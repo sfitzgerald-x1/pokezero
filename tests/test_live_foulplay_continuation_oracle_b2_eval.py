@@ -398,6 +398,30 @@ class B2EvaluatorTest(unittest.TestCase):
         self.assertEqual(p2_last["shard_index"], 23)
         self.assertEqual(p2_last["unit_index_in_shard"], 24)
 
+    def test_accepts_the_exact_durable_continuation_cli_contract(self) -> None:
+        module = _module()
+        args = module.build_arg_parser().parse_args(
+            [
+                "--checkpoint", "/checkpoint.pt",
+                "--showdown-root", "/showdown",
+                "--foulplay-root", "/foulplay",
+                "--foulplay-python", "/foulplay/.venv/bin/python",
+                "--out", "/shared/unit.json",
+                "--pokezero-player", "p1",
+                "--foulplay-player", "p2",
+                "--seed", "109000000",
+                "--registration-seed-start", "109000000",
+                "--max-decision-rounds", "1024",
+                "--max-continuation-decision-rounds", "128",
+                "--expanded-continuation-decision-rounds", "1024",
+                "--oracle-progress-dir", "/shared/oracle-progress",
+            ]
+        )
+        self.assertEqual(args.registration_seed_start, 109_000_000)
+        self.assertEqual(args.max_continuation_decision_rounds, 128)
+        self.assertEqual(args.expanded_continuation_decision_rounds, 1024)
+        self.assertEqual(args.oracle_progress_dir, Path("/shared/oracle-progress"))
+
     def test_accepts_an_explicit_fresh_orientation_band_without_reusing_the_legacy_band(self) -> None:
         module = _module()
         for seat, start in (("p1", 109_000_000), ("p2", 109_000_600)):
