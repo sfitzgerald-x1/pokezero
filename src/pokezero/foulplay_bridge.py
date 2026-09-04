@@ -462,10 +462,11 @@ OPPONENT_JOURNAL_MODES = ("off", "addressed", "full")
 # `battle_modifier`/`websocket_client` emit, so lines-per-decision in a real battle is not
 # bounded by anything this repo has measured. A ring that overflows would make every row
 # `log_lines_dropped` -- a total, silent, favourable-direction failure. So the instrument
-# keeps a SEPARATE cursor buffer holding only the three line shapes it reads (about 4-10
-# lines per decision), capped at `_FOULPLAY_THINK_LINE_CAP`, which is ~50 decisions of
-# backlog and independent of how loudly foul-play logs everything else.
-FOULPLAY_THINK_SCHEMA_VERSION = "pokezero.foulplay-think.v2"
+# keeps a SEPARATE cursor buffer holding only the four line shapes it reads (the
+# fixed-work audit adds one receipt per sampled world), capped at
+# `_FOULPLAY_THINK_LINE_CAP`, which still holds roughly 50 early-game decisions of
+# backlog and is independent of how loudly foul-play logs everything else.
+FOULPLAY_THINK_SCHEMA_VERSION = "pokezero.foulplay-think.v3"
 
 # `Iterations {index}: {total_visits}` (`fp/search/main.py:57`) as it reaches stdout
 # through foul-play's `CustomFormatter`, which prefixes `levelname.ljust(8) + " "` --
@@ -478,7 +479,7 @@ _FOULPLAY_ITERATIONS_RE = re.compile(r"(?:^|\s)Iterations\s+(\d+):\s+(\d+)\s*$")
 # otherwise refuse the whole decision -- a false miss, and one that would also keep
 # re-arming the settle give-up below. `\b` also rejects `MyIterations 0: 999`.
 _FOULPLAY_THINK_LINE_RE = re.compile(
-    r"\bIterations\s+\d|\bSampling\s+\d+\s+battles|\bSearching for a move using MCTS"
+    r"\bIterations\s+\d|\bSampling\s+\d+\s+battles|\bSearching for a move using MCTS|\bPOKEZERO_FOULPLAY_MCTS_V1\b"
 )
 _FOULPLAY_ITERATIONS_CANDIDATE_RE = re.compile(r"\bIterations\s+\d")
 # `Sampling {num_battles} battles at {search_time_per_battle}ms each`
@@ -494,6 +495,14 @@ _FOULPLAY_SAMPLING_CANDIDATE_RE = re.compile(r"\bSampling\s+\d+\s+battles")
 # Exactly one per slice is the invariant: zero means the lines in this slice were not
 # announced by this decision, more than one means the slice spans decisions.
 _FOULPLAY_DECISION_MARKER_RE = re.compile(r"\bSearching for a move using MCTS")
+# Emitted by the private, provenance-bound FoulPlay fixed-work patch. Unlike the
+# historical ``Iterations N: visits`` line, this record carries the requested
+# work, the exact native result, and the derived chance-stream seed. The bridge
+# validates every field before exposing any work on a causal-study row.
+_FOULPLAY_FIXED_MCTS_AUDIT_PREFIX = "POKEZERO_FOULPLAY_MCTS_V1"
+_FOULPLAY_FIXED_MCTS_AUDIT_RE = re.compile(
+    r"\bPOKEZERO_FOULPLAY_MCTS_V1\s+(\{.*\})\s*$"
+)
 # A corrupted or concatenated line can parse as an integer and poison a mean that nothing
 # else would flag. The real measurement is ~450,000 visits per 1,000 ms sample on a
 # 2-mon position, so this ceiling is ~200x the largest plausible reading and still catches
@@ -521,10 +530,11 @@ _FOULPLAY_THINK_SETTLE_PROBE_EVERY = 10
 #: announcements are written off. See the write-off in `_foulplay_think_observation`.
 _FOULPLAY_THINK_MARKER_WRITEOFF_DECISIONS = 3
 # The instrument's own cursor buffer, holding only `_FOULPLAY_THINK_LINE_RE` matches so
-# DEBUG noise cannot displace a measurement. At 4-10 kept lines per decision this is ~50
-# decisions of backlog; overflow is still REPORTED (`log_lines_dropped`) rather than
+# DEBUG noise cannot displace a measurement. Fixed-work early decisions can emit a marker,
+# schedule, eight iteration lines, and eight receipts, so 1,024 lines is still ~50 decisions
+# of backlog; overflow is still REPORTED (`log_lines_dropped`) rather than
 # absorbed, because a total that might be short must refuse.
-_FOULPLAY_THINK_LINE_CAP = 512
+_FOULPLAY_THINK_LINE_CAP = 1024
 
 # The REFUSAL RECORDER, wired on by default.
 #
@@ -736,6 +746,16 @@ class ControlledFoulPlayConfig:
     seed_start: int = 1
     foulplay_random_seed: int | None = None
     search_time_ms: int = 1000
+    # Optional deterministic FoulPlay MCTS budget. A positive value is passed
+    # through the private, image-bound FoulPlay patch to poke-engine, whose
+    # Python API ignores the wall-clock limit when iterations are set. The patched
+    # engine stops exactly at the requested visit count so a receipt
+    # can prove the opponent completed precisely the registered work.
+    # The matching image also requires one in-process worker and one engine
+    # thread; a shared tree has schedule-dependent mutation even with seeded
+    # RNGs. ``None`` preserves the historical time-budgeted opponent for old
+    # evidence only; it is not admissible for a new causal efficacy gate.
+    foulplay_mcts_iterations: int | None = None
     max_decision_rounds: int = 250
     format_id: str = "gen3randombattle"
     policy_mode: str = "root-puct"
@@ -925,6 +945,9 @@ class ControlledFoulPlayConfig:
             raise ValueError("foulplay_random_seed must be non-negative when set.")
         if self.search_time_ms <= 0:
             raise ValueError("search_time_ms must be positive.")
+        if self.foulplay_mcts_iterations is not None:
+            if self.foulplay_mcts_iterations <= 0:
+                raise ValueError("foulplay_mcts_iterations must be positive when set.")
         if self.max_decision_rounds <= 0:
             raise ValueError("max_decision_rounds must be positive.")
         if self.policy_mode not in {"raw", "root-puct", "engine-mcts"}:
@@ -2104,6 +2127,8 @@ class ControlledFoulPlayBenchmarkResult:
             "schema_version": FOULPLAY_THINK_SCHEMA_VERSION,
             "entries_key": "opponent_think",
             "budget_ms_configured": self.config.search_time_ms,
+            "fixed_mcts_iterations_configured": self.config.foulplay_mcts_iterations,
+            "fixed_mcts_audit_required": self.config.foulplay_mcts_iterations is not None,
             **_foulplay_think_aggregate(
                 [row for game in self.games for row in game.opponent_think],
                 record_failures=sum(game.opponent_think_failures for game in self.games),
@@ -2993,6 +3018,31 @@ class _FoulPlayThinkClock:
 
 
 @dataclass(frozen=True)
+class _FoulPlayFixedMctsAudit:
+    """One exact-work native MCTS receipt emitted by the patched opponent."""
+
+    decision_index: int
+    sample_index: int
+    mcts_seed: int
+    iterations_requested: int
+    total_visits: int
+    threads: int
+    parallelism: int
+
+    def to_dict(self) -> dict[str, int | str]:
+        return {
+            "schema": "pokezero.foulplay-fixed-iteration-seeded.v1",
+            "decision_index": self.decision_index,
+            "sample_index": self.sample_index,
+            "mcts_seed": self.mcts_seed,
+            "iterations_requested": self.iterations_requested,
+            "total_visits": self.total_visits,
+            "threads": self.threads,
+            "parallelism": self.parallelism,
+        }
+
+
+@dataclass(frozen=True)
 class _FoulPlayThinkWork:
     """Realized opponent work parsed out of one decision's worth of foul-play stdout.
 
@@ -3016,6 +3066,7 @@ class _FoulPlayThinkWork:
     #: `Searching for a move using MCTS...` occurrences in the slice. Exactly 1 is the
     #: attributable case; see the delimiter guard in the parser.
     decision_markers: int = 0
+    fixed_mcts_audits: tuple[_FoulPlayFixedMctsAudit, ...] = ()
     miss_reasons: tuple[str, ...] = ()
 
     @property
@@ -3064,6 +3115,9 @@ def _foulplay_think_work_from_log_lines(
     lines: Sequence[str],
     *,
     dropped: int = 0,
+    expected_fixed_iterations: int | None = None,
+    expected_fixed_base_seed: int | None = None,
+    expected_decision_index: int | None = None,
 ) -> _FoulPlayThinkWork:
     """Parse one decision's worth of foul-play stdout: marker, `Sampling`, `Iterations`.
 
@@ -3075,6 +3129,7 @@ def _foulplay_think_work_from_log_lines(
     """
 
     iterations: list[int] = []
+    fixed_audits: list[_FoulPlayFixedMctsAudit] = []
     declared_samples: int | None = None
     budget_ms: int | None = None
     decision_markers = 0
@@ -3084,6 +3139,39 @@ def _foulplay_think_work_from_log_lines(
     for line in lines:
         if _FOULPLAY_DECISION_MARKER_RE.search(line) is not None:
             decision_markers += 1
+            continue
+        audit_match = _FOULPLAY_FIXED_MCTS_AUDIT_RE.search(line)
+        if audit_match is not None:
+            try:
+                audit_payload = json.loads(audit_match.group(1))
+                expected_keys = {
+                    "schema",
+                    "decision_index",
+                    "sample_index",
+                    "mcts_seed",
+                    "iterations_requested",
+                    "total_visits",
+                    "threads",
+                    "parallelism",
+                }
+                integer_keys = expected_keys - {"schema"}
+                if (
+                    not isinstance(audit_payload, dict)
+                    or set(audit_payload) != expected_keys
+                    or audit_payload.get("schema") != "pokezero.foulplay-fixed-iteration-seeded.v1"
+                    or any(type(audit_payload.get(key)) is not int for key in integer_keys)
+                ):
+                    raise ValueError("invalid fixed-work audit shape")
+                fixed_audits.append(
+                    _FoulPlayFixedMctsAudit(
+                        **{key: audit_payload[key] for key in integer_keys}
+                    )
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                reasons.append("fixed_mcts_audit_malformed")
+            continue
+        if _FOULPLAY_FIXED_MCTS_AUDIT_PREFIX in line:
+            reasons.append("fixed_mcts_audit_malformed")
             continue
         match = _FOULPLAY_ITERATIONS_RE.search(line)
         if match is not None:
@@ -3126,17 +3214,47 @@ def _foulplay_think_work_from_log_lines(
         reasons.append("decision_marker_absent")
     elif decision_markers > 1:
         reasons.append("decision_marker_repeated")
+    if expected_fixed_iterations is None:
+        if fixed_audits:
+            reasons.append("fixed_mcts_audit_unexpected")
+    else:
+        if expected_fixed_iterations <= 0 or expected_fixed_base_seed is None or expected_decision_index is None:
+            raise ValueError("fixed-work audit parsing requires a positive budget, seed, and decision index")
+        if len(fixed_audits) != len(iterations):
+            reasons.append("fixed_mcts_audit_count_mismatch")
+        if [audit.sample_index for audit in fixed_audits] != list(range(len(fixed_audits))):
+            reasons.append("fixed_mcts_sample_index_mismatch")
+        for audit in fixed_audits:
+            expected_seed = int.from_bytes(
+                hashlib.sha256(
+                    f"{expected_fixed_base_seed}:{expected_decision_index}:{audit.sample_index}".encode("ascii")
+                ).digest()[:8],
+                "big",
+            )
+            if audit.decision_index != expected_decision_index:
+                reasons.append("fixed_mcts_decision_index_mismatch")
+            if audit.mcts_seed != expected_seed:
+                reasons.append("fixed_mcts_seed_mismatch")
+            if (
+                audit.iterations_requested != expected_fixed_iterations
+                or audit.total_visits != expected_fixed_iterations
+            ):
+                reasons.append("fixed_mcts_visit_mismatch")
+            if audit.threads != 1 or audit.parallelism != 1:
+                reasons.append("fixed_mcts_execution_mode_mismatch")
     return _FoulPlayThinkWork(
         iterations_per_sample=tuple(iterations),
         declared_samples=declared_samples,
         budget_ms_per_sample=budget_ms,
         decision_markers=decision_markers,
+        fixed_mcts_audits=tuple(fixed_audits),
         miss_reasons=tuple(dict.fromkeys(reasons)),
     )
 
 
 async def _foulplay_think_observation(
     *,
+    config: ControlledFoulPlayConfig,
     clock: _FoulPlayThinkClock,
     logs: _ProcessLogBuffer,
     state: "_ControlledBattleState",
@@ -3167,7 +3285,21 @@ async def _foulplay_think_observation(
     settle_start = time.monotonic()
     while True:
         log_slice = logs.think_lines_since(state.foulplay_log_cursor)
-        work = _foulplay_think_work_from_log_lines(log_slice.lines, dropped=log_slice.dropped)
+        work = _foulplay_think_work_from_log_lines(
+            log_slice.lines,
+            dropped=log_slice.dropped,
+            expected_fixed_iterations=config.foulplay_mcts_iterations,
+            expected_fixed_base_seed=(
+                config.resolved_foulplay_random_seed
+                if config.foulplay_mcts_iterations is not None
+                else None
+            ),
+            expected_decision_index=(
+                state.foulplay_think_decisions_seen - 1
+                if config.foulplay_mcts_iterations is not None
+                else None
+            ),
+        )
         markers_seen = state.foulplay_think_markers_seen + work.decision_markers
         # ATTRIBUTION BY COUNTING, which is what makes a SUSTAINED lag safe. `find_best_move`
         # logs its marker once per decision from the parent process, so the cumulative number
@@ -3331,6 +3463,14 @@ async def _foulplay_think_observation(
         # exists for should not require a consumer to reassemble it from three columns.
         # `budget_seconds_granted` is the one that IS left out, being its denominator.
         row["iterations_per_budget_second"] = round(work.iterations_per_budget_second, 3)
+    if attributable and config.foulplay_mcts_iterations is not None:
+        # Per-sample receipts, not just a run-level claim. A consumer can verify
+        # the exact work, seed schedule, and one-worker execution independently
+        # for every decision before treating the efficacy result as causal.
+        row["fixed_mcts"] = {
+            "schema_version": "pokezero.foulplay-fixed-iteration-seeded.v1",
+            "audits": [audit.to_dict() for audit in work.fixed_mcts_audits],
+        }
     stratum = _foulplay_think_stratum(work.declared_samples, work.budget_ms_per_sample)
     if attributable and stratum is not None:
         # THE SCHEDULE THIS DECISION RAN UNDER, on the row, because the rate is not
@@ -6804,7 +6944,7 @@ def _foulplay_command(
         "sys.argv = sys.argv[1:]; "
         "runpy.run_path(script, run_name='__main__')"
     )
-    return (
+    command: tuple[str, ...] = (
         str(config.resolved_foulplay_python),
         "-c",
         seed_wrapper,
@@ -6823,7 +6963,22 @@ def _foulplay_command(
         str(resolved_run_count),
         "--search-time-ms",
         str(config.search_time_ms),
+        # Bind both settings explicitly. The installed FoulPlay hardening patch
+        # takes the one-worker path in process, while poke-engine's threaded
+        # tree remains intentionally unavailable to a deterministic study.
+        "--search-parallelism",
+        "1",
+        "--search-threads",
+        "1",
     )
+    if config.foulplay_mcts_iterations is not None:
+        command += (
+            "--search-iterations",
+            str(config.foulplay_mcts_iterations),
+            "--search-seed",
+            str(config.resolved_foulplay_random_seed),
+        )
+    return command
 
 
 async def _drain_process_stream(
@@ -7703,6 +7858,7 @@ async def _select_live_foulplay_decision(
     think_row: Mapping[str, Any] | None = None
     try:
         think_row = await _foulplay_think_observation(
+            config=config,
             clock=think_clock,
             logs=foulplay_logs,
             state=state,
@@ -8770,6 +8926,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--search-time-ms", type=int, default=1000, help="foul-play search time per move.")
+    parser.add_argument(
+        "--foulplay-mcts-iterations",
+        type=int,
+        default=None,
+        help=(
+            "Optional deterministic FoulPlay MCTS visits per sampled world. Requires the "
+            "seeded single-worker source image; must be positive."
+        ),
+    )
     parser.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap.")
     parser.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     parser.add_argument(
@@ -9226,6 +9391,7 @@ def _config_from_args(
         seed_start=args.seed_start,
         foulplay_random_seed=args.foulplay_random_seed,
         search_time_ms=args.search_time_ms,
+        foulplay_mcts_iterations=args.foulplay_mcts_iterations,
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
         policy_mode=policy_mode if policy_mode is not None else args.policy_mode,

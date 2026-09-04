@@ -26,7 +26,7 @@ import apply_poke_engine_patches as patch_stack  # noqa: E402
 import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
-# Post-patch content pins for the 75-patch stack. The two collapse-class patches, the
+# Post-patch content pins for the 76-patch stack. The two collapse-class patches, the
 # roll-enumeration patch, the immobilizer-marker patch, the Sleep Talk double
 # damage-dealt reset guard and the Leech Seed residual band split all touch
 # generate_instructions.rs
@@ -40,9 +40,9 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 #
-# 74 -> 75 (`poke-engine-gen3-sleep-clock-bound.patch`). The three control
-# digests are unchanged across that bump, measured on the replay and not
-# asserted from the diff.
+# 75 -> 76 (`poke-engine-gen3-seeded-mcts.patch`). The three control digests
+# remain unchanged across that bump, measured on the replay and not asserted
+# from the diff.
 EXPECTED_FINAL_SHA256 = {
     "src/gen3/generate_instructions.rs": "5640f931f8818ce6dd90aa98066265b8c091eaa1f918efc2ae1c03788114fe9c",
     "src/gen3/items.rs": "14415306c663e3e7a9a75f5a4882105cbb9bb91013ca96a35be3a30ca395ea93",
@@ -126,7 +126,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-18:]],
+                [entry.name for entry in applied[-19:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -156,6 +156,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     # authored against the fully-patched tree and only appended.
                     "poke-engine-gen3-leechseed-residual-band-split.patch",
                     "poke-engine-gen3-sleep-clock-bound.patch",
+                    "poke-engine-gen3-seeded-mcts.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
@@ -216,6 +217,13 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                 "if fan.iter().filter(|roll| in_band(roll)).count() as i16 != expected_rolls {",
                 generated,
             )
+            mcts_source = (source / "src/mcts.rs").read_text(encoding="utf-8")
+            self.assertIn("pub fn perform_mcts_seeded(", mcts_source)
+            self.assertIn("StdRng::seed_from_u64(seed)", mcts_source)
+            self.assertIn("iterations.saturating_sub(root_node.times_visited)", mcts_source)
+            py_binding = (source / "poke-engine-py/src/lib.rs").read_text(encoding="utf-8")
+            self.assertIn("seeded MCTS requires threads=1", py_binding)
+            self.assertIn("perform_mcts_seeded(", py_binding)
             for relative_path, expected_sha256 in EXPECTED_FINAL_SHA256.items():
                 actual_sha256 = hashlib.sha256((source / relative_path).read_bytes()).hexdigest()
                 self.assertEqual(actual_sha256, expected_sha256, relative_path)
@@ -224,6 +232,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertEqual(
                 targets,
                 [
+                    "poke-engine-py/python/poke_engine/__init__.py",
                     "poke-engine-py/python/poke_engine/poke_engine.pyi",
                     "poke-engine-py/src/lib.rs",
                     "src/choices.rs",

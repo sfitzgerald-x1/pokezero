@@ -1756,6 +1756,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             foulplay_random_seed=456,
             games=7,
             search_time_ms=10,
+            foulplay_mcts_iterations=20_000,
         )
 
         command = _foulplay_command(config, "ws://127.0.0.1:1/showdown/websocket")
@@ -1768,6 +1769,10 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertIn("/foul-play/run.py", command)
         self.assertIn("--run-count", command)
         self.assertEqual(command[command.index("--run-count") + 1], "7")
+        self.assertEqual(command[command.index("--search-parallelism") + 1], "1")
+        self.assertEqual(command[command.index("--search-threads") + 1], "1")
+        self.assertEqual(command[command.index("--search-iterations") + 1], "20000")
+        self.assertEqual(command[command.index("--search-seed") + 1], "456")
         self.assertEqual(env["POKEZERO_FOULPLAY_RANDOM_SEED"], "456")
         self.assertEqual(env["PYTHONHASHSEED"], "456")
         self.assertEqual(env["FOULPLAY_LOCAL_NOSEC"], "1")
@@ -1789,6 +1794,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 foulplay_random_seed=456,
                 games=7,
                 search_time_ms=10,
+                foulplay_mcts_iterations=20_000,
             )
 
             completed = subprocess.run(
@@ -1805,7 +1811,18 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(payload["argv"][0], str(run_py))
         self.assertIn("--websocket-uri", payload["argv"])
         self.assertEqual(payload["argv"][payload["argv"].index("--run-count") + 1], "7")
+        self.assertEqual(payload["argv"][payload["argv"].index("--search-iterations") + 1], "20000")
+        self.assertEqual(payload["argv"][payload["argv"].index("--search-seed") + 1], "456")
         self.assertEqual(payload["draw"], random.Random(456).random())
+
+    def test_foulplay_fixed_iteration_budget_requires_positive_budget(self) -> None:
+        kwargs = dict(checkpoint=Path("checkpoint.pt"), showdown_root=Path("/showdown"))
+        with self.assertRaisesRegex(ValueError, "positive"):
+            ControlledFoulPlayConfig(**kwargs, foulplay_mcts_iterations=0)
+        self.assertEqual(
+            ControlledFoulPlayConfig(**kwargs, foulplay_mcts_iterations=1_001).foulplay_mcts_iterations,
+            1_001,
+        )
 
     def test_foulplay_process_seed_defaults_to_seed_start(self) -> None:
         config = ControlledFoulPlayConfig(
@@ -3581,6 +3598,83 @@ class FoulPlayThinkParserTest(unittest.TestCase):
         self.assertEqual(work.total_iterations, 81105)
         self.assertEqual(work.budget_seconds_granted, 2.0)
         self.assertAlmostEqual(work.iterations_per_budget_second, 81105 / 2.0)
+
+    def test_fixed_work_audit_proves_each_sample_used_the_registered_seed_and_budget(self) -> None:
+        base_seed = 456
+        decision_index = 7
+        iterations = 10_001
+
+        def audit(sample_index: int) -> str:
+            seed = int.from_bytes(
+                hashlib.sha256(
+                    f"{base_seed}:{decision_index}:{sample_index}".encode("ascii")
+                ).digest()[:8],
+                "big",
+            )
+            return "INFO     POKEZERO_FOULPLAY_MCTS_V1 " + json.dumps(
+                {
+                    "schema": "pokezero.foulplay-fixed-iteration-seeded.v1",
+                    "decision_index": decision_index,
+                    "sample_index": sample_index,
+                    "mcts_seed": seed,
+                    "iterations_requested": iterations,
+                    "total_visits": iterations,
+                    "threads": 1,
+                    "parallelism": 1,
+                },
+                sort_keys=True,
+            )
+
+        work = _foulplay_think_work_from_log_lines(
+            _decision_slice(
+                "INFO     Sampling 2 battles at 1000ms each",
+                f"INFO     Iterations 0: {iterations}",
+                audit(0),
+                f"INFO     Iterations 1: {iterations}",
+                audit(1),
+            ),
+            expected_fixed_iterations=iterations,
+            expected_fixed_base_seed=base_seed,
+            expected_decision_index=decision_index,
+        )
+
+        self.assertTrue(work.complete)
+        self.assertEqual(work.total_iterations, 2 * iterations)
+        self.assertEqual([item.sample_index for item in work.fixed_mcts_audits], [0, 1])
+
+    def test_fixed_work_audit_missing_or_tampered_refuses_the_row(self) -> None:
+        work = _foulplay_think_work_from_log_lines(
+            _decision_slice(
+                "INFO     Sampling 1 battles at 1000ms each",
+                "INFO     Iterations 0: 10001",
+            ),
+            expected_fixed_iterations=10_001,
+            expected_fixed_base_seed=456,
+            expected_decision_index=0,
+        )
+        self.assertIn("fixed_mcts_audit_count_mismatch", work.miss_reasons)
+
+        tampered = {
+            "schema": "pokezero.foulplay-fixed-iteration-seeded.v1",
+            "decision_index": 0,
+            "sample_index": 0,
+            "mcts_seed": 0,
+            "iterations_requested": 10_001,
+            "total_visits": 10_001,
+            "threads": 1,
+            "parallelism": 1,
+        }
+        work = _foulplay_think_work_from_log_lines(
+            _decision_slice(
+                "INFO     Sampling 1 battles at 1000ms each",
+                "INFO     Iterations 0: 10001",
+                "INFO     POKEZERO_FOULPLAY_MCTS_V1 " + json.dumps(tampered, sort_keys=True),
+            ),
+            expected_fixed_iterations=10_001,
+            expected_fixed_base_seed=456,
+            expected_decision_index=0,
+        )
+        self.assertIn("fixed_mcts_seed_mismatch", work.miss_reasons)
 
     def test_the_visit_count_is_read_after_the_colon_not_before_it(self) -> None:
         """`Iterations {index}: {total_visits}` -- index FIRST, realized work SECOND.

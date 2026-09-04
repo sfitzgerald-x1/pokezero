@@ -1716,3 +1716,11 @@ poke-engine-gen3-leechseed-residual-band-split.patch
 # crashed sampling with `[inf, -inf, ...]` weights. Saturate the terminal rung
 # to a forced wake and pin the exact state as a native MCTS regression.
 poke-engine-gen3-sleep-clock-bound.patch
+
+# Single-threaded MCTS can run a source-bound fixed iteration budget with one
+# explicit Rust chance-stream seed. This eliminates wall-clock contention and
+# OS-entropy sampling as confounders for continuation-oracle comparisons. The
+# Python binding refuses seeded shared-tree MCTS; scheduler interleavings would
+# still make that mode non-reproducible. Authored against the complete preceding
+# gen3 patch stack and includes an exact-repeat witness on the FoulPlay state.
+poke-engine-gen3-seeded-mcts.patch
