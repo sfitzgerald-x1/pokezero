@@ -52,6 +52,12 @@ _ORIENTATION_REGISTRATION = {
 }
 SOURCE_SCHEMA_VERSION = "pokezero.controlled-foulplay-benchmark.v1"
 ORACLE_RECEIPT_SCHEMA_VERSION = "pokezero.live-foulplay-continuation-oracle.v2"
+# A new causal study cannot use FoulPlay's historical wall-clock-only path.
+# The bridge records a receipt for every native MCTS call in this fixed-work
+# mode; this evaluator verifies the complete receipt rather than trusting the
+# command-line request or a run-level header alone.
+FOULPLAY_THINK_SCHEMA_VERSION = "pokezero.foulplay-think.v3"
+FIXED_MCTS_SCHEMA_VERSION = "pokezero.foulplay-fixed-iteration-seeded.v1"
 SUCCESS_MARKER = "WROTE B2 LIVE FOULPLAY CONTINUATION ORACLE PAIRED UNIT"
 _EXPERIMENT_ID_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _SOURCE_FILE_PATHS = (
@@ -594,6 +600,7 @@ def _require_controller_receipt(
         raise B2EvaluationError("B2 arm does not bind BattleStream and FoulPlay seeds to its game seed")
     if expected_seed is not None and game_seed != expected_seed:
         raise B2EvaluationError("B2 arm returned the wrong registered seed")
+    _require_fixed_mcts_receipts(summary=summary, game=game, base_seed=foulplay_seed)
     if oracle:
         if _require_nonnegative_int(
             controller.get("games_with_oracle_decision"), field="controller.games_with_oracle_decision"
@@ -703,6 +710,86 @@ def _require_controller_receipt(
     return game
 
 
+def _require_fixed_mcts_receipts(
+    *, summary: Mapping[str, Any], game: Mapping[str, Any], base_seed: int,
+) -> None:
+    """Require one complete seeded native-MCTS receipt for every opponent think.
+
+    A matching command line or a matching run header is not evidence that the
+    native engine actually did the configured work.  The patched FoulPlay
+    process emits one record per sampled world.  Refuse an entire arm whenever
+    a row is absent, ambiguous, malformed, or reports a different seed/work
+    count/execution mode.
+    """
+
+    header = _require_mapping(summary.get("foulplay_think"), field="foulplay_think")
+    if header.get("schema_version") != FOULPLAY_THINK_SCHEMA_VERSION:
+        raise B2EvaluationError("B2 arm lacks the fixed-work FoulPlay telemetry schema")
+    iterations = _require_nonnegative_int(
+        header.get("fixed_mcts_iterations_configured"),
+        field="foulplay_think.fixed_mcts_iterations_configured",
+    )
+    if iterations <= 0 or header.get("fixed_mcts_audit_required") is not True:
+        raise B2EvaluationError("B2 arm does not require a positive fixed FoulPlay MCTS budget")
+    rows = game.get("opponent_think")
+    if not isinstance(rows, list) or not rows:
+        raise B2EvaluationError("B2 arm has no per-decision fixed FoulPlay work receipts")
+    if (
+        _require_nonnegative_int(header.get("decisions"), field="foulplay_think.decisions") != len(rows)
+        or _require_nonnegative_int(
+            header.get("decisions_attempted"), field="foulplay_think.decisions_attempted"
+        ) != len(rows)
+        or _require_nonnegative_int(header.get("record_failures"), field="foulplay_think.record_failures") != 0
+        or _require_nonnegative_int(header.get("miss_decisions"), field="foulplay_think.miss_decisions") != 0
+        or _require_nonnegative_int(
+            game.get("opponent_think_record_failures", 0),
+            field="game.opponent_think_record_failures",
+        ) != 0
+    ):
+        raise B2EvaluationError("B2 arm has incomplete fixed FoulPlay work telemetry")
+    audit_keys = {
+        "schema", "decision_index", "sample_index", "mcts_seed", "iterations_requested",
+        "total_visits", "threads", "parallelism",
+    }
+    integer_keys = audit_keys - {"schema"}
+    for decision_index, raw_row in enumerate(rows):
+        row = _require_mapping(raw_row, field=f"opponent_think[{decision_index}]")
+        if row.get("status") != "ok":
+            raise B2EvaluationError("B2 arm has a non-admissible fixed FoulPlay work receipt")
+        fixed = _require_mapping(row.get("fixed_mcts"), field=f"opponent_think[{decision_index}].fixed_mcts")
+        if set(fixed) != {"schema_version", "audits"} or fixed.get("schema_version") != FIXED_MCTS_SCHEMA_VERSION:
+            raise B2EvaluationError("B2 arm has an unexpected fixed FoulPlay audit schema")
+        audits = fixed.get("audits")
+        if not isinstance(audits, list) or not audits:
+            raise B2EvaluationError("B2 arm omits a fixed FoulPlay audit for a sampled decision")
+        for sample_index, raw_audit in enumerate(audits):
+            audit = _require_mapping(
+                raw_audit, field=f"opponent_think[{decision_index}].fixed_mcts.audits[{sample_index}]"
+            )
+            if set(audit) != audit_keys or audit.get("schema") != FIXED_MCTS_SCHEMA_VERSION:
+                raise B2EvaluationError("B2 arm has a malformed fixed FoulPlay audit")
+            values: dict[str, int] = {}
+            for key in integer_keys:
+                value = audit.get(key)
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise B2EvaluationError("B2 arm has a malformed fixed FoulPlay audit integer")
+                values[key] = value
+            expected_seed = int.from_bytes(
+                hashlib.sha256(f"{base_seed}:{decision_index}:{sample_index}".encode("ascii")).digest()[:8],
+                "big",
+            )
+            if (
+                values["decision_index"] != decision_index
+                or values["sample_index"] != sample_index
+                or values["mcts_seed"] != expected_seed
+                or values["iterations_requested"] != iterations
+                or values["total_visits"] != iterations
+                or values["threads"] != 1
+                or values["parallelism"] != 1
+            ):
+                raise B2EvaluationError("B2 arm fixed FoulPlay audit disagrees with its seed/work contract")
+
+
 _ARM_PROVENANCE_KEYS = {
     "bridge_schema_version",
     "bridge_source_sha256",
@@ -715,6 +802,8 @@ _ARM_PROVENANCE_KEYS = {
     "max_continuation_decision_rounds",
     "expanded_continuation_decision_rounds",
     "foulplay_search_time_ms",
+    "foulplay_mcts_iterations",
+    "foulplay_fixed_mcts_audit_schema_version",
     "checkpoint_path",
     "checkpoint_sha256",
     "showdown_root",
@@ -764,6 +853,10 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
     foulplay_think = _require_mapping(summary.get("foulplay_think"), field="foulplay_think")
     if provenance.get("foulplay_search_time_ms") != foulplay_think.get("budget_ms_configured"):
         raise B2EvaluationError("B2 provenance FoulPlay search budget does not match its arm")
+    if provenance.get("foulplay_mcts_iterations") != foulplay_think.get("fixed_mcts_iterations_configured"):
+        raise B2EvaluationError("B2 provenance fixed FoulPlay budget does not match its arm")
+    if provenance.get("foulplay_fixed_mcts_audit_schema_version") != FIXED_MCTS_SCHEMA_VERSION:
+        raise B2EvaluationError("B2 provenance lacks the fixed FoulPlay audit schema")
     for field in (
         "format_id",
         "capture_driver",
@@ -795,6 +888,10 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
         provenance.get("foulplay_search_time_ms"), field="b2_provenance.foulplay_search_time_ms"
     ) <= 0:
         raise B2EvaluationError("B2 provenance has an invalid FoulPlay search budget")
+    if _require_nonnegative_int(
+        provenance.get("foulplay_mcts_iterations"), field="b2_provenance.foulplay_mcts_iterations"
+    ) <= 0:
+        raise B2EvaluationError("B2 provenance has an invalid fixed FoulPlay MCTS budget")
     return provenance
 
 
@@ -1006,6 +1103,8 @@ def _arm_provenance(args: argparse.Namespace, summary: Mapping[str, Any]) -> dic
             summary.get("live_continuation_oracle"), field="live_continuation_oracle"
         ).get("expanded_continuation_decision_rounds"),
         "foulplay_search_time_ms": foulplay_think.get("budget_ms_configured"),
+        "foulplay_mcts_iterations": foulplay_think.get("fixed_mcts_iterations_configured"),
+        "foulplay_fixed_mcts_audit_schema_version": FIXED_MCTS_SCHEMA_VERSION,
         "checkpoint_path": str(args.checkpoint.resolve()),
         "checkpoint_sha256": summary.get("checkpoint_sha256"),
         "showdown_root": str(args.showdown_root.resolve()),
@@ -1040,6 +1139,8 @@ def _run_arm(
         str(seed),
         "--search-time-ms",
         str(args.foulplay_search_time_ms),
+        "--foulplay-mcts-iterations",
+        str(args.foulplay_mcts_iterations),
         "--max-decision-rounds",
         str(args.max_decision_rounds),
         "--policy-mode",
@@ -1195,6 +1296,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=EXPANDED_CONTINUATION_DECISION_ROUNDS,
     )
     parser.add_argument("--foulplay-search-time-ms", type=int, default=1000)
+    parser.add_argument(
+        "--foulplay-mcts-iterations",
+        type=int,
+        required=True,
+        help=(
+            "Exact seeded native-MCTS visits per FoulPlay sampled world. New causal "
+            "studies reject the historical wall-clock-only opponent path."
+        ),
+    )
     parser.add_argument("--max-decision-rounds", type=int, default=64)
     parser.add_argument("--candidate-cap", type=int, default=ACTION_COUNT)
     parser.add_argument(
@@ -1235,6 +1345,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if args.max_decision_rounds <= 2:
         raise B2EvaluationError("B2 requires room for opening and continued live-oracle decisions")
+    if args.foulplay_mcts_iterations <= 0:
+        raise B2EvaluationError("--foulplay-mcts-iterations must be positive")
     if args.candidate_cap != ACTION_COUNT:
         raise B2EvaluationError(
             f"B2 candidate cap must be {ACTION_COUNT}: the complete PokeZero action space"
