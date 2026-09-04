@@ -60,12 +60,19 @@ _SOURCE_FILE_PATHS = (
     "src/pokezero/live_foulplay_continuation.py",
 )
 _TWO_ARM_EXECUTION_ORDERS = ("raw-then-oracle", "oracle-then-raw")
-# The three-arm diagnostic is intentionally restricted to these two physical
-# schedules.  Oracle is always second; the two identical raw treatments trade
-# first/third position.  This lets its realized raw-control comparison detect
-# a time-budget/order effect without confounding the oracle estimate with
-# position in the arm sequence.
-_THREE_ARM_EXECUTION_ORDERS = ("raw-oracle-control", "control-oracle-raw")
+# The three-arm diagnostic rotates the oracle through every physical position.
+# Its two otherwise-identical raw arms provide a same-seed reproducibility
+# control.  Averaging those raw outcomes now counterbalances linear drift, and
+# rotating the oracle itself prevents a middle-only cache or timing advantage
+# from being misread as a search effect.
+_THREE_ARM_EXECUTION_ORDERS = (
+    "oracle-raw-control",
+    "oracle-control-raw",
+    "raw-oracle-control",
+    "control-oracle-raw",
+    "raw-control-oracle",
+    "control-raw-oracle",
+)
 _ARM_EXECUTION_ORDERS = _TWO_ARM_EXECUTION_ORDERS + _THREE_ARM_EXECUTION_ORDERS
 _EXECUTION_KEYS = {"arm_execution_order", "raw_reproducibility_control"}
 
@@ -1090,10 +1097,18 @@ def _paired_unit(args: argparse.Namespace) -> dict[str, object]:
         ordered_arms = (("raw", False), ("oracle", True))
     elif args.arm_execution_order == "oracle-then-raw":
         ordered_arms = (("oracle", True), ("raw", False))
+    elif args.arm_execution_order == "oracle-raw-control":
+        ordered_arms = (("oracle", True), ("raw", False), ("raw-control", False))
+    elif args.arm_execution_order == "oracle-control-raw":
+        ordered_arms = (("oracle", True), ("raw-control", False), ("raw", False))
     elif args.arm_execution_order == "raw-oracle-control":
         ordered_arms = (("raw", False), ("oracle", True), ("raw-control", False))
     elif args.arm_execution_order == "control-oracle-raw":
         ordered_arms = (("raw-control", False), ("oracle", True), ("raw", False))
+    elif args.arm_execution_order == "raw-control-oracle":
+        ordered_arms = (("raw", False), ("raw-control", False), ("oracle", True))
+    elif args.arm_execution_order == "control-raw-oracle":
+        ordered_arms = (("raw-control", False), ("raw", False), ("oracle", True))
     else:  # argparse and _require_execution reject this; retain fail-closed execution.
         raise B2EvaluationError("unsupported physical arm order")
     arms: dict[str, Mapping[str, Any]] = {}
@@ -1155,9 +1170,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         choices=_ARM_EXECUTION_ORDERS,
         default="raw-then-oracle",
         help=(
-            "Physical arm order. Three-arm diagnostics use raw-oracle-control or "
-            "control-oracle-raw so the oracle remains in the middle; registered B2 "
-            "accepts only raw-then-oracle."
+            "Physical arm order. Three-arm diagnostics rotate the oracle across "
+            "first, middle, and last positions; registered B2 accepts only "
+            "raw-then-oracle."
         ),
     )
     parser.add_argument(
