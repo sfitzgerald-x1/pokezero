@@ -32,7 +32,9 @@ def _fixed_mcts_seed(*, base_seed: int, decision_index: int, sample_index: int) 
     )
 
 
-def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> dict[str, object]:
+def _bridge_summary(
+    module: object, *, seat: str, oracle: bool, seed: int, candidate_parallelism: int = 1,
+) -> dict[str, object]:
     foulplay = "p2" if seat == "p1" else "p1"
     game: dict[str, object] = {
         "seed": seed,
@@ -68,6 +70,7 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
                     "first_restored_joint_step": {seat: 1, foulplay: 1},
                     "candidate_count": 2,
                     "candidate_cap": 9,
+                    "candidate_parallelism": candidate_parallelism,
                     "max_continuation_decision_rounds": 128,
                     "expanded_continuation_decision_rounds": 1024,
                     "legal_action_indices": [0, 1],
@@ -124,6 +127,7 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
         "capture_driver": "checkpoint",
         "belief_set_source": False,
         "max_decision_rounds": 64,
+        "candidate_parallelism": candidate_parallelism,
         "max_continuation_decision_rounds": 128,
         "expanded_continuation_decision_rounds": 1024,
         "foulplay_search_time_ms": 1000,
@@ -158,6 +162,7 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
             "enabled": oracle,
             "schema_version": module.ORACLE_RECEIPT_SCHEMA_VERSION,
             "candidate_cap": 9,
+            "candidate_parallelism": candidate_parallelism,
             "max_continuation_decision_rounds": 128,
             "expanded_continuation_decision_rounds": 1024,
             "controller_only_full_state": True,
@@ -200,14 +205,19 @@ def _bridge_summary(module: object, *, seat: str, oracle: bool, seed: int) -> di
 def _unit_document(
     module: object, *, seat: str = "p1", seed: int | None = None, registration_seed_start: int | None = None,
     arm_execution_order: str = "raw-then-oracle", raw_reproducibility_control: bool = False,
+    candidate_parallelism: int = 1,
 ) -> dict[str, object]:
     if seed is None:
         seed = registration_seed_start if registration_seed_start is not None else module._ORIENTATION_REGISTRATION[seat]["seed_start"]
     registered = module._registered_unit(
         seat=seat, seed=seed, registration_seed_start=registration_seed_start,
     )
-    raw = _bridge_summary(module, seat=seat, oracle=False, seed=seed)
-    oracle = _bridge_summary(module, seat=seat, oracle=True, seed=seed)
+    raw = _bridge_summary(
+        module, seat=seat, oracle=False, seed=seed, candidate_parallelism=candidate_parallelism,
+    )
+    oracle = _bridge_summary(
+        module, seat=seat, oracle=True, seed=seed, candidate_parallelism=candidate_parallelism,
+    )
     document = {
         "schema_version": module.SCHEMA_VERSION,
         "experiment_id": module.EXPERIMENT_ID,
@@ -239,6 +249,7 @@ def _unit_document(
             "unit_index_in_shard": registered["unit_index_in_shard"],
             "shard_id": registered["shard_id"],
             "candidate_cap": 9,
+            "candidate_parallelism": candidate_parallelism,
             "max_continuation_decision_rounds": 128,
             "expanded_continuation_decision_rounds": 1024,
             "arms": (
@@ -260,7 +271,13 @@ def _unit_document(
         },
     }
     if raw_reproducibility_control:
-        control = _bridge_summary(module, seat=seat, oracle=False, seed=seed)
+        control = _bridge_summary(
+            module,
+            seat=seat,
+            oracle=False,
+            seed=seed,
+            candidate_parallelism=candidate_parallelism,
+        )
         document["raw_reproducibility_control"] = {
             "treatment_policy_mode": "raw-transformer-policy-reproducibility-control", **control,
         }
@@ -561,6 +578,76 @@ class B2EvaluatorTest(unittest.TestCase):
             module.validate_experiment_document(
                 diagnostic, expected_experiment_id="root-oracle-b2-transfer-foulplay-20260831",
             )
+
+    def test_candidate_parallelism_is_provenance_bound_for_diagnostic_and_b2_units(self) -> None:
+        module = _module()
+        diagnostic_id = "root-oracle-b2-r62-candidate-parallelism-20260905"
+        diagnostic = _unit_document(
+            module,
+            seat="p1",
+            seed=119_000_000,
+            registration_seed_start=119_000_000,
+            candidate_parallelism=3,
+        )
+        diagnostic["experiment_id"] = diagnostic_id
+        module.validate_experiment_document(diagnostic, expected_experiment_id=diagnostic_id)
+        registered_parallel = _unit_document(module, candidate_parallelism=3)
+        module.validate_b2_document(registered_parallel)
+
+        mismatched = _unit_document(
+            module,
+            seat="p1",
+            seed=119_000_000,
+            registration_seed_start=119_000_000,
+            candidate_parallelism=3,
+        )
+        mismatched["experiment_id"] = diagnostic_id
+        mismatched["oracle_continuation"]["live_continuation_oracle"][
+            "candidate_parallelism"
+        ] = 1
+        with self.assertRaisesRegex(
+            module.B2EvaluationError, "candidate parallelism"
+        ):
+            module.validate_experiment_document(mismatched, expected_experiment_id=diagnostic_id)
+
+    def test_run_arm_forwards_candidate_parallelism_for_raw_and_oracle_arms(self) -> None:
+        module = _module()
+        args = SimpleNamespace(
+            python="python",
+            checkpoint=Path("/checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            foulplay_root=Path("/foulplay"),
+            foulplay_python=Path("/foulplay/.venv/bin/python"),
+            foulplay_search_time_ms=1_000,
+            foulplay_mcts_iterations=10_001,
+            max_decision_rounds=64,
+            device="cpu",
+            node_binary="node",
+            candidate_parallelism=3,
+            candidate_cap=9,
+            max_continuation_decision_rounds=128,
+            expanded_continuation_decision_rounds=1_024,
+            oracle_progress_dir=None,
+        )
+        commands: list[list[str]] = []
+
+        def fake_run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+            commands.append(command)
+            return SimpleNamespace(returncode=0, stdout='{"summary": "ok"}', stderr="")
+
+        with (
+            patch.object(module.subprocess, "run", side_effect=fake_run),
+            patch.object(module, "_arm_provenance", return_value={"bound": True}),
+        ):
+            module._run_arm(args, seed=123, seat="p1", oracle=False, label="raw")
+            module._run_arm(args, seed=123, seat="p1", oracle=True, label="oracle")
+
+        self.assertEqual(len(commands), 2)
+        for command in commands:
+            option_index = command.index("--live-continuation-oracle-candidate-parallelism")
+            self.assertEqual(command[option_index + 1], "3")
+        self.assertNotIn("--live-continuation-oracle", commands[0])
+        self.assertIn("--live-continuation-oracle", commands[1])
 
     def test_accepts_an_explicit_diagnostic_experiment_cli_identity(self) -> None:
         module = _module()

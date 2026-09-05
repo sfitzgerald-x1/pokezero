@@ -4,6 +4,8 @@ import asyncio
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import threading
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -132,6 +134,7 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                 )
                 self.assertTrue(config.live_continuation_oracle)
                 self.assertEqual(config.foulplay_player, "p2" if seat == "p1" else "p1")
+                self.assertEqual(config.live_continuation_oracle_candidate_parallelism, 1)
         with self.assertRaisesRegex(ValueError, "raw PokeZero source policy"):
             ControlledFoulPlayConfig(
                 checkpoint=Path("/tmp/ckpt.pt"),
@@ -155,6 +158,23 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                 live_continuation_oracle=True,
                 live_continuation_oracle_progress_dir=Path("relative-progress"),
             )
+        with self.assertRaisesRegex(ValueError, "candidate_parallelism"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("/tmp/ckpt.pt"),
+                showdown_root=Path("/tmp/showdown"),
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                live_continuation_oracle_candidate_parallelism=0,
+            )
+        with self.assertRaisesRegex(ValueError, "candidate_parallelism"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("/tmp/ckpt.pt"),
+                showdown_root=Path("/tmp/showdown"),
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                live_continuation_oracle_candidate_cap=2,
+                live_continuation_oracle_candidate_parallelism=3,
+            )
 
     def test_oracle_progress_recorder_is_create_only_and_snapshot_free(self) -> None:
         with TemporaryDirectory() as directory:
@@ -168,13 +188,14 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                     "candidate_index": 0,
                     "candidate_count": 2,
                     "action_index": 1,
+                    "candidate_parallelism": 1,
                     "max_continuation_decision_rounds": 128,
                 }
             )
             path = Path(directory) / "00000000-candidate-started.json"
             original_bytes = path.read_bytes()
             record = json.loads(original_bytes)
-            self.assertEqual(record["schema_version"], "pokezero.live-foulplay-continuation-oracle-progress.v1")
+            self.assertEqual(record["schema_version"], "pokezero.live-foulplay-continuation-oracle-progress.v2")
             self.assertEqual(record["action_index"], 1)
             self.assertNotIn("snapshot", record)
             with self.assertRaisesRegex(LiveFoulPlayContinuationError, "unexpected schema"):
@@ -190,6 +211,7 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                         "candidate_index": 0,
                         "candidate_count": 2,
                         "action_index": 0,
+                        "candidate_parallelism": 1,
                         "max_continuation_decision_rounds": 128,
                     }
                 )
@@ -202,6 +224,7 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                         "candidate_index": 0,
                         "candidate_count": 2,
                         "action_index": 1,
+                        "candidate_parallelism": 1,
                         "continuation_decision_round_count": 1,
                         "terminal_after_fixed_joint_step": False,
                         "terminal_winner": {"snapshot": "forbidden"},
@@ -534,6 +557,95 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
         self.assertEqual(decision.metadata["actual_foulplay_choice"], "move 4")
         self.assertEqual(decision.metadata["decoded_actual_foulplay_action"], 3)
         self.assertEqual(decision.metadata["legal_action_indices"], (0, 1, 2))
+
+    def test_oracle_parallel_candidates_keep_ordered_evidence_and_selection(self) -> None:
+        boundary = LiveFoulPlayBoundary(
+            snapshot=SimpleNamespace(battle_id="live-parallel", format_id="gen3randombattle"),
+            source_request_sha256={"p1": "a", "p2": "b"},
+            snapshot_request_sha256={"p1": "c", "p2": "d"},
+        )
+        lock = threading.Lock()
+        active = 0
+        peak = 0
+        progress: list[dict[str, object]] = []
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            try:
+                action = int(kwargs["pokezero_action"])
+                time.sleep(0.04 - (action * 0.01))
+                return {
+                    "continuation": {
+                        "decision_round_count": 1,
+                        "terminal_after_fixed_joint_step": False,
+                        "terminal": {
+                            "winner": "p1" if action == 2 else "p2",
+                            "turn_count": 8,
+                            "capped": False,
+                        },
+                    }
+                }
+            finally:
+                with lock:
+                    active -= 1
+
+        with patch("pokezero.live_foulplay_continuation.run_live_foulplay_continuation", side_effect=fake_run):
+            decision = select_live_foulplay_continuation_oracle_action(
+                boundary=boundary,
+                source_seed=108_000_000,
+                source_decision_round=2,
+                raw_action=1,
+                legal_actions=(0, 1, 2),
+                foulplay_action=3,
+                foulplay_choice="move 4",
+                pokezero_player="p1",
+                foulplay_player="p2",
+                candidate_cap=3,
+                candidate_parallelism=3,
+                env_factory=lambda: self.fail("runner is patched"),
+                continuation_policy_factory=lambda: self.fail("runner is patched"),
+                rollout_config=RolloutConfig(max_decision_rounds=10),
+                progress_callback=lambda event: progress.append(dict(event)),
+            )
+
+        self.assertEqual(peak, 3)
+        self.assertEqual(decision.action_index, 2)
+        self.assertEqual(decision.metadata["candidate_parallelism"], 3)
+        self.assertTrue(all(event["candidate_parallelism"] == 3 for event in progress))
+        self.assertEqual(
+            [item["action_index"] for item in decision.metadata["candidates"]],
+            [0, 1, 2],
+        )
+        self.assertEqual(
+            [(event["event"], event.get("action_index")) for event in progress],
+            [
+                ("decision-started", None),
+                ("candidate-started", 0),
+                ("candidate-started", 1),
+                ("candidate-started", 2),
+                ("candidate-completed", 0),
+                ("candidate-completed", 1),
+                ("candidate-completed", 2),
+                ("decision-completed", None),
+            ],
+        )
+
+    def test_oracle_candidate_parallelism_cli_binds_the_bridge_config(self) -> None:
+        args = foulplay_bridge.build_arg_parser().parse_args(
+            [
+                "--checkpoint", "/tmp/ckpt.pt",
+                "--showdown-root", "/tmp/showdown",
+                "--policy-mode", "raw",
+                "--opponent-policy-mode", "foul-play",
+                "--live-continuation-oracle",
+                "--live-continuation-oracle-candidate-parallelism", "3",
+            ]
+        )
+        config = foulplay_bridge._config_from_args(args)
+        self.assertEqual(config.live_continuation_oracle_candidate_parallelism, 3)
 
     def test_oracle_preserves_the_raw_action_when_the_top_scores_tie(self) -> None:
         boundary = LiveFoulPlayBoundary(
