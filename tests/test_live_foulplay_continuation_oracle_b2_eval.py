@@ -72,7 +72,7 @@ def _bridge_summary(
                     "candidate_cap": 9,
                     "candidate_parallelism": candidate_parallelism,
                     "max_continuation_decision_rounds": 128,
-                    "expanded_continuation_decision_rounds": 1024,
+                    "expanded_continuation_decision_rounds": module.EXPANDED_CONTINUATION_DECISION_ROUNDS,
                     "legal_action_indices": [0, 1],
                     "candidates": [
                         {
@@ -129,7 +129,7 @@ def _bridge_summary(
         "max_decision_rounds": 64,
         "candidate_parallelism": candidate_parallelism,
         "max_continuation_decision_rounds": 128,
-        "expanded_continuation_decision_rounds": 1024,
+        "expanded_continuation_decision_rounds": module.EXPANDED_CONTINUATION_DECISION_ROUNDS,
         "foulplay_search_time_ms": 1000,
         "foulplay_mcts_iterations": fixed_iterations,
         "foulplay_fixed_mcts_audit_schema_version": module.FIXED_MCTS_SCHEMA_VERSION,
@@ -164,7 +164,7 @@ def _bridge_summary(
             "candidate_cap": 9,
             "candidate_parallelism": candidate_parallelism,
             "max_continuation_decision_rounds": 128,
-            "expanded_continuation_decision_rounds": 1024,
+            "expanded_continuation_decision_rounds": module.EXPANDED_CONTINUATION_DECISION_ROUNDS,
             "controller_only_full_state": True,
             "oracle_decisions": 1 if oracle else 0,
             "games_with_oracle_decision": 1 if oracle else 0,
@@ -251,7 +251,7 @@ def _unit_document(
             "candidate_cap": 9,
             "candidate_parallelism": candidate_parallelism,
             "max_continuation_decision_rounds": 128,
-            "expanded_continuation_decision_rounds": 1024,
+            "expanded_continuation_decision_rounds": module.EXPANDED_CONTINUATION_DECISION_ROUNDS,
             "arms": (
                 ["raw", "live-continuation-oracle", "raw-reproducibility-control"]
                 if raw_reproducibility_control
@@ -536,13 +536,13 @@ class B2EvaluatorTest(unittest.TestCase):
                 "--foulplay-mcts-iterations", "10001",
                 "--max-decision-rounds", "1024",
                 "--max-continuation-decision-rounds", "128",
-                "--expanded-continuation-decision-rounds", "1024",
+                "--expanded-continuation-decision-rounds", str(module.EXPANDED_CONTINUATION_DECISION_ROUNDS),
                 "--oracle-progress-dir", "/shared/oracle-progress",
             ]
         )
         self.assertEqual(args.registration_seed_start, 109_000_000)
         self.assertEqual(args.max_continuation_decision_rounds, 128)
-        self.assertEqual(args.expanded_continuation_decision_rounds, 1024)
+        self.assertEqual(args.expanded_continuation_decision_rounds, 2048)
         self.assertEqual(args.foulplay_mcts_iterations, 10_001)
         self.assertEqual(args.oracle_progress_dir, Path("/shared/oracle-progress"))
 

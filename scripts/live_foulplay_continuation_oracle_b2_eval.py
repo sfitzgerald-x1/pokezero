@@ -39,9 +39,11 @@ SHARDS_PER_WORKER = 24
 UNITS_PER_SHARD = 25
 MAX_CONTINUATION_DECISION_ROUNDS = 128
 # A capped candidate is retried once from the same boundary at the source
-# workload's hard 1024-decision ceiling. A second cap remains a fail-closed
-# source failure, so no partial candidate can influence B2.
-EXPANDED_CONTINUATION_DECISION_ROUNDS = 1024
+# workload's hard 2048-decision ceiling.  R64 demonstrated a real terminal
+# resolution at 1,104 decisions, so the former 1,024 ceiling could reject a
+# complete candidate as capped.  A second cap remains a fail-closed source
+# failure, so no partial candidate can influence B2.
+EXPANDED_CONTINUATION_DECISION_ROUNDS = 2048
 _ORIENTATION_REGISTRATION = {
     "p1": {"foulplay_player": "p2", "seed_start": B2_SEED_START, "worker_index": 0},
     "p2": {
