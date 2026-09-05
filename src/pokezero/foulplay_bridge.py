@@ -912,6 +912,10 @@ class ControlledFoulPlayConfig:
     # boundaries must succeed or the source game fails closed.
     live_continuation_oracle: bool = False
     live_continuation_oracle_candidate_cap: int = ACTION_COUNT
+    # Candidate continuations are independent reconstructions from one immutable
+    # boundary. A registered run can score a bounded number concurrently, while
+    # preserving legal-action order when recording and selecting the result.
+    live_continuation_oracle_candidate_parallelism: int = 1
     # This eligibility bound applies separately to every fully scored candidate
     # continuation. It never truncates the live legal action set and a capped
     # candidate fails the source game rather than becoming a partial score.
@@ -988,6 +992,17 @@ class ControlledFoulPlayConfig:
             if self.live_continuation_oracle_candidate_cap > ACTION_COUNT:
                 raise ValueError(
                     "live_continuation_oracle_candidate_cap may not exceed the action-space size."
+                )
+            if (
+                isinstance(self.live_continuation_oracle_candidate_parallelism, bool)
+                or not isinstance(self.live_continuation_oracle_candidate_parallelism, int)
+                or self.live_continuation_oracle_candidate_parallelism <= 0
+                or self.live_continuation_oracle_candidate_parallelism
+                > self.live_continuation_oracle_candidate_cap
+            ):
+                raise ValueError(
+                    "live_continuation_oracle_candidate_parallelism must be a positive integer "
+                    "no greater than live_continuation_oracle_candidate_cap."
                 )
             if self.live_continuation_oracle_max_continuation_decision_rounds <= 0:
                 raise ValueError(
@@ -2184,6 +2199,9 @@ class ControlledFoulPlayBenchmarkResult:
                 "enabled": self.config.live_continuation_oracle,
                 "schema_version": LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION,
                 "candidate_cap": self.config.live_continuation_oracle_candidate_cap,
+                "candidate_parallelism": (
+                    self.config.live_continuation_oracle_candidate_parallelism
+                ),
                 "max_continuation_decision_rounds": (
                     self.config.live_continuation_oracle_max_continuation_decision_rounds
                 ),
@@ -5227,7 +5245,7 @@ class _LiveFoulPlayContinuationProbe:
         }
 
 
-_LIVE_ORACLE_PROGRESS_SCHEMA = "pokezero.live-foulplay-continuation-oracle-progress.v1"
+_LIVE_ORACLE_PROGRESS_SCHEMA = "pokezero.live-foulplay-continuation-oracle-progress.v2"
 _LIVE_ORACLE_PROGRESS_EVENTS = frozenset(
     {
         "decision-started",
@@ -5245,6 +5263,7 @@ _LIVE_ORACLE_PROGRESS_EVENT_FIELDS: Mapping[str, frozenset[str]] = {
             "source_decision_round",
             "candidate_count",
             "candidate_cap",
+            "candidate_parallelism",
             "max_continuation_decision_rounds",
         }
     ),
@@ -5255,6 +5274,7 @@ _LIVE_ORACLE_PROGRESS_EVENT_FIELDS: Mapping[str, frozenset[str]] = {
             "candidate_index",
             "candidate_count",
             "action_index",
+            "candidate_parallelism",
             "max_continuation_decision_rounds",
         }
     ),
@@ -5265,6 +5285,7 @@ _LIVE_ORACLE_PROGRESS_EVENT_FIELDS: Mapping[str, frozenset[str]] = {
             "candidate_index",
             "candidate_count",
             "action_index",
+            "candidate_parallelism",
             "continuation_decision_round_count",
             "terminal_after_fixed_joint_step",
             "terminal_winner",
@@ -5275,14 +5296,14 @@ _LIVE_ORACLE_PROGRESS_EVENT_FIELDS: Mapping[str, frozenset[str]] = {
     "candidate-bound-reached": frozenset(
         {
             "event", "source_decision_round", "candidate_index", "candidate_count",
-            "action_index", "max_continuation_decision_rounds",
+            "action_index", "candidate_parallelism", "max_continuation_decision_rounds",
             "expanded_continuation_decision_rounds",
         }
     ),
     "candidate-expansion-started": frozenset(
         {
             "event", "source_decision_round", "candidate_index", "candidate_count",
-            "action_index", "max_continuation_decision_rounds",
+            "action_index", "candidate_parallelism", "max_continuation_decision_rounds",
         }
     ),
     "decision-completed": frozenset(
@@ -5291,6 +5312,7 @@ _LIVE_ORACLE_PROGRESS_EVENT_FIELDS: Mapping[str, frozenset[str]] = {
             "source_decision_round",
             "candidate_count",
             "selected_action_index",
+            "candidate_parallelism",
             "elapsed_milliseconds",
             "max_continuation_decision_rounds",
         }
@@ -5329,6 +5351,9 @@ def _validate_live_oracle_progress_event(event: Mapping[str, Any]) -> str:
     candidate_count = _live_oracle_progress_int(
         event["candidate_count"], field="candidate_count", minimum=1
     )
+    candidate_parallelism = _live_oracle_progress_int(
+        event["candidate_parallelism"], field="candidate_parallelism", minimum=1
+    )
     maximum_rounds = _live_oracle_progress_int(
         event["max_continuation_decision_rounds"],
         field="max_continuation_decision_rounds",
@@ -5341,6 +5366,10 @@ def _validate_live_oracle_progress_event(event: Mapping[str, Any]) -> str:
         if candidate_count > candidate_cap:
             raise LiveFoulPlayContinuationError(
                 "live continuation oracle progress candidate count exceeds candidate cap"
+            )
+        if candidate_parallelism > candidate_cap:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle progress candidate parallelism exceeds candidate cap"
             )
     if event_name in {"candidate-started", "candidate-bound-reached", "candidate-expansion-started", "candidate-completed"}:
         candidate_index = _live_oracle_progress_int(
@@ -5578,6 +5607,9 @@ class _LiveFoulPlayContinuationOracleController:
             pokezero_player=self.config.pokezero_player,
             foulplay_player=self.config.foulplay_player,
             candidate_cap=self.config.live_continuation_oracle_candidate_cap,
+            candidate_parallelism=(
+                self.config.live_continuation_oracle_candidate_parallelism
+            ),
             max_continuation_decision_rounds=(
                 self.config.live_continuation_oracle_max_continuation_decision_rounds
             ),
@@ -9283,6 +9315,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--live-continuation-oracle-candidate-parallelism",
+        type=int,
+        default=1,
+        help=(
+            "Maximum candidate continuations to score concurrently from one immutable "
+            "live boundary. Results are still recorded and selected in legal-action order."
+        ),
+    )
+    parser.add_argument(
         "--live-continuation-oracle-max-continuation-decision-rounds",
         type=int,
         default=128,
@@ -9452,6 +9493,9 @@ def _config_from_args(
         live_continuation_oracle=getattr(args, "live_continuation_oracle", False),
         live_continuation_oracle_candidate_cap=getattr(
             args, "live_continuation_oracle_candidate_cap", ACTION_COUNT
+        ),
+        live_continuation_oracle_candidate_parallelism=getattr(
+            args, "live_continuation_oracle_candidate_parallelism", 1
         ),
         live_continuation_oracle_max_continuation_decision_rounds=getattr(
             args, "live_continuation_oracle_max_continuation_decision_rounds", 128

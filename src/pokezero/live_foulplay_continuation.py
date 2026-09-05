@@ -9,6 +9,7 @@ primitive, not a policy-input or evaluation result.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -36,7 +37,7 @@ class LiveFoulPlayContinuationBoundExceeded(LiveFoulPlayContinuationError):
 
 
 LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION = (
-    "pokezero.live-foulplay-continuation-oracle.v2"
+    "pokezero.live-foulplay-continuation-oracle.v3"
 )
 
 
@@ -375,6 +376,7 @@ def select_live_foulplay_continuation_oracle_action(
     pokezero_player: PlayerId,
     foulplay_player: PlayerId,
     candidate_cap: int,
+    candidate_parallelism: int = 1,
     env_factory: Callable[[], PokeZeroEnv],
     continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
     rollout_config: RolloutConfig,
@@ -436,6 +438,16 @@ def select_live_foulplay_continuation_oracle_action(
             "live continuation oracle legal candidate count "
             f"{len(candidates)} exceeds cap {candidate_cap}; refusing to truncate"
         )
+    if (
+        isinstance(candidate_parallelism, bool)
+        or not isinstance(candidate_parallelism, int)
+        or candidate_parallelism <= 0
+        or candidate_parallelism > candidate_cap
+    ):
+        raise LiveFoulPlayContinuationError(
+            "live continuation oracle candidate parallelism must be a positive integer "
+            "no greater than the candidate cap"
+        )
 
     if progress_callback is not None:
         progress_callback(
@@ -444,25 +456,14 @@ def select_live_foulplay_continuation_oracle_action(
                 "source_decision_round": source_decision_round,
                 "candidate_count": len(candidates),
                 "candidate_cap": candidate_cap,
+                "candidate_parallelism": candidate_parallelism,
                 "max_continuation_decision_rounds": max_continuation_decision_rounds,
             }
         )
-    scored: list[dict[str, Any]] = []
-    decision_started = perf_counter()
-    for candidate_index, action in enumerate(candidates):
-        if progress_callback is not None:
-            progress_callback(
-                {
-                    "event": "candidate-started",
-                    "source_decision_round": source_decision_round,
-                    "candidate_index": candidate_index,
-                    "candidate_count": len(candidates),
-                    "action_index": action,
-                    "max_continuation_decision_rounds": max_continuation_decision_rounds,
-                }
-            )
+    def score_candidate(action: int) -> tuple[dict[str, Any], int, bool]:
         candidate_started = perf_counter()
         effective_bound = max_continuation_decision_rounds
+        expanded = False
         try:
             proof = run_live_foulplay_continuation(
                 boundary=boundary,
@@ -483,28 +484,7 @@ def select_live_foulplay_continuation_oracle_action(
         except LiveFoulPlayContinuationBoundExceeded:
             if expanded_continuation_decision_rounds is None:
                 raise
-            if progress_callback is not None:
-                progress_callback(
-                    {
-                        "event": "candidate-bound-reached",
-                        "source_decision_round": source_decision_round,
-                        "candidate_index": candidate_index,
-                        "candidate_count": len(candidates),
-                        "action_index": action,
-                        "max_continuation_decision_rounds": max_continuation_decision_rounds,
-                        "expanded_continuation_decision_rounds": expanded_continuation_decision_rounds,
-                    }
-                )
-                progress_callback(
-                    {
-                        "event": "candidate-expansion-started",
-                        "source_decision_round": source_decision_round,
-                        "candidate_index": candidate_index,
-                        "candidate_count": len(candidates),
-                        "action_index": action,
-                        "max_continuation_decision_rounds": expanded_continuation_decision_rounds,
-                    }
-                )
+            expanded = True
             effective_bound = expanded_continuation_decision_rounds
             proof = run_live_foulplay_continuation(
                 boundary=boundary,
@@ -569,38 +549,138 @@ def select_live_foulplay_continuation_oracle_action(
             raise LiveFoulPlayContinuationError(
                 f"live continuation oracle candidate has unknown winner {winner!r}"
             )
-        scored.append(
-            {
-                "action_index": action,
-                "score": score,
-                "continuation_decision_round_count": continuation_decision_round_count,
-                **(
-                    {"max_continuation_decision_rounds": effective_bound}
-                    if effective_bound is not None
-                    else {}
-                ),
-                "terminal": {
-                    "winner": winner,
-                    "turn_count": terminal.get("turn_count"),
-                    "capped": False,
-                },
-                "terminal_after_fixed_joint_step": terminal_after_fixed_joint_step,
-            }
+        scored_candidate = {
+            "action_index": action,
+            "score": score,
+            "continuation_decision_round_count": continuation_decision_round_count,
+            **(
+                {"max_continuation_decision_rounds": effective_bound}
+                if effective_bound is not None
+                else {}
+            ),
+            "terminal": {
+                "winner": winner,
+                "turn_count": terminal.get("turn_count"),
+                "capped": False,
+            },
+            "terminal_after_fixed_joint_step": terminal_after_fixed_joint_step,
+        }
+        return (
+            scored_candidate,
+            max(0, int((perf_counter() - candidate_started) * 1000)),
+            expanded,
         )
+
+    def emit_candidate_started(candidate_index: int, action: int) -> None:
         if progress_callback is not None:
             progress_callback(
                 {
-                    "event": "candidate-completed",
+                    "event": "candidate-started",
                     "source_decision_round": source_decision_round,
                     "candidate_index": candidate_index,
                     "candidate_count": len(candidates),
                     "action_index": action,
-                    "continuation_decision_round_count": continuation_decision_round_count,
-                    "terminal_after_fixed_joint_step": terminal_after_fixed_joint_step,
-                    "terminal_winner": winner,
-                    "elapsed_milliseconds": max(0, int((perf_counter() - candidate_started) * 1000)),
-                    "max_continuation_decision_rounds": effective_bound,
+                    "candidate_parallelism": candidate_parallelism,
+                    "max_continuation_decision_rounds": max_continuation_decision_rounds,
                 }
+            )
+
+    def emit_candidate_result(
+        candidate_index: int,
+        action: int,
+        scored_candidate: Mapping[str, Any],
+        elapsed_milliseconds: int,
+        expanded: bool,
+    ) -> None:
+        if progress_callback is None:
+            return
+        if expanded:
+            progress_callback(
+                {
+                    "event": "candidate-bound-reached",
+                    "source_decision_round": source_decision_round,
+                    "candidate_index": candidate_index,
+                    "candidate_count": len(candidates),
+                    "action_index": action,
+                    "candidate_parallelism": candidate_parallelism,
+                    "max_continuation_decision_rounds": max_continuation_decision_rounds,
+                    "expanded_continuation_decision_rounds": expanded_continuation_decision_rounds,
+                }
+            )
+            progress_callback(
+                {
+                    "event": "candidate-expansion-started",
+                    "source_decision_round": source_decision_round,
+                    "candidate_index": candidate_index,
+                    "candidate_count": len(candidates),
+                    "action_index": action,
+                    "candidate_parallelism": candidate_parallelism,
+                    "max_continuation_decision_rounds": expanded_continuation_decision_rounds,
+                }
+            )
+        terminal = scored_candidate["terminal"]
+        assert isinstance(terminal, Mapping)
+        progress_callback(
+            {
+                "event": "candidate-completed",
+                "source_decision_round": source_decision_round,
+                "candidate_index": candidate_index,
+                "candidate_count": len(candidates),
+                "action_index": action,
+                "candidate_parallelism": candidate_parallelism,
+                "continuation_decision_round_count": scored_candidate[
+                    "continuation_decision_round_count"
+                ],
+                "terminal_after_fixed_joint_step": scored_candidate[
+                    "terminal_after_fixed_joint_step"
+                ],
+                "terminal_winner": terminal["winner"],
+                "elapsed_milliseconds": elapsed_milliseconds,
+                "max_continuation_decision_rounds": scored_candidate.get(
+                    "max_continuation_decision_rounds"
+                ),
+            }
+        )
+
+    scored: list[dict[str, Any]] = []
+    decision_started = perf_counter()
+    indexed_candidates = tuple(enumerate(candidates))
+    if candidate_parallelism == 1 or len(indexed_candidates) == 1:
+        for candidate_index, action in indexed_candidates:
+            emit_candidate_started(candidate_index, action)
+            scored_candidate, elapsed_milliseconds, expanded = score_candidate(action)
+            scored.append(scored_candidate)
+            emit_candidate_result(
+                candidate_index,
+                action,
+                scored_candidate,
+                elapsed_milliseconds,
+                expanded,
+            )
+    else:
+        # Every candidate reconstructs fresh environment and policy instances
+        # from the same immutable boundary. Consume results in legal-action
+        # order so scheduler timing cannot affect the decision or evidence.
+        with ThreadPoolExecutor(
+            max_workers=min(candidate_parallelism, len(indexed_candidates)),
+            thread_name_prefix="live-continuation-candidate",
+        ) as executor:
+            futures = []
+            for candidate_index, action in indexed_candidates:
+                emit_candidate_started(candidate_index, action)
+                futures.append((candidate_index, action, executor.submit(score_candidate, action)))
+            evaluations = [
+                (candidate_index, action, *future.result())
+                for candidate_index, action, future in futures
+            ]
+        for candidate_index, action, scored_candidate, elapsed_milliseconds, expanded in evaluations:
+            scored.append(scored_candidate)
+            emit_candidate_result(
+                candidate_index,
+                action,
+                scored_candidate,
+                elapsed_milliseconds,
+                expanded,
             )
 
     selected = _select_scored_candidate(
@@ -614,6 +694,7 @@ def select_live_foulplay_continuation_oracle_action(
                 "source_decision_round": source_decision_round,
                 "candidate_count": len(candidates),
                 "selected_action_index": selected_action,
+                "candidate_parallelism": candidate_parallelism,
                 "elapsed_milliseconds": max(0, int((perf_counter() - decision_started) * 1000)),
                 "max_continuation_decision_rounds": max_continuation_decision_rounds,
             }
@@ -641,6 +722,7 @@ def select_live_foulplay_continuation_oracle_action(
             },
             "candidate_count": len(candidates),
             "candidate_cap": candidate_cap,
+            "candidate_parallelism": candidate_parallelism,
             "max_continuation_decision_rounds": max_continuation_decision_rounds,
             "expanded_continuation_decision_rounds": expanded_continuation_decision_rounds,
             "legal_action_indices": candidates,

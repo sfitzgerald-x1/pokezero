@@ -51,7 +51,7 @@ _ORIENTATION_REGISTRATION = {
     },
 }
 SOURCE_SCHEMA_VERSION = "pokezero.controlled-foulplay-benchmark.v1"
-ORACLE_RECEIPT_SCHEMA_VERSION = "pokezero.live-foulplay-continuation-oracle.v2"
+ORACLE_RECEIPT_SCHEMA_VERSION = "pokezero.live-foulplay-continuation-oracle.v3"
 # A new causal study cannot use FoulPlay's historical wall-clock-only path.
 # The bridge records a receipt for every native MCTS call in this fixed-work
 # mode; this evaluator verifies the complete receipt rather than trusting the
@@ -395,7 +395,8 @@ def _expected_oracle_action(*, scored: Sequence[Mapping[str, Any]], raw_action: 
 
 
 def _require_oracle_candidate_receipt(
-    item: Mapping[str, Any], *, pokezero_player: str, foulplay_player: str
+    item: Mapping[str, Any], *, pokezero_player: str, foulplay_player: str,
+    candidate_parallelism: int,
 ) -> None:
     if _require_nonnegative_int(item.get("candidate_cap"), field="candidate_cap") != ACTION_COUNT:
         raise B2EvaluationError("oracle receipt does not declare the full PokeZero action-space cap")
@@ -415,6 +416,15 @@ def _require_oracle_candidate_receipt(
         != EXPANDED_CONTINUATION_DECISION_ROUNDS
     ):
         raise B2EvaluationError("oracle receipt does not declare the registered expansion eligibility bound")
+    if (
+        _require_nonnegative_int(
+            item.get("candidate_parallelism"), field="candidate_parallelism"
+        )
+        != candidate_parallelism
+    ):
+        raise B2EvaluationError(
+            "oracle receipt candidate parallelism does not match its arm header"
+        )
     candidates = item.get("candidates")
     if not isinstance(candidates, (list, tuple)) or not candidates:
         raise B2EvaluationError("oracle receipt omits scored legal candidates")
@@ -555,6 +565,7 @@ def _require_controller_receipt(
             "enabled",
             "schema_version",
             "candidate_cap",
+            "candidate_parallelism",
             "max_continuation_decision_rounds",
             "expanded_continuation_decision_rounds",
             "expanded_continuation_decision_rounds",
@@ -572,6 +583,11 @@ def _require_controller_receipt(
         raise B2EvaluationError("B2 arm does not assert controller-only full-state confinement")
     if _require_nonnegative_int(controller.get("candidate_cap"), field="controller.candidate_cap") != ACTION_COUNT:
         raise B2EvaluationError("B2 arm is not using the registered full PokeZero action-space cap")
+    candidate_parallelism = _require_nonnegative_int(
+        controller.get("candidate_parallelism"), field="controller.candidate_parallelism"
+    )
+    if candidate_parallelism <= 0 or candidate_parallelism > ACTION_COUNT:
+        raise B2EvaluationError("B2 arm has an invalid candidate parallelism bound")
     if (
         _require_nonnegative_int(
             controller.get("max_continuation_decision_rounds"),
@@ -662,6 +678,7 @@ def _require_controller_receipt(
                     "first_restored_joint_step",
                     "candidate_count",
                     "candidate_cap",
+                    "candidate_parallelism",
                     "max_continuation_decision_rounds",
                     "expanded_continuation_decision_rounds",
                     "legal_action_indices",
@@ -700,7 +717,10 @@ def _require_controller_receipt(
             if item.get("full_state_snapshot_scope") != "controller-only" or "snapshot" in item:
                 raise B2EvaluationError("oracle receipt leaks or mis-scopes the generic full-state snapshot")
             _require_oracle_candidate_receipt(
-                item, pokezero_player=seat, foulplay_player=expected_foulplay
+                item,
+                pokezero_player=seat,
+                foulplay_player=expected_foulplay,
+                candidate_parallelism=candidate_parallelism,
             )
     else:
         _require_zero(controller.get("oracle_decisions"), field="raw controller.oracle_decisions")
@@ -799,6 +819,7 @@ _ARM_PROVENANCE_KEYS = {
     "capture_driver",
     "belief_set_source",
     "max_decision_rounds",
+    "candidate_parallelism",
     "max_continuation_decision_rounds",
     "expanded_continuation_decision_rounds",
     "foulplay_search_time_ms",
@@ -840,6 +861,8 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
     if provenance.get("max_decision_rounds") != summary.get("max_decision_rounds"):
         raise B2EvaluationError("B2 provenance decision cap does not match its arm")
     controller = _require_mapping(summary.get("live_continuation_oracle"), field="live_continuation_oracle")
+    if provenance.get("candidate_parallelism") != controller.get("candidate_parallelism"):
+        raise B2EvaluationError("B2 provenance candidate parallelism does not match its arm")
     if provenance.get("max_continuation_decision_rounds") != controller.get(
         "max_continuation_decision_rounds"
     ):
@@ -874,6 +897,10 @@ def _require_arm_provenance(summary: Mapping[str, Any]) -> Mapping[str, Any]:
         provenance.get("max_decision_rounds"), field="b2_provenance.max_decision_rounds"
     ) <= 2:
         raise B2EvaluationError("B2 provenance has no room for a mid-game continuation")
+    if _require_nonnegative_int(
+        provenance.get("candidate_parallelism"), field="b2_provenance.candidate_parallelism"
+    ) <= 0:
+        raise B2EvaluationError("B2 provenance has an invalid candidate parallelism bound")
     if (
         _require_nonnegative_int(
             provenance.get("max_continuation_decision_rounds"),
@@ -960,6 +987,7 @@ def validate_experiment_document(
             "unit_index_in_shard",
             "shard_id",
             "candidate_cap",
+            "candidate_parallelism",
             "max_continuation_decision_rounds",
             "expanded_continuation_decision_rounds",
             "arms",
@@ -987,6 +1015,12 @@ def validate_experiment_document(
         raise B2EvaluationError("B2 unit has the wrong registered shard size")
     if registration.get("candidate_cap") != ACTION_COUNT:
         raise B2EvaluationError("B2 unit does not record the registered full action-space cap")
+    candidate_parallelism = _require_nonnegative_int(
+        registration.get("candidate_parallelism"),
+        field="registration.candidate_parallelism",
+    )
+    if candidate_parallelism <= 0 or candidate_parallelism > ACTION_COUNT:
+        raise B2EvaluationError("B2 unit has an invalid registered candidate parallelism bound")
     if registration.get("max_continuation_decision_rounds") != MAX_CONTINUATION_DECISION_ROUNDS:
         raise B2EvaluationError("B2 unit does not record the registered continuation eligibility bound")
     if registration.get("expanded_continuation_decision_rounds") != EXPANDED_CONTINUATION_DECISION_ROUNDS:
@@ -1009,6 +1043,16 @@ def validate_experiment_document(
         raise B2EvaluationError("oracle arm has the wrong treatment identity")
     raw_game = _require_controller_receipt(raw, oracle=False, seat=seat, expected_seed=seed)
     oracle_game = _require_controller_receipt(oracle, oracle=True, seat=seat, expected_seed=seed)
+    for arm_name, arm in (("raw", raw), ("oracle", oracle)):
+        controller = _require_mapping(
+            arm.get("live_continuation_oracle"),
+            field=f"{arm_name} live_continuation_oracle",
+        )
+        if controller.get("candidate_parallelism") != candidate_parallelism:
+            raise B2EvaluationError(
+                "B2 unit registration candidate parallelism does not match "
+                f"the {arm_name} arm"
+            )
     for field in ("seed_start", "foulplay_random_seed"):
         if raw.get(field) != oracle.get(field):
             raise B2EvaluationError(f"paired arms disagree on common-random-number field {field}")
@@ -1096,6 +1140,9 @@ def _arm_provenance(args: argparse.Namespace, summary: Mapping[str, Any]) -> dic
         "capture_driver": summary.get("capture_driver"),
         "belief_set_source": summary.get("belief_set_source"),
         "max_decision_rounds": summary.get("max_decision_rounds"),
+        "candidate_parallelism": _require_mapping(
+            summary.get("live_continuation_oracle"), field="live_continuation_oracle"
+        ).get("candidate_parallelism"),
         "max_continuation_decision_rounds": _require_mapping(
             summary.get("live_continuation_oracle"), field="live_continuation_oracle"
         ).get("max_continuation_decision_rounds"),
@@ -1151,6 +1198,8 @@ def _run_arm(
         args.device,
         "--node-binary",
         args.node_binary,
+        "--live-continuation-oracle-candidate-parallelism",
+        str(args.candidate_parallelism),
         "--json",
     ]
     if oracle:
@@ -1308,6 +1357,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-decision-rounds", type=int, default=64)
     parser.add_argument("--candidate-cap", type=int, default=ACTION_COUNT)
     parser.add_argument(
+        "--candidate-parallelism",
+        type=int,
+        default=1,
+        help=(
+            "Bounded concurrent live-continuation candidates. The selected bound is "
+            "recorded in every arm and unit registration."
+        ),
+    )
+    parser.add_argument(
         "--max-continuation-decision-rounds",
         type=int,
         default=MAX_CONTINUATION_DECISION_ROUNDS,
@@ -1351,6 +1409,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise B2EvaluationError(
             f"B2 candidate cap must be {ACTION_COUNT}: the complete PokeZero action space"
         )
+    if args.candidate_parallelism <= 0 or args.candidate_parallelism > args.candidate_cap:
+        raise B2EvaluationError(
+            "--candidate-parallelism must be positive and no greater than --candidate-cap"
+        )
     if args.max_continuation_decision_rounds != MAX_CONTINUATION_DECISION_ROUNDS:
         raise B2EvaluationError(
             "B2 continuation eligibility bound must be "
@@ -1392,6 +1454,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "unit_index_in_shard": registered_unit["unit_index_in_shard"],
             "shard_id": registered_unit["shard_id"],
             "candidate_cap": args.candidate_cap,
+            "candidate_parallelism": args.candidate_parallelism,
             "max_continuation_decision_rounds": args.max_continuation_decision_rounds,
             "expanded_continuation_decision_rounds": args.expanded_continuation_decision_rounds,
             "arms": (
