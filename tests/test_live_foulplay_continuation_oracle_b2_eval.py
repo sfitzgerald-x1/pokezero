@@ -610,7 +610,7 @@ class B2EvaluatorTest(unittest.TestCase):
         ):
             module.validate_experiment_document(mismatched, expected_experiment_id=diagnostic_id)
 
-    def test_run_arm_forwards_candidate_parallelism_for_raw_and_oracle_arms(self) -> None:
+    def test_run_arm_forwards_registered_continuation_policy_for_raw_and_oracle_arms(self) -> None:
         module = _module()
         args = SimpleNamespace(
             python="python",
@@ -644,8 +644,15 @@ class B2EvaluatorTest(unittest.TestCase):
 
         self.assertEqual(len(commands), 2)
         for command in commands:
-            option_index = command.index("--live-continuation-oracle-candidate-parallelism")
-            self.assertEqual(command[option_index + 1], "3")
+            expected_options = {
+                "--live-continuation-oracle-candidate-cap": "9",
+                "--live-continuation-oracle-candidate-parallelism": "3",
+                "--live-continuation-oracle-max-continuation-decision-rounds": "128",
+                "--live-continuation-oracle-expanded-continuation-decision-rounds": "1024",
+            }
+            for option, expected in expected_options.items():
+                option_index = command.index(option)
+                self.assertEqual(command[option_index + 1], expected)
         self.assertNotIn("--live-continuation-oracle", commands[0])
         self.assertIn("--live-continuation-oracle", commands[1])
 

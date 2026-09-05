@@ -1202,18 +1202,22 @@ def _run_arm(
         args.node_binary,
         "--live-continuation-oracle-candidate-parallelism",
         str(args.candidate_parallelism),
+        # The raw control does not turn the controller on, but its bridge
+        # summary is still provenance for the paired unit.  Supply the same
+        # registered policy bounds to both arms so a bridge default can never
+        # make the control describe a different continuation experiment.
+        "--live-continuation-oracle-candidate-cap",
+        str(args.candidate_cap),
+        "--live-continuation-oracle-max-continuation-decision-rounds",
+        str(args.max_continuation_decision_rounds),
+        "--live-continuation-oracle-expanded-continuation-decision-rounds",
+        str(args.expanded_continuation_decision_rounds),
         "--json",
     ]
     if oracle:
         command.extend(
             [
                 "--live-continuation-oracle",
-                "--live-continuation-oracle-candidate-cap",
-                str(args.candidate_cap),
-                "--live-continuation-oracle-max-continuation-decision-rounds",
-                str(args.max_continuation_decision_rounds),
-                "--live-continuation-oracle-expanded-continuation-decision-rounds",
-                str(args.expanded_continuation_decision_rounds),
             ]
         )
         if args.oracle_progress_dir is not None:
