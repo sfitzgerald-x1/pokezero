@@ -4734,6 +4734,15 @@ def cross_arm_foulplay_contention(
 
 
 class _FoulPlayWebsocketServer:
+    # These are protocol deadlines, rather than transport heartbeats. FoulPlay
+    # is allowed to perform a bounded external CPU search before it replies to a
+    # request, so the websocket library's default 20-second ping timeout is
+    # shorter than a valid decision window. Keeping the deadline here gives the
+    # bridge one explicit, auditable owner for liveness without treating a
+    # still-valid search as a disconnected opponent.
+    _CHALLENGE_TIMEOUT_SECONDS = 30.0
+    _CHOICE_TIMEOUT_SECONDS = 120.0
+
     def __init__(self, *, username: str, host: str, allow_missing_client: bool = False) -> None:
         self.username = username
         self.host = host
@@ -4755,7 +4764,17 @@ class _FoulPlayWebsocketServer:
     async def start(self) -> None:
         import websockets
 
-        self.server = await websockets.serve(self._handle_connection, self.host, 0, max_size=None)
+        # Do not enable websockets' default 20-second ping timeout. The
+        # challenge and choice waits below are the controlled harness's
+        # semantic liveness checks, and remain bounded even when FoulPlay is
+        # legitimately busy computing a move.
+        self.server = await websockets.serve(
+            self._handle_connection,
+            self.host,
+            0,
+            max_size=None,
+            ping_interval=None,
+        )
         socket = self.server.sockets[0]
         self.port = int(socket.getsockname()[1])
 
@@ -4826,23 +4845,39 @@ class _FoulPlayWebsocketServer:
             return
         await self.websocket.send(f">{battle_id}\n" + "\n".join(lines))
 
-    async def wait_for_challenge(self, *, expected_target: str, timeout_seconds: float = 30.0) -> None:
+    async def wait_for_challenge(
+        self,
+        *,
+        expected_target: str,
+        timeout_seconds: float = _CHALLENGE_TIMEOUT_SECONDS,
+    ) -> None:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise TimeoutError("timed out waiting for foul-play challenge.")
-            target = await asyncio.wait_for(self.challenge_queue.get(), timeout=remaining)
+            try:
+                target = await asyncio.wait_for(self.challenge_queue.get(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError("timed out waiting for foul-play challenge.") from exc
             if _showdown_id(target) == _showdown_id(expected_target):
                 return
 
-    async def wait_for_choice(self, *, battle_id: str, timeout_seconds: float = 120.0) -> str:
+    async def wait_for_choice(
+        self,
+        *,
+        battle_id: str,
+        timeout_seconds: float = _CHOICE_TIMEOUT_SECONDS,
+    ) -> str:
         deadline = asyncio.get_running_loop().time() + timeout_seconds
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise TimeoutError("timed out waiting for foul-play choice.")
-            room, choice = await asyncio.wait_for(self.choice_queue.get(), timeout=remaining)
+            try:
+                room, choice = await asyncio.wait_for(self.choice_queue.get(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise TimeoutError("timed out waiting for foul-play choice.") from exc
             if room == battle_id:
                 return choice
 
