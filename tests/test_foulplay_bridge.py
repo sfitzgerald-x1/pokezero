@@ -13,7 +13,7 @@ import tempfile
 import time
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pokezero.foulplay_bridge as foulplay_bridge
 from pokezero.actions import ACTION_COUNT
@@ -88,6 +88,31 @@ from _showdown_root import requires_showdown, showdown_root
 
 
 class FoulPlayBridgeTest(unittest.TestCase):
+    def test_local_server_disables_transport_keepalive_but_retains_protocol_deadlines(self) -> None:
+        """A long valid FoulPlay calculation cannot lose to websockets' 20s default timeout."""
+
+        server = _FoulPlayWebsocketServer(username="FoulPlayBot", host="127.0.0.1")
+        listener = SimpleNamespace(sockets=[SimpleNamespace(getsockname=lambda: ("127.0.0.1", 18181))])
+
+        with patch("websockets.serve", new_callable=AsyncMock, return_value=listener) as serve:
+            asyncio.run(server.start())
+
+        serve.assert_awaited_once_with(
+            server._handle_connection,
+            "127.0.0.1",
+            0,
+            max_size=None,
+            ping_interval=None,
+        )
+
+        async def assert_protocol_deadlines() -> None:
+            with self.assertRaisesRegex(TimeoutError, "timed out waiting for foul-play challenge"):
+                await server.wait_for_challenge(expected_target="PokeZeroBot", timeout_seconds=0.001)
+            with self.assertRaisesRegex(TimeoutError, "timed out waiting for foul-play choice"):
+                await server.wait_for_choice(battle_id="controlled-7", timeout_seconds=0.001)
+
+        asyncio.run(assert_protocol_deadlines())
+
     def test_snapshot_capture_uses_a_correlated_reply(self) -> None:
         bridge = _BattleBridge(showdown_root=Path("/showdown"), node_binary="node")
         sent: list[dict[str, object]] = []
