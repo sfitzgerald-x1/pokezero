@@ -15,7 +15,7 @@ advances only when it clears the next relevant question:
 | --- | --- | --- |
 | Does the tree compute completed values correctly? | Invariants and declared action-choice panel | **Yes, for the batched-backup bug.** |
 | Does it select a better action in a known mechanism case? | Predeclared simple-regret panel | **One selector hypothesis worth testing; not promoted.** |
-| Does less encoding work make real search faster without changing it? | Full-path warm/cold timing and parity | **Unknown.** A microbenchmark is insufficient. |
+| Does less encoding work make real search faster without changing it? | Full-path warm/cold timing and parity | **No reproducible benefit shown.** The first ordered development read is parked. |
 | Does a candidate win more paired games than its frozen MCTS incumbent? | Fresh source-isolated mirrored MCTS-versus-MCTS games | **Unknown. This is the next decisive outcome.** |
 
 The scorecard is intentionally not “tests passed,” simulation count, or PR
@@ -51,6 +51,16 @@ incomplete mirrored pairs from scoring. PR
 source-isolated mode required for different native candidate and incumbent
 builds. Together they are infrastructure for the first strength comparison,
 not strength evidence.
+
+The first fixed-work full-path encoder read is a null result. Across two
+candidate-first blocks, candidate timing looked slower; in a baseline-first
+order flip it was effectively tied (6.131s candidate versus 6.174s baseline
+median). Because the direction reverses with order and times fall sharply over
+the sequence, the result is dominated by warm-state/order effects rather than
+a source-attributable win or loss. The exact receipts, counters, and limits are
+in [the timing readout](mcts-fullpath-timing-readout-20260908.md). Do not
+reinvest encoder time into extra search or claim full numerical parity from this
+timing artifact.
 
 ### A bounded selector hypothesis
 
@@ -143,20 +153,19 @@ evidence of no benefit. Fixed-work remains the primary comparison; latency tails
 are reported but cannot be relabelled as a fixed-wall result without a
 separately enforced decision clock.
 
-### 3. Measure the encoder in the real search path
+### 3. Encoder line is parked unless a new measurement need emerges
 
-Build a small, fixed development timing corpus before collecting numbers: early
-and late game, both acting seats, branch-heavy and branch-light requests, and
-representative histories. In an isolated compatible runtime, run baseline and
-optimized builds in alternating order with fixed work and RNG. Record warm
-search time and its existing subphases (tree, model, encoding, folding,
-rendering, tensor writes, and action mapping); record cold start separately.
+The first declared development corpus was measured in serial source-bound
+processes, including an order flip. It does not provide a reproducible
+end-to-end direction, so no cache, batching, or fixed-wall follow-up is
+authorized from this optimization. A future measurement must randomize order,
+separate cold and warm treatment, and add full numerical tree/array parity
+capture before it can reopen the line.
 
-Require bit-exact encoded arrays, identical completed-tree values/actions, and
-identical refusal/fallback behavior. A partial lattice cell or a benefit that
-vanishes outside encoding is a useful null result, not a reason to tune cache
-or batch parameters. Only a reproducible full-path reduction permits a separate
-fixed-wall experiment that reinvests the saved time.
+A partial lattice cell, missing frozen corpus, or a benefit that vanishes outside
+encoding is a useful null result, not a reason to tune cache or batch parameters.
+Only a reproducible full-path reduction with full parity capture permits a
+separate fixed-wall experiment that reinvests saved time.
 
 ### 4. Qualify or park Q-max without altering production selection
 

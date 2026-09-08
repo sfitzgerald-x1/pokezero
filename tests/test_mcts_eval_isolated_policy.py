@@ -40,8 +40,10 @@ def _spec() -> MctsPolicySpec:
     )
 
 
-def _context() -> PolicyContext:
-    p1_observation = SimpleNamespace(legal_action_mask=(True, False), private="p1")
+def _context(*, padding_bytes: int = 0) -> PolicyContext:
+    p1_observation = SimpleNamespace(
+        legal_action_mask=(True, False), private="p1", padding=b"x" * padding_bytes
+    )
     p2_observation = SimpleNamespace(legal_action_mask=(False, True), private="p2")
     trajectory = SimpleNamespace(
         battle_id="battle",
@@ -117,6 +119,10 @@ mode = start["worker_config"].get("mode", "ok")
 if mode == "bad-receipt":
     write(stdout, {{"type": "hello", "receipt": {{"policy": {{}}}}}})
     raise SystemExit(0)
+if mode == "silent-hello":
+    import time
+    time.sleep(5)
+    raise SystemExit(0)
 if mode == "partial-hello":
     stdout.write(b"\\x00\\x00\\x00\\x00")
     stdout.flush()
@@ -124,6 +130,24 @@ if mode == "partial-hello":
     time.sleep(5)
     raise SystemExit(0)
 write(stdout, {{"type": "hello", "receipt": {{"policy": policy, "worker_pid": 999}}}})
+if mode == "stop-after-hello":
+    import time
+    time.sleep(5)
+    raise SystemExit(0)
+if mode == "close-stdin-after-hello":
+    # Close the inherited descriptor itself: closing BufferedReader alone can
+    # retain a read buffer on some Python/platform combinations.
+    import os
+    os.close(stdin.fileno())
+    import time
+    time.sleep(5)
+    raise SystemExit(0)
+if mode == "ignore-term-after-hello":
+    import signal
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    import time
+    time.sleep(5)
+    raise SystemExit(0)
 while True:
     message = read(stdin)
     if message["type"] == "close":
@@ -263,7 +287,73 @@ class IsolatedPolicyTest(unittest.TestCase):
             )
             started = time.monotonic()
             try:
-                with self.assertRaisesRegex(IsolatedPolicyError, "partial isolated policy worker"):
+                with self.assertRaisesRegex(
+                    IsolatedPolicyError,
+                    "partial isolated policy worker response header: received 4 of 8 bytes",
+                ):
+                    policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
+            finally:
+                policy.close()
+            self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_silent_worker_timeout_is_not_misreported_as_a_partial_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = self._policy(
+                Path(directory), mode="silent-hello", response_timeout_seconds=0.1
+            )
+            started = time.monotonic()
+            try:
+                with self.assertRaisesRegex(
+                    IsolatedPolicyError,
+                    "timed out before receiving isolated policy worker response header",
+                ):
+                    policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
+            finally:
+                policy.close()
+            self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_large_request_to_a_nonreading_worker_cannot_block_past_the_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = self._policy(
+                Path(directory), mode="stop-after-hello", response_timeout_seconds=0.1
+            )
+            started = time.monotonic()
+            try:
+                with self.assertRaisesRegex(
+                    IsolatedPolicyError,
+                    "timed out sending partial isolated policy worker request payload",
+                ):
+                    policy.select_action_with_context(
+                        _context(padding_bytes=1024 * 1024), rng=__import__("random").Random(7)
+                    )
+            finally:
+                policy.close()
+            self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_live_worker_with_closed_input_is_terminated_before_close_can_wait(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = self._policy(
+                Path(directory), mode="close-stdin-after-hello", response_timeout_seconds=0.1
+            )
+            started = time.monotonic()
+            try:
+                with self.assertRaisesRegex(IsolatedPolicyError, "protocol failed"):
+                    policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
+            finally:
+                policy.close()
+            self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_sigterm_ignoring_worker_cannot_start_a_second_deadline_during_close(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = self._policy(
+                Path(directory), mode="ignore-term-after-hello", response_timeout_seconds=0.1
+            )
+            started = time.monotonic()
+            try:
+                with self.assertRaisesRegex(
+                    IsolatedPolicyError,
+                    "timed out before receiving isolated policy worker response header",
+                ):
                     policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
             finally:
                 policy.close()

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build ``pokezero.engine-mcts-timing-corpus.v2`` from held-out games (plan A2).
+"""Build ``pokezero.engine-mcts-timing-corpus.v3`` from held-out games (plan A2).
 
 Each record carries the acting seat's public protocol prefix through its request,
 the canonical public action identifiers needed to replay it,
@@ -9,7 +9,7 @@ it), the seeds needed to reproduce the game, and the public belief inputs.
 
 Games are played from a held-out seed band with the study checkpoint, so the
 decisions are drawn from the distribution the timing lattice will be asked
-about. Every record is labeled on all six strata axes from public state.
+about. Every record is labeled on all seven strata axes from public state.
 """
 
 from __future__ import annotations
@@ -26,9 +26,11 @@ if _SRC.is_dir():
     sys.path.insert(0, str(_SRC))
 
 from pokezero.mcts_eval.timing_corpus import (  # noqa: E402
+    CorpusError,
     TimingDecisionRecord,
     build_corpus,
     label_strata,
+    validate_representative_timing_panel,
     write_corpus,
 )
 from pokezero.public_action_capture import public_action_round_from_protocol_lines  # noqa: E402
@@ -86,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     policy = policy_from_spec(spec)
 
     records: list[TimingDecisionRecord] = []
+    games_played = 0
     import random
 
     for offset in range(args.games):
@@ -142,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
                             forced_switch=str(getattr(state, "request_kind", "")) == "forceSwitch",
                             hidden_world_count=1,
                             turn_index=turn,
+                            legal_action_count=sum(mask),
                         ),
                     )
                 )
@@ -165,18 +169,35 @@ def main(argv: list[str] | None = None) -> int:
             public_rounds.append(action_round)
             turn += 1
         print(f"seed {seed}: {len(records)} decisions so far", flush=True)
+        games_played = offset + 1
+        # A raw count is not enough: one long battle can fill the candidate
+        # pool while omitting a seat, late prefix, or narrow legal mask.  Check
+        # the exact deterministic selection before ending collection early.
         if len(records) >= args.decisions * 2:
-            break
+            try:
+                _, candidate = build_corpus(
+                    records,
+                    held_out_seed_start=args.seed_start,
+                    held_out_seed_end=args.seed_start + games_played,
+                    count=args.decisions,
+                )
+                validate_representative_timing_panel(candidate)
+            except CorpusError as error:  # coverage is retried with the next held-out game
+                print(f"seed {seed}: corpus coverage incomplete ({error})", flush=True)
+            else:
+                break
 
     manifest, selected = build_corpus(
         records,
         held_out_seed_start=args.seed_start,
-        held_out_seed_end=args.seed_start + args.games,
+        held_out_seed_end=args.seed_start + games_played,
         count=min(args.decisions, len(records)),
     )
+    coverage = validate_representative_timing_panel(selected)
     write_corpus(args.out, manifest, selected)
     print(json.dumps({"decisions": manifest.decision_count, "sha256": manifest.corpus_sha256[:16],
-                      "buckets": {k: v for k, v in manifest.bucket_counts.items() if v}}, indent=2))
+                      "buckets": {k: v for k, v in manifest.bucket_counts.items() if v},
+                      "representativeness": coverage}, indent=2))
     return 0
 
 

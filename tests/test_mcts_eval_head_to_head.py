@@ -72,6 +72,21 @@ class _IsolatedPolicy(_Policy):
     is_source_isolated = True
 
 
+class IsolatedRunnerCliTest(unittest.TestCase):
+    def test_default_response_deadline_covers_observed_search_tail_budget(self) -> None:
+        module = _runner_module()
+        args = module.build_parser().parse_args(
+            [
+                "--checkpoint", "/checkpoint.pt",
+                "--showdown-root", "/showdown",
+                "--manifest", "/manifest.json",
+                "--out-dir", "/out",
+            ]
+        )
+
+        self.assertEqual(args.isolated_worker_timeout_seconds, 180.0)
+
+
 @dataclass(frozen=True)
 class _PilotConfig:
     search_sims: int = 256
@@ -558,6 +573,11 @@ class SourceReceiptTest(unittest.TestCase):
             "tree_status": "clean_tracked_checkout",
             "engine_fingerprint": incumbent.engine_fingerprint,
             "worker_bootstrap_sha256": "a" * 64,
+            "reset_protocol": "policy_method_or_fresh_source_policy.v1",
+            "config_compatibility": {
+                "protocol": "disabled-diagnostic-omission.v1",
+                "omitted_disabled_fields": [],
+            },
         }
         self.assertEqual(
             module._validate_isolated_receipt(
@@ -569,6 +589,57 @@ class SourceReceiptTest(unittest.TestCase):
         with self.assertRaisesRegex(HeadToHeadError, "clean source checkout"):
             module._validate_isolated_receipt(
                 receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
+            )
+        receipt["tree_status"] = "clean_tracked_checkout"
+        receipt.pop("reset_protocol")
+        with self.assertRaisesRegex(HeadToHeadError, "source-safe reset protocol"):
+            module._validate_isolated_receipt(
+                receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
+            )
+
+    def test_isolated_worker_receipt_refuses_behavior_bearing_compatibility_omission(self) -> None:
+        module = _runner_module()
+        incumbent = _spec(
+            "incumbent",
+            policy_id="incumbent",
+            config={
+                "leaf_eval": "model",
+                "search_sims": 32,
+                "search_batch": 1,
+                "root_selector_shadow": True,
+            },
+        )
+        receipt = {
+            "policy": incumbent.to_payload(),
+            "commit": incumbent.source_commit,
+            "tree_sha256": incumbent.source_tree_sha256,
+            "tree_status": "clean_tracked_checkout",
+            "engine_fingerprint": incumbent.engine_fingerprint,
+            "worker_bootstrap_sha256": "a" * 64,
+            "reset_protocol": "policy_method_or_fresh_source_policy.v1",
+            "config_compatibility": {
+                "protocol": "disabled-diagnostic-omission.v1",
+                "omitted_disabled_fields": ["root_selector_shadow"],
+            },
+        }
+
+        with self.assertRaisesRegex(HeadToHeadError, "not explicitly disabled"):
+            module._validate_isolated_receipt(
+                receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
+            )
+
+        missing_field_policy = _spec("incumbent", policy_id="incumbent")
+        receipt["policy"] = missing_field_policy.to_payload()
+        receipt["config_compatibility"] = {
+            "protocol": "disabled-diagnostic-omission.v1",
+            "omitted_disabled_fields": ["root_selector_shadow"],
+        }
+        with self.assertRaisesRegex(HeadToHeadError, "not explicitly disabled"):
+            module._validate_isolated_receipt(
+                receipt,
+                policy=missing_field_policy,
+                role="incumbent",
+                bootstrap_sha256="a" * 64,
             )
 
     def test_isolated_worker_stderr_keeps_prior_attempts_and_gives_a_retry_a_fresh_path(self) -> None:

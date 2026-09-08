@@ -17,11 +17,20 @@ import struct
 import subprocess
 import sys
 from types import SimpleNamespace
-from typing import Any, BinaryIO, Mapping
+from typing import Any, BinaryIO, Callable, Mapping
 
 
 PROTOCOL_VERSION = "pokezero.isolated-mcts-policy.v1"
 MAX_FRAME_BYTES = 64 * 1024 * 1024
+RESET_PROTOCOL = "policy_method_or_fresh_source_policy.v1"
+# A newer host may include an observability-only selector flag which did not
+# exist in the frozen source being evaluated. We may omit such a flag only
+# when it is explicitly disabled. Anything behavior-bearing must fail closed.
+CONFIG_COMPATIBILITY_PROTOCOL = "disabled-diagnostic-omission.v1"
+DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
+    "root_selector_q": False,
+    "root_selector_shadow": False,
+}
 STATS_FIELDS = (
     "decisions",
     "searched_decisions",
@@ -37,6 +46,46 @@ STATS_FIELDS = (
 
 class WorkerError(RuntimeError):
     """The worker cannot provide a source-bound policy decision."""
+
+
+def source_engine_config_payload(
+    config_payload: Mapping[str, Any], config_type: Any
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Project a host config onto an older source without changing its behavior.
+
+    The isolated worker must construct the declared historical source policy,
+    even if the host gained later diagnostics. This deliberately permits only
+    named diagnostic fields at their disabled defaults, and reports every
+    omission in the source receipt for the host to validate.
+    """
+
+    source_fields = getattr(config_type, "__dataclass_fields__", None)
+    if not isinstance(source_fields, Mapping) or not source_fields:
+        raise WorkerError("isolated source EngineMctsConfig has no dataclass field contract.")
+    unsupported = sorted(set(config_payload).difference(source_fields))
+    omitted: list[str] = []
+    for field_name in unsupported:
+        expected = DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS.get(field_name)
+        if field_name not in DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS:
+            raise WorkerError(
+                "isolated source EngineMctsConfig does not support host field "
+                f"{field_name!r}."
+            )
+        if config_payload[field_name] != expected:
+            raise WorkerError(
+                "isolated source EngineMctsConfig does not support "
+                f"{field_name!r}, but the declared policy enables it."
+            )
+        omitted.append(field_name)
+    projected = {
+        field_name: value
+        for field_name, value in config_payload.items()
+        if field_name in source_fields
+    }
+    return projected, {
+        "protocol": CONFIG_COMPATIBILITY_PROTOCOL,
+        "omitted_disabled_fields": omitted,
+    }
 
 
 def _read_exact(stream: BinaryIO, size: int) -> bytes:
@@ -166,6 +215,44 @@ def showdown_sha256(root: Path) -> str:
         digest.update(str(path.relative_to(root)).encode("utf-8"))
         digest.update(bytes.fromhex(_sha256_file(path)))
     return digest.hexdigest()
+
+
+def _reset_policy(policy: Any, *, recreate: Any) -> tuple[Any, str]:
+    """Return a policy with no preceding-battle state and monotonic telemetry.
+
+    Current sources provide ``EngineMctsPolicy.reset``.  The source-isolated
+    comparison intentionally also runs historical commits that predate that
+    method, and quietly retaining their live fold would make the comparison
+    invalid.  For those declared historical sources, construct a fresh policy
+    from the same verified source/config and attach the old cumulative stats
+    object.  The parent records per-game deltas from that object, so its
+    monotonicity is part of the transport contract rather than an incidental
+    implementation detail.
+    """
+
+    reset = getattr(policy, "reset", None)
+    if callable(reset):
+        reset()
+        return policy, "policy_method"
+
+    stats = getattr(policy, "stats", None)
+    if stats is None:
+        raise WorkerError(
+            "isolated MCTS policy has no reset lifecycle or cumulative telemetry to carry."
+        )
+    try:
+        rebuilt = recreate()
+    except Exception as error:
+        raise WorkerError(f"cannot reconstruct isolated MCTS policy at reset: {error}") from error
+    if getattr(rebuilt, "stats", None) is None:
+        raise WorkerError("reconstructed isolated MCTS policy has no cumulative telemetry surface.")
+    try:
+        rebuilt.stats = stats
+    except Exception as error:
+        raise WorkerError(
+            "reconstructed isolated MCTS policy cannot retain cumulative telemetry."
+        ) from error
+    return rebuilt, "fresh_source_policy"
 
 
 class SnapshotAnnotationSource:
@@ -318,7 +405,13 @@ def _decision_payload(decision: Any) -> dict[str, Any]:
 
 def _worker_start(
     message: Mapping[str, Any],
-) -> tuple[Any, SnapshotAnnotationSource, dict[str, Any], Any]:
+) -> tuple[
+    Any,
+    Callable[[], Any],
+    SnapshotAnnotationSource,
+    dict[str, Any],
+    Any,
+]:
     if message.get("type") != "start" or message.get("protocol_version") != PROTOCOL_VERSION:
         raise WorkerError("host did not begin the expected isolated policy protocol.")
     policy = message.get("policy")
@@ -372,16 +465,23 @@ def _worker_start(
     fingerprint = str(compute_fingerprint()["fingerprint"])
     if fingerprint != str(policy.get("engine_fingerprint", "")):
         raise WorkerError("isolated policy engine fingerprint does not match its declared policy.")
+    source_config_payload, config_compatibility = source_engine_config_payload(
+        config_payload, EngineMctsConfig
+    )
     annotations = SnapshotAnnotationSource()
-    try:
-        engine_config = EngineMctsConfig(**dict(config_payload))
-        engine_policy = EngineMctsPolicy(
+
+    def make_engine_policy() -> Any:
+        engine_config = EngineMctsConfig(**source_config_payload)
+        return EngineMctsPolicy(
             dex=load_showdown_dex_cached(showdown_root),
             set_source=load_gen3_randbat_source_cached(showdown_root),
             config=engine_config,
             policy_id=str(policy.get("policy_id", "")),
             annotation_source=annotations,
         )
+
+    try:
+        engine_policy = make_engine_policy()
     except Exception as error:
         raise WorkerError(f"cannot construct isolated MCTS policy: {error}") from error
     receipt.update(
@@ -389,9 +489,11 @@ def _worker_start(
             "engine_fingerprint": fingerprint,
             "policy": dict(policy),
             "worker_bootstrap_sha256": bootstrap_sha256,
+            "reset_protocol": RESET_PROTOCOL,
+            "config_compatibility": config_compatibility,
         }
     )
-    return engine_policy, annotations, receipt, PolicyContext
+    return engine_policy, make_engine_policy, annotations, receipt, PolicyContext
 
 
 def _serve() -> int:
@@ -399,7 +501,7 @@ def _serve() -> int:
     stdout = sys.stdout.buffer
     try:
         start = read_frame(stdin)
-        policy, annotations, receipt, policy_context_type = _worker_start(start)
+        policy, recreate_policy, annotations, receipt, policy_context_type = _worker_start(start)
     except Exception as error:
         write_frame(stdout, {"type": "error", "message": str(error)})
         return 2
@@ -412,8 +514,8 @@ def _serve() -> int:
                 write_frame(stdout, {"type": "close"})
                 return 0
             if kind == "reset":
-                policy.reset()
-                write_frame(stdout, {"type": "reset"})
+                policy, strategy = _reset_policy(policy, recreate=recreate_policy)
+                write_frame(stdout, {"type": "reset", "strategy": strategy})
                 continue
             if kind != "decide":
                 raise WorkerError(f"unsupported isolated policy request {kind!r}.")

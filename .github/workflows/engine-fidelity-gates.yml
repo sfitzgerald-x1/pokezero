@@ -1535,6 +1535,13 @@ jobs:
       # EXACT count, not a floor, for the reason #1163 gave: a floor was the one fail-open
       # in its mutation battery, and this guard lives in YAML where no local `unittest`
       # run can see it.
+      #
+      # 202 -> 211 on this merge tree: the selector-shadow hardening adds eight checks;
+      # the isolated-worker lifecycle repair adds `EngineMctsPolicyResetTest`, which
+      # proves a completed battle cannot carry live folds, consumed annotations, or
+      # ladder state into the next battle while cumulative telemetry remains cumulative.
+      # Counted from the real merged suite, not the diff; the exact-count guard below
+      # rejects a stale suite size rather than treating it as a pass.
       - name: Engine-search telemetry pins
         run: |
           set -o pipefail
