@@ -401,6 +401,7 @@ class IsolatedMctsPolicy:
     _stderr_handle: BinaryIO | None = field(default=None, init=False, repr=False)
     _stats: IsolatedPolicyStats = field(default_factory=IsolatedPolicyStats, init=False)
     _closed: bool = field(default=False, init=False)
+    _transport_failed: bool = field(default=False, init=False, repr=False)
     worker_receipt: Mapping[str, Any] | None = field(default=None, init=False)
 
     @property
@@ -472,19 +473,31 @@ class IsolatedMctsPolicy:
             return
         try:
             if self._process is not None and self._process.poll() is None:
-                try:
-                    self._request({"type": "close"})
-                except IsolatedPolicyError:
-                    pass
-                try:
-                    self._process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self._process.terminate()
+                if self._transport_failed:
+                    # The framed channel is no longer safe: never start a
+                    # second request/deadline while cleaning it up.
+                    try:
+                        self._process.kill()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        self._process.wait(timeout=0.25)
+                    except subprocess.TimeoutExpired:
+                        pass
+                else:
+                    try:
+                        self._request({"type": "close"})
+                    except IsolatedPolicyError:
+                        pass
                     try:
                         self._process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        self._process.kill()
-                        self._process.wait(timeout=5)
+                        self._process.terminate()
+                        try:
+                            self._process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            self._process.kill()
+                            self._process.wait(timeout=5)
         finally:
             if self._process is not None:
                 for stream in (self._process.stdin, self._process.stdout):
@@ -548,6 +561,7 @@ class IsolatedMctsPolicy:
         self, process: subprocess.Popen[bytes], payload: Mapping[str, Any]
     ) -> Mapping[str, Any]:
         if process.stdin is None or process.stdout is None:
+            self._abort_after_transport_error(process)
             raise IsolatedPolicyError("isolated policy worker has no binary protocol pipes.")
         deadline = monotonic() + self.launch.response_timeout_seconds
         try:
@@ -559,24 +573,29 @@ class IsolatedMctsPolicy:
             )
             return _read_frame_until(process.stdout, process=process, deadline=deadline)
         except (BrokenPipeError, EOFError, OSError) as error:
-            self._terminate_after_transport_error(process)
+            self._abort_after_transport_error(process)
             raise IsolatedPolicyError(
                 f"isolated policy worker protocol failed: {error}{_worker_exit_detail(process)}"
             ) from error
         except IsolatedPolicyError:
-            self._terminate_after_transport_error(process)
+            self._abort_after_transport_error(process)
             raise
 
-    @staticmethod
-    def _terminate_after_transport_error(process: subprocess.Popen[bytes]) -> None:
-        """Stop an unsafe worker immediately; ``close`` performs the reap."""
+    def _abort_after_transport_error(self, process: subprocess.Popen[bytes]) -> None:
+        """Mark a broken channel terminally failed and stop its child now."""
 
-        # A worker that has stopped either reading or writing cannot be left
-        # alive to consume a later game's resources. Do not wait here: the
-        # caller's close path reaps it, while the full request/response deadline
-        # remains the upper bound on the current rollout call.
+        # A worker that has stopped either reading or writing cannot safely
+        # receive a graceful close request. Mark it before signalling, so the
+        # public close path is reap-only and cannot begin a second full
+        # request/response deadline. SIGKILL is deliberate here: a failed
+        # isolated policy invalidates the game, so preserving a child-side
+        # graceful shutdown cannot justify delayed host cleanup.
+        self._transport_failed = True
         if process.poll() is None:
-            process.terminate()
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
 
     @staticmethod
     def _raise_worker_response(response: Mapping[str, Any], *, expected: str) -> None:

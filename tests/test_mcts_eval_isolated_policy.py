@@ -142,6 +142,12 @@ if mode == "close-stdin-after-hello":
     import time
     time.sleep(5)
     raise SystemExit(0)
+if mode == "ignore-term-after-hello":
+    import signal
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    import time
+    time.sleep(5)
+    raise SystemExit(0)
 while True:
     message = read(stdin)
     if message["type"] == "close":
@@ -332,6 +338,22 @@ class IsolatedPolicyTest(unittest.TestCase):
             started = time.monotonic()
             try:
                 with self.assertRaisesRegex(IsolatedPolicyError, "protocol failed"):
+                    policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
+            finally:
+                policy.close()
+            self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_sigterm_ignoring_worker_cannot_start_a_second_deadline_during_close(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = self._policy(
+                Path(directory), mode="ignore-term-after-hello", response_timeout_seconds=0.1
+            )
+            started = time.monotonic()
+            try:
+                with self.assertRaisesRegex(
+                    IsolatedPolicyError,
+                    "timed out before receiving isolated policy worker response header",
+                ):
                     policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
             finally:
                 policy.close()
