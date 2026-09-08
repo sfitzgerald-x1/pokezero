@@ -1535,12 +1535,18 @@ jobs:
       # EXACT count, not a floor, for the reason #1163 gave: a floor was the one fail-open
       # in its mutation battery, and this guard lives in YAML where no local `unittest`
       # run can see it.
+      #
+      # 202 -> 203 with the isolated-worker lifecycle repair: the new
+      # `EngineMctsPolicyResetTest` proves a completed battle cannot carry live folds,
+      # consumed annotations, or ladder state into the next battle, while cumulative
+      # telemetry remains cumulative. Counted from the real suite in this PR; the
+      # re-adjudication gate independently rejects a stale exact count.
       - name: Engine-search telemetry pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 202 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 202 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 203 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 203 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
