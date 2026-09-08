@@ -20,9 +20,18 @@ worker_error = WORKER["WorkerError"]
 
 
 class IsolatedPolicyWorkerResetTest(unittest.TestCase):
-    def test_reset_refuses_policy_without_lifecycle(self) -> None:
-        with self.assertRaises(worker_error):
-            reset_policy(object())
+    def test_reset_reconstructs_policy_without_lifecycle_and_retains_telemetry(self) -> None:
+        class HistoricalPolicy:
+            def __init__(self, stats: object) -> None:
+                self.stats = stats
+
+        stats = object()
+        policy = HistoricalPolicy(stats)
+        rebuilt = HistoricalPolicy(object())
+        result, strategy = reset_policy(policy, recreate=lambda: rebuilt)
+        self.assertIs(result, rebuilt)
+        self.assertIs(result.stats, stats)
+        self.assertEqual(strategy, "fresh_source_policy")
 
     def test_reset_forwards_to_stateful_policy(self) -> None:
         class StatefulPolicy:
@@ -32,8 +41,17 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
                 self.calls += 1
 
         policy = StatefulPolicy()
-        reset_policy(policy)
+        result, strategy = reset_policy(policy, recreate=lambda: self.fail("must not rebuild"))
+        self.assertIs(result, policy)
         self.assertEqual(policy.calls, 1)
+        self.assertEqual(strategy, "policy_method")
+
+    def test_reset_refuses_a_historical_policy_when_reconstruction_loses_telemetry(self) -> None:
+        class HistoricalPolicy:
+            stats = object()
+
+        with self.assertRaisesRegex(worker_error, "cumulative telemetry"):
+            reset_policy(HistoricalPolicy(), recreate=lambda: object())
 
     def test_reset_frame_invokes_lifecycle_before_acknowledging(self) -> None:
         class StatefulPolicy:
@@ -57,14 +75,22 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
             patch.object(WORKER["sys"], "stdout", fake_stdout),
             patch.dict(
                 serve.__globals__,
-                {"_worker_start": lambda _start: (policy, object(), {}, object)},
+                {
+                    "_worker_start": lambda _start: (
+                        policy,
+                        lambda: self.fail("must not rebuild"),
+                        object(),
+                        {},
+                        object(),
+                    )
+                },
             ),
         ):
             self.assertEqual(serve(), 0)
 
         outbound.seek(0)
         self.assertEqual(read_frame(outbound), {"type": "hello", "receipt": {}})
-        self.assertEqual(read_frame(outbound), {"type": "reset"})
+        self.assertEqual(read_frame(outbound), {"type": "reset", "strategy": "policy_method"})
         self.assertEqual(read_frame(outbound), {"type": "close"})
         self.assertEqual(policy.calls, 1)
 

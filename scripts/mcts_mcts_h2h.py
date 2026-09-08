@@ -485,6 +485,10 @@ def _validate_isolated_receipt(
         raise HeadToHeadError(
             "isolated worker receipt bootstrap differs from the host's declared adapter."
         )
+    if payload.get("reset_protocol") != "policy_method_or_fresh_source_policy.v1":
+        raise HeadToHeadError(
+            "isolated worker receipt does not attest the required source-safe reset protocol."
+        )
     return dict(payload)
 
 

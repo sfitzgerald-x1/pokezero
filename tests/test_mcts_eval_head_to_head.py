@@ -409,6 +409,7 @@ class SourceReceiptTest(unittest.TestCase):
             "tree_status": "clean_tracked_checkout",
             "engine_fingerprint": incumbent.engine_fingerprint,
             "worker_bootstrap_sha256": "a" * 64,
+            "reset_protocol": "policy_method_or_fresh_source_policy.v1",
         }
         self.assertEqual(
             module._validate_isolated_receipt(
@@ -418,6 +419,12 @@ class SourceReceiptTest(unittest.TestCase):
         )
         receipt["tree_status"] = "dirty"
         with self.assertRaisesRegex(HeadToHeadError, "clean source checkout"):
+            module._validate_isolated_receipt(
+                receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
+            )
+        receipt["tree_status"] = "clean_tracked_checkout"
+        receipt.pop("reset_protocol")
+        with self.assertRaisesRegex(HeadToHeadError, "source-safe reset protocol"):
             module._validate_isolated_receipt(
                 receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
             )

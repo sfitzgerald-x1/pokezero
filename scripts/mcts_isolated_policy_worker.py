@@ -22,6 +22,7 @@ from typing import Any, BinaryIO, Mapping
 
 PROTOCOL_VERSION = "pokezero.isolated-mcts-policy.v1"
 MAX_FRAME_BYTES = 64 * 1024 * 1024
+RESET_PROTOCOL = "policy_method_or_fresh_source_policy.v1"
 STATS_FIELDS = (
     "decisions",
     "searched_decisions",
@@ -168,13 +169,42 @@ def showdown_sha256(root: Path) -> str:
     return digest.hexdigest()
 
 
-def _reset_policy(policy: Any) -> None:
-    """Require the worker policy to clear its preceding game's state."""
+def _reset_policy(policy: Any, *, recreate: Any) -> tuple[Any, str]:
+    """Return a policy with no preceding-battle state and monotonic telemetry.
+
+    Current sources provide ``EngineMctsPolicy.reset``.  The source-isolated
+    comparison intentionally also runs historical commits that predate that
+    method, and quietly retaining their live fold would make the comparison
+    invalid.  For those declared historical sources, construct a fresh policy
+    from the same verified source/config and attach the old cumulative stats
+    object.  The parent records per-game deltas from that object, so its
+    monotonicity is part of the transport contract rather than an incidental
+    implementation detail.
+    """
 
     reset = getattr(policy, "reset", None)
-    if not callable(reset):
-        raise WorkerError("isolated MCTS policy lacks the required reset lifecycle.")
-    reset()
+    if callable(reset):
+        reset()
+        return policy, "policy_method"
+
+    stats = getattr(policy, "stats", None)
+    if stats is None:
+        raise WorkerError(
+            "isolated MCTS policy has no reset lifecycle or cumulative telemetry to carry."
+        )
+    try:
+        rebuilt = recreate()
+    except Exception as error:
+        raise WorkerError(f"cannot reconstruct isolated MCTS policy at reset: {error}") from error
+    if getattr(rebuilt, "stats", None) is None:
+        raise WorkerError("reconstructed isolated MCTS policy has no cumulative telemetry surface.")
+    try:
+        rebuilt.stats = stats
+    except Exception as error:
+        raise WorkerError(
+            "reconstructed isolated MCTS policy cannot retain cumulative telemetry."
+        ) from error
+    return rebuilt, "fresh_source_policy"
 
 
 class SnapshotAnnotationSource:
@@ -382,15 +412,18 @@ def _worker_start(
     if fingerprint != str(policy.get("engine_fingerprint", "")):
         raise WorkerError("isolated policy engine fingerprint does not match its declared policy.")
     annotations = SnapshotAnnotationSource()
-    try:
+    def make_engine_policy() -> Any:
         engine_config = EngineMctsConfig(**dict(config_payload))
-        engine_policy = EngineMctsPolicy(
+        return EngineMctsPolicy(
             dex=load_showdown_dex_cached(showdown_root),
             set_source=load_gen3_randbat_source_cached(showdown_root),
             config=engine_config,
             policy_id=str(policy.get("policy_id", "")),
             annotation_source=annotations,
         )
+
+    try:
+        engine_policy = make_engine_policy()
     except Exception as error:
         raise WorkerError(f"cannot construct isolated MCTS policy: {error}") from error
     receipt.update(
@@ -398,9 +431,10 @@ def _worker_start(
             "engine_fingerprint": fingerprint,
             "policy": dict(policy),
             "worker_bootstrap_sha256": bootstrap_sha256,
+            "reset_protocol": RESET_PROTOCOL,
         }
     )
-    return engine_policy, annotations, receipt, PolicyContext
+    return engine_policy, make_engine_policy, annotations, receipt, PolicyContext
 
 
 def _serve() -> int:
@@ -408,7 +442,7 @@ def _serve() -> int:
     stdout = sys.stdout.buffer
     try:
         start = read_frame(stdin)
-        policy, annotations, receipt, policy_context_type = _worker_start(start)
+        policy, recreate_policy, annotations, receipt, policy_context_type = _worker_start(start)
     except Exception as error:
         write_frame(stdout, {"type": "error", "message": str(error)})
         return 2
@@ -421,8 +455,8 @@ def _serve() -> int:
                 write_frame(stdout, {"type": "close"})
                 return 0
             if kind == "reset":
-                _reset_policy(policy)
-                write_frame(stdout, {"type": "reset"})
+                policy, strategy = _reset_policy(policy, recreate=recreate_policy)
+                write_frame(stdout, {"type": "reset", "strategy": strategy})
                 continue
             if kind != "decide":
                 raise WorkerError(f"unsupported isolated policy request {kind!r}.")
