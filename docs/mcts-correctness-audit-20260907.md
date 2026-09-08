@@ -74,6 +74,8 @@ the native build, then run from the repository root:
 PYO3_PYTHON="$SEARCH_TEST_PYTHON" CARGO_BUILD_JOBS=4 cargo test --manifest-path rust/pokezero-search/Cargo.toml --lib colliding_batch -- --nocapture
 PYO3_PYTHON="$SEARCH_TEST_PYTHON" CARGO_BUILD_JOBS=4 cargo test --manifest-path rust/pokezero-search/Cargo.toml -- --quiet
 .venv/bin/python -m unittest tests.test_search tests.test_search_policy tests.test_search_benchmark -q
+.venv/bin/python scripts/engine_build_fingerprint.py --print
+.venv/bin/python -m unittest tests.test_terminal_disposition_register tests.test_public_invariant -q
 git diff --check
 ```
 
@@ -105,3 +107,24 @@ that does not replace a model-feature integration run on a compatible toolchain.
 Batch > 1 still changes the selection schedule versus sequential PUCT; the fix
 does not certify batch-size equivalence or erase existing fidelity safeguards.
 Historical batch results should not be relabeled as corrected results.
+
+## CI provenance follow-up
+
+Engine CI on `d6055053f6ee05d44dd9fc112d6c4b823c8da4c2` failed with exit 1
+at the terminal-disposition register: three of 53 tests detected the same stale
+`t1.head_fingerprint`. This was reproduced locally with the same three failures
+and exit 1. The later search/model CI steps were skipped, not passed.
+
+After fetching `origin/main` and confirming it was already an ancestor of this
+branch (`dacb6358d9b145ce069d6718662a38f581a38bc0`), the existing fingerprint
+script re-derived
+`4567e02eb98cf4ed9f9618fe0b1f4f04b1d0665f67b849ddfa68316b812346e8`.
+Both changed native source files, `tree.rs` and `model.rs`, are hashed inputs;
+the register still recorded the baseline prefix `a6b50fec0622b6ee`.
+The follow-up refreshes the register's current-source prose and Appendix A, preserving the old
+baseline as a historical table row and recording the two inputs that moved it.
+No test, hashing rule, historical sweep artifact, or frozen-claim status changes.
+This source identity update does not attest a new binary or a completed sweep.
+The refreshed register and public-invariant suites pass together: **57 tests,
+exit 0**, with no skips. Full GitHub CI, including the previously skipped
+search/model steps, still must pass before merge.
