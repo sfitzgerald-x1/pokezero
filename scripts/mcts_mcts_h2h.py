@@ -35,10 +35,25 @@ from pokezero.mcts_eval.head_to_head import (  # noqa: E402
     summarize_complete_pairs,
     write_game_immutable,
 )
+from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_mean  # noqa: E402
 
 
 MANIFEST_SCHEMA_VERSION = "pokezero.mcts-h2h-manifest.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-h2h-complete.v1"
+BACKUP_REPAIR_PILOT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot.v1"
+BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot-readout.v1"
+
+# This is intentionally a one-contrast contract rather than a tunable study
+# registry.  The first strength read must isolate the batched-backup repair;
+# accepting a later source or an arbitrary comparison here would let a bundled
+# treatment inherit this pilot's decision rule.
+BACKUP_REPAIR_CANDIDATE_COMMIT = "df4e3ce15ee69f922f6ae1b81c7b5e9861828319"
+BACKUP_REPAIR_INCUMBENT_COMMIT = "dacb6358d9b145ce069d6718662a38f581a38bc0"
+BACKUP_REPAIR_PILOT_PAIRS = 12
+BACKUP_REPAIR_CONFIRMATION_PAIRS = 50
+BACKUP_REPAIR_BOOTSTRAP_RESAMPLES = 10_000
+BACKUP_REPAIR_PILOT_CONFIDENCE = 0.80
+BACKUP_REPAIR_MINIMUM_EFFECT_DELTA = 0.05
 
 
 def _sha256_file(path: str | Path) -> str:
@@ -428,6 +443,173 @@ def _seeds(manifest: Mapping[str, Any]) -> tuple[int, ...]:
     return seeds
 
 
+def _backup_repair_pilot_contract(
+    manifest: Mapping[str, Any],
+    *,
+    seeds: tuple[int, ...],
+    bootstrap: Mapping[str, Any],
+    candidate_raw: Mapping[str, Any],
+    incumbent_raw: Mapping[str, Any],
+    candidate_config: Any,
+    incumbent_config: Any,
+) -> dict[str, Any] | None:
+    """Validate the fixed first-strength-pilot contract before it can run.
+
+    Generic MCTS-vs-MCTS manifests remain useful for diagnostics.  A manifest
+    opting into this schema, however, receives a deliberately narrow contract:
+    corrected batched backups versus the frozen predecessor, the exact pilot
+    roster and its separately reserved confirmation roster, equal configured
+    work, and the predeclared readout rule.  This prevents a result from being
+    retrospectively called the backup-repair pilot after configuration, seed,
+    or analysis drift.
+    """
+
+    study = manifest.get("study")
+    if study is None:
+        return None
+    payload = _mapping(study, label="manifest.study")
+    if payload.get("schema_version") != BACKUP_REPAIR_PILOT_SCHEMA_VERSION:
+        raise HeadToHeadError(
+            "manifest.study is not the registered backup-repair pilot schema."
+        )
+    if payload.get("stage") != "pilot":
+        raise HeadToHeadError("backup-repair study must declare stage='pilot'.")
+    if str(candidate_raw.get("source_commit", "")) != BACKUP_REPAIR_CANDIDATE_COMMIT:
+        raise HeadToHeadError(
+            "backup-repair pilot candidate must be the merged corrected-backup commit."
+        )
+    if str(incumbent_raw.get("source_commit", "")) != BACKUP_REPAIR_INCUMBENT_COMMIT:
+        raise HeadToHeadError(
+            "backup-repair pilot incumbent must be the frozen pre-repair commit."
+        )
+    if str(candidate_raw.get("config_id", "")) == str(incumbent_raw.get("config_id", "")):
+        raise HeadToHeadError(
+            "backup-repair pilot candidate and incumbent require distinct config_id values."
+        )
+    if asdict(candidate_config) != asdict(incumbent_config):
+        raise HeadToHeadError(
+            "backup-repair pilot policies must use identical EngineMctsConfig values; "
+            "the repair source is the only treatment."
+        )
+    if len(seeds) != BACKUP_REPAIR_PILOT_PAIRS:
+        raise HeadToHeadError(
+            f"backup-repair pilot requires exactly {BACKUP_REPAIR_PILOT_PAIRS} mirrored pairs."
+        )
+    if int(bootstrap.get("resamples", 0)) != BACKUP_REPAIR_BOOTSTRAP_RESAMPLES:
+        raise HeadToHeadError(
+            "backup-repair pilot requires exactly 10,000 bootstrap resamples."
+        )
+    if float(bootstrap.get("confidence_level", -1.0)) != BACKUP_REPAIR_PILOT_CONFIDENCE:
+        raise HeadToHeadError(
+            "backup-repair pilot requires its predeclared 80% bootstrap interval."
+        )
+    if float(payload.get("minimum_effect_delta", -1.0)) != BACKUP_REPAIR_MINIMUM_EFFECT_DELTA:
+        raise HeadToHeadError(
+            "backup-repair pilot requires its predeclared +0.05 minimum effect."
+        )
+    confirmation_raw = payload.get("reserved_confirmation_seeds")
+    if not isinstance(confirmation_raw, list):
+        raise HeadToHeadError(
+            "backup-repair pilot must reserve its disjoint confirmation seed roster."
+        )
+    try:
+        confirmation = tuple(int(value) for value in confirmation_raw)
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError("backup-repair confirmation seeds must be integer values.") from error
+    if len(confirmation) != BACKUP_REPAIR_CONFIRMATION_PAIRS or len(set(confirmation)) != len(
+        confirmation
+    ):
+        raise HeadToHeadError(
+            f"backup-repair pilot must reserve exactly {BACKUP_REPAIR_CONFIRMATION_PAIRS} "
+            "unique confirmation seeds."
+        )
+    overlap = sorted(set(seeds).intersection(confirmation))
+    if overlap:
+        raise HeadToHeadError(
+            "backup-repair pilot and confirmation rosters overlap: "
+            + ", ".join(str(value) for value in overlap[:8])
+        )
+    return {
+        "schema_version": BACKUP_REPAIR_PILOT_SCHEMA_VERSION,
+        "stage": "pilot",
+        "candidate_commit": BACKUP_REPAIR_CANDIDATE_COMMIT,
+        "incumbent_commit": BACKUP_REPAIR_INCUMBENT_COMMIT,
+        "pilot_seeds": list(seeds),
+        "reserved_confirmation_seeds": list(confirmation),
+        "bootstrap_resamples": BACKUP_REPAIR_BOOTSTRAP_RESAMPLES,
+        "bootstrap_seed": int(bootstrap["seed"]),
+        "confidence_level": BACKUP_REPAIR_PILOT_CONFIDENCE,
+        "minimum_effect_delta": BACKUP_REPAIR_MINIMUM_EFFECT_DELTA,
+    }
+
+
+def _backup_repair_pilot_readout(
+    *,
+    contract: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    games: list[Any],
+) -> dict[str, Any]:
+    """Make the frozen pilot decision explicit without hiding a null result."""
+
+    pair_scores_raw = summary.get("pair_scores")
+    if not isinstance(pair_scores_raw, list):
+        raise HeadToHeadError("completed backup-repair pilot summary has no pair_scores list.")
+    try:
+        pair_scores = tuple(float(value) for value in pair_scores_raw)
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError("completed backup-repair pilot pair scores are malformed.") from error
+    pilot_seeds = tuple(int(value) for value in contract["pilot_seeds"])
+    if len(pair_scores) != len(pilot_seeds):
+        raise HeadToHeadError("backup-repair pilot summary does not cover every registered pair.")
+    interval = bootstrap_mean(
+        pair_scores,
+        bootstrap_indices(
+            sample_size=len(pair_scores),
+            resamples=int(contract["bootstrap_resamples"]),
+            seed=int(contract["bootstrap_seed"]),
+        ),
+        confidence_level=float(contract["confidence_level"]),
+    )
+    delta = {
+        "point": interval.point - 0.5,
+        "low": interval.low - 0.5,
+        "high": interval.high - 0.5,
+    }
+    candidate_fallbacks = sum(game.candidate_telemetry.fallback_decisions for game in games)
+    incumbent_fallbacks = sum(game.incumbent_telemetry.fallback_decisions for game in games)
+    candidate_prior_fallbacks = sum(game.candidate_telemetry.prior_fallbacks for game in games)
+    incumbent_prior_fallbacks = sum(game.incumbent_telemetry.prior_fallbacks for game in games)
+    no_fallbacks = (
+        candidate_fallbacks == 0
+        and incumbent_fallbacks == 0
+        and candidate_prior_fallbacks == 0
+        and incumbent_prior_fallbacks == 0
+    )
+    clears_effect = delta["point"] >= float(contract["minimum_effect_delta"])
+    interval_above_neutral = delta["low"] > 0.0
+    eligible = no_fallbacks and clears_effect and interval_above_neutral
+    return {
+        "schema_version": BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION,
+        "contract": dict(contract),
+        "complete_pairs": len(pair_scores),
+        "candidate_score": interval.to_payload(),
+        "candidate_score_delta_from_neutral": delta,
+        "fallback_counts": {
+            "candidate_decision_fallbacks": candidate_fallbacks,
+            "incumbent_decision_fallbacks": incumbent_fallbacks,
+            "candidate_prior_fallbacks": candidate_prior_fallbacks,
+            "incumbent_prior_fallbacks": incumbent_prior_fallbacks,
+        },
+        "promotion_checks": {
+            "all_registered_pairs_complete": len(pair_scores) == len(pilot_seeds),
+            "no_fallbacks_or_refusals": no_fallbacks,
+            "point_estimate_at_least_minimum_effect": clears_effect,
+            "interval_wholly_above_neutral": interval_above_neutral,
+        },
+        "decision": "ELIGIBLE_FOR_RESERVED_CONFIRMATION" if eligible else "INCONCLUSIVE_OR_NOT_PROMOTED",
+    }
+
+
 def _required_sha256(value: object, *, label: str) -> str:
     digest = str(value or "")
     if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
@@ -698,6 +880,16 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
         )
 
+    pilot_contract = _backup_repair_pilot_contract(
+        manifest,
+        seeds=seeds,
+        bootstrap=bootstrap,
+        candidate_raw=candidate_raw,
+        incumbent_raw=incumbent_raw,
+        candidate_config=candidate_config,
+        incumbent_config=incumbent_config,
+    )
+
     model_config = load_transformer_model_config(args.checkpoint)
     vocabulary = category_vocab_from_model_config(model_config, args.showdown_root)
     env_config = env_config_from_checkpoint_provenance(
@@ -731,6 +923,7 @@ def main(argv: list[str] | None = None) -> int:
             "incumbent": incumbent.to_payload(),
             "seeds": list(seeds),
             "execution_mode": execution_mode,
+            "backup_repair_pilot_contract": pilot_contract,
             "isolated_policies": (
                 {
                     "candidate": {
@@ -952,6 +1145,17 @@ def main(argv: list[str] | None = None) -> int:
         bootstrap_seed=bootstrap_seed,
     )
     _write_immutable_json(out_root / "summary.json", summary)
+    pilot_readout_path: Path | None = None
+    if pilot_contract is not None:
+        pilot_readout_path = out_root / "PILOT_READOUT.json"
+        _write_immutable_json(
+            pilot_readout_path,
+            _backup_repair_pilot_readout(
+                contract=pilot_contract,
+                summary=summary,
+                games=all_games,
+            ),
+        )
     _write_immutable_json(
         out_root / "COMPLETE.json",
         {
@@ -961,6 +1165,9 @@ def main(argv: list[str] | None = None) -> int:
             "pairs": len(seeds),
             "candidate_provenance_sha256": candidate.provenance_sha256,
             "incumbent_provenance_sha256": incumbent.provenance_sha256,
+            "backup_repair_pilot_readout_sha256": (
+                _sha256_file(pilot_readout_path) if pilot_readout_path is not None else None
+            ),
         },
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

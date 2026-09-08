@@ -151,16 +151,22 @@ class Interval:
 
 
 def bootstrap_mean(
-    values: Sequence[float], indices: Sequence[Sequence[int]]
+    values: Sequence[float],
+    indices: Sequence[Sequence[int]],
+    *,
+    confidence_level: float = 0.95,
 ) -> Interval:
     """Percentile bootstrap of the mean over precomputed resample indices."""
     if not values:
         raise ValueError("cannot bootstrap an empty sample.")
+    if not 0.0 < confidence_level < 1.0:
+        raise ValueError("confidence_level must be strictly between zero and one.")
     means = [sum(values[i] for i in draw) / len(draw) for draw in indices]
+    tail = (1.0 - confidence_level) / 2.0
     return Interval(
         point=sum(values) / len(values),
-        low=_percentile(means, 0.025),
-        high=_percentile(means, 0.975),
+        low=_percentile(means, tail),
+        high=_percentile(means, 1.0 - tail),
     )
 
 
