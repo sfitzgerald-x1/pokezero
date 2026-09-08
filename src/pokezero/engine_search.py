@@ -3811,6 +3811,42 @@ class EngineMctsPolicy:
                 tables_path.read_text(encoding="utf-8"), self._model_config
             )
 
+    def reset(self) -> None:
+        """Clear state that belongs to one played battle, preserving telemetry and artifacts.
+
+        ``RolloutDriver`` may reuse one policy instance for several games.  The
+        incremental public fold and adaptive ladder both key their state by battle
+        identity, but a new driver game can legitimately reuse that identity.  A
+        reset must therefore clear the prior game's state rather than relying on a
+        changed ``battle_id`` to evict it.  In particular, retaining
+        ``_fold_consumed`` would make a fresh public event stream look like a
+        rewind.
+
+        Search statistics, model weights, encoder tables, and configuration are
+        intentionally retained: they are process-lifetime state and the evaluator
+        records per-game telemetry as deltas from those cumulative counters.
+        """
+
+        # Scratch state owned by one ladder decision/battle.
+        self._ladder_depth_override = None
+        self._ladder_sims_override = None
+        self._ladder_saturated = False
+        self._ladder_worlds_agree = True
+        self._ladder_pending_addresses = None
+        self._ladder_battle = None
+        self._ladder_worlds = None
+        self._ladder_depth = None
+        self._ladder_depth_ceiling.clear()
+        self._ladder_probing = False
+
+        # State derived from this game's public stream.  Do not clear ``stats``:
+        # callers intentionally use it as cumulative process telemetry.
+        self._world_failures_before.clear()
+        self._live_folds.clear()
+        self._fold_consumed.clear()
+        self._fold_broken.clear()
+        self._fold_annotations_seen.clear()
+
     # Policy protocol (context-free path): uniform legal. Only reached if the
     # rollout driver cannot supply a context, which the bench never does.
     def select_action(self, observation, *, rng: random.Random) -> PolicyDecision:
