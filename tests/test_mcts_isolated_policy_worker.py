@@ -17,9 +17,48 @@ serve = WORKER["_serve"]
 read_frame = WORKER["read_frame"]
 write_frame = WORKER["write_frame"]
 worker_error = WORKER["WorkerError"]
+source_engine_config_payload = WORKER["source_engine_config_payload"]
 
 
 class IsolatedPolicyWorkerResetTest(unittest.TestCase):
+    def test_config_projection_allows_only_explicit_disabled_diagnostics(self) -> None:
+        class HistoricalEngineMctsConfig:
+            __dataclass_fields__ = {"leaf_eval": object(), "search_sims": object()}
+
+        projected, compatibility = source_engine_config_payload(
+            {
+                "leaf_eval": "model",
+                "search_sims": 32,
+                "root_selector_q": False,
+                "root_selector_shadow": False,
+            },
+            HistoricalEngineMctsConfig,
+        )
+
+        self.assertEqual(projected, {"leaf_eval": "model", "search_sims": 32})
+        self.assertEqual(
+            compatibility,
+            {
+                "protocol": "disabled-diagnostic-omission.v1",
+                "omitted_disabled_fields": ["root_selector_q", "root_selector_shadow"],
+            },
+        )
+
+    def test_config_projection_refuses_enabled_or_unknown_historical_gaps(self) -> None:
+        class HistoricalEngineMctsConfig:
+            __dataclass_fields__ = {"leaf_eval": object()}
+
+        with self.assertRaisesRegex(worker_error, "declared policy enables"):
+            source_engine_config_payload(
+                {"leaf_eval": "model", "root_selector_shadow": True},
+                HistoricalEngineMctsConfig,
+            )
+        with self.assertRaisesRegex(worker_error, "does not support host field"):
+            source_engine_config_payload(
+                {"leaf_eval": "model", "future_behavior_flag": False},
+                HistoricalEngineMctsConfig,
+            )
+
     def test_reset_reconstructs_policy_without_lifecycle_and_retains_telemetry(self) -> None:
         class HistoricalPolicy:
             def __init__(self, stats: object) -> None:

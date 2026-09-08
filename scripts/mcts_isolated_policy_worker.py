@@ -23,6 +23,14 @@ from typing import Any, BinaryIO, Callable, Mapping
 PROTOCOL_VERSION = "pokezero.isolated-mcts-policy.v1"
 MAX_FRAME_BYTES = 64 * 1024 * 1024
 RESET_PROTOCOL = "policy_method_or_fresh_source_policy.v1"
+# A newer host may include an observability-only selector flag which did not
+# exist in the frozen source being evaluated. We may omit such a flag only
+# when it is explicitly disabled. Anything behavior-bearing must fail closed.
+CONFIG_COMPATIBILITY_PROTOCOL = "disabled-diagnostic-omission.v1"
+DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
+    "root_selector_q": False,
+    "root_selector_shadow": False,
+}
 STATS_FIELDS = (
     "decisions",
     "searched_decisions",
@@ -38,6 +46,46 @@ STATS_FIELDS = (
 
 class WorkerError(RuntimeError):
     """The worker cannot provide a source-bound policy decision."""
+
+
+def source_engine_config_payload(
+    config_payload: Mapping[str, Any], config_type: Any
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Project a host config onto an older source without changing its behavior.
+
+    The isolated worker must construct the declared historical source policy,
+    even if the host gained later diagnostics. This deliberately permits only
+    named diagnostic fields at their disabled defaults, and reports every
+    omission in the source receipt for the host to validate.
+    """
+
+    source_fields = getattr(config_type, "__dataclass_fields__", None)
+    if not isinstance(source_fields, Mapping) or not source_fields:
+        raise WorkerError("isolated source EngineMctsConfig has no dataclass field contract.")
+    unsupported = sorted(set(config_payload).difference(source_fields))
+    omitted: list[str] = []
+    for field_name in unsupported:
+        expected = DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS.get(field_name)
+        if field_name not in DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS:
+            raise WorkerError(
+                "isolated source EngineMctsConfig does not support host field "
+                f"{field_name!r}."
+            )
+        if config_payload[field_name] != expected:
+            raise WorkerError(
+                "isolated source EngineMctsConfig does not support "
+                f"{field_name!r}, but the declared policy enables it."
+            )
+        omitted.append(field_name)
+    projected = {
+        field_name: value
+        for field_name, value in config_payload.items()
+        if field_name in source_fields
+    }
+    return projected, {
+        "protocol": CONFIG_COMPATIBILITY_PROTOCOL,
+        "omitted_disabled_fields": omitted,
+    }
 
 
 def _read_exact(stream: BinaryIO, size: int) -> bytes:
@@ -417,9 +465,13 @@ def _worker_start(
     fingerprint = str(compute_fingerprint()["fingerprint"])
     if fingerprint != str(policy.get("engine_fingerprint", "")):
         raise WorkerError("isolated policy engine fingerprint does not match its declared policy.")
+    source_config_payload, config_compatibility = source_engine_config_payload(
+        config_payload, EngineMctsConfig
+    )
     annotations = SnapshotAnnotationSource()
+
     def make_engine_policy() -> Any:
-        engine_config = EngineMctsConfig(**dict(config_payload))
+        engine_config = EngineMctsConfig(**source_config_payload)
         return EngineMctsPolicy(
             dex=load_showdown_dex_cached(showdown_root),
             set_source=load_gen3_randbat_source_cached(showdown_root),
@@ -438,6 +490,7 @@ def _worker_start(
             "policy": dict(policy),
             "worker_bootstrap_sha256": bootstrap_sha256,
             "reset_protocol": RESET_PROTOCOL,
+            "config_compatibility": config_compatibility,
         }
     )
     return engine_policy, make_engine_policy, annotations, receipt, PolicyContext

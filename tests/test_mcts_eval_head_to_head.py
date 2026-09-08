@@ -559,6 +559,10 @@ class SourceReceiptTest(unittest.TestCase):
             "engine_fingerprint": incumbent.engine_fingerprint,
             "worker_bootstrap_sha256": "a" * 64,
             "reset_protocol": "policy_method_or_fresh_source_policy.v1",
+            "config_compatibility": {
+                "protocol": "disabled-diagnostic-omission.v1",
+                "omitted_disabled_fields": [],
+            },
         }
         self.assertEqual(
             module._validate_isolated_receipt(
@@ -574,6 +578,37 @@ class SourceReceiptTest(unittest.TestCase):
         receipt["tree_status"] = "clean_tracked_checkout"
         receipt.pop("reset_protocol")
         with self.assertRaisesRegex(HeadToHeadError, "source-safe reset protocol"):
+            module._validate_isolated_receipt(
+                receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
+            )
+
+    def test_isolated_worker_receipt_refuses_behavior_bearing_compatibility_omission(self) -> None:
+        module = _runner_module()
+        incumbent = _spec(
+            "incumbent",
+            policy_id="incumbent",
+            config={
+                "leaf_eval": "model",
+                "search_sims": 32,
+                "search_batch": 1,
+                "root_selector_shadow": True,
+            },
+        )
+        receipt = {
+            "policy": incumbent.to_payload(),
+            "commit": incumbent.source_commit,
+            "tree_sha256": incumbent.source_tree_sha256,
+            "tree_status": "clean_tracked_checkout",
+            "engine_fingerprint": incumbent.engine_fingerprint,
+            "worker_bootstrap_sha256": "a" * 64,
+            "reset_protocol": "policy_method_or_fresh_source_policy.v1",
+            "config_compatibility": {
+                "protocol": "disabled-diagnostic-omission.v1",
+                "omitted_disabled_fields": ["root_selector_shadow"],
+            },
+        }
+
+        with self.assertRaisesRegex(HeadToHeadError, "not disabled"):
             module._validate_isolated_receipt(
                 receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
             )

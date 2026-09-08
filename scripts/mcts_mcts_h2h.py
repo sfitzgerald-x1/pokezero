@@ -54,6 +54,11 @@ BACKUP_REPAIR_CONFIRMATION_PAIRS = 50
 BACKUP_REPAIR_BOOTSTRAP_RESAMPLES = 10_000
 BACKUP_REPAIR_PILOT_CONFIDENCE = 0.80
 BACKUP_REPAIR_MINIMUM_EFFECT_DELTA = 0.05
+ISOLATED_CONFIG_COMPATIBILITY_PROTOCOL = "disabled-diagnostic-omission.v1"
+ISOLATED_DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
+    "root_selector_q": False,
+    "root_selector_shadow": False,
+}
 
 
 def _sha256_file(path: str | Path) -> str:
@@ -671,6 +676,34 @@ def _validate_isolated_receipt(
         raise HeadToHeadError(
             "isolated worker receipt does not attest the required source-safe reset protocol."
         )
+    compatibility = _mapping(
+        payload.get("config_compatibility"), label="isolated worker receipt.config_compatibility"
+    )
+    if compatibility.get("protocol") != ISOLATED_CONFIG_COMPATIBILITY_PROTOCOL:
+        raise HeadToHeadError(
+            "isolated worker receipt does not attest the required config compatibility protocol."
+        )
+    omitted = compatibility.get("omitted_disabled_fields")
+    if (
+        not isinstance(omitted, list)
+        or any(not isinstance(field_name, str) for field_name in omitted)
+        or omitted != sorted(set(omitted))
+    ):
+        raise HeadToHeadError(
+            "isolated worker receipt has an invalid omitted diagnostic-field record."
+        )
+    for field_name in omitted:
+        expected = ISOLATED_DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS.get(field_name)
+        if field_name not in ISOLATED_DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS:
+            raise HeadToHeadError(
+                "isolated worker receipt omitted an unsupported config field "
+                f"{field_name!r}."
+            )
+        if policy.config.get(field_name, expected) != expected:
+            raise HeadToHeadError(
+                "isolated worker receipt omitted a diagnostic field that is not disabled "
+                f"in the declared {role}."
+            )
     return dict(payload)
 
 
