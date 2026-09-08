@@ -798,6 +798,10 @@ class ControlledFoulPlayConfig:
     # Default OFF -- it appends a positional to the native call, so an image that
     # predates it refuses every world rather than ignoring the flag.
     engine_override_telemetry: bool = False
+    # Observational one-world comparison of the completed visit-max and
+    # acting-seat Q-max roots.  This never changes the played action and is
+    # deliberately constrained in EngineMctsConfig to a fixed full-budget tree.
+    engine_root_selector_shadow: bool = False
     # ORACLE BELIEF (docs/mcts_value_gap_investigation_20260811.md §4a / H5):
     # search the TRUE hidden state instead of a sampled one. Every belief world
     # is the true completion, injected through EngineMctsPolicy's documented
@@ -1133,6 +1137,32 @@ class ControlledFoulPlayConfig:
                 f"(got {self.policy_mode!r}); outside it the flag reaches no "
                 "search and the shard's own witness would claim otherwise."
             )
+        if self.engine_root_selector_shadow:
+            if self.policy_mode != "engine-mcts":
+                raise ValueError(
+                    "engine_root_selector_shadow requires policy_mode='engine-mcts' "
+                    f"(got {self.policy_mode!r})."
+                )
+            if not self.engine_override_telemetry:
+                raise ValueError(
+                    "engine_root_selector_shadow requires engine_override_telemetry: "
+                    "the durable root-arm witness is part of the experiment."
+                )
+            if self.engine_worlds != 1:
+                raise ValueError(
+                    "engine_root_selector_shadow requires engine_worlds=1 until a "
+                    "separate belief-aggregation selector is specified."
+                )
+            if self.engine_early_stop:
+                raise ValueError(
+                    "engine_root_selector_shadow requires engine_early_stop=False: "
+                    "visit-lock is not a Q-max stability certificate."
+                )
+            if self.engine_depth_min is not None or self.engine_worlds_min is not None:
+                raise ValueError(
+                    "engine_root_selector_shadow requires a fixed allocation; dynamic "
+                    "depth/world floors would change the completed-tree budget."
+                )
         if self.engine_early_stop and self.policy_mode != "engine-mcts":
             # Refused rather than ignored, same reasoning as the oracle arm: the
             # stop rule lives in the native search, so under 'raw' or 'root-puct'
@@ -2273,6 +2303,7 @@ class ControlledFoulPlayBenchmarkResult:
                 # `policy_stats.search_override_unmeasured` says how much of the
                 # denominator was lost; this says whether the instrument ran.
                 "override_telemetry": self.config.engine_override_telemetry,
+                "root_selector_shadow": self.config.engine_root_selector_shadow,
                 # Same standing as opponent_priors: §4a is read entirely against
                 # whether the belief was the truth or a sample, and "arm identity
                 # witnessed from shard telemetry, not job labels" is a standing
@@ -6614,6 +6645,7 @@ def _validate_external_paths(config: ControlledFoulPlayConfig) -> None:
 _ENGINE_ONLY_FIELDS: tuple[tuple[str, Any], ...] = (
     ("engine_oracle_belief", False),
     ("engine_override_telemetry", False),
+    ("engine_root_selector_shadow", False),
     ("engine_early_stop", False),
     ("engine_depth_min", None),
     ("engine_worlds_min", None),
@@ -6734,6 +6766,12 @@ def _build_policy(
                 use_opponent_priors=config.engine_opponent_priors,
                 fpu_reduction=config.engine_fpu_reduction,
                 override_telemetry=config.engine_override_telemetry,
+                root_selector_shadow=config.engine_root_selector_shadow,
+                # A shadow row is valid only for a complete native root.  If
+                # the native boundary reports an impossible stopped prefix,
+                # do not let the ordinary best-effort fallback play a random
+                # action and leave a bankable FoulPlay shard behind.
+                strict_fallbacks=config.engine_root_selector_shadow,
                 # Dynamic budget. `early_stop_min_sims` is passed only when the
                 # feature is on, so the dataclass default (64) stands for an
                 # unset cell and the config validator sees a coherent pair.
@@ -9058,6 +9096,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "override_measured_decisions) instead of leaving unmeasurable "
                              "decisions to read as agreement. Needs an image whose crate "
                              "accepts `arm_priors` (the per-arm prior column).")
+    parser.add_argument("--engine-root-selector-shadow", action="store_true",
+                        help="Observational, fixed-budget one-world comparison of the "
+                             "played visit-max root action and acting-seat Q-max from the "
+                             "same completed tree. Requires --engine-override-telemetry, "
+                             "--engine-worlds 1, and no early-stop/dynamic floors. It does "
+                             "not change which action is played.")
     parser.add_argument("--engine-oracle-belief", action="store_true",
                         help="Search the TRUE hidden state instead of sampled belief worlds "
                              "(value-gap plan §4a / H5). Every world is the true completion, "
@@ -9489,6 +9533,7 @@ def _config_from_args(
         engine_opponent_priors=getattr(args, "engine_opponent_priors", False),
         engine_fpu_reduction=getattr(args, "engine_fpu_reduction", None),
         engine_override_telemetry=getattr(args, "engine_override_telemetry", False),
+        engine_root_selector_shadow=getattr(args, "engine_root_selector_shadow", False),
         engine_early_stop=getattr(args, "engine_early_stop", False),
         engine_depth_min=getattr(args, "engine_depth_min", None),
         engine_worlds_min=getattr(args, "engine_worlds_min", None),

@@ -3300,6 +3300,7 @@ class WorldAbortRateTests(unittest.TestCase):
                 "opponent_top_arm_decisions",
                 "opponent_prior_arm_decisions",
                 "early_stop_accepted_decisions",
+                "root_selector_shadow_measured_decisions",
             ),
             "every name here is a claim about ONE decision, charged once per RUNG by "
             "`_search_model`. Adding or removing one is a decision about the rule, "
@@ -4237,11 +4238,19 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             SimpleNamespace(to_string=lambda: label),
         )
 
-    def _policy(self, *, telemetry: bool = True, opponent_priors: bool = False):
+    def _policy(
+        self,
+        *,
+        telemetry: bool = True,
+        opponent_priors: bool = False,
+        root_selector_shadow: bool = False,
+        worlds: int = 2,
+        strict: bool = False,
+    ):
         policy = object.__new__(EngineMctsPolicy)
         policy.policy_id = "override-telemetry-test"
         policy._config = EngineMctsConfig(
-            worlds=2,
+            worlds=worlds,
             leaf_eval="model",
             model_path="model.pt",
             checkpoint_path="checkpoint.pt",
@@ -4249,7 +4258,9 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             search_sims=100,
             search_batch=10,
             override_telemetry=telemetry,
+            root_selector_shadow=root_selector_shadow,
             use_opponent_priors=opponent_priors,
+            strict_fallbacks=strict,
         )
         policy._tables_json = "{}"
         policy.stats = EngineMctsStats()
@@ -4633,6 +4644,256 @@ class RootDecisionTelemetryTest(unittest.TestCase):
     def test_the_config_refuses_the_flag_where_it_cannot_be_measured(self) -> None:
         with self.assertRaisesRegex(ValueError, "leaf_eval='model'"):
             EngineMctsConfig(leaf_eval="hp_fraction_crate", override_telemetry=True)
+
+    # -- one-world root-selector shadow --------------------------------------
+
+    def test_shadow_off_does_not_add_a_vocabulary_projection_to_an_unmeasured_root(
+        self,
+    ) -> None:
+        """The shadow's mere presence must not change the old telemetry path.
+
+        With no root priors, the established override instrument is explicitly
+        unmeasured and historically did not construct a second request
+        vocabulary.  `_map_choices` constructs the one vocabulary needed to
+        play the action; this pins that the dormant shadow does not add another
+        live-request projection just by being compiled into the policy.
+        """
+        policy = self._policy(root_selector_shadow=False)
+        original = policy._choice_vocabulary
+        with patch.object(
+            EngineMctsPolicy, "_choice_vocabulary", wraps=original
+        ) as vocabulary:
+            self._run(
+                policy,
+                [self._report(
+                    [("alpha", 60, 0.5, 0.5), ("beta", 40, 0.5, 0.5)],
+                    root_priors=None,
+                )],
+            )
+        self.assertEqual(vocabulary.call_count, 1)
+
+    def test_root_selector_shadow_reads_q_from_the_same_completed_tree(self) -> None:
+        """Visit-max stays played; Q-max is only a witnessed comparison."""
+        policy = self._policy(root_selector_shadow=True, worlds=1)
+        decision, native = self._run(
+            policy,
+            [self._report(
+                [
+                    ("alpha", 60, 0.40, 0.2),
+                    ("beta", 40, 0.90, 0.8),
+                    # FPU values for unvisited arms must not be observations.
+                    ("gamma", 0, 1.00, 0.0),
+                ],
+                root_priors=[0.2, 0.8, 0.0],
+            )],
+        )
+        self.assertEqual(decision.action_index, 0, "production remains visit-max")
+        self.assertEqual(len(native.calls), 1, "the shadow starts no second search")
+        shadow = decision.metadata["engine_mcts"]["root_selector_shadow"]
+        self.assertEqual(shadow["basis"], "one_world_full_budget")
+        self.assertEqual(
+            (shadow["visit_choice"], shadow["visit_action"]), ("alpha", 0)
+        )
+        self.assertEqual((shadow["q_choice"], shadow["q_action"]), ("beta", 1))
+        self.assertAlmostEqual(shadow["q"], 0.90)
+        self.assertAlmostEqual(shadow["q_visit_share"], 0.40)
+        self.assertTrue(shadow["q_is_lower_visit"])
+        self.assertTrue(shadow["disagrees"])
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["root_selector_shadow_measured_decisions"], 1)
+        self.assertEqual(stats["root_selector_shadow_disagreements"], 1)
+        self.assertEqual(stats["root_selector_shadow_unmeasured"], 0)
+        self.assertEqual(stats["root_selector_shadow_disagreement_rate"], 1.0)
+        self.assertEqual(
+            stats["root_decision_rows"][0]["root_selector_shadow"], shadow
+        )
+
+    def test_root_selector_shadow_refuses_an_unexpected_stopped_prefix(self) -> None:
+        """A stale native stop cannot be relabelled as a full-budget tree."""
+        policy = self._policy(root_selector_shadow=True, worlds=1)
+        report = self._report(
+            [("alpha", 40, 0.40, 0.2), ("beta", 20, 0.90, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "iterations": 60,
+                "requested_iterations": 100,
+                "remaining_iterations": 40,
+                "early_stopped": True,
+                "model_evals": 60,
+            }
+        )
+        decision, native = self._run(policy, [report])
+        self.assertEqual(len(native.calls), 1)
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["fallback"],
+            "root_selector_shadow_stopped_prefix",
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["early_stop_triggered_worlds"], 1)
+        self.assertEqual(stats["early_stop_accepted_decisions"], 0)
+        self.assertEqual(stats["root_selector_shadow_measured_decisions"], 0)
+        self.assertEqual(stats["root_selector_shadow_unmeasured"], 0)
+
+    def test_root_selector_shadow_strictly_refuses_an_unexpected_stopped_prefix(self) -> None:
+        """The bridge's strict shadow configuration cannot bank a fallback move."""
+        policy = self._policy(root_selector_shadow=True, worlds=1, strict=True)
+        report = self._report(
+            [("alpha", 40, 0.40, 0.2), ("beta", 20, 0.90, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "iterations": 60,
+                "requested_iterations": 100,
+                "remaining_iterations": 40,
+                "early_stopped": True,
+                "model_evals": 60,
+            }
+        )
+        with self.assertRaisesRegex(
+            EngineSearchFallbackError, "root_selector_shadow_stopped_prefix"
+        ):
+            self._run(policy, [report])
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["early_stop_triggered_worlds"], 1)
+        self.assertEqual(stats["root_selector_shadow_measured_decisions"], 0)
+        self.assertEqual(stats["root_selector_shadow_unmeasured"], 0)
+
+    def test_root_selector_shadow_uses_q_then_visits_then_action_order(self) -> None:
+        policy = self._policy(root_selector_shadow=True, worlds=1)
+        decision, _ = self._run(
+            policy,
+            [self._report(
+                [
+                    # Exact Q tie: beta wins this one by completed visits.
+                    ("alpha", 40, 0.70, 0.5),
+                    ("beta", 60, 0.70, 0.5),
+                ],
+                root_priors=[0.5, 0.5],
+            )],
+        )
+        shadow = decision.metadata["engine_mcts"]["root_selector_shadow"]
+        self.assertEqual(shadow["q_choice"], "beta")
+        self.assertFalse(shadow["disagrees"], "both selectors resolve to beta")
+
+        policy = self._policy(root_selector_shadow=True, worlds=1)
+        decision, _ = self._run(
+            policy,
+            [self._report(
+                [
+                    # Exact Q and visit tie: request action order is alpha, beta.
+                    ("beta", 50, 0.70, 0.5),
+                    ("alpha", 50, 0.70, 0.5),
+                ],
+                root_priors=[0.5, 0.5],
+            )],
+        )
+        shadow = decision.metadata["engine_mcts"]["root_selector_shadow"]
+        self.assertEqual(shadow["q_choice"], "alpha")
+        self.assertEqual(shadow["q_action"], 0)
+        self.assertTrue(shadow["disagrees"], "visit-max retains report order")
+
+    def test_root_selector_shadow_flips_p2_qs_into_the_acting_frame(self) -> None:
+        policy = self._policy(root_selector_shadow=True, worlds=1)
+        context = self._context()
+        context.player_id = "p2"
+        world = (
+            SimpleNamespace(
+                party_species={"p1": ("rattata",), "p2": ("chansey",)},
+                slot_sides={"p2": "side_two"},
+            ),
+            SimpleNamespace(to_string=lambda: "world-p2"),
+        )
+        report = self._report([], root_priors=[0.5, 0.5])
+        report["side_two"] = [
+            # Stored Q is side-one framed.  Acting p2 therefore prefers beta
+            # (1 - 0.10) even though visit-max remains alpha.
+            {"move": "alpha", "visits": 60, "q": 0.60, "prior": 0.5},
+            {"move": "beta", "visits": 40, "q": 0.10, "prior": 0.5},
+        ]
+        decision, _ = self._run(policy, [report], worlds=[world], context=context)
+        self.assertEqual(decision.action_index, 0)
+        shadow = decision.metadata["engine_mcts"]["root_selector_shadow"]
+        self.assertEqual(shadow["q_choice"], "beta")
+        self.assertAlmostEqual(shadow["q"], 0.90)
+        self.assertTrue(shadow["disagrees"])
+
+    def test_root_selector_shadow_refuses_every_ambiguous_configuration(self) -> None:
+        base = {
+            "leaf_eval": "model",
+            "model_path": "model.pt",
+            "checkpoint_path": "checkpoint.pt",
+            "tables_path": "tables.json",
+            "search_sims": 100,
+            "search_batch": 10,
+            "root_selector_shadow": True,
+        }
+        with self.assertRaisesRegex(ValueError, "override_telemetry"):
+            EngineMctsConfig(**base)
+        with self.assertRaisesRegex(ValueError, "worlds=1"):
+            EngineMctsConfig(**base, override_telemetry=True, worlds=2)
+        with self.assertRaisesRegex(ValueError, "early_stop=False"):
+            EngineMctsConfig(
+                **base, override_telemetry=True, worlds=1, early_stop=True
+            )
+        with self.assertRaisesRegex(ValueError, "fixed search allocation"):
+            EngineMctsConfig(
+                **base, override_telemetry=True, worlds=1, depth_min=2
+            )
+        with self.assertRaisesRegex(ValueError, "leaf_eval='model'"):
+            EngineMctsConfig(
+                leaf_eval="hp_fraction_crate",
+                override_telemetry=True,
+                root_selector_shadow=True,
+            )
+
+    def test_root_selector_shadow_denominator_survives_a_bounded_row_store(self) -> None:
+        """The aggregate is complete even when its sampled row witness is not.
+
+        The development panel needs the measured/unmeasured denominator for every
+        searched decision, while `root_decision_rows` is deliberately bounded for
+        a shard.  A consumer may inspect the retained rows, but must see their
+        overflow count rather than mistake that prefix for the denominator.
+        """
+        policy = self._policy(root_selector_shadow=True, worlds=1)
+        reports = [
+            self._report(
+                [("alpha", 60, 0.40, 0.2), ("beta", 40, 0.90, 0.8)],
+                root_priors=[0.2, 0.8],
+            ),
+            self._report(
+                # Production can play the mapped visit leader, but a visited
+                # lower arm that cannot map makes the Q comparison unmeasured.
+                [("alpha", 60, 0.40, 0.2), ("nosuchmove", 40, 0.90, 0.8)],
+                root_priors=[0.2, 0.8],
+            ),
+            self._report(
+                [("alpha", 60, 0.90, 0.2), ("beta", 40, 0.40, 0.8)],
+                root_priors=[0.2, 0.8],
+            ),
+        ]
+        with patch("pokezero.engine_search._ROOT_DECISION_ROWS", 2):
+            for report in reports:
+                self._run(policy, [report])
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["searched_decisions"], 3)
+        self.assertEqual(
+            stats["root_selector_shadow_measured_decisions"]
+            + stats["root_selector_shadow_unmeasured"],
+            stats["searched_decisions"],
+        )
+        self.assertEqual(stats["root_selector_shadow_measured_decisions"], 2)
+        self.assertEqual(stats["root_selector_shadow_unmeasured"], 1)
+        self.assertEqual(
+            stats["root_selector_shadow_unmeasured_causes"],
+            {"visited_arm_unmapped": 1},
+        )
+        self.assertEqual(len(stats["root_decision_rows"]), 2)
+        self.assertEqual(stats["root_decision_rows_dropped"], 1)
+        for row in stats["root_decision_rows"]:
+            self.assertIn("root_selector_shadow", row)
 
     # -- H2: the two top-arm gaps ---------------------------------------------
 
