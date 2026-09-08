@@ -169,17 +169,12 @@ def showdown_sha256(root: Path) -> str:
 
 
 def _reset_policy(policy: Any) -> None:
-    """Reset stateful policies without requiring a no-op method on MCTS.
-
-    ``RolloutDriver`` resets every policy at game start.  ``EngineMctsPolicy``
-    is deliberately stateless across decisions, so it has no ``reset`` method;
-    source-isolated MCTS must therefore acknowledge the protocol reset without
-    turning that ordinary lifecycle hook into a worker failure.
-    """
+    """Require the worker policy to clear its preceding game's state."""
 
     reset = getattr(policy, "reset", None)
-    if callable(reset):
-        reset()
+    if not callable(reset):
+        raise WorkerError("isolated MCTS policy lacks the required reset lifecycle.")
+    reset()
 
 
 class SnapshotAnnotationSource:

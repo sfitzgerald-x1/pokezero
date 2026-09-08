@@ -111,6 +111,47 @@ class ChoiceMappingTests(unittest.TestCase):
         self.assertEqual(dict(self.policy.stats.unmapped_choices), {})
 
 
+class EngineMctsPolicyResetTest(unittest.TestCase):
+    def test_reset_clears_battle_state_but_retains_cumulative_telemetry(self) -> None:
+        policy = _policy()
+        stats = policy.stats
+        policy._ladder_depth_override = 4
+        policy._ladder_sims_override = 16
+        policy._ladder_saturated = True
+        policy._ladder_worlds_agree = False
+        policy._ladder_pending_addresses = [{"address": "prior-game"}]
+        policy._ladder_battle = "rollout"
+        policy._ladder_worlds = 2
+        policy._ladder_depth = 3
+        policy._ladder_depth_ceiling = {2: 3}
+        policy._ladder_probing = True
+        policy._world_failures_before = {"prior-game": 1}
+        key = ("rollout", "p1")
+        policy._live_folds = {key: object()}
+        policy._fold_consumed = {key: 4}
+        policy._fold_broken = {key}
+        policy._fold_annotations_seen = {key: {7: ("prior-game",)}}
+
+        policy.reset()
+
+        self.assertIs(policy.stats, stats)
+        self.assertIsNone(policy._ladder_depth_override)
+        self.assertIsNone(policy._ladder_sims_override)
+        self.assertFalse(policy._ladder_saturated)
+        self.assertTrue(policy._ladder_worlds_agree)
+        self.assertIsNone(policy._ladder_pending_addresses)
+        self.assertIsNone(policy._ladder_battle)
+        self.assertIsNone(policy._ladder_worlds)
+        self.assertIsNone(policy._ladder_depth)
+        self.assertEqual(policy._ladder_depth_ceiling, {})
+        self.assertFalse(policy._ladder_probing)
+        self.assertEqual(policy._world_failures_before, {})
+        self.assertEqual(policy._live_folds, {})
+        self.assertEqual(policy._fold_consumed, {})
+        self.assertEqual(policy._fold_broken, set())
+        self.assertEqual(policy._fold_annotations_seen, {})
+
+
 class OwnSideSelectionTests(unittest.TestCase):
     """The policy must read ITS OWN seat's visit distribution (p2 included)."""
 
@@ -5259,4 +5300,3 @@ class LadderStateMachineTest(unittest.TestCase):
         self.assertEqual(p.stats.ladder_rungs_run, 2)
         self.assertEqual(p.stats.ladder_decisions, 1)
         self.assertEqual(p.stats.to_dict()["ladder_rungs_per_decision"], 2.0)
-
