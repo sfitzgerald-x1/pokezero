@@ -12,6 +12,7 @@ from pokezero.mcts_eval.timing_corpus import (
     STRATA_AXES,
     CorpusError,
     TimingDecisionRecord,
+    branch_bucket,
     boost_bucket,
     build_corpus,
     bucket_counts,
@@ -22,6 +23,7 @@ from pokezero.mcts_eval.timing_corpus import (
     remaining_bucket,
     select_stratified,
     uncertainty_bucket,
+    validate_representative_timing_panel,
     write_corpus,
 )
 from pokezero.public_decision_corpus import PublicActionIdentifier, PublicResolvedActionRound
@@ -60,6 +62,7 @@ def _record(index: int, **overrides) -> TimingDecisionRecord:
             forced_switch=index % 5 == 0,
             hidden_world_count=index % 4,
             turn_index=index % 30,
+            legal_action_count=sum(MASK),
         ),
     )
     values.update(overrides)
@@ -82,6 +85,9 @@ class StrataLabelTest(unittest.TestCase):
         self.assertEqual(phase_bucket(1), "phase_early")
         self.assertEqual(phase_bucket(15), "phase_middle")
         self.assertEqual(phase_bucket(40), "phase_late")
+        self.assertEqual(branch_bucket(2), "branch_light")
+        self.assertEqual(branch_bucket(7), "branch_middle")
+        self.assertEqual(branch_bucket(9), "branch_heavy")
 
     def test_every_record_is_labeled_on_every_axis(self) -> None:
         strata = set(_record(7).strata)
@@ -156,9 +162,51 @@ class SelectionTest(unittest.TestCase):
         # Round-robin must not collapse onto a couple of buckets.
         self.assertGreaterEqual(len(populated), 12)
 
+    def test_selection_spreads_over_independent_battles_when_strata_tie(self) -> None:
+        records = [
+            _record(
+                index,
+                battle_id=f"battle-{index // 2}",
+                legal_action_mask=tuple(True for _ in MASK),
+                strata=label_strata(
+                    remaining=6,
+                    team_hp_fraction=1.0,
+                    boosts=None,
+                    forced_switch=False,
+                    hidden_world_count=1,
+                    turn_index=1,
+                    legal_action_count=len(MASK),
+                ),
+            )
+            for index in range(8)
+        ]
+        chosen = select_stratified(records, count=4)
+        self.assertEqual(len({record.battle_id for record in chosen}), 4)
+
     def test_insufficient_pool_is_terminal(self) -> None:
         with self.assertRaisesRegex(CorpusError, "widen the held-out"):
             select_stratified([_record(i) for i in range(10)], count=256)
+
+
+class RepresentativenessGateTest(unittest.TestCase):
+    def test_accepts_two_seats_early_and_late_with_narrow_and_wide_masks(self) -> None:
+        wide = tuple(True for _ in MASK)
+        narrow = (True, True) + tuple(False for _ in MASK[2:])
+        records = [
+            _record(1, battle_id="battle-a", seat="p1", legal_action_mask=wide),
+            _record(22, battle_id="battle-a", seat="p1", legal_action_mask=wide),
+            _record(2, battle_id="battle-b", seat="p2", legal_action_mask=wide),
+            _record(23, battle_id="battle-b", seat="p2", legal_action_mask=narrow),
+        ]
+        coverage = validate_representative_timing_panel(records)
+        self.assertEqual(coverage["battle_count"], 2)
+        self.assertEqual(coverage["seat_counts"], {"p1": 2, "p2": 2})
+        self.assertEqual(coverage["branch_counts"], {"branch_light": 1, "branch_heavy": 3})
+
+    def test_rejects_a_single_homogeneous_battle(self) -> None:
+        records = [_record(i, battle_id="one-battle") for i in range(16)]
+        with self.assertRaisesRegex(CorpusError, "not representative"):
+            validate_representative_timing_panel(records)
 
 
 class RoundTripTest(unittest.TestCase):

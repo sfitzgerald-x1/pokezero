@@ -1,6 +1,6 @@
 """Representative decision corpus for the Phase-A timing lattice (plan D3/A2).
 
-``pokezero.engine-mcts-timing-corpus.v2`` holds exactly N legal PokeZero
+``pokezero.engine-mcts-timing-corpus.v3`` holds exactly N legal PokeZero
 decisions replayed from held-out FoulPlay games. It deliberately does NOT reuse
 ``public-decision-corpus.v1``: that artifact omits the request-derived action
 candidates and legal mask, and a timing row must exercise the same root-action
@@ -28,7 +28,7 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 from ..public_decision_corpus import PublicResolvedActionRound
 from ..public_replay_materializer import public_event_prefix_summary
 
-TIMING_CORPUS_SCHEMA_VERSION = "pokezero.engine-mcts-timing-corpus.v2"
+TIMING_CORPUS_SCHEMA_VERSION = "pokezero.engine-mcts-timing-corpus.v3"
 DEFAULT_DECISION_COUNT = 256
 
 # Fields a record must carry (plan A2). Kept explicit so the schema hash moves
@@ -69,6 +69,10 @@ BOOST_BUCKETS = ("boost_none", "boost_offensive", "boost_defensive")
 REQUEST_BUCKETS = ("request_move", "request_forced_switch")
 UNCERTAINTY_BUCKETS = ("uncertainty_low", "uncertainty_high")
 PHASE_BUCKETS = ("phase_early", "phase_middle", "phase_late")
+TIMING_PANEL_MIN_BATTLES = 2
+TIMING_PANEL_BRANCH_LIGHT_MAX = 6
+TIMING_PANEL_BRANCH_HEAVY_MIN = 8
+BRANCH_BUCKETS = ("branch_light", "branch_middle", "branch_heavy")
 STRATA_AXES = (
     REMAINING_BUCKETS,
     HP_BUCKETS,
@@ -76,7 +80,13 @@ STRATA_AXES = (
     REQUEST_BUCKETS,
     UNCERTAINTY_BUCKETS,
     PHASE_BUCKETS,
+    BRANCH_BUCKETS,
 )
+
+# A timing lattice is useful only if its fixed corpus actually exercises the
+# decision shapes the timing claim is about.  These deliberately small,
+# observable requirements are separate from the broader A2 strata: they guard
+# against a collector stopping after its first long, homogeneous battle.
 
 
 class CorpusError(RuntimeError):
@@ -138,6 +148,19 @@ def phase_bucket(turn_index: int, *, early_max: int = 8, middle_max: int = 20) -
     if turn_index <= middle_max:
         return "phase_middle"
     return "phase_late"
+
+
+def branch_bucket(legal_action_count: int) -> str:
+    """Bucket by the real request-local legal-action fanout.
+
+    The full request-derived candidate list is often fixed-width, while the
+    legal mask is the actual action-mapping/search branch surface.
+    """
+    if legal_action_count <= TIMING_PANEL_BRANCH_LIGHT_MAX:
+        return "branch_light"
+    if legal_action_count >= TIMING_PANEL_BRANCH_HEAVY_MIN:
+        return "branch_heavy"
+    return "branch_middle"
 
 
 @dataclass(frozen=True)
@@ -239,6 +262,7 @@ def label_strata(
     forced_switch: bool,
     hidden_world_count: int,
     turn_index: int,
+    legal_action_count: int,
 ) -> tuple[str, ...]:
     """Deterministic public-state labels; strata may overlap by design."""
     return (
@@ -248,6 +272,7 @@ def label_strata(
         request_bucket(forced_switch),
         uncertainty_bucket(hidden_world_count),
         phase_bucket(turn_index),
+        branch_bucket(legal_action_count),
     )
 
 
@@ -258,10 +283,11 @@ def select_stratified(
 ) -> tuple[TimingDecisionRecord, ...]:
     """Deterministically choose ``count`` records with the flattest strata coverage.
 
-    Round-robin over every bucket of every axis, taking the lowest-``decision_id``
-    unused record in the currently least-covered bucket. Deterministic in the
-    input order and total by construction — the same candidate pool always yields
-    the same corpus, which is what makes the corpus hash meaningful.
+    Round-robin over every bucket of every axis, preferring an underrepresented
+    battle and then the lowest ``decision_id`` in the currently least-covered
+    bucket. Deterministic in the input order and total by construction — the
+    same candidate pool always yields the same corpus, which is what makes the
+    corpus hash meaningful.
     """
     if count <= 0:
         raise ValueError("count must be positive.")
@@ -273,6 +299,7 @@ def select_stratified(
     pool = sorted(records, key=lambda record: record.decision_id)
     chosen: list[TimingDecisionRecord] = []
     used: set[str] = set()
+    battle_counts: dict[str, int] = {}
     coverage: dict[str, int] = {
         bucket: 0 for axis in STRATA_AXES for bucket in axis
     }
@@ -292,13 +319,25 @@ def select_stratified(
                         break
             break
         _, target = min(candidates)
-        for record in pool:
-            if target in record.strata and record.decision_id not in used:
-                chosen.append(record)
-                used.add(record.decision_id)
-                for bucket in record.strata:
-                    coverage[bucket] += 1
-                break
+        eligible = [
+            record for record in pool
+            if target in record.strata and record.decision_id not in used
+        ]
+        if eligible:
+            # A long first game otherwise monopolises the deterministic
+            # low-ID tiebreak and produces a deceptively homogeneous panel.
+            record = min(
+                eligible,
+                key=lambda candidate: (
+                    battle_counts.get(candidate.battle_id, 0),
+                    candidate.decision_id,
+                ),
+            )
+            chosen.append(record)
+            used.add(record.decision_id)
+            battle_counts[record.battle_id] = battle_counts.get(record.battle_id, 0) + 1
+            for bucket in record.strata:
+                coverage[bucket] += 1
     return tuple(chosen[:count])
 
 
@@ -309,6 +348,63 @@ def bucket_counts(records: Iterable[TimingDecisionRecord]) -> dict[str, int]:
             if bucket in counts:
                 counts[bucket] += 1
     return counts
+
+
+def validate_representative_timing_panel(
+    records: Sequence[TimingDecisionRecord],
+) -> dict[str, Any]:
+    """Return auditable coverage for a full-path timing panel or fail closed.
+
+    The lattice's regular strata make selection deterministic, but did not
+    previously require two seats, an early *and* a late public history, or both
+    narrow and wide legal-action sets.  Consequently, a single battle could
+    satisfy the raw record count and be timed as though it were representative.
+    This validator is intentionally a timing-launch gate rather than a policy
+    feature: it never changes a selected decision or search configuration.
+    """
+
+    if not records:
+        raise CorpusError("timing panel has no replayable decisions")
+
+    seat_counts = {seat: sum(record.seat == seat for record in records) for seat in ("p1", "p2")}
+    phase_counts = {
+        phase: sum(phase in record.strata for record in records)
+        for phase in ("phase_early", "phase_late")
+    }
+    legal_action_counts = [sum(record.legal_action_mask) for record in records]
+    branch_counts = {
+        "branch_light": sum(count <= TIMING_PANEL_BRANCH_LIGHT_MAX for count in legal_action_counts),
+        "branch_heavy": sum(count >= TIMING_PANEL_BRANCH_HEAVY_MIN for count in legal_action_counts),
+    }
+    battle_count = len({record.battle_id for record in records})
+
+    missing: list[str] = []
+    if battle_count < TIMING_PANEL_MIN_BATTLES:
+        missing.append(f"at least {TIMING_PANEL_MIN_BATTLES} independent battles (got {battle_count})")
+    missing.extend(f"seat {seat}" for seat, count in seat_counts.items() if count == 0)
+    missing.extend(f"{phase} public history" for phase, count in phase_counts.items() if count == 0)
+    missing.extend(name for name, count in branch_counts.items() if count == 0)
+    if missing:
+        raise CorpusError(
+            "timing panel is not representative: missing " + ", ".join(missing)
+        )
+
+    return {
+        "decision_count": len(records),
+        "battle_count": battle_count,
+        "seat_counts": seat_counts,
+        "phase_counts": phase_counts,
+        "branch_counts": branch_counts,
+        "legal_action_count_min": min(legal_action_counts),
+        "legal_action_count_max": max(legal_action_counts),
+        "requirements": {
+            "minimum_battles": TIMING_PANEL_MIN_BATTLES,
+            "required_seats": ["p1", "p2"],
+            "required_phases": ["phase_early", "phase_late"],
+            "branch_light_max_legal_actions": TIMING_PANEL_BRANCH_LIGHT_MAX,
+            "branch_heavy_min_legal_actions": TIMING_PANEL_BRANCH_HEAVY_MIN,
+        },
+    }
 
 
 @dataclass(frozen=True)
@@ -337,7 +433,7 @@ def build_corpus(
     held_out_seed_start: int,
     held_out_seed_end: int,
     count: int = DEFAULT_DECISION_COUNT,
-    selection_algorithm: str = "least-covered-bucket-round-robin.v1",
+    selection_algorithm: str = "least-covered-bucket-then-battle-round-robin.v2",
 ) -> tuple[TimingCorpusManifest, tuple[TimingDecisionRecord, ...]]:
     selected = select_stratified(records, count=count)
     corpus_sha256 = canonical_json_sha256([record.to_payload() for record in selected])

@@ -211,12 +211,24 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     @stage_handler(Stage.BUILD_TIMING_CORPUS)
     def _corpus(directory: Path) -> list[str]:
-        from pokezero.mcts_eval.timing_corpus import read_corpus
+        from pokezero.mcts_eval.timing_corpus import (
+            CorpusError,
+            read_corpus,
+            validate_representative_timing_panel,
+        )
 
         target = directory / "timing-corpus.jsonl"
         if target.is_file():
-            corpus_manifest, records = read_corpus(target)  # fails closed on drift
-            return [str(target)]
+            try:
+                _, records = read_corpus(target)  # fails closed on drift
+                coverage = validate_representative_timing_panel(records)
+            except CorpusError as error:
+                # The controller only persists terminal failures it understands.
+                # A corpus is immutable input, so its contract or coverage failure
+                # must become a durable terminal state rather than leak out and
+                # leave status.json looking live.
+                raise TerminalFailure(f"timing corpus rejected: {error}") from error
+            return [str(target), _write_json(directory / "representativeness.json", coverage)]
         raise TerminalFailure(
             f"timing corpus absent at {target}. Build it from held-out FoulPlay games with "
             "pokezero.mcts_eval.timing_corpus.build_corpus (plan A2) and re-run; the runner "
@@ -225,10 +237,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     @stage_handler(Stage.RUN_TIMING_LATTICE)
     def _lattice(directory: Path) -> list[str]:
-        from pokezero.mcts_eval.timing_corpus import read_corpus
+        from pokezero.mcts_eval.timing_corpus import (
+            CorpusError,
+            read_corpus,
+            validate_representative_timing_panel,
+        )
 
         corpus_path = stage_dir(out_root, Stage.BUILD_TIMING_CORPUS) / "timing-corpus.jsonl"
-        _, records = read_corpus(corpus_path)
+        try:
+            _, records = read_corpus(corpus_path)
+            # The corpus stage may have a completed marker from an older runner;
+            # recheck immediately before work is timed so that stale completion
+            # state cannot bypass the current launch gate.
+            validate_representative_timing_panel(records)
+        except CorpusError as error:
+            raise TerminalFailure(f"timing corpus rejected: {error}") from error
 
         if args.workers > 1:
             return _run_lattice_workers(directory)
