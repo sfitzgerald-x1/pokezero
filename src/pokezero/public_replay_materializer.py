@@ -8,7 +8,7 @@ action has no effect, using a deterministic sampled-world legal representative.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 from .public_decision_corpus import PublicActionIdentifier, PublicResolvedActionRound
@@ -52,6 +52,12 @@ class PublicReplayMaterialization:
     requested_players: tuple[str, ...]
     replay_actions: Mapping[int, Mapping[str, int]]
     event_canonicalizations: tuple[PublicEventCanonicalization, ...]
+    # Request observations exist only while the deterministic sampled-world
+    # replay is live.  They are deliberately not corpus output: the timing
+    # adapter needs the acting player's earlier public views to reconstruct the
+    # same opponent request order that production MCTS receives, but must never
+    # persist either player's private request payload.
+    replay_observations: Mapping[int, Mapping[str, Any]] = field(default_factory=dict)
 
 
 def replay_public_action_rounds(
@@ -73,6 +79,7 @@ def replay_public_action_rounds(
         check_prefix_observations=False,
     )
     replay_actions: dict[int, dict[str, int]] = {}
+    replay_observations: dict[int, dict[str, Any]] = {}
     canonicalizations: list[PublicEventCanonicalization] = []
     for expected_turn, action_round in enumerate(public_action_rounds):
         if action_round.turn_index != expected_turn:
@@ -81,9 +88,12 @@ def replay_public_action_rounds(
         if set(requested_players) != set(action_round.actions):
             raise PublicReplayError("sampled_world_request_shape_mismatch")
         actions: dict[str, int] = {}
+        observations: dict[str, Any] = {}
         for player, identifier in action_round.actions.items():
+            observation = env.observe(player)
+            observations[player] = observation
             action_index, canonicalization = resolve_public_action_identifier(
-                env.observe(player),
+                observation,
                 identifier,
                 turn_index=action_round.turn_index,
                 player_id=player,
@@ -93,11 +103,13 @@ def replay_public_action_rounds(
                 canonicalizations.append(canonicalization)
         env.step(actions)
         replay_actions[action_round.turn_index] = actions
+        replay_observations[action_round.turn_index] = observations
     return PublicReplayMaterialization(
         terminal=env.terminal(),
         requested_players=tuple(str(player) for player in env.requested_players()),
         replay_actions=replay_actions,
         event_canonicalizations=tuple(canonicalizations),
+        replay_observations=replay_observations,
     )
 
 

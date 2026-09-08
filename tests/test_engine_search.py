@@ -1399,6 +1399,28 @@ class LiveFoldAdvanceTests(unittest.TestCase):
         fold = policy._advance_live_fold(context)
         self.assertEqual(fold.perspective_slot, "p2")
 
+    def test_timing_replay_warm_resets_only_its_seat_fold(self) -> None:
+        policy = _policy()
+        original = self._context(self.LEAD, battle_id="timing-record")
+        self.assertIsNotNone(policy._advance_live_fold(original))
+        key = ("timing-record", "p1")
+        policy._fold_broken.add(key)
+        policy._fold_annotations_seen[key] = {0: (None, False, False, 0.0)}
+        # The public timing hook must deliberately rebuild this record's fold;
+        # a reused policy may otherwise inherit a broken or longer prefix from
+        # a prior corpus decision with the same synthetic battle id.
+        policy._config = SimpleNamespace(leaf_eval="model", fold_cross_check=False)
+        policy.warm_public_prefix_for_replay(
+            battle_id="timing-record",
+            player_id="p1",
+            decision_round_index=0,
+            public_materialization_state=_FakePublicState(self.LEAD),
+        )
+        self.assertNotIn(key, policy._fold_broken)
+        self.assertNotIn(key, policy._fold_annotations_seen)
+        self.assertEqual(policy._fold_consumed[key], len(self.LEAD))
+        self.assertEqual(policy._live_folds[key].perspective_slot, "p1")
+
 
 class _FakeAnnotationToken:
     def __init__(self, residual=None, residual_valid=False, cb_bit=False, investment=0.0):
@@ -5259,4 +5281,3 @@ class LadderStateMachineTest(unittest.TestCase):
         self.assertEqual(p.stats.ladder_rungs_run, 2)
         self.assertEqual(p.stats.ladder_decisions, 1)
         self.assertEqual(p.stats.to_dict()["ladder_rungs_per_decision"], 2.0)
-

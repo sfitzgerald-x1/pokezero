@@ -3687,6 +3687,58 @@ class EngineMctsPolicy:
         self.stats.decision_wall_seconds += time.perf_counter() - started
         return decision
 
+    def warm_model_runtime(self) -> None:
+        """Load the model runtime before an offline timing cell starts.
+
+        This is deliberately a narrow public hook for the MCTS timing lattice.
+        A timed decision should measure one completed policy decision, not the
+        one-time TorchScript module load for the first decision in a cell.
+        Calling it on a non-model configuration is a harness error rather than
+        an invitation to time a different search path.
+        """
+        if self._config.leaf_eval != "model":
+            raise ValueError("warm_model_runtime requires leaf_eval='model'.")
+        self._native()
+
+    def warm_public_prefix_for_replay(
+        self,
+        *,
+        battle_id: str,
+        player_id: str,
+        decision_round_index: int,
+        public_materialization_state: Any,
+    ) -> None:
+        """Build this replayed prefix's incremental fold outside a timed cell.
+
+        The timing corpus reconstructs the public protocol prefix for each
+        decision. That reconstruction and its first fold advance are setup,
+        not decision work. Clear this seat's fold cache first so a reused
+        policy cannot accidentally inherit an unrelated record with the same
+        corpus battle id; the following timed selection sees the already-warm
+        fold and advances zero lines.
+        """
+        if self._config.leaf_eval != "model":
+            raise ValueError("warm_public_prefix_for_replay requires leaf_eval='model'.")
+        # The fold advance does not consult an observation: accepting just its
+        # public inputs lets the timing harness include the actual request
+        # observation/action-map construction in the measured decision span.
+        # Avoiding a dummy PokeZeroObservation here keeps that boundary honest.
+        from types import SimpleNamespace  # noqa: PLC0415 — timing-only adapter
+
+        context = SimpleNamespace(
+            battle_id=str(battle_id),
+            player_id=str(player_id),
+            decision_round_index=int(decision_round_index),
+            public_materialization_state=public_materialization_state,
+        )
+        key = (str(context.battle_id), context.player_id)
+        self._live_folds.pop(key, None)
+        self._fold_consumed.pop(key, None)
+        self._fold_broken.discard(key)
+        self._fold_annotations_seen.pop(key, None)
+        if self._advance_live_fold(context) is None:
+            raise EngineSearchFallbackError("timing replay could not warm the public fold")
+
     # -----------------------------------------------------------------------------------------
 
     def _notify_world_observer(

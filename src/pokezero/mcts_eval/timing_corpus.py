@@ -1,14 +1,15 @@
 """Representative decision corpus for the Phase-A timing lattice (plan D3/A2).
 
-``pokezero.engine-mcts-timing-corpus.v1`` holds exactly N legal PokeZero
+``pokezero.engine-mcts-timing-corpus.v2`` holds exactly N legal PokeZero
 decisions replayed from held-out FoulPlay games. It deliberately does NOT reuse
 ``public-decision-corpus.v1``: that artifact omits the request-derived action
 candidates and legal mask, and a timing row must exercise the same root-action
 mapping the live policy performs.
 
 Privacy is a schema property, not a convention: a record carries the acting
-player's public event prefix, its own request-derived candidates, seeds, and the
-public belief inputs — never the opponent's request or hidden team data.
+player's public protocol prefix, canonical public action identifiers needed to
+replay that prefix, its own request-derived candidates, seeds, and the public
+belief inputs — never the opponent's request or hidden team data.
 
 Stratification (plan A2) is for COVERAGE ONLY; it does not create a dynamic
 policy. Strata may overlap, and the manifest records the deterministic held-out
@@ -24,7 +25,10 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
-TIMING_CORPUS_SCHEMA_VERSION = "pokezero.engine-mcts-timing-corpus.v1"
+from ..public_decision_corpus import PublicResolvedActionRound
+from ..public_replay_materializer import public_event_prefix_summary
+
+TIMING_CORPUS_SCHEMA_VERSION = "pokezero.engine-mcts-timing-corpus.v2"
 DEFAULT_DECISION_COUNT = 256
 
 # Fields a record must carry (plan A2). Kept explicit so the schema hash moves
@@ -41,14 +45,16 @@ TIMING_CORPUS_SCHEMA_DESCRIPTION = {
         "battle_seed",
         "bot_rng_seed",
         "event_prefix",
+        "public_resolved_action_rounds",
         "action_candidates",
         "legal_action_mask",
         "public_belief_inputs",
         "strata",
     ),
     "privacy": (
-        "acting-seat public event prefix, its own request-derived candidates/mask, "
-        "seeds, and public belief inputs only; no opponent request or hidden team data"
+        "acting-seat public protocol prefix, canonical public action identifiers, its own "
+        "request-derived candidates/mask, seeds, and public belief inputs only; no opponent "
+        "request or hidden team data"
     ),
 }
 TIMING_CORPUS_SCHEMA_SHA256 = hashlib.sha256(
@@ -136,8 +142,14 @@ def phase_bucket(turn_index: int, *, early_max: int = 8, middle_max: int = 20) -
 
 @dataclass(frozen=True)
 class TimingDecisionRecord:
-    """One replayable decision. ``event_prefix`` is replayed to warm the
-    incremental fold before the decision timer starts (plan A2)."""
+    """One replayable decision.
+
+    ``public_resolved_action_rounds`` is the executable public replay prefix.
+    ``event_prefix`` is retained as an integrity witness and is what warms the
+    incremental fold before the decision timer starts (plan A2). Raw protocol
+    text alone is intentionally insufficient: it cannot recover request-local
+    action indexes in a newly sampled world.
+    """
 
     decision_id: str
     battle_id: str
@@ -147,6 +159,7 @@ class TimingDecisionRecord:
     battle_seed: int
     bot_rng_seed: int
     event_prefix: tuple[str, ...]
+    public_resolved_action_rounds: tuple[PublicResolvedActionRound, ...]
     action_candidates: tuple[Mapping[str, Any], ...]
     legal_action_mask: tuple[bool, ...]
     public_belief_inputs: Mapping[str, Any]
@@ -157,6 +170,18 @@ class TimingDecisionRecord:
             raise ValueError("seat must be p1 or p2.")
         if self.turn_index < 0:
             raise ValueError("turn_index must be non-negative.")
+        public_round_indexes = tuple(round_.turn_index for round_ in self.public_resolved_action_rounds)
+        if public_round_indexes != tuple(range(self.turn_index)):
+            raise ValueError(
+                "public_resolved_action_rounds must contain every completed round from turn zero "
+                "through the decision prefix; raw protocol text cannot substitute for replayable actions."
+            )
+        event_summary = public_event_prefix_summary(self.public_resolved_action_rounds)
+        if event_summary["unsupported_public_event_count"]:
+            raise ValueError(
+                "public_resolved_action_rounds contains unsupported public event identifiers "
+                f"{event_summary['unsupported_public_event_ids']}; do not time a prefix that cannot replay."
+            )
         if not any(self.legal_action_mask):
             raise ValueError("a timing decision must have at least one legal action.")
         if not self.action_candidates:
@@ -176,6 +201,9 @@ class TimingDecisionRecord:
         payload = asdict(self)
         payload["record_type"] = "decision"
         payload["event_prefix"] = list(self.event_prefix)
+        payload["public_resolved_action_rounds"] = [
+            round_.to_dict() for round_ in self.public_resolved_action_rounds
+        ]
         payload["action_candidates"] = [dict(candidate) for candidate in self.action_candidates]
         payload["legal_action_mask"] = list(self.legal_action_mask)
         payload["strata"] = list(self.strata)
@@ -192,6 +220,10 @@ class TimingDecisionRecord:
             battle_seed=int(payload["battle_seed"]),
             bot_rng_seed=int(payload["bot_rng_seed"]),
             event_prefix=tuple(payload["event_prefix"]),
+            public_resolved_action_rounds=tuple(
+                PublicResolvedActionRound.from_dict(item)
+                for item in payload["public_resolved_action_rounds"]
+            ),
             action_candidates=tuple(dict(item) for item in payload["action_candidates"]),
             legal_action_mask=tuple(bool(value) for value in payload["legal_action_mask"]),
             public_belief_inputs=dict(payload["public_belief_inputs"]),
@@ -355,9 +387,17 @@ def read_corpus(
             f"{path}: corpus was built against a different record contract "
             f"({header.get('schema_sha256')} != {TIMING_CORPUS_SCHEMA_SHA256})."
         )
-    records = tuple(
-        TimingDecisionRecord.from_payload(json.loads(line)) for line in lines[1:] if line.strip()
-    )
+    parsed_records: list[TimingDecisionRecord] = []
+    for line_number, line in enumerate(lines[1:], start=2):
+        if not line.strip():
+            continue
+        try:
+            parsed_records.append(TimingDecisionRecord.from_payload(json.loads(line)))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise CorpusError(
+                f"{path}: invalid timing decision at line {line_number}: {error}"
+            ) from error
+    records = tuple(parsed_records)
     manifest = TimingCorpusManifest(
         held_out_seed_start=int(header["held_out_seed_start"]),
         held_out_seed_end=int(header["held_out_seed_end"]),
