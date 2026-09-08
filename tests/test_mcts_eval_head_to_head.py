@@ -72,6 +72,21 @@ class _IsolatedPolicy(_Policy):
     is_source_isolated = True
 
 
+class IsolatedRunnerCliTest(unittest.TestCase):
+    def test_default_response_deadline_covers_observed_search_tail_budget(self) -> None:
+        module = _runner_module()
+        args = module.build_parser().parse_args(
+            [
+                "--checkpoint", "/checkpoint.pt",
+                "--showdown-root", "/showdown",
+                "--manifest", "/manifest.json",
+                "--out-dir", "/out",
+            ]
+        )
+
+        self.assertEqual(args.isolated_worker_timeout_seconds, 180.0)
+
+
 @dataclass(frozen=True)
 class _PilotConfig:
     search_sims: int = 256

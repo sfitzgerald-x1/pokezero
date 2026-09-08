@@ -47,16 +47,21 @@ class IsolatedPolicyError(HeadToHeadError):
     """A source-isolated policy worker cannot safely provide a decision."""
 
 
-def write_frame(stream: BinaryIO, payload: Mapping[str, Any]) -> None:
-    """Write one bounded pickle frame, flushing it before the next request."""
+def _encode_frame(payload: Mapping[str, Any]) -> bytes:
+    """Encode one bounded pickle frame without writing it to a stream."""
 
     encoded = pickle.dumps(dict(payload), protocol=pickle.HIGHEST_PROTOCOL)
     if not encoded or len(encoded) > _MAX_FRAME_BYTES:
         raise IsolatedPolicyError(
             f"isolated policy frame has invalid size {len(encoded)} bytes."
         )
-    stream.write(struct.pack(">Q", len(encoded)))
-    stream.write(encoded)
+    return struct.pack(">Q", len(encoded)) + encoded
+
+
+def write_frame(stream: BinaryIO, payload: Mapping[str, Any]) -> None:
+    """Write one bounded pickle frame, flushing it before the next request."""
+
+    stream.write(_encode_frame(payload))
     stream.flush()
 
 
@@ -87,14 +92,82 @@ def read_frame(stream: BinaryIO) -> Mapping[str, Any]:
     return payload
 
 
+def _write_frame_until(
+    stream: BinaryIO,
+    *,
+    process: subprocess.Popen[bytes],
+    payload: Mapping[str, Any],
+    deadline: float,
+) -> None:
+    """Write one complete request within the same deadline as its response.
+
+    ``BufferedWriter.write`` can block forever when a child has stopped
+    reading a large context. This adapter owns both pipe ends, so write the
+    frame directly to its descriptor after a writability poll. No request is
+    considered bounded unless its transmission is bounded too.
+    """
+
+    frame = _encode_frame(payload)
+    descriptor = stream.fileno()
+    sent = 0
+    view = memoryview(frame)
+    was_blocking = os.get_blocking(descriptor)
+    if was_blocking:
+        os.set_blocking(descriptor, False)
+    try:
+        while sent < len(frame):
+            timeout = deadline - monotonic()
+            if timeout <= 0:
+                break
+            _, writable, _ = select.select([], [descriptor], [], timeout)
+            if not writable:
+                if process.poll() is not None:
+                    raise IsolatedPolicyError(
+                        "source-isolated MCTS worker exited while receiving a request"
+                        + _worker_exit_detail(process)
+                    )
+                break
+            try:
+                written = os.write(descriptor, view[sent:])
+            except BlockingIOError:
+                continue
+            if written <= 0:
+                raise IsolatedPolicyError("isolated policy worker accepted no request bytes.")
+            sent += written
+    finally:
+        if was_blocking:
+            os.set_blocking(descriptor, True)
+
+    if sent == len(frame):
+        return
+    frame_part = "header" if sent < 8 else "payload"
+    part_size = 8 if frame_part == "header" else len(frame) - 8
+    part_sent = sent if frame_part == "header" else sent - 8
+    if part_sent == 0:
+        raise IsolatedPolicyError(
+            "timed out before sending isolated policy worker request " f"{frame_part}."
+        )
+    raise IsolatedPolicyError(
+        "timed out sending partial isolated policy worker request "
+        f"{frame_part}: wrote {part_sent} of {part_size} bytes."
+    )
+
+
 def _read_exact_until(
     stream: BinaryIO,
     *,
     process: subprocess.Popen[bytes],
     size: int,
     deadline: float,
+    frame_part: str,
 ) -> bytes:
-    """Read exactly ``size`` bytes without letting a partial frame defeat a deadline."""
+    """Read one frame segment without letting a partial frame defeat a deadline.
+
+    The distinction between no response and a stalled partial frame matters in
+    a durable comparison: the former can be a slow search, while the latter is
+    a transport failure. Preserve that distinction in the refusal rather than
+    labelling every deadline breach as a partial frame.
+    """
 
     chunks: list[bytes] = []
     remaining = size
@@ -102,9 +175,7 @@ def _read_exact_until(
     while remaining:
         timeout = deadline - monotonic()
         if timeout <= 0:
-            raise IsolatedPolicyError(
-                "timed out while receiving a partial isolated policy worker frame"
-            )
+            break
         readable, _, _ = select.select([descriptor], [], [], timeout)
         if not readable:
             if process.poll() is not None:
@@ -112,9 +183,7 @@ def _read_exact_until(
                     "source-isolated MCTS worker exited while sending a response"
                     + _worker_exit_detail(process)
                 )
-            raise IsolatedPolicyError(
-                "timed out while receiving a partial isolated policy worker frame"
-            )
+            break
         chunk = os.read(descriptor, remaining)
         if not chunk:
             raise IsolatedPolicyError(
@@ -123,6 +192,17 @@ def _read_exact_until(
             )
         chunks.append(chunk)
         remaining -= len(chunk)
+    received = size - remaining
+    if received == 0:
+        raise IsolatedPolicyError(
+            "timed out before receiving isolated policy worker response "
+            f"{frame_part}."
+        )
+    if remaining:
+        raise IsolatedPolicyError(
+            "timed out receiving partial isolated policy worker response "
+            f"{frame_part}: received {received} of {size} bytes."
+        )
     return b"".join(chunks)
 
 
@@ -135,13 +215,26 @@ def _read_frame_until(
     """Read one bounded response frame while honoring one absolute deadline."""
 
     size = struct.unpack(
-        ">Q", _read_exact_until(stream, process=process, size=8, deadline=deadline)
+        ">Q",
+        _read_exact_until(
+            stream,
+            process=process,
+            size=8,
+            deadline=deadline,
+            frame_part="header",
+        ),
     )[0]
     if not size or size > _MAX_FRAME_BYTES:
         raise IsolatedPolicyError(f"isolated policy frame has invalid size {size} bytes.")
     try:
         payload = pickle.loads(
-            _read_exact_until(stream, process=process, size=size, deadline=deadline)
+            _read_exact_until(
+                stream,
+                process=process,
+                size=size,
+                deadline=deadline,
+                frame_part="payload",
+            )
         )
     except pickle.PickleError as error:
         raise IsolatedPolicyError(f"cannot decode isolated policy frame: {error}") from error
@@ -308,6 +401,7 @@ class IsolatedMctsPolicy:
     _stderr_handle: BinaryIO | None = field(default=None, init=False, repr=False)
     _stats: IsolatedPolicyStats = field(default_factory=IsolatedPolicyStats, init=False)
     _closed: bool = field(default=False, init=False)
+    _transport_failed: bool = field(default=False, init=False, repr=False)
     worker_receipt: Mapping[str, Any] | None = field(default=None, init=False)
 
     @property
@@ -379,19 +473,31 @@ class IsolatedMctsPolicy:
             return
         try:
             if self._process is not None and self._process.poll() is None:
-                try:
-                    self._request({"type": "close"})
-                except IsolatedPolicyError:
-                    pass
-                try:
-                    self._process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self._process.terminate()
+                if self._transport_failed:
+                    # The framed channel is no longer safe: never start a
+                    # second request/deadline while cleaning it up.
+                    try:
+                        self._process.kill()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        self._process.wait(timeout=0.25)
+                    except subprocess.TimeoutExpired:
+                        pass
+                else:
+                    try:
+                        self._request({"type": "close"})
+                    except IsolatedPolicyError:
+                        pass
                     try:
                         self._process.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        self._process.kill()
-                        self._process.wait(timeout=5)
+                        self._process.terminate()
+                        try:
+                            self._process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            self._process.kill()
+                            self._process.wait(timeout=5)
         finally:
             if self._process is not None:
                 for stream in (self._process.stdin, self._process.stdout):
@@ -403,16 +509,7 @@ class IsolatedMctsPolicy:
 
     def _request(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         process = self._ensure_started()
-        if process.stdin is None or process.stdout is None:
-            raise IsolatedPolicyError("isolated policy worker has no binary protocol pipes.")
-        try:
-            write_frame(process.stdin, payload)
-            response = self._receive(process)
-        except (BrokenPipeError, EOFError, OSError) as error:
-            raise IsolatedPolicyError(
-                f"isolated policy worker protocol failed: {error}{_worker_exit_detail(process)}"
-            ) from error
-        return response
+        return self._request_to_process(process, payload)
 
     def _ensure_started(self) -> subprocess.Popen[bytes]:
         if self._process is not None:
@@ -450,10 +547,8 @@ class IsolatedMctsPolicy:
         return process
 
     def _request_start(self, process: subprocess.Popen[bytes]) -> Mapping[str, Any]:
-        if process.stdin is None:
-            raise IsolatedPolicyError("isolated policy worker has no input pipe.")
-        write_frame(
-            process.stdin,
+        return self._request_to_process(
+            process,
             {
                 "type": "start",
                 "protocol_version": PROTOCOL_VERSION,
@@ -461,22 +556,46 @@ class IsolatedMctsPolicy:
                 "worker_config": dict(self.launch.worker_config),
             },
         )
-        return self._receive(process)
 
-    def _receive(self, process: subprocess.Popen[bytes]) -> Mapping[str, Any]:
-        if process.stdout is None:
-            raise IsolatedPolicyError("isolated policy worker has no output pipe.")
+    def _request_to_process(
+        self, process: subprocess.Popen[bytes], payload: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        if process.stdin is None or process.stdout is None:
+            self._abort_after_transport_error(process)
+            raise IsolatedPolicyError("isolated policy worker has no binary protocol pipes.")
         deadline = monotonic() + self.launch.response_timeout_seconds
         try:
+            _write_frame_until(
+                process.stdin,
+                process=process,
+                payload=payload,
+                deadline=deadline,
+            )
             return _read_frame_until(process.stdout, process=process, deadline=deadline)
+        except (BrokenPipeError, EOFError, OSError) as error:
+            self._abort_after_transport_error(process)
+            raise IsolatedPolicyError(
+                f"isolated policy worker protocol failed: {error}{_worker_exit_detail(process)}"
+            ) from error
         except IsolatedPolicyError:
-            # A worker that has stopped writing cannot be left alive to consume
-            # a later game's resources.  Do not wait here: the caller's close
-            # path reaps it, while the decision deadline remains the upper
-            # bound on the current rollout call.
-            if process.poll() is None:
-                process.terminate()
+            self._abort_after_transport_error(process)
             raise
+
+    def _abort_after_transport_error(self, process: subprocess.Popen[bytes]) -> None:
+        """Mark a broken channel terminally failed and stop its child now."""
+
+        # A worker that has stopped either reading or writing cannot safely
+        # receive a graceful close request. Mark it before signalling, so the
+        # public close path is reap-only and cannot begin a second full
+        # request/response deadline. SIGKILL is deliberate here: a failed
+        # isolated policy invalidates the game, so preserving a child-side
+        # graceful shutdown cannot justify delayed host cleanup.
+        self._transport_failed = True
+        if process.poll() is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
 
     @staticmethod
     def _raise_worker_response(response: Mapping[str, Any], *, expected: str) -> None:
