@@ -63,6 +63,12 @@ one-world. Q-max stays shadow-only until it is checked on representative
 one-world development positions and, only if it continues to improve regret,
 against frozen incumbent MCTS under a separately declared game contract.
 
+The rare-decoy row fully prices its chance distribution when it expands. It
+therefore catches incorrect terminal-probability accounting, but it does not
+model a low-visit Q spike caused by only partially exploring deeper
+continuations. That noisy-Q control remains required before any selector
+promotion.
+
 ## Reproduction
 
 Use the vendored pinned engine build described by the search test instructions,

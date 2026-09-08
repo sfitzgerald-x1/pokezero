@@ -1977,8 +1977,20 @@ mod tests {
         while collected < iterations {
             let take = (iterations - collected).min(batch_size);
             let mut rows = Vec::new();
-            let traversals: Vec<_> = (0..take)
-                .map(|_| {
+            // Keep the panel's collection boundary identical to the model
+            // driver: a collection round ends once either its traversal budget
+            // or its deferred-row budget is consumed before a traversal
+            // starts. A traversal may fan out to more than one deferred row,
+            // so the final traversal can overshoot that threshold—just as it
+            // can in production. A terminal traversal consumes no row, so it
+            // may still be collected until the former limit. Ready-value
+            // controls deliberately have no deferred-row budget, and therefore
+            // retain their fixed traversal cap.
+            let mut traversals = Vec::with_capacity(take);
+            while traversals.len() < take
+                && (!defer_nonterminal || rows.len() < batch_size)
+            {
+                let traversal = {
                     let traversal = traverse(
                         &mut tree,
                         &mut state,
@@ -1998,12 +2010,13 @@ mod tests {
                     );
                     assert_eq!(state.serialize(), before, "traversal restores state");
                     traversal
-                })
-                .collect();
+                };
+                traversals.push(traversal);
+            }
             for traversal in &traversals {
                 finalize(&mut tree, traversal, &rows);
             }
-            collected += take;
+            collected += traversals.len();
         }
         MultiPlyOutcome {
             tree,
@@ -2510,6 +2523,9 @@ mod tests {
                 assert!(row.terminal_branches > 0);
                 assert!(row.exact_simple_regret.abs() < 1e-6);
                 assert!(row.value_error < 1e-6);
+                assert_eq!(row.shadow_q_action, "seismictoss");
+                assert!(row.shadow_q_exact_simple_regret.abs() < 1e-6);
+                assert!(row.shadow_q_value_error < 1e-6);
                 assert_eq!(
                     outcome.counters.leaf_evals, 2,
                     "toxic's hit and miss outcomes each need a deferred leaf row"
@@ -2623,6 +2639,12 @@ mod tests {
                 assert_eq!(row.deferred_leaf_evals, 5);
                 assert!(row.terminal_branches > 0);
                 assert!(row.exact_simple_regret.abs() < 1e-6);
+                assert_eq!(row.shadow_q_action, "seismictoss");
+                assert!(row.shadow_q_exact_simple_regret.abs() < 1e-6);
+                assert!(
+                    (row.shadow_q_value_error - row.value_error).abs() < 1e-6,
+                    "both selectors choose the same finite-work nested arm"
+                );
             }
         }
 
@@ -2681,6 +2703,9 @@ mod tests {
                 assert!(row.terminal_branches > 0);
                 assert!(row.exact_simple_regret.abs() < 1e-6);
                 assert!(row.value_error < 1e-6);
+                assert_eq!(row.shadow_q_action, "splash");
+                assert!(row.shadow_q_exact_simple_regret.abs() < 1e-6);
+                assert!(row.shadow_q_value_error < 1e-6);
                 assert!(outcome.counters.terminal_branches > 0);
             }
         }
@@ -2718,6 +2743,8 @@ mod tests {
                 assert_eq!(row.terminal_branches, 0);
                 assert!(row.exact_simple_regret.abs() < 1e-6);
                 assert!(row.value_error < 1e-6);
+                assert!(row.shadow_q_exact_simple_regret.abs() < 1e-6);
+                assert!(row.shadow_q_value_error < 1e-6);
             }
         }
     }
