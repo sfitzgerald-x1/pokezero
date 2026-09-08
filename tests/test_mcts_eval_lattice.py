@@ -94,7 +94,7 @@ class T(unittest.TestCase):
         self.assertAlmostEqual(row.fold_clone_s, 64 * 0.002, places=5)
         self.assertAlmostEqual(row.row_input_s, 64 * 0.001, places=5)
 
-    def test_live_adapter_keeps_public_history_and_times_showdown_choice(self):
+    def test_live_adapter_keeps_public_history_and_times_showdown_switch_choice(self):
         """The default path must not silently weaken native prior semantics.
 
         The p2 switch actions below only decode to the expected production
@@ -111,13 +111,13 @@ class T(unittest.TestCase):
             "sharpedo",
             "deoxysdefense",
         ]
-        mask = (True, False, False, False, False, False, False, False, False)
+        mask = (False, False, False, False, True, False, False, False, False)
 
         def observation(active_species):
             return SimpleNamespace(
                 legal_action_mask=mask,
                 metadata={
-                    "action_candidates": ({"kind": "move", "move_id": "surf", "slot": 1},),
+                    "action_candidates": ({"kind": "switch", "switched_species": "Pikachu"},),
                     "opponent_active": {"species": active_species},
                 },
             )
@@ -145,6 +145,7 @@ class T(unittest.TestCase):
             seat="p1",
             turn_index=2,
             legal_action_mask=mask,
+            action_candidates=({"kind": "switch", "switched_species": "Pikachu"},),
             public_resolved_action_rounds=rounds,
         )
         replayed = SimpleNamespace(
@@ -156,7 +157,10 @@ class T(unittest.TestCase):
                 1: {"p1": observation("Absol"), "p2": object()},
             },
         )
-        state = SimpleNamespace(legal_action_mask=mask)
+        state = SimpleNamespace(
+            legal_action_mask=mask,
+            self_team=(SimpleNamespace(active=True), SimpleNamespace(active=False)),
+        )
         public_state = SimpleNamespace(replay=SimpleNamespace(public_lines=record.event_prefix))
         case = self
 
@@ -214,7 +218,7 @@ class T(unittest.TestCase):
                 case.assertIsNone(
                     next(step.observation for step in context.trajectory.steps if step.player_id == "p2")
                 )
-                return SimpleNamespace(action_index=0)
+                return SimpleNamespace(action_index=4)
 
         env = FakeEnv()
         policy = FakePolicy()
@@ -228,7 +232,7 @@ class T(unittest.TestCase):
         decider._policy_for = policy_for
         with patch("pokezero.public_replay_materializer.replay_public_action_rounds", return_value=replayed):
             telemetry = decider.prepare(record, SearchConfig(depth=4, sims=512))()
-        self.assertEqual(telemetry["root_action"], "move 1")
+        self.assertEqual(telemetry["root_action"], "switch 2")
         self.assertEqual(telemetry["prior_fallbacks"], 0)
 
     def test_public_replay_retains_ephemeral_request_history(self):
