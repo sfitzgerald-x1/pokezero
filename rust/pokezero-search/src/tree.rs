@@ -2750,6 +2750,116 @@ mod tests {
     }
 
     #[test]
+    fn deep_noisy_q_control_falsifies_raw_q_max_for_both_seats() {
+        // This is the counterhypothesis the shallow rare-terminal control
+        // cannot express. `expand_edge` prices every depth-zero chance outcome
+        // at once, so a lone lucky KO cannot manufacture a root Q there. At
+        // depth two, however, a scarcely explored continuation can replace one
+        // nonterminal branch estimate. The closure below simulates a model
+        // overvaluing only that continuation; the *true* root payoffs remain
+        // explicit and are independent of the closure:
+        //
+        //   Splash = 0.50, Tackle = 4 / 16 terminal KOs = 0.25.
+        //
+        // A raw root-Q selector must be rejected as a candidate if it promotes
+        // this low-visit, high-noise arm. This test records that falsification;
+        // it does not quietly change production selection to visit-max.
+        for (state, acting_side_one, root_allowed) in [
+            (
+                STRADDLE.to_string(),
+                true,
+                (&["splash", "tackle"][..], &["splash"][..]),
+            ),
+            (
+                mirrored(STRADDLE),
+                false,
+                (&["splash"][..], &["splash", "tackle"][..]),
+            ),
+        ] {
+            let outcome = run_batched_action_panel(
+                &state,
+                64,
+                1,
+                2,
+                1,
+                Some((acting_side_one, "splash", 0.9, "tackle", 0.1)),
+                Some(root_allowed),
+                true,
+                |leaf, seam| {
+                    let target_hp = if acting_side_one {
+                        leaf.side_two.get_active_immutable().hp
+                    } else {
+                        leaf.side_one.get_active_immutable().hp
+                    };
+                    let acting_value = if seam.depth == 0 {
+                        // The candidate's non-KO branches start well below the
+                        // safe action. Exact KOs still bypass this synthetic seam.
+                        if target_hp < 50 { 0.0 } else { 0.58 }
+                    } else if seam.parent.is_some_and(|(chance, _)| chance == 5) {
+                        // With this fixed seed and the stated priors, chance
+                        // slot 5 is the lower-prior Tackle root edge. The
+                        // assertion below binds that otherwise internal arena
+                        // position to the displayed root action.
+                        1.0
+                    } else {
+                        0.58
+                    };
+                    if acting_side_one { acting_value } else { 1.0 - acting_value }
+                },
+            );
+            let root = &outcome.tree.decisions[0];
+            let stats = if acting_side_one { &root.s1_stats } else { &root.s2_stats };
+            let splash_index = stats
+                .iter()
+                .position(|stat| stat.display == "splash")
+                .expect("control retains safe Splash");
+            let tackle_index = stats
+                .iter()
+                .position(|stat| stat.display == "tackle")
+                .expect("control retains noisy Tackle");
+            let (splash_key, tackle_key) = if acting_side_one {
+                ((splash_index as u16, 0), (tackle_index as u16, 0))
+            } else {
+                ((0, splash_index as u16), (0, tackle_index as u16))
+            };
+            assert_eq!(
+                root.children.get(&splash_key),
+                Some(&0),
+                "the high-prior safe edge must be chance slot 0"
+            );
+            assert_eq!(
+                root.children.get(&tackle_key),
+                Some(&5),
+                "the noisy continuation must belong to Tackle, never an implicit slot"
+            );
+            let splash = &stats[splash_index];
+            let tackle = &stats[tackle_index];
+            let splash_q = if acting_side_one { splash.mean() } else { 1.0 - splash.mean() };
+            let tackle_q = if acting_side_one { tackle.mean() } else { 1.0 - tackle.mean() };
+            let row = action_choice_observation(
+                &outcome,
+                acting_side_one,
+                &[("splash", 0.5), ("tackle", 0.25)],
+            );
+            eprintln!("action-panel deep-noisy-q side_one={acting_side_one} {row:?}");
+            assert!(outcome.tree.decisions.len() >= 2, "the witness must reach a continuation");
+            assert!(outcome.counters.terminal_branches > 0, "retain real KO branches");
+            assert_eq!(row.completed_visits, 64);
+            assert_eq!(row.chosen_action, "splash", "visit-max keeps the safe action");
+            assert_eq!(row.exact_simple_regret, 0.0);
+            assert_eq!(row.shadow_q_action, "tackle", "raw Q-max follows the noisy arm");
+            assert!(
+                row.shadow_q_visits <= 16,
+                "the noisy arm must remain below one quarter of the 64-visit budget"
+            );
+            assert!(row.shadow_q_is_lower_visit);
+            assert!(tackle_q > splash_q, "the disagreement must be Q-driven, not a tie");
+            assert!((row.shadow_q_exact_simple_regret - 0.25).abs() < 1e-6);
+            assert!(row.shadow_q_value_error > 0.4, "the selected Q is visibly overconfident");
+        }
+    }
+
+    #[test]
     fn depth_occupancy_is_occupancy_not_a_maximum() {
         // THE POINT OF THE FIELD. `max_depth_reached` is satisfied by ONE deep line, so
         // it cannot distinguish a tree filled to depth 3 from one that sent a single
