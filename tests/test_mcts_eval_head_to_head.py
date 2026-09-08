@@ -206,6 +206,30 @@ class MirroredPairTest(unittest.TestCase):
         self.assertEqual(summary["pair_scores"], [0.5])
         self.assertEqual(summary["candidate_score"]["point"], 0.5)
         self.assertEqual(summary["candidate_model_evals"], 16)
+        self.assertEqual(summary["candidate_decision_walls_s"], [0.01, 0.01])
+        self.assertEqual(summary["incumbent_decision_walls_s"], [0.02, 0.02])
+        self.assertEqual(
+            summary["candidate_decision_wall_summary"],
+            {
+                "count": 2,
+                "total_s": 0.02,
+                "min_s": 0.01,
+                "p50_s": 0.01,
+                "p95_s": 0.01,
+                "max_s": 0.01,
+            },
+        )
+        self.assertEqual(
+            summary["incumbent_decision_wall_summary"],
+            {
+                "count": 2,
+                "total_s": 0.04,
+                "min_s": 0.02,
+                "p50_s": 0.02,
+                "p95_s": 0.02,
+                "max_s": 0.02,
+            },
+        )
 
     def test_any_mcts_fallback_invalidates_the_game(self) -> None:
         with self.assertRaisesRegex(HeadToHeadError, "fallback"):
