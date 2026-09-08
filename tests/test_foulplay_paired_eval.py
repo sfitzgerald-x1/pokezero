@@ -47,6 +47,7 @@ def args(**overrides) -> argparse.Namespace:
         engine_fpu_reduction=None,
         engine_c_puct=None,
         engine_override_telemetry=False,
+        engine_root_selector_shadow=False,
         engine_oracle_belief=False,
         opponent_journal=None,
         engine_early_stop=False,
@@ -680,6 +681,60 @@ class OverrideTelemetryPassthroughTest(unittest.TestCase):
             Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py"
         ).read_text(encoding="utf-8")
         self.assertIn('"override_telemetry": bool(args.engine_override_telemetry)', source)
+
+
+class RootSelectorShadowPassthroughTest(unittest.TestCase):
+    """The one-world selector shadow is reachable, witnessed, and observational."""
+
+    def test_the_flag_reaches_the_child_only_for_a_search_arm(self) -> None:
+        self.assertIn(
+            "--engine-root-selector-shadow",
+            _DRIVER.bridge_argv(
+                args(engine_root_selector_shadow=True), seat="p1"
+            ),
+        )
+        self.assertNotIn(
+            "--engine-root-selector-shadow", _DRIVER.bridge_argv(args(), seat="p1")
+        )
+        self.assertNotIn(
+            "--engine-root-selector-shadow",
+            _DRIVER.bridge_argv(
+                args(arm="raw", engine_root_selector_shadow=True), seat="p1"
+            ),
+        )
+
+    def test_the_cli_and_bridge_accept_the_flag(self) -> None:
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "search", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json", "--engine-root-selector-shadow",
+        ])
+        self.assertTrue(ns.engine_root_selector_shadow)
+        self.assertIn(
+            "--engine-root-selector-shadow", _DRIVER.bridge_argv(ns, seat="p2")
+        )
+
+        from pokezero.foulplay_bridge import build_arg_parser
+
+        self.assertIn(
+            "engine_root_selector_shadow",
+            {a.dest for a in build_arg_parser()._actions},
+        )
+        self.assertTrue(build_arg_parser().parse_args([
+            "--checkpoint", "/tmp/c.pt", "--engine-root-selector-shadow"
+        ]).engine_root_selector_shadow)
+
+    def test_the_flag_stays_out_of_config_id_and_is_witnessed_in_the_shard(self) -> None:
+        self.assertEqual(
+            _DRIVER.config_id_for(args(engine_root_selector_shadow=True)),
+            _DRIVER.config_id_for(args()),
+        )
+        source = (
+            Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '"root_selector_shadow": bool(args.engine_root_selector_shadow)', source
+        )
 
 
 class OracleBeliefPassthroughTest(unittest.TestCase):
