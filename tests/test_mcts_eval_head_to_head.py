@@ -65,6 +65,12 @@ class _Policy:
         return SimpleNamespace(action_index=0)
 
 
+class _IsolatedPolicy(_Policy):
+    """Test double for a policy whose decisions came from another source tree."""
+
+    is_source_isolated = True
+
+
 def _spec(config_id: str, **overrides) -> MctsPolicySpec:
     values = {
         "config_id": config_id,
@@ -231,6 +237,75 @@ class MirroredPairTest(unittest.TestCase):
                 driver_factory=lambda _seed, seat, c, i: _Driver(seat, c, i),
             )
 
+    def test_source_different_builds_require_and_accept_a_marked_isolated_session(self) -> None:
+        candidate = _spec("candidate")
+        incumbent = _spec(
+            "incumbent",
+            policy_id="incumbent",
+            source_commit="z" * 40,
+            source_tree_sha256="e" * 64,
+            engine_fingerprint="f" * 16,
+        )
+
+        def session_factory(_seed, seat):
+            candidate_policy = PublicOnlyMctsPolicy(_Policy("candidate"))
+            incumbent_policy = PublicOnlyMctsPolicy(_IsolatedPolicy("incumbent"))
+            return _Driver(seat, candidate_policy, incumbent_policy), candidate_policy, incumbent_policy
+
+        games = play_mirrored_pair(
+            seed=101,
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_factory=lambda: self.fail("session factory must be used"),
+            incumbent_factory=lambda: self.fail("session factory must be used"),
+            driver_factory=lambda *_args: self.fail("session factory must be used"),
+            session_factory=session_factory,
+            execution_mode="isolated_build",
+        )
+
+        self.assertEqual([game.candidate_seat for game in games], ["p1", "p2"])
+
+    def test_isolated_build_refuses_a_session_without_a_source_isolated_policy(self) -> None:
+        candidate = _spec("candidate")
+        incumbent = _spec("incumbent", source_commit="z" * 40)
+
+        def session_factory(_seed, seat):
+            candidate_policy = PublicOnlyMctsPolicy(_Policy("candidate"))
+            incumbent_policy = PublicOnlyMctsPolicy(_Policy("incumbent"))
+            return _Driver(seat, candidate_policy, incumbent_policy), candidate_policy, incumbent_policy
+
+        with self.assertRaisesRegex(HeadToHeadError, "no source-isolated policy"):
+            play_mirrored_pair(
+                seed=101,
+                candidate=candidate,
+                incumbent=incumbent,
+                candidate_factory=lambda: self.fail("session factory must be used"),
+                incumbent_factory=lambda: self.fail("session factory must be used"),
+                driver_factory=lambda *_args: self.fail("session factory must be used"),
+                session_factory=session_factory,
+                execution_mode="isolated_build",
+            )
+
+    def test_isolated_build_still_requires_one_checkpoint_and_simulator(self) -> None:
+        candidate = _spec("candidate")
+        source_different = {"source_commit": "z" * 40}
+        for override, expected in (
+            ({**source_different, "checkpoint_sha256": "x" * 64}, "frozen checkpoint"),
+            ({**source_different, "showdown_source_sha256": "x" * 64}, "frozen simulator"),
+        ):
+            incumbent = _spec("incumbent", **override)
+            with self.assertRaisesRegex(HeadToHeadError, expected):
+                play_mirrored_pair(
+                    seed=101,
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_factory=lambda: self.fail("not reached"),
+                    incumbent_factory=lambda: self.fail("not reached"),
+                    driver_factory=lambda *_args: self.fail("not reached"),
+                    session_factory=lambda *_args: self.fail("not reached"),
+                    execution_mode="isolated_build",
+                )
+
 
 class DurableGameTest(unittest.TestCase):
     def test_partial_pair_is_durable_but_never_scoreable(self) -> None:
@@ -323,6 +398,29 @@ class SourceReceiptTest(unittest.TestCase):
 
         self.assertEqual(first["tree_status"], "explicit_hash_without_git_python_and_bridge")
         self.assertNotEqual(first["tree_sha256"], changed["tree_sha256"])
+
+    def test_isolated_worker_receipt_must_bind_the_exact_clean_incumbent(self) -> None:
+        module = _runner_module()
+        incumbent = _spec("incumbent", policy_id="incumbent")
+        receipt = {
+            "policy": incumbent.to_payload(),
+            "commit": incumbent.source_commit,
+            "tree_sha256": incumbent.source_tree_sha256,
+            "tree_status": "clean_tracked_checkout",
+            "engine_fingerprint": incumbent.engine_fingerprint,
+            "worker_bootstrap_sha256": "a" * 64,
+        }
+        self.assertEqual(
+            module._validate_isolated_receipt(
+                receipt, incumbent=incumbent, bootstrap_sha256="a" * 64
+            )["commit"],
+            incumbent.source_commit,
+        )
+        receipt["tree_status"] = "dirty"
+        with self.assertRaisesRegex(HeadToHeadError, "clean source checkout"):
+            module._validate_isolated_receipt(
+                receipt, incumbent=incumbent, bootstrap_sha256="a" * 64
+            )
 
 
 if __name__ == "__main__":

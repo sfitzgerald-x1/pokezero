@@ -145,6 +145,29 @@ def require_inprocess_compatibility(
         )
 
 
+def require_isolated_build_compatibility(
+    candidate: MctsPolicySpec, incumbent: MctsPolicySpec
+) -> None:
+    """Validate the invariants for a source-different native-engine comparison.
+
+    The two policies intentionally may have different source receipts and engine
+    fingerprints.  They must still share the model and battle engine, otherwise
+    a score would confound the search implementation with a checkpoint or
+    simulator change.
+    """
+
+    if candidate.checkpoint_sha256 != incumbent.checkpoint_sha256:
+        raise HeadToHeadError(
+            "candidate and incumbent checkpoints differ; an isolated-build comparison "
+            "still requires one frozen checkpoint."
+        )
+    if candidate.showdown_source_sha256 != incumbent.showdown_source_sha256:
+        raise HeadToHeadError(
+            "candidate and incumbent Showdown source identities differ; an isolated-build "
+            "comparison requires one frozen simulator."
+        )
+
+
 @dataclass(frozen=True)
 class PublicTrajectoryStep:
     """Only the fields engine determinization needs from a historic step.
@@ -229,6 +252,12 @@ class PublicOnlyMctsPolicy:
     def stats(self) -> Any:
         return self._policy.stats
 
+    @property
+    def is_source_isolated(self) -> bool:
+        """Whether decisions are made by a separately source-bound process."""
+
+        return bool(getattr(self._policy, "is_source_isolated", False))
+
     def select_action(self, observation: Any, *, rng: Any) -> Any:
         return self._policy.select_action(observation, rng=rng)
 
@@ -245,6 +274,11 @@ class PublicOnlyMctsPolicy:
         reset = getattr(self._policy, "reset", None)
         if callable(reset):
             reset()
+
+    def close(self) -> None:
+        close = getattr(self._policy, "close", None)
+        if callable(close):
+            close()
 
 
 @dataclass(frozen=True)
@@ -472,6 +506,7 @@ def play_mirrored_pair(
     completed: Mapping[str, HeadToHeadGame] | None = None,
     session_factory: SessionFactory | None = None,
     on_game: GameSink | None = None,
+    execution_mode: str = "in_process",
 ) -> tuple[HeadToHeadGame, ...]:
     """Play (or resume) the two candidate-seat orientations for one battle seed.
 
@@ -480,7 +515,20 @@ def play_mirrored_pair(
     :func:`complete_pair` before any aggregate is read.
     """
 
-    require_inprocess_compatibility(candidate, incumbent)
+    if execution_mode == "in_process":
+        require_inprocess_compatibility(candidate, incumbent)
+    elif execution_mode == "isolated_build":
+        if session_factory is None:
+            raise HeadToHeadError(
+                "isolated-build comparisons require a session_factory that installs the "
+                "source-isolated policy in the live battle driver."
+            )
+        require_isolated_build_compatibility(candidate, incumbent)
+    else:
+        raise HeadToHeadError(
+            f"unknown execution_mode {execution_mode!r}; expected 'in_process' or "
+            "'isolated_build'."
+        )
     reusable = dict(completed or {})
     unknown_seats = set(reusable).difference(_SEATS)
     if unknown_seats:
@@ -511,6 +559,13 @@ def play_mirrored_pair(
                     "driver; wrapping only the telemetry reference would leak opponent-private "
                     "history to the policy that actually plays."
                 )
+            if execution_mode == "isolated_build" and not (
+                candidate_policy.is_source_isolated or incumbent_policy.is_source_isolated
+            ):
+                raise HeadToHeadError(
+                    "isolated-build comparison session contains no source-isolated policy; "
+                    "refusing to relabel one loaded engine as a historical build."
+                )
         candidate_before = PolicyTelemetry.capture(candidate_policy)
         incumbent_before = PolicyTelemetry.capture(incumbent_policy)
         try:
@@ -519,6 +574,10 @@ def play_mirrored_pair(
             close = getattr(getattr(driver, "env", None), "close", None)
             if callable(close):
                 close()
+            for policy in (candidate_policy, incumbent_policy):
+                policy_close = getattr(policy, "close", None)
+                if callable(policy_close):
+                    policy_close()
         candidate_after = PolicyTelemetry.capture(candidate_policy)
         incumbent_after = PolicyTelemetry.capture(incumbent_policy)
         candidate_delta = candidate_after.delta(candidate_before)

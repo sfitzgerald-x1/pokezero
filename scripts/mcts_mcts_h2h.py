@@ -3,9 +3,9 @@
 
 The manifest is intentionally small but complete enough to be an experiment
 contract: it names two explicit model-leaf MCTS configurations, one checkpoint
-digest, source/build identities, a seed list, and the decision cap.  The runner
-does not accept a source-different incumbent in-process; use a future isolated
-native-build adapter for that particular contrast.
+digest, source/build identities, a seed list, and the decision cap.  A
+source-different incumbent is allowed only through the explicit isolated-build
+mode, where it serves decisions from its declared source-bound process.
 """
 
 from __future__ import annotations
@@ -396,6 +396,65 @@ def _seeds(manifest: Mapping[str, Any]) -> tuple[int, ...]:
     return seeds
 
 
+def _required_sha256(value: object, *, label: str) -> str:
+    digest = str(value or "")
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise HeadToHeadError(f"{label} must be a 64-character lowercase SHA-256 hash.")
+    return digest
+
+
+def _isolated_incumbent_identity(raw: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Read the remote source receipt declared by an isolated incumbent.
+
+    The worker independently recomputes these values before it constructs a
+    policy.  This helper only freezes the expected receipt in the host's
+    immutable experiment contract.
+    """
+
+    commit = str(raw.get("source_commit", ""))
+    if len(commit) != 40 or any(character not in "0123456789abcdef" for character in commit):
+        raise HeadToHeadError(
+            "isolated incumbent.source_commit must be a full lowercase Git commit id."
+        )
+    tree_sha256 = _required_sha256(
+        raw.get("source_tree_sha256"), label="isolated incumbent.source_tree_sha256"
+    )
+    fingerprint = str(raw.get("engine_fingerprint", ""))
+    if not fingerprint:
+        raise HeadToHeadError("isolated incumbent.engine_fingerprint must be non-empty.")
+    return commit, tree_sha256, fingerprint
+
+
+def _validate_isolated_receipt(
+    receipt: object,
+    *,
+    incumbent: MctsPolicySpec,
+    bootstrap_sha256: str,
+) -> Mapping[str, Any]:
+    """Check the durable child receipt before a game is accepted or resumed."""
+
+    payload = _mapping(receipt, label="isolated worker receipt")
+    if dict(_mapping(payload.get("policy"), label="isolated worker receipt.policy")) != (
+        incumbent.to_payload()
+    ):
+        raise HeadToHeadError(
+            "isolated worker receipt policy does not exactly match the declared incumbent."
+        )
+    if payload.get("commit") != incumbent.source_commit:
+        raise HeadToHeadError("isolated worker receipt source commit differs from incumbent.")
+    if payload.get("tree_sha256") != incumbent.source_tree_sha256:
+        raise HeadToHeadError("isolated worker receipt source tree differs from incumbent.")
+    if payload.get("tree_status") != "clean_tracked_checkout":
+        raise HeadToHeadError("isolated worker receipt does not attest a clean source checkout.")
+    if payload.get("engine_fingerprint") != incumbent.engine_fingerprint:
+        raise HeadToHeadError("isolated worker receipt engine differs from incumbent.")
+    if payload.get("worker_bootstrap_sha256") != bootstrap_sha256:
+        raise HeadToHeadError(
+            "isolated worker receipt bootstrap differs from the host's declared adapter."
+        )
+    return dict(payload)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True)
@@ -403,6 +462,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True, help="frozen MCTS-vs-MCTS experiment JSON")
     parser.add_argument("--out-dir", required=True, help="new or exact-resume durable result directory")
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--isolated-incumbent-source-root",
+        help=(
+            "clean historical PokeZero checkout for the incumbent; enables the only "
+            "source-different execution mode"
+        ),
+    )
+    parser.add_argument(
+        "--isolated-incumbent-python",
+        help="Python executable from the isolated incumbent build (required with its source root)",
+    )
+    parser.add_argument(
+        "--isolated-worker-timeout-seconds",
+        type=float,
+        default=60.0,
+        help="per-decision response deadline for the isolated incumbent worker",
+    )
     parser.add_argument("--skip-build-check", action="store_true", help="dry inspection only; never scored")
     return parser
 
@@ -411,6 +487,18 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.skip_build_check:
         raise HeadToHeadError("--skip-build-check is not permitted for an MCTS-vs-MCTS result.")
+    isolated_values = (
+        args.isolated_incumbent_source_root,
+        args.isolated_incumbent_python,
+    )
+    if any(isolated_values) and not all(isolated_values):
+        raise HeadToHeadError(
+            "--isolated-incumbent-source-root and --isolated-incumbent-python must be "
+            "provided together."
+        )
+    if args.isolated_worker_timeout_seconds <= 0:
+        raise HeadToHeadError("--isolated-worker-timeout-seconds must be positive.")
+    execution_mode = "isolated_build" if all(isolated_values) else "in_process"
     out_root = _durable_output_root(args.out_dir)
     manifest = _load_manifest(args.manifest)
     declared_showdown_source_sha256 = _declared_showdown_source_sha256(manifest)
@@ -438,6 +526,10 @@ def main(argv: list[str] | None = None) -> int:
         env_config_from_checkpoint_provenance,
     )
     from pokezero.mcts_eval.lattice import materialize_search_artifacts  # noqa: PLC0415
+    from pokezero.mcts_eval.isolated_policy import (  # noqa: PLC0415
+        IsolatedMctsPolicy,
+        IsolatedPolicyLaunch,
+    )
     from pokezero.mcts_eval.resolver import resolve_checkpoint_contract  # noqa: PLC0415
     from pokezero.neural_policy import (  # noqa: PLC0415
         category_vocab_from_model_config,
@@ -487,19 +579,48 @@ def main(argv: list[str] | None = None) -> int:
         tables_path=artifacts["tables_path"],
         device=args.device,
     )
-    incumbent, incumbent_config = _runtime_spec(
-        _mapping(manifest.get("incumbent"), label="manifest.incumbent"),
-        role="incumbent",
-        checkpoint=args.checkpoint,
-        checkpoint_sha256=checkpoint_sha256,
-        source_commit=source_commit,
-        source_tree_sha256=source_tree_sha256,
-        engine_fingerprint=engine_fingerprint,
-        showdown_source_sha256=showdown_source_sha256,
-        model_path=artifacts["model_path"],
-        tables_path=artifacts["tables_path"],
-        device=args.device,
-    )
+    incumbent_raw = _mapping(manifest.get("incumbent"), label="manifest.incumbent")
+    isolated_source_root: Path | None = None
+    isolated_bootstrap_sha256: str | None = None
+    if execution_mode == "isolated_build":
+        isolated_source_root = Path(args.isolated_incumbent_source_root).expanduser().resolve()
+        if not isolated_source_root.is_dir():
+            raise HeadToHeadError(
+                "--isolated-incumbent-source-root does not name an existing directory."
+            )
+        remote_commit, remote_tree_sha256, remote_fingerprint = _isolated_incumbent_identity(
+            incumbent_raw
+        )
+        incumbent, incumbent_config = _runtime_spec(
+            incumbent_raw,
+            role="isolated incumbent",
+            checkpoint=args.checkpoint,
+            checkpoint_sha256=checkpoint_sha256,
+            source_commit=remote_commit,
+            source_tree_sha256=remote_tree_sha256,
+            engine_fingerprint=remote_fingerprint,
+            showdown_source_sha256=showdown_source_sha256,
+            model_path=artifacts["model_path"],
+            tables_path=artifacts["tables_path"],
+            device=args.device,
+        )
+        isolated_bootstrap_sha256 = _sha256_file(
+            REPO_ROOT / "scripts" / "mcts_isolated_policy_worker.py"
+        )
+    else:
+        incumbent, incumbent_config = _runtime_spec(
+            incumbent_raw,
+            role="incumbent",
+            checkpoint=args.checkpoint,
+            checkpoint_sha256=checkpoint_sha256,
+            source_commit=source_commit,
+            source_tree_sha256=source_tree_sha256,
+            engine_fingerprint=engine_fingerprint,
+            showdown_source_sha256=showdown_source_sha256,
+            model_path=artifacts["model_path"],
+            tables_path=artifacts["tables_path"],
+            device=args.device,
+        )
 
     model_config = load_transformer_model_config(args.checkpoint)
     vocabulary = category_vocab_from_model_config(model_config, args.showdown_root)
@@ -530,10 +651,22 @@ def main(argv: list[str] | None = None) -> int:
             "candidate": candidate.to_payload(),
             "incumbent": incumbent.to_payload(),
             "seeds": list(seeds),
+            "execution_mode": execution_mode,
+            "isolated_incumbent": (
+                {
+                    "source_root": str(isolated_source_root),
+                    "python": str(args.isolated_incumbent_python),
+                    "worker_bootstrap_sha256": isolated_bootstrap_sha256,
+                }
+                if execution_mode == "isolated_build"
+                else None
+            ),
         },
     )
 
-    def session_factory(_seed: int, candidate_seat: str):
+    isolated_workers: dict[tuple[int, str], IsolatedMctsPolicy] = {}
+
+    def session_factory(seed: int, candidate_seat: str):
         env = LocalShowdownEnv(env_config)
         annotations = EnvTier2AnnotationSource(env)
         candidate_policy = PublicOnlyMctsPolicy(
@@ -545,15 +678,43 @@ def main(argv: list[str] | None = None) -> int:
                 annotation_source=annotations,
             )
         )
-        incumbent_policy = PublicOnlyMctsPolicy(
-            EngineMctsPolicy(
-                dex=dex,
-                set_source=set_source,
-                config=incumbent_config,
-                policy_id=incumbent.policy_id,
+        if execution_mode == "isolated_build":
+            assert isolated_source_root is not None
+            assert isolated_bootstrap_sha256 is not None
+            isolated = IsolatedMctsPolicy(
+                IsolatedPolicyLaunch(
+                    policy=incumbent,
+                    command=(
+                        str(args.isolated_incumbent_python),
+                        str(REPO_ROOT / "scripts" / "mcts_isolated_policy_worker.py"),
+                    ),
+                    worker_config={
+                        "source_root": str(isolated_source_root),
+                        "showdown_root": str(Path(args.showdown_root).expanduser().resolve()),
+                        "worker_bootstrap_sha256": isolated_bootstrap_sha256,
+                    },
+                    response_timeout_seconds=args.isolated_worker_timeout_seconds,
+                    stderr_path=(
+                        out_root
+                        / "worker-stderr"
+                        / f"seed-{seed}-{candidate_seat}-{os.getpid()}.log"
+                    ),
+                    working_directory=isolated_source_root,
+                ),
                 annotation_source=annotations,
             )
-        )
+            isolated_workers[(seed, candidate_seat)] = isolated
+            incumbent_policy = PublicOnlyMctsPolicy(isolated)
+        else:
+            incumbent_policy = PublicOnlyMctsPolicy(
+                EngineMctsPolicy(
+                    dex=dex,
+                    set_source=set_source,
+                    config=incumbent_config,
+                    policy_id=incumbent.policy_id,
+                    annotation_source=annotations,
+                )
+            )
         other_seat = "p2" if candidate_seat == "p1" else "p1"
         driver = RolloutDriver(
             env=env,
@@ -572,6 +733,48 @@ def main(argv: list[str] | None = None) -> int:
         completed = load_pair(
             out_root, seed=seed, candidate=candidate, incumbent=incumbent
         )
+        if execution_mode == "isolated_build":
+            assert isolated_bootstrap_sha256 is not None
+            for candidate_seat in completed:
+                receipt_path = (
+                    out_root
+                    / "worker-receipts"
+                    / f"seed-{seed}-{candidate_seat}-incumbent.json"
+                )
+                try:
+                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as error:
+                    raise HeadToHeadError(
+                        "completed isolated game has no readable matching worker receipt "
+                        f"at {receipt_path}: {error}"
+                    ) from error
+                _validate_isolated_receipt(
+                    receipt,
+                    incumbent=incumbent,
+                    bootstrap_sha256=isolated_bootstrap_sha256,
+                )
+
+        def on_game(game):
+            if execution_mode == "isolated_build":
+                assert isolated_bootstrap_sha256 is not None
+                isolated = isolated_workers.pop((game.seed, game.candidate_seat), None)
+                if isolated is None:
+                    raise HeadToHeadError(
+                        "isolated worker was not retained for its completed game receipt."
+                    )
+                receipt = _validate_isolated_receipt(
+                    isolated.worker_receipt,
+                    incumbent=incumbent,
+                    bootstrap_sha256=isolated_bootstrap_sha256,
+                )
+                _write_immutable_json(
+                    out_root
+                    / "worker-receipts"
+                    / f"seed-{game.seed}-{game.candidate_seat}-incumbent.json",
+                    receipt,
+                )
+            write_game_immutable(out_root, game)
+
         games = play_mirrored_pair(
             seed=seed,
             candidate=candidate,
@@ -581,7 +784,8 @@ def main(argv: list[str] | None = None) -> int:
             driver_factory=lambda *_: None,
             completed=completed,
             session_factory=session_factory,
-            on_game=lambda game: write_game_immutable(out_root, game),
+            on_game=on_game,
+            execution_mode=execution_mode,
         )
         complete_pair(games, seed=seed, candidate=candidate, incumbent=incumbent)
         all_games.extend(games)
