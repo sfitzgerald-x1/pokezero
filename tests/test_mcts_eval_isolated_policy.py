@@ -117,6 +117,10 @@ mode = start["worker_config"].get("mode", "ok")
 if mode == "bad-receipt":
     write(stdout, {{"type": "hello", "receipt": {{"policy": {{}}}}}})
     raise SystemExit(0)
+if mode == "silent-hello":
+    import time
+    time.sleep(5)
+    raise SystemExit(0)
 if mode == "partial-hello":
     stdout.write(b"\\x00\\x00\\x00\\x00")
     stdout.flush()
@@ -263,7 +267,26 @@ class IsolatedPolicyTest(unittest.TestCase):
             )
             started = time.monotonic()
             try:
-                with self.assertRaisesRegex(IsolatedPolicyError, "partial isolated policy worker"):
+                with self.assertRaisesRegex(
+                    IsolatedPolicyError,
+                    "partial isolated policy worker response header: received 4 of 8 bytes",
+                ):
+                    policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
+            finally:
+                policy.close()
+            self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_silent_worker_timeout_is_not_misreported_as_a_partial_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = self._policy(
+                Path(directory), mode="silent-hello", response_timeout_seconds=0.1
+            )
+            started = time.monotonic()
+            try:
+                with self.assertRaisesRegex(
+                    IsolatedPolicyError,
+                    "timed out before receiving isolated policy worker response header",
+                ):
                     policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
             finally:
                 policy.close()

@@ -55,6 +55,7 @@ BACKUP_REPAIR_BOOTSTRAP_RESAMPLES = 10_000
 BACKUP_REPAIR_PILOT_CONFIDENCE = 0.80
 BACKUP_REPAIR_MINIMUM_EFFECT_DELTA = 0.05
 ISOLATED_CONFIG_COMPATIBILITY_PROTOCOL = "disabled-diagnostic-omission.v1"
+ISOLATED_WORKER_RESPONSE_TIMEOUT_SECONDS = 180.0
 ISOLATED_DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
     "root_selector_q": False,
     "root_selector_shadow": False,
@@ -739,8 +740,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--isolated-worker-timeout-seconds",
         type=float,
-        default=60.0,
-        help="per-decision response deadline for the isolated incumbent worker",
+        default=ISOLATED_WORKER_RESPONSE_TIMEOUT_SECONDS,
+        help=(
+            "per-decision response deadline for each isolated worker "
+            f"(default: {ISOLATED_WORKER_RESPONSE_TIMEOUT_SECONDS:g} seconds)"
+        ),
     )
     parser.add_argument("--skip-build-check", action="store_true", help="dry inspection only; never scored")
     return parser
@@ -998,6 +1002,7 @@ def main(argv: list[str] | None = None) -> int:
                 "host_source": source,
                 "candidate_provenance_sha256": candidate.provenance_sha256,
                 "incumbent_provenance_sha256": incumbent.provenance_sha256,
+                "response_timeout_seconds": args.isolated_worker_timeout_seconds,
             },
         )
 

@@ -93,8 +93,15 @@ def _read_exact_until(
     process: subprocess.Popen[bytes],
     size: int,
     deadline: float,
+    frame_part: str,
 ) -> bytes:
-    """Read exactly ``size`` bytes without letting a partial frame defeat a deadline."""
+    """Read one frame segment without letting a partial frame defeat a deadline.
+
+    The distinction between no response and a stalled partial frame matters in
+    a durable comparison: the former can be a slow search, while the latter is
+    a transport failure. Preserve that distinction in the refusal rather than
+    labelling every deadline breach as a partial frame.
+    """
 
     chunks: list[bytes] = []
     remaining = size
@@ -102,9 +109,7 @@ def _read_exact_until(
     while remaining:
         timeout = deadline - monotonic()
         if timeout <= 0:
-            raise IsolatedPolicyError(
-                "timed out while receiving a partial isolated policy worker frame"
-            )
+            break
         readable, _, _ = select.select([descriptor], [], [], timeout)
         if not readable:
             if process.poll() is not None:
@@ -112,9 +117,7 @@ def _read_exact_until(
                     "source-isolated MCTS worker exited while sending a response"
                     + _worker_exit_detail(process)
                 )
-            raise IsolatedPolicyError(
-                "timed out while receiving a partial isolated policy worker frame"
-            )
+            break
         chunk = os.read(descriptor, remaining)
         if not chunk:
             raise IsolatedPolicyError(
@@ -123,6 +126,17 @@ def _read_exact_until(
             )
         chunks.append(chunk)
         remaining -= len(chunk)
+    received = size - remaining
+    if received == 0:
+        raise IsolatedPolicyError(
+            "timed out before receiving isolated policy worker response "
+            f"{frame_part}."
+        )
+    if remaining:
+        raise IsolatedPolicyError(
+            "timed out receiving partial isolated policy worker response "
+            f"{frame_part}: received {received} of {size} bytes."
+        )
     return b"".join(chunks)
 
 
@@ -135,13 +149,26 @@ def _read_frame_until(
     """Read one bounded response frame while honoring one absolute deadline."""
 
     size = struct.unpack(
-        ">Q", _read_exact_until(stream, process=process, size=8, deadline=deadline)
+        ">Q",
+        _read_exact_until(
+            stream,
+            process=process,
+            size=8,
+            deadline=deadline,
+            frame_part="header",
+        ),
     )[0]
     if not size or size > _MAX_FRAME_BYTES:
         raise IsolatedPolicyError(f"isolated policy frame has invalid size {size} bytes.")
     try:
         payload = pickle.loads(
-            _read_exact_until(stream, process=process, size=size, deadline=deadline)
+            _read_exact_until(
+                stream,
+                process=process,
+                size=size,
+                deadline=deadline,
+                frame_part="payload",
+            )
         )
     except pickle.PickleError as error:
         raise IsolatedPolicyError(f"cannot decode isolated policy frame: {error}") from error
