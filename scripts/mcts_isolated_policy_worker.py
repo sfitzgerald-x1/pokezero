@@ -16,6 +16,7 @@ import random
 import struct
 import subprocess
 import sys
+from types import SimpleNamespace
 from typing import Any, BinaryIO, Mapping
 
 
@@ -205,22 +206,93 @@ class SnapshotAnnotationSource:
         )
 
 
-def _require_public_context(context: object) -> None:
-    player_id = getattr(context, "player_id", None)
-    observations = getattr(context, "requested_observations", None)
-    masks = getattr(context, "requested_legal_action_masks", None)
-    trajectory = getattr(context, "trajectory", None)
-    if not isinstance(player_id, str) or not isinstance(observations, Mapping) or not isinstance(
-        masks, Mapping
+def _context_from_wire(payload: object, policy_context_type: Any) -> Any:
+    """Reconstruct a source-local context from the adapter's neutral payload."""
+
+    if not isinstance(payload, Mapping):
+        raise WorkerError("decision context is not a mapping.")
+    player_id = payload.get("player_id")
+    observations = payload.get("requested_observations")
+    masks = payload.get("requested_legal_action_masks")
+    trajectory_payload = payload.get("trajectory")
+    requested_players = payload.get("requested_players")
+    if (
+        not isinstance(player_id, str)
+        or not isinstance(observations, Mapping)
+        or not isinstance(masks, Mapping)
+        or not isinstance(trajectory_payload, Mapping)
+        or not isinstance(requested_players, (tuple, list))
     ):
-        raise WorkerError("decision has no valid policy context.")
+        raise WorkerError("decision has no valid source-neutral policy context.")
     if set(observations) != {player_id} or set(masks) != {player_id}:
         raise WorkerError("host leaked another requested player's private boundary data.")
-    for step in getattr(trajectory, "steps", ()):
-        if getattr(step, "player_id", None) != player_id and getattr(
-            step, "observation", None
-        ) is not None:
+    if not all(isinstance(value, str) for value in requested_players):
+        raise WorkerError("source-neutral context has invalid requested players.")
+    own_mask = masks.get(player_id)
+    if not isinstance(own_mask, (tuple, list)) or not all(
+        isinstance(value, bool) for value in own_mask
+    ):
+        raise WorkerError("source-neutral context has an invalid legal action mask.")
+    if trajectory_payload.get("terminal") is not None:
+        raise WorkerError("source-neutral context may not carry a terminal trajectory.")
+    metadata = trajectory_payload.get("metadata")
+    steps_payload = trajectory_payload.get("steps")
+    if not isinstance(metadata, Mapping) or not isinstance(steps_payload, (tuple, list)):
+        raise WorkerError("source-neutral trajectory has an invalid shape.")
+    if set(metadata).difference({"public_resolved_action_rounds"}):
+        raise WorkerError("source-neutral trajectory contains unapproved metadata.")
+    steps: list[SimpleNamespace] = []
+    for raw_step in steps_payload:
+        if not isinstance(raw_step, Mapping):
+            raise WorkerError("source-neutral trajectory has a non-mapping step.")
+        step_player = raw_step.get("player_id")
+        turn_index = raw_step.get("turn_index")
+        action_index = raw_step.get("action_index")
+        if (
+            not isinstance(step_player, str)
+            or not isinstance(turn_index, int)
+            or isinstance(turn_index, bool)
+            or turn_index < 0
+            or not isinstance(action_index, int)
+            or isinstance(action_index, bool)
+            or action_index < 0
+        ):
+            raise WorkerError("source-neutral trajectory has an invalid step identity.")
+        observation = raw_step.get("observation")
+        if step_player != player_id and observation is not None:
             raise WorkerError("host leaked another player's historic observation.")
+        steps.append(
+            SimpleNamespace(
+                player_id=step_player,
+                turn_index=turn_index,
+                action_index=action_index,
+                observation=observation,
+            )
+        )
+    trajectory = SimpleNamespace(
+        battle_id=str(trajectory_payload.get("battle_id", "")),
+        format_id=str(trajectory_payload.get("format_id", "")),
+        seed=int(trajectory_payload.get("seed", -1)),
+        steps=tuple(steps),
+        terminal=None,
+        metadata=dict(metadata),
+    )
+    try:
+        return policy_context_type(
+            player_id=player_id,
+            decision_round_index=int(payload.get("decision_round_index", -1)),
+            battle_id=str(payload.get("battle_id", "")),
+            format_id=str(payload.get("format_id", "")),
+            seed=int(payload.get("seed", -1)),
+            observation=payload.get("observation"),
+            requested_players=tuple(requested_players),
+            trajectory=trajectory,
+            requested_legal_action_masks={player_id: tuple(own_mask)},
+            requested_observations={player_id: observations[player_id]},
+            public_materialization_state=payload.get("public_materialization_state"),
+        )
+    except (TypeError, ValueError) as error:
+        raise WorkerError(f"cannot reconstruct source-local policy context: {error}") from error
 
 
 def _stats_payload(stats: Any) -> dict[str, Any]:
@@ -244,7 +316,9 @@ def _decision_payload(decision: Any) -> dict[str, Any]:
     }
 
 
-def _worker_start(message: Mapping[str, Any]) -> tuple[Any, SnapshotAnnotationSource, dict[str, Any]]:
+def _worker_start(
+    message: Mapping[str, Any],
+) -> tuple[Any, SnapshotAnnotationSource, dict[str, Any], Any]:
     if message.get("type") != "start" or message.get("protocol_version") != PROTOCOL_VERSION:
         raise WorkerError("host did not begin the expected isolated policy protocol.")
     policy = message.get("policy")
@@ -290,6 +364,7 @@ def _worker_start(message: Mapping[str, Any]) -> tuple[Any, SnapshotAnnotationSo
         from engine_build_fingerprint import assert_fresh, compute_fingerprint
         from pokezero.dex import load_showdown_dex_cached
         from pokezero.engine_search import EngineMctsConfig, EngineMctsPolicy
+        from pokezero.policy import PolicyContext
         from pokezero.randbat import load_gen3_randbat_source_cached
     except Exception as error:
         raise WorkerError(f"cannot import declared isolated policy source: {error}") from error
@@ -316,7 +391,7 @@ def _worker_start(message: Mapping[str, Any]) -> tuple[Any, SnapshotAnnotationSo
             "worker_bootstrap_sha256": bootstrap_sha256,
         }
     )
-    return engine_policy, annotations, receipt
+    return engine_policy, annotations, receipt, PolicyContext
 
 
 def _serve() -> int:
@@ -324,7 +399,7 @@ def _serve() -> int:
     stdout = sys.stdout.buffer
     try:
         start = read_frame(stdin)
-        policy, annotations, receipt = _worker_start(start)
+        policy, annotations, receipt, policy_context_type = _worker_start(start)
     except Exception as error:
         write_frame(stdout, {"type": "error", "message": str(error)})
         return 2
@@ -342,8 +417,7 @@ def _serve() -> int:
                 continue
             if kind != "decide":
                 raise WorkerError(f"unsupported isolated policy request {kind!r}.")
-            context = message.get("context")
-            _require_public_context(context)
+            context = _context_from_wire(message.get("context"), policy_context_type)
             annotations.set_snapshot(message.get("annotation"))
             rng = random.Random()
             rng.setstate(message.get("rng_state"))

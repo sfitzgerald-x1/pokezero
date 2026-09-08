@@ -6,6 +6,7 @@ from io import BytesIO
 from pathlib import Path
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 
@@ -17,6 +18,7 @@ from pokezero.mcts_eval.isolated_policy import (
     IsolatedPolicyStats,
     read_frame,
     snapshot_annotation_source,
+    source_neutral_context_payload,
     write_frame,
 )
 from pokezero.policy import PolicyContext
@@ -115,6 +117,12 @@ mode = start["worker_config"].get("mode", "ok")
 if mode == "bad-receipt":
     write(stdout, {{"type": "hello", "receipt": {{"policy": {{}}}}}})
     raise SystemExit(0)
+if mode == "partial-hello":
+    stdout.write(b"\\x00\\x00\\x00\\x00")
+    stdout.flush()
+    import time
+    time.sleep(5)
+    raise SystemExit(0)
 write(stdout, {{"type": "hello", "receipt": {{"policy": policy, "worker_pid": 999}}}})
 while True:
     message = read(stdin)
@@ -128,13 +136,21 @@ while True:
         write(stdout, {{"type": "error", "message": "unexpected request"}})
         continue
     context = message["context"]
-    if set(context.requested_observations) != {{context.player_id}}:
+    if not isinstance(context, dict):
+        write(stdout, {{"type": "error", "message": "context is not source-neutral"}})
+        continue
+    player_id = context["player_id"]
+    if set(context["requested_observations"]) != {{player_id}}:
         write(stdout, {{"type": "error", "message": "private request leaked"}})
         continue
-    if set(context.requested_legal_action_masks) != {{context.player_id}}:
+    if set(context["requested_legal_action_masks"]) != {{player_id}}:
         write(stdout, {{"type": "error", "message": "private mask leaked"}})
         continue
-    if any(step.player_id != context.player_id and step.observation is not None for step in context.trajectory.steps):
+    trajectory = context["trajectory"]
+    if not isinstance(trajectory, dict):
+        write(stdout, {{"type": "error", "message": "trajectory is not source-neutral"}})
+        continue
+    if any(step["player_id"] != player_id and step["observation"] is not None for step in trajectory["steps"]):
         write(stdout, {{"type": "error", "message": "historic private observation leaked"}})
         continue
     annotation = message["annotation"]
@@ -182,15 +198,26 @@ class AnnotationSnapshotTest(unittest.TestCase):
         with self.assertRaisesRegex(IsolatedPolicyError, "invalid entry"):
             snapshot_annotation_source(BadAnnotations(), player_id="p1")
 
+    def test_context_payload_uses_only_a_mapping_for_host_adapter_trajectory(self) -> None:
+        payload = source_neutral_context_payload(_context())
+
+        self.assertIsInstance(payload, dict)
+        self.assertIsInstance(payload["trajectory"], dict)
+        self.assertIsInstance(payload["trajectory"]["steps"][0], dict)
+        self.assertEqual(set(payload["requested_observations"]), {"p1"})
+        self.assertIsNone(payload["trajectory"]["steps"][1]["observation"])
+
 
 class IsolatedPolicyTest(unittest.TestCase):
-    def _policy(self, directory: Path, *, mode: str = "ok") -> IsolatedMctsPolicy:
+    def _policy(
+        self, directory: Path, *, mode: str = "ok", response_timeout_seconds: float = 5
+    ) -> IsolatedMctsPolicy:
         return IsolatedMctsPolicy(
             IsolatedPolicyLaunch(
                 policy=_spec(),
                 command=(sys.executable, str(_fake_worker_script(directory))),
                 worker_config={"mode": mode},
-                response_timeout_seconds=5,
+                response_timeout_seconds=response_timeout_seconds,
                 stderr_path=directory / "worker.stderr",
             ),
             annotation_source=_Annotations(),
@@ -228,6 +255,19 @@ class IsolatedPolicyTest(unittest.TestCase):
                     policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
             finally:
                 policy.close()
+
+    def test_partial_worker_frame_cannot_bypass_the_response_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = self._policy(
+                Path(directory), mode="partial-hello", response_timeout_seconds=0.1
+            )
+            started = time.monotonic()
+            try:
+                with self.assertRaisesRegex(IsolatedPolicyError, "partial isolated policy worker"):
+                    policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
+            finally:
+                policy.close()
+            self.assertLess(time.monotonic() - started, 1.0)
 
 
 class StatsTest(unittest.TestCase):

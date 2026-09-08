@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import os
 import pickle
 import random
 import select
@@ -84,6 +85,74 @@ def read_frame(stream: BinaryIO) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise IsolatedPolicyError("isolated policy frame must decode to a mapping.")
     return payload
+
+
+def _read_exact_until(
+    stream: BinaryIO,
+    *,
+    process: subprocess.Popen[bytes],
+    size: int,
+    deadline: float,
+) -> bytes:
+    """Read exactly ``size`` bytes without letting a partial frame defeat a deadline."""
+
+    chunks: list[bytes] = []
+    remaining = size
+    descriptor = stream.fileno()
+    while remaining:
+        timeout = deadline - monotonic()
+        if timeout <= 0:
+            raise IsolatedPolicyError(
+                "timed out while receiving a partial isolated policy worker frame"
+            )
+        readable, _, _ = select.select([descriptor], [], [], timeout)
+        if not readable:
+            if process.poll() is not None:
+                raise IsolatedPolicyError(
+                    "source-isolated MCTS worker exited while sending a response"
+                    + _worker_exit_detail(process)
+                )
+            raise IsolatedPolicyError(
+                "timed out while receiving a partial isolated policy worker frame"
+            )
+        chunk = os.read(descriptor, remaining)
+        if not chunk:
+            raise IsolatedPolicyError(
+                "source-isolated MCTS worker closed its protocol stream"
+                + _worker_exit_detail(process)
+            )
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
+def _read_frame_until(
+    stream: BinaryIO,
+    *,
+    process: subprocess.Popen[bytes],
+    deadline: float,
+) -> Mapping[str, Any]:
+    """Read one bounded response frame while honoring one absolute deadline."""
+
+    size = struct.unpack(
+        ">Q", _read_exact_until(stream, process=process, size=8, deadline=deadline)
+    )[0]
+    if not size or size > _MAX_FRAME_BYTES:
+        raise IsolatedPolicyError(f"isolated policy frame has invalid size {size} bytes.")
+    try:
+        payload = pickle.loads(
+            _read_exact_until(stream, process=process, size=size, deadline=deadline)
+        )
+    except pickle.PickleError as error:
+        raise IsolatedPolicyError(f"cannot decode isolated policy frame: {error}") from error
+    if not isinstance(payload, Mapping):
+        raise IsolatedPolicyError("isolated policy frame must decode to a mapping.")
+    return payload
+
+
+def _worker_exit_detail(process: subprocess.Popen[bytes]) -> str:
+    code = process.poll()
+    return "" if code is None else f" (exit code {code})"
 
 
 @dataclass(frozen=True)
@@ -184,6 +253,51 @@ def snapshot_annotation_source(source: Any | None, *, player_id: str) -> dict[st
     return {"active": True, "overlay": copied}
 
 
+def source_neutral_context_payload(context: PolicyContext) -> dict[str, Any]:
+    """Return public MCTS input without host-only trajectory classes.
+
+    A historical worker can import stable PokeZero observation and public-state
+    data classes from its own checkout.  It cannot unpickle adapter-only classes
+    such as ``PublicTrajectory`` that were added later in the host source.  The
+    trajectory therefore crosses the process boundary as plain mappings and is
+    reconstructed structurally by the bootstrap.
+    """
+
+    sanitized = public_only_context(context)
+    trajectory = sanitized.trajectory
+    return {
+        "player_id": sanitized.player_id,
+        "decision_round_index": sanitized.decision_round_index,
+        "battle_id": sanitized.battle_id,
+        "format_id": sanitized.format_id,
+        "seed": sanitized.seed,
+        "observation": sanitized.observation,
+        "requested_players": tuple(sanitized.requested_players),
+        "requested_legal_action_masks": {
+            player: tuple(mask)
+            for player, mask in sanitized.requested_legal_action_masks.items()
+        },
+        "requested_observations": dict(sanitized.requested_observations),
+        "public_materialization_state": sanitized.public_materialization_state,
+        "trajectory": {
+            "battle_id": trajectory.battle_id,
+            "format_id": trajectory.format_id,
+            "seed": trajectory.seed,
+            "terminal": trajectory.terminal,
+            "metadata": dict(trajectory.metadata),
+            "steps": tuple(
+                {
+                    "player_id": step.player_id,
+                    "turn_index": step.turn_index,
+                    "action_index": step.action_index,
+                    "observation": step.observation,
+                }
+                for step in trajectory.steps
+            ),
+        },
+    }
+
+
 @dataclass
 class IsolatedMctsPolicy:
     """A context-aware policy backed by one persistent local worker process."""
@@ -229,11 +343,10 @@ class IsolatedMctsPolicy:
             raise IsolatedPolicyError(
                 "source-isolated MCTS requires public_materialization_state."
             )
-        sanitized = public_only_context(context)
         response = self._request(
             {
                 "type": "decide",
-                "context": sanitized,
+                "context": source_neutral_context_payload(context),
                 "rng_state": rng.getstate(),
                 "annotation": snapshot_annotation_source(
                     self.annotation_source, player_id=context.player_id
@@ -297,7 +410,7 @@ class IsolatedMctsPolicy:
             response = self._receive(process)
         except (BrokenPipeError, EOFError, OSError) as error:
             raise IsolatedPolicyError(
-                f"isolated policy worker protocol failed: {error}{self._worker_exit_detail(process)}"
+                f"isolated policy worker protocol failed: {error}{_worker_exit_detail(process)}"
             ) from error
         return response
 
@@ -354,25 +467,16 @@ class IsolatedMctsPolicy:
         if process.stdout is None:
             raise IsolatedPolicyError("isolated policy worker has no output pipe.")
         deadline = monotonic() + self.launch.response_timeout_seconds
-        while True:
-            remaining = deadline - monotonic()
-            if remaining <= 0:
-                raise IsolatedPolicyError(
-                    "timed out waiting for source-isolated MCTS worker response"
-                    + self._worker_exit_detail(process)
-                )
-            readable, _, _ = select.select([process.stdout], [], [], remaining)
-            if readable:
-                return read_frame(process.stdout)
-            if process.poll() is not None:
-                raise IsolatedPolicyError(
-                    "source-isolated MCTS worker exited before responding"
-                    + self._worker_exit_detail(process)
-                )
-
-    def _worker_exit_detail(self, process: subprocess.Popen[bytes]) -> str:
-        code = process.poll()
-        return "" if code is None else f" (exit code {code})"
+        try:
+            return _read_frame_until(process.stdout, process=process, deadline=deadline)
+        except IsolatedPolicyError:
+            # A worker that has stopped writing cannot be left alive to consume
+            # a later game's resources.  Do not wait here: the caller's close
+            # path reaps it, while the decision deadline remains the upper
+            # bound on the current rollout call.
+            if process.poll() is None:
+                process.terminate()
+            raise
 
     @staticmethod
     def _raise_worker_response(response: Mapping[str, Any], *, expected: str) -> None:
