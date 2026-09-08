@@ -226,10 +226,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     @stage_handler(Stage.RUN_TIMING_LATTICE)
     def _lattice(directory: Path) -> list[str]:
-        from pokezero.mcts_eval.timing_corpus import read_corpus
+        from pokezero.mcts_eval.timing_corpus import read_corpus, validate_representative_timing_panel
 
         corpus_path = stage_dir(out_root, Stage.BUILD_TIMING_CORPUS) / "timing-corpus.jsonl"
         _, records = read_corpus(corpus_path)
+        # The corpus stage may have a completed marker from an older runner;
+        # recheck immediately before work is timed so that stale completion
+        # state cannot bypass the current launch gate.
+        validate_representative_timing_panel(records)
 
         if args.workers > 1:
             return _run_lattice_workers(directory)

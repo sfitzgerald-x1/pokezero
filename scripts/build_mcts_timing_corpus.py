@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build ``pokezero.engine-mcts-timing-corpus.v2`` from held-out games (plan A2).
+"""Build ``pokezero.engine-mcts-timing-corpus.v3`` from held-out games (plan A2).
 
 Each record carries the acting seat's public protocol prefix through its request,
 the canonical public action identifiers needed to replay it,
@@ -9,7 +9,7 @@ it), the seeds needed to reproduce the game, and the public belief inputs.
 
 Games are played from a held-out seed band with the study checkpoint, so the
 decisions are drawn from the distribution the timing lattice will be asked
-about. Every record is labeled on all six strata axes from public state.
+about. Every record is labeled on all seven strata axes from public state.
 """
 
 from __future__ import annotations
@@ -145,6 +145,7 @@ def main(argv: list[str] | None = None) -> int:
                             forced_switch=str(getattr(state, "request_kind", "")) == "forceSwitch",
                             hidden_world_count=1,
                             turn_index=turn,
+                            legal_action_count=sum(mask),
                         ),
                     )
                 )
