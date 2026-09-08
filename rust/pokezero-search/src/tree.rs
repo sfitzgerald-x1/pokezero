@@ -1875,6 +1875,143 @@ mod tests {
             .expect("search runs")
     }
 
+    /// Production collect-then-finalize scheduling with the same tree/PUCT
+    /// implementation as the model batch path, but an immediate CPU leaf
+    /// price. This lets action-choice tests vary the collection batch without
+    /// requiring libtorch.
+    fn run_batched_with_root_priors(
+        state_str: &str,
+        iterations: usize,
+        batch_size: usize,
+        max_depth: u8,
+        seed: u64,
+        root_priors: Option<(bool, &str, f32, &str, f32)>,
+    ) -> MultiPlyOutcome {
+        run_batched_action_panel(
+            state_str,
+            iterations,
+            batch_size,
+            max_depth,
+            seed,
+            root_priors,
+            None,
+            false,
+            |leaf, _| HpFractionEval.eval(leaf),
+        )
+    }
+
+    /// The real collect-then-finalize driver with two test-only controls used
+    /// by the predeclared action panel:
+    ///
+    /// * a fixed legal reply makes a payoff an expectation over a stated
+    ///   opponent distribution, rather than a reply retrospectively sampled by
+    ///   PUCT; and
+    /// * deferred rows exercise the production batch handoff. Terminal branches
+    ///   still bypass this closure and keep their engine-derived exact price.
+    #[allow(clippy::too_many_arguments)]
+    fn run_batched_action_panel<F>(
+        state_str: &str,
+        iterations: usize,
+        batch_size: usize,
+        max_depth: u8,
+        seed: u64,
+        root_priors: Option<(bool, &str, f32, &str, f32)>,
+        root_allowed: Option<(&[&str], &[&str])>,
+        defer_nonterminal: bool,
+        mut leaf_value: F,
+    ) -> MultiPlyOutcome
+    where
+        F: FnMut(&State, &BranchSeam) -> f32,
+    {
+        assert!(batch_size > 0);
+        let mut state = parse_state(state_str.trim()).expect("fixture state parses");
+        let cfg = MultiPlyConfig {
+            max_depth,
+            c_puct: 1.4,
+            deep_ko_split: true,
+            use_opponent_priors: false,
+            fpu_reduction: None,
+        };
+        let mut tree = Tree::from_root(&state).expect("root builds");
+        if let Some((s1_allowed, s2_allowed)) = root_allowed {
+            let root = &mut tree.decisions[0];
+            let s1_options: Vec<_> = root
+                .s1_options
+                .iter()
+                .zip(&root.s1_stats)
+                .filter(|(_, stat)| s1_allowed.contains(&stat.display.as_str()))
+                .map(|(option, _)| *option)
+                .collect();
+            let s2_options: Vec<_> = root
+                .s2_options
+                .iter()
+                .zip(&root.s2_stats)
+                .filter(|(_, stat)| s2_allowed.contains(&stat.display.as_str()))
+                .map(|(option, _)| *option)
+                .collect();
+            assert!(!s1_options.is_empty(), "fixture lost every side-one action");
+            assert!(!s2_options.is_empty(), "fixture lost every side-two action");
+            root.s1_options = s1_options;
+            root.s2_options = s2_options;
+            root.s1_stats = make_stats(&state.side_one, &root.s1_options);
+            root.s2_stats = make_stats(&state.side_two, &root.s2_options);
+        }
+        if let Some((side_one, first, first_prior, second, second_prior)) = root_priors {
+            let stats = if side_one {
+                &mut tree.decisions[0].s1_stats
+            } else {
+                &mut tree.decisions[0].s2_stats
+            };
+            for stat in stats {
+                stat.prior = match stat.display.as_str() {
+                    display if display == first => first_prior,
+                    display if display == second => second_prior,
+                    display => panic!("unexpected unmasked root arm {display}"),
+                };
+            }
+        }
+        let mut counters = SearchCounters::default();
+        let mut rng = StdRng::seed_from_u64(seed);
+        let before = state.serialize();
+        let mut collected = 0usize;
+        while collected < iterations {
+            let take = (iterations - collected).min(batch_size);
+            let mut rows = Vec::new();
+            let traversals: Vec<_> = (0..take)
+                .map(|_| {
+                    let traversal = traverse(
+                        &mut tree,
+                        &mut state,
+                        &mut rng,
+                        &cfg,
+                        &mut counters,
+                        &mut |leaf, seam| {
+                            let value = leaf_value(leaf, seam);
+                            if defer_nonterminal {
+                                let row = rows.len();
+                                rows.push(value);
+                                LeafPrice::Deferred(row)
+                            } else {
+                                LeafPrice::Ready(value)
+                            }
+                        },
+                    );
+                    assert_eq!(state.serialize(), before, "traversal restores state");
+                    traversal
+                })
+                .collect();
+            for traversal in &traversals {
+                finalize(&mut tree, traversal, &rows);
+            }
+            collected += take;
+        }
+        MultiPlyOutcome {
+            tree,
+            counters,
+            elapsed_s: 0.0,
+        }
+    }
+
     fn arm_q(outcome: &MultiPlyOutcome, display: &str) -> f32 {
         let root = &outcome.tree.decisions[0];
         let stat = root
@@ -1887,13 +2024,154 @@ mod tests {
     }
 
     fn side_one_argmax(outcome: &MultiPlyOutcome) -> String {
+        side_argmax(outcome, true)
+    }
+
+    fn side_argmax(outcome: &MultiPlyOutcome, side_one: bool) -> String {
         let root = &outcome.tree.decisions[0];
-        root.s1_stats
+        let stats = if side_one { &root.s1_stats } else { &root.s2_stats };
+        stats
             .iter()
             .max_by_key(|s| s.visits)
             .expect("root has arms")
             .display
             .clone()
+    }
+
+    /// Shadow root selector for the action panel only. Production still selects
+    /// by visits. Q is converted to the acting seat's frame, then exact Q ties
+    /// use visits and finally the original arm order.
+    fn side_q_argmax(outcome: &MultiPlyOutcome, side_one: bool) -> String {
+        let root = &outcome.tree.decisions[0];
+        let stats = if side_one { &root.s1_stats } else { &root.s2_stats };
+        stats
+            .iter()
+            .enumerate()
+            .filter(|(_, stat)| stat.visits > 0)
+            .max_by(|(left_index, left), (right_index, right)| {
+                let left_q = if side_one { left.mean() } else { 1.0 - left.mean() };
+                let right_q = if side_one { right.mean() } else { 1.0 - right.mean() };
+                left_q
+                    .total_cmp(&right_q)
+                    .then_with(|| left.visits.cmp(&right.visits))
+                    // `max_by` retains the last equal item, so reverse this
+                    // comparison to preserve the original stable arm order.
+                    .then_with(|| right_index.cmp(left_index))
+            })
+            .expect("root has a completed arm")
+            .1
+            .display
+            .clone()
+    }
+
+    /// One row of the fixed-work action panel. Values supplied to this helper
+    /// are deliberately in the ACTING seat's frame, unlike stored tree Qs
+    /// (which are always side-one win probabilities).
+    #[derive(Debug)]
+    struct ActionChoiceObservation {
+        chosen_action: String,
+        completed_visits: u32,
+        deferred_leaf_evals: usize,
+        terminal_branches: usize,
+        chosen_q: f32,
+        exact_payoff: f32,
+        exact_simple_regret: f32,
+        value_error: f32,
+        shadow_q_action: String,
+        shadow_q_visits: u32,
+        shadow_q: f32,
+        shadow_q_exact_payoff: f32,
+        shadow_q_exact_simple_regret: f32,
+        shadow_q_value_error: f32,
+        shadow_q_is_lower_visit: bool,
+    }
+
+    fn action_choice_observation(
+        outcome: &MultiPlyOutcome,
+        acting_side_one: bool,
+        exact_payoffs: &[(&str, f32)],
+    ) -> ActionChoiceObservation {
+        let chosen_action = side_argmax(outcome, acting_side_one);
+        let root = &outcome.tree.decisions[0];
+        let stats = if acting_side_one { &root.s1_stats } else { &root.s2_stats };
+        let chosen = stats
+            .iter()
+            .find(|stat| stat.display == chosen_action)
+            .expect("chosen action is a root arm");
+        let chosen_q = if acting_side_one {
+            chosen.mean()
+        } else {
+            1.0 - chosen.mean()
+        };
+        let exact_payoff = exact_payoffs
+            .iter()
+            .find_map(|(action, payoff)| (*action == chosen_action).then_some(*payoff))
+            .unwrap_or_else(|| panic!("no exact payoff declared for {chosen_action}"));
+        let optimal_payoff = exact_payoffs
+            .iter()
+            .map(|(_, payoff)| *payoff)
+            .max_by(f32::total_cmp)
+            .expect("panel declares at least one action");
+        let shadow_q_action = side_q_argmax(outcome, acting_side_one);
+        let shadow_q_stat = stats
+            .iter()
+            .find(|stat| stat.display == shadow_q_action)
+            .expect("shadow Q action is a root arm");
+        let shadow_q = if acting_side_one {
+            shadow_q_stat.mean()
+        } else {
+            1.0 - shadow_q_stat.mean()
+        };
+        let shadow_q_exact_payoff = exact_payoffs
+            .iter()
+            .find_map(|(action, payoff)| (*action == shadow_q_action).then_some(*payoff))
+            .unwrap_or_else(|| panic!("no exact payoff declared for {shadow_q_action}"));
+        let observation = ActionChoiceObservation {
+            chosen_action,
+            completed_visits: stats.iter().map(|stat| stat.visits).sum(),
+            deferred_leaf_evals: outcome.counters.leaf_evals,
+            terminal_branches: outcome.counters.terminal_branches,
+            chosen_q,
+            exact_payoff,
+            exact_simple_regret: optimal_payoff - exact_payoff,
+            value_error: (chosen_q - exact_payoff).abs(),
+            shadow_q_action,
+            shadow_q_visits: shadow_q_stat.visits,
+            shadow_q,
+            shadow_q_exact_payoff,
+            shadow_q_exact_simple_regret: optimal_payoff - shadow_q_exact_payoff,
+            shadow_q_value_error: (shadow_q - shadow_q_exact_payoff).abs(),
+            shadow_q_is_lower_visit: shadow_q_stat.visits < chosen.visits,
+        };
+        debug_assert!(
+            (observation.value_error - (observation.chosen_q - observation.exact_payoff).abs())
+                .abs()
+                < 1e-6,
+            "panel row must expose its selected-action value error exactly"
+        );
+        debug_assert!(
+            (observation.shadow_q_value_error
+                - (observation.shadow_q - observation.shadow_q_exact_payoff).abs())
+                .abs()
+                < 1e-6,
+            "panel row must expose its shadow-Q value error exactly"
+        );
+        observation
+    }
+
+    /// In `DEPTH_BENEFIT`, lift Chansey to 200 HP. A root Seismic Toss then
+    /// needs a second deterministic Toss to finish the game, while a root
+    /// Splash followed by Toss leaves Chansey at exactly half HP. Against the
+    /// fixture's only `splash` reply, the solved two-ply targets are therefore
+    /// 1.0 and 0.75 respectively. Keeping this as a state mutation makes the
+    /// known nested counterfactual explicit without adding a hand-written
+    /// engine fixture wire string.
+    fn depth_benefit_two_turn_state() -> String {
+        let mut state = parse_state(DEPTH_BENEFIT.trim()).expect("fixture parses");
+        let target = state.side_two.get_active();
+        target.hp = 200;
+        target.maxhp = 200;
+        state.serialize()
     }
 
     /// Drive the production collect-then-finalize seam without libtorch. Fixing
@@ -2085,6 +2363,361 @@ mod tests {
             }
             for branch in &tree.chances[0].branches {
                 assert_eq!(branch.mean(), branch.terminal.unwrap());
+            }
+        }
+    }
+
+    #[test]
+    fn batched_terminal_win_retains_its_value_under_a_moderate_misleading_prior() {
+        // The candidate is a fixed, known terminal win. The other action has a
+        // deliberately misleading 0.6 prior, a finite 128-visit budget, and
+        // the real collect-then-finalize schedule. This is a known-control for
+        // decision selection, not a claim that the backup repair alone solves
+        // extreme-prior, large-batch root selection.
+        for (state, acting_side_one, bad, good, good_value) in [
+            (ANALYTIC_TOXIC.to_string(), true, "toxic", "seismictoss", 1.0),
+            (mirrored(ANALYTIC_TOXIC), false, "toxic", "seismictoss", 0.0),
+        ] {
+            for batch_size in [1, 2, 8, 64] {
+                let outcome = run_batched_with_root_priors(
+                    &state,
+                    128,
+                    batch_size,
+                    1,
+                    0,
+                    Some((acting_side_one, bad, 0.6, good, 0.4)),
+                );
+                let root = &outcome.tree.decisions[0];
+                let stats = if acting_side_one { &root.s1_stats } else { &root.s2_stats };
+                let terminal = stats
+                    .iter()
+                    .find(|stat| stat.display == good)
+                    .expect("terminal win arm exists");
+                assert!(
+                    (terminal.mean() - good_value).abs() < 1e-6,
+                    "batch {batch_size}, side_one {acting_side_one}: terminal {good} Q {} != {good_value}",
+                    terminal.mean(),
+                );
+                assert_eq!(side_argmax(&outcome, acting_side_one), good);
+                assert_eq!(stats.iter().map(|stat| stat.visits).sum::<u32>(), 128);
+            }
+        }
+    }
+
+    #[test]
+    fn shadow_q_selector_exposes_finite_batch_visit_lag_for_both_seats() {
+        // This is an observation of the completed production tree, not a
+        // production-selector change. At this predeclared hard-prior/batch
+        // point, visit-max lags the exact terminal Q. It gives the later
+        // one-world shadow comparison a concrete, seat-correct starting case.
+        for (state, acting_side_one, expected_terminal_value) in [
+            (ANALYTIC_TOXIC.to_string(), true, 1.0),
+            (mirrored(ANALYTIC_TOXIC), false, 0.0),
+        ] {
+            let outcome = run_batched_with_root_priors(
+                &state,
+                128,
+                64,
+                1,
+                0,
+                Some((acting_side_one, "toxic", 0.7, "seismictoss", 0.3)),
+            );
+            let root = &outcome.tree.decisions[0];
+            let stats = if acting_side_one { &root.s1_stats } else { &root.s2_stats };
+            let terminal = stats
+                .iter()
+                .find(|stat| stat.display == "seismictoss")
+                .expect("terminal win arm exists");
+            assert!((terminal.mean() - expected_terminal_value).abs() < 1e-6);
+            assert_eq!(side_argmax(&outcome, acting_side_one), "toxic");
+            assert_eq!(side_q_argmax(&outcome, acting_side_one), "seismictoss");
+            assert!(
+                terminal.visits < stats.iter().find(|stat| stat.display == "toxic").unwrap().visits,
+                "the shadow disagreement must be caused by completed-visit lag, not a tie"
+            );
+        }
+    }
+
+    /// The action-choice panel is deliberately small and predeclared. Every
+    /// row runs the actual decision/chance traversal and collect/finalize
+    /// scheduling. The one permitted synthetic leaf price is the rare-KO
+    /// control below: it makes a real 25% KO branch a known, losing decoy,
+    /// which is how the panel can falsify Q-max/visit-max variants that chase
+    /// a scarcely visited lucky terminal.
+    #[test]
+    fn predeclared_action_choice_panel_has_explicit_regret_and_value_error() {
+        let toxic_hit = 0.5 + 0.5 * (1.0 - 94.0 / 100.0_f32);
+        let toxic_value = 0.85 * toxic_hit + 0.15 * 0.5;
+
+        // Immediate win versus a worse stochastic alternative, while the
+        // latter is deferred exactly as a model row would be. The opponent has
+        // the single public reply `splash`, so these are true expectations over
+        // the engine's stated chance distribution rather than observed replies.
+        for (state, acting_side_one, root_allowed, side_one_toxic_q) in [
+            (
+                ANALYTIC_TOXIC.to_string(),
+                true,
+                (&["toxic", "seismictoss"][..], &["splash"][..]),
+                toxic_value,
+            ),
+            (
+                mirrored(ANALYTIC_TOXIC),
+                false,
+                (&["splash"][..], &["toxic", "seismictoss"][..]),
+                1.0 - toxic_value,
+            ),
+        ] {
+            for batch_size in [1, 2, 8, 64] {
+                let outcome = run_batched_action_panel(
+                    &state,
+                    128,
+                    batch_size,
+                    1,
+                    101,
+                    Some((acting_side_one, "toxic", 0.6, "seismictoss", 0.4)),
+                    Some(root_allowed),
+                    true,
+                    |leaf, _| HpFractionEval.eval(leaf),
+                );
+                let toxic = if acting_side_one {
+                    outcome.tree.decisions[0]
+                        .s1_stats
+                        .iter()
+                        .find(|stat| stat.display == "toxic")
+                } else {
+                    outcome.tree.decisions[0]
+                        .s2_stats
+                        .iter()
+                        .find(|stat| stat.display == "toxic")
+                }
+                .expect("toxic remains a legal completed arm");
+                assert!(
+                    (toxic.mean() - side_one_toxic_q).abs() < 1e-4,
+                    "batch {batch_size}: deferred toxic Q {} != {side_one_toxic_q}",
+                    toxic.mean(),
+                );
+                let row = action_choice_observation(
+                    &outcome,
+                    acting_side_one,
+                    &[("toxic", toxic_value), ("seismictoss", 1.0)],
+                );
+                eprintln!(
+                    "action-panel immediate/deferred side_one={acting_side_one} batch={batch_size} {row:?}"
+                );
+                assert_eq!(row.chosen_action, "seismictoss");
+                assert_eq!(row.completed_visits, 128);
+                assert_eq!(row.deferred_leaf_evals, 2);
+                assert!(row.terminal_branches > 0);
+                assert!(row.exact_simple_regret.abs() < 1e-6);
+                assert!(row.value_error < 1e-6);
+                assert_eq!(
+                    outcome.counters.leaf_evals, 2,
+                    "toxic's hit and miss outcomes each need a deferred leaf row"
+                );
+                assert!(outcome.counters.terminal_branches > 0);
+            }
+        }
+
+        // The one predeclared shadow-selector comparison uses the SAME
+        // completed tree for both recommendations. A deliberately harsh prior
+        // creates visit lag: visit-max keeps Toxic while acting-seat Q-max sees
+        // the completed terminal Toss. This is a mechanism observation, not a
+        // production selector change; the rare-decoy control below is required
+        // before this can earn any broader trial.
+        for (state, acting_side_one, root_allowed) in [
+            (
+                ANALYTIC_TOXIC.to_string(),
+                true,
+                (&["toxic", "seismictoss"][..], &["splash"][..]),
+            ),
+            (
+                mirrored(ANALYTIC_TOXIC),
+                false,
+                (&["splash"][..], &["toxic", "seismictoss"][..]),
+            ),
+        ] {
+            let outcome = run_batched_action_panel(
+                &state,
+                128,
+                64,
+                1,
+                0,
+                Some((acting_side_one, "toxic", 0.7, "seismictoss", 0.3)),
+                Some(root_allowed),
+                true,
+                |leaf, _| HpFractionEval.eval(leaf),
+            );
+            let row = action_choice_observation(
+                &outcome,
+                acting_side_one,
+                &[("toxic", toxic_value), ("seismictoss", 1.0)],
+            );
+            eprintln!("action-panel shadow-disagreement side_one={acting_side_one} {row:?}");
+            assert_eq!(row.chosen_action, "toxic");
+            assert_eq!(row.shadow_q_action, "seismictoss");
+            assert_eq!(row.deferred_leaf_evals, 2);
+            assert!(row.terminal_branches > 0);
+            assert!(row.exact_simple_regret > 0.45);
+            assert!(row.shadow_q_exact_simple_regret.abs() < 1e-6);
+            assert!(row.shadow_q_is_lower_visit);
+            assert_eq!(row.shadow_q_visits, 52);
+        }
+
+        // Variable nested outcome: the solved continuation after a root Toss
+        // is a second Toss for 1.0, whereas root Splash then Toss leaves the
+        // target at half HP for 0.75. This is intentionally separate from the
+        // depth-one terminal row above: the tree must create and complete a
+        // child before either payoff is available.
+        let two_turn = depth_benefit_two_turn_state();
+        for (state, acting_side_one, root_allowed) in [
+            (
+                two_turn.clone(),
+                true,
+                (&["splash", "seismictoss"][..], &["splash"][..]),
+            ),
+            (
+                mirrored(&two_turn),
+                false,
+                (&["splash"][..], &["splash", "seismictoss"][..]),
+            ),
+        ] {
+            for batch_size in [1, 2, 8, 64] {
+                let outcome = run_batched_action_panel(
+                    &state,
+                    256,
+                    batch_size,
+                    2,
+                    202,
+                    None,
+                    Some(root_allowed),
+                    true,
+                    |leaf, _| HpFractionEval.eval(leaf),
+                );
+                let stats = if acting_side_one {
+                    &outcome.tree.decisions[0].s1_stats
+                } else {
+                    &outcome.tree.decisions[0].s2_stats
+                };
+                let splash = stats
+                    .iter()
+                    .find(|stat| stat.display == "splash")
+                    .expect("passive root arm exists");
+                let splash_q = if acting_side_one {
+                    splash.mean()
+                } else {
+                    1.0 - splash.mean()
+                };
+                let row = action_choice_observation(
+                    &outcome,
+                    acting_side_one,
+                    &[("splash", 0.75), ("seismictoss", 1.0)],
+                );
+                eprintln!(
+                    "action-panel nested side_one={acting_side_one} batch={batch_size} splash_q={} {row:?}",
+                    splash_q,
+                );
+                assert!(outcome.tree.decisions.len() >= 2, "nested line must grow a child");
+                assert!(splash_q > 0.5, "nested continuation must improve the depth-one leaf");
+                assert_eq!(row.chosen_action, "seismictoss");
+                assert_eq!(row.completed_visits, 256);
+                assert_eq!(row.deferred_leaf_evals, 5);
+                assert!(row.terminal_branches > 0);
+                assert!(row.exact_simple_regret.abs() < 1e-6);
+            }
+        }
+
+        // Rare-success decoy: Tackle has four terminal-KO damage outcomes out
+        // of sixteen. Its twelve non-KO leaves price at 0 in the acting seat's
+        // frame; Splash prices at 0.5. Therefore the exact declared values are
+        // Tackle=0.25 and Splash=0.5. This forces the panel to reject a lucky
+        // terminal rather than calling a single observed KO an improvement.
+        for (state, acting_side_one, root_allowed) in [
+            (
+                STRADDLE.to_string(),
+                true,
+                (&["splash", "tackle"][..], &["splash"][..]),
+            ),
+            (
+                mirrored(STRADDLE),
+                false,
+                (&["splash"][..], &["splash", "tackle"][..]),
+            ),
+        ] {
+            for batch_size in [1, 2, 8, 64] {
+                let outcome = run_batched_action_panel(
+                    &state,
+                    256,
+                    batch_size,
+                    1,
+                    303,
+                    None,
+                    Some(root_allowed),
+                    true,
+                    |leaf, _| {
+                        let target_hp = if acting_side_one {
+                            leaf.side_two.get_active_immutable().hp
+                        } else {
+                            leaf.side_one.get_active_immutable().hp
+                        };
+                        let acting_value = if target_hp < 50 { 0.0 } else { 0.5 };
+                        if acting_side_one {
+                            acting_value
+                        } else {
+                            1.0 - acting_value
+                        }
+                    },
+                );
+                let row = action_choice_observation(
+                    &outcome,
+                    acting_side_one,
+                    &[("splash", 0.5), ("tackle", 0.25)],
+                );
+                eprintln!(
+                    "action-panel rare-decoy side_one={acting_side_one} batch={batch_size} {row:?}"
+                );
+                assert_eq!(row.chosen_action, "splash");
+                assert_eq!(row.completed_visits, 256);
+                assert_eq!(row.deferred_leaf_evals, 2);
+                assert!(row.terminal_branches > 0);
+                assert!(row.exact_simple_regret.abs() < 1e-6);
+                assert!(row.value_error < 1e-6);
+                assert!(outcome.counters.terminal_branches > 0);
+            }
+        }
+
+        // Equal-value control: on a nonterminal one-ply state, an explicit
+        // constant leaf price makes both legal root actions exactly 0.5. The
+        // production visit selector may choose either tied action, but neither
+        // may acquire regret or a nonzero completed-tree Q error.
+        for (state, acting_side_one) in [
+            (SYMMETRIC.to_string(), true),
+            (mirrored(SYMMETRIC), false),
+        ] {
+            for batch_size in [1, 2, 8, 64] {
+                let outcome = run_batched_action_panel(
+                    &state,
+                    128,
+                    batch_size,
+                    1,
+                    404,
+                    None,
+                    None,
+                    true,
+                    |_, _| 0.5,
+                );
+                let row = action_choice_observation(
+                    &outcome,
+                    acting_side_one,
+                    &[("ember", 0.5), ("tackle", 0.5)],
+                );
+                eprintln!(
+                    "action-panel equal-control side_one={acting_side_one} batch={batch_size} {row:?}"
+                );
+                assert_eq!(row.completed_visits, 128);
+                assert_eq!(row.deferred_leaf_evals, 16);
+                assert_eq!(row.terminal_branches, 0);
+                assert!(row.exact_simple_regret.abs() < 1e-6);
+                assert!(row.value_error < 1e-6);
             }
         }
     }
