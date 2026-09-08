@@ -34,7 +34,7 @@ from .scoring import (
 )
 
 
-GAME_SCHEMA_VERSION = "pokezero.mcts-h2h-game.v2"
+GAME_SCHEMA_VERSION = "pokezero.mcts-h2h-game.v3"
 _SEATS = ("p1", "p2")
 
 
@@ -358,6 +358,7 @@ class HeadToHeadGame:
     terminal_turn_count: int
     candidate_telemetry: PolicyTelemetry
     incumbent_telemetry: PolicyTelemetry
+    incumbent_decision_walls_s: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
         if self.candidate_seat not in _SEATS:
@@ -397,6 +398,11 @@ class HeadToHeadGame:
             for value in self.result.decision_walls_s
         ):
             raise ValueError("GameResult decision wall times must be finite and non-negative.")
+        if any(
+            not math.isfinite(float(value)) or float(value) < 0
+            for value in self.incumbent_decision_walls_s
+        ):
+            raise ValueError("incumbent decision wall times must be finite and non-negative.")
         if any(not isinstance(value, str) for value in self.result.chosen_actions):
             raise ValueError("GameResult chosen actions must be strings.")
 
@@ -415,6 +421,7 @@ class HeadToHeadGame:
             },
             "candidate_telemetry": self.candidate_telemetry.to_payload(),
             "incumbent_telemetry": self.incumbent_telemetry.to_payload(),
+            "incumbent_decision_walls_s": list(self.incumbent_decision_walls_s),
         }
 
     @classmethod
@@ -429,6 +436,7 @@ class HeadToHeadGame:
         terminal_raw = payload.get("terminal")
         candidate_metrics = payload.get("candidate_telemetry")
         incumbent_metrics = payload.get("incumbent_telemetry")
+        incumbent_walls = payload.get("incumbent_decision_walls_s")
         if not all(
             isinstance(value, Mapping)
             for value in (
@@ -441,6 +449,10 @@ class HeadToHeadGame:
             )
         ):
             raise HeadToHeadError("game record is missing a required mapping payload.")
+        if not isinstance(incumbent_walls, list):
+            raise HeadToHeadError(
+                "game record is missing incumbent_decision_walls_s as a JSON list."
+            )
         try:
             return cls(
                 seed=int(payload["seed"]),
@@ -457,6 +469,7 @@ class HeadToHeadGame:
                 terminal_turn_count=int(terminal_raw["turn_count"]),
                 candidate_telemetry=PolicyTelemetry(**dict(candidate_metrics)),
                 incumbent_telemetry=PolicyTelemetry(**dict(incumbent_metrics)),
+                incumbent_decision_walls_s=tuple(float(value) for value in incumbent_walls),
             )
         except (KeyError, TypeError, ValueError) as error:
             raise HeadToHeadError(f"invalid game record: {error}") from error
@@ -470,10 +483,10 @@ def outcome_for_candidate(*, winner: str | None, candidate_seat: str, capped: bo
     return "win" if winner == candidate_seat else "loss"
 
 
-def _candidate_decision_walls(result: Any, candidate_seat: str) -> tuple[float, ...]:
+def _policy_decision_walls(result: Any, player_id: str) -> tuple[float, ...]:
     values: list[float] = []
     for step in result.trajectory.steps:
-        if step.player_id != candidate_seat:
+        if step.player_id != player_id:
             continue
         elapsed = step.metadata.get("policy_elapsed_seconds")
         if elapsed is not None:
@@ -487,6 +500,42 @@ def _candidate_actions(result: Any, candidate_seat: str) -> tuple[str, ...]:
         for step in result.trajectory.steps
         if step.player_id == candidate_seat
     )
+
+
+def _decision_wall_summary(values: Sequence[float]) -> dict[str, float | int | None]:
+    """Return comparable latency tails without discarding the raw samples.
+
+    A game can terminate before one side makes a decision, so an empty series is
+    a legitimate diagnostic state rather than an error. Its tail values remain
+    explicit ``None`` instead of being silently presented as zero-latency work.
+    """
+
+    ordered = sorted(float(value) for value in values)
+    if not ordered:
+        return {
+            "count": 0,
+            "total_s": 0.0,
+            "min_s": None,
+            "p50_s": None,
+            "p95_s": None,
+            "max_s": None,
+        }
+
+    def quantile(fraction: float) -> float:
+        position = fraction * (len(ordered) - 1)
+        low = int(position)
+        high = min(low + 1, len(ordered) - 1)
+        weight = position - low
+        return ordered[low] * (1.0 - weight) + ordered[high] * weight
+
+    return {
+        "count": len(ordered),
+        "total_s": sum(ordered),
+        "min_s": ordered[0],
+        "p50_s": quantile(0.50),
+        "p95_s": quantile(0.95),
+        "max_s": ordered[-1],
+    }
 
 
 DriverFactory = Callable[[int, str, Any, Any], Any]
@@ -535,6 +584,7 @@ def play_mirrored_pair(
         raise HeadToHeadError(f"completed games contain invalid seats: {sorted(unknown_seats)}")
     output: list[HeadToHeadGame] = []
     for candidate_seat in _SEATS:
+        incumbent_seat = "p2" if candidate_seat == "p1" else "p1"
         existing = reusable.get(candidate_seat)
         if existing is not None:
             _assert_game_identity(existing, seed=seed, candidate=candidate, incumbent=incumbent)
@@ -600,7 +650,7 @@ def play_mirrored_pair(
             ),
             turns=int(terminal.turn_count),
             provenance_sha256=candidate.provenance_sha256,
-            decision_walls_s=_candidate_decision_walls(result, candidate_seat),
+            decision_walls_s=_policy_decision_walls(result, candidate_seat),
             chosen_actions=_candidate_actions(result, candidate_seat),
         )
         game = HeadToHeadGame(
@@ -614,6 +664,7 @@ def play_mirrored_pair(
             terminal_turn_count=int(terminal.turn_count),
             candidate_telemetry=candidate_delta,
             incumbent_telemetry=incumbent_delta,
+            incumbent_decision_walls_s=_policy_decision_walls(result, incumbent_seat),
         )
         if on_game is not None:
             # Persist before the next seat begins.  If that next game dies, the
@@ -793,6 +844,9 @@ def summarize_complete_pairs(
     candidate_walls = tuple(
         wall for game in required for wall in game.result.decision_walls_s
     )
+    incumbent_walls = tuple(
+        wall for game in required for wall in game.incumbent_decision_walls_s
+    )
     return {
         "schema_version": "pokezero.mcts-h2h-summary.v1",
         "candidate": candidate.to_payload(),
@@ -804,6 +858,9 @@ def summarize_complete_pairs(
             (game.result for game in required), config_id=candidate.config_id
         ),
         "candidate_decision_walls_s": list(candidate_walls),
+        "incumbent_decision_walls_s": list(incumbent_walls),
+        "candidate_decision_wall_summary": _decision_wall_summary(candidate_walls),
+        "incumbent_decision_wall_summary": _decision_wall_summary(incumbent_walls),
         "candidate_model_evals": sum(game.candidate_telemetry.model_evals for game in required),
         "incumbent_model_evals": sum(game.incumbent_telemetry.model_evals for game in required),
         "candidate_iterations": sum(game.candidate_telemetry.total_iterations for game in required),
