@@ -422,6 +422,34 @@ class SourceReceiptTest(unittest.TestCase):
                 receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
             )
 
+    def test_isolated_worker_stderr_keeps_prior_attempts_and_gives_a_retry_a_fresh_path(self) -> None:
+        module = _runner_module()
+        with tempfile.TemporaryDirectory() as directory:
+            out_root = Path(directory)
+            first = module._isolated_worker_stderr_path(
+                out_root,
+                attempt_id="a" * 32,
+                seed=19,
+                candidate_seat="p1",
+                role="candidate",
+            )
+            retry = module._isolated_worker_stderr_path(
+                out_root,
+                attempt_id="b" * 32,
+                seed=19,
+                candidate_seat="p1",
+                role="candidate",
+            )
+            first.parent.mkdir(parents=True)
+            first.write_text("interrupted child stderr\n", encoding="utf-8")
+
+            self.assertNotEqual(first, retry)
+            self.assertTrue(first.is_file())
+            self.assertEqual(
+                retry.relative_to(out_root).as_posix(),
+                "worker-stderr/attempt-" + "b" * 32 + "/seed-19-p1-candidate.log",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,6 +19,7 @@ from pathlib import Path
 import subprocess
 import sys
 from typing import Any, Mapping
+import uuid
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -294,6 +295,37 @@ def _write_immutable_json(path: Path, payload: Mapping[str, Any]) -> None:
                 ) from None
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _isolated_worker_stderr_path(
+    out_root: Path,
+    *,
+    attempt_id: str,
+    seed: int,
+    candidate_seat: str,
+    role: str,
+) -> Path:
+    """Name a child log below an invocation-unique durable attempt directory.
+
+    A resumed process may inherit the same PID as an interrupted one (notably
+    PID 1 in a replacement container).  The child transport correctly creates
+    its stderr log exclusively, so the invocation nonce—not that PID—must
+    distinguish retry logs.  Prior logs are therefore retained as evidence,
+    while the replacement worker always has a fresh path.
+    """
+
+    if len(attempt_id) != 32 or any(character not in "0123456789abcdef" for character in attempt_id):
+        raise HeadToHeadError("isolated worker attempt id must be a lowercase UUID hex value.")
+    if role not in {"candidate", "incumbent"}:
+        raise HeadToHeadError(f"unknown isolated worker role {role!r}.")
+    if candidate_seat not in {"p1", "p2"}:
+        raise HeadToHeadError(f"unknown isolated candidate seat {candidate_seat!r}.")
+    return (
+        out_root
+        / "worker-stderr"
+        / f"attempt-{attempt_id}"
+        / f"seed-{seed}-{candidate_seat}-{role}.log"
+    )
 
 
 def _mapping(value: object, *, label: str) -> Mapping[str, Any]:
@@ -717,6 +749,28 @@ def main(argv: list[str] | None = None) -> int:
         },
     )
 
+    isolated_worker_attempt_id: str | None = None
+    if execution_mode == "isolated_build":
+        # This record is intentionally separate from the experiment manifest:
+        # it describes one resumable host invocation, whereas the manifest is
+        # the stable experiment contract.  Every invocation gets new child-log
+        # paths and preserves the earlier attempt's stderr evidence.
+        isolated_worker_attempt_id = uuid.uuid4().hex
+        _write_immutable_json(
+            out_root
+            / "worker-stderr"
+            / f"attempt-{isolated_worker_attempt_id}"
+            / "ATTEMPT.json",
+            {
+                "schema_version": "pokezero.mcts-h2h-isolated-worker-attempt.v1",
+                "attempt_id": isolated_worker_attempt_id,
+                "host_pid": os.getpid(),
+                "host_source": source,
+                "candidate_provenance_sha256": candidate.provenance_sha256,
+                "incumbent_provenance_sha256": incumbent.provenance_sha256,
+            },
+        )
+
     isolated_workers: dict[tuple[int, str], dict[str, IsolatedMctsPolicy]] = {}
 
     def isolated_policy_for(
@@ -730,6 +784,7 @@ def main(argv: list[str] | None = None) -> int:
         candidate_seat: str,
     ) -> IsolatedMctsPolicy:
         assert isolated_bootstrap_sha256 is not None
+        assert isolated_worker_attempt_id is not None
         return IsolatedMctsPolicy(
             IsolatedPolicyLaunch(
                 policy=policy,
@@ -740,10 +795,12 @@ def main(argv: list[str] | None = None) -> int:
                     "worker_bootstrap_sha256": isolated_bootstrap_sha256,
                 },
                 response_timeout_seconds=args.isolated_worker_timeout_seconds,
-                stderr_path=(
-                    out_root
-                    / "worker-stderr"
-                    / f"seed-{seed}-{candidate_seat}-{role}-{os.getpid()}.log"
+                stderr_path=_isolated_worker_stderr_path(
+                    out_root,
+                    attempt_id=isolated_worker_attempt_id,
+                    seed=seed,
+                    candidate_seat=candidate_seat,
+                    role=role,
                 ),
                 working_directory=source_root,
             ),
