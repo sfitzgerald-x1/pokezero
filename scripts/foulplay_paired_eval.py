@@ -378,6 +378,21 @@ def config_id_for(args: argparse.Namespace) -> str:
                 "refused: the raw arm's cell id carries no opponent fragment, so such a "
                 "shard would pool into the paired delta's control."
             )
+        # These flags are observational only when the child actually runs an
+        # engine policy.  `bridge_argv` correctly omits engine-only arguments
+        # for raw, but recording either flag in a successful raw shard would
+        # falsely claim that the instrument ran.  Refuse at the same cell
+        # identity boundary that guards the raw control's opponent identity.
+        if args.engine_root_selector_shadow:
+            raise SystemExit(
+                "--engine-root-selector-shadow requires --arm search: a raw policy "
+                "cannot run or attest root-selector telemetry."
+            )
+        if args.engine_override_telemetry:
+            raise SystemExit(
+                "--engine-override-telemetry requires --arm search: a raw policy "
+                "cannot run or attest engine root telemetry."
+            )
         if calibration is not None:
             return calibration["config_id"]
         return f"raw@{tag}"

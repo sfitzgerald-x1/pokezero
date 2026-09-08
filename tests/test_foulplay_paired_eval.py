@@ -703,6 +703,12 @@ class RootSelectorShadowPassthroughTest(unittest.TestCase):
             ),
         )
 
+    def test_raw_arm_refuses_to_attest_engine_telemetry_it_cannot_run(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "root-selector telemetry"):
+            _DRIVER.config_id_for(args(arm="raw", engine_root_selector_shadow=True))
+        with self.assertRaisesRegex(SystemExit, "engine root telemetry"):
+            _DRIVER.config_id_for(args(arm="raw", engine_override_telemetry=True))
+
     def test_the_cli_and_bridge_accept_the_flag(self) -> None:
         ns = _DRIVER.build_parser().parse_args([
             "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
