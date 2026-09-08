@@ -608,9 +608,23 @@ class SourceReceiptTest(unittest.TestCase):
             },
         }
 
-        with self.assertRaisesRegex(HeadToHeadError, "not disabled"):
+        with self.assertRaisesRegex(HeadToHeadError, "not explicitly disabled"):
             module._validate_isolated_receipt(
                 receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
+            )
+
+        missing_field_policy = _spec("incumbent", policy_id="incumbent")
+        receipt["policy"] = missing_field_policy.to_payload()
+        receipt["config_compatibility"] = {
+            "protocol": "disabled-diagnostic-omission.v1",
+            "omitted_disabled_fields": ["root_selector_shadow"],
+        }
+        with self.assertRaisesRegex(HeadToHeadError, "not explicitly disabled"):
+            module._validate_isolated_receipt(
+                receipt,
+                policy=missing_field_policy,
+                role="incumbent",
+                bootstrap_sha256="a" * 64,
             )
 
     def test_isolated_worker_stderr_keeps_prior_attempts_and_gives_a_retry_a_fresh_path(self) -> None:

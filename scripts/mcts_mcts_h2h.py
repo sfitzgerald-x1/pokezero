@@ -699,10 +699,10 @@ def _validate_isolated_receipt(
                 "isolated worker receipt omitted an unsupported config field "
                 f"{field_name!r}."
             )
-        if policy.config.get(field_name, expected) != expected:
+        if field_name not in policy.config or policy.config[field_name] != expected:
             raise HeadToHeadError(
-                "isolated worker receipt omitted a diagnostic field that is not disabled "
-                f"in the declared {role}."
+                "isolated worker receipt omitted a diagnostic field that is not explicitly "
+                f"disabled in the declared {role}."
             )
     return dict(payload)
 
