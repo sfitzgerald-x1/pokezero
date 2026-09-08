@@ -6767,6 +6767,11 @@ def _build_policy(
                 fpu_reduction=config.engine_fpu_reduction,
                 override_telemetry=config.engine_override_telemetry,
                 root_selector_shadow=config.engine_root_selector_shadow,
+                # A shadow row is valid only for a complete native root.  If
+                # the native boundary reports an impossible stopped prefix,
+                # do not let the ordinary best-effort fallback play a random
+                # action and leave a bankable FoulPlay shard behind.
+                strict_fallbacks=config.engine_root_selector_shadow,
                 # Dynamic budget. `early_stop_min_sims` is passed only when the
                 # feature is on, so the dataclass default (64) stands for an
                 # unset cell and the config validator sees a coherent pair.

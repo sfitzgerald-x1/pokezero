@@ -4245,6 +4245,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         opponent_priors: bool = False,
         root_selector_shadow: bool = False,
         worlds: int = 2,
+        strict: bool = False,
     ):
         policy = object.__new__(EngineMctsPolicy)
         policy.policy_id = "override-telemetry-test"
@@ -4259,6 +4260,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             override_telemetry=telemetry,
             root_selector_shadow=root_selector_shadow,
             use_opponent_priors=opponent_priors,
+            strict_fallbacks=strict,
         )
         policy._tables_json = "{}"
         policy.stats = EngineMctsStats()
@@ -4731,6 +4733,31 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         stats = policy.stats.to_dict()
         self.assertEqual(stats["early_stop_triggered_worlds"], 1)
         self.assertEqual(stats["early_stop_accepted_decisions"], 0)
+        self.assertEqual(stats["root_selector_shadow_measured_decisions"], 0)
+        self.assertEqual(stats["root_selector_shadow_unmeasured"], 0)
+
+    def test_root_selector_shadow_strictly_refuses_an_unexpected_stopped_prefix(self) -> None:
+        """The bridge's strict shadow configuration cannot bank a fallback move."""
+        policy = self._policy(root_selector_shadow=True, worlds=1, strict=True)
+        report = self._report(
+            [("alpha", 40, 0.40, 0.2), ("beta", 20, 0.90, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "iterations": 60,
+                "requested_iterations": 100,
+                "remaining_iterations": 40,
+                "early_stopped": True,
+                "model_evals": 60,
+            }
+        )
+        with self.assertRaisesRegex(
+            EngineSearchFallbackError, "root_selector_shadow_stopped_prefix"
+        ):
+            self._run(policy, [report])
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["early_stop_triggered_worlds"], 1)
         self.assertEqual(stats["root_selector_shadow_measured_decisions"], 0)
         self.assertEqual(stats["root_selector_shadow_unmeasured"], 0)
 

@@ -1771,6 +1771,51 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertEqual(captured["config"].c_puct, 1.4)
         self.assertIsNone(captured["config"].fpu_reduction)
 
+    def test_build_policy_makes_selector_shadow_fail_closed(self) -> None:
+        """A bridge shadow read must refuse, never bank, a partial native root."""
+        import pokezero.engine_search as engine_search
+
+        captured = {}
+
+        class FakeEnginePolicy:
+            def __init__(self, *, config=None, **_: object) -> None:
+                captured["config"] = config
+
+        fake_result = type(
+            "FakeTrainingResult",
+            (), {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        config = ControlledFoulPlayConfig(
+            checkpoint=Path("checkpoint.pt"),
+            showdown_root=Path("/showdown"),
+            policy_mode="engine-mcts",
+            engine_model_path=Path("/art/model_ts.pt"),
+            engine_tables_path=Path("/art/encoder_tables.json"),
+            engine_override_telemetry=True,
+            engine_root_selector_shadow=True,
+            engine_worlds=1,
+        )
+
+        with patch.object(engine_search, "EngineMctsPolicy", FakeEnginePolicy), patch(
+            "pokezero.foulplay_bridge.load_showdown_dex_cached", return_value=object()
+        ), patch(
+            "pokezero.foulplay_bridge.load_gen3_randbat_source_cached",
+            return_value=object(),
+        ):
+            _build_policy(
+                config=config,
+                model=object(),
+                result=fake_result,
+                value_model=object(),
+                value_result=fake_result,
+                env_config=object(),
+                rollout_config=object(),
+                policy_id="fake-base",
+            )
+
+        self.assertTrue(captured["config"].root_selector_shadow)
+        self.assertTrue(captured["config"].strict_fallbacks)
+
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
