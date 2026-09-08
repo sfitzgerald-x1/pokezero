@@ -560,11 +560,11 @@ def play_mirrored_pair(
                     "history to the policy that actually plays."
                 )
             if execution_mode == "isolated_build" and not (
-                candidate_policy.is_source_isolated or incumbent_policy.is_source_isolated
+                candidate_policy.is_source_isolated and incumbent_policy.is_source_isolated
             ):
                 raise HeadToHeadError(
-                    "isolated-build comparison session contains no source-isolated policy; "
-                    "refusing to relabel one loaded engine as a historical build."
+                    "isolated-build comparison must source-isolate both policies; refusing to "
+                    "relabel the host engine as either declared build."
                 )
         candidate_before = PolicyTelemetry.capture(candidate_policy)
         incumbent_before = PolicyTelemetry.capture(incumbent_policy)

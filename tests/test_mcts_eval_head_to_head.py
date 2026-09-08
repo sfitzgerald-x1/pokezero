@@ -248,7 +248,7 @@ class MirroredPairTest(unittest.TestCase):
         )
 
         def session_factory(_seed, seat):
-            candidate_policy = PublicOnlyMctsPolicy(_Policy("candidate"))
+            candidate_policy = PublicOnlyMctsPolicy(_IsolatedPolicy("candidate"))
             incumbent_policy = PublicOnlyMctsPolicy(_IsolatedPolicy("incumbent"))
             return _Driver(seat, candidate_policy, incumbent_policy), candidate_policy, incumbent_policy
 
@@ -265,16 +265,16 @@ class MirroredPairTest(unittest.TestCase):
 
         self.assertEqual([game.candidate_seat for game in games], ["p1", "p2"])
 
-    def test_isolated_build_refuses_a_session_without_a_source_isolated_policy(self) -> None:
+    def test_isolated_build_refuses_a_session_when_only_one_policy_is_isolated(self) -> None:
         candidate = _spec("candidate")
         incumbent = _spec("incumbent", source_commit="z" * 40)
 
         def session_factory(_seed, seat):
-            candidate_policy = PublicOnlyMctsPolicy(_Policy("candidate"))
+            candidate_policy = PublicOnlyMctsPolicy(_IsolatedPolicy("candidate"))
             incumbent_policy = PublicOnlyMctsPolicy(_Policy("incumbent"))
             return _Driver(seat, candidate_policy, incumbent_policy), candidate_policy, incumbent_policy
 
-        with self.assertRaisesRegex(HeadToHeadError, "no source-isolated policy"):
+        with self.assertRaisesRegex(HeadToHeadError, "must source-isolate both"):
             play_mirrored_pair(
                 seed=101,
                 candidate=candidate,
@@ -412,14 +412,14 @@ class SourceReceiptTest(unittest.TestCase):
         }
         self.assertEqual(
             module._validate_isolated_receipt(
-                receipt, incumbent=incumbent, bootstrap_sha256="a" * 64
+                receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
             )["commit"],
             incumbent.source_commit,
         )
         receipt["tree_status"] = "dirty"
         with self.assertRaisesRegex(HeadToHeadError, "clean source checkout"):
             module._validate_isolated_receipt(
-                receipt, incumbent=incumbent, bootstrap_sha256="a" * 64
+                receipt, policy=incumbent, role="incumbent", bootstrap_sha256="a" * 64
             )
 
 
