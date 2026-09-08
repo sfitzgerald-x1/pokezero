@@ -1861,6 +1861,24 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertTrue(captured["config"].root_selector_q)
         self.assertTrue(captured["config"].strict_fallbacks)
 
+    def test_config_from_args_carries_q_selector_to_the_controlled_bridge(self) -> None:
+        """The CLI flag must survive parsing before policy construction sees it."""
+        args = build_arg_parser().parse_args(
+            [
+                "--checkpoint", "checkpoint.pt",
+                "--policy-mode", "engine-mcts",
+                "--engine-model-path", "model.pt",
+                "--engine-tables-path", "tables.json",
+                "--engine-worlds", "1",
+                "--engine-override-telemetry",
+                "--engine-root-selector-q",
+            ]
+        )
+        config = _config_from_args(args)
+        self.assertTrue(config.engine_root_selector_q)
+        self.assertTrue(config.engine_override_telemetry)
+        self.assertEqual(config.engine_worlds, 1)
+
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
