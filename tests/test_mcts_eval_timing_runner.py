@@ -11,7 +11,8 @@ import types
 import unittest
 from unittest import mock
 
-from pokezero.mcts_eval.controller import Stage
+from pokezero.mcts_eval.controller import Stage, write_marker
+from pokezero.mcts_eval.manifest import MatrixManifest, ResourceProfile, SearchConfig
 from pokezero.mcts_eval.resolver import CheckpointContract
 from pokezero.mcts_eval.timing_corpus import (
     TimingDecisionRecord,
@@ -75,18 +76,40 @@ def _homogeneous_record(index: int) -> TimingDecisionRecord:
 
 
 class TimingRunnerDurabilityTest(unittest.TestCase):
+    def _write_nonrepresentative_corpus(self, out_root: Path) -> Path:
+        corpus_path = out_root / Stage.BUILD_TIMING_CORPUS.value / "timing-corpus.jsonl"
+        manifest, records = build_corpus(
+            [_homogeneous_record(index) for index in range(16)],
+            held_out_seed_start=1,
+            held_out_seed_end=1,
+            count=16,
+        )
+        write_corpus(corpus_path, manifest, records)
+        return corpus_path
+
+    @staticmethod
+    def _ids() -> tuple[str, str]:
+        contract = _contract()
+        configs = tuple(
+            SearchConfig(depth=depth, sims=sims)
+            for depth in (2, 4, 6, 8, 10)
+            for sims in (512, 1024, 2048, 4096, 8192)
+        )
+        manifest = MatrixManifest(
+            checkpoint_manifest=contract.to_manifest(),
+            configs=configs,
+            resource_profile=ResourceProfile(concurrency=1, torch_threads=1),
+            worlds=4,
+            seed_band="default",
+            corpus_decisions=256,
+        )
+        return manifest.experiment_id, manifest.execution_id
+
     def test_nonrepresentative_corpus_persists_terminal_failure_before_timing(self) -> None:
         """A launch refusal must never strand the resumable status as running."""
         with tempfile.TemporaryDirectory() as temp_dir:
             out_root = Path(temp_dir)
-            corpus_dir = out_root / Stage.BUILD_TIMING_CORPUS.value
-            manifest, records = build_corpus(
-                [_homogeneous_record(index) for index in range(16)],
-                held_out_seed_start=1,
-                held_out_seed_end=1,
-                count=16,
-            )
-            write_corpus(corpus_dir / "timing-corpus.jsonl", manifest, records)
+            self._write_nonrepresentative_corpus(out_root)
             fake_search = types.ModuleType("pokezero_search")
             fake_search.NativeLeafModel = object
 
@@ -109,6 +132,49 @@ class TimingRunnerDurabilityTest(unittest.TestCase):
             self.assertIn("timing corpus rejected", status["terminal_failure"])
             self.assertIn("not representative", status["terminal_failure"])
             self.assertFalse((out_root / Stage.RUN_TIMING_LATTICE.value).exists())
+
+    def test_cached_corpus_is_rejected_and_persisted_before_lattice_timing(self) -> None:
+        """A stale completion marker cannot bypass the immediate launch recheck."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            out_root = Path(temp_dir)
+            corpus_path = self._write_nonrepresentative_corpus(out_root)
+            experiment_id, execution_id = self._ids()
+            for stage in (
+                Stage.MATERIALIZE_CHECKPOINT,
+                Stage.VALIDATE_CONTRACT,
+                Stage.MECHANICS_SMOKE,
+            ):
+                write_marker(
+                    out_root,
+                    stage,
+                    experiment_id=experiment_id,
+                    execution_id=execution_id,
+                )
+            write_marker(
+                out_root,
+                Stage.BUILD_TIMING_CORPUS,
+                experiment_id=experiment_id,
+                execution_id=execution_id,
+                artifacts=(str(corpus_path),),
+            )
+
+            with mock.patch.object(runner, "resolve_checkpoint_contract", return_value=_contract()):
+                exit_code = runner.main(
+                    [
+                        "--checkpoint", "/checkpoint.pt",
+                        "--out-root", str(out_root),
+                        "--stage-through", Stage.RUN_TIMING_LATTICE.value,
+                    ]
+                )
+
+            self.assertEqual(exit_code, 2)
+            status = json.loads((out_root / "status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["state"], "failed")
+            self.assertEqual(status["stage"], Stage.RUN_TIMING_LATTICE.value)
+            self.assertIn("timing corpus rejected", status["terminal_failure"])
+            self.assertIn("not representative", status["terminal_failure"])
+            lattice_dir = out_root / Stage.RUN_TIMING_LATTICE.value
+            self.assertFalse(any(lattice_dir.glob("timing-*.json")))
 
 
 if __name__ == "__main__":
