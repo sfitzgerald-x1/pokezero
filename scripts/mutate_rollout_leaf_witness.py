@@ -55,17 +55,21 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / "src" / "pokezero" / "engine_search.py"
 BRIDGE = ROOT / "src" / "pokezero" / "foulplay_bridge.py"
+PROGRESS_SCHEMA = "pokezero.rollout-leaf-witness-mutation-progress.v1"
 
 #: The modules whose tests are the KILLERS. Both, always: the witness lives in
 #: `engine_search` and its last hop lives in `foulplay_bridge`, and the finding this
@@ -845,6 +849,154 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _atomic_write_bytes(path: Path, payload: bytes) -> None:
+    """Persist one recovery boundary without leaving a torn file behind."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        temporary.write_bytes(payload)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_write_json(path: Path, payload: object) -> None:
+    _atomic_write_bytes(
+        path,
+        (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+    )
+
+
+def _path_key(path: Path) -> str:
+    """A progress journal is local to its worker checkout, so use its exact path."""
+    return str(path.resolve())
+
+
+def _progress_snapshot(paths: list[Path]) -> dict[str, str]:
+    return {
+        _path_key(path): base64.b64encode(path.read_bytes()).decode("ascii")
+        for path in paths
+    }
+
+
+def _decode_progress_snapshot(
+    document: dict[str, object], paths: list[Path]
+) -> dict[Path, bytes]:
+    """Read the immutable source snapshot that makes an interrupted sweep recoverable."""
+    if document.get("schema_version") != PROGRESS_SCHEMA:
+        raise InstrumentFailure("mutation progress has an unsupported schema version")
+    if document.get("harness_sha256") != _sha256(Path(__file__).resolve()):
+        raise InstrumentFailure(
+            "mutation progress was created by different harness bytes; start a fresh sweep"
+        )
+    encoded = document.get("source_snapshot")
+    if not isinstance(encoded, dict):
+        raise InstrumentFailure("mutation progress has no immutable source snapshot")
+    expected = {_path_key(path) for path in paths}
+    if set(encoded) != expected:
+        raise InstrumentFailure("mutation progress source set does not match this sweep")
+    snapshots: dict[Path, bytes] = {}
+    for path in paths:
+        value = encoded[_path_key(path)]
+        if not isinstance(value, str):
+            raise InstrumentFailure(f"mutation progress snapshot is invalid for {path.name}")
+        try:
+            snapshots[path] = base64.b64decode(value.encode("ascii"), validate=True)
+        except (ValueError, binascii.Error) as error:
+            raise InstrumentFailure(
+                f"mutation progress snapshot cannot decode {path.name}"
+            ) from error
+    return snapshots
+
+
+def _restore_interrupted_mutation(
+    document: dict[str, object],
+    *,
+    snapshots: dict[Path, bytes],
+    progress_path: Path,
+) -> None:
+    """Restore only a mutation the journal proves this harness wrote.
+
+    A killed worker can die between applying a mutant and the usual ``finally``.
+    The journal is written *before* that edit and records its exact target digests.
+    We restore a differing file only when it is one of those declared bytes; an
+    unrelated edit remains untouched and turns into an instrument failure.
+    """
+    active = document.get("active")
+    if active is None:
+        for path, original in snapshots.items():
+            if not path.exists() or path.read_bytes() != original:
+                raise InstrumentFailure(
+                    f"{path.name} differs from the recorded clean source without an active mutation"
+                )
+        return
+    if not isinstance(active, dict) or not isinstance(active.get("mutated"), dict):
+        raise InstrumentFailure("mutation progress has an invalid active mutation")
+    mutated = active["mutated"]
+    for path, original in snapshots.items():
+        key = _path_key(path)
+        actual = _sha256(path) if path.exists() else None
+        original_digest = _sha256_bytes(original)
+        declared = mutated.get(key, original_digest)
+        if actual == original_digest:
+            continue
+        if actual != declared:
+            raise InstrumentFailure(
+                f"{path.name} differs from both the recorded source and active mutation; refusing to overwrite it"
+            )
+        _atomic_write_bytes(path, original)
+    document["active"] = None
+    _atomic_write_json(progress_path, document)
+
+
+def _load_or_create_progress(
+    progress_path: Path,
+    *,
+    paths: list[Path],
+    output_path: Path | None,
+) -> tuple[dict[str, object], dict[Path, bytes]]:
+    if progress_path.exists():
+        try:
+            document = json.loads(progress_path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise InstrumentFailure("mutation progress cannot be read as complete JSON") from error
+        if not isinstance(document, dict):
+            raise InstrumentFailure("mutation progress root must be an object")
+        if document.get("status") == "COMPLETE":
+            raise InstrumentFailure(
+                "mutation progress is already complete; select a fresh progress path for a new sweep"
+            )
+        if document.get("status") != "RUNNING":
+            raise InstrumentFailure("mutation progress has an invalid status")
+        expected_output = str(output_path) if output_path is not None else None
+        if document.get("output_path") != expected_output:
+            raise InstrumentFailure(
+                "mutation progress belongs to a different result path; select a fresh progress path"
+            )
+    else:
+        document = {
+            "schema_version": PROGRESS_SCHEMA,
+            "status": "RUNNING",
+            "harness_sha256": _sha256(Path(__file__).resolve()),
+            "output_path": str(output_path) if output_path is not None else None,
+            "source_snapshot": _progress_snapshot(paths),
+            "mutants": [],
+            "controls": [],
+            "resolved_modules": [],
+            "active": None,
+        }
+        _atomic_write_json(progress_path, document)
+    snapshots = _decode_progress_snapshot(document, paths)
+    _restore_interrupted_mutation(
+        document, snapshots=snapshots, progress_path=progress_path
+    )
+    return document, snapshots
+
+
 def _classify(
     completed: "subprocess.CompletedProcess[str] | None",
     stdout: str,
@@ -1053,25 +1205,61 @@ def _require_pytest(python: str) -> None:
         )
 
 
-def _apply(edits: list[tuple[Path, str, str]], originals: dict[Path, str]) -> str | None:
-    """Write the mutant. Returns a reason string when it cannot be applied."""
+def _stage_edits(
+    edits: list[tuple[Path, str, str]], originals: dict[Path, str]
+) -> tuple[dict[Path, str] | None, str | None]:
+    """Prepare a mutant without touching source, so recovery intent is durable first."""
 
     staged: dict[Path, str] = {}
     for path, old, new in edits:
         text = staged.get(path, originals[path])
         count = text.count(old)
         if count != 1:
-            return f"anchor matched {count} times in {path.name}"
+            return None, f"anchor matched {count} times in {path.name}"
         staged[path] = text.replace(old, new)
+    return staged, None
+
+
+def _apply(staged: dict[Path, str]) -> None:
+    """Write a mutation whose exact replacement was journaled before this call."""
     for path, text in staged.items():
-        path.write_text(text)
-    return None
+        _atomic_write_bytes(path, text.encode("utf-8"))
+
+
+def _recorded_prefix(
+    document: dict[str, object], key: str, table: list[tuple],
+) -> list[dict[str, object]]:
+    """Accept only an ordered prefix, so a damaged journal cannot skip a mutant."""
+    records = document.get(key, [])
+    if not isinstance(records, list) or not all(isinstance(item, dict) for item in records):
+        raise InstrumentFailure(f"mutation progress has an invalid {key} record list")
+    names = [str(item.get("name", "")) for item in records]
+    expected = [str(entry[0]) for entry in table]
+    if names != expected[:len(names)]:
+        raise InstrumentFailure(f"mutation progress {key} are not an ordered sweep prefix")
+    return records
+
+
+def _persist_progress(
+    document: dict[str, object], progress_path: Path | None
+) -> None:
+    if progress_path is not None:
+        _atomic_write_json(progress_path, document)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--venv-python", default=sys.executable)
     parser.add_argument("--json", type=Path, default=None)
+    parser.add_argument(
+        "--progress",
+        type=Path,
+        default=None,
+        help=(
+            "durable atomic journal for a full sweep; an interrupted run restores only "
+            "the mutation it had journaled and resumes from the next complete result"
+        ),
+    )
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument(
         "--only", default=None, help="substring filter over mutant names (debugging)"
@@ -1087,6 +1275,9 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+
+    if args.progress is not None and args.only is not None:
+        raise InstrumentFailure("--progress requires a complete sweep; --only is diagnostic only")
 
     if args.check_anchors:
         bad: list[str] = []
@@ -1107,27 +1298,50 @@ def main(argv: list[str] | None = None) -> int:
     _require_pytest(args.venv_python)
 
     targets = list(ALL_TARGETS)
-    originals = {path: path.read_text() for path in targets}
-    before = {path: _sha256(path) for path in targets}
     killer_paths = [ROOT / name for name in KILLERS]
-    killer_originals = {path: path.read_text() for path in killer_paths}
+    all_paths = list(dict.fromkeys(targets + killer_paths))
+    progress: dict[str, object] | None = None
+    snapshots: dict[Path, bytes]
+    if args.progress is not None:
+        progress, snapshots = _load_or_create_progress(
+            args.progress, paths=all_paths, output_path=args.json
+        )
+    else:
+        snapshots = {path: path.read_bytes() for path in all_paths}
+    originals = {path: snapshots[path].decode("utf-8") for path in targets}
+    killer_originals = {path: snapshots[path].decode("utf-8") for path in killer_paths}
+    before = {path: _sha256_bytes(snapshots[path]) for path in targets}
 
-    results: list[dict[str, object]] = []
-    control_results: list[dict[str, object]] = []
-    resolved_seen: set[str] = set()
+    if progress is None:
+        results: list[dict[str, object]] = []
+        control_results: list[dict[str, object]] = []
+        resolved_seen: set[str] = set()
+    else:
+        results = _recorded_prefix(progress, "mutants", MUTANTS)
+        control_results = _recorded_prefix(progress, "controls", CONTROLS)
+        raw_resolved = progress.get("resolved_modules", [])
+        if not isinstance(raw_resolved, list) or not all(
+            isinstance(item, str) for item in raw_resolved
+        ):
+            raise InstrumentFailure("mutation progress has an invalid resolved-module ledger")
+        resolved_seen = set(raw_resolved)
 
     try:
-        for table, sink, is_control in ((MUTANTS, results, False), (CONTROLS, control_results, True)):
-            for entry in table:
+        for table, sink, is_control, progress_key in (
+            (MUTANTS, results, False, "mutants"),
+            (CONTROLS, control_results, True, "controls"),
+        ):
+            for entry in table[len(sink):]:
                 name = entry[0]
                 edits = entry[-1]
                 if args.only and args.only not in name:
                     continue
-                for path, text in originals.items():
-                    path.write_text(text)
-                for path, text in killer_originals.items():
-                    path.write_text(text)
-                reason = _apply(edits, originals)
+                for path, original in snapshots.items():
+                    if not path.exists() or path.read_bytes() != original:
+                        raise InstrumentFailure(
+                            f"{name}: {path.name} was not clean before the next mutation"
+                        )
+                staged, reason = _stage_edits(edits, originals)
                 if reason is not None:
                     unapplied = {
                         "name": name,
@@ -1144,14 +1358,39 @@ def main(argv: list[str] | None = None) -> int:
                     if is_control:
                         unapplied["required"] = entry[1]
                     sink.append(unapplied)
+                    if progress is not None:
+                        progress[progress_key] = sink
+                        _persist_progress(progress, args.progress)
                     print(
                         f"{'NOT APPLIED':12s} {name}  ({reason})",
                         file=sys.stderr,
                         flush=True,
                     )
                     continue
+                assert staged is not None
+                planned = {
+                    _path_key(path): _sha256_bytes(text.encode("utf-8"))
+                    for path, text in staged.items()
+                }
                 if name == "_control_deleted_killer":
-                    (ROOT / KILLERS[0]).unlink()
+                    planned[_path_key(killer_paths[0])] = None
+                if progress is not None:
+                    progress["active"] = {
+                        "name": name,
+                        "kind": "control" if is_control else "mutant",
+                        "mutated": planned,
+                    }
+                    _persist_progress(progress, args.progress)
+                _apply(staged)
+                if name == "_control_deleted_killer":
+                    killer_paths[0].unlink()
+                for key, expected_digest in planned.items():
+                    path = Path(key)
+                    actual_digest = _sha256(path) if path.exists() else None
+                    if actual_digest != expected_digest:
+                        raise InstrumentFailure(
+                            f"{name}: journaled mutation bytes did not reach {path.name}"
+                        )
                 # The digests of what is ON DISK right now, i.e. of the mutant.
                 mutated = {path: _sha256(path) for path in targets}
                 stdout, stderr, resolved, completed, imported = _run_killers(
@@ -1205,16 +1444,29 @@ def main(argv: list[str] | None = None) -> int:
                 if is_control:
                     record["required"] = entry[1]
                 sink.append(record)
+                for path, original in snapshots.items():
+                    _atomic_write_bytes(path, original)
+                if progress is not None:
+                    progress[progress_key] = sink
+                    progress["resolved_modules"] = sorted(resolved_seen)
+                    progress["active"] = None
+                    _persist_progress(progress, args.progress)
                 print(
                     f"{status:12s} {name}  ({detail})",
                     file=sys.stderr,
                     flush=True,
                 )
     finally:
-        for path, text in originals.items():
-            path.write_text(text)
-        for path, text in killer_originals.items():
-            path.write_text(text)
+        if progress is not None:
+            # Restore only a journaled mutation.  If some other actor altered the
+            # checkout, `_restore_interrupted_mutation` deliberately refuses to
+            # overwrite it instead of concealing that evidence.
+            _restore_interrupted_mutation(
+                progress, snapshots=snapshots, progress_path=args.progress
+            )
+        else:
+            for path, original in snapshots.items():
+                _atomic_write_bytes(path, original)
 
     after = {path: _sha256(path) for path in targets}
     if before != after:
@@ -1279,9 +1531,12 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     if args.json and not args.only:
-        args.json.parent.mkdir(parents=True, exist_ok=True)
-        args.json.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\n")
+        _atomic_write_json(args.json, doc)
         print(f"wrote {args.json}", file=sys.stderr)
+    if progress is not None:
+        progress["status"] = "COMPLETE"
+        progress["active"] = None
+        _persist_progress(progress, args.progress)
     print(
         json.dumps(
             {k: doc[k] for k in ("applied", "killed", "survived", "did_not_run", "not_applied")},

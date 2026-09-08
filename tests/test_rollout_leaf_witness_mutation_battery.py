@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sys
+import tempfile
 from pathlib import Path
 import unittest
 from types import SimpleNamespace
@@ -328,6 +329,64 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
                 "tests/test_mcts_acceptance_report.py",
             ],
         )
+
+
+class MutationProgressRecoveryTest(unittest.TestCase):
+    def test_resume_restores_only_the_exact_journaled_mutation(self) -> None:
+        """A killed worker leaves source clean before it resumes the sweep."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target.py"
+            target.write_bytes(b"original\n")
+            progress_path = root / "progress.json"
+            document, _snapshots = harness._load_or_create_progress(
+                progress_path, paths=[target], output_path=root / "result.json"
+            )
+            mutated = b"mutant\n"
+            document["active"] = {
+                "name": "unit-mutant",
+                "kind": "mutant",
+                "mutated": {
+                    harness._path_key(target): harness._sha256_bytes(mutated),
+                },
+            }
+            harness._atomic_write_json(progress_path, document)
+            target.write_bytes(mutated)
+
+            recovered, _snapshots = harness._load_or_create_progress(
+                progress_path, paths=[target], output_path=root / "result.json"
+            )
+
+            self.assertEqual(target.read_bytes(), b"original\n")
+            self.assertIsNone(recovered["active"])
+
+    def test_resume_refuses_an_unjournaled_source_change(self) -> None:
+        """Recovery must not overwrite a file whose bytes were never journaled."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target.py"
+            target.write_bytes(b"original\n")
+            progress_path = root / "progress.json"
+            document, _snapshots = harness._load_or_create_progress(
+                progress_path, paths=[target], output_path=root / "result.json"
+            )
+            document["active"] = {
+                "name": "unit-mutant",
+                "kind": "mutant",
+                "mutated": {
+                    harness._path_key(target): harness._sha256_bytes(b"mutant\n"),
+                },
+            }
+            harness._atomic_write_json(progress_path, document)
+            target.write_bytes(b"unowned\n")
+
+            with self.assertRaisesRegex(
+                harness.InstrumentFailure, "refusing to overwrite"
+            ):
+                harness._load_or_create_progress(
+                    progress_path, paths=[target], output_path=root / "result.json"
+                )
+            self.assertEqual(target.read_bytes(), b"unowned\n")
 
 
 if __name__ == "__main__":  # pragma: no cover
