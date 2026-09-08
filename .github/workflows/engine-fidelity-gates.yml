@@ -1536,17 +1536,18 @@ jobs:
       # in its mutation battery, and this guard lives in YAML where no local `unittest`
       # run can see it.
       #
-      # 202 -> 203 with the isolated-worker lifecycle repair: the new
-      # `EngineMctsPolicyResetTest` proves a completed battle cannot carry live folds,
-      # consumed annotations, or ladder state into the next battle, while cumulative
-      # telemetry remains cumulative. Counted from the real suite in this PR; the
-      # exact-count guard below rejects a stale suite size rather than treating it as a pass.
+      # 202 -> 211 on this merge tree: the selector-shadow hardening adds eight checks;
+      # the isolated-worker lifecycle repair adds `EngineMctsPolicyResetTest`, which
+      # proves a completed battle cannot carry live folds, consumed annotations, or
+      # ladder state into the next battle while cumulative telemetry remains cumulative.
+      # Counted from the real merged suite, not the diff; the exact-count guard below
+      # rejects a stale suite size rather than treating it as a pass.
       - name: Engine-search telemetry pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 203 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 203 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 211 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 211 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
@@ -2027,8 +2028,8 @@ jobs:
             tests.test_foulplay_budget_calibration \
             tests.test_battle_bridge_boundary_requests -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 362 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 362 tests"
+          if ! grep -qE 'Ran 366 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 366 tests"
             exit 1
           fi
           rollout_leaf_skip_status=0

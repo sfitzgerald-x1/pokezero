@@ -23,6 +23,7 @@ from pokezero.mcts_eval.head_to_head import (
     summarize_complete_pairs,
     write_game_immutable,
 )
+from pokezero.mcts_eval.scoring import bootstrap_mean
 from pokezero.policy import PolicyContext
 
 
@@ -69,6 +70,12 @@ class _IsolatedPolicy(_Policy):
     """Test double for a policy whose decisions came from another source tree."""
 
     is_source_isolated = True
+
+
+@dataclass(frozen=True)
+class _PilotConfig:
+    search_sims: int = 256
+    search_batch: int = 16
 
 
 def _spec(config_id: str, **overrides) -> MctsPolicySpec:
@@ -206,6 +213,30 @@ class MirroredPairTest(unittest.TestCase):
         self.assertEqual(summary["pair_scores"], [0.5])
         self.assertEqual(summary["candidate_score"]["point"], 0.5)
         self.assertEqual(summary["candidate_model_evals"], 16)
+        self.assertEqual(summary["candidate_decision_walls_s"], [0.01, 0.01])
+        self.assertEqual(summary["incumbent_decision_walls_s"], [0.02, 0.02])
+        self.assertEqual(
+            summary["candidate_decision_wall_summary"],
+            {
+                "count": 2,
+                "total_s": 0.02,
+                "min_s": 0.01,
+                "p50_s": 0.01,
+                "p95_s": 0.01,
+                "max_s": 0.01,
+            },
+        )
+        self.assertEqual(
+            summary["incumbent_decision_wall_summary"],
+            {
+                "count": 2,
+                "total_s": 0.04,
+                "min_s": 0.02,
+                "p50_s": 0.02,
+                "p95_s": 0.02,
+                "max_s": 0.02,
+            },
+        )
 
     def test_any_mcts_fallback_invalidates_the_game(self) -> None:
         with self.assertRaisesRegex(HeadToHeadError, "fallback"):
@@ -358,6 +389,124 @@ class DurableGameTest(unittest.TestCase):
         bad_fallback["candidate_telemetry"]["fallback_decisions"] = 1
         with self.assertRaisesRegex(HeadToHeadError, "fallback"):
             HeadToHeadGame.from_payload(bad_fallback)
+
+
+class BackupRepairPilotContractTest(unittest.TestCase):
+    def _contract_inputs(self):
+        module = _runner_module()
+        pilot_seeds = tuple(range(2026090801, 2026090813))
+        confirmation_seeds = list(range(2026091001, 2026091051))
+        manifest = {
+            "study": {
+                "schema_version": module.BACKUP_REPAIR_PILOT_SCHEMA_VERSION,
+                "stage": "pilot",
+                "minimum_effect_delta": 0.05,
+                "reserved_confirmation_seeds": confirmation_seeds,
+            }
+        }
+        bootstrap = {"resamples": 10_000, "seed": 20260908, "confidence_level": 0.80}
+        candidate = {
+            "source_commit": module.BACKUP_REPAIR_CANDIDATE_COMMIT,
+            "config_id": "corrected-backups",
+        }
+        incumbent = {
+            "source_commit": module.BACKUP_REPAIR_INCUMBENT_COMMIT,
+            "config_id": "pre-repair-backups",
+        }
+        return module, manifest, pilot_seeds, bootstrap, candidate, incumbent
+
+    def test_contract_freezes_the_exact_contrast_and_reserved_roster(self) -> None:
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._contract_inputs()
+
+        contract = module._backup_repair_pilot_contract(
+            manifest,
+            seeds=seeds,
+            bootstrap=bootstrap,
+            candidate_raw=candidate,
+            incumbent_raw=incumbent,
+            candidate_config=_PilotConfig(),
+            incumbent_config=_PilotConfig(),
+        )
+
+        self.assertEqual(contract["pilot_seeds"], list(seeds))
+        self.assertEqual(contract["reserved_confirmation_seeds"], manifest["study"]["reserved_confirmation_seeds"])
+        self.assertEqual(contract["confidence_level"], 0.80)
+
+    def test_contract_refuses_configuration_or_roster_drift(self) -> None:
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._contract_inputs()
+        with self.assertRaisesRegex(HeadToHeadError, "identical EngineMctsConfig"):
+            module._backup_repair_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_PilotConfig(),
+                incumbent_config=_PilotConfig(search_sims=512),
+            )
+
+        manifest["study"]["reserved_confirmation_seeds"][0] = seeds[0]
+        with self.assertRaisesRegex(HeadToHeadError, "overlap"):
+            module._backup_repair_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_PilotConfig(),
+                incumbent_config=_PilotConfig(),
+            )
+
+    def test_readout_uses_the_predeclared_delta_and_never_hides_prior_fallbacks(self) -> None:
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._contract_inputs()
+        contract = module._backup_repair_pilot_contract(
+            manifest,
+            seeds=seeds,
+            bootstrap=bootstrap,
+            candidate_raw=candidate,
+            incumbent_raw=incumbent,
+            candidate_config=_PilotConfig(),
+            incumbent_config=_PilotConfig(),
+        )
+        games = [
+            SimpleNamespace(
+                candidate_telemetry=SimpleNamespace(fallback_decisions=0, prior_fallbacks=0),
+                incumbent_telemetry=SimpleNamespace(fallback_decisions=0, prior_fallbacks=0),
+            )
+            for _ in range(24)
+        ]
+        readout = module._backup_repair_pilot_readout(
+            contract=contract,
+            summary={"pair_scores": [1.0] * len(seeds)},
+            games=games,
+        )
+        self.assertEqual(readout["candidate_score_delta_from_neutral"], {
+            "point": 0.5,
+            "low": 0.5,
+            "high": 0.5,
+        })
+        self.assertEqual(readout["decision"], "ELIGIBLE_FOR_RESERVED_CONFIRMATION")
+
+        games[0].candidate_telemetry.prior_fallbacks = 1
+        fallback_readout = module._backup_repair_pilot_readout(
+            contract=contract,
+            summary={"pair_scores": [1.0] * len(seeds)},
+            games=games,
+        )
+        self.assertEqual(fallback_readout["decision"], "INCONCLUSIVE_OR_NOT_PROMOTED")
+        self.assertFalse(fallback_readout["promotion_checks"]["no_fallbacks_or_refusals"])
+
+
+class BootstrapConfidenceTest(unittest.TestCase):
+    def test_confidence_level_controls_percentile_width_and_rejects_invalid_values(self) -> None:
+        values = [0.0, 0.5, 1.0]
+        draws = [[0, 0, 0], [0, 1, 2], [2, 2, 2]]
+        narrow = bootstrap_mean(values, draws, confidence_level=0.50)
+        wide = bootstrap_mean(values, draws, confidence_level=0.95)
+        self.assertGreaterEqual(narrow.low, wide.low)
+        self.assertLessEqual(narrow.high, wide.high)
+        with self.assertRaisesRegex(ValueError, "strictly between"):
+            bootstrap_mean(values, draws, confidence_level=1.0)
 
 
 class SourceReceiptTest(unittest.TestCase):

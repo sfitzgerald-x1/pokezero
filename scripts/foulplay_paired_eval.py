@@ -378,6 +378,21 @@ def config_id_for(args: argparse.Namespace) -> str:
                 "refused: the raw arm's cell id carries no opponent fragment, so such a "
                 "shard would pool into the paired delta's control."
             )
+        # These flags are observational only when the child actually runs an
+        # engine policy.  `bridge_argv` correctly omits engine-only arguments
+        # for raw, but recording either flag in a successful raw shard would
+        # falsely claim that the instrument ran.  Refuse at the same cell
+        # identity boundary that guards the raw control's opponent identity.
+        if args.engine_root_selector_shadow:
+            raise SystemExit(
+                "--engine-root-selector-shadow requires --arm search: a raw policy "
+                "cannot run or attest root-selector telemetry."
+            )
+        if args.engine_override_telemetry:
+            raise SystemExit(
+                "--engine-override-telemetry requires --arm search: a raw policy "
+                "cannot run or attest engine root telemetry."
+            )
         if calibration is not None:
             return calibration["config_id"]
         return f"raw@{tag}"
@@ -474,6 +489,8 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
         # out of config_id; see search_config_id for why.
         if args.engine_override_telemetry:
             argv.append("--engine-override-telemetry")
+        if args.engine_root_selector_shadow:
+            argv.append("--engine-root-selector-shadow")
         # Same "only when set" rule, but this one IS in config_id: it changes the
         # belief the search runs on, which is the one thing §4a varies.
         if args.engine_oracle_belief:
@@ -753,6 +770,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "its own denominator. OBSERVATIONAL -- it does not change the "
                          "search and so is NOT part of config_id; the shard reports it "
                          "as `override_telemetry` instead.")
+    ap.add_argument("--engine-root-selector-shadow", action="store_true",
+                    help="observational one-world, full-budget visit-max versus "
+                         "acting-seat Q-max comparison from the same completed tree. "
+                         "Requires --engine-override-telemetry and --worlds 1; it never "
+                         "changes the action played and is not part of config_id.")
     ap.add_argument("--engine-oracle-belief", action="store_true",
                     help="search the TRUE hidden state instead of sampled belief worlds "
                          "(docs/mcts_value_gap_investigation_20260811.md §4a / H5). Its "
@@ -1004,6 +1026,7 @@ def main(argv=None) -> int:
         # `policy_stats.override_measured_decisions` would then be wrong by
         # exactly the telemetry-off share, silently.
         "override_telemetry": bool(args.engine_override_telemetry),
+        "root_selector_shadow": bool(args.engine_root_selector_shadow),
         # WHO PLAYED, witnessed in the body as well as keyed into config_id. The id keeps
         # the cells apart; this says what the cell actually was, which is what a reader of
         # a single shard needs. Both, because the id can be recomputed wrongly and the
