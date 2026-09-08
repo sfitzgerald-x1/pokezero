@@ -742,7 +742,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=ISOLATED_WORKER_RESPONSE_TIMEOUT_SECONDS,
         help=(
-            "per-decision response deadline for each isolated worker "
+            "per-decision request/response deadline for each isolated worker "
             f"(default: {ISOLATED_WORKER_RESPONSE_TIMEOUT_SECONDS:g} seconds)"
         ),
     )
@@ -1002,7 +1002,7 @@ def main(argv: list[str] | None = None) -> int:
                 "host_source": source,
                 "candidate_provenance_sha256": candidate.provenance_sha256,
                 "incumbent_provenance_sha256": incumbent.provenance_sha256,
-                "response_timeout_seconds": args.isolated_worker_timeout_seconds,
+                "request_response_timeout_seconds": args.isolated_worker_timeout_seconds,
             },
         )
 
