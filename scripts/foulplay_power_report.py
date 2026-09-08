@@ -463,6 +463,7 @@ def main(argv=None) -> int:
                 fpu_reduction=cell.get("fpu_reduction"),
                 c_puct=cell.get("c_puct"),
                 oracle_belief=bool(cell.get("oracle_belief")),
+                root_selector_q=bool(cell.get("root_selector_q")),
                 # Lockstep with the driver's builder. The shared docstring warns that the
                 # two drifting apart is a SILENT failure -- the reference matches no shard
                 # -- so the opponent fragment has to land in BOTH or fixing one creates

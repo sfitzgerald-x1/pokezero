@@ -48,6 +48,7 @@ def args(**overrides) -> argparse.Namespace:
         engine_c_puct=None,
         engine_override_telemetry=False,
         engine_root_selector_shadow=False,
+        engine_root_selector_q=False,
         engine_oracle_belief=False,
         opponent_journal=None,
         engine_early_stop=False,
@@ -741,6 +742,64 @@ class RootSelectorShadowPassthroughTest(unittest.TestCase):
         self.assertIn(
             '"root_selector_shadow": bool(args.engine_root_selector_shadow)', source
         )
+
+
+class RootSelectorQPassthroughTest(unittest.TestCase):
+    """The Q selector changes play, so it must be executable and cell-distinct."""
+
+    def test_the_flag_reaches_the_child_only_for_a_search_arm(self) -> None:
+        self.assertIn(
+            "--engine-root-selector-q",
+            _DRIVER.bridge_argv(args(engine_root_selector_q=True), seat="p1"),
+        )
+        self.assertNotIn(
+            "--engine-root-selector-q", _DRIVER.bridge_argv(args(), seat="p1")
+        )
+        self.assertNotIn(
+            "--engine-root-selector-q",
+            _DRIVER.bridge_argv(
+                args(arm="raw", engine_root_selector_q=True), seat="p1"
+            ),
+        )
+
+    def test_raw_arm_refuses_to_claim_a_selector_it_cannot_run(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "root-selector telemetry"):
+            _DRIVER.config_id_for(args(arm="raw", engine_root_selector_q=True))
+
+    def test_cli_bridge_report_and_config_id_witness_the_playing_selector(self) -> None:
+        ns = _DRIVER.build_parser().parse_args([
+            "--checkpoint", "/tmp/ckpt.pt", "--showdown-root", "/tmp/showdown",
+            "--arm", "search", "--seed-start", "1", "--pairs", "2",
+            "--out", "/tmp/shard.json", "--worlds", "1",
+            "--engine-override-telemetry", "--engine-root-selector-q",
+        ])
+        self.assertTrue(ns.engine_root_selector_q)
+        self.assertIn("--engine-root-selector-q", _DRIVER.bridge_argv(ns, seat="p2"))
+        self.assertEqual(
+            _DRIVER.config_id_for(ns), "d4-s1024-b64-w1+root-q@ckpt"
+        )
+        self.assertNotEqual(
+            _DRIVER.config_id_for(ns),
+            _DRIVER.config_id_for(args(worlds=1, engine_override_telemetry=True)),
+        )
+
+        from pokezero.foulplay_bridge import build_arg_parser
+
+        self.assertIn("engine_root_selector_q", {a.dest for a in build_arg_parser()._actions})
+        self.assertTrue(build_arg_parser().parse_args([
+            "--checkpoint", "/tmp/c.pt", "--engine-root-selector-q"
+        ]).engine_root_selector_q)
+
+        source = (
+            Path(__file__).resolve().parents[1] / "scripts" / "foulplay_paired_eval.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"root_selector_q": bool(args.engine_root_selector_q)', source)
+
+    def test_report_builder_keeps_a_q_campaign_cell_in_the_same_identity(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[1] / "scripts" / "foulplay_power_report.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('root_selector_q=bool(cell.get("root_selector_q"))', source)
 
 
 class OracleBeliefPassthroughTest(unittest.TestCase):

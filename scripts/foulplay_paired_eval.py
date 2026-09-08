@@ -251,6 +251,7 @@ def search_config_id(
     fpu_reduction: float | None = None,
     c_puct: float | None = None,
     oracle_belief: bool = False,
+    root_selector_q: bool = False,
     early_stop: bool = False,
     early_stop_min_sims: int | None = None,
     depth_min: int | None = None,
@@ -329,6 +330,12 @@ def search_config_id(
         # searches the TRUE hidden state. §4a's whole reading is truth-arm vs
         # sampled-arm, so pooling them would erase the experiment.
         base = f"{base}+oracle-belief"
+    if root_selector_q:
+        # Unlike the shadow instrument, this selector changes the action played
+        # from the completed tree.  Keeping it out of the cell id would pool a
+        # Q-selector trial with visit-max and turn a real policy difference into
+        # a plausible but meaningless aggregate.
+        base = f"{base}+root-q"
     if early_stop:
         # IN the id, unlike --engine-override-telemetry above, because this
         # changes how many simulations a decision receives -- i.e. the search
@@ -383,9 +390,14 @@ def config_id_for(args: argparse.Namespace) -> str:
         # for raw, but recording either flag in a successful raw shard would
         # falsely claim that the instrument ran.  Refuse at the same cell
         # identity boundary that guards the raw control's opponent identity.
-        if args.engine_root_selector_shadow:
+        if args.engine_root_selector_shadow or args.engine_root_selector_q:
+            selector_flag = (
+                "--engine-root-selector-shadow"
+                if args.engine_root_selector_shadow
+                else "--engine-root-selector-q"
+            )
             raise SystemExit(
-                "--engine-root-selector-shadow requires --arm search: a raw policy "
+                f"{selector_flag} requires --arm search: a raw policy "
                 "cannot run or attest root-selector telemetry."
             )
         if args.engine_override_telemetry:
@@ -411,6 +423,7 @@ def config_id_for(args: argparse.Namespace) -> str:
         fpu_reduction=args.engine_fpu_reduction,
         c_puct=args.engine_c_puct,
         oracle_belief=args.engine_oracle_belief,
+        root_selector_q=args.engine_root_selector_q,
         early_stop=args.engine_early_stop,
         early_stop_min_sims=args.engine_early_stop_min_sims,
         # Read DIRECTLY, matching the note above: a Namespace predating these knobs must
@@ -491,6 +504,8 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
             argv.append("--engine-override-telemetry")
         if args.engine_root_selector_shadow:
             argv.append("--engine-root-selector-shadow")
+        if args.engine_root_selector_q:
+            argv.append("--engine-root-selector-q")
         # Same "only when set" rule, but this one IS in config_id: it changes the
         # belief the search runs on, which is the one thing §4a varies.
         if args.engine_oracle_belief:
@@ -775,6 +790,12 @@ def build_parser() -> argparse.ArgumentParser:
                          "acting-seat Q-max comparison from the same completed tree. "
                          "Requires --engine-override-telemetry and --worlds 1; it never "
                          "changes the action played and is not part of config_id.")
+    ap.add_argument("--engine-root-selector-q", action="store_true",
+                    help="one-world, full-budget Q-max root selector from the "
+                         "completed native-search tree. Requires "
+                         "--engine-override-telemetry and --worlds 1. It changes "
+                         "the action played, so it is recorded per shard and adds "
+                         "a distinct +root-q config_id fragment.")
     ap.add_argument("--engine-oracle-belief", action="store_true",
                     help="search the TRUE hidden state instead of sampled belief worlds "
                          "(docs/mcts_value_gap_investigation_20260811.md §4a / H5). Its "
@@ -1027,6 +1048,7 @@ def main(argv=None) -> int:
         # exactly the telemetry-off share, silently.
         "override_telemetry": bool(args.engine_override_telemetry),
         "root_selector_shadow": bool(args.engine_root_selector_shadow),
+        "root_selector_q": bool(args.engine_root_selector_q),
         # WHO PLAYED, witnessed in the body as well as keyed into config_id. The id keeps
         # the cells apart; this says what the cell actually was, which is what a reader of
         # a single shard needs. Both, because the id can be recomputed wrongly and the
