@@ -40,9 +40,9 @@ Once #1339 is green, execute its fixed representative timing panel serially, alt
 
 ### 4. Use one attributable strength comparison
 
-The first strength candidate must be selected by the representative selector read or the full-path timing result. Freeze final-enthalf iteration 9375 with SHA-256 `0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be` only after verifying exported bytes. Before outcomes are read, declare candidate, incumbent, mirrored seeds, draw scoring, fixed-work or fixed-wall contract, retries, failure rule, resource cap, and precision rule.
+The first eligible strength contrast is **corrected backups versus frozen uncorrected MCTS**. It may begin only after the minimal isolated-build adapter is validated, because the two policies have different native source identities. Selector and encoder contrasts remain later, separately attributable candidates: each first needs its own representative read. Freeze final-enthalf iteration 9375 with SHA-256 `0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be` only after verifying exported bytes. Before outcomes are read, declare candidate, incumbent, mirrored seeds, draw scoring, fixed-work or fixed-wall contract, retries, failure rule, resource cap, and precision rule.
 
-The merged runner supports two configurations of the *same* source build, such as a surviving selector versus corrected visit-max. It deliberately refuses two different native source builds in one process. Corrected-versus-uncorrected and encoder-versus-baseline contrasts therefore require minimal isolated-build orchestration rather than bypassing the binding guard. That is an explicit implementation gap, not permission to call different sources comparable.
+The merged runner supports two configurations that share the same source, checkpoint, engine fingerprint, and Showdown identity, such as a surviving selector versus corrected visit-max. It deliberately refuses two different native source builds in one process. Corrected-versus-uncorrected and encoder-versus-baseline contrasts therefore require minimal isolated-build orchestration rather than bypassing the binding guard. That is an explicit implementation gap, not permission to call different sources comparable.
 
 Start with a small separately declared native smoke only to validate routing, provenance, freshness, latency, and durability. It has no strength conclusion. Then run the declared mirrored seed comparison, including both seats and fresh trajectories after divergent moves. Report score relative to 0.5, seat splits, paired uncertainty, tail latency, model work, and all exclusion/failure counts. An interval spanning zero is inconclusive, not equivalence.
 
@@ -59,6 +59,6 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 ## Immediate order
 
 1. Validate the running fresh mutation battery and merge #1339 only after exact-source evidence and CI pass.
-2. Publish the selector as telemetry only, with fresh evidence after rebase; collect its one-world development read.
-3. Complete the full-path timing read; park or promote the encoder on its own evidence.
-4. Implement only the isolated-build adapter required by the first cross-source contrast, or use the existing same-source runner for a surviving selector. Then run one bounded, predeclared strength comparison.
+2. Implement and validate only the isolated-build adapter required by the corrected-versus-uncorrected contrast. Run its source-bound native smoke, then the first bounded, predeclared strength comparison.
+3. Publish the selector as telemetry only, with fresh evidence after rebase; collect its one-world development read.
+4. Complete the full-path timing read; park or promote the encoder on its own evidence. A surviving selector may then use the existing same-identity runner; an encoder contrast reuses the isolated-build adapter.
