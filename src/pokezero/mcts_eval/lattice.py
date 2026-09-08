@@ -19,6 +19,7 @@ plan is explicit that upper cells are allowed to fail the gate.
 from __future__ import annotations
 
 import random
+from dataclasses import dataclass
 from statistics import mean, median
 import time
 from typing import Any, Callable, Mapping, Sequence
@@ -36,10 +37,41 @@ from ..observation import (
 )
 from .resolver import CheckpointContract, ContractError
 from .timing_corpus import TimingDecisionRecord
+from ..showdown import showdown_choice_for_action
 
 
 PreparedDecision = Callable[[], dict[str, Any]]
 PreparedDecider = Callable[[TimingDecisionRecord, SearchConfig], PreparedDecision]
+
+
+@dataclass(frozen=True)
+class _PublicReplayStep:
+    """One ephemeral replay action with only the actor's public observation.
+
+    ``PolicyContext.trajectory`` is normally a ``BattleTrajectory``.  The
+    engine's opponent-order reconstruction needs just a structural subset of
+    it: both players' action indexes, the acting player's historical public
+    observations, and public action identifiers.  Supplying an intentionally
+    smaller runtime object prevents a timing adapter from smuggling the
+    opponent's private requests into policy context.
+    """
+
+    player_id: str
+    turn_index: int
+    action_index: int
+    observation: Any | None = None
+
+
+@dataclass(frozen=True)
+class _PublicReplayTrajectory:
+    """Public-only trajectory shape consumed by opponent-order reconstruction."""
+
+    battle_id: str
+    format_id: str
+    seed: int
+    steps: tuple[_PublicReplayStep, ...]
+    metadata: Mapping[str, Any]
+    terminal: None = None
 
 
 def _percentile(values: Sequence[float], fraction: float) -> float:
@@ -88,6 +120,7 @@ def time_lattice_cell(
     depths: list[int] = []
     cap_hits = 0
     fallbacks = 0
+    prior_fallbacks = 0
     invalid_actions = 0
     total_iterations = model_evals = 0
     encode_s = model_s = tree_s = 0.0
@@ -108,6 +141,7 @@ def time_lattice_cell(
             if realized >= config.depth - 1:
                 cap_hits += 1
             fallbacks += int(telemetry.get("fallbacks", 0))
+            prior_fallbacks += int(telemetry.get("prior_fallbacks", 0))
             invalid_actions += int(telemetry.get("invalid_actions", 0))
             total_iterations += int(telemetry.get("total_iterations", 0))
             model_evals += int(telemetry.get("model_evals", 0))
@@ -158,6 +192,7 @@ def time_lattice_cell(
         products_s=products_s,
         row_write_s=row_write_s,
         fallbacks=fallbacks,
+        prior_fallbacks=prior_fallbacks,
         invalid_actions=invalid_actions,
         gate_failed=gate_failed,
         provenance_exact=True,
@@ -180,6 +215,7 @@ class _LiveEngineTimingDecider:
     _FORMAT_ID = "gen3randombattle"
     _STATS_FIELDS = (
         "fallback_decisions",
+        "prior_fallbacks",
         "total_iterations",
         "model_evals",
         "encode_wall_seconds",
@@ -288,11 +324,74 @@ class _LiveEngineTimingDecider:
         ]
         return max(changed, default=0)
 
+    @staticmethod
+    def _public_replay_trajectory(
+        record: TimingDecisionRecord, replayed: Any
+    ) -> _PublicReplayTrajectory:
+        """Build the exact public history native opponent priors need.
+
+        The public replay resolves action indexes in its sampled world.  Keep
+        them so the existing production permutation walk can decode historical
+        opponent switches, and retain *only* the acting player's observation at
+        each prior request.  Those observations are the public information the
+        production policy itself had at that boundary.
+        """
+
+        steps: list[_PublicReplayStep] = []
+        replay_actions = getattr(replayed, "replay_actions", None)
+        replay_observations = getattr(replayed, "replay_observations", None)
+        if not isinstance(replay_actions, Mapping) or not isinstance(replay_observations, Mapping):
+            raise ContractError(
+                f"{record.decision_id}: replay did not retain action/observation history"
+            )
+        for action_round in record.public_resolved_action_rounds:
+            turn_index = action_round.turn_index
+            actions = replay_actions.get(turn_index)
+            observations = replay_observations.get(turn_index)
+            if not isinstance(actions, Mapping) or set(actions) != set(action_round.actions):
+                raise ContractError(
+                    f"{record.decision_id}: replay action history differs at turn {turn_index}"
+                )
+            if not isinstance(observations, Mapping) or set(observations) != set(action_round.actions):
+                raise ContractError(
+                    f"{record.decision_id}: replay observation history differs at turn {turn_index}"
+                )
+            for player_id in sorted(str(player) for player in actions):
+                action_index = actions[player_id]
+                if not isinstance(action_index, int):
+                    raise ContractError(
+                        f"{record.decision_id}: replay action index is not an integer"
+                    )
+                observation = observations[player_id] if player_id == record.seat else None
+                if player_id == record.seat and observation is None:
+                    raise ContractError(
+                        f"{record.decision_id}: replay omitted the acting player's prior observation"
+                    )
+                steps.append(
+                    _PublicReplayStep(
+                        player_id=player_id,
+                        turn_index=turn_index,
+                        action_index=action_index,
+                        observation=observation,
+                    )
+                )
+        return _PublicReplayTrajectory(
+            battle_id=record.battle_id,
+            format_id=_LiveEngineTimingDecider._FORMAT_ID,
+            seed=record.battle_seed,
+            steps=tuple(steps),
+            metadata={
+                "public_resolved_action_rounds": [
+                    action_round.to_dict()
+                    for action_round in record.public_resolved_action_rounds
+                ]
+            },
+        )
+
     def prepare(self, record: TimingDecisionRecord, config: SearchConfig) -> PreparedDecision:
         """Replay + validate the public prefix, returning one timed decision."""
         from ..policy import PolicyContext
         from ..public_replay_materializer import PublicReplayError, replay_public_action_rounds
-        from ..trajectory import BattleTrajectory
 
         if self._closed:
             raise RuntimeError("timing decider is closed")
@@ -329,6 +428,7 @@ class _LiveEngineTimingDecider:
             decision_round_index=record.turn_index,
             public_materialization_state=warm_state,
         )
+        trajectory = self._public_replay_trajectory(record, replayed)
 
         def timed_decision() -> dict[str, Any]:
             observation = self._env.observe(record.seat)
@@ -354,11 +454,7 @@ class _LiveEngineTimingDecider:
                 seed=record.battle_seed,
                 observation=observation,
                 requested_players=tuple(replayed.requested_players),
-                trajectory=BattleTrajectory(
-                    battle_id=record.battle_id,
-                    format_id=self._FORMAT_ID,
-                    seed=record.battle_seed,
-                ),
+                trajectory=trajectory,  # type: ignore[arg-type]  # public-only runtime history
                 requested_legal_action_masks={record.seat: legal_mask},
                 requested_observations={record.seat: observation},
                 public_materialization_state=public_state,
@@ -369,12 +465,21 @@ class _LiveEngineTimingDecider:
             )
             after = self._snapshot_stats(policy)
             action_index = int(decision.action_index)
+            try:
+                choice = showdown_choice_for_action(
+                    self._env._state_for_player(record.seat), action_index
+                )
+            except ValueError as error:
+                raise ContractError(
+                    f"{record.decision_id}: selected action cannot be serialized to Showdown"
+                ) from error
             return {
-                "root_action": str(action_index),
+                "root_action": choice,
                 "max_depth_reached": self._changed_depth(
                     before["depth_reached_histogram"], after["depth_reached_histogram"]
                 ),
                 "fallbacks": int(after["fallback_decisions"] - before["fallback_decisions"]),
+                "prior_fallbacks": int(after["prior_fallbacks"] - before["prior_fallbacks"]),
                 "invalid_actions": int(
                     action_index < 0
                     or action_index >= len(legal_mask)

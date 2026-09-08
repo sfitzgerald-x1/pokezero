@@ -48,6 +48,7 @@ class TimingRow:
     products_s: float = 0.0
     row_write_s: float = 0.0
     fallbacks: int = 0
+    prior_fallbacks: int = 0
     invalid_actions: int = 0
     gate_failed: bool = False
     provenance_exact: bool = True
@@ -63,6 +64,7 @@ class TimingRow:
             and self.provenance_exact
             and self.mean_wall_s < DECISION_WALL_GATE_S
             and self.fallbacks == 0
+            and self.prior_fallbacks == 0
             and self.invalid_actions == 0
             and self.decisions_timed > 0
         )
