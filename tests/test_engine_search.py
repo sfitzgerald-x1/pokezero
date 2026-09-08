@@ -4706,6 +4706,34 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             stats["root_decision_rows"][0]["root_selector_shadow"], shadow
         )
 
+    def test_root_selector_shadow_refuses_an_unexpected_stopped_prefix(self) -> None:
+        """A stale native stop cannot be relabelled as a full-budget tree."""
+        policy = self._policy(root_selector_shadow=True, worlds=1)
+        report = self._report(
+            [("alpha", 40, 0.40, 0.2), ("beta", 20, 0.90, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "iterations": 60,
+                "requested_iterations": 100,
+                "remaining_iterations": 40,
+                "early_stopped": True,
+                "model_evals": 60,
+            }
+        )
+        decision, native = self._run(policy, [report])
+        self.assertEqual(len(native.calls), 1)
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["fallback"],
+            "root_selector_shadow_stopped_prefix",
+        )
+        stats = policy.stats.to_dict()
+        self.assertEqual(stats["early_stop_triggered_worlds"], 1)
+        self.assertEqual(stats["early_stop_accepted_decisions"], 0)
+        self.assertEqual(stats["root_selector_shadow_measured_decisions"], 0)
+        self.assertEqual(stats["root_selector_shadow_unmeasured"], 0)
+
     def test_root_selector_shadow_uses_q_then_visits_then_action_order(self) -> None:
         policy = self._policy(root_selector_shadow=True, worlds=1)
         decision, _ = self._run(

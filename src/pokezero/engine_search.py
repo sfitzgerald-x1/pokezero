@@ -5512,6 +5512,16 @@ class EngineMctsPolicy:
         self.stats.early_stop_triggered_worlds += sum(
             int(r.get("_collapse_multiplicity", 1)) for r in stopped_runs
         )
+        if self._config.root_selector_shadow and stopped_runs:
+            # The shadow contract names a FULL completed tree.  Its own config
+            # sends no early-stop floor, so an `early_stopped` report here is a
+            # stale or malformed native boundary, not a licence to inherit the
+            # ordinary visit-max lock.  Returning any action while attaching a
+            # Q-max comparison would falsely call a stopped prefix full-budget;
+            # refuse the decision instead.  In the declared strict-fallback
+            # run this raises, and even a diagnostic non-strict caller gets no
+            # shadow denominator or recommendation from partial work.
+            return self._fallback(context, rng, "root_selector_shadow_stopped_prefix")
         locked_choice: Optional[str] = None
         full_budget_replays = 0
         simulations_saved = 0
