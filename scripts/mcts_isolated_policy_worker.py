@@ -168,6 +168,20 @@ def showdown_sha256(root: Path) -> str:
     return digest.hexdigest()
 
 
+def _reset_policy(policy: Any) -> None:
+    """Reset stateful policies without requiring a no-op method on MCTS.
+
+    ``RolloutDriver`` resets every policy at game start.  ``EngineMctsPolicy``
+    is deliberately stateless across decisions, so it has no ``reset`` method;
+    source-isolated MCTS must therefore acknowledge the protocol reset without
+    turning that ordinary lifecycle hook into a worker failure.
+    """
+
+    reset = getattr(policy, "reset", None)
+    if callable(reset):
+        reset()
+
+
 class SnapshotAnnotationSource:
     """Per-request copy of the host's public Tier-2 annotation overlay."""
 
@@ -412,7 +426,7 @@ def _serve() -> int:
                 write_frame(stdout, {"type": "close"})
                 return 0
             if kind == "reset":
-                policy.reset()
+                _reset_policy(policy)
                 write_frame(stdout, {"type": "reset"})
                 continue
             if kind != "decide":
