@@ -19,20 +19,20 @@ This avoids changing production choice from a toy observation and building evalu
 | --- | --- | --- | --- |
 | Batched backup repair | Merged in [#1337](https://github.com/sfitzgerald-x1/pokezero/pull/1337), merge `df4e3ce15ee69f922f6ae1b81c7b5e9861828319`. | Colliding batched chance visits no longer dilute a known terminal win or constant leaf value. | Better play. |
 | Corrected action-choice panel | Merged in [#1338](https://github.com/sfitzgerald-x1/pokezero/pull/1338). Both seats and batches 1/2/8/64 pass immediate-terminal, nested-value, rare-decoy, and equal-value controls. | The repaired tree retains the correct action in its declared deterministic cases and exposes finite-budget value error. | Model-path behavior, multi-world behavior, or strength. |
-| Root-choice hypothesis | The panel's harsh-prior row has visit-max regret 0.4745 and shadow Q-max regret 0; the rare-decoy control rejects a simple lucky-terminal explanation. Shadow implementation is locally tested but not published. | One concrete completed-tree visit-lag mechanism is worth testing on real development positions. | Q-max is generally better or safe to deploy. |
+| Root-choice hypothesis | The panel's harsh-prior row has visit-max regret 0.4745 and shadow Q-max regret 0; the rare-decoy control rejects a simple lucky-terminal explanation. [#1350](https://github.com/sfitzgerald-x1/pokezero/pull/1350) is the open, bounded one-world Q-selector candidate. | One concrete completed-tree visit-lag mechanism is worth testing on real development positions. | Q-max is generally better or safe to deploy. |
 | Encoder fast path | Merged in [#1340](https://github.com/sfitzgerald-x1/pokezero/pull/1340), merge `98faa804188289ecdcc5f5b87eaae8ad39de77eb`. | Identifier normalization has bitwise-output coverage and a narrow encoder improvement. | A full-search speedup or extra useful work at the same clock. |
-| Timing replay | [#1339](https://github.com/sfitzgerald-x1/pokezero/pull/1339) is open. Its only failed CI gate is stale mutation evidence, not an engine-fidelity behavioral failure. A fresh source-bound battery is running. | The timing lattice and parity path are available after exact-source integrity evidence. | An end-to-end timing result. |
+| Timing replay | [#1339](https://github.com/sfitzgerald-x1/pokezero/pull/1339) is merged. It provides the replayed-decision timing lattice and parity path. | The full-path timing measurement can be run with its fixed development corpus. | An end-to-end timing result. |
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`. | Fresh mirrored games, atomic game records, provenance binding, and fail-closed resumes are implemented. | A native/checkpoint battle smoke or a score. |
 
 ## Active route
 
-### 1. Close the timing-integrity gate without weakening it
+### 1. Close the source-isolation integrity gate without weakening it
 
-The fresh battery must exit cleanly, restore exact source, and produce one complete artifact: every applied mutation killed; no survivor, skip, or not-applied outcome; matching controls. Only then may #1339 update checked-in evidence and re-run CI. A hand-edited hash or partial artifact is invalid. This is not a new search hypothesis; it is the bounded integrity prerequisite for using replay/timing evidence.
+The fresh battery for [#1345](https://github.com/sfitzgerald-x1/pokezero/pull/1345) must exit cleanly, restore exact source, and produce one complete artifact: every applied mutation killed; no survivor, skip, or not-applied outcome; matching controls. Only then may its source-isolated reset path update checked-in evidence and re-run CI. A hand-edited hash or partial artifact is invalid. This is not a new search hypothesis; it is the bounded integrity prerequisite for the corrected-versus-uncorrected comparison.
 
 ### 2. Turn the root-selector hypothesis into a representative read
 
-After #1339 is green, rebase the shadow-only selector on current main and run fresh source-integrity evidence because it changes `engine_search.py`. The first read uses model-leaf, one-world, fixed-allocation searches with early stop disabled. It preserves production visit-max and records from the same completed tree: acting-seat Q-max and visit-max action; their visits and Q values; disagreement and unmeasured denominators with causes; all fallbacks/refusals; and low-visit-Q/noisy-control rows. The panel earns this read, not a production selector switch. Park Q-max if representative positions show no useful regret signal, noisy-Q regressions, or mostly unmeasured rows; do not rescue it with a threshold grid.
+[#1350](https://github.com/sfitzgerald-x1/pokezero/pull/1350) is an opt-in candidate, not a production switch. It uses the same completed model-leaf one-world tree, fixed allocation, and disabled early stopping; only visited legal arms may be selected, ordered by acting-seat Q, visits, then stable action order. It refuses an incomplete or unmappable root rather than silently falling back to visit-max. After its own review, CI, and exact-source integrity evidence, collect its development read against frozen reference actions/values. Park Q-max if representative positions show no useful regret signal, noisy-Q regressions, or mostly unmeasured rows; do not rescue it with a threshold grid.
 
 ### 3. Obtain the first full-path encoder result
 
@@ -58,7 +58,7 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 
 ## Immediate order
 
-1. Validate the running fresh mutation battery and merge #1339 only after exact-source evidence and CI pass.
+1. Validate the running fresh mutation battery and merge #1345 only after exact-source evidence, independent review, and CI pass.
 2. Implement and validate only the isolated-build adapter required by the corrected-versus-uncorrected contrast. Run its source-bound native smoke, then the first bounded, predeclared strength comparison.
-3. Publish the selector as telemetry only, with fresh evidence after rebase; collect its one-world development read.
+3. Merge #1350 only after its independent review and CI pass; collect its one-world development read against frozen reference actions/values.
 4. Complete the full-path timing read; park or promote the encoder on its own evidence. A surviving selector may then use the existing same-identity runner; an encoder contrast reuses the isolated-build adapter.

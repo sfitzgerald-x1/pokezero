@@ -64,8 +64,10 @@ control before Q-max can advance.
 
 That is useful enough to measure on representative development positions, but
 too synthetic and too narrow to change production selection. PR #1346 keeps the
-selector shadow-only and default-off. Its fresh exact-head mutation receipt is
-the remaining integrity gate; no game claim depends on it.
+selector shadow-only and default-off; [#1350](https://github.com/sfitzgerald-x1/pokezero/pull/1350)
+adds a separately opt-in, one-world Q candidate that reuses that exact completed
+tree and fails closed on incomplete root evidence. Its review and source-bound
+integrity evidence are still required; no game claim depends on it.
 
 ## Execution order
 
@@ -90,12 +92,13 @@ not justify parallel mutation of those files.
 
 ### 1. Close integrity, not more mechanics
 
-Finish the exact-head mutation receipt for PR #1346, commit the fresh receipt,
-and obtain its already-requested independent review. Merge only after its CI
-uses the receipt tied to the exact PR head. Rebase PR #1345 from current `main`
-and regenerate its own receipt; it carries the isolated-worker lifecycle/reset
-integration needed by a resumed source-different run. Receipts never transfer
-across a changed head.
+Finish the exact-head mutation receipt for [#1345](https://github.com/sfitzgerald-x1/pokezero/pull/1345),
+commit the fresh receipt, and obtain its independent review. Merge only after
+its CI uses the receipt tied to the exact PR head; it carries the
+isolated-worker lifecycle/reset integration needed by a resumed
+source-different run. Independently, #1350 needs its own review, CI, and
+exact-head integrity evidence because it changes `engine_search.py`. Receipts
+never transfer across a changed head.
 
 This prevents a regression in the new source-isolation/durability path. It does
 not warrant another selector feature or another broad evaluation framework.
@@ -157,11 +160,11 @@ fixed-wall experiment that reinvests the saved time.
 
 ### 4. Qualify or park Q-max without altering production selection
 
-After PR #1346’s integrity gate, collect shadow recommendation telemetry from
-representative one-world development positions using one completed tree per
-position. Visit-max and Q-max must see exactly the same legal visited actions,
-completed visits, and work. Keep early stop disabled; its current visit-lock
-rule is not validated for Q-max.
+After #1350’s review, CI, and integrity gate, collect the candidate's
+recommendation read from representative one-world development positions using
+one completed tree per position. Visit-max and Q-max must see exactly the same
+legal visited actions, completed visits, and work. Keep early stop disabled;
+its current visit-lock rule is not validated for Q-max.
 
 Each development position needs a reference action/value frozen before either
 selector is read: an exact solved/terminal reference where available, otherwise
@@ -196,8 +199,8 @@ park the selector; never silently enable it because of the harsh-prior fixture.
 
 ## Near-term deliverables
 
-1. Fresh and independently reviewed source-isolation mutation receipts for the
-   two open implementation PRs.
+1. Fresh and independently reviewed source-isolation mutation evidence for
+   #1345, plus separate exact-head integrity evidence for #1350.
 2. A registered, source-bound backup-repair pilot contract and its first
    durable paired-game readout.
 3. A compact full-path timing/parity report that either validates or falsifies
