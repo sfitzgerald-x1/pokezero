@@ -530,10 +530,10 @@ fn batched_search_core<E: BatchLeafEval>(
 /// branch means. All model rows come from EXPANSIONS: expanding a joint edge
 /// prices every enumerated outcome (terminal branches exactly, the rest as
 /// deferred batch rows), so the edge's first backed-up value is already the
-/// exact expectation over model values. Virtual loss (provisional side-one
-/// loss on decision arms, provisional visit on traversed branches, deferred
-/// rows carried via `ChanceBranch::pending_row`) keeps a round's selections
-/// diverse; `finalize` replaces every provisional in collection order.
+/// exact expectation over model values. Virtual loss on decision arms penalizes
+/// each selecting seat to keep a round's selections diverse. Chance-branch
+/// visits count completed samples only; deferred initial rows are carried via
+/// `ChanceBranch::pending_row` and resolved by `finalize` in collection order.
 ///
 /// A round collects traversals until either `batch_size` traversals or
 /// `batch_size` pending rows accumulate (an expansion never splits across
