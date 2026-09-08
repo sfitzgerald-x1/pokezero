@@ -66,11 +66,13 @@ Fresh engine vendoring used the repository script and verified the pinned
 `poke-engine==0.0.47` archive SHA-256
 `84a7dfad5ce4650a2cb9250999597c594385069eb33622c6a14bb1279694b434`.
 
-Run from this worktree:
+Set `SEARCH_TEST_PYTHON` to the absolute path of the Python interpreter used for
+the native build, then run from the repository root:
 
 ```sh
-PYO3_PYTHON=/Users/scott/workspace/agents/pokezero-agent/hceval-venv/bin/python CARGO_BUILD_JOBS=4 cargo test --manifest-path rust/pokezero-search/Cargo.toml --lib colliding_batch -- --nocapture
-PYO3_PYTHON=/Users/scott/workspace/agents/pokezero-agent/hceval-venv/bin/python CARGO_BUILD_JOBS=4 cargo test --manifest-path rust/pokezero-search/Cargo.toml -- --quiet
+: "${SEARCH_TEST_PYTHON:?Set SEARCH_TEST_PYTHON to the native-build Python interpreter}"
+PYO3_PYTHON="$SEARCH_TEST_PYTHON" CARGO_BUILD_JOBS=4 cargo test --manifest-path rust/pokezero-search/Cargo.toml --lib colliding_batch -- --nocapture
+PYO3_PYTHON="$SEARCH_TEST_PYTHON" CARGO_BUILD_JOBS=4 cargo test --manifest-path rust/pokezero-search/Cargo.toml -- --quiet
 .venv/bin/python -m unittest tests.test_search tests.test_search_policy tests.test_search_benchmark -q
 git diff --check
 ```
