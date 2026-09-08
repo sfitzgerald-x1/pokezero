@@ -802,6 +802,10 @@ class ControlledFoulPlayConfig:
     # acting-seat Q-max roots.  This never changes the played action and is
     # deliberately constrained in EngineMctsConfig to a fixed full-budget tree.
     engine_root_selector_shadow: bool = False
+    # Experimental one-world Q-max root selection from the same completed tree.
+    # This changes the played action, unlike the shadow, and is consequently a
+    # distinct configuration rather than an observational annotation.
+    engine_root_selector_q: bool = False
     # ORACLE BELIEF (docs/mcts_value_gap_investigation_20260811.md §4a / H5):
     # search the TRUE hidden state instead of a sampled one. Every belief world
     # is the true completion, injected through EngineMctsPolicy's documented
@@ -1137,30 +1141,40 @@ class ControlledFoulPlayConfig:
                 f"(got {self.policy_mode!r}); outside it the flag reaches no "
                 "search and the shard's own witness would claim otherwise."
             )
-        if self.engine_root_selector_shadow:
+        if self.engine_root_selector_shadow and self.engine_root_selector_q:
+            raise ValueError(
+                "engine_root_selector_shadow and engine_root_selector_q are mutually "
+                "exclusive: a Q-max action cannot also be an observational shadow."
+            )
+        if self.engine_root_selector_shadow or self.engine_root_selector_q:
+            selector_name = (
+                "engine_root_selector_shadow"
+                if self.engine_root_selector_shadow
+                else "engine_root_selector_q"
+            )
             if self.policy_mode != "engine-mcts":
                 raise ValueError(
-                    "engine_root_selector_shadow requires policy_mode='engine-mcts' "
+                    f"{selector_name} requires policy_mode='engine-mcts' "
                     f"(got {self.policy_mode!r})."
                 )
             if not self.engine_override_telemetry:
                 raise ValueError(
-                    "engine_root_selector_shadow requires engine_override_telemetry: "
+                    f"{selector_name} requires engine_override_telemetry: "
                     "the durable root-arm witness is part of the experiment."
                 )
             if self.engine_worlds != 1:
                 raise ValueError(
-                    "engine_root_selector_shadow requires engine_worlds=1 until a "
+                    f"{selector_name} requires engine_worlds=1 until a "
                     "separate belief-aggregation selector is specified."
                 )
             if self.engine_early_stop:
                 raise ValueError(
-                    "engine_root_selector_shadow requires engine_early_stop=False: "
+                    f"{selector_name} requires engine_early_stop=False: "
                     "visit-lock is not a Q-max stability certificate."
                 )
             if self.engine_depth_min is not None or self.engine_worlds_min is not None:
                 raise ValueError(
-                    "engine_root_selector_shadow requires a fixed allocation; dynamic "
+                    f"{selector_name} requires a fixed allocation; dynamic "
                     "depth/world floors would change the completed-tree budget."
                 )
         if self.engine_early_stop and self.policy_mode != "engine-mcts":
@@ -2304,6 +2318,7 @@ class ControlledFoulPlayBenchmarkResult:
                 # denominator was lost; this says whether the instrument ran.
                 "override_telemetry": self.config.engine_override_telemetry,
                 "root_selector_shadow": self.config.engine_root_selector_shadow,
+                "root_selector_q": self.config.engine_root_selector_q,
                 # Same standing as opponent_priors: §4a is read entirely against
                 # whether the belief was the truth or a sample, and "arm identity
                 # witnessed from shard telemetry, not job labels" is a standing
@@ -6646,6 +6661,7 @@ _ENGINE_ONLY_FIELDS: tuple[tuple[str, Any], ...] = (
     ("engine_oracle_belief", False),
     ("engine_override_telemetry", False),
     ("engine_root_selector_shadow", False),
+    ("engine_root_selector_q", False),
     ("engine_early_stop", False),
     ("engine_depth_min", None),
     ("engine_worlds_min", None),
@@ -6767,11 +6783,14 @@ def _build_policy(
                 fpu_reduction=config.engine_fpu_reduction,
                 override_telemetry=config.engine_override_telemetry,
                 root_selector_shadow=config.engine_root_selector_shadow,
+                root_selector_q=config.engine_root_selector_q,
                 # A shadow row is valid only for a complete native root.  If
                 # the native boundary reports an impossible stopped prefix,
                 # do not let the ordinary best-effort fallback play a random
                 # action and leave a bankable FoulPlay shard behind.
-                strict_fallbacks=config.engine_root_selector_shadow,
+                strict_fallbacks=(
+                    config.engine_root_selector_shadow or config.engine_root_selector_q
+                ),
                 # Dynamic budget. `early_stop_min_sims` is passed only when the
                 # feature is on, so the dataclass default (64) stands for an
                 # unset cell and the config validator sees a coherent pair.
@@ -9102,6 +9121,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                              "same completed tree. Requires --engine-override-telemetry, "
                              "--engine-worlds 1, and no early-stop/dynamic floors. It does "
                              "not change which action is played.")
+    parser.add_argument("--engine-root-selector-q", action="store_true",
+                        help="Experimental fixed-budget one-world Q-max root action from "
+                             "the same completed tree. Requires --engine-override-telemetry, "
+                             "--engine-worlds 1, and no early-stop/dynamic floors; it "
+                             "fails closed if any visited root arm is not fully witnessed.")
     parser.add_argument("--engine-oracle-belief", action="store_true",
                         help="Search the TRUE hidden state instead of sampled belief worlds "
                              "(value-gap plan §4a / H5). Every world is the true completion, "
@@ -9534,6 +9558,7 @@ def _config_from_args(
         engine_fpu_reduction=getattr(args, "engine_fpu_reduction", None),
         engine_override_telemetry=getattr(args, "engine_override_telemetry", False),
         engine_root_selector_shadow=getattr(args, "engine_root_selector_shadow", False),
+        engine_root_selector_q=getattr(args, "engine_root_selector_q", False),
         engine_early_stop=getattr(args, "engine_early_stop", False),
         engine_depth_min=getattr(args, "engine_depth_min", None),
         engine_worlds_min=getattr(args, "engine_worlds_min", None),

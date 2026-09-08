@@ -4244,6 +4244,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         telemetry: bool = True,
         opponent_priors: bool = False,
         root_selector_shadow: bool = False,
+        root_selector_q: bool = False,
         worlds: int = 2,
         strict: bool = False,
     ):
@@ -4259,6 +4260,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             search_batch=10,
             override_telemetry=telemetry,
             root_selector_shadow=root_selector_shadow,
+            root_selector_q=root_selector_q,
             use_opponent_priors=opponent_priors,
             strict_fallbacks=strict,
         )
@@ -4708,6 +4710,70 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             stats["root_decision_rows"][0]["root_selector_shadow"], shadow
         )
 
+    def test_root_selector_q_plays_the_witnessed_q_arm_from_the_same_tree(self) -> None:
+        """The candidate adds no search and excludes an unvisited FPU arm."""
+        policy = self._policy(root_selector_q=True, worlds=1, strict=True)
+        decision, native = self._run(
+            policy,
+            [self._report(
+                [
+                    ("alpha", 60, 0.40, 0.2),
+                    ("beta", 40, 0.90, 0.8),
+                    # FPU must not win merely because its placeholder Q is high.
+                    ("gamma", 0, 1.00, 0.0),
+                ],
+                root_priors=[0.2, 0.8, 0.0],
+            )],
+        )
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(len(native.calls), 1, "Q-max must reuse the completed tree")
+        selector = decision.metadata["engine_mcts"]["root_selector"]
+        self.assertEqual(selector["mode"], "q")
+        self.assertEqual((selector["visit_action"], selector["played_action"]), (0, 1))
+        comparison = selector["comparison"]
+        self.assertEqual((comparison["visit_choice"], comparison["q_choice"]), ("alpha", "beta"))
+        self.assertEqual(comparison["q_action"], 1)
+        self.assertEqual(policy.stats.to_dict()["searched_decisions"], 1)
+
+    def test_root_selector_q_refuses_a_partly_unmappable_completed_root(self) -> None:
+        """A candidate trial cannot silently play visit-max when Q is unmeasured."""
+        policy = self._policy(root_selector_q=True, worlds=1, strict=True)
+        with self.assertRaisesRegex(
+            EngineSearchFallbackError, "root_selector_q_visited_arm_unmapped"
+        ):
+            self._run(
+                policy,
+                [self._report(
+                    [("alpha", 60, 0.40, 0.2), ("nosuchmove", 40, 0.90, 0.8)],
+                    root_priors=[0.2, 0.8],
+                )],
+            )
+        self.assertEqual(policy.stats.to_dict()["searched_decisions"], 0)
+
+    def test_root_selector_q_uses_the_acting_seats_q_frame(self) -> None:
+        """A p2 candidate must not select the side-one-favored arm."""
+        policy = self._policy(root_selector_q=True, worlds=1, strict=True)
+        context = self._context()
+        context.player_id = "p2"
+        world = (
+            SimpleNamespace(
+                party_species={"p1": ("rattata",), "p2": ("chansey",)},
+                slot_sides={"p2": "side_two"},
+            ),
+            SimpleNamespace(to_string=lambda: "world-p2"),
+        )
+        report = self._report([], root_priors=[0.5, 0.5])
+        report["side_two"] = [
+            # The native report is side-one framed, so p2's Q-max is beta.
+            {"move": "alpha", "visits": 60, "q": 0.60, "prior": 0.5},
+            {"move": "beta", "visits": 40, "q": 0.10, "prior": 0.5},
+        ]
+        decision, _ = self._run(policy, [report], worlds=[world], context=context)
+        self.assertEqual(decision.action_index, 1)
+        selector = decision.metadata["engine_mcts"]["root_selector"]
+        self.assertEqual(selector["comparison"]["q_choice"], "beta")
+        self.assertAlmostEqual(selector["comparison"]["q"], 0.90)
+
     def test_root_selector_shadow_refuses_an_unexpected_stopped_prefix(self) -> None:
         """A stale native stop cannot be relabelled as a full-budget tree."""
         policy = self._policy(root_selector_shadow=True, worlds=1)
@@ -4846,6 +4912,36 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             EngineMctsConfig(
                 leaf_eval="hp_fraction_crate",
                 override_telemetry=True,
+                root_selector_shadow=True,
+            )
+
+    def test_root_selector_q_has_the_same_one_world_full_budget_fence(self) -> None:
+        base = {
+            "leaf_eval": "model",
+            "model_path": "model.pt",
+            "checkpoint_path": "checkpoint.pt",
+            "tables_path": "tables.json",
+            "search_sims": 100,
+            "search_batch": 10,
+            "root_selector_q": True,
+        }
+        with self.assertRaisesRegex(ValueError, "override_telemetry"):
+            EngineMctsConfig(**base)
+        with self.assertRaisesRegex(ValueError, "worlds=1"):
+            EngineMctsConfig(**base, override_telemetry=True, worlds=2)
+        with self.assertRaisesRegex(ValueError, "early_stop=False"):
+            EngineMctsConfig(
+                **base, override_telemetry=True, worlds=1, early_stop=True
+            )
+        with self.assertRaisesRegex(ValueError, "fixed search allocation"):
+            EngineMctsConfig(
+                **base, override_telemetry=True, worlds=1, depth_min=2
+            )
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            EngineMctsConfig(
+                **base,
+                override_telemetry=True,
+                worlds=1,
                 root_selector_shadow=True,
             )
 

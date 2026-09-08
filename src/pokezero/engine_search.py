@@ -809,6 +809,12 @@ class EngineMctsConfig:
     # this experiment, but requiring that channel means the shard witnesses the
     # exact root arms rather than creating a parallel, under-specified record.
     root_selector_shadow: bool = False
+    # An opt-in, one-world acting-seat Q-max root recommendation.  This is the
+    # deliberately narrow candidate advanced from the action-choice panel: it
+    # selects only among visited, legal arms of the one completed full-budget
+    # tree.  Visit-max remains the default, and multi-world aggregation is not
+    # silently invented here.
+    root_selector_q: bool = False
     # Opt-in safe STOP rule. A tree may stop at a completed batch only after
     # this floor and only when the unspent simulations cannot change its root
     # visit argmax. Multi-world aggregation applies a second safety bound.
@@ -1092,30 +1098,40 @@ class EngineMctsConfig:
             raise ValueError(
                 "override_telemetry is supported only with leaf_eval='model'."
             )
-        if self.root_selector_shadow:
+        if self.root_selector_shadow and self.root_selector_q:
+            raise ValueError(
+                "root_selector_shadow and root_selector_q are mutually exclusive: "
+                "the former observes visit-max while the latter plays Q-max."
+            )
+        if self.root_selector_shadow or self.root_selector_q:
+            selector_name = (
+                "root_selector_shadow"
+                if self.root_selector_shadow
+                else "root_selector_q"
+            )
             if self.leaf_eval != "model":
                 raise ValueError(
-                    "root_selector_shadow is supported only with leaf_eval='model'."
+                    f"{selector_name} is supported only with leaf_eval='model'."
                 )
             if not self.override_telemetry:
                 raise ValueError(
-                    "root_selector_shadow requires override_telemetry=True so its "
+                    f"{selector_name} requires override_telemetry=True so its "
                     "per-decision root-arm witness is retained."
                 )
             if self.worlds != 1:
                 raise ValueError(
-                    "root_selector_shadow requires worlds=1: the first selector "
+                    f"{selector_name} requires worlds=1: the first selector "
                     "comparison is one-world only, before any belief aggregation "
                     "rule is designed."
                 )
             if self.early_stop:
                 raise ValueError(
-                    "root_selector_shadow requires early_stop=False: a visit-lock "
+                    f"{selector_name} requires early_stop=False: a visit-lock "
                     "stopping rule certifies visit-max, not Q-max stability."
                 )
             if self.depth_min is not None or self.worlds_min is not None:
                 raise ValueError(
-                    "root_selector_shadow requires a fixed search allocation; "
+                    f"{selector_name} requires a fixed search allocation; "
                     "depth_min/worlds_min would make its completed-tree budget dynamic."
                 )
         if self.fpu_reduction is not None and not 0.0 <= self.fpu_reduction <= 1.0:
@@ -3510,7 +3526,7 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
     )
 
 
-def _root_selector_shadow(
+def _root_selector_comparison(
     context: PolicyContext,
     arms: _RootArmAggregate,
     aggregated: Mapping[str, float],
@@ -3519,19 +3535,19 @@ def _root_selector_shadow(
     worlds: int,
     vocabulary: "_ChoiceVocabulary | None",
 ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
-    """Read a one-world Q-max recommendation from the tree already completed.
+    """Read one-world visit-max and Q-max recommendations from one completed tree.
 
     This deliberately does *not* call ``_map_choices``.  That method is allowed
-    to charge production fallback telemetry; a shadow that changes a counter it
-    is supposed to observe is not observational.  The caller has already mapped
-    the played visit-max action, and this helper maps candidate displays through
-    the same pure vocabulary translation only.
+    to charge production fallback telemetry.  The caller has already mapped the
+    visit-max action, and this helper maps candidate displays through the same
+    pure vocabulary translation only.
 
     The configuration fence is the authority for one world, fixed work, and
     early-stop disabled.  Still derive every value from the received report: a
     test or stale integration that hands this helper an absent, unvisited, or
-    unmappable root arm must yield an explicit unmeasured cause rather than a
-    Q-max answer computed over a convenient subset.
+    unmappable root arm must yield an explicit cause rather than a Q-max answer
+    computed over a convenient subset.  The observational shadow records that
+    cause; the Q selector fails closed on it.
     """
     if vocabulary is None:
         return None, "no_action_candidates"
@@ -5512,16 +5528,22 @@ class EngineMctsPolicy:
         self.stats.early_stop_triggered_worlds += sum(
             int(r.get("_collapse_multiplicity", 1)) for r in stopped_runs
         )
-        if self._config.root_selector_shadow and stopped_runs:
+        if (self._config.root_selector_shadow or self._config.root_selector_q) and stopped_runs:
             # The shadow contract names a FULL completed tree.  Its own config
             # sends no early-stop floor, so an `early_stopped` report here is a
             # stale or malformed native boundary, not a licence to inherit the
             # ordinary visit-max lock.  Returning any action while attaching a
-            # Q-max comparison would falsely call a stopped prefix full-budget;
-            # refuse the decision instead.  In the declared strict-fallback
-            # run this raises, and even a diagnostic non-strict caller gets no
-            # shadow denominator or recommendation from partial work.
-            return self._fallback(context, rng, "root_selector_shadow_stopped_prefix")
+            # Q-max comparison or action would falsely call a stopped prefix
+            # full-budget; refuse the decision instead.  In the declared
+            # strict-fallback run this raises, and even a diagnostic non-strict
+            # caller gets no selector denominator or recommendation from
+            # partial work.
+            selector_name = (
+                "root_selector_shadow"
+                if self._config.root_selector_shadow
+                else "root_selector_q"
+            )
+            return self._fallback(context, rng, f"{selector_name}_stopped_prefix")
         locked_choice: Optional[str] = None
         full_budget_replays = 0
         simulations_saved = 0
@@ -5663,15 +5685,39 @@ class EngineMctsPolicy:
         choice_weights = (
             Counter({locked_choice: 1.0}) if locked_choice is not None else aggregated
         )
-        action_index = self._map_choices(context, choice_weights)
-        if action_index is None:
+        visit_action_index = self._map_choices(context, choice_weights)
+        if visit_action_index is None:
             return self._fallback(context, rng, "choices_unmapped")
+        action_index = visit_action_index
+        if config.root_selector_q:
+            # The candidate reuses the already completed one-world tree.  Do
+            # not let a malformed or only partly mappable root quietly fall
+            # back to visit-max: this trial's strength result must contain only
+            # decisions whose Q recommendation was completely witnessed.
+            comparison, selection_cause = _root_selector_comparison(
+                context,
+                _aggregate_root_arms(world_runs),
+                aggregated,
+                visit_action_index,
+                worlds=worlds_searched_here,
+                vocabulary=self._choice_vocabulary(context),
+            )
+            if selection_cause is not None:
+                return self._fallback(
+                    context, rng, f"root_selector_q_{selection_cause}"
+                )
+            assert comparison is not None
+            action_index = int(comparison["q_action"])
         self.stats.searched_decisions += 1
         # AFTER `searched_decisions`, so the two counters this telemetry
         # partitions can never be incremented on different sets of decisions.
         override = (
             self._record_root_telemetry(
-                context, world_runs, aggregated, action_index
+                context,
+                world_runs,
+                aggregated,
+                visit_action_index,
+                action_index,
             )
             if config.override_telemetry
             else None
@@ -5730,6 +5776,15 @@ class EngineMctsPolicy:
                 **(
                     {"root_selector_shadow": override["root_selector_shadow"]}
                     if config.root_selector_shadow and override is not None
+                    else {}
+                ),
+                # The played selector is explicit on every candidate decision.
+                # `override` retains the full completed-tree witness; keeping
+                # the mode beside it makes an MCTS-vs-MCTS record self-describing
+                # without relabelling Q-max as the historical visit-max action.
+                **(
+                    {"root_selector": override["root_selector"]}
+                    if config.root_selector_q and override is not None
                     else {}
                 ),
                 # Same rule, and the same reason the crate's own seam columns are
@@ -5801,6 +5856,7 @@ class EngineMctsPolicy:
         context: PolicyContext,
         world_runs: list[dict[str, Any]],
         aggregated: Mapping[str, float],
+        visit_action_index: int,
         search_action_index: int,
     ) -> dict[str, Any]:
         """Absorb this searched decision's ROOT state: override, gaps, opponent arm.
@@ -5871,28 +5927,28 @@ class EngineMctsPolicy:
                 self._record_override_address(
                     context, model_action, search_action_index, model_choice
                 )
-        # --- one-world visit-max / Q-max shadow ----------------------------
-        selector_shadow: Optional[dict[str, Any]] = None
-        selector_shadow_cause: Optional[str] = None
-        if self._config.root_selector_shadow:
+        # --- one-world visit-max / Q-max comparison ------------------------
+        selector_comparison: Optional[dict[str, Any]] = None
+        selector_comparison_cause: Optional[str] = None
+        if self._config.root_selector_shadow or self._config.root_selector_q:
             if vocabulary is None:
                 vocabulary = self._choice_vocabulary(context)
-            selector_shadow, selector_shadow_cause = _root_selector_shadow(
+            selector_comparison, selector_comparison_cause = _root_selector_comparison(
                 context,
                 arms,
                 aggregated,
-                search_action_index,
+                visit_action_index,
                 worlds=worlds,
                 vocabulary=vocabulary,
             )
-            if selector_shadow_cause is None:
+            if self._config.root_selector_shadow and selector_comparison_cause is None:
                 self.stats.root_selector_shadow_measured_decisions += 1
-                if bool(selector_shadow["disagrees"]):
+                if bool(selector_comparison["disagrees"]):
                     self.stats.root_selector_shadow_disagreements += 1
-            else:
+            elif self._config.root_selector_shadow:
                 self.stats.root_selector_shadow_unmeasured += 1
                 self.stats.root_selector_shadow_unmeasured_causes[
-                    selector_shadow_cause
+                    selector_comparison_cause
                 ] += 1
         # --- the two top-arm gaps (H2) ------------------------------------
         leaders = _leading_pair(aggregated)
@@ -5958,10 +6014,22 @@ class EngineMctsPolicy:
             "opponent_prior_arm": opponent_prior_choice,
             **(
                 {
-                    "root_selector_shadow": selector_shadow,
-                    "root_selector_shadow_unmeasured_cause": selector_shadow_cause,
+                    "root_selector_shadow": selector_comparison,
+                    "root_selector_shadow_unmeasured_cause": selector_comparison_cause,
                 }
                 if self._config.root_selector_shadow
+                else {}
+            ),
+            **(
+                {
+                    "root_selector": {
+                        "mode": "q",
+                        "visit_action": visit_action_index,
+                        "played_action": search_action_index,
+                        "comparison": selector_comparison,
+                    }
+                }
+                if self._config.root_selector_q
                 else {}
             ),
         }
@@ -6004,10 +6072,22 @@ class EngineMctsPolicy:
             "opponent_top_arm": opponent_choice,
             **(
                 {
-                    "root_selector_shadow": selector_shadow,
-                    "root_selector_shadow_unmeasured_cause": selector_shadow_cause,
+                    "root_selector_shadow": selector_comparison,
+                    "root_selector_shadow_unmeasured_cause": selector_comparison_cause,
                 }
                 if self._config.root_selector_shadow
+                else {}
+            ),
+            **(
+                {
+                    "root_selector": {
+                        "mode": "q",
+                        "visit_action": visit_action_index,
+                        "played_action": search_action_index,
+                        "comparison": selector_comparison,
+                    }
+                }
+                if self._config.root_selector_q
                 else {}
             ),
         }
