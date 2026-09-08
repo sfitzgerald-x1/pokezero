@@ -44,5 +44,37 @@ class T(unittest.TestCase):
         self.assertFalse(row.eligible)
         self.assertEqual(row.fallbacks, 64)
 
+    def test_preparation_is_not_charged_to_the_decision_window(self):
+        recs = [_record(i) for i in range(64)]
+        import time as _t
+
+        def prepare(rec, cfg):
+            # Prefix replay/fold warm-up can be slow. It must finish before
+            # the decision stopwatch starts, otherwise the A3 timing row
+            # measures a fresh battle reconstruction rather than a decision.
+            _t.sleep(0.001)
+            return lambda: {
+                "max_depth_reached": cfg.depth - 1,
+                "root_action": "move 3",
+                "total_iterations": 7,
+                "model_evals": 2,
+                "fold_clone_s": 0.002,
+                "row_input_s": 0.001,
+            }
+
+        row = time_lattice_cell(
+            SearchConfig(depth=4, sims=512),
+            records=recs,
+            contract=C,
+            prepared_decider=prepare,
+            gate_s=0.0005,
+        )
+        self.assertFalse(row.gate_failed)
+        self.assertTrue(row.eligible)
+        self.assertEqual(row.total_iterations, 64 * 7)
+        self.assertEqual(row.model_evals, 64 * 2)
+        self.assertAlmostEqual(row.fold_clone_s, 64 * 0.002, places=5)
+        self.assertAlmostEqual(row.row_input_s, 64 * 0.001, places=5)
+
 if __name__ == "__main__":
     unittest.main()

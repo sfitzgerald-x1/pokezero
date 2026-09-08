@@ -24,20 +24,32 @@ from pokezero.mcts_eval.timing_corpus import (
     uncertainty_bucket,
     write_corpus,
 )
+from pokezero.public_decision_corpus import PublicActionIdentifier, PublicResolvedActionRound
 
 MASK = (True, True, False, False, False, False, False, False, False)
 
 
 def _record(index: int, **overrides) -> TimingDecisionRecord:
+    turn_index = index % 30
     values = dict(
         decision_id=f"d{index:04d}",
         battle_id=f"battle-{index}",
         seat="p1" if index % 2 == 0 else "p2",
-        turn_index=index % 30,
+        turn_index=turn_index,
         team_seed=1000 + index,
         battle_seed=2000 + index,
         bot_rng_seed=3000 + index,
         event_prefix=("|start|", f"|turn|{index % 30}"),
+        public_resolved_action_rounds=tuple(
+            PublicResolvedActionRound(
+                turn_index=turn,
+                actions={
+                    "p1": PublicActionIdentifier(kind="move", move_id="surf"),
+                    "p2": PublicActionIdentifier(kind="move", move_id="surf"),
+                },
+            )
+            for turn in range(turn_index)
+        ),
         action_candidates=({"kind": "move", "move_id": "surf", "slot": 1},),
         legal_action_mask=MASK,
         public_belief_inputs={"revealed_moves": ["surf"]},
@@ -90,7 +102,37 @@ class PrivacyContractTest(unittest.TestCase):
 
     def test_decision_needs_a_legal_action(self) -> None:
         with self.assertRaisesRegex(ValueError, "legal action"):
-            _record(1, legal_action_mask=tuple(False for _ in MASK))
+                _record(1, legal_action_mask=tuple(False for _ in MASK))
+
+    def test_missing_or_noncontiguous_public_rounds_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "every completed round"):
+            _record(7, public_resolved_action_rounds=())
+        with self.assertRaisesRegex(ValueError, "every completed round"):
+            _record(
+                7,
+                public_resolved_action_rounds=(
+                    PublicResolvedActionRound(
+                        turn_index=1,
+                        actions={"p1": PublicActionIdentifier(kind="move", move_id="surf")},
+                    ),
+                ),
+            )
+
+    def test_unresolved_public_event_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported public event"):
+            _record(
+                1,
+                public_resolved_action_rounds=(
+                    PublicResolvedActionRound(
+                        turn_index=0,
+                        actions={
+                            "p1": PublicActionIdentifier(
+                                kind="event", event_id="unresolved-public-event"
+                            )
+                        },
+                    ),
+                ),
+            )
 
 
 class SelectionTest(unittest.TestCase):
@@ -145,10 +187,26 @@ class RoundTripTest(unittest.TestCase):
             write_corpus(path, manifest, records)
             lines = path.read_text(encoding="utf-8").splitlines()
             payload = json.loads(lines[1])
-            payload["turn_index"] = 999  # tamper with one decision
+            payload["battle_id"] = "tampered-battle"  # still structurally valid, but changes the hash
             lines[1] = json.dumps(payload, sort_keys=True)
             path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(CorpusError, "content hash"):
+                read_corpus(path)
+
+    def test_v1_manifest_is_rejected_before_records_are_read(self) -> None:
+        pool = [_record(i) for i in range(400)]
+        manifest, records = build_corpus(
+            pool, held_out_seed_start=1, held_out_seed_end=2, count=64
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "corpus.jsonl"
+            write_corpus(path, manifest, records)
+            lines = path.read_text(encoding="utf-8").splitlines()
+            header = json.loads(lines[0])
+            header["schema_version"] = "pokezero.engine-mcts-timing-corpus.v1"
+            lines[0] = json.dumps(header, sort_keys=True)
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(CorpusError, "schema"):
                 read_corpus(path)
 
     def test_corpus_hash_moves_with_selection_inputs(self) -> None:

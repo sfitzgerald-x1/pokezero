@@ -34,9 +34,19 @@ class TimingRow:
     realized_depth_mean: float
     realized_depth_max: int
     cap_hit_rate: float
+    total_iterations: int = 0
+    model_evals: int = 0
     encode_s: float = 0.0
     model_s: float = 0.0
     tree_s: float = 0.0
+    fold_clone_s: float = 0.0
+    render_s: float = 0.0
+    fold_advance_s: float = 0.0
+    tensor_s: float = 0.0
+    action_map_s: float = 0.0
+    row_input_s: float = 0.0
+    products_s: float = 0.0
+    row_write_s: float = 0.0
     fallbacks: int = 0
     invalid_actions: int = 0
     gate_failed: bool = False

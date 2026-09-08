@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Build ``pokezero.engine-mcts-timing-corpus.v1`` from held-out games (plan A2).
+"""Build ``pokezero.engine-mcts-timing-corpus.v2`` from held-out games (plan A2).
 
-Each record carries the acting seat's public event prefix through its request,
+Each record carries the acting seat's public protocol prefix through its request,
+the canonical public action identifiers needed to replay it,
 the REQUEST-DERIVED action candidates and legal mask (the field
 ``public-decision-corpus.v1`` lacks, and the reason the plan forbids reusing
 it), the seeds needed to reproduce the game, and the public belief inputs.
@@ -30,6 +31,8 @@ from pokezero.mcts_eval.timing_corpus import (  # noqa: E402
     label_strata,
     write_corpus,
 )
+from pokezero.public_action_capture import public_action_round_from_protocol_lines  # noqa: E402
+from pokezero.public_replay_materializer import public_event_prefix_summary  # noqa: E402
 
 
 def _remaining_and_hp(state: Any) -> tuple[int, float]:
@@ -90,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         env = LocalShowdownEnv(env_config)
         env.reset(seed=seed)
         rngs = {"p1": random.Random(seed * 2 + 1), "p2": random.Random(seed * 2 + 2)}
+        public_rounds = []
         turn = 0
         while turn < args.max_decision_rounds and env.terminal() is None:
             requested = env.requested_players()
@@ -103,8 +107,6 @@ def main(argv: list[str] | None = None) -> int:
                     continue
                 decision = policy.select_action(observation, rng=rngs[player])
                 actions[player] = decision.action_index
-                if player != "p1":
-                    continue
                 candidates = tuple(
                     dict(c) if isinstance(c, dict) else {"value": str(c)}
                     for c in (getattr(observation, "metadata", None) or {}).get("action_candidates", ()) or ()
@@ -115,14 +117,21 @@ def main(argv: list[str] | None = None) -> int:
                 remaining, hp_fraction = _remaining_and_hp(state)
                 records.append(
                     TimingDecisionRecord(
-                        decision_id=f"s{seed:07d}-t{turn:03d}",
+                        decision_id=f"s{seed:07d}-t{turn:03d}-{player}",
                         battle_id=f"corpus-{seed}",
                         seat=player,
                         turn_index=turn,
                         team_seed=seed,
                         battle_seed=seed,
-                        bot_rng_seed=seed,
-                        event_prefix=tuple(str(line) for line in (env.public_log() if hasattr(env, "public_log") else [])[-400:]),
+                        bot_rng_seed=seed * 2 + (1 if player == "p1" else 2),
+                        # ``protocol_lines`` also contains both players' raw request JSON.
+                        # The replay snapshot projects those down to public protocol facts,
+                        # so retaining it is both the privacy boundary and the exact input the
+                        # live fold will consume when the timing harness reconstructs this turn.
+                        event_prefix=tuple(
+                            env.public_materialization_state(player).replay.public_lines
+                        ),
+                        public_resolved_action_rounds=tuple(public_rounds),
                         action_candidates=candidates,
                         legal_action_mask=mask,
                         public_belief_inputs={"turn": turn, "request_kind": str(getattr(state, "request_kind", ""))},
@@ -138,7 +147,22 @@ def main(argv: list[str] | None = None) -> int:
                 )
             if not actions:
                 break
+            protocol_line_count = len(env.protocol_lines)
             env.step(actions)
+            action_round = public_action_round_from_protocol_lines(
+                env.protocol_lines[protocol_line_count:],
+                turn_index=turn,
+                requested_players=requested,
+            )
+            event_summary = public_event_prefix_summary((action_round,))
+            if event_summary["unsupported_public_event_count"]:
+                print(
+                    f"seed {seed}: stopping unreplayable prefix at turn {turn}: "
+                    f"{event_summary['unsupported_public_event_ids']}",
+                    flush=True,
+                )
+                break
+            public_rounds.append(action_round)
             turn += 1
         print(f"seed {seed}: {len(records)} decisions so far", flush=True)
         if len(records) >= args.decisions * 2:
