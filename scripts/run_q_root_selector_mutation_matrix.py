@@ -234,8 +234,9 @@ def _validated_test_run(
     a missing dependency, or a test-selection typo would also produce one.  The
     original source must first pass the exact target count without skips.  Each
     mutant must then execute that same complete set and end in unittest's normal
-    ``FAILED (...)`` summary.  Import, syntax, and partial-run failures are
-    deliberately evidence failures, not kills.
+    ``FAILED (failures=N)`` summary, with at least one assertion failure and no
+    runtime errors.  Import, syntax, fixture/runtime, and partial-run failures
+    are deliberately evidence failures, not kills.
     """
     output = completed.stdout
     match = re.search(r"^Ran (\d+) tests? in ", output, flags=re.MULTILINE)
@@ -256,8 +257,11 @@ def _validated_test_run(
     else:
         if completed.returncode == 0:
             raise MutationError("focused tests passed against a semantic mutant")
-        if re.search(r"^FAILED ", output, flags=re.MULTILINE) is None:
-            raise MutationError("mutant did not end in a unittest failure summary")
+        failed = re.search(r"^FAILED \(failures=(\d+)\)$", output, flags=re.MULTILINE)
+        if failed is None or int(failed.group(1)) < 1:
+            raise MutationError(
+                "mutant did not end in an assertion-only unittest failure summary"
+            )
         status = "KILLED"
     return {
         "status": status,

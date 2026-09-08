@@ -92,6 +92,28 @@ class QRootSelectorMutationMatrixTest(unittest.TestCase):
         with self.assertRaisesRegex(module.MutationError, "exactly"):
             module._validated_test_run(failed_import, clean_baseline=False)
 
+    def test_runtime_errors_cannot_be_counted_as_a_killed_mutation(self) -> None:
+        module = _module()
+        failed_fixture = subprocess.CompletedProcess(
+            args=["python", "-m", "unittest"],
+            returncode=1,
+            stdout=(
+                "Ran 10 tests in 0.001s\n\n"
+                "FAILED (errors=1)\n"
+            ),
+        )
+        mixed_failure_and_error = subprocess.CompletedProcess(
+            args=["python", "-m", "unittest"],
+            returncode=1,
+            stdout=(
+                "Ran 10 tests in 0.001s\n\n"
+                "FAILED (failures=1, errors=1)\n"
+            ),
+        )
+        for result in (failed_fixture, mixed_failure_and_error):
+            with self.assertRaisesRegex(module.MutationError, "assertion-only"):
+                module._validated_test_run(result, clean_baseline=False)
+
     def test_write_once_is_idempotent_and_refuses_a_conflicting_receipt(self) -> None:
         module = _module()
         with tempfile.TemporaryDirectory() as directory:
