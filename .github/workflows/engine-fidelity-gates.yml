@@ -1540,7 +1540,7 @@ jobs:
       # `EngineMctsPolicyResetTest` proves a completed battle cannot carry live folds,
       # consumed annotations, or ladder state into the next battle, while cumulative
       # telemetry remains cumulative. Counted from the real suite in this PR; the
-      # re-adjudication gate independently rejects a stale exact count.
+      # exact-count guard below rejects a stale suite size rather than treating it as a pass.
       - name: Engine-search telemetry pins
         run: |
           set -o pipefail
