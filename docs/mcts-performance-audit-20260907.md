@@ -1,9 +1,12 @@
 # Local MCTS performance audit — 2026-09-07
 
-Scope: source `df4e3ce15ee69f922f6ae1b81c7b5e9861828319`, CPU-only work on the
-laptop. No Kubernetes objects, shared artifacts, running studies, or published
-branches were changed. Local encoder timing is **not** a playing-strength result
-or a current estimate of the encoder's share of full MCTS wall time.
+The paired microbenchmark below was measured at source
+`dacb6358d9b145ce069d6718662a38f581a38bc0`; this narrow implementation was
+then carried forward to `df4e3ce15ee69f922f6ae1b81c7b5e9861828319` before
+opening a review. The work is CPU-only on the laptop. No Kubernetes objects,
+shared artifacts, running studies, or published branches were changed. Local
+encoder timing is **not** a playing-strength result or a current estimate of
+the encoder's share of full MCTS wall time.
 
 ## What the current code already does
 
