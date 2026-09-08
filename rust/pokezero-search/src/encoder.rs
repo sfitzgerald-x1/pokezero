@@ -101,6 +101,19 @@ fn normalize_category(value: &str) -> String {
 /// `showdown._normalize_identifier` / `dex.normalize_id`: lowercase, drop
 /// everything outside `[a-z0-9]`.
 fn normalize_identifier(value: &str) -> String {
+    // Species/move IDs are overwhelmingly ASCII. Reserve once and combine
+    // lowercase + filtering, instead of allocating a lowercase intermediate
+    // and repeatedly growing the filtered output. Preserve full Unicode
+    // lowercasing before filtering for non-ASCII input (e.g. Kelvin sign -> k).
+    if value.is_ascii() {
+        let mut normalized = String::with_capacity(value.len());
+        for byte in value.bytes() {
+            if byte.is_ascii_alphanumeric() {
+                normalized.push(byte.to_ascii_lowercase() as char);
+            }
+        }
+        return normalized;
+    }
     value
         .to_lowercase()
         .chars()
@@ -4538,6 +4551,47 @@ impl NativeEncoder {
         let products = fold.inner().products();
         let encoded = encode_row_value(&self.tables, &row, Some(&products))?;
         encoded_to_dict(py, &encoded)
+    }
+}
+
+#[cfg(test)]
+mod identifier_normalization_tests {
+    use super::normalize_identifier;
+
+    fn reference(value: &str) -> String {
+        value
+            .to_lowercase()
+            .chars()
+            .filter(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+            .collect()
+    }
+
+    #[test]
+    fn every_ascii_pair_matches_the_previous_normalizer() {
+        for first in 0u8..=127 {
+            for second in 0u8..=127 {
+                let value = String::from_utf8(vec![first, second]).unwrap();
+                assert_eq!(normalize_identifier(&value), reference(&value));
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_scalars_and_contextual_examples_match_the_previous_normalizer() {
+        for scalar in 0..=0x10ffff {
+            if let Some(ch) = char::from_u32(scalar) {
+                let value = ch.to_string();
+                assert_eq!(normalize_identifier(&value), reference(&value));
+            }
+        }
+        for value in [
+            "", "Mr. Mime", "Hidden Power [Ice]", "Porygon2", "ΟΣ", "ΣΣ",
+            "İSTANBUL", "Pokémon", "Kelvin", "未知:move", "\u{2003}REST\u{00a0}",
+        ] {
+            assert_eq!(normalize_identifier(value), reference(value));
+        }
+        assert_eq!(normalize_identifier("Kelvin"), "kelvin");
+        assert_eq!(normalize_identifier("İSTANBUL"), "istanbul");
     }
 }
 
