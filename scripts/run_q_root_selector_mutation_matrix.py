@@ -25,9 +25,21 @@ import subprocess
 import sys
 import tempfile
 from typing import NamedTuple, Sequence
+import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
+EXPECTED_TEST_COUNT = 10
+EVIDENCE_FILES = (
+    "scripts/run_q_root_selector_mutation_matrix.py",
+    "src/pokezero/engine_search.py",
+    "src/pokezero/foulplay_bridge.py",
+    "scripts/foulplay_paired_eval.py",
+    "tests/test_engine_search.py",
+    "tests/test_foulplay_bridge.py",
+    "tests/test_foulplay_paired_eval.py",
+    "tests/test_run_q_root_selector_mutation_matrix.py",
+)
 TEST_TARGETS = (
     "tests.test_engine_search.RootDecisionTelemetryTest.test_root_selector_q_plays_the_witnessed_q_arm_from_the_same_tree",
     "tests.test_engine_search.RootDecisionTelemetryTest.test_root_selector_q_refuses_a_partly_unmappable_completed_root",
@@ -116,10 +128,6 @@ class MutationError(RuntimeError):
 
 def _source_commit(override: str | None) -> str:
     """Read the immutable source revision, allowing a source-image override."""
-    if override is not None:
-        if re.fullmatch(r"[0-9a-f]{40}", override) is None:
-            raise MutationError("--source-commit must be a 40-character lowercase Git commit")
-        return override
     try:
         value = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -130,11 +138,27 @@ def _source_commit(override: str | None) -> str:
             check=True,
         ).stdout.strip()
     except subprocess.CalledProcessError as exc:
-        raise MutationError(
-            "source commit override is required when the source tree has no Git metadata"
-        ) from exc
+        if override is None:
+            raise MutationError(
+                "source commit override is required when the source tree has no Git metadata"
+            ) from exc
+        if re.fullmatch(r"[0-9a-f]{40}", override) is None:
+            raise MutationError("--source-commit must be a 40-character lowercase Git commit")
+        return override
     if re.fullmatch(r"[0-9a-f]{40}", value) is None:
         raise MutationError("Git did not report a 40-character lowercase source commit")
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    ).stdout
+    if status:
+        raise MutationError("source tree is not clean; refusing to misattribute evidence")
+    if override is not None and override != value:
+        raise MutationError("--source-commit does not match this checked-out Git revision")
     return value
 
 
@@ -150,9 +174,13 @@ def _write_once(path: Path, payload: dict[str, object]) -> None:
         if path.read_bytes() != encoded:
             raise MutationError(f"refusing to replace a different mutation artifact: {path}")
         return
-    temporary = path.with_name(f".{path.name}.tmp")
-    temporary.write_bytes(encoded)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.link(temporary, path)
     except FileExistsError:
         if path.read_bytes() != encoded:
@@ -197,23 +225,58 @@ def _run_focused_tests(checkout: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _validated_test_run(
+    completed: subprocess.CompletedProcess[str], *, clean_baseline: bool
+) -> dict[str, object]:
+    """Refuse a harness/runtime failure from masquerading as a killed mutant.
+
+    A nonzero process status is not itself mutation evidence: an import error,
+    a missing dependency, or a test-selection typo would also produce one.  The
+    original source must first pass the exact target count without skips.  Each
+    mutant must then execute that same complete set and end in unittest's normal
+    ``FAILED (...)`` summary.  Import, syntax, and partial-run failures are
+    deliberately evidence failures, not kills.
+    """
+    output = completed.stdout
+    match = re.search(r"^Ran (\d+) tests? in ", output, flags=re.MULTILINE)
+    if match is None or int(match.group(1)) != EXPECTED_TEST_COUNT:
+        found = "none" if match is None else match.group(1)
+        raise MutationError(
+            f"focused tests did not execute exactly {EXPECTED_TEST_COUNT} targets "
+            f"(reported {found})"
+        )
+    if "skipped=" in output:
+        raise MutationError("focused tests skipped a target; skipped evidence is not a kill")
+    if any(marker in output for marker in ("ImportError", "ModuleNotFoundError", "SyntaxError")):
+        raise MutationError("focused tests had an import or syntax failure, not a semantic kill")
+    if clean_baseline:
+        if completed.returncode != 0 or re.search(r"^OK$", output, flags=re.MULTILINE) is None:
+            raise MutationError("unmutated focused-test baseline is not clean")
+        status = "CLEAN"
+    else:
+        if completed.returncode == 0:
+            raise MutationError("focused tests passed against a semantic mutant")
+        if re.search(r"^FAILED ", output, flags=re.MULTILINE) is None:
+            raise MutationError("mutant did not end in a unittest failure summary")
+        status = "KILLED"
+    return {
+        "status": status,
+        "exit_code": completed.returncode,
+        "tests_run": EXPECTED_TEST_COUNT,
+        "output_sha256": hashlib.sha256(output.encode()).hexdigest(),
+    }
+
+
 def run(*, source_commit: str | None = None) -> dict[str, object]:
     """Kill every declared selector mutant and return a provenance-bound receipt."""
+    baseline = _validated_test_run(_run_focused_tests(ROOT), clean_baseline=True)
     results: list[dict[str, object]] = []
     for mutation in MUTATIONS:
         temporary, checkout = _mutated_copy(mutation)
         try:
             completed = _run_focused_tests(checkout)
-            if completed.returncode == 0:
-                raise MutationError(f"SURVIVED {mutation.name}: focused tests passed")
-            results.append(
-                {
-                    "name": mutation.name,
-                    "status": "KILLED",
-                    "exit_code": completed.returncode,
-                    "output_sha256": hashlib.sha256(completed.stdout.encode()).hexdigest(),
-                }
-            )
+            result = _validated_test_run(completed, clean_baseline=False)
+            results.append({"name": mutation.name, **result})
         finally:
             temporary.cleanup()
     return {
@@ -221,10 +284,10 @@ def run(*, source_commit: str | None = None) -> dict[str, object]:
         "complete": True,
         "source_commit": _source_commit(source_commit),
         "source_files_sha256": {
-            path: _sha256(ROOT / path)
-            for path in sorted({mutation.relative_path for mutation in MUTATIONS})
+            path: _sha256(ROOT / path) for path in EVIDENCE_FILES
         },
         "test_targets": list(TEST_TARGETS),
+        "baseline": baseline,
         "mutations": results,
         "all_killed": len(results) == len(MUTATIONS)
         and all(item["status"] == "KILLED" for item in results),
