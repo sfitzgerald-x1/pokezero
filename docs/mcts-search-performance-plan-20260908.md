@@ -113,8 +113,8 @@ contrast. Freeze before outcomes are read:
   work cap, and measured latency accounting;
 - retry and failure rules that preserve completed games but score neither member
   of an incomplete mirrored pair; and
-- a small pilot budget and a confirmation-size rule based on pilot paired
-  variance. Development/pilot seeds cannot become confirmation seeds.
+- fixed, disjoint pilot and confirmation seed rosters. Development/pilot seeds
+  cannot become confirmation seeds.
 
 Use source-isolated policies for both sides. After divergent actions, each side
 must follow the actual resulting trajectory; replaying the incumbent’s later
@@ -124,13 +124,14 @@ completed work, p50/p95 latency, fallback/refusal counts, source receipts, and
 the complete/incomplete-pair ledger.
 
 For this first contrast, make those words operational before a game is run: use
-exactly 12 mirrored pilot pairs with 10,000 paired-bootstrap resamples. The
-smallest useful effect is a +0.05 candidate paired score. The pilot proceeds to
-confirmation only if every pair is complete, there are no fallbacks/refusals,
-the point estimate is at least +0.05, and its predeclared 80% paired-score
-interval lies wholly above zero. The confirmation uses a separate,
-already-reserved roster of 50 mirrored pairs and the same 10,000-resample
-paired bootstrap at 95%; an improvement is claimed only if its lower bound is
+exactly 12 mirrored pilot pairs with 10,000 paired-bootstrap resamples. All
+thresholds apply to **Δ = mean candidate paired score − 0.5**, not the runner's
+raw candidate score. The smallest useful effect is Δ=+0.05. The pilot proceeds
+to confirmation only if every pair is complete, there are no fallbacks/refusals,
+the point estimate is at least +0.05, and its predeclared 80% interval for Δ
+lies wholly above zero. The confirmation uses a separate, already-reserved
+roster of 50 mirrored pairs and the same 10,000-resample paired bootstrap at
+95%; an improvement is claimed only if its interval for Δ has a lower bound of
 at least +0.05. Run every pair in a roster before reading that roster's outcome;
 the pilot is inspected once after all 12 pairs and the confirmation once after
 all 50. No pilot seed enters the confirmation roster, and neither roster is
@@ -203,5 +204,6 @@ park the selector; never silently enable it because of the harsh-prior fixture.
    the encoder microbenchmark’s practical effect.
 4. A shadow-selector development report with an explicit promote/park decision.
 
-The first item is an integrity prerequisite. The second is the first deliverable
-that can establish improved MCTS playing strength.
+The first item is an integrity prerequisite. The second can provide preliminary
+strength evidence; only the predeclared independent confirmation can support an
+improvement claim.
