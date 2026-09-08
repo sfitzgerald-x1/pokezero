@@ -94,6 +94,103 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
         self.assertEqual(read_frame(outbound), {"type": "close"})
         self.assertEqual(policy.calls, 1)
 
+    def test_reset_frame_replaces_historical_policy_before_the_next_game(self) -> None:
+        class HistoricalPolicy:
+            def __init__(self, stats: object) -> None:
+                self.stats = stats
+
+        class RebuiltPolicy(HistoricalPolicy):
+            def __init__(self, stats: object) -> None:
+                super().__init__(stats)
+                self.reset_calls = 0
+
+            def reset(self) -> None:
+                self.reset_calls += 1
+
+        stats = object()
+        original = HistoricalPolicy(stats)
+        rebuilt = RebuiltPolicy(object())
+        factory_calls = 0
+
+        def recreate() -> RebuiltPolicy:
+            nonlocal factory_calls
+            factory_calls += 1
+            return rebuilt
+
+        inbound = BytesIO()
+        write_frame(inbound, {"type": "start"})
+        write_frame(inbound, {"type": "reset"})
+        write_frame(inbound, {"type": "reset"})
+        write_frame(inbound, {"type": "close"})
+        inbound.seek(0)
+        outbound = BytesIO()
+        fake_stdin = SimpleNamespace(buffer=inbound)
+        fake_stdout = SimpleNamespace(buffer=outbound)
+        with (
+            patch.object(WORKER["sys"], "stdin", fake_stdin),
+            patch.object(WORKER["sys"], "stdout", fake_stdout),
+            patch.dict(
+                serve.__globals__,
+                {
+                    "_worker_start": lambda _start: (
+                        original,
+                        recreate,
+                        object(),
+                        {},
+                        object(),
+                    )
+                },
+            ),
+        ):
+            self.assertEqual(serve(), 0)
+
+        outbound.seek(0)
+        self.assertEqual(read_frame(outbound), {"type": "hello", "receipt": {}})
+        self.assertEqual(
+            read_frame(outbound), {"type": "reset", "strategy": "fresh_source_policy"}
+        )
+        self.assertEqual(read_frame(outbound), {"type": "reset", "strategy": "policy_method"})
+        self.assertEqual(read_frame(outbound), {"type": "close"})
+        self.assertEqual(factory_calls, 1)
+        self.assertIs(rebuilt.stats, stats)
+        self.assertEqual(rebuilt.reset_calls, 1)
+
+    def test_reset_frame_refuses_historical_policy_without_telemetry(self) -> None:
+        class HistoricalPolicy:
+            stats = None
+
+        inbound = BytesIO()
+        write_frame(inbound, {"type": "start"})
+        write_frame(inbound, {"type": "reset"})
+        write_frame(inbound, {"type": "close"})
+        inbound.seek(0)
+        outbound = BytesIO()
+        fake_stdin = SimpleNamespace(buffer=inbound)
+        fake_stdout = SimpleNamespace(buffer=outbound)
+        with (
+            patch.object(WORKER["sys"], "stdin", fake_stdin),
+            patch.object(WORKER["sys"], "stdout", fake_stdout),
+            patch.dict(
+                serve.__globals__,
+                {
+                    "_worker_start": lambda _start: (
+                        HistoricalPolicy(),
+                        lambda: self.fail("must not rebuild without telemetry"),
+                        object(),
+                        {},
+                        object(),
+                    )
+                },
+            ),
+        ):
+            self.assertEqual(serve(), 0)
+
+        outbound.seek(0)
+        self.assertEqual(read_frame(outbound), {"type": "hello", "receipt": {}})
+        self.assertEqual(
+            read_frame(outbound)["type"], "error", "missing telemetry must not acknowledge reset"
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

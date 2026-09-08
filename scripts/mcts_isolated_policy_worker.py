@@ -17,7 +17,7 @@ import struct
 import subprocess
 import sys
 from types import SimpleNamespace
-from typing import Any, BinaryIO, Mapping
+from typing import Any, BinaryIO, Callable, Mapping
 
 
 PROTOCOL_VERSION = "pokezero.isolated-mcts-policy.v1"
@@ -357,7 +357,13 @@ def _decision_payload(decision: Any) -> dict[str, Any]:
 
 def _worker_start(
     message: Mapping[str, Any],
-) -> tuple[Any, SnapshotAnnotationSource, dict[str, Any], Any]:
+) -> tuple[
+    Any,
+    Callable[[], Any],
+    SnapshotAnnotationSource,
+    dict[str, Any],
+    Any,
+]:
     if message.get("type") != "start" or message.get("protocol_version") != PROTOCOL_VERSION:
         raise WorkerError("host did not begin the expected isolated policy protocol.")
     policy = message.get("policy")
