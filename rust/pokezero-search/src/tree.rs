@@ -80,7 +80,8 @@ pub(crate) struct ChanceBranch {
     /// The engine instructions realizing this outcome (applied/reversed on
     /// the shared `State` during traversal — engine state only, no tokens).
     pub instructions: Vec<Instruction>,
-    /// Running value estimate: mean = value_sum / visits. Initialized at
+    /// Running value estimate: mean = value_sum / visits. Additional visits
+    /// count completed traversals, never in-flight reservations. Initialized at
     /// expansion with the branch's own price (terminal or leaf eval), so the
     /// chance-node expectation is defined from the first backup on.
     pub value_sum: f32,
@@ -288,21 +289,14 @@ impl Default for SearchCounters {
 /// it is the only instrument that can test the deferred-leaf theory (the
 /// selection-tuning plan's finding 3, explicitly unverified).
 ///
-/// The provisionals a round leaves behind are SIDE-ONE ABSOLUTE. A deferred leaf
-/// is priced `(value_sum 0.0, visits 1)` and a traversed branch takes a bare
-/// `visits += 1`; both drag a chance node's expectation toward 0 until the
-/// owning traversal's `finalize` reconciles them, and `finalize` runs in
-/// collection order, so an early traversal's backup reads the depression a later
-/// one has not paid off yet. That expectation reaches the side-one arm as itself
-/// (near 0: a loss, as intended) and the side-two arm as `expectation - 1.0`,
-/// which that seat reads back through `1 - mean` as a WIN. So the same
-/// unreconciled placeholder that repels one seat may ATTRACT the other — and a
-/// single pooled repeat count cannot see it, because the two effects land in one
-/// total. Hence a tally per seat, not one tally.
-///
-/// NOTE the asymmetry is SIDE-absolute, not seat-relative: it falls on
-/// `s2_stats` whichever seat is searching. Consumers that want the self/opponent
-/// view must condition on which side the searching seat sat; the encoded core
+/// Historically, chance-branch provisional visits contaminated permanent
+/// backups: even a known terminal win was depressed while another traversal
+/// was in flight. Chance visits now count resolved samples only; virtual loss
+/// stays on decision arms, where it penalizes each selecting seat. Deferred
+/// initial prices are resolved in collection order before any dependent backup.
+/// Per-seat collision counts remain useful because decoupled PUCT can distribute
+/// one seat's choices differently from the other's. Consumers wanting the
+/// self/opponent view must condition on the searching seat; the encoded core
 /// ships that alongside these counts.
 ///
 /// Recorded from the FINISHED [`Traversal`], never from inside `traverse`: the
@@ -498,8 +492,8 @@ pub(crate) struct Traversal {
 /// One selection pass from the root: descend decision nodes by decoupled
 /// per-side PUCT and chance nodes by weighted sampling over the exact branch
 /// probabilities, expanding the first untried joint edge. Applies VIRTUAL
-/// LOSS along the way (decision arms: provisional side-one loss, identical to
-/// the one-ply batched core; traversed branches: provisional visit) so
+/// LOSS along the way (decision arms: a provisional loss for each selecting
+/// seat, identical to the one-ply batched core) so
 /// batched collection stays well-defined; `finalize` replaces provisionals
 /// with real values. The shared `State` is restored before returning.
 pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
@@ -576,16 +570,15 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                     chance: chance_idx,
                     branch: Some(k),
                 });
-                let branch = &mut tree.chances[chance_idx].branches[k];
+                let branch = &tree.chances[chance_idx].branches[k];
                 let pre_mean = branch.mean();
                 let pending = branch.pending_row;
-                branch.visits += 1; // provisional; finalize adds the sample
                 if let Some(v) = branch.terminal {
                     break TraversalEnd::Ready(v);
                 }
                 if branch.no_expand || depth + 1 >= cfg.max_depth {
                     // Depth cap / pseudo-branch: the sample is the branch's
-                    // own (pre-provisional) estimate — or its batch row when
+                    // own committed estimate — or its batch row when
                     // that estimate is still pending in this round.
                     break match pending {
                         Some(row) => TraversalEnd::Row(row),
@@ -922,9 +915,12 @@ pub(crate) fn finalize(tree: &mut Tree, traversal: &Traversal, row_values: &[f32
     for (idx, step) in traversal.path.iter().enumerate().rev() {
         let is_ending_step = idx == traversal.path.len() - 1;
         if let Some(k) = step.branch {
-            // Traversed branch: the deeper sample lands in its running mean.
+            // Commit the visit together with its real sample. Reserving the
+            // denominator during collection would let other in-flight visits
+            // dilute this permanent backup (including exact terminal values).
             let branch = &mut tree.chances[step.chance].branches[k];
             debug_assert!(is_ending_step || branch.pending_row.is_none());
+            branch.visits += 1;
             branch.value_sum += value;
         } else {
             debug_assert!(is_ending_step, "expansion can only end a traversal");
@@ -1572,10 +1568,10 @@ mod tests {
     }
 
     /// The per-seat split is the whole instrument. A round in which side one
-    /// takes a fresh arm every time while side two keeps returning to arm 0 is
-    /// exactly the shape the deferred-leaf theory predicts (the provisional loss
-    /// is a provisional WIN for that seat), and a pooled counter reports the
-    /// same total whichever seat is doing the repeating.
+    /// takes a fresh arm every time while side two keeps returning to arm 0
+    /// must remain distinguishable from the reverse pattern, even after the
+    /// provisional-value backup defect is repaired. A pooled counter reports
+    /// the same total whichever seat is doing the repeating.
     ///
     /// Three selections at one node: (0,0), (1,0), (2,0).
     ///   joint cells   — all distinct, 0 repeats;
@@ -1898,6 +1894,199 @@ mod tests {
             .expect("root has arms")
             .display
             .clone()
+    }
+
+    /// Drive the production collect-then-finalize seam without libtorch. Fixing
+    /// the root action pair forces collisions instead of depending on PUCT's
+    /// exploration schedule. The engine still enumerates and prices the edge.
+    #[allow(clippy::too_many_arguments)]
+    fn colliding_round(
+        state_text: &str,
+        s1_move: &str,
+        s2_move: &str,
+        leaf_value: f32,
+        deferred: bool,
+        batch_size: usize,
+        max_depth: u8,
+    ) -> MultiPlyOutcome {
+        let mut state = parse_state(state_text.trim()).expect("fixture parses");
+        let before = state.serialize();
+        let mut tree = Tree::from_root(&state).expect("root builds");
+        let root = &mut tree.decisions[0];
+        let i = root.s1_stats.iter().position(|s| s.display == s1_move)
+            .expect("fixture has side-one move");
+        let j = root.s2_stats.iter().position(|s| s.display == s2_move)
+            .expect("fixture has side-two move");
+        root.s1_options = vec![root.s1_options[i]];
+        root.s2_options = vec![root.s2_options[j]];
+        root.s1_stats = make_stats(&state.side_one, &root.s1_options);
+        root.s2_stats = make_stats(&state.side_two, &root.s2_options);
+        let cfg = MultiPlyConfig {
+            max_depth,
+            c_puct: 1.4,
+            deep_ko_split: true,
+            use_opponent_priors: false,
+            fpu_reduction: None,
+        };
+        let mut counters = SearchCounters::default();
+        let mut rng = StdRng::seed_from_u64(0);
+        let mut row_values = Vec::new();
+        let mut traversals = Vec::new();
+        for _ in 0..batch_size {
+            traversals.push(traverse(
+                &mut tree,
+                &mut state,
+                &mut rng,
+                &cfg,
+                &mut counters,
+                &mut |_, _| {
+                    if deferred {
+                        let row = row_values.len();
+                        row_values.push(leaf_value);
+                        LeafPrice::Deferred(row)
+                    } else {
+                        LeafPrice::Ready(leaf_value)
+                    }
+                },
+            ));
+            assert_eq!(state.serialize(), before, "traversal must restore engine state");
+        }
+        for traversal in &traversals {
+            finalize(&mut tree, traversal, &row_values);
+        }
+        MultiPlyOutcome {
+            tree,
+            counters,
+            elapsed_s: 0.0,
+        }
+    }
+
+    #[test]
+    fn colliding_batch_preserves_exact_terminal_values_for_both_seats() {
+        for batch_size in [1, 2, 8, 64] {
+            for (state, s1, s2, expected) in [
+                (ANALYTIC_TOXIC.to_string(), "seismictoss", "splash", 1.0),
+                (mirrored(ANALYTIC_TOXIC), "splash", "seismictoss", 0.0),
+            ] {
+                let outcome = colliding_round(&state, s1, s2, 0.37, true, batch_size, 4);
+                assert_eq!(outcome.counters.leaf_evals, 0, "terminal bypasses the evaluator");
+                let root = &outcome.tree.decisions[0];
+                for stats in [&root.s1_stats, &root.s2_stats] {
+                    assert_eq!(stats[0].visits, batch_size as u32);
+                    assert!(
+                        (stats[0].mean() - expected).abs() < 1e-6,
+                        "batch {batch_size}: terminal Q {} != {expected}", stats[0].mean(),
+                    );
+                }
+                assert_eq!(outcome.tree.decisions.len(), 1, "terminal cannot grow a child");
+            }
+        }
+    }
+
+    #[test]
+    fn colliding_batch_preserves_constant_leaf_values() {
+        for deferred in [false, true] {
+            for batch_size in [1, 2, 8, 64] {
+                let outcome = colliding_round(
+                    DEPTH_BENEFIT, "splash", "splash", 0.8, deferred, batch_size, 1,
+                );
+                let root = &outcome.tree.decisions[0];
+                for stats in [&root.s1_stats, &root.s2_stats] {
+                    assert!(
+                        (stats[0].mean() - 0.8).abs() < 1e-5,
+                        "batch {batch_size}, deferred {deferred}: fixed-leaf Q {} != 0.8",
+                        stats[0].mean(),
+                    );
+                }
+                for branch in &outcome.tree.chances[0].branches {
+                    assert!(
+                        (branch.mean() - 0.8).abs() < 1e-5,
+                        "a provisional visit must not contaminate stored leaf evidence",
+                    );
+                    assert!(branch.pending_row.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn colliding_batch_does_not_dilute_nested_backups() {
+        // Remove the only damaging move, so every depth has the SAME true leaf
+        // value. Several traversals can expand/descend the same pending path.
+        let mut state = parse_state(DEPTH_BENEFIT.trim()).expect("fixture parses");
+        state.side_one.get_active().moves.m1.pp = 0;
+        for deferred in [false, true] {
+            let outcome = colliding_round(
+                &state.serialize(), "splash", "splash", 0.8, deferred, 64, 4,
+            );
+            assert_eq!(outcome.tree.decisions.len(), 4, "all tested depths were reached");
+            for node in &outcome.tree.decisions {
+                for stats in [&node.s1_stats, &node.s2_stats] {
+                    assert_eq!(stats.len(), 1, "fixture must force a single arm per seat");
+                    assert!((stats[0].mean() - 0.8).abs() < 1e-5);
+                }
+            }
+            for chance in &outcome.tree.chances {
+                assert!((chance.expectation() - 0.8).abs() < 1e-5);
+                assert!(chance.branches.iter().all(|branch| branch.pending_row.is_none()));
+            }
+        }
+    }
+
+    #[test]
+    fn colliding_batch_preserves_mixed_terminal_chance_expectation() {
+        for win_probability in [0.25, 0.75] {
+            // Isolate backup from engine mechanics: an already expanded exact
+            // lottery is not allowed to depend on which outcome we refine.
+            let mut root = prior_node(&[1.0], &[1.0]);
+            root.children.insert((0, 0), 0);
+            let branches = [(win_probability, 1.0), (1.0 - win_probability, 0.0)]
+                .into_iter()
+                .map(|(probability, value)| {
+                    let mut branch = priored_branch(None, None);
+                    branch.probability = probability;
+                    branch.value_sum = value;
+                    branch.terminal = Some(value);
+                    branch
+                })
+                .collect();
+            let mut tree = Tree {
+                decisions: vec![root],
+                chances: vec![ChanceNode { branches }],
+            };
+            let cfg = MultiPlyConfig {
+                max_depth: 4,
+                c_puct: 1.4,
+                deep_ko_split: true,
+                use_opponent_priors: false,
+                fpu_reduction: None,
+            };
+            let mut state = parse_state(MINIMAL.trim()).expect("fixture parses");
+            let mut rng = StdRng::seed_from_u64(4);
+            let mut counters = SearchCounters::default();
+            let traversals: Vec<_> = (0..64)
+                .map(|_| {
+                    traverse(
+                        &mut tree,
+                        &mut state,
+                        &mut rng,
+                        &cfg,
+                        &mut counters,
+                        &mut |_, _| panic!("terminal branch must bypass leaf evaluation"),
+                    )
+                })
+                .collect();
+            for traversal in &traversals {
+                let value = finalize(&mut tree, traversal, &[]);
+                assert!((value - win_probability).abs() < 1e-6);
+            }
+            for stats in [&tree.decisions[0].s1_stats, &tree.decisions[0].s2_stats] {
+                assert!((stats[0].mean() - win_probability).abs() < 1e-6);
+            }
+            for branch in &tree.chances[0].branches {
+                assert_eq!(branch.mean(), branch.terminal.unwrap());
+            }
+        }
     }
 
     #[test]
