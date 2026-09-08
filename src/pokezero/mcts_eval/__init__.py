@@ -57,6 +57,7 @@ from .timing_corpus import (
     build_corpus,
     label_strata,
     read_corpus,
+    validate_representative_timing_panel,
     write_corpus,
 )
 
@@ -93,6 +94,7 @@ __all__ = [
     "export_reuse_key",
     "label_strata",
     "read_corpus",
+    "validate_representative_timing_panel",
     "resolve_checkpoint_contract",
     "sha256_file",
     "write_corpus",

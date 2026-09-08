@@ -78,6 +78,14 @@ STRATA_AXES = (
     PHASE_BUCKETS,
 )
 
+# A timing lattice is useful only if its fixed corpus actually exercises the
+# decision shapes the timing claim is about.  These deliberately small,
+# observable requirements are separate from the broader A2 strata: they guard
+# against a collector stopping after its first long, homogeneous battle.
+TIMING_PANEL_MIN_BATTLES = 2
+TIMING_PANEL_BRANCH_LIGHT_MAX = 6
+TIMING_PANEL_BRANCH_HEAVY_MIN = 8
+
 
 class CorpusError(RuntimeError):
     """Terminal corpus contract failure."""
@@ -309,6 +317,63 @@ def bucket_counts(records: Iterable[TimingDecisionRecord]) -> dict[str, int]:
             if bucket in counts:
                 counts[bucket] += 1
     return counts
+
+
+def validate_representative_timing_panel(
+    records: Sequence[TimingDecisionRecord],
+) -> dict[str, Any]:
+    """Return auditable coverage for a full-path timing panel or fail closed.
+
+    The lattice's regular strata make selection deterministic, but did not
+    previously require two seats, an early *and* a late public history, or both
+    narrow and wide legal-action sets.  Consequently, a single battle could
+    satisfy the raw record count and be timed as though it were representative.
+    This validator is intentionally a timing-launch gate rather than a policy
+    feature: it never changes a selected decision or search configuration.
+    """
+
+    if not records:
+        raise CorpusError("timing panel has no replayable decisions")
+
+    seat_counts = {seat: sum(record.seat == seat for record in records) for seat in ("p1", "p2")}
+    phase_counts = {
+        phase: sum(phase in record.strata for record in records)
+        for phase in ("phase_early", "phase_late")
+    }
+    legal_action_counts = [sum(record.legal_action_mask) for record in records]
+    branch_counts = {
+        "branch_light": sum(count <= TIMING_PANEL_BRANCH_LIGHT_MAX for count in legal_action_counts),
+        "branch_heavy": sum(count >= TIMING_PANEL_BRANCH_HEAVY_MIN for count in legal_action_counts),
+    }
+    battle_count = len({record.battle_id for record in records})
+
+    missing: list[str] = []
+    if battle_count < TIMING_PANEL_MIN_BATTLES:
+        missing.append(f"at least {TIMING_PANEL_MIN_BATTLES} independent battles (got {battle_count})")
+    missing.extend(f"seat {seat}" for seat, count in seat_counts.items() if count == 0)
+    missing.extend(f"{phase} public history" for phase, count in phase_counts.items() if count == 0)
+    missing.extend(name for name, count in branch_counts.items() if count == 0)
+    if missing:
+        raise CorpusError(
+            "timing panel is not representative: missing " + ", ".join(missing)
+        )
+
+    return {
+        "decision_count": len(records),
+        "battle_count": battle_count,
+        "seat_counts": seat_counts,
+        "phase_counts": phase_counts,
+        "branch_counts": branch_counts,
+        "legal_action_count_min": min(legal_action_counts),
+        "legal_action_count_max": max(legal_action_counts),
+        "requirements": {
+            "minimum_battles": TIMING_PANEL_MIN_BATTLES,
+            "required_seats": ["p1", "p2"],
+            "required_phases": ["phase_early", "phase_late"],
+            "branch_light_max_legal_actions": TIMING_PANEL_BRANCH_LIGHT_MAX,
+            "branch_heavy_min_legal_actions": TIMING_PANEL_BRANCH_HEAVY_MIN,
+        },
+    }
 
 
 @dataclass(frozen=True)

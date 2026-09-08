@@ -22,6 +22,7 @@ from pokezero.mcts_eval.timing_corpus import (
     remaining_bucket,
     select_stratified,
     uncertainty_bucket,
+    validate_representative_timing_panel,
     write_corpus,
 )
 from pokezero.public_decision_corpus import PublicActionIdentifier, PublicResolvedActionRound
@@ -159,6 +160,27 @@ class SelectionTest(unittest.TestCase):
     def test_insufficient_pool_is_terminal(self) -> None:
         with self.assertRaisesRegex(CorpusError, "widen the held-out"):
             select_stratified([_record(i) for i in range(10)], count=256)
+
+
+class RepresentativenessGateTest(unittest.TestCase):
+    def test_accepts_two_seats_early_and_late_with_narrow_and_wide_masks(self) -> None:
+        wide = tuple(True for _ in MASK)
+        narrow = (True, True) + tuple(False for _ in MASK[2:])
+        records = [
+            _record(1, battle_id="battle-a", seat="p1", legal_action_mask=wide),
+            _record(22, battle_id="battle-a", seat="p1", legal_action_mask=wide),
+            _record(2, battle_id="battle-b", seat="p2", legal_action_mask=wide),
+            _record(23, battle_id="battle-b", seat="p2", legal_action_mask=narrow),
+        ]
+        coverage = validate_representative_timing_panel(records)
+        self.assertEqual(coverage["battle_count"], 2)
+        self.assertEqual(coverage["seat_counts"], {"p1": 2, "p2": 2})
+        self.assertEqual(coverage["branch_counts"], {"branch_light": 1, "branch_heavy": 3})
+
+    def test_rejects_a_single_homogeneous_battle(self) -> None:
+        records = [_record(i, battle_id="one-battle") for i in range(16)]
+        with self.assertRaisesRegex(CorpusError, "not representative"):
+            validate_representative_timing_panel(records)
 
 
 class RoundTripTest(unittest.TestCase):

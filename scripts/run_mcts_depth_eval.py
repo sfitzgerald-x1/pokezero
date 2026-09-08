@@ -211,12 +211,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     @stage_handler(Stage.BUILD_TIMING_CORPUS)
     def _corpus(directory: Path) -> list[str]:
-        from pokezero.mcts_eval.timing_corpus import read_corpus
+        from pokezero.mcts_eval.timing_corpus import read_corpus, validate_representative_timing_panel
 
         target = directory / "timing-corpus.jsonl"
         if target.is_file():
             corpus_manifest, records = read_corpus(target)  # fails closed on drift
-            return [str(target)]
+            coverage = validate_representative_timing_panel(records)
+            return [str(target), _write_json(directory / "representativeness.json", coverage)]
         raise TerminalFailure(
             f"timing corpus absent at {target}. Build it from held-out FoulPlay games with "
             "pokezero.mcts_eval.timing_corpus.build_corpus (plan A2) and re-run; the runner "
