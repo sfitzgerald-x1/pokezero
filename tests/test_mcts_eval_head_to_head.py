@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import fcntl
 import importlib.util
 import os
 from pathlib import Path
@@ -409,14 +410,16 @@ class DurableGameTest(unittest.TestCase):
 class BackupRepairPilotContractTest(unittest.TestCase):
     def _contract_inputs(self):
         module = _runner_module()
-        pilot_seeds = tuple(range(2026090801, 2026090813))
-        confirmation_seeds = list(range(2026091001, 2026091051))
+        pilot_seeds = tuple(range(2026091201, 2026091213))
+        confirmation_seeds = list(range(2026091301, 2026091351))
         manifest = {
             "study": {
                 "schema_version": module.BACKUP_REPAIR_PILOT_SCHEMA_VERSION,
                 "stage": "pilot",
                 "minimum_effect_delta": 0.05,
                 "reserved_confirmation_seeds": confirmation_seeds,
+                "replaces_nonbankable_study": module.BACKUP_REPAIR_SUPERSEDED_STUDY,
+                "failure_retry_policy": module.BACKUP_REPAIR_FAILURE_RETRY_POLICY,
             }
         }
         bootstrap = {"resamples": 10_000, "seed": 20260908, "confidence_level": 0.80}
@@ -446,6 +449,12 @@ class BackupRepairPilotContractTest(unittest.TestCase):
         self.assertEqual(contract["pilot_seeds"], list(seeds))
         self.assertEqual(contract["reserved_confirmation_seeds"], manifest["study"]["reserved_confirmation_seeds"])
         self.assertEqual(contract["confidence_level"], 0.80)
+        self.assertEqual(
+            contract["replaces_nonbankable_study"], module.BACKUP_REPAIR_SUPERSEDED_STUDY
+        )
+        self.assertEqual(
+            contract["failure_retry_policy"], module.BACKUP_REPAIR_FAILURE_RETRY_POLICY
+        )
 
     def test_contract_refuses_configuration_or_roster_drift(self) -> None:
         module, manifest, seeds, bootstrap, candidate, incumbent = self._contract_inputs()
@@ -465,6 +474,49 @@ class BackupRepairPilotContractTest(unittest.TestCase):
             module._backup_repair_pilot_contract(
                 manifest,
                 seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_PilotConfig(),
+                incumbent_config=_PilotConfig(),
+            )
+
+    def test_contract_refuses_superseded_rosters_or_failure_policy_drift(self) -> None:
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._contract_inputs()
+        manifest["study"]["schema_version"] = "pokezero.mcts-h2h-backup-repair-pilot.v1"
+        with self.assertRaisesRegex(HeadToHeadError, "registered backup-repair"):
+            module._backup_repair_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_PilotConfig(),
+                incumbent_config=_PilotConfig(),
+            )
+
+        manifest["study"]["schema_version"] = module.BACKUP_REPAIR_PILOT_SCHEMA_VERSION
+        manifest["study"]["failure_retry_policy"] = {
+            **module.BACKUP_REPAIR_FAILURE_RETRY_POLICY,
+            "nonzero_runner_exit": "retry",
+        }
+        with self.assertRaisesRegex(HeadToHeadError, "failure/retry"):
+            module._backup_repair_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_PilotConfig(),
+                incumbent_config=_PilotConfig(),
+            )
+
+        manifest["study"]["failure_retry_policy"] = module.BACKUP_REPAIR_FAILURE_RETRY_POLICY
+        reused = (*seeds[:-1], module.BACKUP_REPAIR_SUPERSEDED_PILOT_SEEDS[0])
+        with self.assertRaisesRegex(HeadToHeadError, "non-bankable study"):
+            module._backup_repair_pilot_contract(
+                manifest,
+                seeds=reused,
                 bootstrap=bootstrap,
                 candidate_raw=candidate,
                 incumbent_raw=incumbent,
@@ -510,6 +562,85 @@ class BackupRepairPilotContractTest(unittest.TestCase):
         )
         self.assertEqual(fallback_readout["decision"], "INCONCLUSIVE_OR_NOT_PROMOTED")
         self.assertFalse(fallback_readout["promotion_checks"]["no_fallbacks_or_refusals"])
+
+    def test_replacement_cli_refuses_direct_or_terminalled_roots_before_work(self) -> None:
+        module = _runner_module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            out_dir = root / "out"
+            out_dir.mkdir()
+            manifest = root / "manifest.json"
+            manifest.write_text(
+                "{"
+                f"\"schema_version\":\"{module.MANIFEST_SCHEMA_VERSION}\","
+                "\"study\":{\"schema_version\":\"pokezero.mcts-h2h-backup-repair-pilot.v2\"}"
+                "}\n",
+                encoding="utf-8",
+            )
+            argv = [
+                "--checkpoint",
+                str(root / "unread-checkpoint.pt"),
+                "--showdown-root",
+                str(root / "unread-showdown"),
+                "--manifest",
+                str(manifest),
+                "--out-dir",
+                str(out_dir),
+            ]
+            with patch.object(module, "_source_provenance", side_effect=AssertionError):
+                with self.assertRaisesRegex(HeadToHeadError, "durable-launcher attempt id"):
+                    module.main(argv)
+
+            (out_dir / module.RUNNER_TERMINAL_NAME).write_text("not read\n", encoding="utf-8")
+            with patch.object(module, "_source_provenance", side_effect=AssertionError):
+                with self.assertRaisesRegex(HeadToHeadError, "terminal handoff"):
+                    module.main(argv)
+
+    def test_replacement_requires_a_matching_immutable_launcher_receipt(self) -> None:
+        module = _runner_module()
+        with tempfile.TemporaryDirectory() as directory:
+            out_dir = Path(directory) / "out"
+            attempt_id = "attempt-a"
+            receipt = out_dir / "launcher-attempts" / f"{attempt_id}.json"
+            receipt.parent.mkdir(parents=True)
+            runner_script = Path(module.__file__).resolve()
+            module._write_immutable_json(
+                receipt,
+                {
+                    "schema_version": module.DURABLE_LAUNCHER_ATTEMPT_SCHEMA_VERSION,
+                    "attempt_id": attempt_id,
+                    "runner_script": str(runner_script),
+                    "runner_script_sha256": module._sha256_file(runner_script),
+                    "writer_lock": str(out_dir / "runner-writer.lock"),
+                },
+            )
+            environment = {
+                module.DURABLE_LAUNCHER_ATTEMPT_ID_ENV: attempt_id,
+                module.DURABLE_LAUNCHER_OUT_DIR_ENV: str(out_dir),
+                module.DURABLE_LAUNCHER_ATTEMPT_RECEIPT_ENV: str(receipt),
+            }
+            with patch.dict(os.environ, environment, clear=False):
+                with self.assertRaisesRegex(HeadToHeadError, "writer-lock fd"):
+                    module._require_durable_launcher_handoff(out_dir)
+
+            lock_path = out_dir / "runner-writer.lock"
+            lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                environment[module.DURABLE_LAUNCHER_WRITER_LOCK_FD_ENV] = str(lock_fd)
+                with patch.dict(os.environ, environment, clear=False):
+                    module._require_durable_launcher_handoff(out_dir)
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+
+            with patch.dict(
+                os.environ,
+                {**environment, module.DURABLE_LAUNCHER_ATTEMPT_ID_ENV: "wrong"},
+                clear=False,
+            ):
+                with self.assertRaisesRegex(HeadToHeadError, "receipt does not match"):
+                    module._require_durable_launcher_handoff(out_dir)
 
 
 class BootstrapConfidenceTest(unittest.TestCase):
