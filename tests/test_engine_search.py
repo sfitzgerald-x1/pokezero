@@ -4374,6 +4374,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         report = self._report(
             [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
             root_priors=[0.2, 0.8],
+            opponent=[("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
         )
         report.update(
             {
@@ -4391,6 +4392,50 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(budget["scope"], "whole_model_decision")
         self.assertEqual(budget["requested_ms"], 10_000)
         self.assertFalse(budget["exhausted"])
+        self.assertEqual(len(budget["native_invocations"]), 1)
+        invocation = budget["native_invocations"][0]
+        self.assertEqual(invocation["multiplicity"], 1)
+        self.assertEqual(invocation["requested_iterations"], 100)
+        self.assertEqual(invocation["completed_iterations"], 100)
+        self.assertEqual(invocation["remaining_iterations"], 0)
+        self.assertFalse(invocation["time_budget_exhausted"])
+        self.assertEqual(invocation["status"], "completed")
+        self.assertEqual(invocation["root_visits"], {"side_one": 100, "side_two": 100})
+
+    def test_time_budget_records_one_multiplicity_scaled_native_invocation(self) -> None:
+        """Collapsed worlds are one native call, not two falsely capped calls."""
+        policy = self._policy(worlds=2, model_decision_time_ms=10_000)
+        report = self._report(
+            [("alpha", 120, 0.5, 0.2), ("beta", 80, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+            opponent=[("alpha", 120, 0.5, 0.2), ("beta", 80, 0.5, 0.8)],
+        )
+        report.update(
+            {
+                "time_budget_enabled": True,
+                "time_budget_ms": 10_000,
+                "time_budget_elapsed_ms": 0.1,
+                "time_budget_exhausted": False,
+                "time_budget_batch_overshoot_ms": 0.0,
+            }
+        )
+
+        decision, native = self._run(
+            policy,
+            [report],
+            worlds=[self._world("duplicate")] * 2,
+        )
+
+        self.assertEqual(len(native.calls), 1)
+        invocation = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ][0]
+        self.assertEqual(invocation["multiplicity"], 2)
+        self.assertEqual(invocation["requested_iterations"], 200)
+        self.assertEqual(invocation["completed_iterations"], 200)
+        self.assertEqual(invocation["remaining_iterations"], 0)
+        self.assertEqual(invocation["status"], "completed")
+        self.assertEqual(invocation["root_visits"], {"side_one": 200, "side_two": 200})
 
     def test_time_budget_refuses_a_native_report_without_its_witness(self) -> None:
         policy = self._policy(worlds=1, model_decision_time_ms=10_000)
@@ -4409,6 +4454,234 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                 for reason in policy.stats.world_failure_reasons
             )
         )
+        invocations = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ]
+        self.assertEqual(len(invocations), 1)
+        refusal = invocations[0]
+        self.assertEqual(refusal["status"], "refused")
+        self.assertEqual(refusal["multiplicity"], 1)
+        self.assertEqual(refusal["requested_iterations"], 100)
+        self.assertEqual(refusal["time_budget_ms"], 10_000)
+        self.assertIn("native_time_budget_witness_missing", refusal["refusal"])
+
+    def test_time_budget_refuses_a_report_that_lies_about_its_native_request(self) -> None:
+        policy = self._policy(worlds=1, model_decision_time_ms=10_000)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+            opponent=[("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+        )
+        report.update(
+            {
+                # The native call receives the configured 100 iterations, not
+                # this claimed 200/100 prefix.
+                "requested_iterations": 200,
+                "remaining_iterations": 100,
+                "time_budget_enabled": True,
+                "time_budget_ms": 10_000,
+                "time_budget_elapsed_ms": 10_001.0,
+                "time_budget_exhausted": True,
+                "time_budget_batch_overshoot_ms": 1.0,
+            }
+        )
+
+        decision, _ = self._run(policy, [report])
+
+        self.assertEqual(decision.metadata["engine_mcts"]["fallback"], "crate_search_failed")
+        refusal = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ][0]
+        self.assertEqual(refusal["status"], "refused")
+        self.assertEqual(refusal["requested_iterations"], 100)
+        self.assertIn("native_time_budget_invocation_invalid", refusal["refusal"])
+
+    def test_time_budget_requires_both_seat_roots_to_conserve_completed_visits(self) -> None:
+        policy = self._policy(worlds=1, model_decision_time_ms=10_000)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+            # An empty side two root used to be silently accepted.
+            opponent=[],
+        )
+        report.update(
+            {
+                "time_budget_enabled": True,
+                "time_budget_ms": 10_000,
+                "time_budget_elapsed_ms": 0.1,
+                "time_budget_exhausted": False,
+                "time_budget_batch_overshoot_ms": 0.0,
+            }
+        )
+
+        decision, _ = self._run(policy, [report])
+
+        refusal = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ][0]
+        self.assertEqual(refusal["status"], "refused")
+        self.assertIn("side_two root visits", refusal["refusal"])
+
+    def test_time_budget_refuses_coercible_or_nonfinite_native_scalars(self) -> None:
+        invalid_fields = {
+            "requested_iterations": 100.5,
+            "remaining_iterations": 0.5,
+            "time_budget_elapsed_ms": float("nan"),
+            "time_budget_batch_overshoot_ms": -1.0,
+            "time_budget_exhausted": "false",
+        }
+        for field_name, value in invalid_fields.items():
+            with self.subTest(field_name=field_name):
+                policy = self._policy(worlds=1, model_decision_time_ms=10_000)
+                report = self._report(
+                    [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                    root_priors=[0.2, 0.8],
+                    opponent=[("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                )
+                report.update(
+                    {
+                        "time_budget_enabled": True,
+                        "time_budget_ms": 10_000,
+                        "time_budget_elapsed_ms": 0.1,
+                        "time_budget_exhausted": False,
+                        "time_budget_batch_overshoot_ms": 0.0,
+                    }
+                )
+                report[field_name] = value
+
+                decision, _ = self._run(policy, [report])
+
+                refusal = decision.metadata["engine_mcts"]["time_budget"][
+                    "native_invocations"
+                ][0]
+                self.assertEqual(refusal["status"], "refused")
+                self.assertIn("native_time_budget_invocation_invalid", refusal["refusal"])
+
+    def test_time_budget_refuses_cross_field_inconsistent_native_witnesses(self) -> None:
+        cases = (
+            (
+                "unfinished-but-too-early",
+                [("alpha", 40, 0.5, 0.2), ("beta", 20, 0.5, 0.8)],
+                40,
+                True,
+                0.1,
+                0.0,
+                "precedes the native budget",
+            ),
+            (
+                "unfinished-without-exhaustion",
+                [("alpha", 40, 0.5, 0.2), ("beta", 20, 0.5, 0.8)],
+                40,
+                False,
+                0.1,
+                0.0,
+                "lack a native deadline witness",
+            ),
+            (
+                "overshoot-disagrees-with-elapsed",
+                [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                0,
+                False,
+                10_001.0,
+                0.0,
+                "batch_overshoot_ms does not match elapsed time",
+            ),
+        )
+        for (
+            label,
+            arms,
+            remaining_iterations,
+            exhausted,
+            elapsed_ms,
+            batch_overshoot_ms,
+            expected_reason,
+        ) in cases:
+            with self.subTest(label=label):
+                policy = self._policy(worlds=1, model_decision_time_ms=10_000)
+                report = self._report(
+                    arms,
+                    root_priors=[0.2, 0.8],
+                    opponent=arms,
+                )
+                report.update(
+                    {
+                        "requested_iterations": 100,
+                        "remaining_iterations": remaining_iterations,
+                        "time_budget_enabled": True,
+                        "time_budget_ms": 10_000,
+                        "time_budget_elapsed_ms": elapsed_ms,
+                        "time_budget_exhausted": exhausted,
+                        "time_budget_batch_overshoot_ms": batch_overshoot_ms,
+                    }
+                )
+
+                decision, _ = self._run(policy, [report])
+
+                refusal = decision.metadata["engine_mcts"]["time_budget"][
+                    "native_invocations"
+                ][0]
+                self.assertEqual(refusal["status"], "refused")
+                self.assertIn(expected_reason, refusal["refusal"])
+
+    def test_time_budget_allows_a_completed_final_batch_to_overrun(self) -> None:
+        policy = self._policy(worlds=1, model_decision_time_ms=10_000)
+        arms = [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)]
+        report = self._report(arms, root_priors=[0.2, 0.8], opponent=arms)
+        report.update(
+            {
+                "time_budget_enabled": True,
+                "time_budget_ms": 10_000,
+                "time_budget_elapsed_ms": 10_001.0,
+                "time_budget_exhausted": False,
+                "time_budget_batch_overshoot_ms": 1.0,
+            }
+        )
+
+        decision, _ = self._run(policy, [report])
+
+        invocation = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ][0]
+        self.assertEqual(invocation["status"], "completed")
+        self.assertEqual(invocation["remaining_iterations"], 0)
+        self.assertFalse(invocation["time_budget_exhausted"])
+
+    def test_time_budget_retains_a_refusal_beside_a_later_healthy_world(self) -> None:
+        policy = self._policy(worlds=2, model_decision_time_ms=10_000)
+        missing_witness = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        valid = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+            opponent=[("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+        )
+        valid.update(
+            {
+                "time_budget_enabled": True,
+                "time_budget_ms": 10_000,
+                "time_budget_elapsed_ms": 0.1,
+                "time_budget_exhausted": False,
+                "time_budget_batch_overshoot_ms": 0.0,
+            }
+        )
+
+        with patch("pokezero.engine_search.time.perf_counter", return_value=0.0):
+            decision, native = self._run(
+                policy,
+                [missing_witness, valid],
+                worlds=[self._world("first"), self._world("second")],
+            )
+
+        self.assertEqual(len(native.calls), 2)
+        self.assertNotIn("fallback", decision.metadata["engine_mcts"])
+        invocations = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ]
+        self.assertEqual([row["status"] for row in invocations], ["refused", "completed"])
+        self.assertEqual(invocations[0]["requested_iterations"], 100)
+        self.assertIn("native_time_budget_witness_missing", invocations[0]["refusal"])
 
     def test_time_budget_witness_includes_action_mapping(self) -> None:
         """The deadline is whole-decision, not merely native-tree wall time."""
@@ -4418,6 +4691,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         report = self._report(
             [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
             root_priors=[0.2, 0.8],
+            opponent=[("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
         )
         report.update(
             {
@@ -4479,17 +4753,28 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(policy.stats.prior_fallbacks, 2)
         self.assertAlmostEqual(policy.stats.model_wall_seconds, 0.081, places=6)
         self.assertEqual(policy.stats.world_search_attempts, 0)
+        witness = decision.metadata["engine_mcts"]["time_budget"]
+        self.assertTrue(witness["exhausted"])
+        self.assertEqual(len(witness["native_invocations"]), 1)
+        invocation = witness["native_invocations"][0]
+        self.assertEqual(invocation["requested_iterations"], 100)
+        self.assertEqual(invocation["completed_iterations"], 0)
+        self.assertEqual(invocation["remaining_iterations"], 100)
+        self.assertTrue(invocation["time_budget_exhausted"])
+        self.assertEqual(invocation["status"], "completed")
+        self.assertEqual(invocation["root_visits"], {"side_one": 0, "side_two": 0})
 
     def test_deadline_truncated_tree_is_labeled_as_a_deadline_prefix(self) -> None:
         policy = self._policy(worlds=1, model_decision_time_ms=10_000)
         report = self._report(
-            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            [("alpha", 40, 0.5, 0.2), ("beta", 20, 0.5, 0.8)],
             root_priors=[0.2, 0.8],
+            opponent=[("alpha", 40, 0.5, 0.2), ("beta", 20, 0.5, 0.8)],
         )
         report.update(
             {
-                "requested_iterations": 200,
-                "remaining_iterations": 100,
+                "requested_iterations": 100,
+                "remaining_iterations": 40,
                 "time_budget_enabled": True,
                 "time_budget_ms": 10_000,
                 "time_budget_elapsed_ms": 10_001.0,
@@ -4502,6 +4787,15 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             decision.metadata["engine_mcts"]["aggregated_choices_basis"],
             "deadline_prefix",
         )
+        invocation = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ][0]
+        self.assertEqual(invocation["status"], "completed")
+        self.assertEqual(invocation["requested_iterations"], 100)
+        self.assertEqual(invocation["completed_iterations"], 60)
+        self.assertEqual(invocation["remaining_iterations"], 40)
+        self.assertTrue(invocation["time_budget_exhausted"])
+        self.assertEqual(invocation["root_visits"], {"side_one": 60, "side_two": 60})
 
     # -- the counter FIRES -----------------------------------------------------
 
