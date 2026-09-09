@@ -46,3 +46,23 @@ jobs:
             echo "::error::the randbat provenance suite did not run"
             exit 1
           fi
+
+      - name: Run durable MCTS head-to-head contract tests
+        # These are deliberately separate from the fan-in tests above: the
+        # replacement-pilot preflight and its launcher lease are a process
+        # handoff contract, not a worker fan-in behaviour.  CI names test
+        # modules explicitly, so without this step both suites remain
+        # local-only even when the PR edits the runner they guard.
+        run: |
+          set -o pipefail
+          python -m unittest -v \
+            tests.test_mcts_eval_head_to_head \
+            tests.test_mcts_h2h_durable_launcher 2>&1 | tee /tmp/mcts-h2h-contract.log
+          if ! grep -qE 'Ran 33 tests' /tmp/mcts-h2h-contract.log; then
+            echo "::error::expected 33 durable MCTS head-to-head contract tests; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/mcts-h2h-contract.log; then
+            echo "::error::durable MCTS head-to-head contract tests did not report a clean OK"
+            exit 1
+          fi
