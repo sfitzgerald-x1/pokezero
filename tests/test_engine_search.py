@@ -583,6 +583,37 @@ class ModelConfigValidationTests(unittest.TestCase):
                 early_stop_min_sims=9,
             )
 
+    def test_whole_decision_time_budget_has_one_unambiguous_model_contract(self) -> None:
+        base = {
+            "leaf_eval": "model",
+            "model_path": "x.pt",
+            "checkpoint_path": "checkpoint.pt",
+            "tables_path": "t.json",
+            "search_sims": 8,
+            "search_batch": 8,
+        }
+        with self.assertRaisesRegex(ValueError, "only with leaf_eval='model'"):
+            EngineMctsConfig(model_decision_time_ms=1)
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            EngineMctsConfig(**base, model_decision_time_ms=0)
+        with self.assertRaisesRegex(ValueError, "early_stop=False"):
+            EngineMctsConfig(
+                **base,
+                model_decision_time_ms=10,
+                early_stop=True,
+                early_stop_min_sims=8,
+            )
+        with self.assertRaisesRegex(ValueError, "fixed search allocation"):
+            EngineMctsConfig(**base, model_decision_time_ms=10, depth_min=2)
+        with self.assertRaisesRegex(ValueError, "model_decision_time_ms=None"):
+            EngineMctsConfig(
+                **base,
+                model_decision_time_ms=10,
+                worlds=1,
+                override_telemetry=True,
+                root_selector_shadow=True,
+            )
+
     def test_missing_model_artifact_fails_at_init(self) -> None:
         with self.assertRaises(ValueError):
             EngineMctsPolicy(
@@ -3292,6 +3323,10 @@ class WorldAbortRateTests(unittest.TestCase):
             "ladder_recovered_fallbacks",
             # Charged once per decide(), outside `_search_model` entirely.
             "decisions",
+            # Whole-decision deadline accounting is charged before ladder
+            # dispatch, and the config refuses dynamic allocations, so neither
+            # counter is a per-rung claim to rewind.
+            "model_time_budget_decisions", "model_time_budget_exhausted_decisions",
             # Per RUNG by construction and documented as such -- it is the
             # denominator that tells a reader a figure is rung-scoped.
             "searched_decisions",
@@ -4287,6 +4322,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         root_selector_shadow: bool = False,
         worlds: int = 2,
         strict: bool = False,
+        model_decision_time_ms: int | None = None,
     ):
         policy = object.__new__(EngineMctsPolicy)
         policy.policy_id = "override-telemetry-test"
@@ -4302,6 +4338,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             root_selector_shadow=root_selector_shadow,
             use_opponent_priors=opponent_priors,
             strict_fallbacks=strict,
+            model_decision_time_ms=model_decision_time_ms,
         )
         policy._tables_json = "{}"
         policy.stats = EngineMctsStats()
@@ -4328,6 +4365,143 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                 random.Random(7),
             )
         return decision, native
+
+    def test_time_budget_reaches_the_outermost_native_slot_with_a_witness(self) -> None:
+        # A high budget keeps this a call-contract test rather than a race with
+        # the test host. The fake still has to return the native witness; without
+        # it the Python layer refuses the world rather than claiming it was timed.
+        policy = self._policy(worlds=1, model_decision_time_ms=10_000)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "time_budget_enabled": True,
+                "time_budget_ms": 10_000,
+                "time_budget_elapsed_ms": 0.1,
+                "time_budget_exhausted": False,
+                "time_budget_batch_overshoot_ms": 0.0,
+            }
+        )
+        decision, native = self._run(policy, [report])
+        self.assertEqual(len(native.calls), 1)
+        self.assertEqual(native.calls[0][-1], 10_000)
+        budget = decision.metadata["engine_mcts"]["time_budget"]
+        self.assertEqual(budget["scope"], "whole_model_decision")
+        self.assertEqual(budget["requested_ms"], 10_000)
+        self.assertFalse(budget["exhausted"])
+
+    def test_time_budget_refuses_a_native_report_without_its_witness(self) -> None:
+        policy = self._policy(worlds=1, model_decision_time_ms=10_000)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        decision, _ = self._run(policy, [report])
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["fallback"],
+            "crate_search_failed",
+        )
+        self.assertTrue(
+            any(
+                "native_time_budget_witness_missing" in reason
+                for reason in policy.stats.world_failure_reasons
+            )
+        )
+
+    def test_time_budget_witness_includes_action_mapping(self) -> None:
+        """The deadline is whole-decision, not merely native-tree wall time."""
+        policy = self._policy(
+            telemetry=False, worlds=1, model_decision_time_ms=100
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "time_budget_enabled": True,
+                "time_budget_ms": 100,
+                "time_budget_elapsed_ms": 0.1,
+                "time_budget_exhausted": False,
+                "time_budget_batch_overshoot_ms": 0.0,
+            }
+        )
+        clock = SimpleNamespace(now=0.0)
+
+        def delayed_map(_self, _context, _weights) -> int:
+            clock.now += 0.250
+            return 0
+
+        with (
+            patch("pokezero.engine_search.time.perf_counter", lambda: clock.now),
+            patch.object(EngineMctsPolicy, "_map_choices", delayed_map),
+        ):
+            decision, _ = self._run(policy, [report])
+
+        budget = decision.metadata["engine_mcts"]["time_budget"]
+        self.assertAlmostEqual(budget["deadline_elapsed_ms"], 250.0, places=3)
+        self.assertAlmostEqual(budget["deadline_overshoot_ms"], 150.0, places=3)
+        self.assertTrue(budget["exhausted"])
+        self.assertAlmostEqual(
+            policy.stats.model_time_budget_overshoot_seconds, 0.150, places=6
+        )
+
+    def test_zero_iteration_timed_report_keeps_root_work_but_not_a_world(self) -> None:
+        """A deadline seam may run root priors without completing a batch."""
+        policy = self._policy(worlds=1, model_decision_time_ms=10_000)
+        report = self._report([], root_priors=[])
+        report.update(
+            {
+                "requested_iterations": 100,
+                "remaining_iterations": 100,
+                "model_evals": 1,
+                "prior_fallbacks": 2,
+                "model_s": 0.081,
+                "time_budget_enabled": True,
+                "time_budget_ms": 10_000,
+                "time_budget_elapsed_ms": 10_001.0,
+                "time_budget_exhausted": True,
+                "time_budget_batch_overshoot_ms": 1.0,
+            }
+        )
+        with patch("pokezero.engine_search.time.perf_counter", return_value=0.0):
+            decision, _ = self._run(policy, [report])
+
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["fallback"],
+            "model_time_budget_no_completed_worlds",
+        )
+        self.assertEqual(policy.stats.worlds_searched, 0)
+        self.assertEqual(policy.stats.total_iterations, 0)
+        self.assertEqual(policy.stats.model_evals, 1)
+        self.assertEqual(policy.stats.prior_fallbacks, 2)
+        self.assertAlmostEqual(policy.stats.model_wall_seconds, 0.081, places=6)
+        self.assertEqual(policy.stats.world_search_attempts, 0)
+
+    def test_deadline_truncated_tree_is_labeled_as_a_deadline_prefix(self) -> None:
+        policy = self._policy(worlds=1, model_decision_time_ms=10_000)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "requested_iterations": 200,
+                "remaining_iterations": 100,
+                "time_budget_enabled": True,
+                "time_budget_ms": 10_000,
+                "time_budget_elapsed_ms": 10_001.0,
+                "time_budget_exhausted": True,
+                "time_budget_batch_overshoot_ms": 1.0,
+            }
+        )
+        decision, _ = self._run(policy, [report])
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["aggregated_choices_basis"],
+            "deadline_prefix",
+        )
 
     # -- the counter FIRES -----------------------------------------------------
 
