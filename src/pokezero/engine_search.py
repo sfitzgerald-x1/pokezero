@@ -5399,6 +5399,8 @@ class EngineMctsPolicy:
         ) -> Optional[dict]:
             nonlocal budget_skipped_worlds, native_budget_exhausted
             time_budget_ms: int | None = None
+            expected_requested_iterations: int | None = None
+            native_invocation_started = False
             if decision_deadline is not None:
                 remaining = decision_deadline - time.perf_counter()
                 if remaining <= 0:
@@ -5409,6 +5411,14 @@ class EngineMctsPolicy:
                 # Python does not turn a still-positive remainder into a false
                 # zero-ms refusal before native can decide at its batch seam.
                 time_budget_ms = max(1, math.ceil(remaining * 1000.0))
+                # `sims` is the exact allocation threaded to native.  A
+                # duplicate group supplies its multiplicity-scaled amount;
+                # with no override the configured per-world allocation is the
+                # actual request.  Never let the native report name its own
+                # denominator without comparing it to this boundary value.
+                expected_requested_iterations = int(
+                    config.search_sims if sims is None else sims
+                )
             try:
                 search_args = native_search_args(
                     config,
@@ -5421,6 +5431,7 @@ class EngineMctsPolicy:
                     depth=depth,
                     time_budget_ms=time_budget_ms,
                 )
+                native_invocation_started = time_budget_ms is not None
                 report = json.loads(
                     native.search_batched_multi_encoded(*search_args)
                 )
@@ -5429,17 +5440,21 @@ class EngineMctsPolicy:
                     # not witness its use is not a timed search. Refuse it
                     # rather than recording Python's elapsed wall time beside
                     # a tree that may have run the historical fixed-work path.
-                    required = {
-                        "time_budget_enabled": True,
-                        "time_budget_ms": time_budget_ms,
-                    }
-                    for field_name, expected in required.items():
-                        if report.get(field_name) != expected:
-                            raise EngineSearchWitnessError(
-                                "native_time_budget_witness_missing: "
-                                f"{field_name}={report.get(field_name)!r}, expected "
-                                f"{expected!r}"
-                            )
+                    if report.get("time_budget_enabled") is not True:
+                        raise EngineSearchWitnessError(
+                            "native_time_budget_witness_missing: "
+                            "time_budget_enabled is not true"
+                        )
+                    reported_time_budget_ms = report.get("time_budget_ms")
+                    if (
+                        type(reported_time_budget_ms) is not int
+                        or reported_time_budget_ms != time_budget_ms
+                    ):
+                        raise EngineSearchWitnessError(
+                            "native_time_budget_witness_missing: "
+                            f"time_budget_ms={reported_time_budget_ms!r}, expected "
+                            f"{time_budget_ms!r}"
+                        )
                     for field_name in (
                         "time_budget_elapsed_ms",
                         "time_budget_exhausted",
@@ -5451,19 +5466,49 @@ class EngineMctsPolicy:
                                 f"{field_name} absent"
                             )
                     try:
-                        requested_iterations = int(report["requested_iterations"])
-                        remaining_iterations = int(report["remaining_iterations"])
+                        def nonnegative_int(field_name: str) -> int:
+                            value = report[field_name]
+                            if type(value) is not int or value < 0:
+                                raise ValueError(
+                                    f"{field_name} must be a nonnegative integer"
+                                )
+                            return value
+
+                        def nonnegative_finite_number(field_name: str) -> float:
+                            value = report[field_name]
+                            if (
+                                isinstance(value, bool)
+                                or not isinstance(value, (int, float))
+                                or not math.isfinite(float(value))
+                                or value < 0
+                            ):
+                                raise ValueError(
+                                    f"{field_name} must be a finite nonnegative number"
+                                )
+                            return float(value)
+
+                        requested_iterations = nonnegative_int("requested_iterations")
+                        remaining_iterations = nonnegative_int("remaining_iterations")
                         completed_iterations = requested_iterations - remaining_iterations
-                        reported_iterations = int(report["iterations"])
+                        reported_iterations = nonnegative_int("iterations")
                         if (
-                            requested_iterations < 0
-                            or remaining_iterations < 0
-                            or completed_iterations < 0
+                            completed_iterations < 0
                             or reported_iterations != completed_iterations
+                            or requested_iterations != expected_requested_iterations
                         ):
                             raise ValueError(
-                                "requested/completed/remaining iteration accounting is invalid"
+                                "requested/completed/remaining iteration accounting does not "
+                                "match the native request"
                             )
+                        native_elapsed_ms = nonnegative_finite_number(
+                            "time_budget_elapsed_ms"
+                        )
+                        native_batch_overshoot_ms = nonnegative_finite_number(
+                            "time_budget_batch_overshoot_ms"
+                        )
+                        native_time_budget_exhausted = report["time_budget_exhausted"]
+                        if type(native_time_budget_exhausted) is not bool:
+                            raise ValueError("time_budget_exhausted must be a boolean")
 
                         root_visits: dict[str, int] = {}
                         for side in ("side_one", "side_two"):
@@ -5474,11 +5519,17 @@ class EngineMctsPolicy:
                             for entry in entries:
                                 if not isinstance(entry, Mapping):
                                     raise ValueError(f"{side} contains a non-object arm")
-                                arm_visits = int(entry["visits"])
-                                if arm_visits < 0:
-                                    raise ValueError(f"{side} contains negative visits")
+                                arm_visits = entry["visits"]
+                                if type(arm_visits) is not int or arm_visits < 0:
+                                    raise ValueError(
+                                        f"{side} contains a non-integer or negative visit count"
+                                    )
                                 visits += arm_visits
                             root_visits[side] = visits
+                            if visits != completed_iterations:
+                                raise ValueError(
+                                    f"{side} root visits do not equal completed iterations"
+                                )
                     except (KeyError, TypeError, ValueError) as error:
                         raise EngineSearchWitnessError(
                             "native_time_budget_invocation_invalid: "
@@ -5486,21 +5537,16 @@ class EngineMctsPolicy:
                         ) from error
                     native_time_budget_invocations.append(
                         {
+                            "status": "completed",
                             "world_seed": int(record["seed"]),
                             "multiplicity": weight,
                             "requested_iterations": requested_iterations,
                             "completed_iterations": completed_iterations,
                             "remaining_iterations": remaining_iterations,
                             "time_budget_ms": time_budget_ms,
-                            "time_budget_elapsed_ms": float(
-                                report["time_budget_elapsed_ms"]
-                            ),
-                            "time_budget_batch_overshoot_ms": float(
-                                report["time_budget_batch_overshoot_ms"]
-                            ),
-                            "time_budget_exhausted": bool(
-                                report["time_budget_exhausted"]
-                            ),
+                            "time_budget_elapsed_ms": native_elapsed_ms,
+                            "time_budget_batch_overshoot_ms": native_batch_overshoot_ms,
+                            "time_budget_exhausted": native_time_budget_exhausted,
                             "root_visits": root_visits,
                         }
                     )
@@ -5524,6 +5570,22 @@ class EngineMctsPolicy:
                     if config.override_telemetry and isinstance(error, TypeError)
                     else detail
                 )
+                if native_invocation_started:
+                    # The native call occurred but did not produce a receipt we
+                    # can trust.  Keep the boundary facts and bounded reason;
+                    # never invent its completed work, timing, or visits.  A
+                    # later healthy world must not erase this failed attempt
+                    # from a deadline qualification record.
+                    native_time_budget_invocations.append(
+                        {
+                            "status": "refused",
+                            "world_seed": int(record["seed"]),
+                            "multiplicity": weight,
+                            "requested_iterations": expected_requested_iterations,
+                            "time_budget_ms": time_budget_ms,
+                            "refusal": reason,
+                        }
+                    )
                 # Unsafe renderer branches abort the native world before a
                 # chance outcome can be silently omitted from its expectation.
                 # The native report is unavailable on that error path, so
