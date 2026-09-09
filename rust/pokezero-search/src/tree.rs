@@ -2187,6 +2187,44 @@ mod tests {
         state.serialize()
     }
 
+    /// A terminal-free two-turn variant of `STRADDLE`. Both active Pokémon
+    /// start at 1000 HP. The fixture's only damaging move is Tackle; the
+    /// engine's maximum (including a critical) is bounded below, so even two
+    /// such hits cannot end the depth-two horizon. That lets the deep noisy-Q
+    /// control state an exact continuation price for every branch rather than
+    /// inheriting an unmodelled engine terminal payoff.
+    fn deep_noisy_q_control_state(acting_side_one: bool) -> String {
+        let fixture = if acting_side_one {
+            STRADDLE.to_string()
+        } else {
+            mirrored(STRADDLE)
+        };
+        let mut state = parse_state(fixture.trim()).expect("fixture parses");
+        for active in [state.side_one.get_active(), state.side_two.get_active()] {
+            active.hp = 1000;
+            active.maxhp = 1000;
+        }
+        let tackle = MoveChoice::Move(poke_engine::state::PokemonMoveIndex::M1);
+        let (s1_damage, s2_damage) = calculate_both_damage_rolls(
+            &state,
+            move_choice_to_choice(&state.side_one, &tackle).expect("side one has Tackle"),
+            move_choice_to_choice(&state.side_two, &tackle).expect("side two has Tackle"),
+            true,
+        );
+        let max_tackle_damage = s1_damage
+            .iter()
+            .chain(s2_damage.iter())
+            .flatten()
+            .copied()
+            .max()
+            .expect("Tackle has a damage roll");
+        assert!(
+            2 * i32::from(max_tackle_damage) < 1000,
+            "two horizon-limited Tackles must not reach the 1000-HP control state"
+        );
+        state.serialize()
+    }
+
     /// Drive the production collect-then-finalize seam without libtorch. Fixing
     /// the root action pair forces collisions instead of depending on PUCT's
     /// exploration schedule. The engine still enumerates and prices the edge.
@@ -2746,6 +2784,198 @@ mod tests {
                 assert!(row.shadow_q_exact_simple_regret.abs() < 1e-6);
                 assert!(row.shadow_q_value_error < 1e-6);
             }
+        }
+    }
+
+    #[test]
+    fn deep_noisy_q_control_falsifies_raw_q_max_for_both_seats() {
+        // This is the counterhypothesis the shallow rare-terminal control
+        // cannot express. It deliberately has *no* terminal branches: a
+        // terminal payoff bypasses the evaluator, so mixing that engine value
+        // with a synthetic depth-two leaf label would not establish an exact
+        // control payoff. Instead every nonterminal continuation is priced by
+        // an explicit reference game:
+        //
+        //   Splash-root continuations = 0.55; Tackle-root continuations = 0.40.
+        //
+        // `deep_noisy_q_control_state` raises both active Pokémon to 1000 HP,
+        // and proves the engine's maximum two-Tackle damage remains below it,
+        // so Tackles cannot terminate this horizon. The root expansion identifies
+        // its own action from the leaf state; a deeper expansion identifies the
+        // same root action from `parent`. A separate reference pass below uses
+        // only those values. The noisy pass changes *only* deep descendants of
+        // Tackle to 0.75, modelling an uncalibrated continuation estimate.
+        //
+        // A raw root-Q selector must be rejected as a candidate if it promotes
+        // this low-visit, high-noise arm. This test records that falsification;
+        // it does not quietly change production selection to visit-max.
+        for (acting_side_one, root_allowed) in [
+            (
+                true,
+                (&["splash", "tackle"][..], &["splash"][..]),
+            ),
+            (
+                false,
+                (&["splash"][..], &["splash", "tackle"][..]),
+            ),
+        ] {
+            let state = deep_noisy_q_control_state(acting_side_one);
+            let reference_value = |leaf: &State, seam: &BranchSeam| {
+                let target_hp = if acting_side_one {
+                    leaf.side_two.get_active_immutable().hp
+                } else {
+                    leaf.side_one.get_active_immutable().hp
+                };
+                let acting_value = match seam.parent {
+                    // A depth-zero expansion has no ancestor chance node. A
+                    // root Splash leaves the target at 1000; root Tackle does
+                    // damage and leaves it below 1000.
+                    None => {
+                        assert_eq!(seam.depth, 0, "only root expansion lacks a parent");
+                        if target_hp == 1000 { 0.55 } else { 0.40 }
+                    }
+                    // The root-only masks and fixed seed bind these two arena
+                    // chance nodes to Splash and Tackle respectively. Keep
+                    // this assertion loud: traversal-order changes must never
+                    // silently redirect the injected continuation bias.
+                    Some((0, _)) => 0.55,
+                    Some((3, _)) => 0.40,
+                    Some((chance, _)) => panic!("unexpected root chance {chance}"),
+                };
+                if acting_side_one {
+                    acting_value
+                } else {
+                    1.0 - acting_value
+                }
+            };
+            let reference = run_batched_action_panel(
+                &state,
+                64,
+                1,
+                2,
+                1,
+                Some((acting_side_one, "splash", 0.9, "tackle", 0.1)),
+                Some(root_allowed),
+                true,
+                |leaf, seam| reference_value(leaf, seam),
+            );
+            let reference_row = action_choice_observation(
+                &reference,
+                acting_side_one,
+                &[("splash", 0.55), ("tackle", 0.40)],
+            );
+            assert_eq!(reference.counters.terminal_branches, 0);
+            assert_eq!(reference_row.chosen_action, "splash");
+            assert_eq!(reference_row.shadow_q_action, "splash");
+            assert!(reference_row.exact_simple_regret.abs() < 1e-6);
+            assert!(reference_row.shadow_q_exact_simple_regret.abs() < 1e-6);
+            let reference_root = &reference.tree.decisions[0];
+            let reference_stats = if acting_side_one {
+                &reference_root.s1_stats
+            } else {
+                &reference_root.s2_stats
+            };
+            let reference_splash_index = reference_stats
+                .iter()
+                .position(|stat| stat.display == "splash")
+                .expect("reference retains safe Splash");
+            let reference_tackle_index = reference_stats
+                .iter()
+                .position(|stat| stat.display == "tackle")
+                .expect("reference retains noisy Tackle");
+            let (reference_splash_key, reference_tackle_key) = if acting_side_one {
+                (
+                    (reference_splash_index as u16, 0),
+                    (reference_tackle_index as u16, 0),
+                )
+            } else {
+                (
+                    (0, reference_splash_index as u16),
+                    (0, reference_tackle_index as u16),
+                )
+            };
+            assert_eq!(
+                reference_root.children.get(&reference_splash_key),
+                Some(&0),
+                "reference safe edge must be chance slot 0"
+            );
+            assert_eq!(
+                reference_root.children.get(&reference_tackle_key),
+                Some(&3),
+                "reference noisy edge must be chance slot 3"
+            );
+            let outcome = run_batched_action_panel(
+                &state,
+                64,
+                1,
+                2,
+                1,
+                Some((acting_side_one, "splash", 0.9, "tackle", 0.1)),
+                Some(root_allowed),
+                true,
+                |leaf, seam| {
+                    let mut value = reference_value(leaf, seam);
+                    if seam.parent.is_some_and(|(chance, _)| chance == 3) {
+                        // With this fixed seed and the stated priors, chance
+                        // slot 3 is the lower-prior Tackle root edge. The
+                        // assertion below binds that otherwise internal arena
+                        // position to the displayed root action. Convert the
+                        // injected acting-seat value back to the tree's
+                        // side-one frame before returning it.
+                        value = if acting_side_one { 0.75 } else { 0.25 };
+                    }
+                    value
+                },
+            );
+            let root = &outcome.tree.decisions[0];
+            let stats = if acting_side_one { &root.s1_stats } else { &root.s2_stats };
+            let splash_index = stats
+                .iter()
+                .position(|stat| stat.display == "splash")
+                .expect("control retains safe Splash");
+            let tackle_index = stats
+                .iter()
+                .position(|stat| stat.display == "tackle")
+                .expect("control retains noisy Tackle");
+            let (splash_key, tackle_key) = if acting_side_one {
+                ((splash_index as u16, 0), (tackle_index as u16, 0))
+            } else {
+                ((0, splash_index as u16), (0, tackle_index as u16))
+            };
+            assert_eq!(
+                root.children.get(&splash_key),
+                Some(&0),
+                "the high-prior safe edge must be chance slot 0"
+            );
+            assert_eq!(
+                root.children.get(&tackle_key),
+                Some(&3),
+                "the noisy continuation must belong to Tackle, never an implicit slot"
+            );
+            let splash = &stats[splash_index];
+            let tackle = &stats[tackle_index];
+            let splash_q = if acting_side_one { splash.mean() } else { 1.0 - splash.mean() };
+            let tackle_q = if acting_side_one { tackle.mean() } else { 1.0 - tackle.mean() };
+            let row = action_choice_observation(
+                &outcome,
+                acting_side_one,
+                &[("splash", 0.55), ("tackle", 0.40)],
+            );
+            eprintln!("action-panel deep-noisy-q side_one={acting_side_one} {row:?}");
+            assert!(outcome.tree.decisions.len() >= 2, "the witness must reach a continuation");
+            assert_eq!(outcome.counters.terminal_branches, 0, "this control isolates leaf noise");
+            assert_eq!(row.completed_visits, 64);
+            assert_eq!(row.chosen_action, "splash", "visit-max keeps the safe action");
+            assert_eq!(row.exact_simple_regret, 0.0);
+            assert_eq!(row.shadow_q_action, "tackle", "raw Q-max follows the noisy arm");
+            assert!(
+                row.shadow_q_visits <= 16,
+                "the noisy arm must remain below one quarter of the 64-visit budget"
+            );
+            assert!(row.shadow_q_is_lower_visit);
+            assert!(tackle_q > splash_q, "the disagreement must be Q-driven, not a tie");
+            assert!((row.shadow_q_exact_simple_regret - 0.15).abs() < 1e-6);
+            assert!(row.shadow_q_value_error > 0.1, "the selected Q is materially overconfident");
         }
     }
 
