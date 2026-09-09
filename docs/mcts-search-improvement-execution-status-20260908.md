@@ -27,8 +27,8 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | Encoder fast path | Merged in [#1340](https://github.com/sfitzgerald-x1/pokezero/pull/1340), merge `98faa804188289ecdcc5f5b87eaae8ad39de77eb`; full-path timing is a stable null and this line is parked. | Identifier normalization has bitwise-output coverage and the microbenchmark did not survive to a source-attributable full-path benefit. | A full-search speedup or extra useful work at the same clock. |
 | Timing replay | [#1339](https://github.com/sfitzgerald-x1/pokezero/pull/1339) is merged and its fixed corpus was measured candidate-first twice, then baseline-first. | The candidate's apparent slowdown reverses in the baseline-first block; the result is order/warm-state dominated and is a valid null. | A source-attributable full-search win, numerical-tree parity, or extra useful work at the same clock. |
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
-| Whole-decision deadline | Merged in [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356), merge `380066e8a8e7e16ab4e09f377f6802c11a4a2e85`. It is model-only and fixed-work-only: the clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
-| Backup-repair strength pilot | Active, frozen 12-pair/24-game corrected-versus-uncorrected comparison: depth 2, 256 simulations, four worlds, batch 16, CPU, final-enthalf iteration 9375. At the 2026-09-09 outcome-blind inspection, eight complete mirrored pairs (16 games and 32 receipts) were durable and the ninth pair's isolated workers were actively consuming CPU. | The live contrast is attributable and resumable; completed units have matching policy receipts. | Any outcome before all 12 pairs and one valid terminal readout. |
+| Whole-decision deadline | [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) introduced the model-only, fixed-work deadline; [#1359](https://github.com/sfitzgerald-x1/pokezero/pull/1359) hardened the native-invocation witness and fail-closed validation. The qualification source is their reviewed combined `main` merge `8609d301399738a8081f0e938a3cc4ed7d39abdd` (reviewed #1359 head `6e2bb3ac4fb50abf7fb358c250a7398686153cff`). The clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
+| Backup-repair strength pilot | Active, frozen 12-pair/24-game corrected-versus-uncorrected comparison: depth 2, 256 simulations, four worlds, batch 16, CPU, final-enthalf iteration 9375. At the latest outcome-blind 2026-09-09 inspection, 21 games and 42 matching receipts were durable; the current pair's isolated workers remained active on CPU. | The live contrast is attributable and resumable; completed units have matching policy receipts. | Any outcome before all 12 pairs and one valid terminal readout. |
 
 ## Active route
 
@@ -92,10 +92,11 @@ canonical corpus SHA-256 is
 
 Freeze the following before the first timed decision:
 
-- corrected source `380066e8a8e7e16ab4e09f377f6802c11a4a2e85`, its matching
-  native build, the final-enthalf iteration-9375 checkpoint and its registered
-  SHA-256, the corpus hash, CPU runtime, and the exact Showdown/vocabulary
-  receipts;
+- qualification source `8609d301399738a8081f0e938a3cc4ed7d39abdd`, including
+  the reviewed #1359 deadline-witness head
+  `6e2bb3ac4fb50abf7fb358c250a7398686153cff`, its matching native build, the
+  final-enthalf iteration-9375 checkpoint and its registered SHA-256, the corpus
+  hash, CPU runtime, and the exact Showdown/vocabulary receipts;
 - fixed model allocation: depth 2, 256 requested simulations **per native
   world invocation**, batch 16, four worlds, `early_stop=false`, and both
   selector flags disabled. A collapsed duplicate is one native invocation with
@@ -118,7 +119,9 @@ multiplicity, requested and completed iterations, remaining iterations,
 The terminal summary must retain p50/p95/max outer elapsed time and deadline
 overshoot, the count of exhausted decisions, total and per-decision world
 coverage, and the count of zero-completed-world refusals. A missing witness is
-a terminal NONPASS, not a zero.
+a terminal NONPASS, not a zero. A strict fallback that raises before emitting an
+invocation receipt is likewise a terminal NONPASS; it must not be recast as a
+receipt-bearing fallback or silently retried.
 
 The qualification may permit a fully completed fixed-work decision, but it
 passes only if at least one native invocation witnesses
