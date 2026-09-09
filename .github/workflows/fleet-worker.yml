@@ -57,9 +57,10 @@ jobs:
           set -o pipefail
           python -m unittest -v \
             tests.test_mcts_eval_head_to_head \
-            tests.test_mcts_h2h_durable_launcher 2>&1 | tee /tmp/mcts-h2h-contract.log
-          if ! grep -qE 'Ran 33 tests' /tmp/mcts-h2h-contract.log; then
-            echo "::error::expected 33 durable MCTS head-to-head contract tests; the suite shrank or grew"
+            tests.test_mcts_h2h_durable_launcher \
+            tests.test_mcts_isolated_policy_worker 2>&1 | tee /tmp/mcts-h2h-contract.log
+          if ! grep -qE 'Ran 41 tests' /tmp/mcts-h2h-contract.log; then
+            echo "::error::expected 41 durable MCTS head-to-head contract tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/mcts-h2h-contract.log; then
