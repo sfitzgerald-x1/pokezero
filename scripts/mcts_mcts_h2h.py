@@ -41,15 +41,43 @@ from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_mean  # noqa
 
 MANIFEST_SCHEMA_VERSION = "pokezero.mcts-h2h-manifest.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-h2h-complete.v1"
-BACKUP_REPAIR_PILOT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot.v2"
+BACKUP_REPAIR_PILOT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot.v3"
 BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot-readout.v1"
 
 # This is intentionally a one-contrast contract rather than a tunable study
-# registry.  The first strength read must isolate the batched-backup repair;
-# accepting a later source or an arbitrary comparison here would let a bundled
-# treatment inherit this pilot's decision rule.
-BACKUP_REPAIR_CANDIDATE_COMMIT = "df4e3ce15ee69f922f6ae1b81c7b5e9861828319"
-BACKUP_REPAIR_INCUMBENT_COMMIT = "dacb6358d9b145ce069d6718662a38f581a38bc0"
+# registry.  The first strength read must isolate the batched-backup repair.
+# The native bindings needed for the current PyTorch runtime require fresh,
+# reviewed source revisions for *both* policies.  The B2 source-image builder
+# deliberately produces depth-one, remote-free checkouts, so runtime admission
+# cannot rely on Git ancestry.  Instead, the contract pins the two reviewed
+# revisions and carries the static, identical compatibility-delta proof below.
+# It must never call a generic later source revision the backup-repair
+# treatment.
+BACKUP_REPAIR_CANDIDATE_BASELINE_COMMIT = "df4e3ce15ee69f922f6ae1b81c7b5e9861828319"
+BACKUP_REPAIR_INCUMBENT_BASELINE_COMMIT = "dacb6358d9b145ce069d6718662a38f581a38bc0"
+BACKUP_REPAIR_CANDIDATE_RUNTIME_COMMIT = "12ded361fdd674c2d8b855b4e9797484f6f3112f"
+BACKUP_REPAIR_INCUMBENT_RUNTIME_COMMIT = "3d8bdc27ab66b3d75e4231205ac443a520d465ef"
+BACKUP_REPAIR_RUNTIME_COMPATIBILITY = {
+    "schema_version": "pokezero.mcts-h2h-backup-repair-runtime-compatibility.v1",
+    "candidate": {
+        "runtime_commit": BACKUP_REPAIR_CANDIDATE_RUNTIME_COMMIT,
+        "mechanics_baseline_commit": BACKUP_REPAIR_CANDIDATE_BASELINE_COMMIT,
+    },
+    "incumbent": {
+        "runtime_commit": BACKUP_REPAIR_INCUMBENT_RUNTIME_COMMIT,
+        "mechanics_baseline_commit": BACKUP_REPAIR_INCUMBENT_BASELINE_COMMIT,
+    },
+    "allowed_changed_paths": [
+        ".github/workflows/engine-fidelity-gates.yml",
+        "docs/crate_model_integration.md",
+        "rust/pokezero-search/Cargo.lock",
+        "rust/pokezero-search/Cargo.toml",
+        "rust/pokezero-search/README.md",
+        "scripts/build_search_crate_model.sh",
+        "scripts/public_projection_census.py",
+    ],
+    "identical_delta_sha256": "c18625518cadee4d005b85140d9f0d885af5ec19de73b416a7345c6dc7a45fc0",
+}
 BACKUP_REPAIR_PILOT_PAIRS = 12
 BACKUP_REPAIR_CONFIRMATION_PAIRS = 50
 BACKUP_REPAIR_BOOTSTRAP_RESAMPLES = 10_000
@@ -590,11 +618,12 @@ def _backup_repair_pilot_contract(
 
     Generic MCTS-vs-MCTS manifests remain useful for diagnostics.  A manifest
     opting into this schema, however, receives a deliberately narrow contract:
-    corrected batched backups versus the frozen predecessor, a fresh pilot
-    roster and separately reserved confirmation roster, equal configured work,
-    a non-bankable predecessor record, and an executable failure/retry policy.
+    corrected batched backups versus the frozen predecessor, the exact reviewed
+    runtime pair and its constrained compatibility delta, a fresh pilot roster
+    and separately reserved confirmation roster, equal configured work, a
+    non-bankable predecessor record, and an executable failure/retry policy.
     This prevents a result from being retrospectively called the backup-repair
-    pilot after configuration, seed, failure-handling, or analysis drift.
+    pilot after configuration, source, seed, failure-handling, or analysis drift.
     """
 
     study = manifest.get("study")
@@ -615,13 +644,19 @@ def _backup_repair_pilot_contract(
         raise HeadToHeadError(
             "backup-repair pilot must use the exact predeclared failure/retry policy."
         )
-    if str(candidate_raw.get("source_commit", "")) != BACKUP_REPAIR_CANDIDATE_COMMIT:
+    if payload.get("runtime_compatibility") != BACKUP_REPAIR_RUNTIME_COMPATIBILITY:
         raise HeadToHeadError(
-            "backup-repair pilot candidate must be the merged corrected-backup commit."
+            "backup-repair pilot must declare the exact reviewed runtime compatibility delta."
         )
-    if str(incumbent_raw.get("source_commit", "")) != BACKUP_REPAIR_INCUMBENT_COMMIT:
+    candidate_commit = str(candidate_raw.get("source_commit", ""))
+    incumbent_commit = str(incumbent_raw.get("source_commit", ""))
+    if candidate_commit != BACKUP_REPAIR_CANDIDATE_RUNTIME_COMMIT:
         raise HeadToHeadError(
-            "backup-repair pilot incumbent must be the frozen pre-repair commit."
+            "backup-repair pilot candidate must use the exact reviewed corrected-backup runtime commit."
+        )
+    if incumbent_commit != BACKUP_REPAIR_INCUMBENT_RUNTIME_COMMIT:
+        raise HeadToHeadError(
+            "backup-repair pilot incumbent must use the exact reviewed predecessor runtime commit."
         )
     if str(candidate_raw.get("config_id", "")) == str(incumbent_raw.get("config_id", "")):
         raise HeadToHeadError(
@@ -682,8 +717,9 @@ def _backup_repair_pilot_contract(
     return {
         "schema_version": BACKUP_REPAIR_PILOT_SCHEMA_VERSION,
         "stage": "pilot",
-        "candidate_commit": BACKUP_REPAIR_CANDIDATE_COMMIT,
-        "incumbent_commit": BACKUP_REPAIR_INCUMBENT_COMMIT,
+        "candidate_runtime_commit": candidate_commit,
+        "incumbent_runtime_commit": incumbent_commit,
+        "runtime_compatibility": BACKUP_REPAIR_RUNTIME_COMPATIBILITY,
         "pilot_seeds": list(seeds),
         "reserved_confirmation_seeds": list(confirmation),
         "bootstrap_resamples": BACKUP_REPAIR_BOOTSTRAP_RESAMPLES,
@@ -1078,6 +1114,11 @@ def main(argv: list[str] | None = None) -> int:
         candidate_config=candidate_config,
         incumbent_config=incumbent_config,
     )
+    if pilot_contract is not None:
+        if execution_mode != "isolated_build" or isolated_candidate_source_root is None or isolated_incumbent_source_root is None:
+            raise HeadToHeadError(
+                "backup-repair pilot requires isolated source builds for both runtime revisions."
+            )
 
     model_config = load_transformer_model_config(args.checkpoint)
     vocabulary = category_vocab_from_model_config(model_config, args.showdown_root)
