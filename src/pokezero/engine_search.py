@@ -814,6 +814,17 @@ class EngineMctsConfig:
     # visit argmax. Multi-world aggregation applies a second safety bound.
     early_stop: bool = False
     early_stop_min_sims: int = 64
+    # A whole-decision wall budget for the model path. This is intentionally
+    # distinct from ``search_time_ms``: that older knob belongs to the
+    # handcrafted path, while model search historically has been work-capped by
+    # ``search_sims``. ``None`` preserves that historical contract exactly.
+    #
+    # When enabled, the clock starts before live-fold advancement and belief
+    # construction. The native tree is allowed to finish the one batch it has
+    # already started, then declines to begin another; this makes an overrun
+    # bounded, observable, and tree-consistent instead of returning virtual-loss
+    # traversals without their evaluation/backups.
+    model_decision_time_ms: int | None = None
     # DYNAMIC BUDGET LADDER (docs/dynamic-search-budget-plan-20260812.md).
     #
     # `search_depth` and `worlds` remain the MAXIMA, unchanged in meaning. These
@@ -1031,6 +1042,22 @@ class EngineMctsConfig:
                     "for a decision, so a floor that passes here can still exceed an "
                     "individual rung's per-world share; it is clamped to the rung."
                 )
+            if self.model_decision_time_ms is not None:
+                if self.model_decision_time_ms <= 0:
+                    raise ValueError(
+                        "model_decision_time_ms must be positive when set."
+                    )
+                if self.early_stop:
+                    raise ValueError(
+                        "model_decision_time_ms requires early_stop=False: both "
+                        "mechanisms can end a search early, but certify different "
+                        "properties and must not share a result in v1."
+                    )
+                if self.depth_min is not None or self.worlds_min is not None:
+                    raise ValueError(
+                        "model_decision_time_ms requires a fixed search allocation; "
+                        "depth_min/worlds_min can issue later rungs after a deadline."
+                    )
             if (self.depth_min is not None or self.worlds_min is not None) and (
                 self.search_sims < self.worlds
             ):
@@ -1076,6 +1103,10 @@ class EngineMctsConfig:
                 )
         elif self.early_stop:
             raise ValueError("early_stop is supported only with leaf_eval='model'.")
+        elif self.model_decision_time_ms is not None:
+            raise ValueError(
+                "model_decision_time_ms is supported only with leaf_eval='model'."
+            )
         elif self.depth_min is not None or self.worlds_min is not None:
             # Same standing as early_stop: the ladder re-invokes the native model
             # search, so outside leaf_eval='model' it would do nothing and the
@@ -1117,6 +1148,12 @@ class EngineMctsConfig:
                 raise ValueError(
                     "root_selector_shadow requires a fixed search allocation; "
                     "depth_min/worlds_min would make its completed-tree budget dynamic."
+                )
+            if self.model_decision_time_ms is not None:
+                raise ValueError(
+                    "root_selector_shadow requires model_decision_time_ms=None: "
+                    "the shadow reads a completed fixed-work tree, not a deadline "
+                    "prefix."
                 )
         if self.fpu_reduction is not None and not 0.0 <= self.fpu_reduction <= 1.0:
             # Refused here as well as in the crate: Q is a win probability, so a
@@ -1498,6 +1535,13 @@ class EngineMctsStats:
     #: computed against construction went NEGATIVE (measured -1.75). Found in review.
     world_search_attempts: int = 0
     worlds_searched: int = 0
+    # Whole-decision deadline telemetry. A "skipped" world is a constructed
+    # hypothesis the deadline prevented us from handing to native search; it is
+    # deliberately not a crate abort and must not inflate world_search_abort_rate.
+    model_time_budget_decisions: int = 0
+    model_time_budget_exhausted_decisions: int = 0
+    model_time_budget_skipped_worlds: int = 0
+    model_time_budget_overshoot_seconds: float = 0.0
     # Duplicate draws folded into another world's search (drawn N, searched 1
     # at N x budget), so `worlds_searched - worlds_collapsed ==
     # unique_worlds_searched`. Both sides count SUCCEEDING searches only: a
@@ -1882,6 +1926,12 @@ class EngineMctsStats:
             "worlds_attempted": self.worlds_attempted,
             "worlds_constructed": self.worlds_constructed,
             "worlds_searched": self.worlds_searched,
+            "model_time_budget_decisions": self.model_time_budget_decisions,
+            "model_time_budget_exhausted_decisions": (
+                self.model_time_budget_exhausted_decisions
+            ),
+            "model_time_budget_skipped_worlds": self.model_time_budget_skipped_worlds,
+            "model_time_budget_overshoot_seconds": self.model_time_budget_overshoot_seconds,
             # THE PER-WORLD ABORT RATE. `fallback_rate` is a LOWER BOUND on it.
             #
             # A decision falls back only when EVERY world fails (`_search_model`
@@ -2275,6 +2325,7 @@ def native_search_args(
     early_stop_min_sims: int,
     sims: int | None = None,
     depth: int | None = None,
+    time_budget_ms: int | None = None,
 ) -> list:
     """The positional argument list for `search_batched_multi_encoded`.
 
@@ -2344,12 +2395,15 @@ def native_search_args(
     # written as, and the reason it is a widening chain rather than four
     # independent `if`s.
     rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
+    if time_budget_ms is not None and time_budget_ms <= 0:
+        raise ValueError("time_budget_ms must be positive when passed to native search.")
     if (
         early_stop_min_sims
         or config.use_opponent_priors
         or fpu_reduction is not None
         or override_telemetry
         or rollout_leaf_eval
+        or time_budget_ms is not None
     ):
         search_args.extend([early_stop_min_sims, record["side_key"] == "side_one"])
     if (
@@ -2357,15 +2411,21 @@ def native_search_args(
         or fpu_reduction is not None
         or override_telemetry
         or rollout_leaf_eval
+        or time_budget_ms is not None
     ):
         search_args.append(bool(config.use_opponent_priors))
-    if fpu_reduction is not None or override_telemetry or rollout_leaf_eval:
+    if (
+        fpu_reduction is not None
+        or override_telemetry
+        or rollout_leaf_eval
+        or time_budget_ms is not None
+    ):
         # `None` is the crate's own default for this slot, so materializing it to
         # reach the slot behind it changes nothing -- unlike the two booleans
         # above, whose default is False and whose materialized value is the
         # config's.
         search_args.append(None if fpu_reduction is None else float(fpu_reduction))
-    if override_telemetry or rollout_leaf_eval:
+    if override_telemetry or rollout_leaf_eval or time_budget_ms is not None:
         # `arm_priors` is pure telemetry, so materializing it to reach the slot
         # behind it must pass the config's OWN value, never an unconditional
         # True: writing True here would silently switch the arm-name column on
@@ -2385,10 +2445,15 @@ def native_search_args(
     # search config is priors ON, which is this call; the sequential
     # `leaf_eval="rollout_crate"` path is uniform-priors and cannot answer the
     # question the arbiter is for.
-    if rollout_leaf_eval:
+    # The deadline is one positional beyond the rollout seam. Supplying it
+    # therefore materializes every rollout slot with its own inert defaults;
+    # otherwise an integer budget would land in ``rollout_leaf_mode``. This
+    # changes no rollout behavior when the seam is off (the mode remains None),
+    # but keeps the native positional ABI explicit and testable.
+    if rollout_leaf_eval or time_budget_ms is not None:
         search_args.extend(
             [
-                "rollout",
+                "rollout" if rollout_leaf_eval else None,
                 int(config.rollout_count),
                 int(config.rollout_max_plies),
                 str(config.rollout_policy),
@@ -2397,6 +2462,8 @@ def native_search_args(
                 bool(getattr(config, "rollout_branch_on_damage", False)),
             ]
         )
+    if time_budget_ms is not None:
+        search_args.append(int(time_budget_ms))
     return search_args
 
 
@@ -3949,6 +4016,16 @@ class EngineMctsPolicy:
 
     def _search(self, context: PolicyContext, *, rng: random.Random) -> PolicyDecision:
         self._world_failures_before = dict(self.stats.world_failure_reasons)
+        # This is the OUTER clock for a model decision: fold advancement, belief
+        # construction, native batches, aggregation and action mapping all share
+        # one deadline. Native receives only the remaining duration because its
+        # monotonic clock cannot be meaningfully compared with Python's.
+        decision_deadline: float | None = None
+        if self._config.model_decision_time_ms is not None:
+            self.stats.model_time_budget_decisions += 1
+            decision_deadline = time.perf_counter() + (
+                self._config.model_decision_time_ms / 1000.0
+            )
         if context.public_materialization_state is None:
             return self._fallback(context, rng, "no_public_state")
         # Live root fold: advanced at EVERY decision boundary (model mode and
@@ -3973,6 +4050,11 @@ class EngineMctsPolicy:
         attempts_budget = self._config.worlds * self._config.sample_retry_factor
         attempts = 0
         while len(worlds) < self._config.worlds and attempts < attempts_budget:
+            if decision_deadline is not None and time.perf_counter() >= decision_deadline:
+                # Do not start a new materialization after the decision clock
+                # has elapsed. A world already inside `world_battle_spec` is
+                # allowed to finish; it has no partially-mutated shared state.
+                break
             attempts += 1
             self.stats.worlds_attempted += 1
             if self._fixed_override is not None:
@@ -4056,6 +4138,12 @@ class EngineMctsPolicy:
             self._notify_world_observer(context, world, state)
 
         if not worlds:
+            if decision_deadline is not None and time.perf_counter() >= decision_deadline:
+                self.stats.model_time_budget_exhausted_decisions += 1
+                self.stats.model_time_budget_overshoot_seconds += max(
+                    0.0, time.perf_counter() - decision_deadline
+                )
+                return self._fallback(context, rng, "model_time_budget_no_completed_worlds")
             return self._fallback(context, rng, "no_worlds_constructed")
 
         # Counted HERE, at the single dispatch point, rather than at the append
@@ -4069,7 +4157,9 @@ class EngineMctsPolicy:
         self.stats.world_search_attempts += len(worlds)
 
         if self._config.leaf_eval == "model":
-            return self._search_ladder(context, worlds, live_fold, rng)
+            return self._search_ladder(
+                context, worlds, live_fold, rng, decision_deadline=decision_deadline
+            )
         if self._config.leaf_eval == "hp_fraction_crate":
             return self._search_hp_fraction_crate(context, worlds, rng)
         if self._config.leaf_eval == "rollout_crate":
@@ -5068,6 +5158,7 @@ class EngineMctsPolicy:
         worlds: list[tuple[EngineWorld, Any]],
         live_fold: Any,
         rng: random.Random,
+        decision_deadline: float | None = None,
     ) -> PolicyDecision:
         """ONE PLAYED search per decision, plus an occasional discarded shadow.
 
@@ -5102,11 +5193,14 @@ class EngineMctsPolicy:
             self._ladder_depth_override = depth
             self._ladder_sims_override = stage_sims
             self._ladder_pending_addresses = None
+            prior_deadline = getattr(self, "_model_decision_deadline", None)
+            self._model_decision_deadline = decision_deadline
             try:
                 out = self._search_model(context, worlds[:stage_worlds], live_fold, rng)
             finally:
                 self._ladder_depth_override = None
                 self._ladder_sims_override = None
+                self._model_decision_deadline = prior_deadline
             return (
                 out,
                 self.stats.fallback_decisions > before,
@@ -5201,6 +5295,12 @@ class EngineMctsPolicy:
         replay = context.public_materialization_state.replay
         turn = int(getattr(replay, "turn_number", 0) or 0)
         config = self._config
+        decision_deadline = getattr(self, "_model_decision_deadline", None)
+        if config.model_decision_time_ms is not None and decision_deadline is None:
+            # Direct `_search_model` callers are test/probe surfaces that bypass
+            # `_search`; retain the same contract rather than silently disabling
+            # an explicitly configured deadline there.
+            decision_deadline = time.perf_counter() + (config.model_decision_time_ms / 1000.0)
 
         # Relative to THIS RUNG's per-world budget. `early_stop_min_sims` is
         # validated against `search_sims`, which on a ladder cell is the TOTAL for
@@ -5235,6 +5335,8 @@ class EngineMctsPolicy:
         rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
         rollout_ledger: Counter[str] = Counter()
         rollout_modes: Counter[str] = Counter()
+        budget_skipped_worlds = 0
+        native_budget_exhausted = False
 
         def run_world(
             record: Mapping[str, Any],
@@ -5243,6 +5345,18 @@ class EngineMctsPolicy:
             weight: int = 1,
             depth: int | None = None,
         ) -> Optional[dict]:
+            nonlocal budget_skipped_worlds, native_budget_exhausted
+            time_budget_ms: int | None = None
+            if decision_deadline is not None:
+                remaining = decision_deadline - time.perf_counter()
+                if remaining <= 0:
+                    budget_skipped_worlds += weight
+                    native_budget_exhausted = True
+                    return None
+                # A positive value is required by the native boundary. Ceil so
+                # Python does not turn a still-positive remainder into a false
+                # zero-ms refusal before native can decide at its batch seam.
+                time_budget_ms = max(1, math.ceil(remaining * 1000.0))
             try:
                 search_args = native_search_args(
                     config,
@@ -5253,10 +5367,37 @@ class EngineMctsPolicy:
                     early_stop_min_sims=early_stop_min_sims,
                     sims=sims,
                     depth=depth,
+                    time_budget_ms=time_budget_ms,
                 )
                 report = json.loads(
                     native.search_batched_multi_encoded(*search_args)
                 )
+                if time_budget_ms is not None:
+                    # A native wheel that accepts the new positional but does
+                    # not witness its use is not a timed search. Refuse it
+                    # rather than recording Python's elapsed wall time beside
+                    # a tree that may have run the historical fixed-work path.
+                    required = {
+                        "time_budget_enabled": True,
+                        "time_budget_ms": time_budget_ms,
+                    }
+                    for field_name, expected in required.items():
+                        if report.get(field_name) != expected:
+                            raise EngineSearchWitnessError(
+                                "native_time_budget_witness_missing: "
+                                f"{field_name}={report.get(field_name)!r}, expected "
+                                f"{expected!r}"
+                            )
+                    for field_name in (
+                        "time_budget_elapsed_ms",
+                        "time_budget_exhausted",
+                        "time_budget_batch_overshoot_ms",
+                    ):
+                        if field_name not in report:
+                            raise EngineSearchWitnessError(
+                                "native_time_budget_witness_missing: "
+                                f"{field_name} absent"
+                            )
             except Exception as error:  # noqa: BLE001 — count, keep the other worlds
                 detail = (
                     _bounded_reason_detail(str(error).splitlines()[0])
@@ -5266,6 +5407,8 @@ class EngineMctsPolicy:
                 reason = (
                     f"native_early_stop_unsupported: {detail}"
                     if early_stop_min_sims and isinstance(error, TypeError)
+                    else f"native_time_budget_unsupported: {detail}"
+                    if time_budget_ms is not None and isinstance(error, TypeError)
                     # The telemetry flag appends a positional, so a stale image
                     # rejects the call outright -- as a TypeError, from the same
                     # arity mismatch the early-stop flag hit. Named, because
@@ -5310,6 +5453,12 @@ class EngineMctsPolicy:
             # world that is conservatively replayed at full budget counts both
             # invocations; worlds_searched is updated only for final records.
             self.stats.total_iterations += int(report["iterations"])
+            no_completed_batch = (
+                decision_deadline is not None and int(report["iterations"]) == 0
+            )
+            native_budget_exhausted = native_budget_exhausted or bool(
+                report.get("time_budget_exhausted", False)
+            )
             self.stats.model_evals += int(report["model_evals"])
             # Reached depth, same accumulation the hp_fraction path already does.
             # Without this the model path -- the one every strength campaign runs
@@ -5375,6 +5524,16 @@ class EngineMctsPolicy:
                     field_name,
                     getattr(self.stats, field_name) + int(report.get(field_name) or 0),
                 )
+            if no_completed_batch:
+                # The native core may have completed root-prior work before it
+                # reached the deadline seam, even though it completed no full
+                # traversal batch. Keep that real model/phase/fallback cost in
+                # the run ledger, but do not turn a root-only tree into a world
+                # aggregate or demand rollout witnesses for leaves that do not
+                # exist.
+                budget_skipped_worlds += weight
+                native_budget_exhausted = True
+                return None
             # THE ROLLOUT WITNESS, absorbed here rather than nowhere. Every field
             # below was already in the report and was already being read on the
             # SEQUENTIAL path; on this one -- the path the arbiter runs, and the only
@@ -5484,7 +5643,8 @@ class EngineMctsPolicy:
             cache_key = world_cache_key(record, side_key)
             duplicates.setdefault(cache_key, []).append(record)
 
-        for cache_key, records in duplicates.items():
+        duplicate_groups = list(duplicates.items())
+        for group_index, (cache_key, records) in enumerate(duplicate_groups):
             multiplicity = len(records)
             lead = records[0]
             sims = None
@@ -5506,6 +5666,12 @@ class EngineMctsPolicy:
                 depth=getattr(self, "_ladder_depth_override", None),
             )
             if report is None:
+                # A deadline cannot become un-expired. Avoid even building the
+                # later native request records once no remaining time exists.
+                if decision_deadline is not None and time.perf_counter() >= decision_deadline:
+                    for _, remaining_records in duplicate_groups[group_index + 1:]:
+                        budget_skipped_worlds += len(remaining_records)
+                    break
                 continue
             # Both counters move ONLY on a search that returned a report, and
             # only together. Incrementing `worlds_collapsed` before the call --
@@ -5675,10 +5841,54 @@ class EngineMctsPolicy:
                 self._ladder_worlds_agree = len(set(per_world_leaders)) <= 1
         self.stats.search_wall_seconds += time.perf_counter() - search_started
 
+        if budget_skipped_worlds:
+            # `_search` charged every constructed world before it knew which
+            # ones a deadline would defer. Remove only those from the abort
+            # denominator: a deadline is a policy budget result, not a native
+            # search failure.
+            # Normal decisions were charged by `_search` before entering this
+            # method. Direct probe callers deliberately bypass that outer
+            # accounting, so never fabricate a negative abort denominator when
+            # they exercise only the native boundary.
+            self.stats.world_search_attempts = max(
+                0, self.stats.world_search_attempts - budget_skipped_worlds
+            )
+            self.stats.model_time_budget_skipped_worlds += budget_skipped_worlds
+        time_budget_duration_seconds = (
+            config.model_decision_time_ms / 1000.0
+            if decision_deadline is not None
+            else 0.0
+        )
+        # A prefix means the model tree itself was truncated.  It is deliberately
+        # distinct from a deadline that expires later while mapping/telemetry is
+        # finishing: the latter is still a full tree, but its whole-decision wall
+        # witness must report the overrun honestly.
+        deadline_tree_prefix = bool(budget_skipped_worlds or native_budget_exhausted)
+
+        def finalize_time_budget() -> tuple[float, float, bool]:
+            """Account for the *entire* decision immediately before it returns."""
+            if decision_deadline is None:
+                return 0.0, 0.0, False
+            finished = time.perf_counter()
+            elapsed = max(
+                0.0,
+                finished - (decision_deadline - time_budget_duration_seconds),
+            )
+            overshoot = max(0.0, elapsed - time_budget_duration_seconds)
+            exhausted = deadline_tree_prefix or finished >= decision_deadline
+            if exhausted:
+                self.stats.model_time_budget_exhausted_decisions += 1
+            self.stats.model_time_budget_overshoot_seconds += overshoot
+            return elapsed, overshoot, exhausted
+
         if replay_failed:
+            finalize_time_budget()
             return self._fallback(context, rng, "early_stop_replay_failed")
         worlds_searched_here = len(world_runs)
         if not worlds_searched_here:
+            _, _, budget_exhausted = finalize_time_budget()
+            if decision_deadline is not None and budget_exhausted:
+                return self._fallback(context, rng, "model_time_budget_no_completed_worlds")
             return self._fallback(context, rng, "crate_search_failed")
         self.stats.worlds_searched += worlds_searched_here
         aggregated: Counter[str] = Counter()
@@ -5701,6 +5911,7 @@ class EngineMctsPolicy:
         )
         action_index = self._map_choices(context, choice_weights)
         if action_index is None:
+            finalize_time_budget()
             return self._fallback(context, rng, "choices_unmapped")
         self.stats.searched_decisions += 1
         # AFTER `searched_decisions`, so the two counters this telemetry
@@ -5711,6 +5922,11 @@ class EngineMctsPolicy:
             )
             if config.override_telemetry
             else None
+        )
+        # Mapping and root telemetry are part of the same live decision, so
+        # collect the deadline witness only after both complete.
+        budget_elapsed_seconds, budget_overshoot_seconds, budget_exhausted = (
+            finalize_time_budget()
         )
         # THE WITNESS TRAVELS WITH THE DECISION, and the run-level ledger with the
         # shard. Both, not either: the per-decision row is what a turn-level reading
@@ -5738,7 +5954,11 @@ class EngineMctsPolicy:
                     choice: round(weight, 4) for choice, weight in aggregated.most_common()
                 },
                 "aggregated_choices_basis": (
-                    "stopped_prefix" if locked_choice is not None else "full_budget"
+                    "deadline_prefix"
+                    if deadline_tree_prefix
+                    else "stopped_prefix"
+                    if locked_choice is not None
+                    else "full_budget"
                 ),
                 "early_stop": {
                     "enabled": config.early_stop,
@@ -5753,6 +5973,25 @@ class EngineMctsPolicy:
                     "full_budget_replays": full_budget_replays,
                     "simulations_saved": simulations_saved,
                 },
+                **(
+                    {
+                        "time_budget": {
+                            "scope": "whole_model_decision",
+                            "requested_ms": config.model_decision_time_ms,
+                            "deadline_elapsed_ms": round(
+                                budget_elapsed_seconds * 1000.0,
+                                3,
+                            ),
+                            "deadline_overshoot_ms": round(
+                                budget_overshoot_seconds * 1000.0, 3
+                            ),
+                            "exhausted": budget_exhausted,
+                            "worlds_budget_skipped": budget_skipped_worlds,
+                        }
+                    }
+                    if decision_deadline is not None
+                    else {}
+                ),
                 # Present only with the flag on, so a flag-off decision's
                 # metadata is exactly what it has always been. The shard's
                 # aggregate lives in `policy_stats`; this is the per-decision

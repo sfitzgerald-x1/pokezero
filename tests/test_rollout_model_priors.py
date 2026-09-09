@@ -304,6 +304,7 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         model_priors: bool = True,
         use_opponent_priors: bool = True,
         row_inputs: str | None = None,
+        time_budget_ms: int | None = None,
         _raw: bool = False,
     ):
         """One encoded search. `mode=None` is PRODUCTION: the seam's positionals
@@ -330,7 +331,10 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
             None,  # fpu_reduction
             False,  # arm_priors
         ]
-        if mode is not None:
+        # The deadline is positioned after the rollout seam. A timed production
+        # call therefore materializes the seam's inert defaults so the integer
+        # cannot land in `rollout_leaf_mode` on the native ABI.
+        if mode is not None or time_budget_ms is not None:
             args += [
                 mode,
                 self.ROLLOUTS if rollouts is None else rollouts,
@@ -340,6 +344,8 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
                 threads,
                 False,  # rollout_branch_on_damage
             ]
+        if time_budget_ms is not None:
+            args.append(time_budget_ms)
         raw = self._search_raw_from_args(args)
         return raw if _raw else json.loads(raw)
 
@@ -392,6 +398,45 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         for field in ("side_one", "side_two", "root_value", "prior_branches",
                       "depth_occupancy", "expansions", "leaf_evals"):
             self.assertIn(field, production, f"{field} must be in the compared set")
+
+    def test_native_deadline_returns_only_finalized_root_visits(self) -> None:
+        """A tiny budget may stop the tree, never a selected-but-unbacked row.
+
+        This is deliberately a real model-wheel call, not a fake Python report:
+        it proves the optional deadline reaches the native traversal seam. The
+        root setup and the full 2,048-simulation workload cannot complete within
+        one millisecond on the declared fixture, while the exact completed
+        prefix remains implementation-independent. A traversal may fan out into
+        multiple pending chance leaves, so a completed round need not contain
+        exactly `batch` root visits; visit conservation is the real invariant.
+        On a cold host setup may consume the entire millisecond and leave a
+        legal zero-length prefix, so this is an ABI/deadline smoke test rather
+        than the deterministic nonzero-prefix finalization test.
+        """
+        requested = 2_048
+        batch = 64
+        report = self._search(
+            sims=requested,
+            batch=batch,
+            seed=17,
+            model_priors=True,
+            time_budget_ms=1,
+        )
+        self.assertTrue(report["time_budget_enabled"])
+        self.assertEqual(report["time_budget_ms"], 1)
+        self.assertTrue(report["time_budget_exhausted"])
+        completed = int(report["iterations"])
+        self.assertLess(completed, requested)
+        self.assertEqual(report["requested_iterations"], requested)
+        self.assertEqual(report["remaining_iterations"], requested - completed)
+        for side in ("side_one", "side_two"):
+            self.assertEqual(
+                sum(int(entry["visits"]) for entry in report[side]),
+                completed,
+                "a timed report may contain only fully finalized root visits",
+            )
+        self.assertGreaterEqual(float(report["time_budget_elapsed_ms"]), 0.0)
+        self.assertGreaterEqual(float(report["time_budget_batch_overshoot_ms"]), 0.0)
 
     def test_the_gate_holds_at_the_panels_own_batch(self) -> None:
         """The gate must hold at b64, because b64 IS production here.

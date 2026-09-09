@@ -1540,14 +1540,17 @@ jobs:
       # the isolated-worker lifecycle repair adds `EngineMctsPolicyResetTest`, which
       # proves a completed battle cannot carry live folds, consumed annotations, or
       # ladder state into the next battle while cumulative telemetry remains cumulative.
+      # 211 -> 217: the whole-decision deadline adds configuration, timing-witness,
+      # zero-completed-world, and deadline-prefix pins. They are search telemetry
+      # contracts, so this is the one exact-count guard that must move with them.
       # Counted from the real merged suite, not the diff; the exact-count guard below
       # rejects a stale suite size rather than treating it as a pass.
       - name: Engine-search telemetry pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 211 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 211 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 217 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 217 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
@@ -2028,8 +2031,10 @@ jobs:
             tests.test_foulplay_budget_calibration \
             tests.test_battle_bridge_boundary_requests -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 366 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 366 tests"
+          # 366 -> 367: `test_native_deadline_returns_only_finalized_root_visits`
+          # exercises the appended native deadline ABI on the actual model wheel.
+          if ! grep -qE 'Ran 367 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 367 tests"
             exit 1
           fi
           rollout_leaf_skip_status=0

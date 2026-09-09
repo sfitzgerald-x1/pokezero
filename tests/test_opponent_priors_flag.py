@@ -145,6 +145,7 @@ class NativeCallContractTest(unittest.TestCase):
         self,
         early_stop_min_sims: int = 0,
         sims: int | None = None,
+        time_budget_ms: int | None = None,
         **config_kwargs,
     ) -> list:
         # leaf_eval is irrelevant to the flag and "model" demands artifact
@@ -164,6 +165,7 @@ class NativeCallContractTest(unittest.TestCase):
             rust_fold=FOLD,
             early_stop_min_sims=early_stop_min_sims,
             sims=sims,
+            time_budget_ms=time_budget_ms,
         )
 
     def test_the_twelve_leading_positionals_are_the_pre_flag_contract(self) -> None:
@@ -259,6 +261,23 @@ class NativeCallContractTest(unittest.TestCase):
         # the historical 12.
         self.assertEqual(self._captured_args(fpu_reduction=None), self._captured_args())
         self.assertEqual(len(self._captured_args(fpu_reduction=None)), 12)
+
+    def test_time_budget_materializes_every_slot_in_front_of_it(self) -> None:
+        # The deadline is the outermost positional. Its integer cannot be
+        # appended directly after the historical twelve: it would be parsed as
+        # early_stop_min_sims. The inert rollout seam defaults are materialized
+        # solely to reach its declared slot.
+        args = self._captured_args(time_budget_ms=73)
+        self.assertEqual(len(args), 25)
+        self.assertEqual(args[12:17], [0, True, False, None, False])
+        self.assertEqual(args[17:24], [None, 32, 200, "uniform", 0, 1, False])
+        self.assertEqual(args[24], 73)
+
+    def test_time_budget_is_not_accepted_as_zero_or_negative(self) -> None:
+        for budget in (0, -1):
+            with self.subTest(budget=budget):
+                with self.assertRaisesRegex(ValueError, "time_budget_ms must be positive"):
+                    self._captured_args(time_budget_ms=budget)
 
     def test_an_out_of_range_fpu_reduction_is_refused_by_the_config(self) -> None:
         for bad in (-0.1, 1.5):
@@ -364,6 +383,7 @@ class NativeCallContractTest(unittest.TestCase):
                 "rollout_seed",
                 "rollout_threads",
                 "rollout_branch_on_damage",
+                "time_budget_ms",
             ],
         )
 
