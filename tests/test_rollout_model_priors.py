@@ -399,14 +399,16 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
                       "depth_occupancy", "expansions", "leaf_evals"):
             self.assertIn(field, production, f"{field} must be in the compared set")
 
-    def test_native_deadline_returns_only_complete_batches(self) -> None:
+    def test_native_deadline_returns_only_finalized_root_visits(self) -> None:
         """A tiny budget may stop the tree, never a selected-but-unbacked row.
 
         This is deliberately a real model-wheel call, not a fake Python report:
         it proves the optional deadline reaches the native traversal seam. The
-        root setup and at least one 64-row TorchScript batch make 2,048
-        simulations impossible within one millisecond on the declared fixture,
-        while the exact completed count remains implementation-independent.
+        root setup and the full 2,048-simulation workload cannot complete within
+        one millisecond on the declared fixture, while the exact completed
+        prefix remains implementation-independent. A traversal may fan out into
+        multiple pending chance leaves, so a completed round need not contain
+        exactly `batch` root visits; visit conservation is the real invariant.
         """
         requested = 2_048
         batch = 64
@@ -422,11 +424,6 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         self.assertTrue(report["time_budget_exhausted"])
         completed = int(report["iterations"])
         self.assertLess(completed, requested)
-        self.assertEqual(
-            completed % batch,
-            0,
-            "the deadline is checked before a batch, never after selection",
-        )
         self.assertEqual(report["requested_iterations"], requested)
         self.assertEqual(report["remaining_iterations"], requested - completed)
         for side in ("side_one", "side_two"):
