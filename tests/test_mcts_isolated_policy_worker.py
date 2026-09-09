@@ -31,6 +31,7 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
                 "search_sims": 32,
                 "root_selector_q": False,
                 "root_selector_shadow": False,
+                "model_decision_time_ms": None,
             },
             HistoricalEngineMctsConfig,
         )
@@ -40,7 +41,9 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
             compatibility,
             {
                 "protocol": "disabled-diagnostic-omission.v1",
-                "omitted_disabled_fields": ["root_selector_q", "root_selector_shadow"],
+                "omitted_disabled_fields": [
+                    "model_decision_time_ms", "root_selector_q", "root_selector_shadow",
+                ],
             },
         )
 
@@ -51,6 +54,11 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
         with self.assertRaisesRegex(worker_error, "declared policy enables"):
             source_engine_config_payload(
                 {"leaf_eval": "model", "root_selector_shadow": True},
+                HistoricalEngineMctsConfig,
+            )
+        with self.assertRaisesRegex(worker_error, "declared policy enables"):
+            source_engine_config_payload(
+                {"leaf_eval": "model", "model_decision_time_ms": 1},
                 HistoricalEngineMctsConfig,
             )
         with self.assertRaisesRegex(worker_error, "does not support host field"):
