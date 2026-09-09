@@ -409,6 +409,9 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         prefix remains implementation-independent. A traversal may fan out into
         multiple pending chance leaves, so a completed round need not contain
         exactly `batch` root visits; visit conservation is the real invariant.
+        On a cold host setup may consume the entire millisecond and leave a
+        legal zero-length prefix, so this is an ABI/deadline smoke test rather
+        than the deterministic nonzero-prefix finalization test.
         """
         requested = 2_048
         batch = 64
