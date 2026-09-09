@@ -23,7 +23,7 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | --- | --- | --- | --- |
 | Batched backup repair | Merged in [#1337](https://github.com/sfitzgerald-x1/pokezero/pull/1337), merge `df4e3ce15ee69f922f6ae1b81c7b5e9861828319`. | Colliding batched chance visits no longer dilute a known terminal win or constant leaf value. | Better play. |
 | Corrected action-choice panel | Merged in [#1338](https://github.com/sfitzgerald-x1/pokezero/pull/1338). Both seats and batches 1/2/8/64 pass immediate-terminal, nested-value, rare-decoy, and equal-value controls. | The repaired tree retains the correct action in its declared deterministic cases and exposes finite-budget value error. | Model-path behavior, multi-world behavior, or strength. |
-| Raw Q-max selector | A terminal-free, two-seat noisy-Q control is in [#1354](https://github.com/sfitzgerald-x1/pokezero/pull/1354); its full fidelity gate is the remaining merge condition. Visit-max takes the high-visit action while raw Q-max takes the noisier low-visit action, with a synthetic regret gap. | The conservative stop rule has an exact model-bias counterexample. | How often that error happens in games, or any game-strength estimate. |
+| Raw Q-max selector | Merged in [#1354](https://github.com/sfitzgerald-x1/pokezero/pull/1354), merge `8616a2afb5eff426ec4f37a87e2fe4a8a649c723`. Its terminal-free, two-seat noisy-Q control shows visit-max taking the high-visit action while raw Q-max takes the noisier low-visit action, with a synthetic regret gap. | The conservative stop rule has an exact model-bias counterexample. | How often that error happens in games, or any game-strength estimate. |
 | Encoder fast path | Merged in [#1340](https://github.com/sfitzgerald-x1/pokezero/pull/1340), merge `98faa804188289ecdcc5f5b87eaae8ad39de77eb`; full-path timing is a stable null and this line is parked. | Identifier normalization has bitwise-output coverage and the microbenchmark did not survive to a source-attributable full-path benefit. | A full-search speedup or extra useful work at the same clock. |
 | Timing replay | [#1339](https://github.com/sfitzgerald-x1/pokezero/pull/1339) is merged and its fixed corpus was measured candidate-first twice, then baseline-first. | The candidate's apparent slowdown reverses in the baseline-first block; the result is order/warm-state dominated and is a valid null. | A source-attributable full-search win, numerical-tree parity, or extra useful work at the same clock. |
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
@@ -31,13 +31,13 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 
 ## Active route
 
-### 1. Close the selector control, then retire selector work
+### 1. Record the selector control and retire selector work
 
-Merge [#1354](https://github.com/sfitzgerald-x1/pokezero/pull/1354) only after
-its complete fidelity gate succeeds. Record the narrow result: raw Q-max can
-prefer a low-visit noisy action in a terminal-free, both-seat control. That
-supports parking the mechanism; it neither estimates real-position error
-frequency nor demonstrates a loss in games.
+[#1354](https://github.com/sfitzgerald-x1/pokezero/pull/1354) passed its complete
+fidelity gate and is merged. Its narrow result is that raw Q-max can prefer a
+low-visit noisy action in a terminal-free, both-seat control. That supports
+parking the mechanism; it neither estimates real-position error frequency nor
+demonstrates a loss in games.
 
 No new selector telemetry, representative selector read, or selector mutation
 battery is authorized in this iteration.
@@ -81,7 +81,7 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 
 ## Immediate order
 
-1. Let #1354 complete its existing gate, merge it when green, and record the raw-Q stop decision.
+1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
 2. Let the frozen backup pilot complete unchanged, validate its terminal artifact, then apply its predeclared analysis exactly once.
 3. If the pilot promotes, run only its reserved confirmation contrast. If it does not, retain the correctness repair and choose the next mechanics investigation from a concrete remaining decision error.
 4. Design fixed-wall enforcement only as a distinct, tested contract before making any same-deadline claim.
