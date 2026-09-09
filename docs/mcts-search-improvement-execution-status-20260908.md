@@ -96,27 +96,38 @@ Freeze the following before the first timed decision:
   native build, the final-enthalf iteration-9375 checkpoint and its registered
   SHA-256, the corpus hash, CPU runtime, and the exact Showdown/vocabulary
   receipts;
-- fixed model allocation: depth 2, 256 requested simulations, batch 16, four
-  worlds, `early_stop=false`, and both selector flags disabled; and
+- fixed model allocation: depth 2, 256 requested simulations **per native
+  world invocation**, batch 16, four worlds, `early_stop=false`, and both
+  selector flags disabled. A collapsed duplicate is one native invocation with
+  its request scaled by multiplicity; 256 is never misreported as a
+  per-decision simulation cap; and
 - one whole-decision request of **1,000 ms** (`model_decision_time_ms=1000`) on
   every corpus decision. This is a qualification target, not a budget to tune
   after observing its result.
 
-The generated per-decision records must preserve the existing timing boundary
-(prefix replay and fold warm-up excluded; request construction through action
-mapping included) and add the decision's deadline witness: requested budget,
-elapsed time, overshoot, exhaustion, completed iterations, searched and
-constructed worlds, deadline-skipped worlds, and exact fallback/refusal cause.
-The terminal summary must retain p50/p95/max elapsed and overshoot, the count
-of exhausted decisions, total and per-decision world coverage, and the count
-of zero-completed-world refusals. A missing witness is a terminal NONPASS, not
-a zero.
+The generated per-decision records must retain two distinct clocks. The
+existing outer timing boundary excludes prefix replay and fold warm-up, then
+measures through validated Showdown choice serialization. The inner deadline
+witness covers the model decision and is not a substitute for that outer wall
+time. Report both rather than treating either as the other. Each record must
+add the decision's requested budget, deadline elapsed time, deadline overshoot,
+exhaustion, searched and constructed worlds, deadline-skipped worlds, and exact
+fallback/refusal cause. It must also retain every native invocation's
+multiplicity, requested and completed iterations, remaining iterations,
+`time_budget_exhausted` witness, and each seat's finalized root-visit total.
+The terminal summary must retain p50/p95/max outer elapsed time and deadline
+overshoot, the count of exhausted decisions, total and per-decision world
+coverage, and the count of zero-completed-world refusals. A missing witness is
+a terminal NONPASS, not a zero.
 
 The qualification may permit a fully completed fixed-work decision, but it
-passes only if at least one deadline-exhausted decision has a **nonzero,
-finalized** prefix below its 256-request cap; every prefix must retain visit
-conservation; and there are no fallback, invalid-action, or
-zero-completed-world decisions. Deadline-skipped worlds are not failures or
+passes only if at least one native invocation witnesses
+`time_budget_exhausted=true` with a **nonzero, finalized** prefix
+(`0 < completed_iterations < requested_iterations` for that invocation).
+Every such prefix must retain per-seat root-visit conservation; a
+decision-level exhaustion caused only by later mapping or skipped worlds does
+not satisfy this gate. There must be no fallback, invalid-action, or
+zero-completed-world decision. Deadline-skipped worlds are not failures or
 silently discarded: their distribution is part of the result. A timed
 MCTS-versus-MCTS contrast remains blocked unless that result records the same
 clock contract and makes its candidate/incumbent belief-world coverage
