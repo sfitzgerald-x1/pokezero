@@ -59,6 +59,9 @@ reused attempt id or existing terminal is refused; a new attempt id can resume
 an interrupted, non-terminal scorer root without overwriting prior diagnostics.
 One root-scoped advisory lease is inherited by the scorer, so a hard-killed
 launcher cannot admit a recovery attempt while its child still writes the root.
+The child also receives the immutable launcher-attempt identity, receipt path,
+and output-root path, allowing a scored-study contract to require this exact
+handoff rather than relying on an optional wrapper convention.
 Its focused tests cover successful and failed child exits, interrupted-attempt
 preservation, orphan-child exclusion, existing-terminal refusal, and rejection
 of a diverging runner `--out-dir`. Before any replacement pilot, freeze a new

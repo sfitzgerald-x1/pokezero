@@ -29,7 +29,12 @@ class DurableLauncherTest(unittest.TestCase):
     def _runner(self, directory: Path, *, exit_code: int) -> Path:
         script = directory / "runner.py"
         script.write_text(
+            "import os\n"
             "import sys\n"
+            "print('launcher_attempt=' + os.environ['POKEZERO_DURABLE_LAUNCHER_ATTEMPT_ID'])\n"
+            "print('launcher_out_dir=' + os.environ['POKEZERO_DURABLE_LAUNCHER_OUT_DIR'])\n"
+            "print('launcher_receipt=' + os.environ['POKEZERO_DURABLE_LAUNCHER_ATTEMPT_RECEIPT'])\n"
+            "print('launcher_writer_lock_fd=' + os.environ['POKEZERO_DURABLE_LAUNCHER_WRITER_LOCK_FD'])\n"
             "print('wrapped runner output')\n"
             f"raise SystemExit({exit_code})\n",
             encoding="utf-8",
@@ -113,6 +118,11 @@ class DurableLauncherTest(unittest.TestCase):
                 terminal["runner_log_sha256"],
                 hashlib.sha256(log_path.read_bytes()).hexdigest(),
             )
+            log = log_path.read_text(encoding="utf-8")
+            self.assertIn("launcher_attempt=attempt-a", log)
+            self.assertIn(f"launcher_out_dir={out_dir.resolve()}", log)
+            self.assertIn(f"launcher_receipt={attempt_path.resolve()}", log)
+            self.assertIn("launcher_writer_lock_fd=", log)
             self.assertTrue(raw_terminal.endswith("\n"))
             self.assertNotIn("\\n", raw_terminal)
 

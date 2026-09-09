@@ -226,6 +226,15 @@ def run(args: argparse.Namespace) -> int:
                 "writer_lock": str(writer_lock_path),
             },
         )
+        runner_environment = dict(os.environ)
+        runner_environment.update(
+            {
+                "POKEZERO_DURABLE_LAUNCHER_ATTEMPT_ID": attempt_id,
+                "POKEZERO_DURABLE_LAUNCHER_OUT_DIR": str(out_dir),
+                "POKEZERO_DURABLE_LAUNCHER_ATTEMPT_RECEIPT": str(attempt_receipt),
+                "POKEZERO_DURABLE_LAUNCHER_WRITER_LOCK_FD": str(writer_lock_descriptor),
+            }
+        )
 
         launcher_error: str | None = None
         with runner_log.open("xb") as log_handle:
@@ -236,6 +245,7 @@ def run(args: argparse.Namespace) -> int:
                     stderr=subprocess.STDOUT,
                     check=False,
                     pass_fds=(writer_lock_descriptor,),
+                    env=runner_environment,
                 )
                 exit_code = int(completed.returncode)
             except OSError as error:
