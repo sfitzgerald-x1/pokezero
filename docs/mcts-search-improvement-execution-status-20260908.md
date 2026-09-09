@@ -13,52 +13,75 @@ Improve MCTS decisions at a fixed practical per-decision budget by taking the sh
 
 This avoids changing production choice from a toy observation and building evaluation machinery without a decision it can make.
 
+The active corrected-versus-uncorrected backup comparison is **work-capped**,
+not fixed-wall. A favorable result would be a strength signal under its
+declared work cap only; it must not be relabelled as equal-deadline strength.
+
 ## Current evidence
 
 | Line | Current state | Establishes | Does **not** establish |
 | --- | --- | --- | --- |
 | Batched backup repair | Merged in [#1337](https://github.com/sfitzgerald-x1/pokezero/pull/1337), merge `df4e3ce15ee69f922f6ae1b81c7b5e9861828319`. | Colliding batched chance visits no longer dilute a known terminal win or constant leaf value. | Better play. |
 | Corrected action-choice panel | Merged in [#1338](https://github.com/sfitzgerald-x1/pokezero/pull/1338). Both seats and batches 1/2/8/64 pass immediate-terminal, nested-value, rare-decoy, and equal-value controls. | The repaired tree retains the correct action in its declared deterministic cases and exposes finite-budget value error. | Model-path behavior, multi-world behavior, or strength. |
-| Root-choice hypothesis | The panel's harsh-prior row has visit-max regret 0.4745 and shadow Q-max regret 0; the rare-decoy control rejects a simple lucky-terminal explanation. Shadow implementation is locally tested but not published. | One concrete completed-tree visit-lag mechanism is worth testing on real development positions. | Q-max is generally better or safe to deploy. |
-| Encoder fast path | Merged in [#1340](https://github.com/sfitzgerald-x1/pokezero/pull/1340), merge `98faa804188289ecdcc5f5b87eaae8ad39de77eb`; the first full-path read is now parked as null. | Identifier normalization has bitwise-output coverage and a narrow encoder improvement. | A full-search speedup or extra useful work at the same clock. |
+| Raw Q-max selector | A terminal-free, two-seat noisy-Q control is in [#1354](https://github.com/sfitzgerald-x1/pokezero/pull/1354); its full fidelity gate is the remaining merge condition. Visit-max takes the high-visit action while raw Q-max takes the noisier low-visit action, with a synthetic regret gap. | The conservative stop rule has an exact model-bias counterexample. | How often that error happens in games, or any game-strength estimate. |
+| Encoder fast path | Merged in [#1340](https://github.com/sfitzgerald-x1/pokezero/pull/1340), merge `98faa804188289ecdcc5f5b87eaae8ad39de77eb`; full-path timing is a stable null and this line is parked. | Identifier normalization has bitwise-output coverage and the microbenchmark did not survive to a source-attributable full-path benefit. | A full-search speedup or extra useful work at the same clock. |
 | Timing replay | [#1339](https://github.com/sfitzgerald-x1/pokezero/pull/1339) is merged and its fixed corpus was measured candidate-first twice, then baseline-first. | The candidate's apparent slowdown reverses in the baseline-first block; the result is order/warm-state dominated and is a valid null. | A source-attributable full-search win, numerical-tree parity, or extra useful work at the same clock. |
-| MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`. | Fresh mirrored games, atomic game records, provenance binding, and fail-closed resumes are implemented. | A native/checkpoint battle smoke or a score. |
+| MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
+| Backup-repair strength pilot | Active, frozen 12-pair/24-game corrected-versus-uncorrected comparison: depth 2, 256 simulations, four worlds, batch 16, CPU, final-enthalf iteration 9375. Five complete mirrored pairs are durable; the sixth is running. | The live contrast is attributable and resumable; completed units have matching policy receipts. | Any outcome before all 12 pairs and one valid terminal readout. |
 
 ## Active route
 
-### 1. Close the timing-integrity gate without weakening it
+### 1. Close the selector control, then retire selector work
 
-The fresh battery must exit cleanly, restore exact source, and produce one complete artifact: every applied mutation killed; no survivor, skip, or not-applied outcome; matching controls. Only then may #1339 update checked-in evidence and re-run CI. A hand-edited hash or partial artifact is invalid. This is not a new search hypothesis; it is the bounded integrity prerequisite for using replay/timing evidence.
+Merge [#1354](https://github.com/sfitzgerald-x1/pokezero/pull/1354) only after
+its complete fidelity gate succeeds. Record the narrow result: raw Q-max can
+prefer a low-visit noisy action in a terminal-free, both-seat control. That
+supports parking the mechanism; it neither estimates real-position error
+frequency nor demonstrates a loss in games.
 
-### 2. Turn the root-selector hypothesis into a representative read
+No new selector telemetry, representative selector read, or selector mutation
+battery is authorized in this iteration.
 
-After #1339 is green, rebase the shadow-only selector on current main and run fresh source-integrity evidence because it changes `engine_search.py`. The first read uses model-leaf, one-world, fixed-allocation searches with early stop disabled. It preserves production visit-max and records from the same completed tree: acting-seat Q-max and visit-max action; their visits and Q values; disagreement and unmeasured denominators with causes; all fallbacks/refusals; and low-visit-Q/noisy-control rows. The panel earns this read, not a production selector switch. Park Q-max if representative positions show no useful regret signal, noisy-Q regressions, or mostly unmeasured rows; do not rescue it with a threshold grid.
+### 2. Finish the backup pilot unchanged and read it once
 
-### 3. Obtain the first full-path encoder result
+Let the active pilot reach exactly 12 complete mirrored pairs. A valid terminal
+read requires all 24 durable game records and 48 matching worker receipts, the
+frozen checkpoint/source/engine contracts, and one complete PASS or NONPASS
+terminal record. No partial read, retry reinterpretation, or outcome-driven
+extension is permitted.
 
-Once #1339 is green, execute its fixed representative timing panel serially, alternating baseline and candidate in isolated processes. Record parity, completed work, total decision wall, and existing subphase counters. Promote only a result with matching arrays, actions, values, and refusal/fallback behavior at fixed work. A vanished end-to-end gain is a valid negative result and closes this optimization line.
+On a valid PASS, apply the frozen bootstrap rule: 10,000 resamples, confidence
+0.80, and minimum effect delta 0.05. Promote only if that rule says so;
+otherwise the result is inconclusive or negative as specified, not a reason to
+change the rule. Any confirmation uses the reserved non-overlapping seed set
+and its declared 50-pair bound.
 
-### 4. Use one attributable strength comparison
+### 3. Keep the fixed-wall objective explicit
 
-The first eligible strength contrast is **corrected backups versus frozen uncorrected MCTS**. It may begin only after the minimal isolated-build adapter is validated, because the two policies have different native source identities. Selector and encoder contrasts remain later, separately attributable candidates: each first needs its own representative read. Freeze final-enthalf iteration 9375 with SHA-256 `0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be` only after verifying exported bytes. Before outcomes are read, declare candidate, incumbent, mirrored seeds, draw scoring, fixed-work or fixed-wall contract, retries, failure rule, resource cap, and precision rule.
+The current model search performs its declared simulation cap independently for
+each belief world. `search_time_ms` is not an enforced whole-decision deadline
+for this model path. Before claiming equal-deadline strength, define and test a
+single decision clock, its scope, the permitted one-batch overshoot policy, and
+the rule that no unfinished virtual-loss row is backed up. Until then, report
+per-decision latency and completed work as measurements only.
 
-The merged runner supports two configurations that share the same source, checkpoint, engine fingerprint, and Showdown identity, such as a surviving selector versus corrected visit-max. It deliberately refuses two different native source builds in one process. Corrected-versus-uncorrected and encoder-versus-baseline contrasts therefore require minimal isolated-build orchestration rather than bypassing the binding guard. That is an explicit implementation gap, not permission to call different sources comparable.
-
-Start with a small separately declared native smoke only to validate routing, provenance, freshness, latency, and durability. It has no strength conclusion. Then run the declared mirrored seed comparison, including both seats and fresh trajectories after divergent moves. Report score relative to 0.5, seat splits, paired uncertainty, tail latency, model work, and all exclusion/failure counts. An interval spanning zero is inconclusive, not equivalence.
+This is a future implementation requirement, not permission to alter the live
+work-capped pilot.
 
 ## Resource, durability, and stop rules
 
-All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an engine node with actual spare capacity and binds there. New GPU work requests whole GPU groups, never fragments a node, and uses at most two nodes at a time. Every long run writes atomic progress and complete units, emits PASS/NONPASS terminal state, retains failure diagnostics, and is validated before it changes source.
+All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an engine node with actual spare capacity and binds there. New GPU work requests whole GPU groups, never fragments a node, and uses at most two nodes at a time. Every long run writes atomic progress and complete units, emits PASS/NONPASS terminal state, retains failure diagnostics, and is validated before it changes source. The pilot launcher atomically records the runner exit code, while the runner separately validates every source-bound game receipt; a superficial PASS marker is not sufficient.
 
 - Keep the backup repair even if playing strength is flat: it is a correctness repair, not a claimed strength win.
-- Park selector Q-max if its real-position read fails declared regret/noisy-Q controls.
-- Close the encoder line if full-path parity timing is null or worse.
+- Park raw Q-max after #1354's terminal-free noisy-Q control merges; do not rescue it with a threshold or selector grid.
+- Keep the encoder line closed: full-path timing is null/order-sensitive.
+- The stopped rollout-mutation sweep is preserved but invalid: its wrapper emitted PASS after interrupted, incomplete progress with zero controls. It is not a result or a prerequisite.
 - Do not start a PUCT/depth/simulation sweep, broad cache rewrite, or retraining run as a substitute for these reads.
 - Keep the R74 missing-handoff recovery separate; it is not MCTS-improvement evidence and cannot be synthesized from partial artifacts.
 
 ## Immediate order
 
-1. Validate the running fresh mutation battery and merge #1339 only after exact-source evidence and CI pass.
-2. Implement and validate only the isolated-build adapter required by the corrected-versus-uncorrected contrast. Run its source-bound native smoke, then the first bounded, predeclared strength comparison.
-3. Publish the selector as telemetry only, with fresh evidence after rebase; collect its one-world development read.
-4. Complete the full-path timing read; park or promote the encoder on its own evidence. A surviving selector may then use the existing same-identity runner; an encoder contrast reuses the isolated-build adapter.
+1. Let #1354 complete its existing gate, merge it when green, and record the raw-Q stop decision.
+2. Let the frozen backup pilot complete unchanged, validate its terminal artifact, then apply its predeclared analysis exactly once.
+3. If the pilot promotes, run only its reserved confirmation contrast. If it does not, retain the correctness repair and choose the next mechanics investigation from a concrete remaining decision error.
+4. Design fixed-wall enforcement only as a distinct, tested contract before making any same-deadline claim.
