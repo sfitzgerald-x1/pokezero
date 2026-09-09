@@ -5509,6 +5509,44 @@ class EngineMctsPolicy:
                         native_time_budget_exhausted = report["time_budget_exhausted"]
                         if type(native_time_budget_exhausted) is not bool:
                             raise ValueError("time_budget_exhausted must be a boolean")
+                        # Native serializes each duration with three decimal
+                        # places.  Permit that last-place rounding, but no
+                        # wider disagreement between the fields that certify a
+                        # deadline prefix.  With early stopping forbidden for
+                        # this config, unfinished requested work can only come
+                        # from native observing its deadline.  A *completed*
+                        # final batch may still overrun without a subsequent
+                        # native check, so the converse is intentionally not
+                        # required for zero remaining work.
+                        native_duration_rounding_tolerance_ms = 0.001
+                        if (
+                            native_time_budget_exhausted
+                            and native_elapsed_ms + native_duration_rounding_tolerance_ms
+                            < float(time_budget_ms)
+                        ):
+                            raise ValueError(
+                                "time_budget_exhausted precedes the native budget"
+                            )
+                        expected_batch_overshoot_ms = max(
+                            0.0, native_elapsed_ms - float(time_budget_ms)
+                        )
+                        if (
+                            abs(
+                                native_batch_overshoot_ms
+                                - expected_batch_overshoot_ms
+                            )
+                            > native_duration_rounding_tolerance_ms
+                        ):
+                            raise ValueError(
+                                "time_budget_batch_overshoot_ms does not match elapsed time"
+                            )
+                        if (
+                            remaining_iterations > 0
+                            and not native_time_budget_exhausted
+                        ):
+                            raise ValueError(
+                                "unfinished iterations lack a native deadline witness"
+                            )
 
                         root_visits: dict[str, int] = {}
                         for side in ("side_one", "side_two"):
