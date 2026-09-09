@@ -1544,7 +1544,7 @@ jobs:
       # zero-completed-world, and deadline-prefix pins. They are search telemetry
       # contracts, so this is the one exact-count guard that must move with them.
       # 217 -> 224: native-invocation receipts add seven rejection/conservation
-      # checks: multiplicity-scaled allocation, missing witness, forged work,
+      # checks: multiplicity-scaled allocation, completed-final-batch overrun, forged work,
       # opposite-root conservation, scalar validity, cross-field timing
       # consistency, and preservation of an earlier refused invocation.
       # Counted from the real merged suite, not the diff; the exact-count guard below
