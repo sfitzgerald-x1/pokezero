@@ -7,7 +7,6 @@ import fcntl
 import importlib.util
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -421,17 +420,16 @@ class BackupRepairPilotContractTest(unittest.TestCase):
                 "reserved_confirmation_seeds": confirmation_seeds,
                 "replaces_nonbankable_study": module.BACKUP_REPAIR_SUPERSEDED_STUDY,
                 "failure_retry_policy": module.BACKUP_REPAIR_FAILURE_RETRY_POLICY,
-                "candidate_repair_baseline": module.BACKUP_REPAIR_CANDIDATE_BASELINE_COMMIT,
-                "incumbent_repair_baseline": module.BACKUP_REPAIR_INCUMBENT_BASELINE_COMMIT,
+                "runtime_compatibility": module.BACKUP_REPAIR_RUNTIME_COMPATIBILITY,
             }
         }
         bootstrap = {"resamples": 10_000, "seed": 20260908, "confidence_level": 0.80}
         candidate = {
-            "source_commit": "a" * 40,
+            "source_commit": module.BACKUP_REPAIR_CANDIDATE_RUNTIME_COMMIT,
             "config_id": "corrected-backups",
         }
         incumbent = {
-            "source_commit": "b" * 40,
+            "source_commit": module.BACKUP_REPAIR_INCUMBENT_RUNTIME_COMMIT,
             "config_id": "pre-repair-backups",
         }
         return module, manifest, pilot_seeds, bootstrap, candidate, incumbent
@@ -459,10 +457,7 @@ class BackupRepairPilotContractTest(unittest.TestCase):
             contract["failure_retry_policy"], module.BACKUP_REPAIR_FAILURE_RETRY_POLICY
         )
         self.assertEqual(contract["candidate_runtime_commit"], candidate["source_commit"])
-        self.assertEqual(
-            contract["candidate_repair_baseline"],
-            module.BACKUP_REPAIR_CANDIDATE_BASELINE_COMMIT,
-        )
+        self.assertEqual(contract["runtime_compatibility"], module.BACKUP_REPAIR_RUNTIME_COMPATIBILITY)
 
     def test_contract_refuses_configuration_or_roster_drift(self) -> None:
         module, manifest, seeds, bootstrap, candidate, incumbent = self._contract_inputs()
@@ -532,8 +527,8 @@ class BackupRepairPilotContractTest(unittest.TestCase):
                 incumbent_config=_PilotConfig(),
             )
 
-        manifest["study"]["candidate_repair_baseline"] = "0" * 40
-        with self.assertRaisesRegex(HeadToHeadError, "corrected-backup baseline"):
+        manifest["study"]["runtime_compatibility"] = {}
+        with self.assertRaisesRegex(HeadToHeadError, "runtime compatibility delta"):
             module._backup_repair_pilot_contract(
                 manifest,
                 seeds=seeds,
@@ -544,65 +539,32 @@ class BackupRepairPilotContractTest(unittest.TestCase):
                 incumbent_config=_PilotConfig(),
             )
 
-    def test_runtime_source_must_be_a_clean_descendant_of_the_mechanics_baseline(self) -> None:
-        module = _runner_module()
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-
-            def git(*arguments: str) -> subprocess.CompletedProcess[str]:
-                return subprocess.run(
-                    ["git", "-C", str(root), *arguments],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-
-            git("init")
-            git("config", "user.email", "tests@example.invalid")
-            git("config", "user.name", "MCTS contract test")
-            tracked = root / "tracked.txt"
-            tracked.write_text("baseline\n", encoding="utf-8")
-            git("add", "tracked.txt")
-            git("commit", "-m", "baseline")
-            baseline = git("rev-parse", "HEAD").stdout.strip()
-            tracked.write_text("runtime compatibility\n", encoding="utf-8")
-            git("commit", "-am", "runtime compatibility")
-            head = git("rev-parse", "HEAD").stdout.strip()
-
-            proof = module._require_clean_git_ancestor(
-                root,
-                expected_head=head,
-                required_ancestor=baseline,
-                role="candidate",
+    def test_contract_refuses_any_unreviewed_runtime_source_revision(self) -> None:
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._contract_inputs()
+        candidate["source_commit"] = "a" * 40
+        with self.assertRaisesRegex(HeadToHeadError, "exact reviewed corrected-backup runtime"):
+            module._backup_repair_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_PilotConfig(),
+                incumbent_config=_PilotConfig(),
             )
-            self.assertEqual(proof["head"], head)
-            self.assertEqual(proof["required_ancestor"], baseline)
-            self.assertTrue(proof["ancestor_verified"])
 
-            with self.assertRaisesRegex(HeadToHeadError, "declared runtime commit"):
-                module._require_clean_git_ancestor(
-                    root,
-                    expected_head=baseline,
-                    required_ancestor=baseline,
-                    role="candidate",
-                )
-
-            with self.assertRaisesRegex(HeadToHeadError, "does not descend"):
-                module._require_clean_git_ancestor(
-                    root,
-                    expected_head=head,
-                    required_ancestor="0" * 40,
-                    role="candidate",
-                )
-
-            tracked.write_text("dirty\n", encoding="utf-8")
-            with self.assertRaisesRegex(HeadToHeadError, "not a clean"):
-                module._require_clean_git_ancestor(
-                    root,
-                    expected_head=head,
-                    required_ancestor=baseline,
-                    role="candidate",
-                )
+        candidate["source_commit"] = module.BACKUP_REPAIR_CANDIDATE_RUNTIME_COMMIT
+        incumbent["source_commit"] = "b" * 40
+        with self.assertRaisesRegex(HeadToHeadError, "exact reviewed predecessor runtime"):
+            module._backup_repair_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_PilotConfig(),
+                incumbent_config=_PilotConfig(),
+            )
 
     def test_readout_uses_the_predeclared_delta_and_never_hides_prior_fallbacks(self) -> None:
         module, manifest, seeds, bootstrap, candidate, incumbent = self._contract_inputs()
