@@ -78,6 +78,58 @@ distribution, zero-completed-world refusal behavior, and the identical clock
 configuration on both policies. Until then, report per-decision latency and
 completed work as measurements only.
 
+### 4. Fixed-deadline qualification contract (after the frozen pilot readout)
+
+This is one bounded, development-only gate for the already-merged deadline;
+it is neither a game trial nor evidence of stronger MCTS. It uses the existing
+public replay timing corpus and replay-backed model path, rather than a new
+benchmark or evaluation runner. The corpus has 16 development decisions and is
+not part of either the 12-pair pilot or its reserved confirmation roster. Its
+canonical corpus SHA-256 is
+`6d4be46153251e8a615275e600a9e557fb109609c9fd3111e7d087c27a6d8d11`
+(raw-file SHA-256
+`a1930e513149d39166fc8fe5e0ddbbfd509cd0d4e50f0319f8f20f29d39a6203`).
+
+Freeze the following before the first timed decision:
+
+- corrected source `380066e8a8e7e16ab4e09f377f6802c11a4a2e85`, its matching
+  native build, the final-enthalf iteration-9375 checkpoint and its registered
+  SHA-256, the corpus hash, CPU runtime, and the exact Showdown/vocabulary
+  receipts;
+- fixed model allocation: depth 2, 256 requested simulations, batch 16, four
+  worlds, `early_stop=false`, and both selector flags disabled; and
+- one whole-decision request of **1,000 ms** (`model_decision_time_ms=1000`) on
+  every corpus decision. This is a qualification target, not a budget to tune
+  after observing its result.
+
+The generated per-decision records must preserve the existing timing boundary
+(prefix replay and fold warm-up excluded; request construction through action
+mapping included) and add the decision's deadline witness: requested budget,
+elapsed time, overshoot, exhaustion, completed iterations, searched and
+constructed worlds, deadline-skipped worlds, and exact fallback/refusal cause.
+The terminal summary must retain p50/p95/max elapsed and overshoot, the count
+of exhausted decisions, total and per-decision world coverage, and the count
+of zero-completed-world refusals. A missing witness is a terminal NONPASS, not
+a zero.
+
+The qualification may permit a fully completed fixed-work decision, but it
+passes only if at least one deadline-exhausted decision has a **nonzero,
+finalized** prefix below its 256-request cap; every prefix must retain visit
+conservation; and there are no fallback, invalid-action, or
+zero-completed-world decisions. Deadline-skipped worlds are not failures or
+silently discarded: their distribution is part of the result. A timed
+MCTS-versus-MCTS contrast remains blocked unless that result records the same
+clock contract and makes its candidate/incumbent belief-world coverage
+comparable.
+
+The historical `dacb635` predecessor cannot accept
+`model_decision_time_ms`; the isolated transport correctly rejects it rather
+than omitting a behavior-bearing field. Therefore a later timed baseline must
+be an explicitly source-bound **derived predecessor** that ports only this
+deadline contract, with its diff reviewed against `dacb635`. It must never be
+relabeled as the historical predecessor, and the active work-capped pilot
+remains unchanged.
+
 ## Resource, durability, and stop rules
 
 All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an engine node with actual spare capacity and binds there. New GPU work requests whole GPU groups, never fragments a node, and uses at most two nodes at a time. Every long run writes atomic progress and complete units, emits PASS/NONPASS terminal state, retains failure diagnostics, and is validated before it changes source. The pilot launcher atomically records the runner exit code, while the runner separately validates every source-bound game receipt; a superficial PASS marker is not sufficient.
