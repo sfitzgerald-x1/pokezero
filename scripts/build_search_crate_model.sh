@@ -29,6 +29,10 @@ if [ ! -x "$PYTHON" ]; then
 fi
 
 export LIBTORCH_USE_PYTORCH=1
+if [[ "${LIBTORCH_BYPASS_VERSION_CHECK+x}" == x ]]; then
+  echo "error: LIBTORCH_BYPASS_VERSION_CHECK is forbidden; install the matching PyTorch 2.13.0 runtime" >&2
+  exit 1
+fi
 export PYTHON
 export PATH="$(dirname "$PYTHON"):$PATH"
 
