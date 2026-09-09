@@ -1543,14 +1543,18 @@ jobs:
       # 211 -> 217: the whole-decision deadline adds configuration, timing-witness,
       # zero-completed-world, and deadline-prefix pins. They are search telemetry
       # contracts, so this is the one exact-count guard that must move with them.
+      # 217 -> 224: native-invocation receipts add seven rejection/conservation
+      # checks: multiplicity-scaled allocation, missing witness, forged work,
+      # opposite-root conservation, scalar validity, cross-field timing
+      # consistency, and preservation of an earlier refused invocation.
       # Counted from the real merged suite, not the diff; the exact-count guard below
       # rejects a stale suite size rather than treating it as a pass.
       - name: Engine-search telemetry pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 217 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 217 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 224 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 224 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
