@@ -859,6 +859,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     fpu_reduction: Option<f32>,
     arm_priors: bool,
     rollout_seam: Option<EncodedRolloutSeam<'_>>,
+    time_budget_ms: Option<u64>,
+    time_budget_started: Option<Instant>,
     lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
@@ -954,7 +956,18 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut model_nanos = 0u128;
     let mut tree_nanos = 0u128;
     let mut root_priors: Option<Vec<f32>> = None;
-    if model_priors {
+    // The clock is started by the PyO3 boundary, before root parsing, context
+    // construction, fold cloning, and this core's tree setup. Python passes
+    // the remaining duration from its whole-decision clock, so the two clocks
+    // need not share an epoch; they only need to agree that an already-started
+    // batch is completed before another one can begin.
+    let mut time_budget_exhausted = false;
+    if let (Some(budget_ms), Some(started)) = (time_budget_ms, time_budget_started) {
+        if started.elapsed().as_millis() >= u128::from(budget_ms) {
+            time_budget_exhausted = true;
+        }
+    }
+    if model_priors && !time_budget_exhausted {
         // Both seats' option lists, selected once from `self_side_one`. No
         // caller-side `if self_side_one { s2 } else { s1 }` anywhere in this
         // path: that expression is a seat swap no libtorch-less test can see.
@@ -1011,6 +1024,16 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let _ = crate::leaf::drain_encode_subphases(); // per-search reset
     let start = Instant::now();
     while completed < iterations {
+        if let (Some(budget_ms), Some(started)) = (time_budget_ms, time_budget_started) {
+            if started.elapsed().as_millis() >= u128::from(budget_ms) {
+                // This check is deliberately before a round begins. Everything
+                // selected in a prior round has already had its model forward
+                // and finalize/back-up pass, so returning here cannot leak a
+                // virtual loss or an unfinished tree row.
+                time_budget_exhausted = true;
+                break;
+            }
+        }
         let traversal_budget = batch_size.min(iterations - completed);
         let mut traversals: Vec<Traversal> = Vec::with_capacity(traversal_budget);
         let mut pending: Vec<crate::encoder::EncodedArrays> = Vec::new();
@@ -1515,6 +1538,24 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         collisions.traversals,
         collisions.leaf_repeats,
     );
+    // Deadline fields are appended only for the opt-in path: a historical
+    // fixed-work report remains byte-for-byte on its old schema. An overrun is
+    // not hidden -- it is the cost of finishing the final complete batch rather
+    // than abandoning traversals after selection.
+    let extra = match (time_budget_ms, time_budget_started) {
+        (Some(budget_ms), Some(started)) => {
+            let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let overshoot_ms = (elapsed_ms - budget_ms as f64).max(0.0);
+            format!(
+                "{extra},\"time_budget_enabled\":true,\"time_budget_ms\":{},\"time_budget_elapsed_ms\":{:.3},\"time_budget_exhausted\":{},\"time_budget_batch_overshoot_ms\":{:.3}",
+                budget_ms,
+                elapsed_ms,
+                time_budget_exhausted,
+                overshoot_ms,
+            )
+        }
+        _ => extra,
+    };
     // The seam's columns are APPENDED, and only when the seam is engaged, so a
     // production report is byte-identical to the one this function produced
     // before the seam existed -- not "identical after dropping some new
@@ -1925,6 +1966,10 @@ impl NativeLeafModel {
         rollout_seed = 0,
         rollout_threads = 1,
         rollout_branch_on_damage = false,
+        // A whole native-search budget, appended after every previous optional
+        // positional. ``None`` leaves the historical fixed-work call and report
+        // untouched; a value is checked only between full traversal batches.
+        time_budget_ms = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -1954,6 +1999,7 @@ impl NativeLeafModel {
         rollout_seed: u64,
         rollout_threads: usize,
         rollout_branch_on_damage: bool,
+        time_budget_ms: Option<u64>,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -1968,6 +2014,16 @@ impl NativeLeafModel {
                 "early_stop_min_sims must be <= iterations",
             ));
         }
+        if time_budget_ms == Some(0) {
+            return Err(PyValueError::new_err(
+                "time_budget_ms must be positive when set",
+            ));
+        }
+        // Start before every setup step that can consume the supplied native
+        // remainder. The core only begins a traversal batch after checking
+        // this same clock, so a late parse or tree build cannot buy an extra
+        // batch beyond the caller's decision deadline.
+        let time_budget_started = time_budget_ms.map(|_| Instant::now());
         let fpu_reduction = crate::tree::validate_fpu_reduction(fpu_reduction)?;
         // The seam's boundary. Every rejection here has a demonstrated failing
         // input in `tests/test_rollout_model_priors.py`, per the program rule
@@ -2083,6 +2139,8 @@ impl NativeLeafModel {
                             .as_ref()
                             .expect("a mode implies a validated config"),
                     }),
+                    time_budget_ms,
+                    time_budget_started,
                     lossy_subcases,
                 )
             })
