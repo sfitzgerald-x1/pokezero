@@ -29,8 +29,10 @@ Build requirement, non-negotiable and inherited from direction 1: the crate must
 be built ``--features model``. Without it the abort gate at
 ``rust/pokezero-search/src/tree.rs`` is ``allow(dead_code)``, and while direction
 2 does not read the abort channel directly, a census whose two directions ran on
-different builds is not one census. torch 2.11.0 or 2.12.1; never 2.12.0 (removed
-``at::Tensor::align_as``) and never 2.13.0.
+different builds is not one census. The model-feature build requires the same
+PyTorch 2.13.0 runtime as the source image: tch/torch-sys 0.26.0 matches that
+runtime. Older binding/runtime combinations that relied on a bypass are not
+valid census inputs.
 """
 
 from __future__ import annotations
