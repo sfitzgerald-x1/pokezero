@@ -78,6 +78,69 @@ distribution, zero-completed-world refusal behavior, and the identical clock
 configuration on both policies. Until then, report per-decision latency and
 completed work as measurements only.
 
+### 4. Fixed-deadline qualification contract (after the frozen pilot readout)
+
+This is one bounded, development-only gate for the already-merged deadline;
+it is neither a game trial nor evidence of stronger MCTS. It uses the existing
+public replay timing corpus and replay-backed model path, rather than a new
+benchmark or evaluation runner. The corpus has 16 development decisions and is
+not part of either the 12-pair pilot or its reserved confirmation roster. Its
+canonical corpus SHA-256 is
+`6d4be46153251e8a615275e600a9e557fb109609c9fd3111e7d087c27a6d8d11`
+(raw-file SHA-256
+`a1930e513149d39166fc8fe5e0ddbbfd509cd0d4e50f0319f8f20f29d39a6203`).
+
+Freeze the following before the first timed decision:
+
+- corrected source `380066e8a8e7e16ab4e09f377f6802c11a4a2e85`, its matching
+  native build, the final-enthalf iteration-9375 checkpoint and its registered
+  SHA-256, the corpus hash, CPU runtime, and the exact Showdown/vocabulary
+  receipts;
+- fixed model allocation: depth 2, 256 requested simulations **per native
+  world invocation**, batch 16, four worlds, `early_stop=false`, and both
+  selector flags disabled. A collapsed duplicate is one native invocation with
+  its request scaled by multiplicity; 256 is never misreported as a
+  per-decision simulation cap; and
+- one whole-decision request of **1,000 ms** (`model_decision_time_ms=1000`) on
+  every corpus decision. This is a qualification target, not a budget to tune
+  after observing its result.
+
+The generated per-decision records must retain two distinct clocks. The
+existing outer timing boundary excludes prefix replay and fold warm-up, then
+measures through validated Showdown choice serialization. The inner deadline
+witness covers the model decision and is not a substitute for that outer wall
+time. Report both rather than treating either as the other. Each record must
+add the decision's requested budget, deadline elapsed time, deadline overshoot,
+exhaustion, searched and constructed worlds, deadline-skipped worlds, and exact
+fallback/refusal cause. It must also retain every native invocation's
+multiplicity, requested and completed iterations, remaining iterations,
+`time_budget_exhausted` witness, and each seat's finalized root-visit total.
+The terminal summary must retain p50/p95/max outer elapsed time and deadline
+overshoot, the count of exhausted decisions, total and per-decision world
+coverage, and the count of zero-completed-world refusals. A missing witness is
+a terminal NONPASS, not a zero.
+
+The qualification may permit a fully completed fixed-work decision, but it
+passes only if at least one native invocation witnesses
+`time_budget_exhausted=true` with a **nonzero, finalized** prefix
+(`0 < completed_iterations < requested_iterations` for that invocation).
+Every such prefix must retain per-seat root-visit conservation; a
+decision-level exhaustion caused only by later mapping or skipped worlds does
+not satisfy this gate. There must be no fallback, invalid-action, or
+zero-completed-world decision. Deadline-skipped worlds are not failures or
+silently discarded: their distribution is part of the result. A timed
+MCTS-versus-MCTS contrast remains blocked unless that result records the same
+clock contract and makes its candidate/incumbent belief-world coverage
+comparable.
+
+The historical `dacb635` predecessor cannot accept
+`model_decision_time_ms`; the isolated transport correctly rejects it rather
+than omitting a behavior-bearing field. Therefore a later timed baseline must
+be an explicitly source-bound **derived predecessor** that ports only this
+deadline contract, with its diff reviewed against `dacb635`. It must never be
+relabeled as the historical predecessor, and the active work-capped pilot
+remains unchanged.
+
 ## Resource, durability, and stop rules
 
 All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an engine node with actual spare capacity and binds there. New GPU work requests whole GPU groups, never fragments a node, and uses at most two nodes at a time. Every long run writes atomic progress and complete units, emits PASS/NONPASS terminal state, retains failure diagnostics, and is validated before it changes source. The pilot launcher atomically records the runner exit code, while the runner separately validates every source-bound game receipt; a superficial PASS marker is not sufficient.
