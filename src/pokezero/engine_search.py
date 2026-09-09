@@ -5337,6 +5337,58 @@ class EngineMctsPolicy:
         rollout_modes: Counter[str] = Counter()
         budget_skipped_worlds = 0
         native_budget_exhausted = False
+        # These are compute invocations, not belief-world rows.  A collapsed
+        # duplicate group performs one native search at a multiplicity-scaled
+        # allocation and then contributes several belief rows; preserving the
+        # distinction is necessary to audit a deadline prefix honestly.
+        native_time_budget_invocations: list[dict[str, Any]] = []
+        time_budget_duration_seconds = (
+            config.model_decision_time_ms / 1000.0
+            if decision_deadline is not None
+            else 0.0
+        )
+        finalized_time_budget: tuple[float, float, bool] | None = None
+
+        def finalize_time_budget() -> tuple[float, float, bool]:
+            """Account for the whole decision exactly once, including fallback exits."""
+            nonlocal finalized_time_budget
+            if finalized_time_budget is not None:
+                return finalized_time_budget
+            if decision_deadline is None:
+                finalized_time_budget = (0.0, 0.0, False)
+                return finalized_time_budget
+            finished = time.perf_counter()
+            elapsed = max(
+                0.0,
+                finished - (decision_deadline - time_budget_duration_seconds),
+            )
+            overshoot = max(0.0, elapsed - time_budget_duration_seconds)
+            exhausted = bool(budget_skipped_worlds or native_budget_exhausted) or (
+                finished >= decision_deadline
+            )
+            if exhausted:
+                self.stats.model_time_budget_exhausted_decisions += 1
+            self.stats.model_time_budget_overshoot_seconds += overshoot
+            finalized_time_budget = (elapsed, overshoot, exhausted)
+            return finalized_time_budget
+
+        def time_budget_metadata() -> dict[str, Any]:
+            """Return the decision and native-invocation deadline witnesses."""
+            elapsed, overshoot, exhausted = finalize_time_budget()
+            return {
+                "scope": "whole_model_decision",
+                "requested_ms": config.model_decision_time_ms,
+                "deadline_elapsed_ms": round(elapsed * 1000.0, 3),
+                "deadline_overshoot_ms": round(overshoot * 1000.0, 3),
+                "exhausted": exhausted,
+                "worlds_budget_skipped": budget_skipped_worlds,
+                "native_invocations": native_time_budget_invocations,
+            }
+
+        def time_budget_fallback_extra() -> dict[str, Any] | None:
+            if decision_deadline is None:
+                return None
+            return {"time_budget": time_budget_metadata()}
 
         def run_world(
             record: Mapping[str, Any],
@@ -5398,6 +5450,60 @@ class EngineMctsPolicy:
                                 "native_time_budget_witness_missing: "
                                 f"{field_name} absent"
                             )
+                    try:
+                        requested_iterations = int(report["requested_iterations"])
+                        remaining_iterations = int(report["remaining_iterations"])
+                        completed_iterations = requested_iterations - remaining_iterations
+                        reported_iterations = int(report["iterations"])
+                        if (
+                            requested_iterations < 0
+                            or remaining_iterations < 0
+                            or completed_iterations < 0
+                            or reported_iterations != completed_iterations
+                        ):
+                            raise ValueError(
+                                "requested/completed/remaining iteration accounting is invalid"
+                            )
+
+                        root_visits: dict[str, int] = {}
+                        for side in ("side_one", "side_two"):
+                            entries = report[side]
+                            if not isinstance(entries, list):
+                                raise ValueError(f"{side} is not a list")
+                            visits = 0
+                            for entry in entries:
+                                if not isinstance(entry, Mapping):
+                                    raise ValueError(f"{side} contains a non-object arm")
+                                arm_visits = int(entry["visits"])
+                                if arm_visits < 0:
+                                    raise ValueError(f"{side} contains negative visits")
+                                visits += arm_visits
+                            root_visits[side] = visits
+                    except (KeyError, TypeError, ValueError) as error:
+                        raise EngineSearchWitnessError(
+                            "native_time_budget_invocation_invalid: "
+                            f"{error}"
+                        ) from error
+                    native_time_budget_invocations.append(
+                        {
+                            "world_seed": int(record["seed"]),
+                            "multiplicity": weight,
+                            "requested_iterations": requested_iterations,
+                            "completed_iterations": completed_iterations,
+                            "remaining_iterations": remaining_iterations,
+                            "time_budget_ms": time_budget_ms,
+                            "time_budget_elapsed_ms": float(
+                                report["time_budget_elapsed_ms"]
+                            ),
+                            "time_budget_batch_overshoot_ms": float(
+                                report["time_budget_batch_overshoot_ms"]
+                            ),
+                            "time_budget_exhausted": bool(
+                                report["time_budget_exhausted"]
+                            ),
+                            "root_visits": root_visits,
+                        }
+                    )
             except Exception as error:  # noqa: BLE001 — count, keep the other worlds
                 detail = (
                     _bounded_reason_detail(str(error).splitlines()[0])
@@ -5854,42 +5960,35 @@ class EngineMctsPolicy:
                 0, self.stats.world_search_attempts - budget_skipped_worlds
             )
             self.stats.model_time_budget_skipped_worlds += budget_skipped_worlds
-        time_budget_duration_seconds = (
-            config.model_decision_time_ms / 1000.0
-            if decision_deadline is not None
-            else 0.0
-        )
         # A prefix means the model tree itself was truncated.  It is deliberately
         # distinct from a deadline that expires later while mapping/telemetry is
         # finishing: the latter is still a full tree, but its whole-decision wall
         # witness must report the overrun honestly.
         deadline_tree_prefix = bool(budget_skipped_worlds or native_budget_exhausted)
 
-        def finalize_time_budget() -> tuple[float, float, bool]:
-            """Account for the *entire* decision immediately before it returns."""
-            if decision_deadline is None:
-                return 0.0, 0.0, False
-            finished = time.perf_counter()
-            elapsed = max(
-                0.0,
-                finished - (decision_deadline - time_budget_duration_seconds),
-            )
-            overshoot = max(0.0, elapsed - time_budget_duration_seconds)
-            exhausted = deadline_tree_prefix or finished >= decision_deadline
-            if exhausted:
-                self.stats.model_time_budget_exhausted_decisions += 1
-            self.stats.model_time_budget_overshoot_seconds += overshoot
-            return elapsed, overshoot, exhausted
-
         if replay_failed:
-            finalize_time_budget()
-            return self._fallback(context, rng, "early_stop_replay_failed")
+            return self._fallback(
+                context,
+                rng,
+                "early_stop_replay_failed",
+                engine_mcts_extra=time_budget_fallback_extra(),
+            )
         worlds_searched_here = len(world_runs)
         if not worlds_searched_here:
             _, _, budget_exhausted = finalize_time_budget()
             if decision_deadline is not None and budget_exhausted:
-                return self._fallback(context, rng, "model_time_budget_no_completed_worlds")
-            return self._fallback(context, rng, "crate_search_failed")
+                return self._fallback(
+                    context,
+                    rng,
+                    "model_time_budget_no_completed_worlds",
+                    engine_mcts_extra=time_budget_fallback_extra(),
+                )
+            return self._fallback(
+                context,
+                rng,
+                "crate_search_failed",
+                engine_mcts_extra=time_budget_fallback_extra(),
+            )
         self.stats.worlds_searched += worlds_searched_here
         aggregated: Counter[str] = Counter()
         for record in world_runs:
@@ -5911,8 +6010,12 @@ class EngineMctsPolicy:
         )
         action_index = self._map_choices(context, choice_weights)
         if action_index is None:
-            finalize_time_budget()
-            return self._fallback(context, rng, "choices_unmapped")
+            return self._fallback(
+                context,
+                rng,
+                "choices_unmapped",
+                engine_mcts_extra=time_budget_fallback_extra(),
+            )
         self.stats.searched_decisions += 1
         # AFTER `searched_decisions`, so the two counters this telemetry
         # partitions can never be incremented on different sets of decisions.
@@ -5925,9 +6028,7 @@ class EngineMctsPolicy:
         )
         # Mapping and root telemetry are part of the same live decision, so
         # collect the deadline witness only after both complete.
-        budget_elapsed_seconds, budget_overshoot_seconds, budget_exhausted = (
-            finalize_time_budget()
-        )
+        finalize_time_budget()
         # THE WITNESS TRAVELS WITH THE DECISION, and the run-level ledger with the
         # shard. Both, not either: the per-decision row is what a turn-level reading
         # joins on, and the shard aggregate is where `rollout_fallback_fraction`
@@ -5974,21 +6075,7 @@ class EngineMctsPolicy:
                     "simulations_saved": simulations_saved,
                 },
                 **(
-                    {
-                        "time_budget": {
-                            "scope": "whole_model_decision",
-                            "requested_ms": config.model_decision_time_ms,
-                            "deadline_elapsed_ms": round(
-                                budget_elapsed_seconds * 1000.0,
-                                3,
-                            ),
-                            "deadline_overshoot_ms": round(
-                                budget_overshoot_seconds * 1000.0, 3
-                            ),
-                            "exhausted": budget_exhausted,
-                            "worlds_budget_skipped": budget_skipped_worlds,
-                        }
-                    }
+                    {"time_budget": time_budget_metadata()}
                     if decision_deadline is not None
                     else {}
                 ),
@@ -6826,7 +6913,12 @@ class EngineMctsPolicy:
 
 
     def _fallback(
-        self, context: PolicyContext, rng: random.Random, reason: str
+        self,
+        context: PolicyContext,
+        rng: random.Random,
+        reason: str,
+        *,
+        engine_mcts_extra: Mapping[str, Any] | None = None,
     ) -> PolicyDecision:
         self.stats.fallback_decisions += 1
         self.stats.fallback_reasons[reason] += 1
@@ -6897,7 +6989,12 @@ class EngineMctsPolicy:
         return PolicyDecision(
             action_index=rng.choice(legal),
             policy_id=self.policy_id,
-            metadata={"engine_mcts": {"fallback": reason}},
+            metadata={
+                "engine_mcts": {
+                    "fallback": reason,
+                    **(dict(engine_mcts_extra) if engine_mcts_extra is not None else {}),
+                }
+            },
         )
 
 

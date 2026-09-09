@@ -4391,6 +4391,47 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(budget["scope"], "whole_model_decision")
         self.assertEqual(budget["requested_ms"], 10_000)
         self.assertFalse(budget["exhausted"])
+        self.assertEqual(len(budget["native_invocations"]), 1)
+        invocation = budget["native_invocations"][0]
+        self.assertEqual(invocation["multiplicity"], 1)
+        self.assertEqual(invocation["requested_iterations"], 100)
+        self.assertEqual(invocation["completed_iterations"], 100)
+        self.assertEqual(invocation["remaining_iterations"], 0)
+        self.assertFalse(invocation["time_budget_exhausted"])
+        self.assertEqual(invocation["root_visits"], {"side_one": 100, "side_two": 0})
+
+    def test_time_budget_records_one_multiplicity_scaled_native_invocation(self) -> None:
+        """Collapsed worlds are one native call, not two falsely capped calls."""
+        policy = self._policy(worlds=2, model_decision_time_ms=10_000)
+        report = self._report(
+            [("alpha", 120, 0.5, 0.2), ("beta", 80, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "time_budget_enabled": True,
+                "time_budget_ms": 10_000,
+                "time_budget_elapsed_ms": 0.1,
+                "time_budget_exhausted": False,
+                "time_budget_batch_overshoot_ms": 0.0,
+            }
+        )
+
+        decision, native = self._run(
+            policy,
+            [report],
+            worlds=[self._world("duplicate")] * 2,
+        )
+
+        self.assertEqual(len(native.calls), 1)
+        invocation = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ][0]
+        self.assertEqual(invocation["multiplicity"], 2)
+        self.assertEqual(invocation["requested_iterations"], 200)
+        self.assertEqual(invocation["completed_iterations"], 200)
+        self.assertEqual(invocation["remaining_iterations"], 0)
+        self.assertEqual(invocation["root_visits"], {"side_one": 200, "side_two": 0})
 
     def test_time_budget_refuses_a_native_report_without_its_witness(self) -> None:
         policy = self._policy(worlds=1, model_decision_time_ms=10_000)
@@ -4408,6 +4449,11 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                 "native_time_budget_witness_missing" in reason
                 for reason in policy.stats.world_failure_reasons
             )
+        )
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["time_budget"]["native_invocations"],
+            [],
+            "a malformed native response is a refusal, never a forged invocation receipt",
         )
 
     def test_time_budget_witness_includes_action_mapping(self) -> None:
@@ -4479,6 +4525,15 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(policy.stats.prior_fallbacks, 2)
         self.assertAlmostEqual(policy.stats.model_wall_seconds, 0.081, places=6)
         self.assertEqual(policy.stats.world_search_attempts, 0)
+        witness = decision.metadata["engine_mcts"]["time_budget"]
+        self.assertTrue(witness["exhausted"])
+        self.assertEqual(len(witness["native_invocations"]), 1)
+        invocation = witness["native_invocations"][0]
+        self.assertEqual(invocation["requested_iterations"], 100)
+        self.assertEqual(invocation["completed_iterations"], 0)
+        self.assertEqual(invocation["remaining_iterations"], 100)
+        self.assertTrue(invocation["time_budget_exhausted"])
+        self.assertEqual(invocation["root_visits"], {"side_one": 0, "side_two": 0})
 
     def test_deadline_truncated_tree_is_labeled_as_a_deadline_prefix(self) -> None:
         policy = self._policy(worlds=1, model_decision_time_ms=10_000)
@@ -4502,6 +4557,14 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             decision.metadata["engine_mcts"]["aggregated_choices_basis"],
             "deadline_prefix",
         )
+        invocation = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ][0]
+        self.assertEqual(invocation["requested_iterations"], 200)
+        self.assertEqual(invocation["completed_iterations"], 100)
+        self.assertEqual(invocation["remaining_iterations"], 100)
+        self.assertTrue(invocation["time_budget_exhausted"])
+        self.assertEqual(invocation["root_visits"], {"side_one": 100, "side_two": 0})
 
     # -- the counter FIRES -----------------------------------------------------
 
