@@ -23,13 +23,15 @@ from typing import Any, BinaryIO, Callable, Mapping
 PROTOCOL_VERSION = "pokezero.isolated-mcts-policy.v1"
 MAX_FRAME_BYTES = 64 * 1024 * 1024
 RESET_PROTOCOL = "policy_method_or_fresh_source_policy.v1"
-# A newer host may include an observability-only selector flag which did not
-# exist in the frozen source being evaluated. We may omit such a flag only
-# when it is explicitly disabled. Anything behavior-bearing must fail closed.
+# A newer host may include a disabled diagnostic or deadline field which did
+# not exist in the frozen source being evaluated.  We may omit it only when
+# its exact disabled value preserves the historical fixed-work behavior.
+# Anything behavior-bearing must fail closed.
 CONFIG_COMPATIBILITY_PROTOCOL = "disabled-diagnostic-omission.v1"
 DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
     "root_selector_q": False,
     "root_selector_shadow": False,
+    "model_decision_time_ms": None,
 }
 STATS_FIELDS = (
     "decisions",

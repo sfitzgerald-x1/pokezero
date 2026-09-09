@@ -696,7 +696,16 @@ class SourceReceiptTest(unittest.TestCase):
 
     def test_isolated_worker_receipt_must_bind_the_exact_clean_incumbent(self) -> None:
         module = _runner_module()
-        incumbent = _spec("incumbent", policy_id="incumbent")
+        incumbent = _spec(
+            "incumbent",
+            policy_id="incumbent",
+            config={
+                "leaf_eval": "model",
+                "search_sims": 32,
+                "search_batch": 1,
+                "model_decision_time_ms": None,
+            },
+        )
         receipt = {
             "policy": incumbent.to_payload(),
             "commit": incumbent.source_commit,
@@ -707,7 +716,7 @@ class SourceReceiptTest(unittest.TestCase):
             "reset_protocol": "policy_method_or_fresh_source_policy.v1",
             "config_compatibility": {
                 "protocol": "disabled-diagnostic-omission.v1",
-                "omitted_disabled_fields": [],
+                "omitted_disabled_fields": ["model_decision_time_ms"],
             },
         }
         self.assertEqual(

@@ -92,6 +92,9 @@ ISOLATED_WORKER_RESPONSE_TIMEOUT_SECONDS = 180.0
 ISOLATED_DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
     "root_selector_q": False,
     "root_selector_shadow": False,
+    # Older frozen sources predate this deadline control.  None is the
+    # disabled setting and retains their fixed-work MCTS behavior exactly.
+    "model_decision_time_ms": None,
 }
 
 
