@@ -49,13 +49,13 @@ build-then-install is the supported path.)
 scripts/build_search_crate_model.sh <venv-python>
 ```
 
-= `LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1 maturin build
---release --features model` + wheel install. The crate links the venv's OWN
-libtorch (never a vendored one); tch is pinned `=0.24.0` (torch-sys expects
-libtorch 2.11.0, venv ships 2.12.x — the bypass covers the skew and the
-parity gate `tests/test_crate_model_leafeval.py` is the real compatibility
-check; re-run it after any tch/torch bump). `build.rs` embeds an rpath to
-the venv's `torch/lib`, so import order does not matter at runtime.
+= `LIBTORCH_USE_PYTORCH=1 maturin build --release --features model` + wheel
+install. The crate links the venv's OWN libtorch (never a vendored one); tch
+is pinned `=0.26.0`, whose torch-sys binding targets libtorch 2.13.0. The
+build rejects any non-2.13.0 runtime rather than bypassing a version check. The
+parity gate `tests/test_crate_model_leafeval.py` remains the compatibility
+check; re-run it after any tch/torch bump. `build.rs` embeds an rpath to the
+venv's `torch/lib`, so import order does not matter at runtime.
 
 Artifacts are per-device (`torch.jit.trace` bakes device constants): export
 CPU via `scripts/export_model.py --formats ts`; re-trace on MPS/CUDA for

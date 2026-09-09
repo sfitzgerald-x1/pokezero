@@ -9,7 +9,7 @@ per its recommendation). Everything here is CRATE-side; wiring into
 
 ## What landed
 
-- **Cargo feature `model`** on `pokezero-search`: `tch = "=0.24.0"`
+- **Cargo feature `model`** on `pokezero-search`: `tch = "=0.26.0"`
   (optional). Default build is unchanged and libtorch-free.
 - **`TorchScriptLeafEval`** (`src/model.rs`): loads a `scripts/export_model.py`
   artifact via `CModule`, runs batched forward (obs batch + optional
@@ -33,14 +33,14 @@ per its recommendation). Everything here is CRATE-side; wiring into
 scripts/build_search_crate_model.sh <venv-python>
 ```
 
-which is: `LIBTORCH_USE_PYTORCH=1 LIBTORCH_BYPASS_VERSION_CHECK=1
-maturin build --release --features model` + wheel install. Specifics:
+which is: `LIBTORCH_USE_PYTORCH=1 maturin build --release --features model`
+and wheel install. Specifics:
 
-- **tch 0.24.0 against the venv's torch 2.12.1.** torch-sys 0.24.0 expects
-  libtorch 2.11.0; the bypass acknowledges the minor-version skew. The C++
-  shims compile against the venv torch's real headers, and the parity gate
-  below is the machine-checkable compatibility proof. Bump tch and drop the
-  bypass together when a matched release exists; re-run the gate after any
+- **tch 0.26.0 against the model runtime's torch 2.13.0.** torch-sys 0.26.0
+  targets libtorch 2.13.0. The build refuses any other runtime; it never uses a
+  version-check bypass. The C++ shims compile against the venv torch's real
+  headers, and the parity gate below is the machine-checkable compatibility
+  proof. Bump tch and the runtime guard together; re-run the gate after any
   bump.
 - **No vendored libtorch, ever** — the crate links the torch the venv
   already ships (one runtime for Python-side and in-crate inference; also
