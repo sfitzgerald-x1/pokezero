@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
+import fcntl
 import hashlib
 import json
 import os
@@ -40,7 +41,7 @@ from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_mean  # noqa
 
 MANIFEST_SCHEMA_VERSION = "pokezero.mcts-h2h-manifest.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-h2h-complete.v1"
-BACKUP_REPAIR_PILOT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot.v1"
+BACKUP_REPAIR_PILOT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot.v2"
 BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot-readout.v1"
 
 # This is intentionally a one-contrast contract rather than a tunable study
@@ -54,6 +55,38 @@ BACKUP_REPAIR_CONFIRMATION_PAIRS = 50
 BACKUP_REPAIR_BOOTSTRAP_RESAMPLES = 10_000
 BACKUP_REPAIR_PILOT_CONFIDENCE = 0.80
 BACKUP_REPAIR_MINIMUM_EFFECT_DELTA = 0.05
+BACKUP_REPAIR_SUPERSEDED_STUDY = {
+    "experiment_id": "mcts-backup-repair-pilot-c7f54d7e-20260908-r4",
+    "terminal_handoff": "malformed_literal_backslash_n",
+}
+BACKUP_REPAIR_SUPERSEDED_PILOT_SEEDS = (
+    2026090801,
+    2026090802,
+    2026090803,
+    2026090804,
+    2026090805,
+    2026090806,
+    2026090807,
+    2026090808,
+    2026090809,
+    2026090810,
+    2026090811,
+    2026090812,
+)
+BACKUP_REPAIR_SUPERSEDED_CONFIRMATION_SEEDS = tuple(range(2026091001, 2026091051))
+BACKUP_REPAIR_FAILURE_RETRY_POLICY = {
+    "schema_version": "pokezero.mcts-h2h-failure-retry-policy.v1",
+    "interrupted_before_runner_terminal": "resume_same_root_with_fresh_launcher_attempt",
+    "nonzero_runner_exit": "terminal_failed_no_retry",
+    "malformed_runner_terminal": "nonbankable_no_retry",
+    "completed_game_units": "immutable_reuse_only",
+}
+DURABLE_LAUNCHER_ATTEMPT_SCHEMA_VERSION = "pokezero.mcts-h2h-launcher-attempt.v1"
+DURABLE_LAUNCHER_ATTEMPT_ID_ENV = "POKEZERO_DURABLE_LAUNCHER_ATTEMPT_ID"
+DURABLE_LAUNCHER_OUT_DIR_ENV = "POKEZERO_DURABLE_LAUNCHER_OUT_DIR"
+DURABLE_LAUNCHER_ATTEMPT_RECEIPT_ENV = "POKEZERO_DURABLE_LAUNCHER_ATTEMPT_RECEIPT"
+DURABLE_LAUNCHER_WRITER_LOCK_FD_ENV = "POKEZERO_DURABLE_LAUNCHER_WRITER_LOCK_FD"
+RUNNER_TERMINAL_NAME = "runner-terminal.json"
 ISOLATED_CONFIG_COMPATIBILITY_PROTOCOL = "disabled-diagnostic-omission.v1"
 ISOLATED_WORKER_RESPONSE_TIMEOUT_SECONDS = 180.0
 ISOLATED_DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
@@ -449,6 +482,97 @@ def _seeds(manifest: Mapping[str, Any]) -> tuple[int, ...]:
     return seeds
 
 
+def _replacement_study_requires_durable_launcher(manifest: Mapping[str, Any]) -> bool:
+    study = manifest.get("study")
+    return isinstance(study, Mapping) and study.get("schema_version") == BACKUP_REPAIR_PILOT_SCHEMA_VERSION
+
+
+def _require_durable_launcher_handoff(out_root: Path) -> None:
+    """Reject a v2 replacement run that was not launched with the durable handoff.
+
+    A direct scorer invocation could otherwise resume a root after a terminal
+    failure or malformed handoff and violate the contract's declared no-retry
+    rule. The launcher owns its terminal record and writer lease; the scorer
+    proves it received the matching immutable attempt context before any model
+    or battle work begins.
+    """
+
+    terminal = out_root / RUNNER_TERMINAL_NAME
+    if terminal.exists():
+        raise HeadToHeadError(
+            f"replacement study root already has a terminal handoff at {terminal}; no retry is permitted."
+        )
+    attempt_id = os.environ.get(DURABLE_LAUNCHER_ATTEMPT_ID_ENV, "")
+    if not attempt_id or len(attempt_id) > 64 or any(
+        character not in "abcdefghijklmnopqrstuvwxyz0123456789._-" for character in attempt_id
+    ):
+        raise HeadToHeadError(
+            "replacement study requires a safe durable-launcher attempt id."
+        )
+    expected_root = str(out_root)
+    if os.environ.get(DURABLE_LAUNCHER_OUT_DIR_ENV) != expected_root:
+        raise HeadToHeadError(
+            "replacement study durable-launcher output root does not match --out-dir."
+        )
+    expected_receipt = out_root / "launcher-attempts" / f"{attempt_id}.json"
+    supplied_receipt = os.environ.get(DURABLE_LAUNCHER_ATTEMPT_RECEIPT_ENV, "")
+    if supplied_receipt != str(expected_receipt):
+        raise HeadToHeadError(
+            "replacement study durable-launcher receipt does not match its root and attempt."
+        )
+    lock_path = out_root / "runner-writer.lock"
+    lock_fd_raw = os.environ.get(DURABLE_LAUNCHER_WRITER_LOCK_FD_ENV, "")
+    try:
+        lock_fd = int(lock_fd_raw)
+    except ValueError as error:
+        raise HeadToHeadError(
+            "replacement study requires the inherited durable-launcher writer-lock fd."
+        ) from error
+    if lock_fd < 0 or str(lock_fd) != lock_fd_raw:
+        raise HeadToHeadError(
+            "replacement study requires the inherited durable-launcher writer-lock fd."
+        )
+    try:
+        descriptor_status = os.fstat(lock_fd)
+        path_status = lock_path.stat()
+    except OSError as error:
+        raise HeadToHeadError(
+            f"replacement study cannot access its inherited writer-lock fd: {error}"
+        ) from error
+    if (
+        descriptor_status.st_dev != path_status.st_dev
+        or descriptor_status.st_ino != path_status.st_ino
+    ):
+        raise HeadToHeadError(
+            "replacement study inherited writer-lock fd does not bind its output root."
+        )
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        raise HeadToHeadError(
+            f"replacement study cannot acquire its inherited writer lease: {error}"
+        ) from error
+    try:
+        receipt = json.loads(expected_receipt.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HeadToHeadError(
+            f"replacement study cannot read its durable-launcher attempt receipt: {error}"
+        ) from error
+    if not isinstance(receipt, Mapping):
+        raise HeadToHeadError("replacement study durable-launcher receipt is not an object.")
+    runner_script = Path(__file__).resolve()
+    if (
+        receipt.get("schema_version") != DURABLE_LAUNCHER_ATTEMPT_SCHEMA_VERSION
+        or receipt.get("attempt_id") != attempt_id
+        or receipt.get("runner_script") != str(runner_script)
+        or receipt.get("runner_script_sha256") != _sha256_file(runner_script)
+        or receipt.get("writer_lock") != str(lock_path)
+    ):
+        raise HeadToHeadError(
+            "replacement study durable-launcher receipt does not bind this scorer and root."
+        )
+
+
 def _backup_repair_pilot_contract(
     manifest: Mapping[str, Any],
     *,
@@ -463,11 +587,11 @@ def _backup_repair_pilot_contract(
 
     Generic MCTS-vs-MCTS manifests remain useful for diagnostics.  A manifest
     opting into this schema, however, receives a deliberately narrow contract:
-    corrected batched backups versus the frozen predecessor, the exact pilot
-    roster and its separately reserved confirmation roster, equal configured
-    work, and the predeclared readout rule.  This prevents a result from being
-    retrospectively called the backup-repair pilot after configuration, seed,
-    or analysis drift.
+    corrected batched backups versus the frozen predecessor, a fresh pilot
+    roster and separately reserved confirmation roster, equal configured work,
+    a non-bankable predecessor record, and an executable failure/retry policy.
+    This prevents a result from being retrospectively called the backup-repair
+    pilot after configuration, seed, failure-handling, or analysis drift.
     """
 
     study = manifest.get("study")
@@ -480,6 +604,14 @@ def _backup_repair_pilot_contract(
         )
     if payload.get("stage") != "pilot":
         raise HeadToHeadError("backup-repair study must declare stage='pilot'.")
+    if payload.get("replaces_nonbankable_study") != BACKUP_REPAIR_SUPERSEDED_STUDY:
+        raise HeadToHeadError(
+            "backup-repair pilot must explicitly supersede the recorded non-bankable study."
+        )
+    if payload.get("failure_retry_policy") != BACKUP_REPAIR_FAILURE_RETRY_POLICY:
+        raise HeadToHeadError(
+            "backup-repair pilot must use the exact predeclared failure/retry policy."
+        )
     if str(candidate_raw.get("source_commit", "")) != BACKUP_REPAIR_CANDIDATE_COMMIT:
         raise HeadToHeadError(
             "backup-repair pilot candidate must be the merged corrected-backup commit."
@@ -535,6 +667,15 @@ def _backup_repair_pilot_contract(
             "backup-repair pilot and confirmation rosters overlap: "
             + ", ".join(str(value) for value in overlap[:8])
         )
+    superseded = set(BACKUP_REPAIR_SUPERSEDED_PILOT_SEEDS).union(
+        BACKUP_REPAIR_SUPERSEDED_CONFIRMATION_SEEDS
+    )
+    reused = sorted(set(seeds).union(confirmation).intersection(superseded))
+    if reused:
+        raise HeadToHeadError(
+            "backup-repair replacement rosters reuse seeds reserved by the non-bankable study: "
+            + ", ".join(str(value) for value in reused[:8])
+        )
     return {
         "schema_version": BACKUP_REPAIR_PILOT_SCHEMA_VERSION,
         "stage": "pilot",
@@ -546,6 +687,8 @@ def _backup_repair_pilot_contract(
         "bootstrap_seed": int(bootstrap["seed"]),
         "confidence_level": BACKUP_REPAIR_PILOT_CONFIDENCE,
         "minimum_effect_delta": BACKUP_REPAIR_MINIMUM_EFFECT_DELTA,
+        "replaces_nonbankable_study": dict(BACKUP_REPAIR_SUPERSEDED_STUDY),
+        "failure_retry_policy": dict(BACKUP_REPAIR_FAILURE_RETRY_POLICY),
     }
 
 
@@ -770,6 +913,8 @@ def main(argv: list[str] | None = None) -> int:
     execution_mode = "isolated_build" if all(isolated_values) else "in_process"
     out_root = _durable_output_root(args.out_dir)
     manifest = _load_manifest(args.manifest)
+    if _replacement_study_requires_durable_launcher(manifest):
+        _require_durable_launcher_handoff(out_root)
     declared_showdown_source_sha256 = _declared_showdown_source_sha256(manifest)
     declared_source_tree_sha256 = _declared_source_tree_sha256(manifest)
     seeds = _seeds(manifest)
