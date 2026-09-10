@@ -51,14 +51,18 @@ BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pi
 # deliberately produces depth-one, remote-free checkouts, so runtime admission
 # cannot rely on Git ancestry.  Instead, the contract pins the two reviewed
 # revisions and carries the static, identical compatibility-delta proof below.
+# The runtime pair includes only the same PyTorch compatibility work plus the
+# same source-local split-fallback instrumentation on each mechanics baseline.
+# The historical runtime pair cannot serve this v2 protocol because it omits
+# the root/branch counters; accepting it as scoped zero would be unsound.
 # It must never call a generic later source revision the backup-repair
 # treatment.
 BACKUP_REPAIR_CANDIDATE_BASELINE_COMMIT = "df4e3ce15ee69f922f6ae1b81c7b5e9861828319"
 BACKUP_REPAIR_INCUMBENT_BASELINE_COMMIT = "dacb6358d9b145ce069d6718662a38f581a38bc0"
-BACKUP_REPAIR_CANDIDATE_RUNTIME_COMMIT = "12ded361fdd674c2d8b855b4e9797484f6f3112f"
-BACKUP_REPAIR_INCUMBENT_RUNTIME_COMMIT = "3d8bdc27ab66b3d75e4231205ac443a520d465ef"
+BACKUP_REPAIR_CANDIDATE_RUNTIME_COMMIT = "2198e3c71114aef3f5f4c72f0d2f7d7d649fcbad"
+BACKUP_REPAIR_INCUMBENT_RUNTIME_COMMIT = "82a7b555ce5373e939f996644397ba1c59cd8fc8"
 BACKUP_REPAIR_RUNTIME_COMPATIBILITY = {
-    "schema_version": "pokezero.mcts-h2h-backup-repair-runtime-compatibility.v1",
+    "schema_version": "pokezero.mcts-h2h-backup-repair-runtime-compatibility.v2",
     "candidate": {
         "runtime_commit": BACKUP_REPAIR_CANDIDATE_RUNTIME_COMMIT,
         "mechanics_baseline_commit": BACKUP_REPAIR_CANDIDATE_BASELINE_COMMIT,
@@ -73,10 +77,17 @@ BACKUP_REPAIR_RUNTIME_COMPATIBILITY = {
         "rust/pokezero-search/Cargo.lock",
         "rust/pokezero-search/Cargo.toml",
         "rust/pokezero-search/README.md",
+        "rust/pokezero-search/src/model.rs",
         "scripts/build_search_crate_model.sh",
         "scripts/public_projection_census.py",
+        "src/pokezero/engine_search.py",
     ],
-    "identical_delta_sha256": "c18625518cadee4d005b85140d9f0d885af5ec19de73b416a7345c6dc7a45fc0",
+    # The two mechanics baselines differ outside the compatibility paths, so
+    # Git's blob-id-bearing `index` lines differ even though the allowed
+    # patches are byte-identical. This value is the SHA-256 of `git diff
+    # <baseline> <runtime>` with only those `index` lines removed.
+    "delta_normalization": "git-diff-with-index-lines-removed.v1",
+    "identical_normalized_delta_sha256": "cab10cc252a2779b0dc1c62726390b52fa26a6dac9712a4d577bd94e2397f3d0",
 }
 BACKUP_REPAIR_PILOT_PAIRS = 12
 BACKUP_REPAIR_CONFIRMATION_PAIRS = 50

@@ -130,6 +130,14 @@ contrast. Freeze before outcomes are read:
   invalidates the strength claim; interior counts remain visible but are not
   mislabeled as failures of the live chosen action.
 
+The frozen runtime revisions used for the earlier attempt only emitted the
+aggregate fallback counter. They are not eligible for this scoped gate: the
+replacement pair must be source-bound to the two reviewed, instrumentation-only
+runtime revisions that emit `prior_fallbacks = root_prior_fallbacks +
+branch_prior_fallbacks`. This is a compatibility requirement, not a search
+treatment; the same normalized delta is applied to both sides and the original
+backup-repair contrast remains the only mechanical difference.
+
 Use source-isolated policies for both sides. After divergent actions, each side
 must follow the actual resulting trajectory; replaying the incumbent’s later
 decisions after a candidate divergence is invalid. The outcome report must
