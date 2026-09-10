@@ -28,7 +28,7 @@ from ..policy import PolicyContext, PolicyDecision
 from .head_to_head import HeadToHeadError, MctsPolicySpec, public_only_context
 
 
-PROTOCOL_VERSION = "pokezero.isolated-mcts-policy.v1"
+PROTOCOL_VERSION = "pokezero.isolated-mcts-policy.v2"
 _MAX_FRAME_BYTES = 64 * 1024 * 1024
 _STATS_FIELDS = (
     "decisions",
@@ -39,6 +39,8 @@ _STATS_FIELDS = (
     "worlds_constructed",
     "worlds_searched",
     "prior_fallbacks",
+    "root_prior_fallbacks",
+    "branch_prior_fallbacks",
     "decision_wall_seconds",
 )
 
@@ -282,6 +284,8 @@ class IsolatedPolicyStats:
     worlds_constructed: int = 0
     worlds_searched: int = 0
     prior_fallbacks: int = 0
+    root_prior_fallbacks: int = 0
+    branch_prior_fallbacks: int = 0
     decision_wall_seconds: float = 0.0
 
     def update(self, payload: Mapping[str, Any]) -> None:
@@ -313,6 +317,10 @@ class IsolatedPolicyStats:
                     f"{previous!r} -> {value!r}."
                 )
             setattr(self, field_name, value)
+        if self.prior_fallbacks != self.root_prior_fallbacks + self.branch_prior_fallbacks:
+            raise IsolatedPolicyError(
+                "isolated policy prior fallback aggregate must equal root plus branch."
+            )
 
 
 def snapshot_annotation_source(source: Any | None, *, player_id: str) -> dict[str, Any]:

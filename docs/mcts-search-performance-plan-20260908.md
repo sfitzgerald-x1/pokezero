@@ -124,7 +124,11 @@ contrast. Freeze before outcomes are read:
 - retry and failure rules that preserve completed games but score neither member
   of an incomplete mirrored pair; and
 - fixed, disjoint pilot and confirmation seed rosters. Development/pilot seeds
-  cannot become confirmation seeds.
+  cannot become confirmation seeds; and
+- decision fallbacks and **root-prior** fallbacks, distinct from the separately
+  reported interior simulated-branch prior fallbacks. A nonzero root count
+  invalidates the strength claim; interior counts remain visible but are not
+  mislabeled as failures of the live chosen action.
 
 Use source-isolated policies for both sides. After divergent actions, each side
 must follow the actual resulting trajectory; replaying the incumbent’s later
@@ -137,9 +141,12 @@ For this first contrast, make those words operational before a game is run: use
 exactly 12 mirrored pilot pairs with 10,000 paired-bootstrap resamples. All
 thresholds apply to **Δ = mean candidate paired score − 0.5**, not the runner's
 raw candidate score. The smallest useful effect is Δ=+0.05. The pilot proceeds
-to confirmation only if every pair is complete, there are no fallbacks/refusals,
-the point estimate is at least +0.05, and its predeclared 80% interval for Δ
-lies wholly above zero. The confirmation uses a separate, already-reserved
+to confirmation only if every pair is complete, there are no decision or
+root-prior fallbacks/refusals, the point estimate is at least +0.05, its
+predeclared 80% interval for Δ lies
+wholly above zero, and both sides have zero decision and root-prior fallbacks.
+Interior simulated-branch fallbacks are reported as topology telemetry, not
+silently discarded or treated as live-root failures. The confirmation uses a separate, already-reserved
 roster of 50 mirrored pairs and the same 10,000-resample paired bootstrap at
 95%; an improvement is claimed only if its interval for Δ has a lower bound of
 at least +0.05. Run every pair in a roster before reading that roster's outcome;

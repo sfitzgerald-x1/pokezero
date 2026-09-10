@@ -548,6 +548,8 @@ class ModelPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
         self.assertEqual(len(root_priors), len(self_arms))
         self.assertAlmostEqual(sum(root_priors), 1.0, places=3)
         self.assertEqual(first["prior_fallbacks"], 0)
+        self.assertEqual(first["root_prior_fallbacks"], 0)
+        self.assertEqual(first["branch_prior_fallbacks"], 0)
         # Visit conservation in both modes.
         for side in ("side_one", "side_two"):
             self.assertEqual(sum(entry["visits"] for entry in first[side]), 48)
@@ -1080,6 +1082,14 @@ class OpponentPriorsEncodedSearchTest(_EncodedSearchFixture, unittest.TestCase):
         off = self._search(sims=48, batch=1, seed=5, model_priors=True)
 
         self.assertGreater(on["prior_fallbacks"], 0, "the refusals must be counted")
+        self.assertGreater(on["root_prior_fallbacks"], 0, "the root refusal must be scoped")
+        self.assertGreater(
+            on["branch_prior_fallbacks"], 0, "the interior refusals must be scoped"
+        )
+        self.assertEqual(
+            on["prior_fallbacks"],
+            on["root_prior_fallbacks"] + on["branch_prior_fallbacks"],
+        )
         self.assertEqual(off["prior_fallbacks"], 0)
         self.assertEqual(on["prior_branches"], off["prior_branches"])
         self.assertEqual(on["root_priors"], off["root_priors"])

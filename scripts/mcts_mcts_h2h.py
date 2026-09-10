@@ -41,8 +41,8 @@ from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_mean  # noqa
 
 MANIFEST_SCHEMA_VERSION = "pokezero.mcts-h2h-manifest.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-h2h-complete.v1"
-BACKUP_REPAIR_PILOT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot.v3"
-BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot-readout.v1"
+BACKUP_REPAIR_PILOT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot.v4"
+BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot-readout.v2"
 
 # This is intentionally a one-contrast contract rather than a tunable study
 # registry.  The first strength read must isolate the batched-backup repair.
@@ -767,15 +767,27 @@ def _backup_repair_pilot_readout(
     incumbent_fallbacks = sum(game.incumbent_telemetry.fallback_decisions for game in games)
     candidate_prior_fallbacks = sum(game.candidate_telemetry.prior_fallbacks for game in games)
     incumbent_prior_fallbacks = sum(game.incumbent_telemetry.prior_fallbacks for game in games)
-    no_fallbacks = (
+    candidate_root_prior_fallbacks = sum(
+        game.candidate_telemetry.root_prior_fallbacks for game in games
+    )
+    incumbent_root_prior_fallbacks = sum(
+        game.incumbent_telemetry.root_prior_fallbacks for game in games
+    )
+    candidate_branch_prior_fallbacks = sum(
+        game.candidate_telemetry.branch_prior_fallbacks for game in games
+    )
+    incumbent_branch_prior_fallbacks = sum(
+        game.incumbent_telemetry.branch_prior_fallbacks for game in games
+    )
+    no_decision_or_root_fallbacks = (
         candidate_fallbacks == 0
         and incumbent_fallbacks == 0
-        and candidate_prior_fallbacks == 0
-        and incumbent_prior_fallbacks == 0
+        and candidate_root_prior_fallbacks == 0
+        and incumbent_root_prior_fallbacks == 0
     )
     clears_effect = delta["point"] >= float(contract["minimum_effect_delta"])
     interval_above_neutral = delta["low"] > 0.0
-    eligible = no_fallbacks and clears_effect and interval_above_neutral
+    eligible = no_decision_or_root_fallbacks and clears_effect and interval_above_neutral
     return {
         "schema_version": BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION,
         "contract": dict(contract),
@@ -787,10 +799,18 @@ def _backup_repair_pilot_readout(
             "incumbent_decision_fallbacks": incumbent_fallbacks,
             "candidate_prior_fallbacks": candidate_prior_fallbacks,
             "incumbent_prior_fallbacks": incumbent_prior_fallbacks,
+            "candidate_root_prior_fallbacks": candidate_root_prior_fallbacks,
+            "incumbent_root_prior_fallbacks": incumbent_root_prior_fallbacks,
+            # Interior simulated nodes lack an authoritative Showdown request
+            # after a simulated replacement. Their fail-closed uniform-prior
+            # fallbacks remain visible here but do not falsely invalidate the
+            # live root action selected for this game.
+            "candidate_branch_prior_fallbacks": candidate_branch_prior_fallbacks,
+            "incumbent_branch_prior_fallbacks": incumbent_branch_prior_fallbacks,
         },
         "promotion_checks": {
             "all_registered_pairs_complete": len(pair_scores) == len(pilot_seeds),
-            "no_fallbacks_or_refusals": no_fallbacks,
+            "no_decision_or_root_prior_fallbacks": no_decision_or_root_fallbacks,
             "point_estimate_at_least_minimum_effect": clears_effect,
             "interval_wholly_above_neutral": interval_above_neutral,
         },

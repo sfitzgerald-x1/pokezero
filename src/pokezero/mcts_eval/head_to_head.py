@@ -293,6 +293,8 @@ class PolicyTelemetry:
     worlds_constructed: int = 0
     worlds_searched: int = 0
     prior_fallbacks: int = 0
+    root_prior_fallbacks: int = 0
+    branch_prior_fallbacks: int = 0
     decision_wall_seconds: float = 0.0
 
     def __post_init__(self) -> None:
@@ -305,9 +307,15 @@ class PolicyTelemetry:
             self.worlds_constructed,
             self.worlds_searched,
             self.prior_fallbacks,
+            self.root_prior_fallbacks,
+            self.branch_prior_fallbacks,
         )
         if any(value < 0 for value in counters):
             raise ValueError("policy telemetry counters must be non-negative.")
+        if self.prior_fallbacks != self.root_prior_fallbacks + self.branch_prior_fallbacks:
+            raise ValueError(
+                "policy prior fallback aggregate must equal root plus branch fallbacks."
+            )
         if not math.isfinite(self.decision_wall_seconds) or self.decision_wall_seconds < 0:
             raise ValueError("policy decision wall time must be finite and non-negative.")
 
@@ -316,6 +324,24 @@ class PolicyTelemetry:
         stats = getattr(policy, "stats", None)
         if stats is None:
             raise HeadToHeadError("MCTS policy exposes no stats; required work counters are absent.")
+        prior_fallbacks = int(getattr(stats, "prior_fallbacks", 0))
+        root_prior_fallbacks = getattr(stats, "root_prior_fallbacks", None)
+        branch_prior_fallbacks = getattr(stats, "branch_prior_fallbacks", None)
+        if root_prior_fallbacks is None and branch_prior_fallbacks is None:
+            # A caller that cannot distinguish scope cannot establish that its
+            # live root action was clean. Preserve its total as a conservative
+            # root failure instead of silently making it eligible.
+            root_prior_fallbacks = prior_fallbacks
+            branch_prior_fallbacks = 0
+        elif root_prior_fallbacks is None or branch_prior_fallbacks is None:
+            raise HeadToHeadError(
+                "MCTS policy exposes incomplete root/branch prior fallback telemetry."
+            )
+        if int(root_prior_fallbacks) + int(branch_prior_fallbacks) != prior_fallbacks:
+            raise HeadToHeadError(
+                "MCTS policy reports a prior fallback aggregate that does not equal root plus "
+                "branch."
+            )
         return cls(
             decisions=int(getattr(stats, "decisions", 0)),
             searched_decisions=int(getattr(stats, "searched_decisions", 0)),
@@ -324,7 +350,9 @@ class PolicyTelemetry:
             total_iterations=int(getattr(stats, "total_iterations", 0)),
             worlds_constructed=int(getattr(stats, "worlds_constructed", 0)),
             worlds_searched=int(getattr(stats, "worlds_searched", 0)),
-            prior_fallbacks=int(getattr(stats, "prior_fallbacks", 0)),
+            prior_fallbacks=prior_fallbacks,
+            root_prior_fallbacks=int(root_prior_fallbacks),
+            branch_prior_fallbacks=int(branch_prior_fallbacks),
             decision_wall_seconds=float(getattr(stats, "decision_wall_seconds", 0.0)),
         )
 
@@ -874,5 +902,17 @@ def summarize_complete_pairs(
         ),
         "incumbent_prior_fallbacks": sum(
             game.incumbent_telemetry.prior_fallbacks for game in required
+        ),
+        "candidate_root_prior_fallbacks": sum(
+            game.candidate_telemetry.root_prior_fallbacks for game in required
+        ),
+        "incumbent_root_prior_fallbacks": sum(
+            game.incumbent_telemetry.root_prior_fallbacks for game in required
+        ),
+        "candidate_branch_prior_fallbacks": sum(
+            game.candidate_telemetry.branch_prior_fallbacks for game in required
+        ),
+        "incumbent_branch_prior_fallbacks": sum(
+            game.incumbent_telemetry.branch_prior_fallbacks for game in required
         ),
     }
