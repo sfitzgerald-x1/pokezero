@@ -37,7 +37,7 @@ SOURCE_RECEIPT_SCHEMA_VERSION = "pokezero.mcts-deadline-source-receipt.v1"
 # local guard in addition to the image receipt and installed-build fingerprint.
 REVIEWED_DEADLINE_SOURCE_COMMIT = "8609d301399738a8081f0e938a3cc4ed7d39abdd"
 REVIEWED_ENGINE_SEARCH_SHA256 = "8d647f13440173cf939ea36c7d5940e64544388fb82b0315d2f67c9a9b845eb5"
-REVIEWED_ENGINE_FINGERPRINT = "82201ace3c55a9a0e04ccf1085342155cca8a5b38f939aba11745f1bf513ae6e"
+REVIEWED_ENGINE_FINGERPRINT = "453b9ff93acbddcba3a03b2e3c3bef190607a30c9e5ad04ca10209e5625aa209"
 REQUIRED_RECEIPT_FILES = (
     "scripts/run_mcts_deadline_qualification.py",
     "scripts/engine_build_fingerprint.py",
