@@ -2212,6 +2212,9 @@ impl LeafContext {
                     }
                 }
             };
+            if index.is_none() {
+                eprintln!("POKEZERO_PRIOR_MAP_REFUSAL option={option:?} recharging={recharging} force_switch={force_switch_shape} engine_authoritative={engine_authoritative}");
+            }
             map.push(index);
         }
         Ok(map)
