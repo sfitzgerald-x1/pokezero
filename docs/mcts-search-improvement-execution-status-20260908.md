@@ -79,9 +79,12 @@ and the create-only terminal snapshot independently validates the contract. The
 execution must either be the original Job completing with zero restarts, or the
 manifest's sole admitted recovery: a validated primary failure before runner
 terminal, an immutable resume-admission record and safe durable-root stage,
-then a fresh resume Job completing with zero restarts. A later retry, a
-malformed terminal handoff, or a partially preserved root is not a valid
-readout path.
+then a fresh resume Job completing with zero restarts. A malformed terminal
+handoff or partially preserved root is not a valid readout path. Any further
+interrupted-before-terminal recovery must keep the original primary failure
+bound and receive its own immutable admission, fresh Job identity, safe-root
+validation, and terminal-capture validation; an automatic or unadmitted retry
+cannot be read.
 
 ### 3. Qualify the implemented fixed-wall mechanism before using it
 
