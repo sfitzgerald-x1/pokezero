@@ -41,6 +41,23 @@ def _arguments(out_root: Path, *, resume: bool = False) -> list[str]:
 
 
 class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
+    def test_dirty_source_is_refused_before_a_replay_is_bound(self) -> None:
+        with mock.patch.object(runner.subprocess, "check_output", return_value=" M source.py\n"):
+            with self.assertRaisesRegex(runner.DeadlineQualificationError, "checkout is dirty"):
+                runner._require_clean_source()
+
+    def test_deadline_mechanics_drift_is_refused(self) -> None:
+        with (
+            mock.patch.object(
+                runner.subprocess,
+                "check_output",
+                side_effect=("reviewed\n", "engine-blob\n", "native-tree\n"),
+            ),
+            mock.patch.object(runner.subprocess, "run", return_value=types.SimpleNamespace(returncode=1)),
+        ):
+            with self.assertRaisesRegex(runner.DeadlineQualificationError, "differs"):
+                runner._deadline_mechanics_source("reviewed")
+
     def test_existing_terminal_root_is_never_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             out_root = Path(temporary) / "existing"
