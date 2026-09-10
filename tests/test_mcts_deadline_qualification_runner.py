@@ -159,6 +159,5 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             self.assertTrue((out_root / "DEADLINE_QUALIFICATION_PASS.json").is_file())
             self.assertFalse((out_root / "RUNNING.json").exists())
 
-
 if __name__ == "__main__":
     unittest.main()
