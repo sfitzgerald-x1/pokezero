@@ -1,6 +1,6 @@
 # MCTS search performance plan — evidence to strength
 
-Date: 2026-09-08. This replaces the now-stale execution order in the September
+Date: 2026-09-08, updated 2026-09-10. This replaces the now-stale execution order in the September
 7 working plan. It is deliberately narrow: get one attributable answer about
 whether the repaired MCTS is stronger, then invest only where the answer points.
 It is not a deployment plan and does not turn any diagnostic or synthetic result
@@ -14,7 +14,7 @@ advances only when it clears the next relevant question:
 | Question | Evidence that answers it | Current state |
 | --- | --- | --- |
 | Does the tree compute completed values correctly? | Invariants and declared action-choice panel | **Yes, for the batched-backup bug.** |
-| Does it select a better action in a known mechanism case? | Predeclared simple-regret panel | **One selector hypothesis worth testing; not promoted.** |
+| Does it select a better action in a known mechanism case? | Predeclared simple-regret panel | **No for raw Q-max.** The deep noisy control falsified it; the selector is parked. |
 | Does less encoding work make real search faster without changing it? | Full-path warm/cold timing and parity | **No reproducible benefit shown.** The first ordered development read is parked. |
 | Does a candidate win more paired games than its frozen MCTS incumbent? | Fresh source-isolated mirrored MCTS-versus-MCTS games | **Unknown. This is the next decisive outcome.** |
 
@@ -66,16 +66,22 @@ timing artifact.
 
 The corrected decision panel includes a deliberately harsh-prior one-world row:
 visit-max selected `toxic` (regret 0.4745), while shadow acting-seat Q-max
-selected the known winning `seismictoss` (regret 0). The rare-terminal-decoy and
-equal-value controls did not let Q-max win by chasing a fully priced lucky
-terminal leaf. The rare-decoy row does **not** cover a low-visit Q spike caused
-by a partially explored deeper continuation; that is a separate required
-control before Q-max can advance.
+selected the known winning `seismictoss` (regret 0). That narrow row was a
+hypothesis, not a promotion result.
 
-That is useful enough to measure on representative development positions, but
-too synthetic and too narrow to change production selection. PR #1346 keeps the
-selector shadow-only and default-off. Its fresh exact-head mutation receipt is
-the remaining integrity gate; no game claim depends on it.
+The required deep-noisy control falsified raw Q-max for both acting seats:
+Q-max selected a 10-visit `tackle` with reported Q=0.632018 against its declared
+payoff of 0.4 (simple regret 0.15 and Q error 0.232018), while visit-max selected
+`splash` with payoff 0.55 and zero regret. Raw Q-max is therefore parked. PR
+#1346 remains shadow-only and default-off; it is not a path to a game-level
+trial or production selection.
+
+An independent post-merge review also found that PR #1346 is not a valid
+integrity fallback: its shadow path can attest a truncated native report as a
+full-budget tree, and its committed mutation receipt covers rollout-leaf witness
+behavior rather than selector guards. Those gaps need not be repaired while the
+falsified selector is parked. They must be fixed and independently re-reviewed
+before any future selector evidence is used.
 
 ## Execution order
 
@@ -89,8 +95,7 @@ corrected backup baseline
           |
           +-- full-path timing/parity --> decide whether to reinvest saved time
           |
-          +-- selector shadow on development positions --> only then a separate
-                                                     MCTS-v-MCTS candidate trial
+          +-- raw Q-max selector --------------------------> parked (falsified)
 ```
 
 These branches share provenance and durability rules but not outcome claims.
@@ -98,17 +103,18 @@ The only serial dependency is that a shared mutation runner must mutate and
 restore one source tree at a time; timing preparation and result analysis do
 not justify parallel mutation of those files.
 
-### 1. Close integrity, not more mechanics
+### 1. Keep the selector conclusion bounded
 
-Finish the exact-head mutation receipt for PR #1346, commit the fresh receipt,
-and obtain its already-requested independent review. Merge only after its CI
-uses the receipt tied to the exact PR head. Rebase PR #1345 from current `main`
-and regenerate its own receipt; it carries the isolated-worker lifecycle/reset
-integration needed by a resumed source-different run. Receipts never transfer
+PR #1345's source-isolated lifecycle/reset work and PR #1346's default-off
+shadow implementation have merged. The shadow integrity review was not clean,
+but its failure does not undermine the direct deep-noisy panel result: raw
+Q-max is parked. Do not repair its telemetry, add a threshold family, collect a
+selector development corpus, or run selector games in this iteration.
+
+If a future independent mechanism reopens selector work, first require an
+exact-head, selector-specific mutation battery and a full-budget native-report
+invariant, then obtain a fresh independent review. Receipts never transfer
 across a changed head.
-
-This prevents a regression in the new source-isolation/durability path. It does
-not warrant another selector feature or another broad evaluation framework.
 
 ### 2. First decisive experiment: backup repair versus frozen predecessor
 
@@ -179,28 +185,13 @@ encoding is a useful null result, not a reason to tune cache or batch parameters
 Only a reproducible full-path reduction with full parity capture permits a
 separate fixed-wall experiment that reinvests saved time.
 
-### 4. Qualify or park Q-max without altering production selection
+### 4. Q-max is parked without altering production selection
 
-After PR #1346’s integrity gate, collect shadow recommendation telemetry from
-representative one-world development positions using one completed tree per
-position. Visit-max and Q-max must see exactly the same legal visited actions,
-completed visits, and work. Keep early stop disabled; its current visit-lock
-rule is not validated for Q-max.
-
-Each development position needs a reference action/value frozen before either
-selector is read: an exact solved/terminal reference where available, otherwise
-a separately specified deeper evaluator whose settings, source, and work cap
-are recorded. Neither selector's own root Q nor its visit count is an action
-label. The position set and reference evaluator stay fixed; they cannot be
-selected or altered after visit-max/Q-max disagreement is observed. When the
-reference is approximate, retain its uncertainty and ties explicitly; do not
-turn an unresolved reference into a binary selector-regret label.
-
-Advance Q-max only if a predeclared noisy/deep-continuation control and the
-development panel show lower regret without an unacceptable low-visit error
-pattern. It then gets its *own* paired MCTS-versus-MCTS comparison against the
-corrected visit-max incumbent. Otherwise retain the telemetry if useful and
-park the selector; never silently enable it because of the harsh-prior fixture.
+The deep-noisy control is the relevant negative result: a low-visit, lucky
+continuation can produce an overstated root Q. The raw Q-max recommendation is
+not eligible for a representative development readout, a game-level candidate
+trial, or production selection. Do not reinterpret the harsh-prior fixture as
+countervailing evidence.
 
 ## Operating safeguards
 
@@ -218,16 +209,10 @@ park the selector; never silently enable it because of the harsh-prior fixture.
   rewrites, and model retraining remain out of scope until a completed contrast
   identifies a concrete bottleneck or mechanism.
 
-## Near-term deliverables
+## Near-term deliverable
 
-1. Fresh and independently reviewed source-isolation mutation receipts for the
-   two open implementation PRs.
-2. A registered, source-bound backup-repair pilot contract and its first
-   durable paired-game readout.
-3. A compact full-path timing/parity report that either validates or falsifies
-   the encoder microbenchmark’s practical effect.
-4. A shadow-selector development report with an explicit promote/park decision.
-
-The first item is an integrity prerequisite. The second can provide preliminary
-strength evidence; only the predeclared independent confirmation can support an
-improvement claim.
+The only active decision is the registered, source-bound backup-repair pilot's
+complete paired-game readout. It can permit consideration of the disjoint
+confirmation roster only under its frozen threshold; it cannot itself support
+an improvement claim. The encoder and Q-max lines are parked, and neither
+authorizes follow-on tuning or a second game experiment.
