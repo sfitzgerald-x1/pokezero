@@ -28,7 +28,7 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | Timing replay | [#1339](https://github.com/sfitzgerald-x1/pokezero/pull/1339) is merged and its fixed corpus was measured candidate-first twice, then baseline-first. | The candidate's apparent slowdown reverses in the baseline-first block; the result is order/warm-state dominated and is a valid null. | A source-attributable full-search win, numerical-tree parity, or extra useful work at the same clock. |
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
 | Whole-decision deadline | [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) introduced the model-only, fixed-work deadline; [#1359](https://github.com/sfitzgerald-x1/pokezero/pull/1359) hardened the native-invocation witness and fail-closed validation. The qualification source is their reviewed combined `main` merge `8609d301399738a8081f0e938a3cc4ed7d39abdd` (reviewed #1359 head `6e2bb3ac4fb50abf7fb358c250a7398686153cff`). The clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
-| Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run reached 24 durable games and 48 matching receipts, and its runner exited 0. Its create-only `runner-terminal.json` is nevertheless unparsable because the ad hoc shell launcher appended literal `\\n` bytes after its JSON object. The complete units and all artifacts are preserved, but the result is non-bankable and its score/readout remains unread. | The runner and child receipts completed the declared units; the new reusable launcher has focused regression coverage for a parseable, create-only process handoff. | A valid terminal result, any pilot outcome, or a promotion decision. |
+| Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run is preserved as non-bankable: its launcher appended literal `\\n` bytes after `runner-terminal.json`. Its independent replacement, R18, is live under a new source-bound contract: corrected `6c1afe3b27d28f874c666a1ae34d5a92720bf4c0` versus frozen historical `aab7d480780fbfd3061458e17e35c1dc598b2c94`, on the registered final-enthalf iteration-9375 checkpoint, with 12 fresh mirrored pilot seeds and 50 disjoint reserved confirmation seeds. | The reusable launcher, source-isolated two-MCTS transport, and durable atomic game/receipt contract are now exercised by a new study rather than by the malformed historical handoff. | A valid terminal result, any pilot outcome, a strength claim, or a promotion decision. |
 
 ## Active route
 
@@ -43,7 +43,7 @@ demonstrates a loss in games.
 No new selector telemetry, representative selector read, or selector mutation
 battery is authorized in this iteration.
 
-### 2. Preserve the invalid pilot and repair the process handoff before another study
+### 2. Preserve the invalid pilot; the independent R18 replacement is live
 
 The first pilot completed all 24 durable game records and 48 matching worker
 receipts, but its terminal handoff is invalid. The shell launcher wrote a valid
@@ -64,9 +64,27 @@ and output-root path, allowing a scored-study contract to require this exact
 handoff rather than relying on an optional wrapper convention.
 Its focused tests cover successful and failed child exits, interrupted-attempt
 preservation, orphan-child exclusion, existing-terminal refusal, and rejection
-of a diverging runner `--out-dir`. Before any replacement pilot, freeze a new
-independent seed roster and explicit failure/retry rule; a new study must not
-be relabeled as the invalid pilot or silently reuse its seeds.
+of a diverging runner `--out-dir`.
+
+R18 is the resulting independent, work-capped replacement study. Its immutable
+manifest freezes the corrected candidate and historical uncorrected incumbent,
+the same final-enthalf iteration-9375 checkpoint bytes, 12 fresh pilot seeds,
+and a separate 50-seed confirmation roster. It writes each mirrored game and
+both policy receipts atomically under
+`/shared/scott-experiment/mcts-backup-repair-current-pilot-r18-20260910`.
+The job is not a result while it is live: no score, readout, or promotion may
+be inferred from partial games. It can be read only after all 24 games and 48
+receipts are present, the runner has written its parseable terminal handoff,
+and the create-only terminal snapshot independently validates the contract. The
+execution must either be the original Job completing with zero restarts, or the
+manifest's sole admitted recovery: a validated primary failure before runner
+terminal, an immutable resume-admission record and safe durable-root stage,
+then a fresh resume Job completing with zero restarts. A malformed terminal
+handoff or partially preserved root is not a valid readout path. Any further
+interrupted-before-terminal recovery must keep the original primary failure
+bound and receive its own immutable admission, fresh Job identity, safe-root
+validation, and terminal-capture validation; an automatic or unadmitted retry
+cannot be read.
 
 ### 3. Qualify the implemented fixed-wall mechanism before using it
 
@@ -170,6 +188,6 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 ## Immediate order
 
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
-2. Preserve the invalid first backup pilot without reading it. After the durable-launcher repair is reviewed and merged, register a new independent, source-bound pilot with explicit failure/retry handling before running it.
-3. Before any same-deadline comparison, qualify #1356 on the intended runtime with a nonzero completed prefix, measured tail/overshoot, no-completed-world behavior, and identical policy clocks. This is a measurement gate, not a strength trial.
-4. If the pilot promotes, run only its reserved confirmation contrast. If it does not, retain the correctness repair and choose the next mechanics investigation from a concrete remaining decision error.
+2. Preserve the invalid first pilot without reading it. Let R18 reach a clean, source-bound terminal handoff; then capture and independently validate its immutable terminal snapshot before reading a result.
+3. Before any same-deadline comparison, qualify #1356 on the intended runtime with a nonzero completed prefix, measured tail/overshoot, no-completed-world behavior, and identical policy clocks. This is a measurement gate, not a strength trial, and follows the R18 readout.
+4. If R18 promotes, run only its reserved confirmation contrast. If it does not, retain the correctness repair and choose the next mechanics investigation from a concrete remaining decision error.
