@@ -231,14 +231,23 @@ class _LiveEngineTimingDecider:
         "row_write_wall_seconds",
     )
 
-    def __init__(self, contract: CheckpointContract, showdown_root: str | None) -> None:
+    def __init__(
+        self,
+        contract: CheckpointContract,
+        showdown_root: str | None,
+        *,
+        model_decision_time_ms: int | None = None,
+    ) -> None:
         from ..collection import env_config_with_policy_spec_masks
         from ..dex import load_showdown_dex_cached
         from ..engine_search import EnvTier2AnnotationSource
         from ..local_showdown import LocalShowdownConfig, LocalShowdownEnv
         from ..randbat import load_gen3_randbat_source_cached
 
+        if model_decision_time_ms is not None and model_decision_time_ms <= 0:
+            raise ValueError("model_decision_time_ms must be positive when set")
         self._contract = contract
+        self._model_decision_time_ms = model_decision_time_ms
         self._artifacts = materialize_search_artifacts(contract, showdown_root=showdown_root)
         self._env_config = env_config_with_policy_spec_masks(
             LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=True),
@@ -286,6 +295,7 @@ class _LiveEngineTimingDecider:
                 search_depth=config.depth,
                 model_priors=True,
                 early_stop=False,
+                model_decision_time_ms=self._model_decision_time_ms,
             ),
             policy_id=f"mcts-timing-{config.config_id}",
             annotation_source=self._annotation_source,
@@ -498,6 +508,13 @@ class _LiveEngineTimingDecider:
                 "row_input_s": float(after["row_input_wall_seconds"] - before["row_input_wall_seconds"]),
                 "products_s": float(after["products_wall_seconds"] - before["products_wall_seconds"]),
                 "row_write_s": float(after["row_write_wall_seconds"] - before["row_write_wall_seconds"]),
+                # The fixed-work timing lattice ignores this additive field.  The
+                # deadline qualification consumes it directly, so its durable
+                # evidence travels with the actual selected decision rather than
+                # being reconstructed from run-level counters.
+                "engine_mcts": dict(
+                    (getattr(decision, "metadata", {}) or {}).get("engine_mcts", {})
+                ),
             }
 
         return timed_decision
