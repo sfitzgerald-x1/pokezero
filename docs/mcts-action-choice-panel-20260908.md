@@ -59,15 +59,25 @@ not a tie-break artifact.
 
 That is a useful mechanism observation, not a production recommendation. The
 rare-decoy and equal controls pass, but the panel remains synthetic and
-one-world. Q-max stays shadow-only until it is checked on representative
-one-world development positions and, only if it continues to improve regret,
-against frozen incumbent MCTS under a separately declared game contract.
+one-world.
 
-The rare-decoy row fully prices its chance distribution when it expands. It
-therefore catches incorrect terminal-probability accounting, but it does not
-model a low-visit Q spike caused by only partially exploring deeper
-continuations. That noisy-Q control remains required before any selector
-promotion.
+## Raw Q-max is parked
+
+The required deep noisy-continuation control was run on 2026-09-10. It uses no
+terminal branches and declares the exact root payoffs in advance: `splash=0.55`
+and `tackle=0.40`. With 64 visits, batch 1, depth 2, and fixed priors of 0.9 /
+0.1, the reference leaf pass makes both visit-max and shadow Q-max choose
+`splash` for both acting seats.
+
+The control then changes only Tackle's deep, nonterminal continuation estimate
+to 0.75. Visit-max still selects `splash`, with zero regret. Raw shadow Q-max
+instead selects the 10-visit `tackle` arm at Q `0.632018`, despite its declared
+payoff of `0.40`: simple regret `0.15` and Q error `0.232018` for both seats.
+
+This falsifies raw acting-seat Q-max as a selector candidate at finite work. It
+remains telemetry only and is not eligible for a representative-position or
+head-to-head promotion. The harsh-prior terminal example is retained as a
+diagnostic of visit lag, not evidence that Q-max improves MCTS play.
 
 ## Reproduction
 
@@ -78,6 +88,10 @@ then run:
 PYO3_PYTHON="$SEARCH_TEST_PYTHON" CARGO_BUILD_JOBS=4 cargo test \
   --manifest-path rust/pokezero-search/Cargo.toml \
   predeclared_action_choice_panel_has_explicit_regret_and_value_error -- --nocapture
+
+PYO3_PYTHON="$SEARCH_TEST_PYTHON" CARGO_BUILD_JOBS=4 cargo test \
+  --manifest-path rust/pokezero-search/Cargo.toml \
+  deep_noisy_q_control_falsifies_raw_q_max_for_both_seats -- --nocapture
 ```
 
 The output includes every per-seat/per-batch row. The test is deterministic;
