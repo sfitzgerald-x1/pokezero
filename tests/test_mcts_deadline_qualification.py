@@ -16,6 +16,7 @@ def _record(index: int, *, prefix: bool) -> dict:
     completed = 128 if prefix else 256
     return {
         "decision_id": f"decision-{index:02d}",
+        "corpus_record_sha256": f"{index:x}" * 64,
         "outer_wall_ms": 1_010.0 + index,
         "invalid_actions": 0,
         "engine_mcts": {

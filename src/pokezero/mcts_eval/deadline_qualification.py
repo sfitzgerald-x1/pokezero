@@ -15,7 +15,7 @@ import math
 from typing import Any
 
 
-DEADLINE_QUALIFICATION_SCHEMA_VERSION = "pokezero.mcts-deadline-qualification.v1"
+DEADLINE_QUALIFICATION_SCHEMA_VERSION = "pokezero.mcts-deadline-qualification.v2"
 
 
 class DeadlineQualificationError(ValueError):
@@ -84,6 +84,14 @@ def _bool(value: Any, field: str, *, decision_id: str) -> bool:
     return value
 
 
+def _sha256(value: Any, field: str, *, decision_id: str) -> str:
+    if not isinstance(value, str) or len(value) != 64 or any(
+        character not in "0123456789abcdef" for character in value
+    ):
+        raise DeadlineQualificationError(f"{decision_id}: {field} must be a lowercase SHA-256")
+    return value
+
+
 def _require_root_visit_conservation(
     root_visits: Any,
     *,
@@ -134,6 +142,7 @@ def validate_deadline_decision(
     if not isinstance(decision_id_value, str) or not decision_id_value:
         raise DeadlineQualificationError("decision_id must be a non-empty string")
     decision_id = decision_id_value
+    _sha256(record.get("corpus_record_sha256"), "corpus_record_sha256", decision_id=decision_id)
     engine = _mapping(record.get("engine_mcts"), "engine_mcts", decision_id=decision_id)
     if engine.get("leaf_eval") != "model":
         raise DeadlineQualificationError(f"{decision_id}: not a model-MCTS decision")
