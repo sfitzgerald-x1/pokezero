@@ -2212,6 +2212,28 @@ impl LeafContext {
                     }
                 }
             };
+            if index.is_none() {
+                let legal_actions: Vec<String> = candidates
+                    .iter()
+                    .filter_map(|candidate| {
+                        let obj = candidate.as_object()?;
+                        if !obj.get("legal").and_then(Value::as_bool).unwrap_or(false) {
+                            return None;
+                        }
+                        Some(format!(
+                            "index={} kind={} move_slot={} team_index={} move_id={}",
+                            obj.get("action_index").and_then(Value::as_u64).unwrap_or(usize::MAX as u64),
+                            obj.get("kind").and_then(Value::as_str).unwrap_or("<missing>"),
+                            obj.get("move_slot").and_then(Value::as_u64).map_or_else(|| "<none>".to_owned(), |value| value.to_string()),
+                            obj.get("team_index").and_then(Value::as_u64).map_or_else(|| "<none>".to_owned(), |value| value.to_string()),
+                            obj.get("move_id").and_then(Value::as_str).unwrap_or("<none>"),
+                        ))
+                    })
+                    .collect();
+                eprintln!(
+                    "POKEZERO_PRIOR_MAP_REFUSAL slot_is_self={slot_is_self} option={option:?} recharging={recharging} force_switch={force_switch_shape} engine_authoritative={engine_authoritative} legal_actions={legal_actions:?}"
+                );
+            }
             map.push(index);
         }
         Ok(map)

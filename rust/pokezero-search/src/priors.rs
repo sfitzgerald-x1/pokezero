@@ -196,15 +196,22 @@ fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f
     }
     let mut gathered = Vec::with_capacity(map.len());
     let mut sum = 0.0f32;
-    for entry in map {
-        let index = (*entry)?;
-        let prior = *priors_row.get(index)?;
+    for (position, entry) in map.iter().enumerate() {
+        let Some(index) = *entry else {
+            eprintln!("POKEZERO_PRIOR_GATHER_FALLBACK reason=unmapped_option position={position} map={map:?}");
+            return None;
+        };
+        let Some(prior) = priors_row.get(index).copied() else {
+            eprintln!("POKEZERO_PRIOR_GATHER_FALLBACK reason=prior_row_out_of_range position={position} index={index} row_len={}", priors_row.len());
+            return None;
+        };
         sum += prior;
         gathered.push(prior);
     }
     // NaN comparisons are false, so a non-finite logit would slip past the
     // underflow guard alone and propagate into stat.prior.
     if !sum.is_finite() || sum <= 1e-8 {
+        eprintln!("POKEZERO_PRIOR_GATHER_FALLBACK reason=invalid_or_underflow_mass sum={sum} mapped_count={}", map.len());
         return None;
     }
     for prior in &mut gathered {
