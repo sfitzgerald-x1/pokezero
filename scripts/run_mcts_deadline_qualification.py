@@ -17,6 +17,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any, Mapping, Sequence
 
@@ -71,6 +72,35 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
         json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n", encoding="utf-8"
     )
     temporary.replace(path)
+
+
+def _create_terminal_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Atomically create (never replace) the one authoritative terminal record."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        raise DeadlineQualificationError(f"refusing to replace existing terminal artifact: {path}")
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True, default=str)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError as error:
+            raise DeadlineQualificationError(
+                f"refusing to replace existing terminal artifact: {path}"
+            ) from error
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _read_json(path: Path) -> Mapping[str, Any]:
@@ -439,6 +469,26 @@ def _prepare_root(out_root: Path, manifest: Mapping[str, Any], *, resume: bool) 
     _atomic_json(out_root / "RUNNING.json", {"manifest": manifest, "state": "RUNNING"})
 
 
+def _terminal_payload(
+    *, state: str, result: Mapping[str, Any] | None = None, error: BaseException | None = None
+) -> dict[str, Any]:
+    if state not in {"PASS", "NONPASS"}:
+        raise ValueError(f"unsupported terminal state: {state}")
+    payload: dict[str, Any] = {
+        "schema_version": DEADLINE_QUALIFICATION_SCHEMA_VERSION,
+        "state": state,
+        # Keep the protocol marker in the same create-only record as its
+        # outcome.  A process interruption cannot publish a PASS without the
+        # matching marker (or a NONPASS without its matching failure marker).
+        "marker": f"DEADLINE_QUALIFICATION_{state}",
+    }
+    if result is not None:
+        payload.update(result)
+    if error is not None:
+        payload.update({"error_type": type(error).__name__, "error": str(error)})
+    return payload
+
+
 def _decision_payload(
     *,
     record: Any,
@@ -600,33 +650,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Exception as error:  # noqa: BLE001 - terminal diagnostics must survive every failure
         if ownership["verified"]:
             out_root.mkdir(parents=True, exist_ok=True)
-            _atomic_json(
+            _create_terminal_json(
                 out_root / "NONPASS.json",
-                {
-                    "schema_version": DEADLINE_QUALIFICATION_SCHEMA_VERSION,
-                    "state": "NONPASS",
-                    "error_type": type(error).__name__,
-                    "error": str(error),
-                },
+                _terminal_payload(state="NONPASS", error=error),
             )
             (out_root / "RUNNING.json").unlink(missing_ok=True)
         print(f"NONPASS: {error}", file=sys.stderr)
         return 2
-    _atomic_json(
+    _create_terminal_json(
         out_root / "PASS.json",
-        {
-            "schema_version": DEADLINE_QUALIFICATION_SCHEMA_VERSION,
-            "state": "PASS",
-            **result,
-        },
-    )
-    _atomic_json(
-        out_root / "DEADLINE_QUALIFICATION_PASS.json",
-        {
-            "schema_version": DEADLINE_QUALIFICATION_SCHEMA_VERSION,
-            "state": "PASS",
-            "marker": "DEADLINE_QUALIFICATION_PASS",
-        },
+        _terminal_payload(state="PASS", result=result),
     )
     (out_root / "RUNNING.json").unlink(missing_ok=True)
     print("DEADLINE QUALIFICATION PASS", flush=True)

@@ -143,6 +143,11 @@ def validate_deadline_decision(
         raise DeadlineQualificationError("decision_id must be a non-empty string")
     decision_id = decision_id_value
     _sha256(record.get("corpus_record_sha256"), "corpus_record_sha256", decision_id=decision_id)
+    root_action = record.get("root_action")
+    if not isinstance(root_action, str) or not root_action.strip():
+        raise DeadlineQualificationError(
+            f"{decision_id}: root_action must be a non-empty serialized action"
+        )
     engine = _mapping(record.get("engine_mcts"), "engine_mcts", decision_id=decision_id)
     if engine.get("leaf_eval") != "model":
         raise DeadlineQualificationError(f"{decision_id}: not a model-MCTS decision")
@@ -302,6 +307,7 @@ def validate_deadline_decision(
 
     return {
         "decision_id": decision_id,
+        "root_action": root_action,
         "outer_wall_ms": _finite_number(record.get("outer_wall_ms"), "outer_wall_ms", decision_id=decision_id),
         "deadline_elapsed_ms": elapsed_ms,
         "deadline_overshoot_ms": overshoot_ms,
@@ -344,6 +350,15 @@ def validate_deadline_qualification(
         weight = position - lower
         return values[lower] * (1.0 - weight) + values[upper] * weight
 
+    coverage = [
+        {
+            "decision_id": row["decision_id"],
+            "worlds_constructed": row["worlds_constructed"],
+            "worlds_searched": row["worlds_searched"],
+            "worlds_budget_skipped": row["worlds_budget_skipped"],
+        }
+        for row in normalized
+    ]
     return {
         "schema_version": DEADLINE_QUALIFICATION_SCHEMA_VERSION,
         "requirements": requirements.to_payload(),
@@ -353,6 +368,16 @@ def validate_deadline_qualification(
             int(row["deadline_exhausted"]) for row in normalized
         ),
         "worlds_budget_skipped": sum(row["worlds_budget_skipped"] for row in normalized),
+        # A valid qualification rejects a zero-completed-world decision rather
+        # than silently treating it as zero work.  Make that refusal accounting
+        # explicit in the terminal summary.
+        "zero_completed_world_refusals": 0,
+        "world_coverage": {
+            "constructed_total": sum(row["worlds_constructed"] for row in normalized),
+            "searched_total": sum(row["worlds_searched"] for row in normalized),
+            "budget_skipped_total": sum(row["worlds_budget_skipped"] for row in normalized),
+            "per_decision": coverage,
+        },
         "outer_wall_ms": {
             "p50": percentile(outer_walls, 0.5),
             "p95": percentile(outer_walls, 0.95),

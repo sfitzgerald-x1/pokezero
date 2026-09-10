@@ -17,6 +17,7 @@ def _record(index: int, *, prefix: bool) -> dict:
     return {
         "decision_id": f"decision-{index:02d}",
         "corpus_record_sha256": f"{index:x}" * 64,
+        "root_action": "move 1",
         "outer_wall_ms": 1_010.0 + index,
         "invalid_actions": 0,
         "engine_mcts": {
@@ -72,6 +73,17 @@ class DeadlineQualificationTest(unittest.TestCase):
         self.assertEqual(summary["decision_count"], 2)
         self.assertEqual(summary["native_prefix_count"], 1)
         self.assertEqual(summary["deadline_overshoot_ms"]["max"], 5.0)
+        self.assertEqual(summary["zero_completed_world_refusals"], 0)
+        self.assertEqual(summary["world_coverage"]["constructed_total"], 8)
+        self.assertEqual(summary["world_coverage"]["searched_total"], 8)
+
+    def test_missing_serialized_root_action_cannot_resume_as_valid_evidence(self) -> None:
+        record = _record(0, prefix=True)
+        del record["root_action"]
+        with self.assertRaisesRegex(DeadlineQualificationError, "root_action"):
+            validate_deadline_qualification(
+                [record, _record(1, prefix=False)], requirements=self.requirements
+            )
 
     def test_refused_native_witness_cannot_be_hidden_by_another_world(self) -> None:
         record = _record(0, prefix=True)

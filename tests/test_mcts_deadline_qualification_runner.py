@@ -173,6 +173,7 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             self.assertEqual(runner.main(_arguments(out_root)), 2)
             terminal = json.loads((out_root / "NONPASS.json").read_text())
             self.assertEqual(terminal["state"], "NONPASS")
+            self.assertEqual(terminal["marker"], "DEADLINE_QUALIFICATION_NONPASS")
             self.assertIn("source receipt", terminal["error"])
             self.assertFalse((out_root / "RUNNING.json").exists())
 
@@ -255,6 +256,7 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
 
             terminal = json.loads((out_root / "PASS.json").read_text())
             self.assertEqual(terminal["state"], "PASS")
+            self.assertEqual(terminal["marker"], "DEADLINE_QUALIFICATION_PASS")
             self.assertEqual(terminal["summary"]["decision_count"], 16)
             self.assertEqual(terminal["summary"]["native_prefix_count"], 1)
             self.assertFalse(terminal["manifest"]["search_config"]["model_priors"])
@@ -278,7 +280,7 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
                 },
             )
             self.assertEqual(len(list((out_root / "decisions").glob("*.json"))), 16)
-            self.assertTrue((out_root / "DEADLINE_QUALIFICATION_PASS.json").is_file())
+            self.assertFalse((out_root / "DEADLINE_QUALIFICATION_PASS.json").exists())
             self.assertFalse((out_root / "RUNNING.json").exists())
 
 
