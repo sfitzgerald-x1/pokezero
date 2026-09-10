@@ -32,6 +32,7 @@ def _arguments(out_root: Path, *, resume: bool = False) -> list[str]:
         "--expected-corpus-sha256", "b" * 64,
         "--expected-corpus-file-sha256", "c" * 64,
         "--expected-source-commit", "d" * 40,
+        "--expected-deadline-source-commit", "e" * 40,
         "--out-root", str(out_root),
     ]
     if resume:
@@ -78,8 +79,11 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
                 return {"checkpoint_sha256": "a" * 64, "policy_id": "fake"}
 
         class FakeDecider:
+            initialized_with = None
+
             def __init__(self, *_args, **_kwargs):
                 self.closed = False
+                type(self).initialized_with = dict(_kwargs)
 
             def prepare(self, record, _config):
                 index = int(record.decision_id.rsplit("-", 1)[-1])
@@ -143,10 +147,16 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             args[args.index("--expected-source-commit") + 1] = "source"
             with (
                 mock.patch.object(runner, "_source_commit", return_value="source"),
+                mock.patch.object(runner, "_require_clean_source"),
                 mock.patch.object(runner, "sha256_file", return_value="c" * 64),
                 mock.patch.object(runner, "read_corpus", return_value=(corpus_manifest, records)),
                 mock.patch.object(runner, "validate_representative_timing_panel", return_value={"ok": True}),
                 mock.patch.object(runner, "resolve_checkpoint_contract", return_value=FakeContract()),
+                mock.patch.object(
+                    runner,
+                    "_deadline_mechanics_source",
+                    return_value={"commit": "deadline", "paths": {"engine": "blob"}},
+                ),
                 mock.patch.object(runner, "_LiveEngineTimingDecider", FakeDecider),
             ):
                 self.assertEqual(runner.main(args), 0)
@@ -155,6 +165,17 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             self.assertEqual(terminal["state"], "PASS")
             self.assertEqual(terminal["summary"]["decision_count"], 16)
             self.assertEqual(terminal["summary"]["native_prefix_count"], 1)
+            self.assertFalse(terminal["manifest"]["search_config"]["model_priors"])
+            self.assertFalse(terminal["manifest"]["search_config"]["use_opponent_priors"])
+            self.assertEqual(terminal["manifest"]["deadline_mechanics_source"]["commit"], "deadline")
+            self.assertEqual(
+                FakeDecider.initialized_with,
+                {
+                    "model_decision_time_ms": 1000,
+                    "model_priors": False,
+                    "use_opponent_priors": False,
+                },
+            )
             self.assertEqual(len(list((out_root / "decisions").glob("*.json"))), 16)
             self.assertTrue((out_root / "DEADLINE_QUALIFICATION_PASS.json").is_file())
             self.assertFalse((out_root / "RUNNING.json").exists())

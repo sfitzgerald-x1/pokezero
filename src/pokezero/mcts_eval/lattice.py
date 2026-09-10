@@ -237,6 +237,8 @@ class _LiveEngineTimingDecider:
         showdown_root: str | None,
         *,
         model_decision_time_ms: int | None = None,
+        model_priors: bool = True,
+        use_opponent_priors: bool = False,
     ) -> None:
         from ..collection import env_config_with_policy_spec_masks
         from ..dex import load_showdown_dex_cached
@@ -246,8 +248,16 @@ class _LiveEngineTimingDecider:
 
         if model_decision_time_ms is not None and model_decision_time_ms <= 0:
             raise ValueError("model_decision_time_ms must be positive when set")
+        if not isinstance(model_priors, bool) or not isinstance(use_opponent_priors, bool):
+            raise ValueError("model_priors and use_opponent_priors must be booleans")
         self._contract = contract
         self._model_decision_time_ms = model_decision_time_ms
+        # The timing lattice measures the established priors-on production
+        # path by default.  A bounded qualification may deliberately pin both
+        # prior selectors off, so retain that choice in the adapter rather than
+        # silently hard-coding it at policy construction.
+        self._model_priors = model_priors
+        self._use_opponent_priors = use_opponent_priors
         self._artifacts = materialize_search_artifacts(contract, showdown_root=showdown_root)
         self._env_config = env_config_with_policy_spec_masks(
             LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=True),
@@ -293,7 +303,8 @@ class _LiveEngineTimingDecider:
                 search_sims=config.sims,
                 search_batch=config.batch,
                 search_depth=config.depth,
-                model_priors=True,
+                model_priors=self._model_priors,
+                use_opponent_priors=self._use_opponent_priors,
                 early_stop=False,
                 model_decision_time_ms=self._model_decision_time_ms,
             ),

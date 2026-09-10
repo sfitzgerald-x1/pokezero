@@ -26,6 +26,15 @@ SRC = ROOT / "src"
 if SRC.is_dir():
     sys.path.insert(0, str(SRC))
 
+# The bounded runner is necessarily newer than the deadline mechanism it
+# qualifies.  These are the complete implementation surfaces whose source must
+# remain exactly equal to the reviewed deadline commit; any drift is a
+# different study, not a replay of that mechanism.
+DEADLINE_MECHANICS_PATHS = (
+    "src/pokezero/engine_search.py",
+    "rust/pokezero-search",
+)
+
 from pokezero.mcts_eval.deadline_qualification import (  # noqa: E402
     DEADLINE_QUALIFICATION_SCHEMA_VERSION,
     DeadlineQualificationError,
@@ -68,6 +77,17 @@ def _source_commit() -> str:
         raise DeadlineQualificationError("cannot resolve the source commit") from error
 
 
+def _require_clean_source() -> None:
+    try:
+        changes = subprocess.check_output(
+            ["git", "-C", str(ROOT), "status", "--porcelain"], text=True
+        )
+    except subprocess.CalledProcessError as error:
+        raise DeadlineQualificationError("cannot inspect source cleanliness") from error
+    if changes:
+        raise DeadlineQualificationError("source checkout is dirty; refusing an unbound replay")
+
+
 def _safe_decision_name(decision_id: str, index: int) -> str:
     digest = hashlib.sha256(decision_id.encode("utf-8")).hexdigest()[:16]
     return f"{index:02d}-{digest}.json"
@@ -82,6 +102,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--expected-corpus-sha256", required=True)
     parser.add_argument("--expected-corpus-file-sha256", required=True)
     parser.add_argument("--expected-source-commit", required=True)
+    parser.add_argument(
+        "--expected-deadline-source-commit",
+        required=True,
+        help="Reviewed commit whose engine-search and native tree must match this source exactly.",
+    )
     parser.add_argument("--out-root", required=True)
     parser.add_argument("--model-device", default="cpu", choices=("cpu", "cuda"))
     parser.add_argument("--deadline-ms", type=int, default=1_000)
@@ -104,6 +129,7 @@ def _frozen_manifest(
     corpus_manifest: Any,
     corpus_file_sha256: str,
     checkpoint_contract: Any,
+    deadline_mechanics_source: Mapping[str, Any],
     requirements: DeadlineQualificationRequirements,
 ) -> dict[str, Any]:
     return {
@@ -113,6 +139,7 @@ def _frozen_manifest(
         "corpus_sha256": corpus_manifest.corpus_sha256,
         "corpus_file_sha256": corpus_file_sha256,
         "checkpoint": checkpoint_contract.to_manifest(),
+        "deadline_mechanics_source": dict(deadline_mechanics_source),
         "requirements": requirements.to_payload(),
         "search_config": {
             "depth": args.depth,
@@ -120,10 +147,46 @@ def _frozen_manifest(
             "batch": args.batch,
             "worlds": args.worlds,
             "early_stop": False,
-            "model_priors": True,
+            # This is a deadline-mechanics qualification, not a prior-policy
+            # study.  Freeze both selection-prior toggles off exactly as the
+            # predeclared contract requires.
+            "model_priors": False,
             "use_opponent_priors": False,
             "model_decision_time_ms": args.deadline_ms,
         },
+    }
+
+
+def _deadline_mechanics_source(expected_commit: str) -> dict[str, Any]:
+    """Prove this newer runner is exercising the reviewed deadline mechanism."""
+
+    try:
+        canonical_commit = subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-parse", f"{expected_commit}^{{commit}}"], text=True
+        ).strip()
+        objects = {
+            path: subprocess.check_output(
+                ["git", "-C", str(ROOT), "rev-parse", f"{canonical_commit}:{path}"], text=True
+            ).strip()
+            for path in DEADLINE_MECHANICS_PATHS
+        }
+    except subprocess.CalledProcessError as error:
+        raise DeadlineQualificationError(
+            f"cannot resolve reviewed deadline source {expected_commit}"
+        ) from error
+    compared = subprocess.run(
+        ["git", "-C", str(ROOT), "diff", "--quiet", canonical_commit, "--", *DEADLINE_MECHANICS_PATHS],
+        check=False,
+    )
+    if compared.returncode == 1:
+        raise DeadlineQualificationError(
+            "engine-search or native search source differs from the reviewed deadline source"
+        )
+    if compared.returncode != 0:
+        raise DeadlineQualificationError("cannot compare source against reviewed deadline source")
+    return {
+        "commit": canonical_commit,
+        "paths": dict(objects),
     }
 
 
@@ -175,6 +238,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         raise DeadlineQualificationError(
             f"source commit {source_commit} != expected {args.expected_source_commit}"
         )
+    _require_clean_source()
     requirements = DeadlineQualificationRequirements(
         requested_ms=args.deadline_ms,
         sims_per_world=args.sims,
@@ -203,12 +267,14 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         model_device=args.model_device,
         showdown_root=args.showdown_root,
     )
+    deadline_mechanics_source = _deadline_mechanics_source(args.expected_deadline_source_commit)
     manifest = _frozen_manifest(
         args=args,
         source_commit=source_commit,
         corpus_manifest=corpus_manifest,
         corpus_file_sha256=corpus_file_sha256,
         checkpoint_contract=checkpoint_contract,
+        deadline_mechanics_source=deadline_mechanics_source,
         requirements=requirements,
     )
     out_root = Path(args.out_root)
@@ -222,6 +288,8 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         checkpoint_contract,
         args.showdown_root,
         model_decision_time_ms=args.deadline_ms,
+        model_priors=False,
+        use_opponent_priors=False,
     )
     try:
         for index, record in enumerate(records):
