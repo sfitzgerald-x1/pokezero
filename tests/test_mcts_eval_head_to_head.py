@@ -566,7 +566,7 @@ class BackupRepairPilotContractTest(unittest.TestCase):
                 incumbent_config=_PilotConfig(),
             )
 
-    def test_readout_uses_the_predeclared_delta_and_never_hides_prior_fallbacks(self) -> None:
+    def test_readout_uses_the_predeclared_delta_and_scopes_prior_fallbacks(self) -> None:
         module, manifest, seeds, bootstrap, candidate, incumbent = self._contract_inputs()
         contract = module._backup_repair_pilot_contract(
             manifest,
@@ -579,8 +579,18 @@ class BackupRepairPilotContractTest(unittest.TestCase):
         )
         games = [
             SimpleNamespace(
-                candidate_telemetry=SimpleNamespace(fallback_decisions=0, prior_fallbacks=0),
-                incumbent_telemetry=SimpleNamespace(fallback_decisions=0, prior_fallbacks=0),
+                candidate_telemetry=SimpleNamespace(
+                    fallback_decisions=0,
+                    prior_fallbacks=0,
+                    root_prior_fallbacks=0,
+                    branch_prior_fallbacks=0,
+                ),
+                incumbent_telemetry=SimpleNamespace(
+                    fallback_decisions=0,
+                    prior_fallbacks=0,
+                    root_prior_fallbacks=0,
+                    branch_prior_fallbacks=0,
+                ),
             )
             for _ in range(24)
         ]
@@ -596,14 +606,32 @@ class BackupRepairPilotContractTest(unittest.TestCase):
         })
         self.assertEqual(readout["decision"], "ELIGIBLE_FOR_RESERVED_CONFIRMATION")
 
+        # A simulated future node can lack an authoritative request after a
+        # simulated replacement. Keep that refusal visible without treating it
+        # as a failure of the live root action.
         games[0].candidate_telemetry.prior_fallbacks = 1
+        games[0].candidate_telemetry.branch_prior_fallbacks = 1
+        branch_readout = module._backup_repair_pilot_readout(
+            contract=contract,
+            summary={"pair_scores": [1.0] * len(seeds)},
+            games=games,
+        )
+        self.assertEqual(branch_readout["decision"], "ELIGIBLE_FOR_RESERVED_CONFIRMATION")
+        self.assertEqual(
+            branch_readout["fallback_counts"]["candidate_branch_prior_fallbacks"], 1
+        )
+
+        games[0].candidate_telemetry.prior_fallbacks = 2
+        games[0].candidate_telemetry.root_prior_fallbacks = 1
         fallback_readout = module._backup_repair_pilot_readout(
             contract=contract,
             summary={"pair_scores": [1.0] * len(seeds)},
             games=games,
         )
         self.assertEqual(fallback_readout["decision"], "INCONCLUSIVE_OR_NOT_PROMOTED")
-        self.assertFalse(fallback_readout["promotion_checks"]["no_fallbacks_or_refusals"])
+        self.assertFalse(
+            fallback_readout["promotion_checks"]["no_decision_or_root_prior_fallbacks"]
+        )
 
     def test_replacement_cli_refuses_direct_or_terminalled_roots_before_work(self) -> None:
         module = _runner_module()
@@ -615,7 +643,7 @@ class BackupRepairPilotContractTest(unittest.TestCase):
             manifest.write_text(
                 "{"
                 f"\"schema_version\":\"{module.MANIFEST_SCHEMA_VERSION}\","
-                "\"study\":{\"schema_version\":\"pokezero.mcts-h2h-backup-repair-pilot.v3\"}"
+                f"\"study\":{{\"schema_version\":\"{module.BACKUP_REPAIR_PILOT_SCHEMA_VERSION}\"}}"
                 "}\n",
                 encoding="utf-8",
             )

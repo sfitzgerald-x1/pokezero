@@ -950,7 +950,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 12 |
 | `t1.hashed_input_files` | 94 |
-| `t1.head_fingerprint` | 453b9ff93acbddcb |
+| `t1.head_fingerprint` | 7eb9baf814a09bae |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

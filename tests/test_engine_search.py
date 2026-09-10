@@ -26,6 +26,7 @@ from pokezero.engine_search import (  # noqa: E402
     EngineMctsPolicy,
     EngineMctsStats,
     EngineSearchFallbackError,
+    EngineSearchWitnessError,
     _ABORT_LOSSY_SUBCASES_ATTR,
     _FALLBACK_SAMPLE_KEY_CEILING,
     _OVERRIDE_DISAGREEMENT_ADDRESSES,
@@ -4732,6 +4733,8 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                 "remaining_iterations": 100,
                 "model_evals": 1,
                 "prior_fallbacks": 2,
+                "root_prior_fallbacks": 2,
+                "branch_prior_fallbacks": 0,
                 "model_s": 0.081,
                 "time_budget_enabled": True,
                 "time_budget_ms": 10_000,
@@ -4751,6 +4754,8 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(policy.stats.total_iterations, 0)
         self.assertEqual(policy.stats.model_evals, 1)
         self.assertEqual(policy.stats.prior_fallbacks, 2)
+        self.assertEqual(policy.stats.root_prior_fallbacks, 2)
+        self.assertEqual(policy.stats.branch_prior_fallbacks, 0)
         self.assertAlmostEqual(policy.stats.model_wall_seconds, 0.081, places=6)
         self.assertEqual(policy.stats.world_search_attempts, 0)
         witness = decision.metadata["engine_mcts"]["time_budget"]
@@ -4763,6 +4768,27 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertTrue(invocation["time_budget_exhausted"])
         self.assertEqual(invocation["status"], "completed")
         self.assertEqual(invocation["root_visits"], {"side_one": 0, "side_two": 0})
+
+    def test_mismatched_prior_fallback_scope_refuses_the_native_world(self) -> None:
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+            opponent=[("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 0,
+            }
+        )
+
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError,
+            "native_prior_fallback_scope_invalid",
+        ):
+            self._run(policy, [report])
 
     def test_deadline_truncated_tree_is_labeled_as_a_deadline_prefix(self) -> None:
         policy = self._policy(worlds=1, model_decision_time_ms=10_000)

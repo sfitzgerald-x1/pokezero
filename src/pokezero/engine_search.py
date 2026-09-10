@@ -1634,7 +1634,12 @@ class EngineMctsStats:
     # spent unable to say what had changed in a class; that is the cost this avoids.
     lossy_subcase_renders: Counter = field(default_factory=Counter)
     attribution_unsafe_renders: int = 0
+    # Preserve the historical aggregate and split it by scope. A root fallback
+    # affects the live selected action; an interior fallback is a simulated
+    # node that may intentionally lack an authoritative request label space.
     prior_fallbacks: int = 0
+    root_prior_fallbacks: int = 0
+    branch_prior_fallbacks: int = 0
     # Within-batch selection collisions, PER SEAT (model mode only; the crate
     # reports these from `multiply_batched_encoded_core` and nowhere else,
     # because a collision is a property of a batch and the sequential core
@@ -2035,6 +2040,8 @@ class EngineMctsStats:
             "lossy_subcase_renders": dict(self.lossy_subcase_renders),
             "attribution_unsafe_renders": self.attribution_unsafe_renders,
             "prior_fallbacks": self.prior_fallbacks,
+            "root_prior_fallbacks": self.root_prior_fallbacks,
+            "branch_prior_fallbacks": self.branch_prior_fallbacks,
             "collision_rounds": self.collision_rounds,
             "collision_pending_rounds": self.collision_pending_rounds,
             "collision_selections": self.collision_selections,
@@ -5711,7 +5718,41 @@ class EngineMctsPolicy:
             self.stats.attribution_unsafe_renders += int(
                 report.get("attribution_unsafe_renders") or 0
             )
-            self.stats.prior_fallbacks += int(report.get("prior_fallbacks") or 0)
+            reported_prior_fallbacks = report.get("prior_fallbacks") or 0
+            if (
+                type(reported_prior_fallbacks) is not int
+                or reported_prior_fallbacks < 0
+            ):
+                raise EngineSearchWitnessError(
+                    "native_prior_fallbacks_invalid: aggregate must be a non-negative integer"
+                )
+            root_prior_fallbacks = report.get("root_prior_fallbacks")
+            branch_prior_fallbacks = report.get("branch_prior_fallbacks")
+            if root_prior_fallbacks is None and branch_prior_fallbacks is None:
+                # A pre-split native report cannot demonstrate that its
+                # fallbacks were only interior. Charge any nonzero legacy
+                # aggregate to the root conservatively; source-isolated
+                # strength comparisons require the explicit split instead.
+                root_prior_fallbacks = reported_prior_fallbacks
+                branch_prior_fallbacks = 0
+            elif root_prior_fallbacks is None or branch_prior_fallbacks is None:
+                raise EngineSearchWitnessError(
+                    "native_prior_fallback_scope_incomplete: root and branch counters "
+                    "must be reported together"
+                )
+            if (
+                type(root_prior_fallbacks) is not int
+                or root_prior_fallbacks < 0
+                or type(branch_prior_fallbacks) is not int
+                or branch_prior_fallbacks < 0
+                or root_prior_fallbacks + branch_prior_fallbacks != reported_prior_fallbacks
+            ):
+                raise EngineSearchWitnessError(
+                    "native_prior_fallback_scope_invalid: aggregate must equal root plus branch"
+                )
+            self.stats.prior_fallbacks += reported_prior_fallbacks
+            self.stats.root_prior_fallbacks += root_prior_fallbacks
+            self.stats.branch_prior_fallbacks += branch_prior_fallbacks
             # Per-INVOCATION like the phase walls above: a conservatively
             # replayed world collided that many times twice and must report it.
             # `.get(...) or 0` keeps a pre-collision-counter wheel readable.

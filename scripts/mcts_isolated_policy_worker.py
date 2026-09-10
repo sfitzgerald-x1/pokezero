@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from typing import Any, BinaryIO, Callable, Mapping
 
 
-PROTOCOL_VERSION = "pokezero.isolated-mcts-policy.v1"
+PROTOCOL_VERSION = "pokezero.isolated-mcts-policy.v2"
 MAX_FRAME_BYTES = 64 * 1024 * 1024
 RESET_PROTOCOL = "policy_method_or_fresh_source_policy.v1"
 # A newer host may include a disabled diagnostic or deadline field which did
@@ -42,6 +42,8 @@ STATS_FIELDS = (
     "worlds_constructed",
     "worlds_searched",
     "prior_fallbacks",
+    "root_prior_fallbacks",
+    "branch_prior_fallbacks",
     "decision_wall_seconds",
 )
 
@@ -387,8 +389,19 @@ def _context_from_wire(payload: object, policy_context_type: Any) -> Any:
 def _stats_payload(stats: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {}
     for field_name in STATS_FIELDS:
-        value = getattr(stats, field_name, 0.0 if field_name == "decision_wall_seconds" else 0)
+        try:
+            value = getattr(stats, field_name)
+        except AttributeError as error:
+            raise WorkerError(
+                f"source-local policy stats omit required telemetry field {field_name!r}."
+            ) from error
         payload[field_name] = float(value) if field_name == "decision_wall_seconds" else int(value)
+    if payload["prior_fallbacks"] != (
+        payload["root_prior_fallbacks"] + payload["branch_prior_fallbacks"]
+    ):
+        raise WorkerError(
+            "source-local policy prior fallback aggregate must equal root plus branch."
+        )
     return payload
 
 

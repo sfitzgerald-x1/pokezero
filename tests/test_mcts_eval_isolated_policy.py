@@ -182,10 +182,14 @@ while True:
         write(stdout, {{"type": "error", "message": "annotation snapshot changed"}})
         continue
     action = 1 if mode == "illegal" else 0
+    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "decision_wall_seconds": 0.25}}
+    if mode == "legacy-stats":
+        del stats["root_prior_fallbacks"]
+        del stats["branch_prior_fallbacks"]
     write(stdout, {{
         "type": "decision",
         "decision": {{"action_index": action, "policy_id": policy["policy_id"], "metadata": {{"worker": "fake"}}}},
-        "stats": {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "decision_wall_seconds": 0.25}},
+        "stats": stats,
     }})
 """,
         encoding="utf-8",
@@ -267,6 +271,16 @@ class IsolatedPolicyTest(unittest.TestCase):
             policy = self._policy(Path(directory), mode="illegal")
             try:
                 with self.assertRaisesRegex(IsolatedPolicyError, "not legal"):
+                    policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
+            finally:
+                policy.close()
+
+    def test_legacy_source_stats_cannot_be_treated_as_scoped_zero(self) -> None:
+        """A v2 pilot must fail closed before scoring an uninstrumented source."""
+        with tempfile.TemporaryDirectory() as directory:
+            policy = self._policy(Path(directory), mode="legacy-stats")
+            try:
+                with self.assertRaisesRegex(IsolatedPolicyError, "root_prior_fallbacks"):
                     policy.select_action_with_context(_context(), rng=__import__("random").Random(7))
             finally:
                 policy.close()
@@ -361,9 +375,9 @@ class IsolatedPolicyTest(unittest.TestCase):
 
 
 class StatsTest(unittest.TestCase):
-    def test_telemetry_regression_is_refused(self) -> None:
-        stats = IsolatedPolicyStats()
-        payload = {
+    @staticmethod
+    def _payload() -> dict[str, object]:
+        return {
             "decisions": 3,
             "searched_decisions": 3,
             "fallback_decisions": 0,
@@ -372,26 +386,47 @@ class StatsTest(unittest.TestCase):
             "worlds_constructed": 1,
             "worlds_searched": 1,
             "prior_fallbacks": 0,
+            "root_prior_fallbacks": 0,
+            "branch_prior_fallbacks": 0,
             "decision_wall_seconds": 0.3,
         }
+
+    def test_telemetry_regression_is_refused(self) -> None:
+        stats = IsolatedPolicyStats()
+        payload = self._payload()
         stats.update(payload)
         payload["model_evals"] = 3
         with self.assertRaisesRegex(IsolatedPolicyError, "regressed"):
             stats.update(payload)
 
+    def test_scope_counters_are_required_from_an_isolated_source(self) -> None:
+        stats = IsolatedPolicyStats()
+        payload = self._payload()
+        del payload["root_prior_fallbacks"]
+        with self.assertRaisesRegex(IsolatedPolicyError, "root_prior_fallbacks"):
+            stats.update(payload)
+
+    def test_scope_counter_aggregate_mismatch_is_refused(self) -> None:
+        stats = IsolatedPolicyStats()
+        payload = self._payload()
+        payload["prior_fallbacks"] = 1
+        with self.assertRaisesRegex(IsolatedPolicyError, "aggregate must equal root plus branch"):
+            stats.update(payload)
+
     def test_non_finite_wall_time_is_refused(self) -> None:
         stats = IsolatedPolicyStats()
-        payload = {
-            "decisions": 0,
-            "searched_decisions": 0,
-            "fallback_decisions": 0,
-            "model_evals": 0,
-            "total_iterations": 0,
-            "worlds_constructed": 0,
-            "worlds_searched": 0,
-            "prior_fallbacks": 0,
-            "decision_wall_seconds": float("nan"),
-        }
+        payload = self._payload()
+        payload.update(
+            {
+                "decisions": 0,
+                "searched_decisions": 0,
+                "model_evals": 0,
+                "total_iterations": 0,
+                "worlds_constructed": 0,
+                "worlds_searched": 0,
+                "decision_wall_seconds": float("nan"),
+            }
+        )
         with self.assertRaisesRegex(IsolatedPolicyError, "invalid decision wall time"):
             stats.update(payload)
 
