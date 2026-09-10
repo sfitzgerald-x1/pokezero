@@ -570,9 +570,14 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                     chance: chance_idx,
                     branch: Some(k),
                 });
-                let branch = &tree.chances[chance_idx].branches[k];
+                // Intentional historical control: reserve the sampled branch's
+                // denominator during batched collection, matching the frozen
+                // pre-#1337 backup implementation.  This branch exists only
+                // as the source-isolated incumbent for the paired comparison.
+                let branch = &mut tree.chances[chance_idx].branches[k];
                 let pre_mean = branch.mean();
                 let pending = branch.pending_row;
+                branch.visits += 1;
                 if let Some(v) = branch.terminal {
                     break TraversalEnd::Ready(v);
                 }
@@ -915,12 +920,11 @@ pub(crate) fn finalize(tree: &mut Tree, traversal: &Traversal, row_values: &[f32
     for (idx, step) in traversal.path.iter().enumerate().rev() {
         let is_ending_step = idx == traversal.path.len() - 1;
         if let Some(k) = step.branch {
-            // Commit the visit together with its real sample. Reserving the
-            // denominator during collection would let other in-flight visits
-            // dilute this permanent backup (including exact terminal values).
+            // Historical-control complement to the provisional reservation in
+            // `traverse`: the final sample contributes value only because its
+            // visit was reserved during collection.
             let branch = &mut tree.chances[step.chance].branches[k];
             debug_assert!(is_ending_step || branch.pending_row.is_none());
-            branch.visits += 1;
             branch.value_sum += value;
         } else {
             debug_assert!(is_ending_step, "expansion can only end a traversal");
