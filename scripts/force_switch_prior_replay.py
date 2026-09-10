@@ -44,7 +44,7 @@ from pokezero.local_showdown import (  # noqa: E402
     _public_materialization_payload,
 )
 from pokezero.poke_engine_adapter import build_poke_engine_state  # noqa: E402
-from pokezero.showdown import V2_1_REPLAY_OBSERVATION_SPEC  # noqa: E402
+from pokezero.showdown import V2_2_REPLAY_OBSERVATION_SPEC  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, pack_team  # noqa: E402
 
 
@@ -71,7 +71,11 @@ def _config(showdown_root: Path) -> LocalShowdownConfig:
     return LocalShowdownConfig(
         showdown_root=showdown_root,
         read_timeout_seconds=10.0,
-        observation_spec=V2_1_REPLAY_OBSERVATION_SPEC,
+        # The native LeafEncoder accepts the current v2.2+ layout, not the
+        # legacy v2.1 fixture layout.  This is a root-map replay, so retain a
+        # supported production layout rather than letting the harness itself
+        # be the source of a compatibility failure.
+        observation_spec=V2_2_REPLAY_OBSERVATION_SPEC,
     )
 
 
@@ -242,7 +246,7 @@ def run_replay(*, showdown_root: Path) -> dict[str, Any]:
     tables_json = json.dumps(
         build_tables(
             str(showdown_root),
-            observation_schema_version=V2_1_REPLAY_OBSERVATION_SPEC.schema_version,
+            observation_schema_version=V2_2_REPLAY_OBSERVATION_SPEC.schema_version,
         ),
         sort_keys=True,
         separators=(",", ":"),
