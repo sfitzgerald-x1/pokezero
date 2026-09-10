@@ -75,8 +75,13 @@ both policy receipts atomically under
 The job is not a result while it is live: no score, readout, or promotion may
 be inferred from partial games. It can be read only after all 24 games and 48
 receipts are present, the runner has written its parseable terminal handoff,
-the Job completed with zero restarts, and the create-only terminal snapshot
-independently validates the contract.
+and the create-only terminal snapshot independently validates the contract. The
+execution must either be the original Job completing with zero restarts, or the
+manifest's sole admitted recovery: a validated primary failure before runner
+terminal, an immutable resume-admission record and safe durable-root stage,
+then a fresh resume Job completing with zero restarts. A later retry, a
+malformed terminal handoff, or a partially preserved root is not a valid
+readout path.
 
 ### 3. Qualify the implemented fixed-wall mechanism before using it
 
