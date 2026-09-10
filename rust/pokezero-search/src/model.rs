@@ -924,7 +924,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // Prior wiring telemetry: nodes whose acting-side priors came from the
     // model vs fallbacks to uniform (unmapped option / underflow / mismatch).
     let mut prior_branches = 0usize;
-    let mut prior_fallbacks = 0usize;
+    // Keep the authoritative live-root fallback separate from fallbacks at
+    // simulated interior nodes. The aggregate remains available below for
+    // compatibility with callers that only understand the historical field.
+    let mut root_prior_fallbacks = 0usize;
+    let mut branch_prior_fallbacks = 0usize;
     // Per-phase wall attribution (plan deliverable 4: "Do not estimate a
     // missing phase by subtracting an assumed model cost"). Every phase is
     // measured directly:
@@ -1005,7 +1009,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 opponent_map.as_deref(),
             );
             root_priors = resolved.acting;
-            prior_fallbacks += resolved.fallbacks;
+            root_prior_fallbacks += resolved.fallbacks;
         }
     }
     let _ = crate::leaf::drain_encode_subphases(); // per-search reset
@@ -1356,7 +1360,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 leaf_ctx,
             );
             prior_branches += resolved.applied;
-            prior_fallbacks += resolved.fallbacks;
+            branch_prior_fallbacks += resolved.fallbacks;
             // SEAT ORIENTATION. The model's value is SELF-relative: every leaf
             // observation is encoded from `leaf_ctx`'s own seat (SELF /
             // OPPONENT token blocks), and the checkpoint's value target is +1
@@ -1458,10 +1462,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     } else {
         (collisions.side_two_repeats, collisions.side_one_repeats)
     };
+    let prior_fallbacks = root_prior_fallbacks + branch_prior_fallbacks;
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
+         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1485,6 +1490,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         model_priors,
         prior_branches,
         prior_fallbacks,
+        root_prior_fallbacks,
+        branch_prior_fallbacks,
         encode_nanos as f64 / 1e9,
         model_nanos as f64 / 1e9,
         tree_nanos as f64 / 1e9,
