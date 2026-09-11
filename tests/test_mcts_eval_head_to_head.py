@@ -629,6 +629,13 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
 
 
 class BackupRepairPilotContractTest(unittest.TestCase):
+    def test_bootstrap_contract_keeps_the_validated_mapping_for_downstream_gates(self) -> None:
+        module = _runner_module()
+        manifest = {"bootstrap": {"resamples": 10_000, "seed": 20260910, "confidence_level": 0.80}}
+        bootstrap, resamples, seed, confidence = module._bootstrap_contract(manifest)
+        self.assertEqual(bootstrap, manifest["bootstrap"])
+        self.assertEqual((resamples, seed, confidence), (10_000, 20260910, 0.80))
+
     def test_bootstrap_settings_include_the_declared_confidence(self) -> None:
         module = _runner_module()
         self.assertEqual(
