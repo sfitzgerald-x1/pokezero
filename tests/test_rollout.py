@@ -131,6 +131,43 @@ class RolloutDriverTest(unittest.TestCase):
         self.assertEqual(result.trajectory.steps[0].player_id, "p1")
         self.assertIsNone(result.trajectory.steps[0].opponent_action_index)
 
+    def test_rollout_emits_progress_only_after_each_committed_decision(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",), ("p1",)], terminal_after_steps=2)
+        progress = []
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": RandomLegalPolicy()},
+            config=RolloutConfig(max_decision_rounds=3, decision_sink=progress.append),
+        )
+
+        result = driver.run(seed=73, battle_id="progress-battle")
+
+        self.assertEqual(result.decision_round_count, 2)
+        self.assertEqual([event.decision_round_index for event in progress], [0, 1])
+        self.assertEqual([event.decision_round_count for event in progress], [1, 2])
+        self.assertEqual([event.requested_players for event in progress], [("p1",), ("p1",)])
+        self.assertEqual([event.terminal for event in progress], [False, True])
+        self.assertFalse(progress[0].terminal_capped)
+        self.assertEqual(progress[1].terminal_winner, "p1")
+        self.assertEqual([event.battle_id for event in progress], ["progress-battle", "progress-battle"])
+        self.assertEqual([event.seed for event in progress], [73, 73])
+
+    def test_rollout_fails_closed_when_an_opted_in_progress_sink_fails(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+
+        def fail(_event) -> None:
+            raise RuntimeError("durable progress unavailable")
+
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": RandomLegalPolicy()},
+            config=RolloutConfig(decision_sink=fail),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "durable progress unavailable"):
+            driver.run(seed=74)
+        self.assertEqual(len(env.step_calls), 1)
+
     def test_rollout_caps_when_environment_does_not_terminal(self) -> None:
         env = ScriptedEnv(requested_sequence=[("p1", "p2")] * 5, terminal_after_steps=None)
         driver = RolloutDriver(

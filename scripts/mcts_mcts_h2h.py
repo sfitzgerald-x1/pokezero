@@ -41,6 +41,7 @@ from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_mean  # noqa
 
 MANIFEST_SCHEMA_VERSION = "pokezero.mcts-h2h-manifest.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-h2h-complete.v1"
+PROGRESS_SCHEMA_VERSION = "pokezero.mcts-h2h-progress.v1"
 BACKUP_REPAIR_PILOT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot.v4"
 BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot-readout.v2"
 OPPONENT_PRIOR_APPLICABILITY_SCHEMA_VERSION = (
@@ -407,6 +408,40 @@ def _write_immutable_json(path: Path, payload: Mapping[str, Any]) -> None:
                 raise HeadToHeadError(
                     f"refusing to replace concurrently-created artifact {path}; it differs."
                 ) from None
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_progress_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Atomically update the runner's explicitly mutable liveness checkpoint.
+
+    Game, receipt, summary, and terminal artifacts are immutable. This one
+    progress path is deliberately different: it is a non-score-bearing status
+    snapshot that advances after each committed decision. An unfamiliar or
+    malformed existing file fails closed rather than being overwritten.
+    """
+
+    if path.parent.name != "progress" or path.name != "current.json":
+        raise HeadToHeadError(f"progress checkpoint has an unexpected path: {path}")
+    if payload.get("schema_version") != PROGRESS_SCHEMA_VERSION:
+        raise HeadToHeadError("progress checkpoint has the wrong schema version.")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        existing = None
+    except (OSError, json.JSONDecodeError) as error:
+        raise HeadToHeadError(f"refusing to replace unreadable progress checkpoint {path}: {error}") from error
+    if existing is not None:
+        if not isinstance(existing, Mapping) or existing.get("schema_version") != PROGRESS_SCHEMA_VERSION:
+            raise HeadToHeadError(f"refusing to replace incompatible progress checkpoint {path}")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(_canonical_bytes(payload))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -1190,7 +1225,11 @@ def main(argv: list[str] | None = None) -> int:
         observation_spec_from_model_config,
     )
     from pokezero.randbat import load_gen3_randbat_source_cached  # noqa: PLC0415
-    from pokezero.rollout import RolloutConfig, RolloutDriver  # noqa: PLC0415
+    from pokezero.rollout import (  # noqa: PLC0415
+        RolloutConfig,
+        RolloutDecisionProgress,
+        RolloutDriver,
+    )
 
     source = _source_provenance()
     source_commit = source["commit"]
@@ -1404,6 +1443,42 @@ def main(argv: list[str] | None = None) -> int:
 
     isolated_workers: dict[tuple[int, str], dict[str, IsolatedMctsPolicy]] = {}
 
+    def write_progress(
+        event: str,
+        *,
+        seed: int,
+        candidate_seat: str,
+        decision: RolloutDecisionProgress | None = None,
+        completed_candidate_seats: tuple[str, ...] | None = None,
+    ) -> None:
+        """Publish a non-score-bearing, atomically replaceable runner heartbeat."""
+
+        payload: dict[str, Any] = {
+            "schema_version": PROGRESS_SCHEMA_VERSION,
+            "event": event,
+            "seed": seed,
+            "candidate_seat": candidate_seat,
+            "max_decision_rounds": max_decision_rounds,
+            "execution_mode": execution_mode,
+            "candidate_provenance_sha256": candidate.provenance_sha256,
+            "incumbent_provenance_sha256": incumbent.provenance_sha256,
+        }
+        if decision is not None:
+            payload.update(
+                {
+                    "battle_id": decision.battle_id,
+                    "decision_round_index": decision.decision_round_index,
+                    "decision_round_count": decision.decision_round_count,
+                    "requested_players": list(decision.requested_players),
+                    "terminal": decision.terminal,
+                    "terminal_capped": decision.terminal_capped,
+                    "terminal_winner": decision.terminal_winner,
+                }
+            )
+        if completed_candidate_seats is not None:
+            payload["completed_candidate_seats"] = list(completed_candidate_seats)
+        _write_progress_json(out_root / "progress" / "current.json", payload)
+
     def isolated_policy_for(
         *,
         policy: MctsPolicySpec,
@@ -1439,6 +1514,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     def session_factory(seed: int, candidate_seat: str):
+        write_progress("game_started", seed=seed, candidate_seat=candidate_seat)
         env = LocalShowdownEnv(env_config)
         annotations = EnvTier2AnnotationSource(env)
         if execution_mode == "isolated_build":
@@ -1498,6 +1574,12 @@ def main(argv: list[str] | None = None) -> int:
                 format_id="gen3randombattle",
                 record_policy_timing=True,
                 hide_opponent_legal_action_masks=True,
+                decision_sink=lambda decision: write_progress(
+                    "decision_committed",
+                    seed=seed,
+                    candidate_seat=candidate_seat,
+                    decision=decision,
+                ),
             ),
         )
         return driver, candidate_policy, incumbent_policy
@@ -1557,6 +1639,11 @@ def main(argv: list[str] | None = None) -> int:
                         receipt,
                     )
             write_game_immutable(out_root, game)
+            write_progress(
+                "game_persisted",
+                seed=game.seed,
+                candidate_seat=game.candidate_seat,
+            )
 
         games = play_mirrored_pair(
             seed=seed,
@@ -1571,6 +1658,12 @@ def main(argv: list[str] | None = None) -> int:
             execution_mode=execution_mode,
         )
         complete_pair(games, seed=seed, candidate=candidate, incumbent=incumbent)
+        write_progress(
+            "pair_completed",
+            seed=seed,
+            candidate_seat="both",
+            completed_candidate_seats=tuple(sorted(game.candidate_seat for game in games)),
+        )
         all_games.extend(games)
         print(f"completed mirrored pair seed={seed}", flush=True)
 
