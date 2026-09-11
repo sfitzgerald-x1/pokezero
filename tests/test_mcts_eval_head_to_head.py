@@ -50,6 +50,7 @@ class _Stats:
     total_iterations: int = 0
     worlds_constructed: int = 0
     worlds_searched: int = 0
+    opponent_prior_arm_decisions: int = 0
     decision_wall_seconds: float = 0.0
 
 
@@ -90,6 +91,15 @@ class IsolatedRunnerCliTest(unittest.TestCase):
 
 @dataclass(frozen=True)
 class _PilotConfig:
+    search_sims: int = 256
+    search_batch: int = 16
+
+
+@dataclass(frozen=True)
+class _OpponentPriorConfig:
+    model_priors: bool = True
+    use_opponent_priors: bool = True
+    override_telemetry: bool = True
     search_sims: int = 256
     search_batch: int = 16
 
@@ -246,6 +256,8 @@ class MirroredPairTest(unittest.TestCase):
         self.assertEqual(summary["pair_scores"], [0.5])
         self.assertEqual(summary["candidate_score"]["point"], 0.5)
         self.assertEqual(summary["candidate_model_evals"], 16)
+        self.assertEqual(summary["candidate_opponent_prior_arm_decisions"], 0)
+        self.assertEqual(summary["incumbent_opponent_prior_arm_decisions"], 0)
         self.assertEqual(summary["candidate_decision_walls_s"], [0.01, 0.01])
         self.assertEqual(summary["incumbent_decision_walls_s"], [0.02, 0.02])
         self.assertEqual(
@@ -270,6 +282,34 @@ class MirroredPairTest(unittest.TestCase):
                 "max_s": 0.02,
             },
         )
+
+    def test_summary_preserves_applied_opponent_prior_counts_for_both_arms(self) -> None:
+        candidate = _spec("candidate")
+        incumbent = _spec("incumbent", policy_id="incumbent")
+        games = [
+            replace(
+                game,
+                candidate_telemetry=replace(
+                    game.candidate_telemetry, opponent_prior_arm_decisions=5
+                ),
+                incumbent_telemetry=replace(
+                    game.incumbent_telemetry, opponent_prior_arm_decisions=2
+                ),
+            )
+            for game in _pair()
+        ]
+
+        summary = summarize_complete_pairs(
+            games,
+            seeds=[101],
+            candidate=candidate,
+            incumbent=incumbent,
+            bootstrap_resamples=20,
+            bootstrap_seed=7,
+        )
+
+        self.assertEqual(summary["candidate_opponent_prior_arm_decisions"], 10)
+        self.assertEqual(summary["incumbent_opponent_prior_arm_decisions"], 4)
 
     def test_any_mcts_fallback_invalidates_the_game(self) -> None:
         with self.assertRaisesRegex(HeadToHeadError, "fallback"):
@@ -422,6 +462,170 @@ class DurableGameTest(unittest.TestCase):
         bad_fallback["candidate_telemetry"]["fallback_decisions"] = 1
         with self.assertRaisesRegex(HeadToHeadError, "fallback"):
             HeadToHeadGame.from_payload(bad_fallback)
+
+
+class OpponentPriorApplicabilityContractTest(unittest.TestCase):
+    def _inputs(self):
+        module = _runner_module()
+        manifest = {
+            "opponent_prior_applicability": dict(
+                module.OPPONENT_PRIOR_APPLICABILITY_CONTRACT
+            )
+        }
+        candidate = {
+            "source_commit": "a" * 40,
+            "source_tree_sha256": "b" * 64,
+            "engine_fingerprint": "c" * 64,
+            "config_id": "opponent-priors-on",
+        }
+        incumbent = {**candidate, "config_id": "opponent-priors-off"}
+        return module, manifest, candidate, incumbent
+
+    def test_contract_requires_the_source_isolated_one_setting_contrast(self) -> None:
+        module, manifest, candidate, incumbent = self._inputs()
+        contract = module._opponent_prior_applicability_contract(
+            manifest,
+            candidate_raw=candidate,
+            incumbent_raw=incumbent,
+            candidate_config=_OpponentPriorConfig(),
+            incumbent_config=replace(_OpponentPriorConfig(), use_opponent_priors=False),
+            execution_mode="isolated_build",
+        )
+        self.assertEqual(contract, module.OPPONENT_PRIOR_APPLICABILITY_CONTRACT)
+
+        with self.assertRaisesRegex(HeadToHeadError, "source-isolated"):
+            module._opponent_prior_applicability_contract(
+                manifest,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_OpponentPriorConfig(),
+                incumbent_config=replace(_OpponentPriorConfig(), use_opponent_priors=False),
+                execution_mode="in_process",
+            )
+
+        with self.assertRaisesRegex(HeadToHeadError, "only use_opponent_priors"):
+            module._opponent_prior_applicability_contract(
+                manifest,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_OpponentPriorConfig(),
+                incumbent_config=replace(
+                    _OpponentPriorConfig(), use_opponent_priors=False, search_sims=128
+                ),
+                execution_mode="isolated_build",
+            )
+
+    def test_contract_refuses_identity_or_prior_configuration_drift(self) -> None:
+        module, manifest, candidate, incumbent = self._inputs()
+        incumbent["source_tree_sha256"] = "d" * 64
+        with self.assertRaisesRegex(HeadToHeadError, "same verified source identity"):
+            module._opponent_prior_applicability_contract(
+                manifest,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_OpponentPriorConfig(),
+                incumbent_config=replace(_OpponentPriorConfig(), use_opponent_priors=False),
+                execution_mode="isolated_build",
+            )
+
+        incumbent["source_tree_sha256"] = candidate["source_tree_sha256"]
+        with self.assertRaisesRegex(HeadToHeadError, "model priors on"):
+            module._opponent_prior_applicability_contract(
+                manifest,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=replace(_OpponentPriorConfig(), model_priors=False),
+                incumbent_config=replace(
+                    _OpponentPriorConfig(),
+                    model_priors=False,
+                    use_opponent_priors=False,
+                ),
+                execution_mode="isolated_build",
+            )
+
+        with self.assertRaisesRegex(HeadToHeadError, "override_telemetry=true"):
+            module._opponent_prior_applicability_contract(
+                manifest,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=replace(_OpponentPriorConfig(), override_telemetry=False),
+                incumbent_config=replace(
+                    _OpponentPriorConfig(),
+                    use_opponent_priors=False,
+                    override_telemetry=False,
+                ),
+                execution_mode="isolated_build",
+            )
+
+        incumbent["config_id"] = candidate["config_id"]
+        with self.assertRaisesRegex(HeadToHeadError, "distinct candidate and incumbent config_id"):
+            module._opponent_prior_applicability_contract(
+                manifest,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_OpponentPriorConfig(),
+                incumbent_config=replace(_OpponentPriorConfig(), use_opponent_priors=False),
+                execution_mode="isolated_build",
+            )
+
+    def test_readout_makes_zero_or_unexpected_incumbent_use_terminal_nonpass(self) -> None:
+        module, manifest, candidate, incumbent = self._inputs()
+        contract = module._opponent_prior_applicability_contract(
+            manifest,
+            candidate_raw=candidate,
+            incumbent_raw=incumbent,
+            candidate_config=_OpponentPriorConfig(),
+            incumbent_config=replace(_OpponentPriorConfig(), use_opponent_priors=False),
+            execution_mode="isolated_build",
+        )
+
+        passed = module._opponent_prior_applicability_readout(
+            contract=contract,
+            summary={
+                "candidate_opponent_prior_arm_decisions": 7,
+                "incumbent_opponent_prior_arm_decisions": 0,
+                "candidate_root_prior_fallbacks": 0,
+                "incumbent_root_prior_fallbacks": 0,
+            },
+        )
+        self.assertEqual(passed["status"], "PASS")
+        self.assertEqual(passed["marker"], "OPPONENT_PRIOR_APPLICABILITY_PASS")
+
+        zero = module._opponent_prior_applicability_readout(
+            contract=contract,
+            summary={
+                "candidate_opponent_prior_arm_decisions": 0,
+                "incumbent_opponent_prior_arm_decisions": 0,
+                "candidate_root_prior_fallbacks": 0,
+                "incumbent_root_prior_fallbacks": 0,
+            },
+        )
+        self.assertEqual(zero["status"], "NONPASS")
+        self.assertFalse(zero["checks"]["candidate_applied_model_priced_opponent_arm"])
+
+        drift = module._opponent_prior_applicability_readout(
+            contract=contract,
+            summary={
+                "candidate_opponent_prior_arm_decisions": 7,
+                "incumbent_opponent_prior_arm_decisions": 1,
+                "candidate_root_prior_fallbacks": 0,
+                "incumbent_root_prior_fallbacks": 0,
+            },
+        )
+        self.assertEqual(drift["status"], "NONPASS")
+        self.assertFalse(drift["checks"]["incumbent_remained_flag_off"])
+
+        root_fallback = module._opponent_prior_applicability_readout(
+            contract=contract,
+            summary={
+                "candidate_opponent_prior_arm_decisions": 7,
+                "incumbent_opponent_prior_arm_decisions": 0,
+                "candidate_root_prior_fallbacks": 1,
+                "incumbent_root_prior_fallbacks": 0,
+            },
+        )
+        self.assertEqual(root_fallback["status"], "NONPASS")
+        self.assertFalse(root_fallback["checks"]["live_root_priors_remained_clean"])
 
 
 class BackupRepairPilotContractTest(unittest.TestCase):

@@ -43,6 +43,24 @@ MANIFEST_SCHEMA_VERSION = "pokezero.mcts-h2h-manifest.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-h2h-complete.v1"
 BACKUP_REPAIR_PILOT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot.v4"
 BACKUP_REPAIR_PILOT_READOUT_SCHEMA_VERSION = "pokezero.mcts-h2h-backup-repair-pilot-readout.v2"
+OPPONENT_PRIOR_APPLICABILITY_SCHEMA_VERSION = (
+    "pokezero.mcts-h2h-opponent-prior-applicability.v1"
+)
+OPPONENT_PRIOR_APPLICABILITY_READOUT_SCHEMA_VERSION = (
+    "pokezero.mcts-h2h-opponent-prior-applicability-readout.v1"
+)
+OPPONENT_PRIOR_APPLICABILITY_CONTRACT = {
+    "schema_version": OPPONENT_PRIOR_APPLICABILITY_SCHEMA_VERSION,
+    "stage": "development_applicability",
+    "minimum_candidate_opponent_prior_arm_decisions": 1,
+    "maximum_incumbent_opponent_prior_arm_decisions": 0,
+    # Interior simulated nodes can lack an authoritative live request after a
+    # simulated replacement.  Root fallback is different: it means the actual
+    # played decision could not retain its model prior, so it invalidates an
+    # applicability result even if another decision used the opponent head.
+    "maximum_candidate_root_prior_fallbacks": 0,
+    "maximum_incumbent_root_prior_fallbacks": 0,
+}
 
 # This is intentionally a one-contrast contract rather than a tunable study
 # registry.  The first strength read must isolate the batched-backup repair.
@@ -846,6 +864,135 @@ def _backup_repair_pilot_readout(
     }
 
 
+def _opponent_prior_applicability_contract(
+    manifest: Mapping[str, Any],
+    *,
+    candidate_raw: Mapping[str, Any],
+    incumbent_raw: Mapping[str, Any],
+    candidate_config: Any,
+    incumbent_config: Any,
+    execution_mode: str,
+) -> dict[str, Any] | None:
+    """Freeze the one-setting current-source opponent-prior applicability read.
+
+    This is deliberately not a strength-study schema.  Its only conclusion is
+    whether the flag-on candidate actually supplied a non-uniform model-priced
+    opponent arm to the tree, while the otherwise-identical flag-off twin did
+    not.  Scoring still remains a later, separately registered decision.
+    """
+
+    raw = manifest.get("opponent_prior_applicability")
+    if raw is None:
+        return None
+    contract = _mapping(raw, label="manifest.opponent_prior_applicability")
+    if dict(contract) != OPPONENT_PRIOR_APPLICABILITY_CONTRACT:
+        raise HeadToHeadError(
+            "opponent-prior applicability must use the exact declared development contract."
+        )
+    if execution_mode != "isolated_build":
+        raise HeadToHeadError(
+            "opponent-prior applicability requires source-isolated policies for both arms."
+        )
+    identity_fields = ("source_commit", "source_tree_sha256", "engine_fingerprint")
+    if any(candidate_raw.get(field) != incumbent_raw.get(field) for field in identity_fields):
+        raise HeadToHeadError(
+            "opponent-prior applicability requires the same verified source identity for both arms."
+        )
+    if candidate_raw.get("config_id") == incumbent_raw.get("config_id"):
+        raise HeadToHeadError(
+            "opponent-prior applicability requires distinct candidate and incumbent config_id values."
+        )
+    candidate_values = asdict(candidate_config)
+    incumbent_values = asdict(incumbent_config)
+    changed_fields = {
+        field
+        for field in candidate_values
+        if candidate_values.get(field) != incumbent_values.get(field)
+    }
+    if changed_fields != {"use_opponent_priors"}:
+        raise HeadToHeadError(
+            "opponent-prior applicability permits only use_opponent_priors to differ between arms."
+        )
+    if (
+        candidate_values.get("model_priors") is not True
+        or incumbent_values.get("model_priors") is not True
+        or candidate_values.get("use_opponent_priors") is not True
+        or incumbent_values.get("use_opponent_priors") is not False
+    ):
+        raise HeadToHeadError(
+            "opponent-prior applicability requires model priors on and a true-versus-false opponent-prior contrast."
+        )
+    # The native tree has always applied these priors independently of whether
+    # the report exposes its arms.  The application witness, however, is
+    # produced only by the pure `override_telemetry` report path.  Require it
+    # for both arms here rather than spend a development roster on a counter
+    # that would necessarily remain zero.  It is unchanged between arms by
+    # the one-setting check above and does not alter search selection.
+    if (
+        candidate_values.get("override_telemetry") is not True
+        or incumbent_values.get("override_telemetry") is not True
+    ):
+        raise HeadToHeadError(
+            "opponent-prior applicability requires override_telemetry=true on both arms "
+            "to retain the native applied-prior witness."
+        )
+    return dict(contract)
+
+
+def _opponent_prior_applicability_readout(
+    *, contract: Mapping[str, Any], summary: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Produce a terminal applied/not-applied result before any score is read."""
+
+    def counter(name: str) -> int:
+        value = summary.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise HeadToHeadError(
+                f"opponent-prior applicability summary has invalid {name}={value!r}."
+            )
+        return value
+
+    candidate_count = counter("candidate_opponent_prior_arm_decisions")
+    incumbent_count = counter("incumbent_opponent_prior_arm_decisions")
+    candidate_root_prior_fallbacks = counter("candidate_root_prior_fallbacks")
+    incumbent_root_prior_fallbacks = counter("incumbent_root_prior_fallbacks")
+    candidate_applied = (
+        candidate_count
+        >= int(contract["minimum_candidate_opponent_prior_arm_decisions"])
+    )
+    incumbent_remained_off = (
+        incumbent_count
+        <= int(contract["maximum_incumbent_opponent_prior_arm_decisions"])
+    )
+    live_roots_clean = (
+        candidate_root_prior_fallbacks
+        <= int(contract["maximum_candidate_root_prior_fallbacks"])
+        and incumbent_root_prior_fallbacks
+        <= int(contract["maximum_incumbent_root_prior_fallbacks"])
+    )
+    status = (
+        "PASS"
+        if candidate_applied and incumbent_remained_off and live_roots_clean
+        else "NONPASS"
+    )
+    return {
+        "schema_version": OPPONENT_PRIOR_APPLICABILITY_READOUT_SCHEMA_VERSION,
+        "complete": True,
+        "contract": dict(contract),
+        "candidate_opponent_prior_arm_decisions": candidate_count,
+        "incumbent_opponent_prior_arm_decisions": incumbent_count,
+        "candidate_root_prior_fallbacks": candidate_root_prior_fallbacks,
+        "incumbent_root_prior_fallbacks": incumbent_root_prior_fallbacks,
+        "checks": {
+            "candidate_applied_model_priced_opponent_arm": candidate_applied,
+            "incumbent_remained_flag_off": incumbent_remained_off,
+            "live_root_priors_remained_clean": live_roots_clean,
+        },
+        "status": status,
+        "marker": f"OPPONENT_PRIOR_APPLICABILITY_{status}",
+    }
+
+
 def _required_sha256(value: object, *, label: str) -> str:
     digest = str(value or "")
     if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
@@ -1163,6 +1310,14 @@ def main(argv: list[str] | None = None) -> int:
             raise HeadToHeadError(
                 "backup-repair pilot requires isolated source builds for both runtime revisions."
             )
+    opponent_prior_applicability_contract = _opponent_prior_applicability_contract(
+        manifest,
+        candidate_raw=candidate_raw,
+        incumbent_raw=incumbent_raw,
+        candidate_config=candidate_config,
+        incumbent_config=incumbent_config,
+        execution_mode=execution_mode,
+    )
 
     model_config = load_transformer_model_config(args.checkpoint)
     vocabulary = category_vocab_from_model_config(model_config, args.showdown_root)
@@ -1432,6 +1587,24 @@ def main(argv: list[str] | None = None) -> int:
                 games=all_games,
             ),
         )
+    opponent_prior_applicability_readout_path: Path | None = None
+    if opponent_prior_applicability_contract is not None:
+        opponent_prior_applicability_readout_path = (
+            out_root / "OPPONENT_PRIOR_APPLICABILITY.json"
+        )
+        applicability_readout = _opponent_prior_applicability_readout(
+            contract=opponent_prior_applicability_contract,
+            summary=summary,
+        )
+        _write_immutable_json(
+            opponent_prior_applicability_readout_path,
+            applicability_readout,
+        )
+        if applicability_readout["status"] != "PASS":
+            raise HeadToHeadError(
+                "opponent-prior applicability is terminal NONPASS; "
+                "the source-isolated contrast did not prove applied, clean opponent priors."
+            )
     _write_immutable_json(
         out_root / "COMPLETE.json",
         {
@@ -1443,6 +1616,11 @@ def main(argv: list[str] | None = None) -> int:
             "incumbent_provenance_sha256": incumbent.provenance_sha256,
             "backup_repair_pilot_readout_sha256": (
                 _sha256_file(pilot_readout_path) if pilot_readout_path is not None else None
+            ),
+            "opponent_prior_applicability_readout_sha256": (
+                _sha256_file(opponent_prior_applicability_readout_path)
+                if opponent_prior_applicability_readout_path is not None
+                else None
             ),
         },
     )

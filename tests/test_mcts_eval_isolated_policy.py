@@ -182,7 +182,7 @@ while True:
         write(stdout, {{"type": "error", "message": "annotation snapshot changed"}})
         continue
     action = 1 if mode == "illegal" else 0
-    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "decision_wall_seconds": 0.25}}
+    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "opponent_prior_arm_decisions": 1, "decision_wall_seconds": 0.25}}
     if mode == "legacy-stats":
         del stats["root_prior_fallbacks"]
         del stats["branch_prior_fallbacks"]
@@ -260,6 +260,7 @@ class IsolatedPolicyTest(unittest.TestCase):
                 self.assertEqual(decision.policy_id, "fixed-policy")
                 self.assertEqual(decision.metadata, {"worker": "fake"})
                 self.assertEqual(policy.stats.model_evals, 4)
+                self.assertEqual(policy.stats.opponent_prior_arm_decisions, 1)
                 self.assertEqual(policy.stats.decision_wall_seconds, 0.25)
                 self.assertEqual(policy.worker_receipt["policy"], _spec().to_payload())
                 policy.reset()
@@ -388,6 +389,7 @@ class StatsTest(unittest.TestCase):
             "prior_fallbacks": 0,
             "root_prior_fallbacks": 0,
             "branch_prior_fallbacks": 0,
+            "opponent_prior_arm_decisions": 3,
             "decision_wall_seconds": 0.3,
         }
 
@@ -404,6 +406,13 @@ class StatsTest(unittest.TestCase):
         payload = self._payload()
         del payload["root_prior_fallbacks"]
         with self.assertRaisesRegex(IsolatedPolicyError, "root_prior_fallbacks"):
+            stats.update(payload)
+
+    def test_opponent_prior_application_counter_is_required_from_an_isolated_source(self) -> None:
+        stats = IsolatedPolicyStats()
+        payload = self._payload()
+        del payload["opponent_prior_arm_decisions"]
+        with self.assertRaisesRegex(IsolatedPolicyError, "opponent_prior_arm_decisions"):
             stats.update(payload)
 
     def test_scope_counter_aggregate_mismatch_is_refused(self) -> None:

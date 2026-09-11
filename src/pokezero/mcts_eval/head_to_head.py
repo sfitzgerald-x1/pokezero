@@ -295,6 +295,7 @@ class PolicyTelemetry:
     prior_fallbacks: int = 0
     root_prior_fallbacks: int = 0
     branch_prior_fallbacks: int = 0
+    opponent_prior_arm_decisions: int = 0
     decision_wall_seconds: float = 0.0
 
     def __post_init__(self) -> None:
@@ -309,6 +310,7 @@ class PolicyTelemetry:
             self.prior_fallbacks,
             self.root_prior_fallbacks,
             self.branch_prior_fallbacks,
+            self.opponent_prior_arm_decisions,
         )
         if any(value < 0 for value in counters):
             raise ValueError("policy telemetry counters must be non-negative.")
@@ -353,6 +355,12 @@ class PolicyTelemetry:
             prior_fallbacks=prior_fallbacks,
             root_prior_fallbacks=int(root_prior_fallbacks),
             branch_prior_fallbacks=int(branch_prior_fallbacks),
+            # Historical, non-isolated records may predate this observability
+            # counter. The source-isolated transport itself requires it, while
+            # durable readers retain backwards compatibility for old artifacts.
+            opponent_prior_arm_decisions=int(
+                getattr(stats, "opponent_prior_arm_decisions", 0)
+            ),
             decision_wall_seconds=float(getattr(stats, "decision_wall_seconds", 0.0)),
         )
 
@@ -916,5 +924,15 @@ def summarize_complete_pairs(
         ),
         "incumbent_branch_prior_fallbacks": sum(
             game.incumbent_telemetry.branch_prior_fallbacks for game in required
+        ),
+        # A flag-on opponent-prior candidate is eligible only when this
+        # source-instrumented counter proves that model-priced opponent arms
+        # actually reached the tree. Keep both arms explicit in the immutable
+        # summary; a generic policy outcome alone cannot establish application.
+        "candidate_opponent_prior_arm_decisions": sum(
+            game.candidate_telemetry.opponent_prior_arm_decisions for game in required
+        ),
+        "incumbent_opponent_prior_arm_decisions": sum(
+            game.incumbent_telemetry.opponent_prior_arm_decisions for game in required
         ),
     }

@@ -44,6 +44,7 @@ STATS_FIELDS = (
     "prior_fallbacks",
     "root_prior_fallbacks",
     "branch_prior_fallbacks",
+    "opponent_prior_arm_decisions",
     "decision_wall_seconds",
 )
 
