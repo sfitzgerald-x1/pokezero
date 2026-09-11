@@ -43,7 +43,7 @@ demonstrates a loss in games.
 No new selector telemetry, representative selector read, or selector mutation
 battery is authorized in this iteration.
 
-### 2. Preserve both non-bankable pilots; park backup repair as a strength mechanism
+### 2. Preserve both non-bankable pilots; complete the fresh R20 read before another MCTS job
 
 The first pilot completed all 24 durable game records and 48 matching worker
 receipts, but its terminal handoff is invalid. The shell launcher wrote a valid
@@ -83,6 +83,14 @@ interval, so no favorable pilot result exists and the reserved confirmation
 seeds stay unused. Keep #1337 as a correctness repair; park it as a current
 strength mechanism.
 
+The fresh R20 corrected-versus-uncorrected read is the sole active MCTS Job.
+It uses a new, disjoint roster and the canonical launcher-terminal path; its
+partial game records and receipts remain unread and non-bankable until a
+complete, validated terminal capture exists. Do not submit a concurrent MCTS,
+selector, or deadline Job while R20 is active. Its terminal result determines
+whether this backup-repair line remains a correctness-only repair; it does not
+alter either preserved predecessor root.
+
 ### 3. Next candidate: requalify opponent-side model priors on the current checkpoint
 
 The current model path explicitly defaults `use_opponent_priors` to false, so
@@ -108,6 +116,10 @@ applicability read on the final-enthalf checkpoint; its purpose is to establish
 that the candidate is applied with no live-root fallback, not to claim strength.
 Only a clean, applied read may register a fresh paired pilot with new seeds.
 R18's pilot and confirmation rosters remain permanently excluded.
+
+The create-only applicability deployment, capture, and failure paths are
+already prepared and tested in pokezero-deploy PR #867. That read is queued
+behind R20 rather than submitted concurrently.
 
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
@@ -217,7 +229,7 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 ## Immediate order
 
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
-2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. Propagate the declared confidence level in the generic summary before any future study.
-3. Requalify the one concrete remaining candidate: opponent-side model priors on the current final-enthalf checkpoint. First carry its applied counter through the existing isolated MCTS transport and run a fresh development applicability read; a missing, zero, or fallback-contaminated counter parks the candidate without games.
+2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. Complete and validate R20 before submitting any other MCTS Job; do not inspect partial R20 outcomes.
+3. After R20 is terminally captured, run the already-prepared source-bound development applicability read for opponent-side model priors on the current final-enthalf checkpoint. A missing, zero, or fallback-contaminated applied counter parks the candidate without games.
 4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if the applied opponent-prior read earns a timed study.
-5. Backup repair did not promote. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
+5. R18 and the earlier backup-repair attempt did not promote. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized. R20 receives one terminal capture decision under its own fresh roster.
