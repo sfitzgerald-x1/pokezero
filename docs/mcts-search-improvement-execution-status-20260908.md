@@ -83,7 +83,33 @@ interval, so no favorable pilot result exists and the reserved confirmation
 seeds stay unused. Keep #1337 as a correctness repair; park it as a current
 strength mechanism.
 
-### 3. Keep the implemented fixed-wall mechanism ready for a future candidate
+### 3. Next candidate: requalify opponent-side model priors on the current checkpoint
+
+The current model path explicitly defaults `use_opponent_priors` to false, so
+the in-tree opponent is uniform even though the checkpoint exposes a separate
+opponent-action head. This is a concrete modelling error, not a request for a
+PUCT or budget sweep: the candidate changes that one boolean to true while
+keeping source, checkpoint, belief construction, model priors, work cap, and
+all other search settings fixed.
+
+An older same-build study found a large opponent-prior effect, but that result
+used an earlier checkpoint and passed through several now-repaired opponent
+request-order bugs. It is hypothesis evidence only; it cannot establish the
+current final-enthalf behavior. The existing implementation now fails closed
+when it cannot construct a correct opponent request order, and it records
+`opponent_prior_arm_decisions` when the native tree actually uses the opponent
+head.
+
+Before any new games, extend the existing source-isolated MCTS transport only
+enough to preserve that applied counter in each durable policy receipt. A
+candidate with a missing, regressing, or zero applied count is a terminal
+NONPASS, regardless of its score. Then run one fresh, source-bound development
+applicability read on the final-enthalf checkpoint; its purpose is to establish
+that the candidate is applied with no live-root fallback, not to claim strength.
+Only a clean, applied read may register a fresh paired pilot with new seeds.
+R18's pilot and confirmation rosters remain permanently excluded.
+
+### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
 [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) supplies the
 previously missing model-path decision clock without altering the live
@@ -104,7 +130,7 @@ distribution, zero-completed-world refusal behavior, and the identical clock
 configuration on both policies. Until then, report per-decision latency and
 completed work as measurements only.
 
-### 4. Fixed-deadline qualification contract (only after a new candidate earns a timed study)
+### 5. Fixed-deadline qualification contract (only after a new candidate earns a timed study)
 
 This is one bounded, development-only gate for the already-merged deadline;
 it is neither a game trial nor evidence of stronger MCTS. It is required before
@@ -188,5 +214,6 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
 2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. Propagate the declared confidence level in the generic summary before any future study.
-3. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. First identify one concrete remaining decision error and its attributable candidate.
-4. Backup repair did not promote. Retain the correctness repair and choose the next mechanics investigation only from a concrete remaining decision error; no PUCT/depth/simulation rescue grid or automatic cluster rerun is authorized.
+3. Requalify the one concrete remaining candidate: opponent-side model priors on the current final-enthalf checkpoint. First carry its applied counter through the existing isolated MCTS transport and run a fresh development applicability read; a missing, zero, or fallback-contaminated counter parks the candidate without games.
+4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if the applied opponent-prior read earns a timed study.
+5. Backup repair did not promote. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
