@@ -28,7 +28,7 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | Timing replay | [#1339](https://github.com/sfitzgerald-x1/pokezero/pull/1339) is merged and its fixed corpus was measured candidate-first twice, then baseline-first. | The candidate's apparent slowdown reverses in the baseline-first block; the result is order/warm-state dominated and is a valid null. | A source-attributable full-search win, numerical-tree parity, or extra useful work at the same clock. |
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
 | Whole-decision deadline | [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) introduced the model-only, fixed-work deadline; [#1359](https://github.com/sfitzgerald-x1/pokezero/pull/1359) hardened the native-invocation witness and fail-closed validation. The qualification source is their reviewed combined `main` merge `8609d301399738a8081f0e938a3cc4ed7d39abdd` (reviewed #1359 head `6e2bb3ac4fb50abf7fb358c250a7398686153cff`). The clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
-| Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run is preserved as non-bankable: its launcher appended literal `\\n` bytes after `runner-terminal.json`. Its independent R18 replacement completed cleanly and retained all 12 fresh mirrored pairs, but is also non-bankable: its immutable manifest declared an 80% bootstrap interval while the generic summary silently used the default 95% interval. The candidate point score was 0.4583 against 0.5 neutral, so it would not have promoted even if the contract had been valid. | The reusable launcher, source-isolated two-MCTS transport, and durable atomic game/receipt contract work; the generic summary did not honor its declared statistical contract. | A strength result, a promotion decision, or use of the 50 reserved confirmation seeds. |
+| Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run and its R18 replacement remain non-bankable for their independent terminal-contract defects. The fresh R20 replacement completed cleanly, with all 12 pairs, 24 games, and 48 policy receipts captured in an immutable terminal snapshot. Its work-capped candidate score was 0.375 (declared interval 0.2917–0.4583) and the frozen readout says `no_automatic_extension`. | The canonical launcher and terminal-capture path now work for a complete source-bound MCTS comparison; this particular backup-repair contrast did not produce a positive pilot signal. | A general no-effect claim, an equal-deadline result, a promotion decision, or use of the 50 reserved confirmation seeds. |
 
 ## Active route
 
@@ -43,7 +43,7 @@ demonstrates a loss in games.
 No new selector telemetry, representative selector read, or selector mutation
 battery is authorized in this iteration.
 
-### 2. Preserve both non-bankable pilots; complete the fresh R20 read before another MCTS job
+### 2. Preserve both non-bankable pilots; R20 parks backup repair as a strength path
 
 The first pilot completed all 24 durable game records and 48 matching worker
 receipts, but its terminal handoff is invalid. The shell launcher wrote a valid
@@ -83,13 +83,15 @@ interval, so no favorable pilot result exists and the reserved confirmation
 seeds stay unused. Keep #1337 as a correctness repair; park it as a current
 strength mechanism.
 
-The fresh R20 corrected-versus-uncorrected read is the sole active MCTS Job.
-It uses a new, disjoint roster and the canonical launcher-terminal path; its
-partial game records and receipts remain unread and non-bankable until a
-complete, validated terminal capture exists. Do not submit a concurrent MCTS,
-selector, or deadline Job while R20 is active. Its terminal result determines
-whether this backup-repair line remains a correctness-only repair; it does not
-alter either preserved predecessor root.
+R20 was the fresh corrected-versus-uncorrected read with a new, disjoint roster
+and the canonical launcher-terminal path. It completed with zero restarts and
+its immutable terminal snapshot independently validates all 12 pairs, 24 games,
+and 48 policy receipts. The work-capped readout reports candidate score `0.375`
+with its declared interval `[0.2917, 0.4583]` and decision
+`no_automatic_extension`. This is a clean negative pilot, not an inconclusive
+handoff: retain #1337 as a correctness repair and park backup repair as a
+current strength mechanism. It does not alter either preserved predecessor root
+or authorize use of the reserved confirmation seeds.
 
 ### 3. Next candidate: requalify opponent-side model priors on the current checkpoint
 
@@ -118,8 +120,23 @@ Only a clean, applied read may register a fresh paired pilot with new seeds.
 R18's pilot and confirmation rosters remain permanently excluded.
 
 The create-only applicability deployment, capture, and failure paths are
-already prepared and tested in pokezero-deploy PR #867. That read is queued
-behind R20 rather than submitted concurrently.
+prepared and tested in pokezero-deploy PR #867. The fresh R3 applicability Job
+was admitted on a spare arm64 engine node with a digest-qualified receipt and
+immutable manifest, but its receipt selected source commit `3301f285` from
+before the merged bootstrap-contract repair. It failed before its first game
+with `NameError: bootstrap is not defined`; its preserved artifacts are a
+terminal source-admission failure, not an applicability result. No game,
+telemetry, or score evidence from R3 is bankable.
+
+The fresh R4 replacement is create-only under new object and shared-artifact
+names. Its renderer verifies the clean checkout tied to the receipt contains
+the bootstrap-contract assignment, records that runner-source hash in the
+immutable manifest, and rejects the old `3301f285` tree before Kubernetes
+objects can be created. It is bound to the independently successful R19
+receipt: source commit `eaf37e7` and digest
+`sha256:f0487300616c1c5e6ef466e53554360879f70e83db7fc9df3310ecb569734514`.
+R4 remains an applicability gate, not a strength result: a missing, zero, or
+fallback-contaminated applied counter parks the candidate without games.
 
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
@@ -229,7 +246,7 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 ## Immediate order
 
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
-2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. Complete and validate R20 before submitting any other MCTS Job; do not inspect partial R20 outcomes.
-3. After R20 is terminally captured, run the already-prepared source-bound development applicability read for opponent-side model priors on the current final-enthalf checkpoint. A missing, zero, or fallback-contaminated applied counter parks the candidate without games.
+2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. R20 is terminally captured and negative, so retain the repair as correctness-only and do not extend that line.
+3. Complete and validate the fresh R4 source-bound development applicability read for opponent-side model priors on the current final-enthalf checkpoint. R3's pre-game source-admission failure is preserved and excluded. A missing, zero, or fallback-contaminated applied counter parks the candidate without games.
 4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if the applied opponent-prior read earns a timed study.
-5. R18 and the earlier backup-repair attempt did not promote. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized. R20 receives one terminal capture decision under its own fresh roster.
+5. R18, the earlier backup-repair attempt, and clean R20 read did not promote backup repair. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
