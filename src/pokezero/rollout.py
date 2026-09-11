@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 import hashlib
 import random
 from time import perf_counter
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from .env import BattleFormat, PlayerId, PokeZeroEnv, TerminalState
 from .observation import PokeZeroObservationV0
@@ -26,6 +26,10 @@ class RolloutConfig:
     # request-local observation and legal mask, never simultaneous-opponent
     # request state.
     hide_opponent_legal_action_masks: bool = False
+    # Optional, non-semantic lifecycle hook. It runs only after a decision has
+    # been stepped and appended to the trajectory, so callers can expose
+    # durable progress without observing or influencing action selection.
+    decision_sink: "RolloutDecisionSink | None" = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.max_decision_rounds <= 0:
@@ -42,6 +46,29 @@ class RolloutResult:
     # stay deterministic (twin-replay byte-exactness; the parallel-vs-serial equality invariant).
     # None when timing was not collected.
     timing: "RolloutTiming | None" = None
+
+
+@dataclass(frozen=True)
+class RolloutDecisionProgress:
+    """One fully committed decision boundary for optional progress consumers.
+
+    The event intentionally excludes observations, actions, rewards, and
+    wall-clock measurements. It is a liveness/checkpoint signal, not replay or
+    scoring evidence, and is emitted only after the decision reached the
+    trajectory.
+    """
+
+    seed: int
+    battle_id: str
+    decision_round_index: int
+    decision_round_count: int
+    requested_players: tuple[PlayerId, ...]
+    terminal: bool
+    terminal_capped: bool
+    terminal_winner: PlayerId | None
+
+
+RolloutDecisionSink = Callable[[RolloutDecisionProgress], None]
 
 
 @dataclass
@@ -304,12 +331,30 @@ def continue_rollout_from_current_state(
 
         if step_result.terminal is not None:
             trajectory.record_terminal(step_result.terminal)
+            _emit_decision_progress(
+                config=config,
+                seed=seed,
+                battle_id=battle_id,
+                decision_round_index=decision_round_index,
+                starting_decision_round_index=starting_decision_round_index,
+                requested_players=requested_players,
+                terminal=step_result.terminal,
+            )
             return _rollout_result(
                 trajectory=trajectory,
                 terminal=step_result.terminal,
                 decision_round_count=decision_round_index - starting_decision_round_index + 1,
                 timing=timing,
             )
+        _emit_decision_progress(
+            config=config,
+            seed=seed,
+            battle_id=battle_id,
+            decision_round_index=decision_round_index,
+            starting_decision_round_index=starting_decision_round_index,
+            requested_players=requested_players,
+            terminal=None,
+        )
         requested_players = step_result.requested_players
         cached_observations = dict(step_result.observations)
 
@@ -335,6 +380,40 @@ def _rollout_result(
         terminal=terminal,
         decision_round_count=decision_round_count,
         timing=timing,
+    )
+
+
+def _emit_decision_progress(
+    *,
+    config: RolloutConfig,
+    seed: int,
+    battle_id: str,
+    decision_round_index: int,
+    starting_decision_round_index: int,
+    requested_players: Sequence[PlayerId],
+    terminal: TerminalState | None,
+) -> None:
+    """Notify an opt-in progress sink after a decision is represented.
+
+    Sink failures deliberately propagate: a caller that elected durable progress
+    must not claim a healthy, observable long-running evaluation after it can no
+    longer update that checkpoint.
+    """
+
+    sink = config.decision_sink
+    if sink is None:
+        return
+    sink(
+        RolloutDecisionProgress(
+            seed=seed,
+            battle_id=battle_id,
+            decision_round_index=decision_round_index,
+            decision_round_count=decision_round_index - starting_decision_round_index + 1,
+            requested_players=tuple(requested_players),
+            terminal=terminal is not None,
+            terminal_capped=bool(terminal.capped) if terminal is not None else False,
+            terminal_winner=terminal.winner if terminal is not None else None,
+        )
     )
 
 
