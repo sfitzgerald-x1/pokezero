@@ -41,6 +41,7 @@ _STATS_FIELDS = (
     "prior_fallbacks",
     "root_prior_fallbacks",
     "branch_prior_fallbacks",
+    "opponent_prior_arm_decisions",
     "decision_wall_seconds",
 )
 
@@ -286,6 +287,7 @@ class IsolatedPolicyStats:
     prior_fallbacks: int = 0
     root_prior_fallbacks: int = 0
     branch_prior_fallbacks: int = 0
+    opponent_prior_arm_decisions: int = 0
     decision_wall_seconds: float = 0.0
 
     def update(self, payload: Mapping[str, Any]) -> None:

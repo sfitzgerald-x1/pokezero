@@ -50,6 +50,7 @@ class _Stats:
     total_iterations: int = 0
     worlds_constructed: int = 0
     worlds_searched: int = 0
+    opponent_prior_arm_decisions: int = 0
     decision_wall_seconds: float = 0.0
 
 
@@ -246,6 +247,8 @@ class MirroredPairTest(unittest.TestCase):
         self.assertEqual(summary["pair_scores"], [0.5])
         self.assertEqual(summary["candidate_score"]["point"], 0.5)
         self.assertEqual(summary["candidate_model_evals"], 16)
+        self.assertEqual(summary["candidate_opponent_prior_arm_decisions"], 0)
+        self.assertEqual(summary["incumbent_opponent_prior_arm_decisions"], 0)
         self.assertEqual(summary["candidate_decision_walls_s"], [0.01, 0.01])
         self.assertEqual(summary["incumbent_decision_walls_s"], [0.02, 0.02])
         self.assertEqual(
@@ -270,6 +273,34 @@ class MirroredPairTest(unittest.TestCase):
                 "max_s": 0.02,
             },
         )
+
+    def test_summary_preserves_applied_opponent_prior_counts_for_both_arms(self) -> None:
+        candidate = _spec("candidate")
+        incumbent = _spec("incumbent", policy_id="incumbent")
+        games = [
+            replace(
+                game,
+                candidate_telemetry=replace(
+                    game.candidate_telemetry, opponent_prior_arm_decisions=5
+                ),
+                incumbent_telemetry=replace(
+                    game.incumbent_telemetry, opponent_prior_arm_decisions=2
+                ),
+            )
+            for game in _pair()
+        ]
+
+        summary = summarize_complete_pairs(
+            games,
+            seeds=[101],
+            candidate=candidate,
+            incumbent=incumbent,
+            bootstrap_resamples=20,
+            bootstrap_seed=7,
+        )
+
+        self.assertEqual(summary["candidate_opponent_prior_arm_decisions"], 10)
+        self.assertEqual(summary["incumbent_opponent_prior_arm_decisions"], 4)
 
     def test_any_mcts_fallback_invalidates_the_game(self) -> None:
         with self.assertRaisesRegex(HeadToHeadError, "fallback"):

@@ -18,9 +18,28 @@ read_frame = WORKER["read_frame"]
 write_frame = WORKER["write_frame"]
 worker_error = WORKER["WorkerError"]
 source_engine_config_payload = WORKER["source_engine_config_payload"]
+stats_payload = WORKER["_stats_payload"]
 
 
 class IsolatedPolicyWorkerResetTest(unittest.TestCase):
+    def test_stats_payload_refuses_a_source_without_opponent_prior_application_counter(self) -> None:
+        stats = SimpleNamespace(
+            decisions=1,
+            searched_decisions=1,
+            fallback_decisions=0,
+            model_evals=4,
+            total_iterations=8,
+            worlds_constructed=1,
+            worlds_searched=1,
+            prior_fallbacks=0,
+            root_prior_fallbacks=0,
+            branch_prior_fallbacks=0,
+            decision_wall_seconds=0.25,
+        )
+
+        with self.assertRaisesRegex(worker_error, "opponent_prior_arm_decisions"):
+            stats_payload(stats)
+
     def test_config_projection_allows_only_explicit_disabled_diagnostics(self) -> None:
         class HistoricalEngineMctsConfig:
             __dataclass_fields__ = {"leaf_eval": object(), "search_sims": object()}
