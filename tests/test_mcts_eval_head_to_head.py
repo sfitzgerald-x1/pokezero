@@ -99,6 +99,7 @@ class _PilotConfig:
 class _OpponentPriorConfig:
     model_priors: bool = True
     use_opponent_priors: bool = True
+    override_telemetry: bool = True
     search_sims: int = 256
     search_batch: int = 16
 
@@ -538,6 +539,20 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
                     _OpponentPriorConfig(),
                     model_priors=False,
                     use_opponent_priors=False,
+                ),
+                execution_mode="isolated_build",
+            )
+
+        with self.assertRaisesRegex(HeadToHeadError, "override_telemetry=true"):
+            module._opponent_prior_applicability_contract(
+                manifest,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=replace(_OpponentPriorConfig(), override_telemetry=False),
+                incumbent_config=replace(
+                    _OpponentPriorConfig(),
+                    use_opponent_priors=False,
+                    override_telemetry=False,
                 ),
                 execution_mode="isolated_build",
             )

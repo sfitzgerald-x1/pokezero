@@ -922,6 +922,20 @@ def _opponent_prior_applicability_contract(
         raise HeadToHeadError(
             "opponent-prior applicability requires model priors on and a true-versus-false opponent-prior contrast."
         )
+    # The native tree has always applied these priors independently of whether
+    # the report exposes its arms.  The application witness, however, is
+    # produced only by the pure `override_telemetry` report path.  Require it
+    # for both arms here rather than spend a development roster on a counter
+    # that would necessarily remain zero.  It is unchanged between arms by
+    # the one-setting check above and does not alter search selection.
+    if (
+        candidate_values.get("override_telemetry") is not True
+        or incumbent_values.get("override_telemetry") is not True
+    ):
+        raise HeadToHeadError(
+            "opponent-prior applicability requires override_telemetry=true on both arms "
+            "to retain the native applied-prior witness."
+        )
     return dict(contract)
 
 
