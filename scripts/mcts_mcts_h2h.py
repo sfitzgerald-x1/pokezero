@@ -559,6 +559,14 @@ def _bootstrap_settings(manifest: Mapping[str, Any]) -> tuple[int, int, float]:
     return resamples, seed, confidence_level
 
 
+def _bootstrap_contract(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], int, int, float]:
+    """Keep the validated manifest mapping available to downstream contracts."""
+
+    bootstrap = _mapping(manifest.get("bootstrap"), label="manifest.bootstrap")
+    resamples, seed, confidence_level = _bootstrap_settings(manifest)
+    return bootstrap, resamples, seed, confidence_level
+
+
 def _replacement_study_requires_durable_launcher(manifest: Mapping[str, Any]) -> bool:
     study = manifest.get("study")
     return isinstance(study, Mapping) and study.get("schema_version") == BACKUP_REPAIR_PILOT_SCHEMA_VERSION
@@ -1152,7 +1160,7 @@ def main(argv: list[str] | None = None) -> int:
     declared_showdown_source_sha256 = _declared_showdown_source_sha256(manifest)
     declared_source_tree_sha256 = _declared_source_tree_sha256(manifest)
     seeds = _seeds(manifest)
-    resamples, bootstrap_seed, bootstrap_confidence_level = _bootstrap_settings(manifest)
+    bootstrap, resamples, bootstrap_seed, bootstrap_confidence_level = _bootstrap_contract(manifest)
     max_decision_rounds = int(manifest.get("max_decision_rounds", 0))
     if max_decision_rounds <= 0:
         raise HeadToHeadError("manifest.max_decision_rounds must be positive.")
