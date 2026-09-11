@@ -208,7 +208,11 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 - Keep the encoder line closed: full-path timing is null/order-sensitive.
 - The stopped rollout-mutation sweep is preserved but invalid: its wrapper emitted PASS after interrupted, incomplete progress with zero controls. It is not a result or a prerequisite.
 - Do not start a PUCT/depth/simulation sweep, broad cache rewrite, or retraining run as a substitute for these reads.
-- Keep the R74 missing-handoff recovery separate; it is not MCTS-improvement evidence and cannot be synthesized from partial artifacts.
+- The R74 Wave 03 recovery decision is recorded in
+  [the recovery decision](r74-recovery-decision-20260911.md): its missing
+  terminal snapshot makes that registered bridge incomplete and non-bankable.
+  It remains separate from MCTS-improvement evidence and cannot be synthesized
+  from partial artifacts.
 
 ## Immediate order
 
