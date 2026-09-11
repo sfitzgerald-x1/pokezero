@@ -211,6 +211,23 @@ def _pair(*, fallback: bool = False):
 
 
 class MirroredPairTest(unittest.TestCase):
+    def test_summary_honors_declared_bootstrap_confidence(self) -> None:
+        candidate = _spec("candidate")
+        incumbent = _spec("incumbent", policy_id="incumbent")
+        with patch(
+            "pokezero.mcts_eval.head_to_head.bootstrap_mean", wraps=bootstrap_mean
+        ) as observed:
+            summarize_complete_pairs(
+                _pair(),
+                seeds=[101],
+                candidate=candidate,
+                incumbent=incumbent,
+                bootstrap_resamples=20,
+                bootstrap_seed=7,
+                bootstrap_confidence_level=0.80,
+            )
+        self.assertEqual(observed.call_args.kwargs["confidence_level"], 0.80)
+
     def test_both_candidate_seats_are_required_and_score_as_one_pair(self) -> None:
         candidate = _spec("candidate")
         incumbent = _spec("incumbent", policy_id="incumbent")
@@ -408,6 +425,19 @@ class DurableGameTest(unittest.TestCase):
 
 
 class BackupRepairPilotContractTest(unittest.TestCase):
+    def test_bootstrap_settings_include_the_declared_confidence(self) -> None:
+        module = _runner_module()
+        self.assertEqual(
+            module._bootstrap_settings(
+                {"bootstrap": {"resamples": 10_000, "seed": 20260910, "confidence_level": 0.80}}
+            ),
+            (10_000, 20260910, 0.80),
+        )
+        with self.assertRaisesRegex(HeadToHeadError, "confidence level"):
+            module._bootstrap_settings(
+                {"bootstrap": {"resamples": 10_000, "seed": 20260910, "confidence_level": 1.0}}
+            )
+
     def _contract_inputs(self):
         module = _runner_module()
         pilot_seeds = tuple(range(2026091201, 2026091213))

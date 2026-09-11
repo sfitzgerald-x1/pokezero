@@ -524,6 +524,23 @@ def _seeds(manifest: Mapping[str, Any]) -> tuple[int, ...]:
     return seeds
 
 
+def _bootstrap_settings(manifest: Mapping[str, Any]) -> tuple[int, int, float]:
+    """Read the complete, predeclared bootstrap contract from a manifest."""
+    bootstrap = _mapping(manifest.get("bootstrap"), label="manifest.bootstrap")
+    try:
+        resamples = int(bootstrap.get("resamples", 0))
+        seed = int(bootstrap.get("seed", -1))
+        confidence_level = float(bootstrap.get("confidence_level", 0.95))
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError("manifest.bootstrap values are malformed.") from error
+    if resamples <= 0 or seed < 0 or not 0.0 < confidence_level < 1.0:
+        raise HeadToHeadError(
+            "manifest.bootstrap requires positive resamples, a non-negative seed, "
+            "and a confidence level strictly between zero and one."
+        )
+    return resamples, seed, confidence_level
+
+
 def _replacement_study_requires_durable_launcher(manifest: Mapping[str, Any]) -> bool:
     study = manifest.get("study")
     return isinstance(study, Mapping) and study.get("schema_version") == BACKUP_REPAIR_PILOT_SCHEMA_VERSION
@@ -988,11 +1005,7 @@ def main(argv: list[str] | None = None) -> int:
     declared_showdown_source_sha256 = _declared_showdown_source_sha256(manifest)
     declared_source_tree_sha256 = _declared_source_tree_sha256(manifest)
     seeds = _seeds(manifest)
-    bootstrap = _mapping(manifest.get("bootstrap"), label="manifest.bootstrap")
-    resamples = int(bootstrap.get("resamples", 0))
-    bootstrap_seed = int(bootstrap.get("seed", -1))
-    if resamples <= 0 or bootstrap_seed < 0:
-        raise HeadToHeadError("manifest.bootstrap requires positive resamples and a non-negative seed.")
+    resamples, bootstrap_seed, bootstrap_confidence_level = _bootstrap_settings(manifest)
     max_decision_rounds = int(manifest.get("max_decision_rounds", 0))
     if max_decision_rounds <= 0:
         raise HeadToHeadError("manifest.max_decision_rounds must be positive.")
@@ -1405,6 +1418,7 @@ def main(argv: list[str] | None = None) -> int:
         incumbent=incumbent,
         bootstrap_resamples=resamples,
         bootstrap_seed=bootstrap_seed,
+        bootstrap_confidence_level=bootstrap_confidence_level,
     )
     _write_immutable_json(out_root / "summary.json", summary)
     pilot_readout_path: Path | None = None
