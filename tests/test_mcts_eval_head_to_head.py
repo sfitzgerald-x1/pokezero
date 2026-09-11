@@ -569,6 +569,8 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
             summary={
                 "candidate_opponent_prior_arm_decisions": 7,
                 "incumbent_opponent_prior_arm_decisions": 0,
+                "candidate_root_prior_fallbacks": 0,
+                "incumbent_root_prior_fallbacks": 0,
             },
         )
         self.assertEqual(passed["status"], "PASS")
@@ -579,6 +581,8 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
             summary={
                 "candidate_opponent_prior_arm_decisions": 0,
                 "incumbent_opponent_prior_arm_decisions": 0,
+                "candidate_root_prior_fallbacks": 0,
+                "incumbent_root_prior_fallbacks": 0,
             },
         )
         self.assertEqual(zero["status"], "NONPASS")
@@ -589,10 +593,24 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
             summary={
                 "candidate_opponent_prior_arm_decisions": 7,
                 "incumbent_opponent_prior_arm_decisions": 1,
+                "candidate_root_prior_fallbacks": 0,
+                "incumbent_root_prior_fallbacks": 0,
             },
         )
         self.assertEqual(drift["status"], "NONPASS")
         self.assertFalse(drift["checks"]["incumbent_remained_flag_off"])
+
+        root_fallback = module._opponent_prior_applicability_readout(
+            contract=contract,
+            summary={
+                "candidate_opponent_prior_arm_decisions": 7,
+                "incumbent_opponent_prior_arm_decisions": 0,
+                "candidate_root_prior_fallbacks": 1,
+                "incumbent_root_prior_fallbacks": 0,
+            },
+        )
+        self.assertEqual(root_fallback["status"], "NONPASS")
+        self.assertFalse(root_fallback["checks"]["live_root_priors_remained_clean"])
 
 
 class BackupRepairPilotContractTest(unittest.TestCase):

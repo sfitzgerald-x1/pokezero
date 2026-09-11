@@ -54,6 +54,12 @@ OPPONENT_PRIOR_APPLICABILITY_CONTRACT = {
     "stage": "development_applicability",
     "minimum_candidate_opponent_prior_arm_decisions": 1,
     "maximum_incumbent_opponent_prior_arm_decisions": 0,
+    # Interior simulated nodes can lack an authoritative live request after a
+    # simulated replacement.  Root fallback is different: it means the actual
+    # played decision could not retain its model prior, so it invalidates an
+    # applicability result even if another decision used the opponent head.
+    "maximum_candidate_root_prior_fallbacks": 0,
+    "maximum_incumbent_root_prior_fallbacks": 0,
 }
 
 # This is intentionally a one-contrast contract rather than a tunable study
@@ -934,6 +940,8 @@ def _opponent_prior_applicability_readout(
 
     candidate_count = counter("candidate_opponent_prior_arm_decisions")
     incumbent_count = counter("incumbent_opponent_prior_arm_decisions")
+    candidate_root_prior_fallbacks = counter("candidate_root_prior_fallbacks")
+    incumbent_root_prior_fallbacks = counter("incumbent_root_prior_fallbacks")
     candidate_applied = (
         candidate_count
         >= int(contract["minimum_candidate_opponent_prior_arm_decisions"])
@@ -942,16 +950,29 @@ def _opponent_prior_applicability_readout(
         incumbent_count
         <= int(contract["maximum_incumbent_opponent_prior_arm_decisions"])
     )
-    status = "PASS" if candidate_applied and incumbent_remained_off else "NONPASS"
+    live_roots_clean = (
+        candidate_root_prior_fallbacks
+        <= int(contract["maximum_candidate_root_prior_fallbacks"])
+        and incumbent_root_prior_fallbacks
+        <= int(contract["maximum_incumbent_root_prior_fallbacks"])
+    )
+    status = (
+        "PASS"
+        if candidate_applied and incumbent_remained_off and live_roots_clean
+        else "NONPASS"
+    )
     return {
         "schema_version": OPPONENT_PRIOR_APPLICABILITY_READOUT_SCHEMA_VERSION,
         "complete": True,
         "contract": dict(contract),
         "candidate_opponent_prior_arm_decisions": candidate_count,
         "incumbent_opponent_prior_arm_decisions": incumbent_count,
+        "candidate_root_prior_fallbacks": candidate_root_prior_fallbacks,
+        "incumbent_root_prior_fallbacks": incumbent_root_prior_fallbacks,
         "checks": {
             "candidate_applied_model_priced_opponent_arm": candidate_applied,
             "incumbent_remained_flag_off": incumbent_remained_off,
+            "live_root_priors_remained_clean": live_roots_clean,
         },
         "status": status,
         "marker": f"OPPONENT_PRIOR_APPLICABILITY_{status}",
@@ -1568,7 +1589,7 @@ def main(argv: list[str] | None = None) -> int:
         if applicability_readout["status"] != "PASS":
             raise HeadToHeadError(
                 "opponent-prior applicability is terminal NONPASS; "
-                "the candidate did not prove applied model-priced opponent arms."
+                "the source-isolated contrast did not prove applied, clean opponent priors."
             )
     _write_immutable_json(
         out_root / "COMPLETE.json",
