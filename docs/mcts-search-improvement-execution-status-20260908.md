@@ -120,12 +120,23 @@ Only a clean, applied read may register a fresh paired pilot with new seeds.
 R18's pilot and confirmation rosters remain permanently excluded.
 
 The create-only applicability deployment, capture, and failure paths are
-prepared and tested in pokezero-deploy PR #867. After R20's terminal capture,
-the fresh R3 applicability read was admitted on a spare arm64 engine node with
-its digest-qualified source receipt and immutable manifest. It is the only
-active MCTS Job. Its outcome remains an applicability gate, not a strength
-result: a missing, zero, or fallback-contaminated applied counter parks the
-candidate without games.
+prepared and tested in pokezero-deploy PR #867. The fresh R3 applicability Job
+was admitted on a spare arm64 engine node with a digest-qualified receipt and
+immutable manifest, but its receipt selected source commit `3301f285` from
+before the merged bootstrap-contract repair. It failed before its first game
+with `NameError: bootstrap is not defined`; its preserved artifacts are a
+terminal source-admission failure, not an applicability result. No game,
+telemetry, or score evidence from R3 is bankable.
+
+The fresh R4 replacement is create-only under new object and shared-artifact
+names. Its renderer verifies the clean checkout tied to the receipt contains
+the bootstrap-contract assignment, records that runner-source hash in the
+immutable manifest, and rejects the old `3301f285` tree before Kubernetes
+objects can be created. It is bound to the independently successful R19
+receipt: source commit `eaf37e7` and digest
+`sha256:f0487300616c1c5e6ef466e53554360879f70e83db7fc9df3310ecb569734514`.
+R4 remains an applicability gate, not a strength result: a missing, zero, or
+fallback-contaminated applied counter parks the candidate without games.
 
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
@@ -236,6 +247,6 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
 2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. R20 is terminally captured and negative, so retain the repair as correctness-only and do not extend that line.
-3. Complete and validate the already-admitted source-bound development applicability read for opponent-side model priors on the current final-enthalf checkpoint. A missing, zero, or fallback-contaminated applied counter parks the candidate without games.
+3. Complete and validate the fresh R4 source-bound development applicability read for opponent-side model priors on the current final-enthalf checkpoint. R3's pre-game source-admission failure is preserved and excluded. A missing, zero, or fallback-contaminated applied counter parks the candidate without games.
 4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if the applied opponent-prior read earns a timed study.
 5. R18, the earlier backup-repair attempt, and clean R20 read did not promote backup repair. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
