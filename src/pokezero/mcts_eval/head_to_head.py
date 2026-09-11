@@ -837,6 +837,7 @@ def summarize_complete_pairs(
     incumbent: MctsPolicySpec,
     bootstrap_resamples: int,
     bootstrap_seed: int,
+    bootstrap_confidence_level: float = 0.95,
 ) -> dict[str, Any]:
     """Return the candidate's direct MCTS-vs-MCTS score against 0.5.
 
@@ -868,6 +869,7 @@ def summarize_complete_pairs(
         bootstrap_indices(
             sample_size=len(values), resamples=bootstrap_resamples, seed=bootstrap_seed
         ),
+        confidence_level=bootstrap_confidence_level,
     )
     candidate_walls = tuple(
         wall for game in required for wall in game.result.decision_walls_s

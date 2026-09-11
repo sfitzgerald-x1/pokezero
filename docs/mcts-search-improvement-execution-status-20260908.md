@@ -1,6 +1,6 @@
 # MCTS search improvement: execution status and next decisions
 
-Date: 2026-09-09. This is the live execution companion to the offline plan. It distinguishes implemented safety/correctness work, measured mechanics, and actual playing strength. Nothing below treats a green test, synthetic panel, or new runner as a strength result.
+Date: 2026-09-11. This is the live execution companion to the offline plan. It distinguishes implemented safety/correctness work, measured mechanics, and actual playing strength. Nothing below treats a green test, synthetic panel, or new runner as a strength result.
 
 ## Objective
 
@@ -28,7 +28,7 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | Timing replay | [#1339](https://github.com/sfitzgerald-x1/pokezero/pull/1339) is merged and its fixed corpus was measured candidate-first twice, then baseline-first. | The candidate's apparent slowdown reverses in the baseline-first block; the result is order/warm-state dominated and is a valid null. | A source-attributable full-search win, numerical-tree parity, or extra useful work at the same clock. |
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
 | Whole-decision deadline | [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) introduced the model-only, fixed-work deadline; [#1359](https://github.com/sfitzgerald-x1/pokezero/pull/1359) hardened the native-invocation witness and fail-closed validation. The qualification source is their reviewed combined `main` merge `8609d301399738a8081f0e938a3cc4ed7d39abdd` (reviewed #1359 head `6e2bb3ac4fb50abf7fb358c250a7398686153cff`). The clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
-| Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run is preserved as non-bankable: its launcher appended literal `\\n` bytes after `runner-terminal.json`. Its independent replacement, R18, is live under a new source-bound contract: corrected `6c1afe3b27d28f874c666a1ae34d5a92720bf4c0` versus frozen historical `aab7d480780fbfd3061458e17e35c1dc598b2c94`, on the registered final-enthalf iteration-9375 checkpoint, with 12 fresh mirrored pilot seeds and 50 disjoint reserved confirmation seeds. | The reusable launcher, source-isolated two-MCTS transport, and durable atomic game/receipt contract are now exercised by a new study rather than by the malformed historical handoff. | A valid terminal result, any pilot outcome, a strength claim, or a promotion decision. |
+| Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run is preserved as non-bankable: its launcher appended literal `\\n` bytes after `runner-terminal.json`. Its independent R18 replacement completed cleanly and retained all 12 fresh mirrored pairs, but is also non-bankable: its immutable manifest declared an 80% bootstrap interval while the generic summary silently used the default 95% interval. The candidate point score was 0.4583 against 0.5 neutral, so it would not have promoted even if the contract had been valid. | The reusable launcher, source-isolated two-MCTS transport, and durable atomic game/receipt contract work; the generic summary did not honor its declared statistical contract. | A strength result, a promotion decision, or use of the 50 reserved confirmation seeds. |
 
 ## Active route
 
@@ -43,7 +43,7 @@ demonstrates a loss in games.
 No new selector telemetry, representative selector read, or selector mutation
 battery is authorized in this iteration.
 
-### 2. Preserve the invalid pilot; the independent R18 replacement is live
+### 2. Preserve both non-bankable pilots; park backup repair as a strength mechanism
 
 The first pilot completed all 24 durable game records and 48 matching worker
 receipts, but its terminal handoff is invalid. The shell launcher wrote a valid
@@ -66,27 +66,50 @@ Its focused tests cover successful and failed child exits, interrupted-attempt
 preservation, orphan-child exclusion, existing-terminal refusal, and rejection
 of a diverging runner `--out-dir`.
 
-R18 is the resulting independent, work-capped replacement study. Its immutable
-manifest freezes the corrected candidate and historical uncorrected incumbent,
-the same final-enthalf iteration-9375 checkpoint bytes, 12 fresh pilot seeds,
-and a separate 50-seed confirmation roster. It writes each mirrored game and
-both policy receipts atomically under
+R18 was the independent, work-capped replacement study, freezing corrected
+`6c1afe3b27d28f874c666a1ae34d5a92720bf4c0` against historical uncorrected
+`aab7d480780fbfd3061458e17e35c1dc598b2c94`, the same iteration-9375 checkpoint,
+12 fresh pilot seeds, and 50 disjoint confirmation seeds. It completed with
+zero restarts and all 24 game records and 48 policy receipts under
 `/shared/scott-experiment/mcts-backup-repair-current-pilot-r18-20260910`.
-The job is not a result while it is live: no score, readout, or promotion may
-be inferred from partial games. It can be read only after all 24 games and 48
-receipts are present, the runner has written its parseable terminal handoff,
-and the create-only terminal snapshot independently validates the contract. The
-execution must either be the original Job completing with zero restarts, or the
-manifest's sole admitted recovery: a validated primary failure before runner
-terminal, an immutable resume-admission record and safe durable-root stage,
-then a fresh resume Job completing with zero restarts. A malformed terminal
-handoff or partially preserved root is not a valid readout path. Any further
-interrupted-before-terminal recovery must keep the original primary failure
-bound and receive its own immutable admission, fresh Job identity, safe-root
-validation, and terminal-capture validation; an automatic or unadmitted retry
-cannot be read.
 
-### 3. Qualify the implemented fixed-wall mechanism before using it
+Its terminal summary is nevertheless invalid: the immutable manifest declares
+10,000 resamples, seed `20260910`, and confidence level `0.8`, while its generic
+summary reports the default 95% bootstrap lower bound (`0.375`) instead of the
+declared 80% reconstruction (`0.4166666666666667`). The summary therefore
+violates the predeclared analysis contract and cannot be captured, repaired, or
+rerun. Its observed 0.4583 candidate point score is below neutral in either
+interval, so no favorable pilot result exists and the reserved confirmation
+seeds stay unused. Keep #1337 as a correctness repair; park it as a current
+strength mechanism.
+
+### 3. Next candidate: requalify opponent-side model priors on the current checkpoint
+
+The current model path explicitly defaults `use_opponent_priors` to false, so
+the in-tree opponent is uniform even though the checkpoint exposes a separate
+opponent-action head. This is a concrete modelling error, not a request for a
+PUCT or budget sweep: the candidate changes that one boolean to true while
+keeping source, checkpoint, belief construction, model priors, work cap, and
+all other search settings fixed.
+
+An older same-build study found a large opponent-prior effect, but that result
+used an earlier checkpoint and passed through several now-repaired opponent
+request-order bugs. It is hypothesis evidence only; it cannot establish the
+current final-enthalf behavior. The existing implementation now fails closed
+when it cannot construct a correct opponent request order, and it records
+`opponent_prior_arm_decisions` when the native tree actually uses the opponent
+head.
+
+Before any new games, extend the existing source-isolated MCTS transport only
+enough to preserve that applied counter in each durable policy receipt. A
+candidate with a missing, regressing, or zero applied count is a terminal
+NONPASS, regardless of its score. Then run one fresh, source-bound development
+applicability read on the final-enthalf checkpoint; its purpose is to establish
+that the candidate is applied with no live-root fallback, not to claim strength.
+Only a clean, applied read may register a fresh paired pilot with new seeds.
+R18's pilot and confirmation rosters remain permanently excluded.
+
+### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
 [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) supplies the
 previously missing model-path decision clock without altering the live
@@ -107,10 +130,12 @@ distribution, zero-completed-world refusal behavior, and the identical clock
 configuration on both policies. Until then, report per-decision latency and
 completed work as measurements only.
 
-### 4. Fixed-deadline qualification contract (after the frozen pilot readout)
+### 5. Fixed-deadline qualification contract (only after a new candidate earns a timed study)
 
 This is one bounded, development-only gate for the already-merged deadline;
-it is neither a game trial nor evidence of stronger MCTS. It uses the existing
+it is neither a game trial nor evidence of stronger MCTS. It is required before
+a future same-deadline contrast, but is not an automatic cluster run now that
+the only active source-isolated candidate is parked. It uses the existing
 public replay timing corpus and replay-backed model path, rather than a new
 benchmark or evaluation runner. The corpus has 16 development decisions and is
 not part of either the 12-pair pilot or its reserved confirmation roster. Its
@@ -188,6 +213,7 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 ## Immediate order
 
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
-2. Preserve the invalid first pilot without reading it. Let R18 reach a clean, source-bound terminal handoff; then capture and independently validate its immutable terminal snapshot before reading a result.
-3. Before any same-deadline comparison, qualify #1356 on the intended runtime with a nonzero completed prefix, measured tail/overshoot, no-completed-world behavior, and identical policy clocks. This is a measurement gate, not a strength trial, and follows the R18 readout.
-4. If R18 promotes, run only its reserved confirmation contrast. If it does not, retain the correctness repair and choose the next mechanics investigation from a concrete remaining decision error.
+2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. Propagate the declared confidence level in the generic summary before any future study.
+3. Requalify the one concrete remaining candidate: opponent-side model priors on the current final-enthalf checkpoint. First carry its applied counter through the existing isolated MCTS transport and run a fresh development applicability read; a missing, zero, or fallback-contaminated counter parks the candidate without games.
+4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if the applied opponent-prior read earns a timed study.
+5. Backup repair did not promote. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
