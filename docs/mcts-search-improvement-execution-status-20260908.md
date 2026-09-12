@@ -160,6 +160,9 @@ why the upstream public-order walk declined the order (for example, a lost
 permutation versus inconsistent public history), so no mechanics change is
 justified from this run. A future, separately admitted source diagnostic must
 record that refusal reason before attempting to repair the public-order path.
+Its terminal evidence must distinguish an empty or duplicate sampled party, a
+rejected public-order walk, a lost active permutation, and a non-permutation
+result; a missing reason is a diagnostic failure, never an implicit zero.
 
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
