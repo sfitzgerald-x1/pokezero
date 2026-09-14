@@ -1640,6 +1640,11 @@ class EngineMctsStats:
     prior_fallbacks: int = 0
     root_prior_fallbacks: int = 0
     branch_prior_fallbacks: int = 0
+    # Root-order resolution observed by native opponent-prior invocations.
+    # This is per invocation (like the fallback counters above): a replayed
+    # world is a second source-bound native call and therefore a second audit
+    # observation, not a silently collapsed duplicate.
+    opponent_request_order_statuses: Counter = field(default_factory=Counter)
     # Within-batch selection collisions, PER SEAT (model mode only; the crate
     # reports these from `multiply_batched_encoded_core` and nowhere else,
     # because a collision is a property of a batch and the sequential core
@@ -2118,6 +2123,12 @@ class EngineMctsStats:
         if self.depth_reached_samples:
             payload["depth_reached_mean"] = (
                 self.depth_reached_sum / self.depth_reached_samples
+            )
+        if self.opponent_request_order_statuses:
+            # The field is opt-in with opponent priors.  Do not re-schema the
+            # normal model telemetry merely because this diagnostic exists.
+            payload["opponent_request_order_statuses"] = dict(
+                self.opponent_request_order_statuses
             )
         if self.rollout_leaf_modes:
             # ADDITIVE AND CONDITIONAL, exactly like the crate's own seam columns:
@@ -3339,8 +3350,37 @@ def self_recharge_from_action_candidates(observation_metadata: Any) -> bool:
     return normalize_id(str(only.get("move_id") or "")) == _RECHARGE_REQUEST_MOVE_ID
 
 
-def opponent_request_order(context, party_species) -> list[str] | None:
-    """The opponent's Showdown request order at this decision, or None.
+_OPPONENT_REQUEST_ORDER_STATUSES = frozenset(
+    {
+        "resolved",
+        "empty_party",
+        "duplicate_party",
+        "public_order_walk_error",
+        "rejected_public_order_walk",
+        "lost_active_permutation",
+        "non_permutation_result",
+    }
+)
+
+
+@dataclass(frozen=True)
+class OpponentRequestOrderResolution:
+    """A resolved public request order or a closed, source-derived refusal.
+
+    The status is deliberately a small protocol between the Python boundary and
+    the crate.  A future opponent-prior comparison must be able to distinguish
+    an unavailable public permutation from a model/prior failure; ``None``
+    alone made the two indistinguishable in R4.
+    """
+
+    order: tuple[str, ...] | None
+    status: str
+
+
+def opponent_request_order_resolution(
+    context, party_species
+) -> OpponentRequestOrderResolution:
+    """Resolve the opponent request order and retain the fail-closed reason.
 
     Showdown keeps a player's active at request slot 0 and swaps the incoming
     mon into slot 0 on every switch-in (`sim/battle-actions.ts` `switchIn`, an
@@ -3380,27 +3420,41 @@ def opponent_request_order(context, party_species) -> list[str] | None:
 
     party = [normalize_id(str(name)) for name in party_species]
     if not party:
-        return None
+        return OpponentRequestOrderResolution(None, "empty_party")
     if len(set(party)) != len(party):
         # Slot swaps are resolved by species name downstream, so a duplicated
         # species makes the mapping ambiguous.
-        return None
+        return OpponentRequestOrderResolution(None, "duplicate_party")
     opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
     try:
         walk = _public_opponent_team_index_walk(
             context, opponent_slot=opponent_slot, team_size=len(party)
         )
     except Exception:  # noqa: BLE001 - never break search over telemetry
-        return None
+        return OpponentRequestOrderResolution(None, "public_order_walk_error")
     if walk is None:
-        return None
+        return OpponentRequestOrderResolution(None, "rejected_public_order_walk")
     _constraints, current_order, active_position = walk
     if active_position is None:
         # The walk stopped trusting its own permutation.
-        return None
+        return OpponentRequestOrderResolution(None, "lost_active_permutation")
     if sorted(current_order) != list(range(len(party))):
-        return None
-    return [party[index] for index in current_order]
+        return OpponentRequestOrderResolution(None, "non_permutation_result")
+    return OpponentRequestOrderResolution(
+        tuple(party[index] for index in current_order), "resolved"
+    )
+
+
+def opponent_request_order(context, party_species) -> list[str] | None:
+    """The opponent's Showdown request order at this decision, or None.
+
+    Compatibility wrapper for callers that only need the order.  New native
+    prior work must use :func:`opponent_request_order_resolution` so a refusal
+    remains diagnosable rather than becoming an unlabelled uniform fallback.
+    """
+
+    resolution = opponent_request_order_resolution(context, party_species)
+    return list(resolution.order) if resolution.order is not None else None
 
 
 def _leading_choice(weights: Mapping[str, float]) -> Optional[str]:
@@ -5753,6 +5807,27 @@ class EngineMctsPolicy:
             self.stats.prior_fallbacks += reported_prior_fallbacks
             self.stats.root_prior_fallbacks += root_prior_fallbacks
             self.stats.branch_prior_fallbacks += branch_prior_fallbacks
+            if config.use_opponent_priors:
+                expected_order_status = record.get("_opponent_request_order_status")
+                if expected_order_status not in _OPPONENT_REQUEST_ORDER_STATUSES:
+                    raise EngineSearchWitnessError(
+                        "opponent_request_order_status_missing_at_python_boundary"
+                    )
+                reported_order_status = report.get("opponent_request_order_status")
+                if reported_order_status != expected_order_status:
+                    raise EngineSearchWitnessError(
+                        "native_opponent_request_order_status_mismatch: "
+                        f"expected {expected_order_status!r}, got {reported_order_status!r}"
+                    )
+                if (
+                    reported_order_status != "resolved"
+                    and root_prior_fallbacks < 1
+                ):
+                    raise EngineSearchWitnessError(
+                        "native_opponent_request_order_refusal_not_counted_at_root: "
+                        f"status={reported_order_status!r}"
+                    )
+                self.stats.opponent_request_order_statuses[reported_order_status] += 1
             # Per-INVOCATION like the phase walls above: a conservatively
             # replayed world collided that many times twice and must report it.
             # `.get(...) or 0` keeps a pre-collision-counter wheel readable.
@@ -5833,28 +5908,32 @@ class EngineMctsPolicy:
             return report
 
         for world, state in worlds:
-            ctx_json = json.dumps(
-                {
-                    "p1": list(world.party_species["p1"]),
-                    "p2": list(world.party_species["p2"]),
-                    "turn": turn,
-                    # Construction-only provenance for a root Toxic zero.
-                    # The leaf context consumes this outside model metadata.
-                    "toxic_stage_zero_after_upkeep": _root_toxic_zero_after_upkeep_attestation(
-                        replay
-                    ),
-                    **(
-                        {"opponent_request_order": opponent_order}
-                        if (opponent_order := opponent_request_order(
-                            context,
-                            world.party_species[
-                                "p2" if context.player_id == "p1" else "p1"
-                            ],
-                        ))
-                        else {}
-                    ),
-                }
+            opponent_order_resolution = opponent_request_order_resolution(
+                context,
+                world.party_species["p2" if context.player_id == "p1" else "p1"],
             )
+            ctx_payload: dict[str, Any] = {
+                "p1": list(world.party_species["p1"]),
+                "p2": list(world.party_species["p2"]),
+                "turn": turn,
+                # Construction-only provenance for a root Toxic zero.
+                # The leaf context consumes this outside model metadata.
+                "toxic_stage_zero_after_upkeep": _root_toxic_zero_after_upkeep_attestation(
+                    replay
+                ),
+            }
+            if opponent_order_resolution.order is not None:
+                ctx_payload["opponent_request_order"] = list(
+                    opponent_order_resolution.order
+                )
+            if config.use_opponent_priors:
+                # An opponent-prior run is invalid unless the native report
+                # echoes this exact source-derived outcome.  The flag-off path
+                # deliberately sends no new byte through the native boundary.
+                ctx_payload["opponent_request_order_status"] = (
+                    opponent_order_resolution.status
+                )
+            ctx_json = json.dumps(ctx_payload)
             world_seed = rng.getrandbits(63)
             side_key = (
                 "side_one"
@@ -5867,6 +5946,10 @@ class EngineMctsPolicy:
                 "seed": world_seed,
                 "side_key": side_key,
             }
+            if config.use_opponent_priors:
+                record["_opponent_request_order_status"] = (
+                    opponent_order_resolution.status
+                )
             # CONCENTRATE duplicate belief completions instead of skipping them.
             #
             # Two worlds with the same serialized state, context and seat are one
