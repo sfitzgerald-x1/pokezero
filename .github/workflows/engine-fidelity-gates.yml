@@ -205,6 +205,11 @@ jobs:
             # is the sole guard against the Rust and Python spellings drifting -- must still
             # trip the gate. `src/pokezero/**` covers the module they pin but not the pins.
             tests/test_engine_search.py
+            # The source-derived opponent request-order pins, with the named step below.
+            # The failure classes are a cross-language diagnostic protocol: deleting or
+            # weakening their only direct tests must trigger the same gate that proves the
+            # native report can be attributed to a source refusal.
+            tests/test_opponent_request_order.py
             # Direction 2 of the oracle, with a STEP below. Same reason as every
             # other test file here: `src/pokezero/**` covers `public_projection.py`
             # but not the pins on it, and a PR whose only change widens the render
@@ -1553,8 +1558,8 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 225 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 225 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 227 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 227 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
@@ -1585,6 +1590,26 @@ jobs:
               exit 1
             }
           done
+
+      # The opponent-prior applicability read is allowed to explain a root fallback
+      # only through this source-derived request-order protocol.  A previously added
+      # fixture module had neither a path-filter entry nor a workflow step: a test-only
+      # weakening could therefore merge green, and this PR's new refusal status would be
+      # locally exercised but absent from required CI.  Keep the exact count to reject a
+      # silently shrinking refusal census.
+      - name: Opponent request-order source pins
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_opponent_request_order -v 2>&1 \
+            | tee /tmp/opponentrequestorder.log
+          if ! grep -qE 'Ran 12 tests' /tmp/opponentrequestorder.log; then
+            echo "::error::expected 12 opponent request-order tests; the suite shrank or grew"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/opponentrequestorder.log; then
+            echo "::error::opponent request-order pins did not report a clean OK"
+            exit 1
+          fi
 
       - name: Crate suites, including the renderer pins
         run: |

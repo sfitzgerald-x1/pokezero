@@ -16,6 +16,7 @@ from pokezero.mcts_eval.head_to_head import (
     HeadToHeadGame,
     HeadToHeadError,
     MctsPolicySpec,
+    PolicyTelemetry,
     PublicOnlyMctsPolicy,
     complete_pair,
     load_pair,
@@ -72,6 +73,23 @@ class _IsolatedPolicy(_Policy):
     """Test double for a policy whose decisions came from another source tree."""
 
     is_source_isolated = True
+
+
+class OpponentOrderTelemetryTest(unittest.TestCase):
+    def test_order_status_deltas_are_preserved_and_must_be_monotonic(self) -> None:
+        before = PolicyTelemetry(opponent_request_order_statuses={"resolved": 2})
+        after = PolicyTelemetry(
+            opponent_request_order_statuses={
+                "resolved": 3,
+                "lost_active_permutation": 1,
+            }
+        )
+        self.assertEqual(
+            after.delta(before).opponent_request_order_statuses,
+            {"resolved": 1, "lost_active_permutation": 1},
+        )
+        with self.assertRaisesRegex(HeadToHeadError, "status telemetry regressed"):
+            before.delta(after)
 
 
 class IsolatedRunnerCliTest(unittest.TestCase):
@@ -586,6 +604,10 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
                 "incumbent_opponent_prior_arm_decisions": 0,
                 "candidate_root_prior_fallbacks": 0,
                 "incumbent_root_prior_fallbacks": 0,
+                "candidate_opponent_request_order_statuses": {"resolved": 7},
+                "incumbent_opponent_request_order_statuses": {},
+                "candidate_opponent_request_order_root_fallback_statuses": {},
+                "incumbent_opponent_request_order_root_fallback_statuses": {},
             },
         )
         self.assertEqual(passed["status"], "PASS")
@@ -598,6 +620,10 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
                 "incumbent_opponent_prior_arm_decisions": 0,
                 "candidate_root_prior_fallbacks": 0,
                 "incumbent_root_prior_fallbacks": 0,
+                "candidate_opponent_request_order_statuses": {},
+                "incumbent_opponent_request_order_statuses": {},
+                "candidate_opponent_request_order_root_fallback_statuses": {},
+                "incumbent_opponent_request_order_root_fallback_statuses": {},
             },
         )
         self.assertEqual(zero["status"], "NONPASS")
@@ -610,6 +636,10 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
                 "incumbent_opponent_prior_arm_decisions": 1,
                 "candidate_root_prior_fallbacks": 0,
                 "incumbent_root_prior_fallbacks": 0,
+                "candidate_opponent_request_order_statuses": {"resolved": 7},
+                "incumbent_opponent_request_order_statuses": {},
+                "candidate_opponent_request_order_root_fallback_statuses": {},
+                "incumbent_opponent_request_order_root_fallback_statuses": {},
             },
         )
         self.assertEqual(drift["status"], "NONPASS")
@@ -622,10 +652,33 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
                 "incumbent_opponent_prior_arm_decisions": 0,
                 "candidate_root_prior_fallbacks": 1,
                 "incumbent_root_prior_fallbacks": 0,
+                "candidate_opponent_request_order_statuses": {"lost_active_permutation": 1},
+                "incumbent_opponent_request_order_statuses": {},
+                "candidate_opponent_request_order_root_fallback_statuses": {"lost_active_permutation": 1},
+                "incumbent_opponent_request_order_root_fallback_statuses": {},
             },
         )
         self.assertEqual(root_fallback["status"], "NONPASS")
         self.assertFalse(root_fallback["checks"]["live_root_priors_remained_clean"])
+        self.assertEqual(
+            root_fallback["candidate_opponent_request_order_root_fallback_statuses"],
+            {"lost_active_permutation": 1},
+        )
+
+        with self.assertRaisesRegex(HeadToHeadError, "unclassified candidate root fallbacks"):
+            module._opponent_prior_applicability_readout(
+                contract=contract,
+                summary={
+                    "candidate_opponent_prior_arm_decisions": 7,
+                    "incumbent_opponent_prior_arm_decisions": 0,
+                    "candidate_root_prior_fallbacks": 1,
+                    "incumbent_root_prior_fallbacks": 0,
+                    "candidate_opponent_request_order_statuses": {"resolved": 7},
+                    "incumbent_opponent_request_order_statuses": {},
+                    "candidate_opponent_request_order_root_fallback_statuses": {},
+                    "incumbent_opponent_request_order_root_fallback_statuses": {},
+                },
+            )
 
 
 class BackupRepairPilotContractTest(unittest.TestCase):

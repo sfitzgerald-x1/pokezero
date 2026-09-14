@@ -1491,6 +1491,19 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     } else {
         (collisions.side_two_repeats, collisions.side_one_repeats)
     };
+    // Appended only for the opt-in source-audit protocol.  A legacy or
+    // ordinary model-prior report remains byte-identical, while an
+    // opponent-prior caller can prove whether the root order was resolved or
+    // deliberately refused before any uniform fallback was used.
+    let opponent_request_order_status_field = leaf_ctx
+        .root_opponent_order_status()
+        .map(|status| {
+            format!(
+                ",\"opponent_request_order_status\":{}",
+                serde_json::to_string(status).expect("string JSON serialization cannot fail"),
+            )
+        })
+        .unwrap_or_default();
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
@@ -1503,7 +1516,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
          \"collision_selections\":{},\"collision_joint_repeats\":{},\
          \"collision_self_repeats\":{},\"collision_opponent_repeats\":{},\
          \"collision_self_side\":\"{}\",\
-         \"collision_traversals\":{},\"collision_leaf_repeats\":{}",
+         \"collision_traversals\":{},\"collision_leaf_repeats\":{}{}",
         batch_size,
         rounds,
         model_evals,
@@ -1549,6 +1562,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         if self_side_one { "side_one" } else { "side_two" },
         collisions.traversals,
         collisions.leaf_repeats,
+        opponent_request_order_status_field,
     );
     // Deadline fields are appended only for the opt-in path: a historical
     // fixed-work report remains byte-for-byte on its old schema. An overrun is

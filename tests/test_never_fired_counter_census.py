@@ -60,31 +60,16 @@ import functools
 import json
 import os
 import re
+import subprocess
 import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Directories that never hold committed measurement artifacts, and one (`third_party`)
-# that is gitignored and regenerated, so walking it is both slow and non-deterministic.
-_SKIP_DIRS = frozenset(
-    {
-        ".git",
-        "third_party",
-        "node_modules",
-        "target",
-        ".venv",
-        "__pycache__",
-        ".pytest_cache",
-        "dist",
-        "build",
-    }
-)
-
-# The two trees walked. Verified at the time of writing by scanning ALL 379 committed
-# JSON outside `third_party/` -- every nonzero counter-shaped leaf for every name below
-# lives under one of these two. `runs/`, `evals/`, `scenarios/`, `checkpoints/`,
-# `schemas/` and `tests/data/` hold JSON and contribute no counter evidence.
+# The two trees queried from Git's tracked-file set. Verified at the time of writing by
+# scanning ALL 379 committed JSON outside `third_party/` -- every nonzero counter-shaped
+# leaf for every name below lives under one of these two. `runs/`, `evals/`, `scenarios/`,
+# `checkpoints/`, `schemas/` and `tests/data/` hold JSON and contribute no counter evidence.
 _CORPUS_TREES = ("reports", "docs")
 
 # MEASURED, not computed: 347 == 267 under `reports/` + 80 under `docs/`. The sum is
@@ -468,15 +453,19 @@ def _is_nonzero_number(value: object) -> bool:
 
 @functools.lru_cache(maxsize=1)
 def counter_artifacts() -> tuple[str, ...]:
-    """Every committed JSON under `reports/` or `docs/`, recursively."""
-    found: list[str] = []
-    for tree in _CORPUS_TREES:
-        for root, dirs, files in os.walk(REPO / tree):
-            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
-            for name in files:
-                if name.endswith(".json"):
-                    found.append(os.path.relpath(os.path.join(root, name), REPO))
-    return tuple(sorted(found))
+    """Every *tracked* JSON under `reports/` or `docs/`, recursively.
+
+    A working-tree walk admits partial run journals, candidate artifacts, and other
+    untracked local files.  Those are not part of the committed evidence corpus and
+    must not alter a census whose claims and denominator are explicitly committed.
+    """
+
+    listed = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "-z", "--", *_CORPUS_TREES],
+        capture_output=True,
+        check=True,
+    ).stdout.decode("utf-8").split("\0")
+    return tuple(sorted(name for name in listed if name.endswith(".json")))
 
 
 @functools.lru_cache(maxsize=1)

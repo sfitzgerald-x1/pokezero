@@ -821,6 +821,10 @@ pub(crate) struct LeafContext {
     root_active_party: [usize; 2],
     /// Caller-supplied opponent root request order (empty when absent).
     root_opponent_request_order: Vec<String>,
+    /// Source-derived disposition of the root opponent order.  This is absent
+    /// for legacy/non-opponent-prior calls; when supplied it makes an empty
+    /// order an auditable refusal rather than an indistinguishable fallback.
+    root_opponent_request_order_status: Option<String>,
     /// The SELF side's belief-ledger PP charges per (species key, move id)
     /// (`belief_view.self_pokemon[*].move_uses` — the parser's public
     /// charging count, exact where the cached request-history PP is stale).
@@ -1030,6 +1034,40 @@ impl LeafContext {
                     .collect()
             })
             .unwrap_or_default();
+        let root_opponent_request_order_status = match ctx
+            .get("opponent_request_order_status")
+        {
+            None => None,
+            Some(Value::String(status)) => {
+                const VALID_STATUSES: [&str; 7] = [
+                    "resolved",
+                    "empty_party",
+                    "duplicate_party",
+                    "public_order_walk_error",
+                    "rejected_public_order_walk",
+                    "lost_active_permutation",
+                    "non_permutation_result",
+                ];
+                if !VALID_STATUSES.contains(&status.as_str()) {
+                    return Err(err(format!(
+                        "unsupported opponent_request_order_status {status:?}"
+                    )));
+                }
+                let order_is_present = !root_opponent_request_order.is_empty();
+                if (status == "resolved") != order_is_present {
+                    return Err(err(format!(
+                        "opponent_request_order_status {status:?} disagrees with \
+                         opponent_request_order presence"
+                    )));
+                }
+                Some(status.clone())
+            }
+            Some(_) => {
+                return Err(err(
+                    "opponent_request_order_status must be a string when supplied",
+                ));
+            }
+        };
         let root_weather = md
             .get("weather")
             .and_then(Value::as_str)
@@ -1053,6 +1091,7 @@ impl LeafContext {
             meta_ctx,
             root_active_party,
             root_opponent_request_order,
+            root_opponent_request_order_status,
             self_ledger_uses,
             root_turn,
             root_weather,
@@ -2059,6 +2098,12 @@ impl LeafContext {
         } else {
             Some(&self.root_opponent_request_order)
         }
+    }
+
+    /// The source boundary's explicit disposition, if this caller requested
+    /// the opponent-prior audit protocol.
+    pub(crate) fn root_opponent_order_status(&self) -> Option<&str> {
+        self.root_opponent_request_order_status.as_deref()
     }
 
     pub(crate) fn opponent_prefix(&self) -> &'static str {
@@ -3360,6 +3405,72 @@ mod tests {
         assert_eq!(
             map[0], None,
             "the move arm must be refused with the rest of the node"
+        );
+    }
+
+    #[test]
+    fn opponent_request_order_status_requires_a_matching_order_shape() {
+        // The source boundary must be able to distinguish a deliberate
+        // refusal from an order it resolved.  This parser-level pin makes a
+        // stale/hand-edited ctx fail before a native search could report a
+        // misleading prior-fallback total.
+        let state = State::default();
+        let root_inputs = order_root_inputs(&SELF_PARTY);
+        let mut resolved_ctx: Value = serde_json::from_str(&order_ctx_json(
+            &SELF_PARTY,
+            Some(&ORDER_THE_APPROXIMATION_RETURNED),
+        ))
+        .expect("fixture ctx JSON");
+        resolved_ctx["opponent_request_order_status"] = json!("resolved");
+        let resolved = LeafContext::new(
+            ORDER_TABLES_JSON,
+            &root_inputs,
+            &resolved_ctx.to_string(),
+            &state,
+        )
+        .expect("resolved status with an order");
+        assert_eq!(resolved.root_opponent_order_status(), Some("resolved"));
+
+        let mut refusal_ctx: Value = serde_json::from_str(&order_ctx_json(
+            &SELF_PARTY,
+            None,
+        ))
+        .expect("fixture ctx JSON");
+        refusal_ctx["opponent_request_order_status"] = json!("lost_active_permutation");
+        let refusal = LeafContext::new(
+            ORDER_TABLES_JSON,
+            &root_inputs,
+            &refusal_ctx.to_string(),
+            &state,
+        )
+        .expect("refusal status without an order");
+        assert_eq!(
+            refusal.root_opponent_order_status(),
+            Some("lost_active_permutation")
+        );
+
+        refusal_ctx["opponent_request_order_status"] = json!("resolved");
+        assert!(
+            LeafContext::new(
+                ORDER_TABLES_JSON,
+                &root_inputs,
+                &refusal_ctx.to_string(),
+                &state,
+            )
+            .is_err(),
+            "a resolved status cannot conceal an absent request order"
+        );
+
+        resolved_ctx["opponent_request_order_status"] = json!("made_up_status");
+        assert!(
+            LeafContext::new(
+                ORDER_TABLES_JSON,
+                &root_inputs,
+                &resolved_ctx.to_string(),
+                &state,
+            )
+            .is_err(),
+            "the diagnostic vocabulary is closed"
         );
     }
 

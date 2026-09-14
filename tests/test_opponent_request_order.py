@@ -28,10 +28,16 @@ nothing.
 
 from __future__ import annotations
 
+from pathlib import Path
+import re
 from types import SimpleNamespace
 import unittest
 
-from pokezero.engine_search import opponent_request_order
+from pokezero.engine_search import (
+    OPPONENT_REQUEST_ORDER_STATUS_VALUES,
+    opponent_request_order,
+    opponent_request_order_resolution,
+)
 from pokezero.policy import PolicyContext
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
 
@@ -87,6 +93,9 @@ class RequestOrderTest(unittest.TestCase):
         ctx = context([step("p1", 0, "Typhlosion", 0)], decision_round=1,
                       active="Typhlosion")
         self.assertEqual(opponent_request_order(ctx, PARTY), PARTY)
+        resolution = opponent_request_order_resolution(ctx, PARTY)
+        self.assertEqual(resolution.order, tuple(PARTY))
+        self.assertEqual(resolution.status, "resolved")
 
     def test_one_switch_moves_the_incoming_mon_to_slot_zero(self) -> None:
         # Absol is at request position 2, so its switch action index is 5.
@@ -185,6 +194,26 @@ class RequestOrderTest(unittest.TestCase):
 
 
 class FailClosedTest(unittest.TestCase):
+    def test_rust_parser_accepts_the_exact_source_status_protocol(self) -> None:
+        """A new source refusal category must not die at the native boundary."""
+
+        leaf = (
+            Path(__file__).resolve().parents[1]
+            / "rust"
+            / "pokezero-search"
+            / "src"
+            / "leaf.rs"
+        )
+        source = leaf.read_text(encoding="utf-8")
+        match = re.search(
+            r"const VALID_STATUSES: \[&str; \d+\] = \[(.*?)\];",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match, "native request-order status parser disappeared")
+        native_statuses = frozenset(re.findall(r'"([a-z_]+)"', match.group(1)))
+        self.assertEqual(native_statuses, OPPONENT_REQUEST_ORDER_STATUS_VALUES)
+
     def test_no_history_at_all_returns_none(self) -> None:
         trajectory = BattleTrajectory(battle_id="b", format_id="gen3randombattle", seed=1)
         ctx = PolicyContext(
@@ -193,16 +222,58 @@ class FailClosedTest(unittest.TestCase):
             requested_players=("p1",), trajectory=trajectory,
         )
         self.assertIsNone(opponent_request_order(ctx, PARTY))
+        self.assertEqual(
+            opponent_request_order_resolution(ctx, PARTY).status,
+            "lost_active_permutation",
+        )
 
     def test_duplicate_species_fails_closed(self) -> None:
         party = ["absol", "absol", "smeargle", "vaporeon", "sharpedo", "typhlosion"]
         ctx = context([step("p1", 0, "Absol", 0)], decision_round=1, active="Absol")
         self.assertIsNone(opponent_request_order(ctx, party))
+        self.assertEqual(
+            opponent_request_order_resolution(ctx, party).status, "duplicate_party"
+        )
 
     def test_empty_party_fails_closed(self) -> None:
         ctx = context([step("p1", 0, "Typhlosion", 0)], decision_round=1,
                       active="Typhlosion")
         self.assertIsNone(opponent_request_order(ctx, []))
+        self.assertEqual(
+            opponent_request_order_resolution(ctx, []).status, "empty_party"
+        )
+
+    def test_walk_refusal_statuses_are_closed_and_distinct(self) -> None:
+        """The native audit must not collapse distinct public-order failures."""
+        import pokezero.determinization as determinization
+
+        ctx = context([step("p1", 0, "Typhlosion", 0)], decision_round=1,
+                      active="Typhlosion")
+        original = determinization._public_opponent_team_index_walk
+        cases = {
+            "rejected_public_order_walk": None,
+            "lost_active_permutation": (None, list(range(len(PARTY))), None),
+            "non_permutation_result": (None, [0, 0, 2, 3, 4, 5], 0),
+        }
+        try:
+            for expected, walk_result in cases.items():
+                determinization._public_opponent_team_index_walk = (
+                    lambda *_args, result=walk_result, **_kwargs: result
+                )
+                with self.subTest(expected=expected):
+                    resolution = opponent_request_order_resolution(ctx, PARTY)
+                    self.assertIsNone(resolution.order)
+                    self.assertEqual(resolution.status, expected)
+
+            def raises(*_args, **_kwargs):
+                raise RuntimeError("fixture walk failure")
+
+            determinization._public_opponent_team_index_walk = raises
+            resolution = opponent_request_order_resolution(ctx, PARTY)
+            self.assertIsNone(resolution.order)
+            self.assertEqual(resolution.status, "public_order_walk_error")
+        finally:
+            determinization._public_opponent_team_index_walk = original
 
     def test_helper_defers_to_the_determinization_walk(self) -> None:
         # Pins that this is a reuse, not a seventh reconstruction.

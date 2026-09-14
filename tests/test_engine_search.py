@@ -27,6 +27,7 @@ from pokezero.engine_search import (  # noqa: E402
     EngineMctsStats,
     EngineSearchFallbackError,
     EngineSearchWitnessError,
+    OpponentRequestOrderResolution,
     _ABORT_LOSSY_SUBCASES_ATTR,
     _FALLBACK_SAMPLE_KEY_CEILING,
     _OVERRIDE_DISAGREEMENT_ADDRESSES,
@@ -4367,6 +4368,56 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             )
         return decision, native
 
+    def test_opponent_prior_audit_echoes_the_source_order_status(self) -> None:
+        """An opponent-prior result records why a root order was unavailable."""
+        policy = self._policy(opponent_priors=True, worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        # The compact context fixture has no public trajectory, so the real
+        # resolution helper fails closed at the active-permutation boundary.
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "opponent_request_order_status": "public_order_walk_error",
+            }
+        )
+        _decision, native = self._run(policy, [report])
+        ctx = json.loads(native.calls[0][5])
+        self.assertEqual(
+            ctx["opponent_request_order_status"], "public_order_walk_error"
+        )
+        self.assertEqual(
+            policy.stats.opponent_request_order_statuses,
+            {"public_order_walk_error": 1},
+        )
+        self.assertEqual(
+            policy.stats.opponent_request_order_root_fallback_statuses,
+            {"public_order_walk_error": 1},
+        )
+
+    def test_opponent_prior_audit_rejects_a_missing_native_status_echo(self) -> None:
+        policy = self._policy(opponent_priors=True, worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+            }
+        )
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError,
+            "native_opponent_request_order_status_mismatch",
+        ):
+            self._run(policy, [report])
+
     def test_time_budget_reaches_the_outermost_native_slot_with_a_witness(self) -> None:
         # A high budget keeps this a call-contract test rather than a race with
         # the test host. The fake still has to return the native witness; without
@@ -5535,14 +5586,27 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         ):
             with self.subTest(opponent_priors=opponent_priors):
                 policy = self._policy(opponent_priors=opponent_priors)
-                self._run(
-                    policy,
-                    [self._report(
-                        [("alpha", 60, 0.5, 0.8), ("beta", 40, 0.5, 0.2)],
-                        root_priors=[0.8, 0.2],
-                        opponent=opponent,
-                    )],
+                report = self._report(
+                    [("alpha", 60, 0.5, 0.8), ("beta", 40, 0.5, 0.2)],
+                    root_priors=[0.8, 0.2],
+                    opponent=opponent,
                 )
+                if opponent_priors:
+                    # This fixture tests the non-uniform-row rule, not
+                    # public-order reconstruction. Its synthetic model row
+                    # therefore needs an equally synthetic *resolved* source
+                    # receipt; otherwise it models a native result that the
+                    # source boundary correctly refuses to bank.
+                    report["opponent_request_order_status"] = "resolved"
+                    with patch(
+                        "pokezero.engine_search.opponent_request_order_resolution",
+                        return_value=OpponentRequestOrderResolution(
+                            ("chansey",), "resolved"
+                        ),
+                    ):
+                        self._run(policy, [report])
+                else:
+                    self._run(policy, [report])
                 stats = policy.stats.to_dict()
                 self.assertEqual(
                     stats["root_decision_rows"][0]["opponent_prior_arm"], expected

@@ -40,6 +40,32 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
         with self.assertRaisesRegex(worker_error, "opponent_prior_arm_decisions"):
             stats_payload(stats)
 
+    def test_stats_payload_preserves_the_closed_order_status_ledger(self) -> None:
+        stats = SimpleNamespace(
+            decisions=1,
+            searched_decisions=1,
+            fallback_decisions=0,
+            model_evals=4,
+            total_iterations=8,
+            worlds_constructed=1,
+            worlds_searched=1,
+            prior_fallbacks=1,
+            root_prior_fallbacks=1,
+            branch_prior_fallbacks=0,
+            opponent_prior_arm_decisions=0,
+            opponent_request_order_statuses={"lost_active_permutation": 1},
+            opponent_request_order_root_fallback_statuses={"lost_active_permutation": 1},
+            decision_wall_seconds=0.25,
+        )
+        self.assertEqual(
+            stats_payload(stats)["opponent_request_order_statuses"],
+            {"lost_active_permutation": 1},
+        )
+        self.assertEqual(
+            stats_payload(stats)["opponent_request_order_root_fallback_statuses"],
+            {"lost_active_permutation": 1},
+        )
+
     def test_config_projection_allows_only_explicit_disabled_diagnostics(self) -> None:
         class HistoricalEngineMctsConfig:
             __dataclass_fields__ = {"leaf_eval": object(), "search_sims": object()}
