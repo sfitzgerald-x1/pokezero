@@ -228,6 +228,7 @@ class FailClosedTest(unittest.TestCase):
                       active="Typhlosion")
         original = determinization._public_opponent_team_index_walk
         cases = {
+            "rejected_public_order_walk": None,
             "lost_active_permutation": (None, list(range(len(PARTY))), None),
             "non_permutation_result": (None, [0, 0, 2, 3, 4, 5], 0),
         }
