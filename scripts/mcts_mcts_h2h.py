@@ -15,6 +15,7 @@ from dataclasses import asdict
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import subprocess
@@ -50,6 +51,13 @@ OPPONENT_PRIOR_APPLICABILITY_SCHEMA_VERSION = (
 )
 OPPONENT_PRIOR_APPLICABILITY_READOUT_SCHEMA_VERSION = (
     "pokezero.mcts-h2h-opponent-prior-applicability-readout.v2"
+)
+OPPONENT_PRIOR_STRENGTH_PILOT_READOUT_SCHEMA_VERSION = (
+    "pokezero.mcts-h2h-opponent-prior-strength-pilot-readout.v1"
+)
+OPPONENT_PRIOR_STRENGTH_PILOT_DECISIONS = (
+    "ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION",
+    "NO_EXTENSION",
 )
 OPPONENT_PRIOR_APPLICABILITY_CONTRACT = {
     "schema_version": OPPONENT_PRIOR_APPLICABILITY_SCHEMA_VERSION,
@@ -1100,6 +1108,257 @@ def _opponent_prior_applicability_readout(
     }
 
 
+def _opponent_prior_strength_pilot_contract(
+    manifest: Mapping[str, Any],
+    *,
+    seeds: tuple[int, ...],
+    bootstrap: Mapping[str, Any],
+    applicability_contract: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Validate the declared terminal decision for an opponent-prior pilot.
+
+    Applicability and strength answer different questions.  A flag-on policy can
+    demonstrably price opponent arms without having enough paired strength
+    evidence to justify a confirmation roster.  Keep the latter's exact,
+    predeclared threshold in the runner so a generic summary cannot be mistaken
+    for an approval.
+    """
+
+    trial_raw = manifest.get("trial_protocol")
+    if trial_raw is None:
+        return None
+    trial = _mapping(trial_raw, label="manifest.trial_protocol")
+    raw = trial.get("readout_contract")
+    if raw is None:
+        return None
+    if applicability_contract is None:
+        raise HeadToHeadError(
+            "opponent-prior strength pilot requires the matching applicability contract."
+        )
+    contract = dict(_mapping(raw, label="manifest.trial_protocol.readout_contract"))
+    required_fields = {
+        "schema_version",
+        "bootstrap",
+        "candidate_allowed_opponent_request_order_statuses",
+        "candidate_observed_source_order_statuses_at_least",
+        "candidate_opponent_prior_arm_decisions_at_least",
+        "candidate_score_reference",
+        "delta_definition",
+        "incumbent_allowed_opponent_request_order_statuses",
+        "incumbent_opponent_prior_arm_decisions_at_most",
+        "interval_lower_strictly_above",
+        "minimum_effect_delta",
+        "terminal_decisions",
+    }
+    if set(contract) != required_fields:
+        raise HeadToHeadError(
+            "opponent-prior strength pilot readout contract has unexpected or missing fields."
+        )
+    if contract["schema_version"] != OPPONENT_PRIOR_STRENGTH_PILOT_READOUT_SCHEMA_VERSION:
+        raise HeadToHeadError("opponent-prior strength pilot has an unrecognized readout schema.")
+    declared_bootstrap = dict(_mapping(contract["bootstrap"], label="readout_contract.bootstrap"))
+    if declared_bootstrap != dict(bootstrap):
+        raise HeadToHeadError(
+            "opponent-prior strength pilot readout bootstrap must exactly match manifest.bootstrap."
+        )
+
+    def nonnegative_int(name: str, *, minimum: int = 0) -> int:
+        value = contract[name]
+        if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+            raise HeadToHeadError(
+                f"opponent-prior strength pilot {name} must be an integer at least {minimum}."
+            )
+        return value
+
+    def allowed_statuses(name: str) -> tuple[str, ...]:
+        values = contract[name]
+        if not isinstance(values, list) or tuple(values) != ("resolved",):
+            raise HeadToHeadError(
+                f"opponent-prior strength pilot {name} must be exactly ['resolved']."
+            )
+        return ("resolved",)
+
+    candidate_allowed_statuses = allowed_statuses(
+        "candidate_allowed_opponent_request_order_statuses"
+    )
+    incumbent_allowed_statuses = allowed_statuses(
+        "incumbent_allowed_opponent_request_order_statuses"
+    )
+    candidate_observed_minimum = nonnegative_int(
+        "candidate_observed_source_order_statuses_at_least", minimum=1
+    )
+    candidate_arm_minimum = nonnegative_int(
+        "candidate_opponent_prior_arm_decisions_at_least", minimum=1
+    )
+    incumbent_arm_maximum = nonnegative_int(
+        "incumbent_opponent_prior_arm_decisions_at_most"
+    )
+    if incumbent_arm_maximum != 0:
+        raise HeadToHeadError(
+            "opponent-prior strength pilot incumbent arm maximum must remain zero."
+        )
+    for name, expected in (
+        ("candidate_score_reference", 0.5),
+        ("interval_lower_strictly_above", 0.0),
+    ):
+        value = contract[name]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or float(value) != expected:
+            raise HeadToHeadError(
+                f"opponent-prior strength pilot {name} must remain {expected:g}."
+            )
+    if contract["delta_definition"] != "mean_paired_candidate_score_minus_0.5":
+        raise HeadToHeadError("opponent-prior strength pilot has an unrecognized delta definition.")
+    minimum_effect = contract["minimum_effect_delta"]
+    if (
+        isinstance(minimum_effect, bool)
+        or not isinstance(minimum_effect, (int, float))
+        or not 0.0 < float(minimum_effect) <= 0.5
+    ):
+        raise HeadToHeadError(
+            "opponent-prior strength pilot minimum effect must be in (0, 0.5]."
+        )
+    if tuple(contract["terminal_decisions"]) != OPPONENT_PRIOR_STRENGTH_PILOT_DECISIONS:
+        raise HeadToHeadError(
+            "opponent-prior strength pilot must declare the exact eligible/no-extension decisions."
+        )
+    return {
+        "schema_version": OPPONENT_PRIOR_STRENGTH_PILOT_READOUT_SCHEMA_VERSION,
+        "registered_seeds": list(seeds),
+        "bootstrap": declared_bootstrap,
+        "candidate_allowed_opponent_request_order_statuses": list(candidate_allowed_statuses),
+        "candidate_observed_source_order_statuses_at_least": candidate_observed_minimum,
+        "candidate_opponent_prior_arm_decisions_at_least": candidate_arm_minimum,
+        "candidate_score_reference": 0.5,
+        "delta_definition": "mean_paired_candidate_score_minus_0.5",
+        "incumbent_allowed_opponent_request_order_statuses": list(incumbent_allowed_statuses),
+        "incumbent_opponent_prior_arm_decisions_at_most": incumbent_arm_maximum,
+        "interval_lower_strictly_above": 0.0,
+        "minimum_effect_delta": float(minimum_effect),
+        "terminal_decisions": list(OPPONENT_PRIOR_STRENGTH_PILOT_DECISIONS),
+    }
+
+
+def _opponent_prior_strength_pilot_readout(
+    *,
+    contract: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    applicability_readout: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Write the terminal strength decision without upgrading a thin signal."""
+
+    raw_scores = summary.get("pair_scores")
+    if not isinstance(raw_scores, list):
+        raise HeadToHeadError("opponent-prior strength pilot summary has no pair_scores list.")
+    try:
+        scores = tuple(float(value) for value in raw_scores)
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError("opponent-prior strength pilot pair scores are malformed.") from error
+    if not scores or any(not math.isfinite(value) or not 0.0 <= value <= 1.0 for value in scores):
+        raise HeadToHeadError("opponent-prior strength pilot pair scores must be finite values in [0, 1].")
+    registered_seeds = tuple(int(value) for value in contract["registered_seeds"])
+    if len(scores) != len(registered_seeds):
+        raise HeadToHeadError(
+            "opponent-prior strength pilot summary does not cover every registered pair."
+        )
+    if applicability_readout.get("status") not in {"PASS", "NONPASS"}:
+        raise HeadToHeadError("opponent-prior strength pilot has no terminal applicability status.")
+
+    def count(name: str) -> int:
+        value = applicability_readout.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise HeadToHeadError(
+                f"opponent-prior strength pilot applicability readout has invalid {name}={value!r}."
+            )
+        return value
+
+    def statuses(name: str) -> dict[str, int]:
+        raw = applicability_readout.get(name)
+        if not isinstance(raw, Mapping):
+            raise HeadToHeadError(
+                f"opponent-prior strength pilot applicability readout has no {name} mapping."
+            )
+        result: dict[str, int] = {}
+        for status, value in raw.items():
+            if status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
+                raise HeadToHeadError(
+                    f"opponent-prior strength pilot has unknown request-order status {status!r}."
+                )
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise HeadToHeadError(
+                    f"opponent-prior strength pilot has invalid {name} count {status!r}={value!r}."
+                )
+            result[str(status)] = value
+        return dict(sorted(result.items()))
+
+    candidate_statuses = statuses("candidate_opponent_request_order_statuses")
+    incumbent_statuses = statuses("incumbent_opponent_request_order_statuses")
+    candidate_arms = count("candidate_opponent_prior_arm_decisions")
+    incumbent_arms = count("incumbent_opponent_prior_arm_decisions")
+    interval = bootstrap_mean(
+        scores,
+        bootstrap_indices(
+            sample_size=len(scores),
+            resamples=int(contract["bootstrap"]["resamples"]),
+            seed=int(contract["bootstrap"]["seed"]),
+        ),
+        confidence_level=float(contract["bootstrap"]["confidence_level"]),
+    )
+    reference = float(contract["candidate_score_reference"])
+    delta = {
+        "point": interval.point - reference,
+        "low": interval.low - reference,
+        "high": interval.high - reference,
+    }
+    candidate_orders_allowed = set(candidate_statuses).issubset(
+        set(contract["candidate_allowed_opponent_request_order_statuses"])
+    )
+    incumbent_orders_allowed = set(incumbent_statuses).issubset(
+        set(contract["incumbent_allowed_opponent_request_order_statuses"])
+    )
+    checks = {
+        "all_registered_pairs_complete": len(scores) == len(registered_seeds),
+        "applicability_passed": applicability_readout.get("status") == "PASS",
+        "candidate_source_order_statuses_allowed": candidate_orders_allowed,
+        "candidate_observed_source_order_statuses_sufficient": (
+            sum(candidate_statuses.values())
+            >= int(contract["candidate_observed_source_order_statuses_at_least"])
+        ),
+        "candidate_opponent_prior_arm_decisions_sufficient": (
+            candidate_arms >= int(contract["candidate_opponent_prior_arm_decisions_at_least"])
+        ),
+        "incumbent_source_order_statuses_allowed": incumbent_orders_allowed,
+        "incumbent_opponent_prior_arm_decisions_bounded": (
+            incumbent_arms <= int(contract["incumbent_opponent_prior_arm_decisions_at_most"])
+        ),
+        "point_estimate_at_least_minimum_effect": (
+            delta["point"] >= float(contract["minimum_effect_delta"])
+        ),
+        "interval_lower_strictly_above_reference": (
+            delta["low"] > float(contract["interval_lower_strictly_above"])
+        ),
+    }
+    eligible = all(checks.values())
+    decision = (
+        "ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION" if eligible else "NO_EXTENSION"
+    )
+    return {
+        "schema_version": OPPONENT_PRIOR_STRENGTH_PILOT_READOUT_SCHEMA_VERSION,
+        "complete": True,
+        "contract": dict(contract),
+        "complete_pairs": len(scores),
+        "candidate_score": interval.to_payload(),
+        "candidate_score_delta_from_neutral": delta,
+        "candidate_opponent_prior_arm_decisions": candidate_arms,
+        "incumbent_opponent_prior_arm_decisions": incumbent_arms,
+        "candidate_opponent_request_order_statuses": candidate_statuses,
+        "incumbent_opponent_request_order_statuses": incumbent_statuses,
+        "promotion_checks": checks,
+        "status": "PASS" if eligible else "NONPASS",
+        "decision": decision,
+        "marker": f"OPPONENT_PRIOR_STRENGTH_PILOT_{decision}",
+    }
+
+
 def _required_sha256(value: object, *, label: str) -> str:
     digest = str(value or "")
     if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
@@ -1429,6 +1688,12 @@ def main(argv: list[str] | None = None) -> int:
         incumbent_config=incumbent_config,
         execution_mode=execution_mode,
     )
+    opponent_prior_strength_pilot_contract = _opponent_prior_strength_pilot_contract(
+        manifest,
+        seeds=seeds,
+        bootstrap=bootstrap,
+        applicability_contract=opponent_prior_applicability_contract,
+    )
 
     model_config = load_transformer_model_config(args.checkpoint)
     vocabulary = category_vocab_from_model_config(model_config, args.showdown_root)
@@ -1464,6 +1729,7 @@ def main(argv: list[str] | None = None) -> int:
             "seeds": list(seeds),
             "execution_mode": execution_mode,
             "backup_repair_pilot_contract": pilot_contract,
+            "opponent_prior_strength_pilot_contract": opponent_prior_strength_pilot_contract,
             "isolated_policies": (
                 {
                     "candidate": {
@@ -1753,6 +2019,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
     opponent_prior_applicability_readout_path: Path | None = None
+    applicability_readout: dict[str, Any] | None = None
     if opponent_prior_applicability_contract is not None:
         opponent_prior_applicability_readout_path = (
             out_root / "OPPONENT_PRIOR_APPLICABILITY.json"
@@ -1770,6 +2037,23 @@ def main(argv: list[str] | None = None) -> int:
                 "opponent-prior applicability is terminal NONPASS; "
                 "the source-isolated contrast did not prove applied, clean opponent priors."
             )
+    opponent_prior_strength_pilot_readout_path: Path | None = None
+    if opponent_prior_strength_pilot_contract is not None:
+        if applicability_readout is None:
+            raise HeadToHeadError(
+                "opponent-prior strength pilot requires a completed applicability readout."
+            )
+        opponent_prior_strength_pilot_readout_path = (
+            out_root / "OPPONENT_PRIOR_STRENGTH_PILOT_READOUT.json"
+        )
+        _write_immutable_json(
+            opponent_prior_strength_pilot_readout_path,
+            _opponent_prior_strength_pilot_readout(
+                contract=opponent_prior_strength_pilot_contract,
+                summary=summary,
+                applicability_readout=applicability_readout,
+            ),
+        )
     _write_immutable_json(
         out_root / "COMPLETE.json",
         {
@@ -1785,6 +2069,11 @@ def main(argv: list[str] | None = None) -> int:
             "opponent_prior_applicability_readout_sha256": (
                 _sha256_file(opponent_prior_applicability_readout_path)
                 if opponent_prior_applicability_readout_path is not None
+                else None
+            ),
+            "opponent_prior_strength_pilot_readout_sha256": (
+                _sha256_file(opponent_prior_strength_pilot_readout_path)
+                if opponent_prior_strength_pilot_readout_path is not None
                 else None
             ),
         },
