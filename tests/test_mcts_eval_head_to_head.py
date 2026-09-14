@@ -681,6 +681,132 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
             )
 
 
+class OpponentPriorStrengthPilotReadoutTest(unittest.TestCase):
+    def _contract(self):
+        module = _runner_module()
+        seeds = tuple(range(2026092401, 2026092409))
+        bootstrap = {"resamples": 10_000, "seed": 20260924, "confidence_level": 0.80}
+        manifest = {
+            "trial_protocol": {
+                "readout_contract": {
+                    "schema_version": module.OPPONENT_PRIOR_STRENGTH_PILOT_READOUT_SCHEMA_VERSION,
+                    "bootstrap": dict(bootstrap),
+                    "candidate_allowed_opponent_request_order_statuses": ["resolved"],
+                    "candidate_observed_source_order_statuses_at_least": 1,
+                    "candidate_opponent_prior_arm_decisions_at_least": 1,
+                    "candidate_score_reference": 0.5,
+                    "delta_definition": "mean_paired_candidate_score_minus_0.5",
+                    "incumbent_allowed_opponent_request_order_statuses": ["resolved"],
+                    "incumbent_opponent_prior_arm_decisions_at_most": 0,
+                    "interval_lower_strictly_above": 0.0,
+                    "minimum_effect_delta": 0.05,
+                    "terminal_decisions": list(module.OPPONENT_PRIOR_STRENGTH_PILOT_DECISIONS),
+                }
+            }
+        }
+        return module, module._opponent_prior_strength_pilot_contract(
+            manifest,
+            seeds=seeds,
+            bootstrap=bootstrap,
+            applicability_contract=module.OPPONENT_PRIOR_APPLICABILITY_CONTRACT,
+        )
+
+    @staticmethod
+    def _applicability(*, status="PASS", candidate_statuses=None, candidate_arms=8):
+        return {
+            "status": status,
+            "candidate_opponent_prior_arm_decisions": candidate_arms,
+            "incumbent_opponent_prior_arm_decisions": 0,
+            "candidate_opponent_request_order_statuses": (
+                {"resolved": 24} if candidate_statuses is None else candidate_statuses
+            ),
+            "incumbent_opponent_request_order_statuses": {},
+        }
+
+    def test_contract_binds_the_registered_roster_and_matching_bootstrap(self) -> None:
+        module, contract = self._contract()
+        self.assertEqual(contract["registered_seeds"], list(range(2026092401, 2026092409)))
+        self.assertEqual(contract["bootstrap"], {
+            "resamples": 10_000,
+            "seed": 20260924,
+            "confidence_level": 0.80,
+        })
+
+        with self.assertRaisesRegex(HeadToHeadError, "matching applicability"):
+            module._opponent_prior_strength_pilot_contract(
+                {"trial_protocol": {"readout_contract": contract}},
+                seeds=tuple(contract["registered_seeds"]),
+                bootstrap=contract["bootstrap"],
+                applicability_contract=None,
+            )
+
+        declared_contract = {
+            key: value for key, value in contract.items() if key != "registered_seeds"
+        }
+        drifted = {
+            "trial_protocol": {
+                "readout_contract": {
+                    **declared_contract,
+                    "bootstrap": {**contract["bootstrap"], "seed": 1},
+                }
+            }
+        }
+        with self.assertRaisesRegex(HeadToHeadError, "exactly match manifest.bootstrap"):
+            module._opponent_prior_strength_pilot_contract(
+                drifted,
+                seeds=tuple(contract["registered_seeds"]),
+                bootstrap=contract["bootstrap"],
+                applicability_contract=module.OPPONENT_PRIOR_APPLICABILITY_CONTRACT,
+            )
+
+    def test_thin_positive_signal_writes_no_extension_not_a_false_promotion(self) -> None:
+        module, contract = self._contract()
+        readout = module._opponent_prior_strength_pilot_readout(
+            contract=contract,
+            summary={"pair_scores": [0.5] * 7 + [1.0]},
+            applicability_readout=self._applicability(),
+        )
+
+        self.assertEqual(readout["candidate_score_delta_from_neutral"], {
+            "point": 0.0625,
+            "low": 0.0,
+            "high": 0.125,
+        })
+        self.assertEqual(readout["status"], "NONPASS")
+        self.assertEqual(readout["decision"], "NO_EXTENSION")
+        self.assertFalse(readout["promotion_checks"]["interval_lower_strictly_above_reference"])
+        self.assertEqual(
+            readout["marker"], "OPPONENT_PRIOR_STRENGTH_PILOT_NO_EXTENSION"
+        )
+
+    def test_decisive_clean_signal_is_only_eligible_for_separate_confirmation(self) -> None:
+        module, contract = self._contract()
+        readout = module._opponent_prior_strength_pilot_readout(
+            contract=contract,
+            summary={"pair_scores": [1.0] * 8},
+            applicability_readout=self._applicability(),
+        )
+
+        self.assertEqual(readout["status"], "PASS")
+        self.assertEqual(
+            readout["decision"], "ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION"
+        )
+        self.assertTrue(all(readout["promotion_checks"].values()))
+
+    def test_non_resolved_source_order_never_qualifies(self) -> None:
+        module, contract = self._contract()
+        readout = module._opponent_prior_strength_pilot_readout(
+            contract=contract,
+            summary={"pair_scores": [1.0] * 8},
+            applicability_readout=self._applicability(
+                candidate_statuses={"lost_active_permutation": 1}
+            ),
+        )
+
+        self.assertEqual(readout["decision"], "NO_EXTENSION")
+        self.assertFalse(readout["promotion_checks"]["candidate_source_order_statuses_allowed"])
+
+
 class BackupRepairPilotContractTest(unittest.TestCase):
     def test_bootstrap_contract_keeps_the_validated_mapping_for_downstream_gates(self) -> None:
         module = _runner_module()
