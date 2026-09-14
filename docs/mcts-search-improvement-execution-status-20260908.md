@@ -1,6 +1,6 @@
 # MCTS search improvement: execution status and next decisions
 
-Last updated: 2026-09-13. This is the live execution companion to the offline plan. It distinguishes implemented safety/correctness work, measured mechanics, and actual playing strength. Nothing below treats a green test, synthetic panel, or new runner as a strength result.
+Last updated: 2026-09-14. This is the live execution companion to the offline plan. It distinguishes implemented safety/correctness work, measured mechanics, and actual playing strength. Nothing below treats a green test, synthetic panel, or new runner as a strength result.
 
 ## Objective
 
@@ -29,7 +29,7 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
 | Whole-decision deadline | [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) introduced the model-only, fixed-work deadline; [#1359](https://github.com/sfitzgerald-x1/pokezero/pull/1359) hardened the native-invocation witness and fail-closed validation. The qualification source is their reviewed combined `main` merge `8609d301399738a8081f0e938a3cc4ed7d39abdd` (reviewed #1359 head `6e2bb3ac4fb50abf7fb358c250a7398686153cff`). The clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
 | Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run and its R18 replacement remain non-bankable for their independent terminal-contract defects. The fresh R20 replacement completed cleanly, with all 12 pairs, 24 games, and 48 policy receipts captured in an immutable terminal snapshot. Its work-capped candidate score was 0.375 (declared interval 0.2917–0.4583) and the frozen readout says `no_automatic_extension`. | The canonical launcher and terminal-capture path now work for a complete source-bound MCTS comparison; this particular backup-repair contrast did not produce a positive pilot signal. | A general no-effect claim, an equal-deadline result, a promotion decision, or use of the 50 reserved confirmation seeds. |
-| Opponent-side model priors | R4 completed its full four-seed mirrored applicability roster with zero restarts and an immutable terminal `NONPASS` snapshot. The candidate applied its model-priced opponent arm 249 times and the incumbent stayed off, but live root-prior fallbacks were nonzero (candidate 104; incumbent 4). | The current source-isolated contrast reaches the intended opponent-prior code path, but does not do so cleanly enough to test the mechanism. | A playing-strength result, an excuse to interpret its games, or authorization for a pilot. |
+| Opponent-side model priors | R4 completed its full four-seed mirrored applicability roster with zero restarts and an immutable terminal `NONPASS` snapshot. The candidate applied its model-priced opponent arm 249 times and the incumbent stayed off, but live root-prior fallbacks were nonzero (candidate 104; incumbent 4). R7 is the separately admitted, fresh-roster source-refusal diagnostic on current source; until its complete PASS/NONPASS snapshot exists, its durable units are diagnostic-only. | R4 reaches the intended code path but not cleanly enough to test it. R7 can classify the source reason for a future clean or refused root before a new strength decision. | A playing-strength result, an excuse to interpret partial R7 games, or authorization for a pilot before a clean R7 terminal. |
 
 ## Active route
 
@@ -163,6 +163,22 @@ record that refusal reason before attempting to repair the public-order path.
 Its terminal evidence must distinguish an empty or duplicate sampled party, a
 rejected public-order walk, a lost active permutation, and a non-permutation
 result; a missing reason is a diagnostic failure, never an implicit zero.
+
+R7 is that separately admitted source-refusal diagnostic. It uses fresh,
+four-seed mirrored development inputs and current source
+`5ac2f0e68319b02aa7c2e53e3b1b9d879369242e`; its only purpose is to retain the
+source-order status alongside every live-root fallback while holding the
+one-setting opponent-prior contrast fixed. Its durable game and receipt units
+must not be scored while the Job is active. A terminal PASS requires the
+candidate to apply at least one model-priced opponent arm, the incumbent to
+remain off, and zero candidate and incumbent root-prior fallbacks. Source-order
+statuses need not all be `resolved` when roots are clean, but any root fallback
+must be fully classified and makes the result NONPASS. A PASS establishes only
+current applicability; the historical same-build null remains a reason to run
+at most one separately registered, short strength pilot with fresh seeds. A
+NONPASS rejects this attempt as strength evidence; preserve and diagnose its
+classified status before deciding whether a distinct repair or diagnostic is
+warranted. Do not replay or reinterpret its games as a score.
 
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
