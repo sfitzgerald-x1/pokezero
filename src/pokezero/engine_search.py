@@ -6311,6 +6311,27 @@ class EngineMctsPolicy:
                             payload=error,
                             time_budget_ms=time_budget_ms,
                         )
+                    # Argument construction is part of the outer decision
+                    # clock.  The first read above only establishes that it is
+                    # worthwhile to construct the positional ABI; it cannot
+                    # authorize the native invocation itself.  Re-read at the
+                    # call seam so slow construction or scheduler delay cannot
+                    # start a new native search after the wall has expired.
+                    # Refresh the final positional at that same seam: the
+                    # receipt must record the budget actually handed to native,
+                    # never the earlier construction budget.
+                    remaining = decision_deadline - time.perf_counter()
+                    if remaining <= 0:
+                        return _ParallelWorldPrefetch(completed=False, skipped=True)
+                    time_budget_ms = max(1, math.ceil(remaining * 1000.0))
+                    if not search_args or not isinstance(search_args[-1], int):
+                        return _ParallelWorldPrefetch(
+                            completed=False,
+                            payload=EngineSearchWitnessError(
+                                "deadline parallel task omitted its final native deadline budget."
+                            ),
+                        )
+                    search_args[-1] = time_budget_ms
                     try:
                         return _ParallelWorldPrefetch(
                             completed=True,

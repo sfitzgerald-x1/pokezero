@@ -1648,6 +1648,67 @@ class ModelWorldParallelismTests(unittest.TestCase):
         self.assertEqual(parallelism["mode"], "deadline_remaining_budget")
         self.assertEqual(parallelism["native_invocations"], 2)
 
+    def test_parallel_deadline_world_rechecks_after_argument_construction(self) -> None:
+        class _BlockFirstWorldNative(self._NativeByState):
+            def __init__(self, reports, entered, release) -> None:
+                super().__init__(reports)
+                self._entered = entered
+                self._release = release
+
+            def search_batched_multi_encoded(self, *args):
+                if args[0] == "world-a":
+                    self._entered.set()
+                    self._release.wait(timeout=2.0)
+                return super().search_batched_multi_encoded(*args)
+
+        clock = SimpleNamespace(now=0.0)
+        entered = threading.Event()
+        release = threading.Event()
+        reports = {
+            "world-a": self._timed_report(70, 30, time_budget_ms=10),
+            "world-b": self._timed_report(60, 40, time_budget_ms=10),
+        }
+        handles = [
+            _BlockFirstWorldNative(reports, entered, release),
+            _BlockFirstWorldNative(reports, entered, release),
+        ]
+        policy = self._policy(workers=2, deadline_ms=10)
+        original_native_search_args = native_search_args
+
+        def advance_during_world_b_argument_construction(*args, **kwargs):
+            result = original_native_search_args(*args, **kwargs)
+            if args[1]["state_str"] == "world-b":
+                self.assertTrue(entered.wait(timeout=2.0))
+                # This is precisely the previous race: the worker observed a
+                # positive remaining budget, but argument construction consumed
+                # it before the native invocation seam.
+                clock.now = 0.020
+                release.set()
+            return result
+
+        with (
+            patch("pokezero.engine_search.time.perf_counter", lambda: clock.now),
+            patch(
+                "pokezero.engine_search.native_search_args",
+                side_effect=advance_during_world_b_argument_construction,
+            ),
+        ):
+            decision = self._run(
+                policy,
+                native=handles[0],
+                handles=handles,
+                worlds=[self._world("world-a"), self._world("world-b")],
+            )
+
+        self.assertEqual(decision.action_index, 0)
+        calls = [call for handle in handles for call in handle.calls]
+        self.assertEqual([call[0] for call in calls], ["world-a"])
+        budget = decision.metadata["engine_mcts"]["time_budget"]
+        self.assertTrue(budget["exhausted"])
+        self.assertEqual(budget["worlds_budget_skipped"], 1)
+        self.assertEqual(len(budget["native_invocations"]), 1)
+        self.assertEqual(budget["native_invocations"][0]["time_budget_ms"], 10)
+
     def test_parallel_result_and_fixed_work_accounting_match_serial(self) -> None:
         reports = {
             "world-a": self._report(70, 30),
