@@ -1383,6 +1383,42 @@ class FoulPlayBridgeTest(unittest.TestCase):
                 showdown_root=Path("/showdown"),
                 foulplay_random_seed=-1,
             )
+        engine = {
+            "policy_mode": "engine-mcts",
+            "engine_model_path": Path("/art/model_ts.pt"),
+            "engine_tables_path": Path("/art/encoder_tables.json"),
+            "engine_worlds": 2,
+        }
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                **engine,
+                engine_model_world_workers=0,
+            )
+        with self.assertRaisesRegex(ValueError, "must be <= engine_worlds"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                **engine,
+                engine_model_world_workers=3,
+            )
+        with self.assertRaisesRegex(ValueError, "engine_early_stop=False"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                **engine,
+                engine_model_world_workers=2,
+                engine_early_stop=True,
+            )
+        with self.assertRaisesRegex(ValueError, "device='cpu'"):
+            ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"),
+                showdown_root=Path("/showdown"),
+                **engine,
+                engine_model_world_workers=2,
+                device="cuda",
+            )
 
     def test_controlled_foulplay_defaults_to_visit_selection(self) -> None:
         config = ControlledFoulPlayConfig(
@@ -1705,6 +1741,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
             engine_tables_path=Path("/art/encoder_tables.json"),
             engine_c_puct=0.8,
             engine_fpu_reduction=0.2,
+            engine_model_world_workers=2,
         )
 
         with patch.object(engine_search, "EngineMctsPolicy", FakeEnginePolicy), patch(
@@ -1726,6 +1763,7 @@ class FoulPlayBridgeTest(unittest.TestCase):
 
         self.assertEqual(captured["config"].c_puct, 0.8)
         self.assertEqual(captured["config"].fpu_reduction, 0.2)
+        self.assertEqual(captured["config"].model_world_workers, 2)
 
     def test_build_policy_leaves_the_selection_knobs_at_their_recorded_defaults(self) -> None:
         # The other half: an untuned cell must reach the crate as the search

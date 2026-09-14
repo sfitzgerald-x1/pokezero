@@ -10,6 +10,7 @@ import pathlib
 import random
 import sys
 import tempfile
+import threading
 import warnings
 from types import SimpleNamespace
 import unittest
@@ -615,6 +616,35 @@ class ModelConfigValidationTests(unittest.TestCase):
                 override_telemetry=True,
                 root_selector_shadow=True,
             )
+
+    def test_model_world_parallelism_is_fixed_work_model_only(self) -> None:
+        base = {
+            "leaf_eval": "model",
+            "model_path": "x.pt",
+            "checkpoint_path": "checkpoint.pt",
+            "tables_path": "t.json",
+            "worlds": 2,
+            "search_sims": 8,
+            "search_batch": 8,
+        }
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            EngineMctsConfig(**base, model_world_workers=0)
+        with self.assertRaisesRegex(ValueError, "must be <= worlds"):
+            EngineMctsConfig(**base, model_world_workers=3)
+        with self.assertRaisesRegex(ValueError, "only with leaf_eval='model'"):
+            EngineMctsConfig(worlds=2, model_world_workers=2)
+        with self.assertRaisesRegex(ValueError, "requires early_stop=False"):
+            EngineMctsConfig(
+                **base, model_world_workers=2, early_stop=True, early_stop_min_sims=8
+            )
+        with self.assertRaisesRegex(ValueError, "model_decision_time_ms=None"):
+            EngineMctsConfig(
+                **base, model_world_workers=2, model_decision_time_ms=10
+            )
+        with self.assertRaisesRegex(ValueError, "model_device='cpu'"):
+            EngineMctsConfig(**base, model_world_workers=2, model_device="cuda")
+        with self.assertRaisesRegex(ValueError, "fixed search allocation"):
+            EngineMctsConfig(**base, model_world_workers=2, depth_min=1)
 
     def test_missing_model_artifact_fails_at_init(self) -> None:
         with self.assertRaises(ValueError):
@@ -1371,6 +1401,247 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
         payload = policy.stats.to_dict()
         self.assertEqual(payload["worlds_searched"], 2)
         self.assertAlmostEqual(payload["search_wall_per_searched_decision"], step)
+
+
+class ModelWorldParallelismTests(unittest.TestCase):
+    """The opt-in path must retain fixed-work result semantics.
+
+    The native evaluator is intentionally represented by independent fakes.  A
+    barrier makes the first test fail if the implementation ever quietly falls
+    back to serial dispatch, while the remaining tests pin the serial result and
+    existing world-failure taxonomy rather than merely asserting a faster wall.
+    """
+
+    class _NativeByState:
+        def __init__(self, reports: dict[str, dict | Exception]) -> None:
+            self._reports = dict(reports)
+            self.calls: list[tuple] = []
+
+        def search_batched_multi_encoded(self, *args):
+            self.calls.append(args)
+            response = self._reports[str(args[0])]
+            if isinstance(response, Exception):
+                raise response
+            return json.dumps(response)
+
+    class _BarrierNative(_NativeByState):
+        def __init__(
+            self,
+            reports: dict[str, dict | Exception],
+            barrier: threading.Barrier,
+        ) -> None:
+            super().__init__(reports)
+            self._barrier = barrier
+            self.entered = threading.Event()
+
+        def search_batched_multi_encoded(self, *args):
+            self.entered.set()
+            # A serial implementation blocks here and produces an explicit
+            # refusal, rather than allowing this test to pass on timing luck.
+            self._barrier.wait(timeout=2.0)
+            return super().search_batched_multi_encoded(*args)
+
+    @staticmethod
+    def _report(alpha: int, beta: int) -> dict:
+        return EarlyStopPolicyIntegrationTests._report(
+            alpha, beta, stopped=False
+        )
+
+    @staticmethod
+    def _world(label: str):
+        return EarlyStopPolicyIntegrationTests._world(label)
+
+    @staticmethod
+    def _context():
+        return EarlyStopPolicyIntegrationTests._context()
+
+    @staticmethod
+    def _policy(*, workers: int) -> EngineMctsPolicy:
+        policy = object.__new__(EngineMctsPolicy)
+        policy.policy_id = "model-world-parallelism-test"
+        policy._config = EngineMctsConfig(
+            worlds=2,
+            leaf_eval="model",
+            model_path="model.pt",
+            checkpoint_path="checkpoint.pt",
+            tables_path="tables.json",
+            search_sims=100,
+            search_batch=10,
+            model_world_workers=workers,
+        )
+        policy._tables_json = "{}"
+        policy.stats = EngineMctsStats()
+        policy._world_failures_before = {}
+        return policy
+
+    def _run(self, policy, native, handles, worlds):
+        fake_module = SimpleNamespace(
+            FoldState=SimpleNamespace(from_payload=lambda _payload: object())
+        )
+        live_fold = SimpleNamespace(to_payload=lambda: {})
+        handles_patch = (
+            patch.object(
+                EngineMctsPolicy,
+                "_native_handles_for_model_world_workers",
+                side_effect=handles,
+            )
+            if isinstance(handles, BaseException)
+            else patch.object(
+                EngineMctsPolicy,
+                "_native_handles_for_model_world_workers",
+                return_value=tuple(handles),
+            )
+        )
+        with (
+            patch.dict(sys.modules, {"pokezero_search": fake_module}),
+            patch.object(EngineMctsPolicy, "_native", return_value=native),
+            handles_patch,
+            patch.object(
+                EngineMctsPolicy, "_validate_model_root_observation", return_value=None
+            ),
+            patch.object(EngineMctsPolicy, "_root_inputs_json", return_value="{}"),
+        ):
+            return policy._search_model(
+                self._context(), worlds, live_fold, random.Random(7)
+            )
+
+    def test_parallel_dispatch_uses_independent_handles_concurrently(self) -> None:
+        reports = {
+            "world-a": self._report(70, 30),
+            "world-b": self._report(60, 40),
+        }
+        barrier = threading.Barrier(2)
+        handles = [
+            self._BarrierNative(reports, barrier),
+            self._BarrierNative(reports, barrier),
+        ]
+        policy = self._policy(workers=2)
+
+        decision = self._run(
+            policy,
+            native=handles[0],
+            handles=handles,
+            worlds=[self._world("world-a"), self._world("world-b")],
+        )
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertTrue(all(handle.entered.is_set() for handle in handles))
+        self.assertEqual(sum(len(handle.calls) for handle in handles), 2)
+        parallelism = decision.metadata["engine_mcts"]["world_parallelism"]
+        self.assertEqual(parallelism["workers"], 2)
+        self.assertEqual(parallelism["native_invocations"], 2)
+        self.assertEqual(parallelism["independent_native_models"], 2)
+        self.assertEqual(policy.stats.model_world_parallel_dispatches, 1)
+        self.assertEqual(policy.stats.model_world_parallel_invocations, 2)
+
+    def test_parallel_result_and_fixed_work_accounting_match_serial(self) -> None:
+        reports = {
+            "world-a": self._report(70, 30),
+            "world-b": self._report(20, 80),
+        }
+        worlds = [self._world("world-a"), self._world("world-b")]
+        serial = self._policy(workers=1)
+        serial_native = self._NativeByState(reports)
+        serial_decision = self._run(serial, serial_native, [serial_native], worlds)
+
+        parallel = self._policy(workers=2)
+        parallel_handles = [
+            self._NativeByState(reports),
+            self._NativeByState(reports),
+        ]
+        parallel_decision = self._run(
+            parallel, parallel_handles[0], parallel_handles, worlds
+        )
+
+        self.assertEqual(parallel_decision.action_index, serial_decision.action_index)
+        for name in (
+            "worlds_searched",
+            "worlds_collapsed",
+            "unique_worlds_searched",
+            "total_iterations",
+            "model_evals",
+            "lossy_renders",
+            "attribution_unsafe_renders",
+            "prior_fallbacks",
+        ):
+            with self.subTest(counter=name):
+                self.assertEqual(getattr(parallel.stats, name), getattr(serial.stats, name))
+        self.assertNotIn("world_parallelism", serial_decision.metadata["engine_mcts"])
+        self.assertIn("world_parallelism", parallel_decision.metadata["engine_mcts"])
+        self.assertNotIn("model_world_parallel_dispatches", serial.stats.to_dict())
+        self.assertEqual(
+            parallel.stats.to_dict()["model_world_parallel_dispatches"], 1
+        )
+
+    def test_duplicate_belief_draws_remain_one_scaled_native_tree(self) -> None:
+        """Parallelism must not undo the established duplicate-world collapse."""
+
+        reports = {"same-world": self._report(150, 50)}
+        handles = [self._NativeByState(reports), self._NativeByState(reports)]
+        policy = self._policy(workers=2)
+
+        decision = self._run(
+            policy,
+            native=handles[0],
+            handles=handles,
+            worlds=[self._world("same-world"), self._world("same-world")],
+        )
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(sum(len(handle.calls) for handle in handles), 1)
+        call = next(call for handle in handles for call in handle.calls)
+        self.assertEqual(call[1], 200)  # two identical draws, one doubled budget
+        self.assertEqual(policy.stats.worlds_searched, 2)
+        self.assertEqual(policy.stats.unique_worlds_searched, 1)
+        self.assertNotIn("world_parallelism", decision.metadata["engine_mcts"])
+        self.assertNotIn("model_world_parallel_dispatches", policy.stats.to_dict())
+
+    def test_parallel_refusal_keeps_the_serial_world_failure_taxonomy(self) -> None:
+        reports = {
+            "world-a": ValueError("parallel refusal"),
+            "world-b": self._report(10, 90),
+        }
+        handles = [self._NativeByState(reports), self._NativeByState(reports)]
+        policy = self._policy(workers=2)
+
+        decision = self._run(
+            policy,
+            native=handles[0],
+            handles=handles,
+            worlds=[self._world("world-a"), self._world("world-b")],
+        )
+
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(decision.metadata["engine_mcts"]["worlds_searched"], 1)
+        self.assertEqual(policy.stats.worlds_searched, 1)
+        self.assertEqual(
+            policy.stats.world_failure_reasons, Counter({"crate_search: parallel refusal": 1})
+        )
+
+    def test_parallel_setup_failure_falls_back_instead_of_escaping(self) -> None:
+        policy = self._policy(workers=2)
+        native = self._NativeByState({"world-a": self._report(70, 30)})
+
+        decision = self._run(
+            policy,
+            native=native,
+            handles=RuntimeError("second model load failed"),
+            worlds=[self._world("world-a"), self._world("world-b")],
+        )
+
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["fallback"],
+            "model_world_parallel_setup_failed",
+        )
+        self.assertEqual(policy.stats.worlds_searched, 0)
+        self.assertEqual(
+            policy.stats.world_failure_reasons,
+            Counter(
+                {
+                    "model_world_parallel_setup: RuntimeError: second model load failed": 1
+                }
+            ),
+        )
 
 
 class _FakeEvent:

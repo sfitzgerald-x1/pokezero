@@ -154,6 +154,7 @@ ISOLATED_DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
     # Older frozen sources predate this deadline control.  None is the
     # disabled setting and retains their fixed-work MCTS behavior exactly.
     "model_decision_time_ms": None,
+    "model_world_workers": 1,
 }
 
 

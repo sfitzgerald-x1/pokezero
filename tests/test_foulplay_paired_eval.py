@@ -43,6 +43,7 @@ def args(**overrides) -> argparse.Namespace:
         sims=1024,
         batch=64,
         worlds=4,
+        engine_model_world_workers=1,
         opponent_priors=False,
         engine_fpu_reduction=None,
         engine_c_puct=None,
@@ -251,6 +252,19 @@ class SelectionKnobForwardingTest(unittest.TestCase):
         )
         self.assertEqual(argv[argv.index("--engine-fpu-reduction") + 1], "0.2")
         self.assertEqual(argv[argv.index("--engine-c-puct") + 1], "0.8")
+
+    def test_world_parallelism_reaches_the_child_and_splits_the_throughput_cell(self) -> None:
+        argv = _DRIVER.bridge_argv(args(engine_model_world_workers=2), seat="p1")
+        self.assertEqual(
+            argv[argv.index("--engine-model-world-workers") + 1], "2"
+        )
+        self.assertNotIn(
+            "--engine-model-world-workers", _DRIVER.bridge_argv(args(), seat="p1")
+        )
+        self.assertNotEqual(
+            _DRIVER.config_id_for(args(engine_model_world_workers=2)),
+            _DRIVER.config_id_for(args()),
+        )
 
     def test_unset_knobs_leave_the_child_argv_unchanged(self) -> None:
         # The compatibility claim at the argv level: an untuned cell must hand

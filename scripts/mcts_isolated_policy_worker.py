@@ -32,6 +32,7 @@ DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
     "root_selector_q": False,
     "root_selector_shadow": False,
     "model_decision_time_ms": None,
+    "model_world_workers": 1,
 }
 STATS_FIELDS = (
     "decisions",
