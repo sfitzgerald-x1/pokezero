@@ -302,6 +302,12 @@ class PolicyTelemetry:
     # this mapping lets a diagnostic separate an unavailable public order from
     # a genuinely ineffective opponent policy prior.
     opponent_request_order_statuses: Mapping[str, int] = field(default_factory=dict)
+    # The strict subset of the status census that actually caused a live root
+    # fallback.  It is separate because a run can legitimately resolve some
+    # orders while another request-order outcome fails closed.
+    opponent_request_order_root_fallback_statuses: Mapping[str, int] = field(
+        default_factory=dict
+    )
     decision_wall_seconds: float = 0.0
 
     def __post_init__(self) -> None:
@@ -324,20 +330,36 @@ class PolicyTelemetry:
             raise ValueError(
                 "policy prior fallback aggregate must equal root plus branch fallbacks."
             )
-        if not isinstance(self.opponent_request_order_statuses, Mapping):
-            raise ValueError("opponent request-order statuses must be a mapping.")
-        statuses: dict[str, int] = {}
-        for status, count in self.opponent_request_order_statuses.items():
-            if status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
-                raise ValueError(f"unknown opponent request-order status {status!r}.")
-            if not isinstance(count, int) or isinstance(count, bool) or count < 0:
-                raise ValueError(
-                    f"opponent request-order status {status!r} has invalid count {count!r}."
-                )
-            statuses[str(status)] = count
+        def status_mapping(value: object, *, label: str) -> dict[str, int]:
+            if not isinstance(value, Mapping):
+                raise ValueError(f"{label} must be a mapping.")
+            statuses: dict[str, int] = {}
+            for status, count in value.items():
+                if status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
+                    raise ValueError(f"unknown opponent request-order status {status!r}.")
+                if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                    raise ValueError(
+                        f"opponent request-order status {status!r} has invalid count {count!r}."
+                    )
+                statuses[str(status)] = count
+            return statuses
+
+        statuses = status_mapping(
+            self.opponent_request_order_statuses,
+            label="opponent request-order statuses",
+        )
+        root_fallback_statuses = status_mapping(
+            self.opponent_request_order_root_fallback_statuses,
+            label="opponent request-order root-fallback statuses",
+        )
         # A frozen dataclass does not freeze a mutable mapping.  Copy the
         # receipt payload so a caller cannot alter a validated game afterward.
         object.__setattr__(self, "opponent_request_order_statuses", statuses)
+        object.__setattr__(
+            self,
+            "opponent_request_order_root_fallback_statuses",
+            root_fallback_statuses,
+        )
         if not math.isfinite(self.decision_wall_seconds) or self.decision_wall_seconds < 0:
             raise ValueError("policy decision wall time must be finite and non-negative.")
 
@@ -384,15 +406,21 @@ class PolicyTelemetry:
             opponent_request_order_statuses=dict(
                 getattr(stats, "opponent_request_order_statuses", {})
             ),
+            opponent_request_order_root_fallback_statuses=dict(
+                getattr(stats, "opponent_request_order_root_fallback_statuses", {})
+            ),
             decision_wall_seconds=float(getattr(stats, "decision_wall_seconds", 0.0)),
         )
 
     def delta(self, before: "PolicyTelemetry") -> "PolicyTelemetry":
         values: dict[str, Any] = {}
         for field_name in self.__dataclass_fields__:
-            if field_name == "opponent_request_order_statuses":
-                current = self.opponent_request_order_statuses
-                previous = before.opponent_request_order_statuses
+            if field_name in {
+                "opponent_request_order_statuses",
+                "opponent_request_order_root_fallback_statuses",
+            }:
+                current = getattr(self, field_name)
+                previous = getattr(before, field_name)
                 if any(current.get(status, 0) < count for status, count in previous.items()):
                     raise HeadToHeadError(
                         "policy opponent request-order status telemetry regressed during a game."
@@ -407,7 +435,11 @@ class PolicyTelemetry:
         if any(
             value < 0
             for field_name, value in values.items()
-            if field_name != "opponent_request_order_statuses"
+            if field_name
+            not in {
+                "opponent_request_order_statuses",
+                "opponent_request_order_root_fallback_statuses",
+            }
         ):
             raise HeadToHeadError(
                 "policy telemetry regressed during a game; counters must be monotonic to "
@@ -926,9 +958,17 @@ def summarize_complete_pairs(
     )
     candidate_order_statuses: Counter[str] = Counter()
     incumbent_order_statuses: Counter[str] = Counter()
+    candidate_root_fallback_statuses: Counter[str] = Counter()
+    incumbent_root_fallback_statuses: Counter[str] = Counter()
     for game in required:
         candidate_order_statuses.update(game.candidate_telemetry.opponent_request_order_statuses)
         incumbent_order_statuses.update(game.incumbent_telemetry.opponent_request_order_statuses)
+        candidate_root_fallback_statuses.update(
+            game.candidate_telemetry.opponent_request_order_root_fallback_statuses
+        )
+        incumbent_root_fallback_statuses.update(
+            game.incumbent_telemetry.opponent_request_order_root_fallback_statuses
+        )
     return {
         "schema_version": "pokezero.mcts-h2h-summary.v1",
         "candidate": candidate.to_payload(),
@@ -984,5 +1024,11 @@ def summarize_complete_pairs(
         ),
         "incumbent_opponent_request_order_statuses": dict(
             sorted(incumbent_order_statuses.items())
+        ),
+        "candidate_opponent_request_order_root_fallback_statuses": dict(
+            sorted(candidate_root_fallback_statuses.items())
+        ),
+        "incumbent_opponent_request_order_root_fallback_statuses": dict(
+            sorted(incumbent_root_fallback_statuses.items())
         ),
     }

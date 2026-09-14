@@ -182,7 +182,7 @@ while True:
         write(stdout, {{"type": "error", "message": "annotation snapshot changed"}})
         continue
     action = 1 if mode == "illegal" else 0
-    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "opponent_prior_arm_decisions": 1, "opponent_request_order_statuses": {{"resolved": 1}}, "decision_wall_seconds": 0.25}}
+    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "opponent_prior_arm_decisions": 1, "opponent_request_order_statuses": {{"resolved": 1}}, "opponent_request_order_root_fallback_statuses": {{}}, "decision_wall_seconds": 0.25}}
     if mode == "legacy-stats":
         del stats["root_prior_fallbacks"]
         del stats["branch_prior_fallbacks"]
@@ -391,6 +391,7 @@ class StatsTest(unittest.TestCase):
             "branch_prior_fallbacks": 0,
             "opponent_prior_arm_decisions": 3,
             "opponent_request_order_statuses": {"resolved": 3},
+            "opponent_request_order_root_fallback_statuses": {},
             "decision_wall_seconds": 0.3,
         }
 
@@ -421,6 +422,7 @@ class StatsTest(unittest.TestCase):
         payload = self._payload()
         stats.update(payload)
         self.assertEqual(stats.opponent_request_order_statuses, {"resolved": 3})
+        self.assertEqual(stats.opponent_request_order_root_fallback_statuses, {})
         missing = self._payload()
         del missing["opponent_request_order_statuses"]
         with self.assertRaisesRegex(IsolatedPolicyError, "opponent_request_order_statuses"):
@@ -429,6 +431,31 @@ class StatsTest(unittest.TestCase):
         regressed["opponent_request_order_statuses"] = {"resolved": 2}
         with self.assertRaisesRegex(IsolatedPolicyError, "status telemetry regressed"):
             stats.update(regressed)
+
+    def test_root_fallback_statuses_are_required_and_match_the_root_total(self) -> None:
+        payload = self._payload()
+        payload.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "opponent_request_order_statuses": {"resolved": 2, "lost_active_permutation": 1},
+                "opponent_request_order_root_fallback_statuses": {"lost_active_permutation": 1},
+            }
+        )
+        stats = IsolatedPolicyStats()
+        stats.update(payload)
+        self.assertEqual(
+            stats.opponent_request_order_root_fallback_statuses,
+            {"lost_active_permutation": 1},
+        )
+        missing = self._payload()
+        del missing["opponent_request_order_root_fallback_statuses"]
+        with self.assertRaisesRegex(IsolatedPolicyError, "root_fallback_statuses"):
+            IsolatedPolicyStats().update(missing)
+        unclassified = dict(payload)
+        unclassified["opponent_request_order_root_fallback_statuses"] = {}
+        with self.assertRaisesRegex(IsolatedPolicyError, "must equal root_prior_fallbacks"):
+            IsolatedPolicyStats().update(unclassified)
 
     def test_scope_counter_aggregate_mismatch_is_refused(self) -> None:
         stats = IsolatedPolicyStats()

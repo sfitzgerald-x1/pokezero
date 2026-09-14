@@ -4394,6 +4394,10 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             policy.stats.opponent_request_order_statuses,
             {"public_order_walk_error": 1},
         )
+        self.assertEqual(
+            policy.stats.opponent_request_order_root_fallback_statuses,
+            {"public_order_walk_error": 1},
+        )
 
     def test_opponent_prior_audit_rejects_a_missing_native_status_echo(self) -> None:
         policy = self._policy(opponent_priors=True, worlds=1)

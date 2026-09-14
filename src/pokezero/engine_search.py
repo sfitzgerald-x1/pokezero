@@ -1645,6 +1645,14 @@ class EngineMctsStats:
     # world is a second source-bound native call and therefore a second audit
     # observation, not a silently collapsed duplicate.
     opponent_request_order_statuses: Counter = field(default_factory=Counter)
+    # The strict cross-tab for the refusal diagnostic.  The status totals above
+    # say which root-order outcomes occurred; this counter says which outcome
+    # owned each live root-prior fallback.  Without it, a mixed run could show
+    # both a refusal and a later mapping failure but could not attribute the
+    # fallback to either one.
+    opponent_request_order_root_fallback_statuses: Counter = field(
+        default_factory=Counter
+    )
     # Within-batch selection collisions, PER SEAT (model mode only; the crate
     # reports these from `multiply_batched_encoded_core` and nowhere else,
     # because a collision is a property of a batch and the sequential core
@@ -2129,6 +2137,10 @@ class EngineMctsStats:
             # normal model telemetry merely because this diagnostic exists.
             payload["opponent_request_order_statuses"] = dict(
                 self.opponent_request_order_statuses
+            )
+        if self.opponent_request_order_root_fallback_statuses:
+            payload["opponent_request_order_root_fallback_statuses"] = dict(
+                self.opponent_request_order_root_fallback_statuses
             )
         if self.rollout_leaf_modes:
             # ADDITIVE AND CONDITIONAL, exactly like the crate's own seam columns:
@@ -5831,6 +5843,10 @@ class EngineMctsPolicy:
                         f"status={reported_order_status!r}"
                     )
                 self.stats.opponent_request_order_statuses[reported_order_status] += 1
+                if root_prior_fallbacks:
+                    self.stats.opponent_request_order_root_fallback_statuses[
+                        reported_order_status
+                    ] += root_prior_fallbacks
             # Per-INVOCATION like the phase walls above: a conservatively
             # replayed world collided that many times twice and must report it.
             # `.get(...) or 0` keeps a pre-collision-counter wheel readable.

@@ -37,6 +37,7 @@ from pokezero.mcts_eval.head_to_head import (  # noqa: E402
     write_game_immutable,
 )
 from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_mean  # noqa: E402
+from pokezero.engine_search import OPPONENT_REQUEST_ORDER_STATUS_VALUES  # noqa: E402
 
 
 MANIFEST_SCHEMA_VERSION = "pokezero.mcts-h2h-manifest.v1"
@@ -48,7 +49,7 @@ OPPONENT_PRIOR_APPLICABILITY_SCHEMA_VERSION = (
     "pokezero.mcts-h2h-opponent-prior-applicability.v1"
 )
 OPPONENT_PRIOR_APPLICABILITY_READOUT_SCHEMA_VERSION = (
-    "pokezero.mcts-h2h-opponent-prior-applicability-readout.v1"
+    "pokezero.mcts-h2h-opponent-prior-applicability-readout.v2"
 )
 OPPONENT_PRIOR_APPLICABILITY_CONTRACT = {
     "schema_version": OPPONENT_PRIOR_APPLICABILITY_SCHEMA_VERSION,
@@ -995,10 +996,63 @@ def _opponent_prior_applicability_readout(
             )
         return value
 
+    def status_counter(name: str) -> dict[str, int]:
+        value = summary.get(name)
+        if not isinstance(value, Mapping):
+            raise HeadToHeadError(
+                f"opponent-prior applicability summary has no {name} mapping."
+            )
+        validated: dict[str, int] = {}
+        for status, count in value.items():
+            if status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
+                raise HeadToHeadError(
+                    f"opponent-prior applicability summary has unknown {name} status "
+                    f"{status!r}."
+                )
+            if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                raise HeadToHeadError(
+                    f"opponent-prior applicability summary has invalid {name} "
+                    f"count {status!r}={count!r}."
+                )
+            validated[str(status)] = count
+        return dict(sorted(validated.items()))
+
     candidate_count = counter("candidate_opponent_prior_arm_decisions")
     incumbent_count = counter("incumbent_opponent_prior_arm_decisions")
     candidate_root_prior_fallbacks = counter("candidate_root_prior_fallbacks")
     incumbent_root_prior_fallbacks = counter("incumbent_root_prior_fallbacks")
+    candidate_order_statuses = status_counter("candidate_opponent_request_order_statuses")
+    incumbent_order_statuses = status_counter("incumbent_opponent_request_order_statuses")
+    candidate_root_fallback_statuses = status_counter(
+        "candidate_opponent_request_order_root_fallback_statuses"
+    )
+    incumbent_root_fallback_statuses = status_counter(
+        "incumbent_opponent_request_order_root_fallback_statuses"
+    )
+    for role, root_fallbacks, statuses, root_statuses in (
+        (
+            "candidate",
+            candidate_root_prior_fallbacks,
+            candidate_order_statuses,
+            candidate_root_fallback_statuses,
+        ),
+        (
+            "incumbent",
+            incumbent_root_prior_fallbacks,
+            incumbent_order_statuses,
+            incumbent_root_fallback_statuses,
+        ),
+    ):
+        if sum(root_statuses.values()) != root_fallbacks:
+            raise HeadToHeadError(
+                "opponent-prior applicability summary has unclassified "
+                f"{role} root fallbacks."
+            )
+        if any(count > statuses.get(status, 0) for status, count in root_statuses.items()):
+            raise HeadToHeadError(
+                "opponent-prior applicability summary has "
+                f"{role} root-fallback statuses beyond their status denominator."
+            )
     candidate_applied = (
         candidate_count
         >= int(contract["minimum_candidate_opponent_prior_arm_decisions"])
@@ -1026,10 +1080,19 @@ def _opponent_prior_applicability_readout(
         "incumbent_opponent_prior_arm_decisions": incumbent_count,
         "candidate_root_prior_fallbacks": candidate_root_prior_fallbacks,
         "incumbent_root_prior_fallbacks": incumbent_root_prior_fallbacks,
+        "candidate_opponent_request_order_statuses": candidate_order_statuses,
+        "incumbent_opponent_request_order_statuses": incumbent_order_statuses,
+        "candidate_opponent_request_order_root_fallback_statuses": (
+            candidate_root_fallback_statuses
+        ),
+        "incumbent_opponent_request_order_root_fallback_statuses": (
+            incumbent_root_fallback_statuses
+        ),
         "checks": {
             "candidate_applied_model_priced_opponent_arm": candidate_applied,
             "incumbent_remained_flag_off": incumbent_remained_off,
             "live_root_priors_remained_clean": live_roots_clean,
+            "root_fallbacks_have_source_order_statuses": True,
         },
         "status": status,
         "marker": f"OPPONENT_PRIOR_APPLICABILITY_{status}",

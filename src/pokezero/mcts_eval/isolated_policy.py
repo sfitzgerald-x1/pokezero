@@ -45,6 +45,7 @@ _STATS_FIELDS = (
     "branch_prior_fallbacks",
     "opponent_prior_arm_decisions",
     "opponent_request_order_statuses",
+    "opponent_request_order_root_fallback_statuses",
     "decision_wall_seconds",
 )
 
@@ -296,6 +297,12 @@ class IsolatedPolicyStats:
     # of the source-bound opponent-prior diagnostic is to explain *which*
     # public-order refusal caused them.
     opponent_request_order_statuses: Counter = field(default_factory=Counter)
+    # Cross-tab each actual root fallback against the source-derived order
+    # status that accompanied that native call.  A standalone status census
+    # cannot explain a mixed run.
+    opponent_request_order_root_fallback_statuses: Counter = field(
+        default_factory=Counter
+    )
     decision_wall_seconds: float = 0.0
 
     def update(self, payload: Mapping[str, Any]) -> None:
@@ -305,11 +312,14 @@ class IsolatedPolicyStats:
                     f"isolated policy worker omitted telemetry field {field_name!r}."
                 )
             value = payload[field_name]
-            if field_name == "opponent_request_order_statuses":
+            if field_name in {
+                "opponent_request_order_statuses",
+                "opponent_request_order_root_fallback_statuses",
+            }:
                 if not isinstance(value, Mapping):
                     raise IsolatedPolicyError(
-                        "isolated policy worker reported opponent request-order "
-                        "statuses that are not a mapping."
+                        "isolated policy worker reported opponent request-order status "
+                        "telemetry that is not a mapping."
                     )
                 observed: Counter = Counter()
                 for status, count in value.items():
@@ -325,11 +335,13 @@ class IsolatedPolicyStats:
                         )
                     observed[str(status)] = count
                 previous = self.opponent_request_order_statuses
+                if field_name == "opponent_request_order_root_fallback_statuses":
+                    previous = self.opponent_request_order_root_fallback_statuses
                 if any(observed[status] < count for status, count in previous.items()):
                     raise IsolatedPolicyError(
                         "isolated policy opponent request-order status telemetry regressed."
                     )
-                self.opponent_request_order_statuses = observed
+                setattr(self, field_name, observed)
                 continue
             if field_name == "decision_wall_seconds":
                 try:
@@ -356,6 +368,19 @@ class IsolatedPolicyStats:
         if self.prior_fallbacks != self.root_prior_fallbacks + self.branch_prior_fallbacks:
             raise IsolatedPolicyError(
                 "isolated policy prior fallback aggregate must equal root plus branch."
+            )
+        if sum(self.opponent_request_order_root_fallback_statuses.values()) != self.root_prior_fallbacks:
+            raise IsolatedPolicyError(
+                "isolated policy opponent request-order root-fallback status telemetry "
+                "must equal root_prior_fallbacks."
+            )
+        if any(
+            count > self.opponent_request_order_statuses.get(status, 0)
+            for status, count in self.opponent_request_order_root_fallback_statuses.items()
+        ):
+            raise IsolatedPolicyError(
+                "isolated policy opponent request-order root-fallback status telemetry "
+                "exceeds its status denominator."
             )
 
 

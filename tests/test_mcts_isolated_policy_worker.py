@@ -54,10 +54,15 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
             branch_prior_fallbacks=0,
             opponent_prior_arm_decisions=0,
             opponent_request_order_statuses={"lost_active_permutation": 1},
+            opponent_request_order_root_fallback_statuses={"lost_active_permutation": 1},
             decision_wall_seconds=0.25,
         )
         self.assertEqual(
             stats_payload(stats)["opponent_request_order_statuses"],
+            {"lost_active_permutation": 1},
+        )
+        self.assertEqual(
+            stats_payload(stats)["opponent_request_order_root_fallback_statuses"],
             {"lost_active_permutation": 1},
         )
 
