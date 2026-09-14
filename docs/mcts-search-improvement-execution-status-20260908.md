@@ -30,7 +30,7 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | Whole-decision deadline | [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) introduced the model-only, fixed-work deadline; [#1359](https://github.com/sfitzgerald-x1/pokezero/pull/1359) hardened the native-invocation witness and fail-closed validation. The qualification source is their reviewed combined `main` merge `8609d301399738a8081f0e938a3cc4ed7d39abdd` (reviewed #1359 head `6e2bb3ac4fb50abf7fb358c250a7398686153cff`). The clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
 | Model-world parallelism R6 timing preflight | The source-bound R6 Job completed cleanly on two CPU workers at source `017fb434e62bd24fa1c0f2e6ff7b043a56bace0f`, with all three 16-decision serial/parallel pairs preserving fixed work and decision outputs. Warm serial medians were 10.802s, 11.191s, and 10.813s; two-worker medians were 5.408s, 5.488s, and 5.437s: 1.997x median speedup (range 1.989x–2.039x). | Two independent CPU model-world evaluators can nearly halve fixed-work decision wall time without changing the validated fixed-work decision results. | Same-deadline behavior, a hard latency limit, a strength gain, or permission to reinvest the saved wall time without a separate remaining-budget qualification. |
 | Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run and its R18 replacement remain non-bankable for their independent terminal-contract defects. The fresh R20 replacement completed cleanly, with all 12 pairs, 24 games, and 48 policy receipts captured in an immutable terminal snapshot. Its work-capped candidate score was 0.375 (declared interval 0.2917–0.4583) and the frozen readout says `no_automatic_extension`. | The canonical launcher and terminal-capture path now work for a complete source-bound MCTS comparison; this particular backup-repair contrast did not produce a positive pilot signal. | A general no-effect claim, an equal-deadline result, a promotion decision, or use of the 50 reserved confirmation seeds. |
-| Opponent-side model priors | R4's complete applicability result was a terminal `NONPASS`: candidate root-prior fallbacks were 104 and incumbent fallbacks were 4. The fresh R7 source-refusal diagnostic then completed cleanly on source `5ac2f0e68319b02aa7c2e53e3b1b9d879369242e`: its immutable `mcts-opponent-prior-refusal-diagnostic-r7-20260914-terminal` snapshot validates four mirrored pairs, eight games, 16 policy receipts, zero restarts, 575 candidate model-priced opponent arms, zero incumbent arms, and zero root-prior fallbacks for both arms. | The current four-world/depth-2 configuration reaches the intended opponent-prior code path cleanly and is eligible for one separately registered short strength pilot with fresh seeds. | A playing-strength result, interpretation of R7 game outcomes as score evidence, automatic confirmation, or production promotion. |
+| Opponent-side model priors | R4's complete applicability result was a terminal `NONPASS`: candidate root-prior fallbacks were 104 and incumbent fallbacks were 4. The fresh R7 source-refusal diagnostic then completed cleanly on source `5ac2f0e68319b02aa7c2e53e3b1b9d879369242e`: its immutable `mcts-opponent-prior-refusal-diagnostic-r7-20260914-terminal` snapshot validates four mirrored pairs, eight games, 16 policy receipts, zero restarts, 575 candidate model-priced opponent arms, zero incumbent arms, and zero root-prior fallbacks for both arms. The separately registered P1 pilot then completed all eight fresh mirrored pairs (16 games, 32 policy receipts) with zero restarts, 750 candidate opponent-prior arms, zero incumbent arms, and zero root-prior fallbacks. Its point estimate was +0.0625, but its declared 80% paired-bootstrap lower delta was exactly 0.0, not strictly positive. | The current four-world/depth-2 configuration reaches the intended opponent-prior code path cleanly, but P1 does not earn a confirmation roster or a strength claim. | A playing-strength improvement, an automatic confirmation, a retry of P1, or production promotion. |
 
 ## Active route
 
@@ -186,6 +186,35 @@ fallback/refusal gate, applied-prior denominator, and no-extension rule before
 any outcome is read. A terminal failure or an unfavorable/inconclusive pilot
 parks this one-boolean mechanism without reusing R7's games.
 
+That P1 pilot is now complete. Its source-bound root contains all eight fresh
+mirrored pairs, 16 games, 32 isolated-policy receipts, and a clean runner exit
+with zero Pod restarts. The one-setting contrast retained the applicability
+preconditions: the candidate recorded 750 model-priced opponent arms, the
+incumbent recorded zero, all observed candidate request-order statuses were
+`resolved`, and both root-prior-fallback counters remained zero. The candidate
+won nine games and lost seven, yielding seven paired scores of 0.5 and one of
+1.0: point score 0.5625, hence Δ=+0.0625 versus neutral. Under the predeclared
+10,000-resample, 80% paired bootstrap (seed `20260924`), its score interval is
+[0.5, 0.625] and Δ interval is [0.0, +0.125]. The interval rule was strict:
+the lower bound must be greater than zero. P1 therefore earns **no extension**
+and supplies no playing-strength claim.
+
+P1 also exposed a runner visibility defect: its immutable manifest carried the
+complete strength-readout contract, but the runner wrote only the generic
+summary and applicability artifact. The deterministic calculation above is a
+validation of the completed root, not a synthesized terminal artifact and does
+not alter P1. [#1390](https://github.com/sfitzgerald-x1/pokezero/pull/1390),
+merged as `973c3cc41e0181bcc42c2690beba34c7a9a92739`, closes that visibility
+gap for future source-bound pilots: the runner now atomically writes
+`OPPONENT_PRIOR_STRENGTH_PILOT_READOUT.json` before `COMPLETE.json`, binds its
+SHA-256 in `COMPLETE.json`, validates the exact registered bootstrap and
+applicability conditions, and records either
+`ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION` or `NO_EXTENSION`. A clean
+null therefore terminates normally as `NO_EXTENSION` rather than requiring
+manual interpretation. This repair neither alters P1 nor authorizes a retry,
+extension, or production promotion of opponent-side priors. No further pilot
+is currently registered because P1 did not meet its strict interval rule.
+
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
 [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) supplies the
@@ -308,6 +337,6 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
 2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. R20 is terminally captured and negative, so retain the repair as correctness-only and do not extend that line.
-3. Preserve R3's pre-game source-admission failure and R4's complete terminal `NONPASS`. Do not rerun, recapture, or score either; park opponent-side model priors because the live root-prior counters were fallback-contaminated. A bounded source-level diagnosis is allowed only to classify those fallback sites before naming another candidate.
+3. Preserve R3's pre-game source-admission failure, R4's complete terminal `NONPASS`, and P1's completed root. Do not rerun, recapture, or extend any of them. R7 proved clean applicability, but P1's lower paired-bootstrap delta is exactly neutral, so park opponent-side model priors as a strength mechanism. The future-pilot strength-readout repair merged in #1390; it does not revive this parked candidate.
 4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if a different cleanly applied candidate earns a timed study.
 5. R18, the earlier backup-repair attempt, and clean R20 read did not promote backup repair. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
