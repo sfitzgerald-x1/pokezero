@@ -831,10 +831,16 @@ class EngineMctsConfig:
     # serially. A value above one dispatches those completed-world trees
     # together, then absorbs their reports in the original sampling order.
     #
-    # This is throughput only: it never changes a world's seed, requested
-    # iterations, root fold, or aggregation weight. It is intentionally
-    # unavailable for deadlines, early stopping, and the dynamic ladder because
-    # those modes make a world's start/completion order part of search policy.
+    # In fixed-work mode this is throughput only: it never changes a world's
+    # seed, requested iterations, root fold, or aggregation weight.  Under a
+    # whole-decision deadline each worker instead receives the *actual
+    # remaining* wall budget immediately before its native invocation.  A task
+    # that has not started by the deadline is recorded as a skipped belief
+    # world, never started with a stale budget.  This preserves the deadline as
+    # a whole-decision policy contract while making the completed-prefix work
+    # available for concurrent execution.  Early stopping and the dynamic
+    # ladder remain unavailable because their later work depends on completed
+    # world order.
     model_world_workers: int = 1
     # DYNAMIC BUDGET LADDER (docs/dynamic-search-budget-plan-20260812.md).
     #
@@ -1081,11 +1087,6 @@ class EngineMctsConfig:
                     raise ValueError(
                         "model_world_workers > 1 requires early_stop=False: a stopped "
                         "world's replay set depends on completed-world order."
-                    )
-                if self.model_decision_time_ms is not None:
-                    raise ValueError(
-                        "model_world_workers > 1 requires model_decision_time_ms=None: "
-                        "the initial implementation does not alter deadline semantics."
                     )
                 if self.model_device != "cpu":
                     raise ValueError(
@@ -1533,6 +1534,25 @@ def world_cache_key(record: Mapping[str, Any], side_key: str) -> tuple[str, str,
     fires.
     """
     return (str(record["state_str"]), str(record["ctx_json"]), str(side_key))
+
+
+@dataclass(frozen=True)
+class _ParallelWorldPrefetch:
+    """A completed or safely skipped parallel native-world task.
+
+    Deadline mode cannot infer a native request's budget at aggregation time:
+    by then sibling worlds may have consumed the whole decision wall.  The
+    worker therefore carries the exact budget used at its own invocation back
+    to the serial, source-order report-absorption path.  ``skipped`` means the
+    task observed no remaining whole-decision time before it invoked native;
+    it is a policy-budget event, not a native refusal.
+    """
+
+    completed: bool
+    payload: Any = None
+    time_budget_ms: int | None = None
+    native_invocation_started: bool = False
+    skipped: bool = False
 
 
 @dataclass
@@ -5569,13 +5589,40 @@ class EngineMctsPolicy:
             sims: int | None = None,
             weight: int = 1,
             depth: int | None = None,
-            prefetched: tuple[bool, Any] | None = None,
+            prefetched: _ParallelWorldPrefetch | None = None,
         ) -> Optional[dict]:
             nonlocal budget_skipped_worlds, native_budget_exhausted
             time_budget_ms: int | None = None
             expected_requested_iterations: int | None = None
             native_invocation_started = False
-            if decision_deadline is not None:
+            if prefetched is not None and prefetched.skipped:
+                if decision_deadline is None:
+                    raise EngineSearchWitnessError(
+                        "parallel world dispatch reported a deadline skip without a deadline."
+                    )
+                if prefetched.time_budget_ms is not None or prefetched.native_invocation_started:
+                    raise EngineSearchWitnessError(
+                        "parallel deadline skip carried a native invocation receipt."
+                    )
+                budget_skipped_worlds += weight
+                native_budget_exhausted = True
+                return None
+            if prefetched is not None:
+                time_budget_ms = prefetched.time_budget_ms
+                native_invocation_started = prefetched.native_invocation_started
+                if decision_deadline is not None:
+                    if time_budget_ms is None:
+                        raise EngineSearchWitnessError(
+                            "parallel deadline invocation omitted its remaining-time receipt."
+                        )
+                    expected_requested_iterations = int(
+                        config.search_sims if sims is None else sims
+                    )
+            elif time_budget_ms is not None:
+                raise EngineSearchWitnessError(
+                    "fixed-work parallel invocation carried a deadline receipt."
+                )
+            elif decision_deadline is not None:
                 remaining = decision_deadline - time.perf_counter()
                 if remaining <= 0:
                     budget_skipped_worlds += weight
@@ -5611,7 +5658,7 @@ class EngineMctsPolicy:
                         native.search_batched_multi_encoded(*search_args)
                     )
                 else:
-                    completed, payload = prefetched
+                    completed, payload = prefetched.completed, prefetched.payload
                     if not completed:
                         if not isinstance(payload, BaseException):
                             raise EngineSearchWitnessError(
@@ -6110,13 +6157,18 @@ class EngineMctsPolicy:
             duplicates.setdefault(cache_key, []).append(record)
 
         duplicate_groups = list(duplicates.items())
-        # Fixed-work parity dispatch.  Each task gets both an independent native
-        # evaluator and an independent immutable FoldState.  Results are then
-        # absorbed in this original group order, preserving the serial path's
-        # aggregation and cumulative-accounting order.
-        prefetched_reports: dict[tuple[str, str, str], tuple[bool, Any]] = {}
+        # Parallel dispatch gives each task both an independent native evaluator
+        # and an independent immutable FoldState.  Results are always absorbed
+        # in this original group order, preserving the aggregation and
+        # cumulative-accounting order.  Fixed work can prebuild complete native
+        # argument lists; a deadline cannot.  Its worker computes the remaining
+        # decision wall immediately before calling native and returns that exact
+        # receipt for source-order validation below.
+        prefetched_reports: dict[tuple[str, str, str], _ParallelWorldPrefetch] = {}
         parallel_worker_count = 0
         parallel_invocation_count = 0
+        parallel_mode: str | None = None
+        parallel_deadline_dispatch = False
         if config.model_world_workers > 1 and len(duplicate_groups) > 1:
             parallel_worker_count = min(config.model_world_workers, len(duplicate_groups))
             try:
@@ -6131,25 +6183,52 @@ class EngineMctsPolicy:
                 for handle in handles:
                     available_handles.put(handle)
 
-                parallel_tasks: list[tuple[tuple[str, str, str], list[Any]]] = []
+                # Fold construction is part of the whole-decision wall.  Do it
+                # before the worker pool so a clone/setup failure preserves the
+                # established all-or-nothing setup taxonomy; the workers still
+                # decline the native call if this preparation exhausted the
+                # deadline.
+                parallel_tasks: list[
+                    tuple[
+                        tuple[str, str, str],
+                        Mapping[str, Any],
+                        int | None,
+                        Any,
+                        list[Any] | None,
+                    ]
+                ] = []
                 for cache_key, records in duplicate_groups:
                     multiplicity = len(records)
                     sims = config.search_sims * multiplicity if multiplicity > 1 else None
                     task_fold = pokezero_search.FoldState.from_payload(fold_payload)
+                    # Fixed work keeps its established setup boundary: every
+                    # native argument list is constructed before any task is
+                    # submitted, so a setup failure remains a whole-decision
+                    # setup fallback rather than a partial aggregate.  Deadline
+                    # tasks must leave this slot empty because their budget is
+                    # only valid at worker start.
+                    fixed_search_args = (
+                        native_search_args(
+                            config,
+                            records[0],
+                            tables_json=self._tables_json,
+                            root_inputs=root_inputs,
+                            rust_fold=task_fold,
+                            early_stop_min_sims=stop_floor,
+                            sims=sims,
+                            depth=None,
+                            time_budget_ms=None,
+                        )
+                        if decision_deadline is None
+                        else None
+                    )
                     parallel_tasks.append(
                         (
                             cache_key,
-                            native_search_args(
-                                config,
-                                records[0],
-                                tables_json=self._tables_json,
-                                root_inputs=root_inputs,
-                                rust_fold=task_fold,
-                                early_stop_min_sims=stop_floor,
-                                sims=sims,
-                                depth=None,
-                                time_budget_ms=None,
-                            ),
+                            records[0],
+                            sims,
+                            task_fold,
+                            fixed_search_args,
                         )
                     )
             except Exception as error:  # noqa: BLE001 -- a setup failure is not a crash
@@ -6163,27 +6242,110 @@ class EngineMctsPolicy:
                 ] += 1
                 return self._fallback(context, rng, "model_world_parallel_setup_failed")
 
-            def invoke_fixed_world(search_args: list[Any]) -> tuple[bool, Any]:
+            def invoke_fixed_world(
+                task: tuple[
+                    tuple[str, str, str], Mapping[str, Any], int | None, Any, list[Any] | None
+                ],
+            ) -> _ParallelWorldPrefetch:
+                _cache_key, _record, _sims, _task_fold, search_args = task
                 handle = available_handles.get()
                 try:
-                    return True, json.loads(handle.search_batched_multi_encoded(*search_args))
+                    if search_args is None:
+                        raise EngineSearchWitnessError(
+                            "fixed-work parallel task omitted its prepared native arguments."
+                        )
+                    return _ParallelWorldPrefetch(
+                        completed=True,
+                        payload=json.loads(handle.search_batched_multi_encoded(*search_args)),
+                        native_invocation_started=True,
+                    )
                 except Exception as error:  # preserve serial refusal taxonomy
-                    return False, error
+                    return _ParallelWorldPrefetch(
+                        completed=False,
+                        payload=error,
+                        native_invocation_started=True,
+                    )
                 finally:
                     available_handles.put(handle)
 
+            def invoke_deadline_world(
+                task: tuple[
+                    tuple[str, str, str], Mapping[str, Any], int | None, Any, list[Any] | None
+                ],
+            ) -> _ParallelWorldPrefetch:
+                _cache_key, record, sims, task_fold, fixed_search_args = task
+                handle = available_handles.get()
+                try:
+                    # The only budget that native may receive is measured at the
+                    # instant this queued task is about to start.  A task that
+                    # waited behind a sibling therefore cannot revive an expired
+                    # decision with the stale budget it had when the executor was
+                    # populated.
+                    assert decision_deadline is not None
+                    if fixed_search_args is not None:
+                        raise EngineSearchWitnessError(
+                            "deadline parallel task carried fixed-work native arguments."
+                        )
+                    remaining = decision_deadline - time.perf_counter()
+                    if remaining <= 0:
+                        return _ParallelWorldPrefetch(completed=False, skipped=True)
+                    time_budget_ms = max(1, math.ceil(remaining * 1000.0))
+                    try:
+                        search_args = native_search_args(
+                            config,
+                            record,
+                            tables_json=self._tables_json,
+                            root_inputs=root_inputs,
+                            rust_fold=task_fold,
+                            early_stop_min_sims=stop_floor,
+                            sims=sims,
+                            depth=None,
+                            time_budget_ms=time_budget_ms,
+                        )
+                    except Exception as error:
+                        # No native call occurred.  Keep the planned budget out
+                        # of the invocation ledger, just like serial argument
+                        # construction failures.
+                        return _ParallelWorldPrefetch(
+                            completed=False,
+                            payload=error,
+                            time_budget_ms=time_budget_ms,
+                        )
+                    try:
+                        return _ParallelWorldPrefetch(
+                            completed=True,
+                            payload=json.loads(handle.search_batched_multi_encoded(*search_args)),
+                            time_budget_ms=time_budget_ms,
+                            native_invocation_started=True,
+                        )
+                    except Exception as error:  # preserve serial refusal taxonomy
+                        return _ParallelWorldPrefetch(
+                            completed=False,
+                            payload=error,
+                            time_budget_ms=time_budget_ms,
+                            native_invocation_started=True,
+                        )
+                finally:
+                    available_handles.put(handle)
+
+            if decision_deadline is None:
+                invoke = invoke_fixed_world
+                parallel_mode = "fixed_work"
+            else:
+                invoke = invoke_deadline_world
+                parallel_mode = "deadline_remaining_budget"
+                parallel_deadline_dispatch = True
             with ThreadPoolExecutor(max_workers=parallel_worker_count) as executor:
-                outcomes = list(
-                    executor.map(
-                        invoke_fixed_world,
-                        [search_args for _, search_args in parallel_tasks],
-                    )
-                )
+                outcomes = list(executor.map(invoke, parallel_tasks))
             prefetched_reports = {
                 cache_key: outcome
-                for (cache_key, _), outcome in zip(parallel_tasks, outcomes, strict=True)
+                for (cache_key, _record, _sims, _fold, _fixed_args), outcome in zip(
+                    parallel_tasks, outcomes, strict=True
+                )
             }
-            parallel_invocation_count = len(parallel_tasks)
+            parallel_invocation_count = sum(
+                outcome.native_invocation_started for outcome in outcomes
+            )
             self.stats.model_world_parallel_dispatches += 1
             self.stats.model_world_parallel_invocations += parallel_invocation_count
         for group_index, (cache_key, records) in enumerate(duplicate_groups):
@@ -6210,8 +6372,16 @@ class EngineMctsPolicy:
             )
             if report is None:
                 # A deadline cannot become un-expired. Avoid even building the
-                # later native request records once no remaining time exists.
-                if decision_deadline is not None and time.perf_counter() >= decision_deadline:
+                # later native request records once no remaining time exists on
+                # the serial path.  Parallel deadline tasks that reached native
+                # before the wall expired may complete out of order, so their
+                # source-order receipts must still be absorbed rather than
+                # discarded merely because the consumer is now past the wall.
+                if (
+                    decision_deadline is not None
+                    and not parallel_deadline_dispatch
+                    and time.perf_counter() >= decision_deadline
+                ):
                     for _, remaining_records in duplicate_groups[group_index + 1:]:
                         budget_skipped_worlds += len(remaining_records)
                     break
@@ -6504,7 +6674,7 @@ class EngineMctsPolicy:
                             "workers": parallel_worker_count,
                             "native_invocations": parallel_invocation_count,
                             "independent_native_models": parallel_worker_count,
-                            "mode": "fixed_work",
+                            "mode": parallel_mode,
                         }
                     }
                     if parallel_worker_count

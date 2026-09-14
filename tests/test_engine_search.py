@@ -637,10 +637,10 @@ class ModelConfigValidationTests(unittest.TestCase):
             EngineMctsConfig(
                 **base, model_world_workers=2, early_stop=True, early_stop_min_sims=8
             )
-        with self.assertRaisesRegex(ValueError, "model_decision_time_ms=None"):
-            EngineMctsConfig(
-                **base, model_world_workers=2, model_decision_time_ms=10
-            )
+        timed_parallel = EngineMctsConfig(
+            **base, model_world_workers=2, model_decision_time_ms=10
+        )
+        self.assertEqual(timed_parallel.model_decision_time_ms, 10)
         with self.assertRaisesRegex(ValueError, "model_device='cpu'"):
             EngineMctsConfig(**base, model_world_workers=2, model_device="cuda")
         with self.assertRaisesRegex(ValueError, "fixed search allocation"):
@@ -1404,7 +1404,7 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
 
 
 class ModelWorldParallelismTests(unittest.TestCase):
-    """The opt-in path must retain fixed-work result semantics.
+    """The opt-in path must retain fixed-work and deadline result semantics.
 
     The native evaluator is intentionally represented by independent fakes.  A
     barrier makes the first test fail if the implementation ever quietly falls
@@ -1448,6 +1448,24 @@ class ModelWorldParallelismTests(unittest.TestCase):
         )
 
     @staticmethod
+    def _timed_report(alpha: int, beta: int, *, time_budget_ms: int) -> dict:
+        report = ModelWorldParallelismTests._report(alpha, beta)
+        report["side_two"] = [
+            {"move": "alpha", "visits": alpha, "q": 0.5},
+            {"move": "beta", "visits": beta, "q": 0.5},
+        ]
+        report.update(
+            {
+                "time_budget_enabled": True,
+                "time_budget_ms": time_budget_ms,
+                "time_budget_elapsed_ms": 0.1,
+                "time_budget_exhausted": False,
+                "time_budget_batch_overshoot_ms": 0.0,
+            }
+        )
+        return report
+
+    @staticmethod
     def _world(label: str):
         return EarlyStopPolicyIntegrationTests._world(label)
 
@@ -1456,11 +1474,13 @@ class ModelWorldParallelismTests(unittest.TestCase):
         return EarlyStopPolicyIntegrationTests._context()
 
     @staticmethod
-    def _policy(*, workers: int) -> EngineMctsPolicy:
+    def _policy(
+        *, workers: int, worlds: int = 2, deadline_ms: int | None = None
+    ) -> EngineMctsPolicy:
         policy = object.__new__(EngineMctsPolicy)
         policy.policy_id = "model-world-parallelism-test"
         policy._config = EngineMctsConfig(
-            worlds=2,
+            worlds=worlds,
             leaf_eval="model",
             model_path="model.pt",
             checkpoint_path="checkpoint.pt",
@@ -1468,6 +1488,7 @@ class ModelWorldParallelismTests(unittest.TestCase):
             search_sims=100,
             search_batch=10,
             model_world_workers=workers,
+            model_decision_time_ms=deadline_ms,
         )
         policy._tables_json = "{}"
         policy.stats = EngineMctsStats()
@@ -1533,6 +1554,99 @@ class ModelWorldParallelismTests(unittest.TestCase):
         self.assertEqual(parallelism["independent_native_models"], 2)
         self.assertEqual(policy.stats.model_world_parallel_dispatches, 1)
         self.assertEqual(policy.stats.model_world_parallel_invocations, 2)
+
+    def test_parallel_deadline_dispatch_passes_one_remaining_budget_per_native_call(self) -> None:
+        reports = {
+            "world-a": self._timed_report(70, 30, time_budget_ms=10_000),
+            "world-b": self._timed_report(60, 40, time_budget_ms=10_000),
+        }
+        barrier = threading.Barrier(2)
+        handles = [
+            self._BarrierNative(reports, barrier),
+            self._BarrierNative(reports, barrier),
+        ]
+        policy = self._policy(workers=2, deadline_ms=10_000)
+
+        # A frozen clock makes this a call-contract test.  The barrier still
+        # proves that both timed native calls actually dispatch concurrently.
+        with patch("pokezero.engine_search.time.perf_counter", return_value=0.0):
+            decision = self._run(
+                policy,
+                native=handles[0],
+                handles=handles,
+                worlds=[self._world("world-a"), self._world("world-b")],
+            )
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertTrue(all(handle.entered.is_set() for handle in handles))
+        for handle in handles:
+            self.assertEqual(handle.calls[0][-1], 10_000)
+        parallelism = decision.metadata["engine_mcts"]["world_parallelism"]
+        self.assertEqual(parallelism["mode"], "deadline_remaining_budget")
+        self.assertEqual(parallelism["native_invocations"], 2)
+        invocations = decision.metadata["engine_mcts"]["time_budget"][
+            "native_invocations"
+        ]
+        self.assertEqual([row["status"] for row in invocations], ["completed", "completed"])
+        self.assertEqual([row["time_budget_ms"] for row in invocations], [10_000, 10_000])
+
+    def test_queued_parallel_deadline_world_never_starts_with_a_stale_budget(self) -> None:
+        class _AdvancePastDeadlineNative(self._NativeByState):
+            def __init__(self, reports, barrier, clock) -> None:
+                super().__init__(reports)
+                self._barrier = barrier
+                self._clock = clock
+
+            def search_batched_multi_encoded(self, *args):
+                self._barrier.wait(timeout=2.0)
+                # Both initially dispatched worlds received their budget at
+                # clock=0.  Advancing before either worker returns makes the
+                # queued third world prove it re-checks at its actual start.
+                self._clock.now = 0.020
+                return super().search_batched_multi_encoded(*args)
+
+        clock = SimpleNamespace(now=0.0)
+        reports = {
+            "world-a": self._timed_report(70, 30, time_budget_ms=10),
+            "world-b": self._timed_report(60, 40, time_budget_ms=10),
+            "world-c": self._timed_report(55, 45, time_budget_ms=10),
+        }
+        barrier = threading.Barrier(2)
+        handles = [
+            _AdvancePastDeadlineNative(reports, barrier, clock),
+            _AdvancePastDeadlineNative(reports, barrier, clock),
+        ]
+        policy = self._policy(workers=2, worlds=3, deadline_ms=10)
+
+        with patch("pokezero.engine_search.time.perf_counter", lambda: clock.now):
+            decision = self._run(
+                policy,
+                native=handles[0],
+                handles=handles,
+                worlds=[
+                    self._world("world-a"),
+                    self._world("world-b"),
+                    self._world("world-c"),
+                ],
+            )
+
+        self.assertEqual(decision.action_index, 0)
+        self.assertEqual(sum(len(handle.calls) for handle in handles), 2)
+        self.assertEqual(
+            {call[0] for handle in handles for call in handle.calls},
+            {"world-a", "world-b"},
+        )
+        budget = decision.metadata["engine_mcts"]["time_budget"]
+        self.assertTrue(budget["exhausted"])
+        self.assertEqual(budget["worlds_budget_skipped"], 1)
+        self.assertEqual(len(budget["native_invocations"]), 2)
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["aggregated_choices_basis"],
+            "deadline_prefix",
+        )
+        parallelism = decision.metadata["engine_mcts"]["world_parallelism"]
+        self.assertEqual(parallelism["mode"], "deadline_remaining_budget")
+        self.assertEqual(parallelism["native_invocations"], 2)
 
     def test_parallel_result_and_fixed_work_accounting_match_serial(self) -> None:
         reports = {

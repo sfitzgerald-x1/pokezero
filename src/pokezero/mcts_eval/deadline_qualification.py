@@ -29,6 +29,7 @@ class DeadlineQualificationRequirements:
     requested_ms: int = 1_000
     sims_per_world: int = 256
     worlds: int = 4
+    model_world_workers: int = 1
     expected_decisions: int = 16
 
     def __post_init__(self) -> None:
@@ -36,9 +37,14 @@ class DeadlineQualificationRequirements:
             self.requested_ms,
             self.sims_per_world,
             self.worlds,
+            self.model_world_workers,
             self.expected_decisions,
         ) <= 0:
             raise ValueError("deadline qualification requirements must be positive.")
+        if self.model_world_workers > self.worlds:
+            raise ValueError(
+                "deadline qualification model_world_workers must not exceed worlds."
+            )
 
     def to_payload(self) -> dict[str, int]:
         return asdict(self)
@@ -173,6 +179,33 @@ def validate_deadline_decision(
             f"{decision_id}: zero-completed-world decision ({searched}/{constructed} searched)"
         )
 
+    parallel_invocation_count: int | None = None
+    if requirements.model_world_workers > 1:
+        parallel = _mapping(
+            engine.get("world_parallelism"),
+            "engine_mcts.world_parallelism",
+            decision_id=decision_id,
+        )
+        if _int(
+            parallel.get("workers"),
+            "world_parallelism.workers",
+            decision_id=decision_id,
+            minimum=1,
+        ) != requirements.model_world_workers:
+            raise DeadlineQualificationError(
+                f"{decision_id}: world parallelism differs from the frozen contract"
+            )
+        if parallel.get("mode") != "deadline_remaining_budget":
+            raise DeadlineQualificationError(
+                f"{decision_id}: world parallelism did not use remaining-budget dispatch"
+            )
+        parallel_invocation_count = _int(
+            parallel.get("native_invocations"),
+            "world_parallelism.native_invocations",
+            decision_id=decision_id,
+            minimum=1,
+        )
+
     budget = _mapping(engine.get("time_budget"), "engine_mcts.time_budget", decision_id=decision_id)
     if budget.get("scope") != "whole_model_decision":
         raise DeadlineQualificationError(f"{decision_id}: deadline witness has the wrong scope")
@@ -204,6 +237,13 @@ def validate_deadline_decision(
     )
     if not invocations:
         raise DeadlineQualificationError(f"{decision_id}: has no native deadline invocation")
+    if (
+        parallel_invocation_count is not None
+        and parallel_invocation_count != len(invocations)
+    ):
+        raise DeadlineQualificationError(
+            f"{decision_id}: world parallelism/native deadline invocation counts differ"
+        )
 
     normalized_invocations: list[dict[str, Any]] = []
     prefixes = 0

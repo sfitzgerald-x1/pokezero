@@ -288,11 +288,23 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--worlds", type=int, default=4)
     parser.add_argument(
+        "--model-world-workers",
+        type=int,
+        default=1,
+        help=(
+            "Concurrent CPU model-world workers. A timed run records and "
+            "independently validates remaining-budget dispatch for this value."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Reuse only independently revalidated, durable decision units for this exact manifest.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not 0 < args.model_world_workers <= args.worlds:
+        parser.error("--model-world-workers must be in 1..=--worlds")
+    return args
 
 
 def _frozen_manifest(
@@ -330,6 +342,7 @@ def _frozen_manifest(
             "model_priors": False,
             "use_opponent_priors": False,
             "model_decision_time_ms": args.deadline_ms,
+            "model_world_workers": args.model_world_workers,
         },
     }
 
@@ -539,6 +552,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         requested_ms=args.deadline_ms,
         sims_per_world=args.sims,
         worlds=args.worlds,
+        model_world_workers=args.model_world_workers,
         expected_decisions=16,
     )
     corpus_file_sha256 = sha256_file(args.corpus)
@@ -587,6 +601,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         checkpoint_contract,
         args.showdown_root,
         model_decision_time_ms=args.deadline_ms,
+        model_world_workers=args.model_world_workers,
         model_priors=False,
         use_opponent_priors=False,
     )

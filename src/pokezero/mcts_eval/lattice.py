@@ -237,6 +237,7 @@ class _LiveEngineTimingDecider:
         showdown_root: str | None,
         *,
         model_decision_time_ms: int | None = None,
+        model_world_workers: int = 1,
         model_priors: bool = True,
         use_opponent_priors: bool = False,
     ) -> None:
@@ -248,10 +249,13 @@ class _LiveEngineTimingDecider:
 
         if model_decision_time_ms is not None and model_decision_time_ms <= 0:
             raise ValueError("model_decision_time_ms must be positive when set")
+        if model_world_workers <= 0:
+            raise ValueError("model_world_workers must be positive")
         if not isinstance(model_priors, bool) or not isinstance(use_opponent_priors, bool):
             raise ValueError("model_priors and use_opponent_priors must be booleans")
         self._contract = contract
         self._model_decision_time_ms = model_decision_time_ms
+        self._model_world_workers = model_world_workers
         # The timing lattice measures the established priors-on production
         # path by default.  A bounded qualification may deliberately pin both
         # prior selectors off, so retain that choice in the adapter rather than
@@ -307,6 +311,7 @@ class _LiveEngineTimingDecider:
                 use_opponent_priors=self._use_opponent_priors,
                 early_stop=False,
                 model_decision_time_ms=self._model_decision_time_ms,
+                model_world_workers=self._model_world_workers,
             ),
             policy_id=f"mcts-timing-{config.config_id}",
             annotation_source=self._annotation_source,
