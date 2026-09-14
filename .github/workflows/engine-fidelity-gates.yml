@@ -1558,12 +1558,13 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          # 227 -> 233: fixed-work CPU world dispatch adds six configuration,
-          # concurrency, parity, duplicate-collapse, failure-taxonomy, and
-          # setup-fallback pins.  Keep this exact count synchronized with the
-          # checked-in suite so the guard remains fail-closed.
-          if ! grep -qE 'Ran 233 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 233 engine-search tests; the suite shrank or grew"
+          # 227 -> 235: fixed-work CPU world dispatch adds configuration,
+          # concurrency, parity (including malformed reports), duplicate-collapse,
+          # failure-taxonomy, setup-fallback, and warmup-coverage pins. Keep this
+          # exact count synchronized with the checked-in suite so the guard remains
+          # fail-closed.
+          if ! grep -qE 'Ran 235 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 235 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
