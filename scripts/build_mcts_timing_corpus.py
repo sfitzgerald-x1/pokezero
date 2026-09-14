@@ -34,7 +34,11 @@ from pokezero.mcts_eval.timing_corpus import (  # noqa: E402
     write_corpus,
 )
 from pokezero.public_action_capture import public_action_round_from_protocol_lines  # noqa: E402
-from pokezero.public_replay_materializer import public_event_prefix_summary  # noqa: E402
+from pokezero.public_replay_materializer import (  # noqa: E402
+    PublicReplayError,
+    public_event_prefix_summary,
+    replay_public_action_rounds,
+)
 
 
 def _remaining_and_hp(state: Any) -> tuple[int, float]:
@@ -66,6 +70,38 @@ def _remaining_and_hp(state: Any) -> tuple[int, float]:
     return (alive or 1), (current / total if total else 1.0)
 
 
+def _prefix_replayability_reason(
+    env: Any,
+    *,
+    seed: int,
+    public_rounds: tuple[Any, ...],
+    expected_public_lines: dict[str, tuple[str, ...]],
+) -> str | None:
+    """Return a named rejection unless the public prefix replays identically.
+
+    Request-local action indexes are intentionally absent from the corpus. A
+    parseable public action identifier is therefore not sufficient: it must
+    also reproduce the public protocol and future request shape in a fresh
+    MCTS-shaped world.
+    """
+
+    try:
+        replay_public_action_rounds(
+            env,
+            seed=seed,
+            format_id="gen3randombattle",
+            public_action_rounds=public_rounds,
+            start_override=None,
+        )
+    except PublicReplayError as error:
+        return f"public_replay:{error.reason}"
+    for player, expected in expected_public_lines.items():
+        actual = tuple(env.public_materialization_state(player).replay.public_lines)
+        if actual != expected:
+            return "public_replay:public_prefix_mismatch"
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--checkpoint", required=True)
@@ -82,13 +118,19 @@ def main(argv: list[str] | None = None) -> int:
     from pokezero.collection import env_config_with_policy_spec_masks
 
     spec = f"neural:{args.checkpoint}"
+    # The corpus must use the exact belief-aware observation path consumed by
+    # the timing lattice. Otherwise a replayable collection record can still
+    # fail in the model-backed MCTS adapter.
     env_config = env_config_with_policy_spec_masks(
-        LocalShowdownConfig(showdown_root=args.showdown_root), [spec], context="timing corpus"
+        LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True),
+        [spec],
+        context="timing corpus",
     )
     policy = policy_from_spec(spec)
 
     records: list[TimingDecisionRecord] = []
     games_played = 0
+    replay_rejections: dict[str, int] = {}
     import random
 
     for offset in range(args.games):
@@ -100,6 +142,26 @@ def main(argv: list[str] | None = None) -> int:
         turn = 0
         while turn < args.max_decision_rounds and env.terminal() is None:
             requested = env.requested_players()
+            expected_public_lines = {
+                player: tuple(env.public_materialization_state(player).replay.public_lines)
+                for player in requested
+            }
+            probe = LocalShowdownEnv(env_config)
+            try:
+                replay_reason = _prefix_replayability_reason(
+                    probe,
+                    seed=seed,
+                    public_rounds=tuple(public_rounds),
+                    expected_public_lines=expected_public_lines,
+                )
+            finally:
+                probe.close()
+            if replay_reason is not None:
+                replay_rejections[replay_reason] = replay_rejections.get(replay_reason, 0) + 1
+                print(
+                    f"seed {seed}: excluding unreplayable timing prefix at turn {turn}: {replay_reason}",
+                    flush=True,
+                )
             actions: dict[str, int] = {}
             for player in ("p1", "p2"):
                 if player not in requested:
@@ -114,7 +176,10 @@ def main(argv: list[str] | None = None) -> int:
                     dict(c) if isinstance(c, dict) else {"value": str(c)}
                     for c in (getattr(observation, "metadata", None) or {}).get("action_candidates", ()) or ()
                 )
-                if not candidates:
+                if not candidates or replay_reason is not None:
+                    # Continue the held-out game so later prefixes remain
+                    # available, but do not admit a decision whose public
+                    # reconstruction already diverged.
                     continue
                 state = env._state_for_player(player)
                 remaining, hp_fraction = _remaining_and_hp(state)
@@ -197,7 +262,8 @@ def main(argv: list[str] | None = None) -> int:
     write_corpus(args.out, manifest, selected)
     print(json.dumps({"decisions": manifest.decision_count, "sha256": manifest.corpus_sha256[:16],
                       "buckets": {k: v for k, v in manifest.bucket_counts.items() if v},
-                      "representativeness": coverage}, indent=2))
+                      "representativeness": coverage,
+                      "replay_rejections": dict(sorted(replay_rejections.items()))}, indent=2))
     return 0
 
 
