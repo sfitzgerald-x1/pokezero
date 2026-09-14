@@ -176,8 +176,9 @@ statuses need not all be `resolved` when roots are clean, but any root fallback
 must be fully classified and makes the result NONPASS. A PASS establishes only
 current applicability; the historical same-build null remains a reason to run
 at most one separately registered, short strength pilot with fresh seeds. A
-NONPASS parks this one-boolean mechanism without replaying or reinterpreting
-the diagnostic games.
+NONPASS rejects this attempt as strength evidence; preserve and diagnose its
+classified status before deciding whether a distinct repair or diagnostic is
+warranted. Do not replay or reinterpret its games as a score.
 
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
