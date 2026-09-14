@@ -28,10 +28,13 @@ nothing.
 
 from __future__ import annotations
 
+from pathlib import Path
+import re
 from types import SimpleNamespace
 import unittest
 
 from pokezero.engine_search import (
+    OPPONENT_REQUEST_ORDER_STATUS_VALUES,
     opponent_request_order,
     opponent_request_order_resolution,
 )
@@ -191,6 +194,26 @@ class RequestOrderTest(unittest.TestCase):
 
 
 class FailClosedTest(unittest.TestCase):
+    def test_rust_parser_accepts_the_exact_source_status_protocol(self) -> None:
+        """A new source refusal category must not die at the native boundary."""
+
+        leaf = (
+            Path(__file__).resolve().parents[1]
+            / "rust"
+            / "pokezero-search"
+            / "src"
+            / "leaf.rs"
+        )
+        source = leaf.read_text(encoding="utf-8")
+        match = re.search(
+            r"const VALID_STATUSES: \[&str; \d+\] = \[(.*?)\];",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match, "native request-order status parser disappeared")
+        native_statuses = frozenset(re.findall(r'"([a-z_]+)"', match.group(1)))
+        self.assertEqual(native_statuses, OPPONENT_REQUEST_ORDER_STATUS_VALUES)
+
     def test_no_history_at_all_returns_none(self) -> None:
         trajectory = BattleTrajectory(battle_id="b", format_id="gen3randombattle", seed=1)
         ctx = PolicyContext(
