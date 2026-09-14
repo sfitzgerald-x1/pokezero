@@ -783,6 +783,10 @@ class ControlledFoulPlayConfig:
     engine_sims: int = 1024
     engine_batch: int = 16
     engine_worlds: int = 4
+    # Independent model-search handles used to run fixed-work belief worlds in
+    # parallel. One preserves the historical serial path; a larger value is an
+    # explicit throughput experiment and must be visible in every shard.
+    engine_model_world_workers: int = 1
     engine_c_puct: float = 1.4
     engine_model_priors: bool = True
     # Opponent-side model priors in the native search (campaign cells B/E).
@@ -1100,6 +1104,35 @@ class ControlledFoulPlayConfig:
                 f"(got {self.policy_mode!r}); it injects through "
                 "EngineMctsPolicy's fixed_override hook, which no other policy has."
             )
+        if self.engine_model_world_workers <= 0:
+            raise ValueError("engine_model_world_workers must be positive.")
+        if self.engine_model_world_workers > self.engine_worlds:
+            raise ValueError(
+                "engine_model_world_workers must be <= engine_worlds: one worker "
+                "cannot improve a single belief world."
+            )
+        if self.engine_model_world_workers != 1:
+            if self.policy_mode != "engine-mcts":
+                raise ValueError(
+                    "engine_model_world_workers requires policy_mode='engine-mcts' "
+                    f"(got {self.policy_mode!r})."
+                )
+            if self.engine_early_stop:
+                raise ValueError(
+                    "engine_model_world_workers > 1 requires engine_early_stop=False: "
+                    "the stopped-world replay set is order-sensitive."
+                )
+            if (self.device or "cpu") != "cpu":
+                raise ValueError(
+                    "engine_model_world_workers > 1 currently requires device='cpu': "
+                    "each worker owns an independent model, and multi-device scheduling "
+                    "has not been qualified."
+                )
+            if self.engine_depth_min is not None or self.engine_worlds_min is not None:
+                raise ValueError(
+                    "engine_model_world_workers > 1 requires a fixed allocation; "
+                    "dynamic depth/world floors are order-sensitive."
+                )
         for _name, _floor, _cap, _capname in (
             ("engine_depth_min", self.engine_depth_min, self.engine_depth, "engine_depth"),
             ("engine_worlds_min", self.engine_worlds_min, self.engine_worlds, "engine_worlds"),
@@ -2291,6 +2324,7 @@ class ControlledFoulPlayBenchmarkResult:
                 "sims": self.config.engine_sims,
                 "batch": self.config.engine_batch,
                 "worlds": self.config.engine_worlds,
+                "model_world_workers": self.config.engine_model_world_workers,
                 # Part of the cell's identity, not a footnote: cells B and E
                 # are read entirely against whether this was on.
                 "opponent_priors": self.config.engine_opponent_priors,
@@ -6646,6 +6680,7 @@ _ENGINE_ONLY_FIELDS: tuple[tuple[str, Any], ...] = (
     ("engine_oracle_belief", False),
     ("engine_override_telemetry", False),
     ("engine_root_selector_shadow", False),
+    ("engine_model_world_workers", 1),
     ("engine_early_stop", False),
     ("engine_depth_min", None),
     ("engine_worlds_min", None),
@@ -6750,7 +6785,14 @@ def _build_policy(
             # belief FEATURES are in the observation, which is a separate
             # question from whether the searcher can sample worlds at all.
             set_source=load_gen3_randbat_source_cached(config.showdown_root),
-            policy_id=f"{policy_id}+engine-mcts-d{config.engine_depth}-s{config.engine_sims}",
+            policy_id=(
+                f"{policy_id}+engine-mcts-d{config.engine_depth}-s{config.engine_sims}"
+                + (
+                    f"-wp{config.engine_model_world_workers}"
+                    if config.engine_model_world_workers != 1
+                    else ""
+                )
+            ),
             config=EngineMctsConfig(
                 leaf_eval="model",
                 checkpoint_path=str(config.checkpoint),
@@ -6758,6 +6800,7 @@ def _build_policy(
                 tables_path=str(config.engine_tables_path),
                 model_device=config.device or "cpu",
                 worlds=config.engine_worlds,
+                model_world_workers=config.engine_model_world_workers,
                 search_sims=config.engine_sims,
                 search_batch=config.engine_batch,
                 search_depth=config.engine_depth,
@@ -9076,6 +9119,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--engine-sims", type=int, default=1024)
     parser.add_argument("--engine-batch", type=int, default=64)
     parser.add_argument("--engine-worlds", type=int, default=4)
+    parser.add_argument("--engine-model-world-workers", type=int, default=1,
+                        help="Independent model-search handles for concurrent belief "
+                             "worlds. Fixed-work engine-mcts only; 1 preserves the "
+                             "historical serial path, and the value must not exceed "
+                             "--engine-worlds.")
     parser.add_argument("--engine-c-puct", type=float, default=1.4)
     parser.add_argument("--no-engine-model-priors", action="store_true",
                         help="Disable model priors in the native search (default: enabled).")
@@ -9528,6 +9576,7 @@ def _config_from_args(
         engine_sims=getattr(args, "engine_sims", 1024),
         engine_batch=getattr(args, "engine_batch", 64),
         engine_worlds=getattr(args, "engine_worlds", 4),
+        engine_model_world_workers=getattr(args, "engine_model_world_workers", 1),
         engine_c_puct=getattr(args, "engine_c_puct", 1.4),
         engine_model_priors=not getattr(args, "no_engine_model_priors", False),
         engine_opponent_priors=getattr(args, "engine_opponent_priors", False),

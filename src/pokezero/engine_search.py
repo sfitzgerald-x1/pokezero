@@ -40,7 +40,9 @@ import random
 import time
 import warnings
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields
+from queue import Queue
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Sequence
 
@@ -825,6 +827,15 @@ class EngineMctsConfig:
     # bounded, observable, and tree-consistent instead of returning virtual-loss
     # traversals without their evaluation/backups.
     model_decision_time_ms: int | None = None
+    # Fixed-work model searches normally visit independent belief worlds
+    # serially. A value above one dispatches those completed-world trees
+    # together, then absorbs their reports in the original sampling order.
+    #
+    # This is throughput only: it never changes a world's seed, requested
+    # iterations, root fold, or aggregation weight. It is intentionally
+    # unavailable for deadlines, early stopping, and the dynamic ladder because
+    # those modes make a world's start/completion order part of search policy.
+    model_world_workers: int = 1
     # DYNAMIC BUDGET LADDER (docs/dynamic-search-budget-plan-20260812.md).
     #
     # `search_depth` and `worlds` remain the MAXIMA, unchanged in meaning. These
@@ -862,6 +873,13 @@ class EngineMctsConfig:
     def __post_init__(self) -> None:
         if self.worlds <= 0 or self.search_time_ms <= 0 or self.threads <= 0:
             raise ValueError("worlds, search_time_ms, and threads must be positive.")
+        if self.model_world_workers <= 0:
+            raise ValueError("model_world_workers must be positive.")
+        if self.model_world_workers > self.worlds:
+            raise ValueError(
+                "model_world_workers must be <= worlds: one worker cannot improve a "
+                "single belief world."
+            )
         # AGAINST THE REGISTRY, not against a second copy of the same literals. A
         # leaf-eval mode is selectable if and only if it is registered in
         # `LEAF_EVAL_SEARCH_METHODS`, which is what lets the instrumentation guard
@@ -1058,6 +1076,28 @@ class EngineMctsConfig:
                         "model_decision_time_ms requires a fixed search allocation; "
                         "depth_min/worlds_min can issue later rungs after a deadline."
                     )
+            if self.model_world_workers > 1:
+                if self.early_stop:
+                    raise ValueError(
+                        "model_world_workers > 1 requires early_stop=False: a stopped "
+                        "world's replay set depends on completed-world order."
+                    )
+                if self.model_decision_time_ms is not None:
+                    raise ValueError(
+                        "model_world_workers > 1 requires model_decision_time_ms=None: "
+                        "the initial implementation does not alter deadline semantics."
+                    )
+                if self.model_device != "cpu":
+                    raise ValueError(
+                        "model_world_workers > 1 currently requires model_device='cpu': "
+                        "each worker owns an independent model, and multi-device scheduling "
+                        "has not been qualified."
+                    )
+                if self.depth_min is not None or self.worlds_min is not None:
+                    raise ValueError(
+                        "model_world_workers > 1 requires a fixed search allocation; "
+                        "the dynamic ladder's later rungs are order-sensitive."
+                    )
             if (self.depth_min is not None or self.worlds_min is not None) and (
                 self.search_sims < self.worlds
             ):
@@ -1106,6 +1146,10 @@ class EngineMctsConfig:
         elif self.model_decision_time_ms is not None:
             raise ValueError(
                 "model_decision_time_ms is supported only with leaf_eval='model'."
+            )
+        elif self.model_world_workers != 1:
+            raise ValueError(
+                "model_world_workers is supported only with leaf_eval='model'."
             )
         elif self.depth_min is not None or self.worlds_min is not None:
             # Same standing as early_stop: the ladder re-invokes the native model
@@ -1552,6 +1596,11 @@ class EngineMctsStats:
     # Aborted searches are not counted here -- they are counted, per world draw,
     # in `world_failure_reasons`.
     unique_worlds_searched: int = 0
+    # Fixed-work model decisions that dispatched independent belief-world
+    # searches concurrently. Invocations are separate because duplicate belief
+    # draws may collapse to one native tree.
+    model_world_parallel_dispatches: int = 0
+    model_world_parallel_invocations: int = 0
     total_iterations: int = 0
     search_wall_seconds: float = 0.0
     decision_wall_seconds: float = 0.0
@@ -2131,6 +2180,16 @@ class EngineMctsStats:
         if self.depth_reached_samples:
             payload["depth_reached_mean"] = (
                 self.depth_reached_sum / self.depth_reached_samples
+            )
+        if self.model_world_parallel_dispatches:
+            # The disabled default must retain the historical payload shape: a
+            # missing field means no opt-in dispatch occurred, while a zero would
+            # re-schema every existing fixed-work report.
+            payload["model_world_parallel_dispatches"] = (
+                self.model_world_parallel_dispatches
+            )
+            payload["model_world_parallel_invocations"] = (
+                self.model_world_parallel_invocations
             )
         if self.opponent_request_order_statuses:
             # The field is opt-in with opponent priors.  Do not re-schema the
@@ -3922,6 +3981,10 @@ class EngineMctsPolicy:
         self._tables_json: str | None = None
         self._model_config: Any | None = None
         self._native_model: Any | None = None
+        # Additional immutable handles used only by the opt-in fixed-work
+        # dispatcher. Separate handles avoid assuming one libtorch module is
+        # safe to enter concurrently merely because it is inference-only.
+        self._native_model_world_workers: tuple[Any, ...] | None = None
         if self._config.leaf_eval == "model":
             from pathlib import Path  # noqa: PLC0415 — model-mode-only dependency
 
@@ -4010,13 +4073,16 @@ class EngineMctsPolicy:
 
         This is deliberately a narrow public hook for the MCTS timing lattice.
         A timed decision should measure one completed policy decision, not the
-        one-time TorchScript module load for the first decision in a cell.
+        one-time TorchScript module load for the first decision in a cell.  An
+        opt-in fixed-work world dispatcher owns one independent native model per
+        worker, so warming only its primary handle would hide the remaining
+        loads in the first measured parallel decision.
         Calling it on a non-model configuration is a harness error rather than
         an invitation to time a different search path.
         """
         if self._config.leaf_eval != "model":
             raise ValueError("warm_model_runtime requires leaf_eval='model'.")
-        self._native()
+        self._native_handles_for_model_world_workers()
 
     def warm_public_prefix_for_replay(
         self,
@@ -4993,6 +5059,36 @@ class EngineMctsPolicy:
             )
         return self._native_model
 
+    def _native_handles_for_model_world_workers(self) -> tuple[Any, ...]:
+        """Return independent evaluators for fixed-work belief-world dispatch."""
+
+        workers = self._config.model_world_workers
+        primary = self._native()
+        if workers == 1:
+            return (primary,)
+        cached = getattr(self, "_native_model_world_workers", None)
+        if cached is not None and len(cached) == workers:
+            return cached
+
+        import pokezero_search  # noqa: PLC0415 — model-mode-only dependency
+
+        layout = json.loads(self._tables_json or "{}")["layout"]
+        handles = [primary]
+        for _ in range(1, workers):
+            handles.append(
+                pokezero_search.NativeLeafModel(
+                    str(self._config.model_path),
+                    device=self._config.model_device,
+                    window=1,
+                    tokens=int(layout["token_count"]),
+                    categorical_features=int(layout["categorical_feature_count"]),
+                    numeric_features=int(layout["numeric_feature_count"]),
+                )
+            )
+        frozen = tuple(handles)
+        self._native_model_world_workers = frozen
+        return frozen
+
     def _validate_model_root_observation(self, observation: Any) -> None:
         """Fail closed if the live root is outside the checkpoint's trained contract."""
 
@@ -5361,7 +5457,8 @@ class EngineMctsPolicy:
         self._validate_model_root_observation(context.observation)
         try:
             root_inputs = self._root_inputs_json(context)
-            rust_fold = pokezero_search.FoldState.from_payload(live_fold.to_payload())
+            fold_payload = live_fold.to_payload()
+            rust_fold = pokezero_search.FoldState.from_payload(fold_payload)
         except Exception as error:  # noqa: BLE001 — taxonomy, never a crash
             self.stats.world_failure_reasons[
                 f"root_inputs: {type(error).__name__}: {str(error)[:120]}"
@@ -5472,6 +5569,7 @@ class EngineMctsPolicy:
             sims: int | None = None,
             weight: int = 1,
             depth: int | None = None,
+            prefetched: tuple[bool, Any] | None = None,
         ) -> Optional[dict]:
             nonlocal budget_skipped_worlds, native_budget_exhausted
             time_budget_ms: int | None = None
@@ -5496,21 +5594,40 @@ class EngineMctsPolicy:
                     config.search_sims if sims is None else sims
                 )
             try:
-                search_args = native_search_args(
-                    config,
-                    record,
-                    tables_json=self._tables_json,
-                    root_inputs=root_inputs,
-                    rust_fold=rust_fold,
-                    early_stop_min_sims=early_stop_min_sims,
-                    sims=sims,
-                    depth=depth,
-                    time_budget_ms=time_budget_ms,
-                )
-                native_invocation_started = time_budget_ms is not None
-                report = json.loads(
-                    native.search_batched_multi_encoded(*search_args)
-                )
+                if prefetched is None:
+                    search_args = native_search_args(
+                        config,
+                        record,
+                        tables_json=self._tables_json,
+                        root_inputs=root_inputs,
+                        rust_fold=rust_fold,
+                        early_stop_min_sims=early_stop_min_sims,
+                        sims=sims,
+                        depth=depth,
+                        time_budget_ms=time_budget_ms,
+                    )
+                    native_invocation_started = time_budget_ms is not None
+                    report = json.loads(
+                        native.search_batched_multi_encoded(*search_args)
+                    )
+                else:
+                    completed, payload = prefetched
+                    if not completed:
+                        if not isinstance(payload, BaseException):
+                            raise EngineSearchWitnessError(
+                                "parallel world dispatch returned a non-exception refusal."
+                            )
+                        raise payload
+                    # Keep JSON-decoded values *as is*.  The serial path accepts
+                    # ``json.loads`` here and consumes the native report below;
+                    # an array/scalar therefore raises from that shared
+                    # consumption seam.  Coercing or rejecting it inside this
+                    # parallel-only branch turns the malformed world into a
+                    # recoverable per-world refusal, letting a healthy sibling
+                    # produce a partial aggregate where the serial policy
+                    # rejects the whole decision.  The dispatch mode may change
+                    # throughput, never that failure boundary.
+                    report = payload
                 if time_budget_ms is not None:
                     # A native wheel that accepts the new positional but does
                     # not witness its use is not a timed search. Refuse it
@@ -5993,6 +6110,82 @@ class EngineMctsPolicy:
             duplicates.setdefault(cache_key, []).append(record)
 
         duplicate_groups = list(duplicates.items())
+        # Fixed-work parity dispatch.  Each task gets both an independent native
+        # evaluator and an independent immutable FoldState.  Results are then
+        # absorbed in this original group order, preserving the serial path's
+        # aggregation and cumulative-accounting order.
+        prefetched_reports: dict[tuple[str, str, str], tuple[bool, Any]] = {}
+        parallel_worker_count = 0
+        parallel_invocation_count = 0
+        if config.model_world_workers > 1 and len(duplicate_groups) > 1:
+            parallel_worker_count = min(config.model_world_workers, len(duplicate_groups))
+            try:
+                handles = self._native_handles_for_model_world_workers()[
+                    :parallel_worker_count
+                ]
+                if len(handles) != parallel_worker_count:
+                    raise EngineSearchWitnessError(
+                        "parallel world dispatch did not provide one native model per worker."
+                    )
+                available_handles: Queue = Queue()
+                for handle in handles:
+                    available_handles.put(handle)
+
+                parallel_tasks: list[tuple[tuple[str, str, str], list[Any]]] = []
+                for cache_key, records in duplicate_groups:
+                    multiplicity = len(records)
+                    sims = config.search_sims * multiplicity if multiplicity > 1 else None
+                    task_fold = pokezero_search.FoldState.from_payload(fold_payload)
+                    parallel_tasks.append(
+                        (
+                            cache_key,
+                            native_search_args(
+                                config,
+                                records[0],
+                                tables_json=self._tables_json,
+                                root_inputs=root_inputs,
+                                rust_fold=task_fold,
+                                early_stop_min_sims=stop_floor,
+                                sims=sims,
+                                depth=None,
+                                time_budget_ms=None,
+                            ),
+                        )
+                    )
+            except Exception as error:  # noqa: BLE001 -- a setup failure is not a crash
+                detail = (
+                    _bounded_reason_detail(str(error).splitlines()[0])
+                    if str(error)
+                    else type(error).__name__
+                )
+                self.stats.world_failure_reasons[
+                    f"model_world_parallel_setup: {type(error).__name__}: {detail}"
+                ] += 1
+                return self._fallback(context, rng, "model_world_parallel_setup_failed")
+
+            def invoke_fixed_world(search_args: list[Any]) -> tuple[bool, Any]:
+                handle = available_handles.get()
+                try:
+                    return True, json.loads(handle.search_batched_multi_encoded(*search_args))
+                except Exception as error:  # preserve serial refusal taxonomy
+                    return False, error
+                finally:
+                    available_handles.put(handle)
+
+            with ThreadPoolExecutor(max_workers=parallel_worker_count) as executor:
+                outcomes = list(
+                    executor.map(
+                        invoke_fixed_world,
+                        [search_args for _, search_args in parallel_tasks],
+                    )
+                )
+            prefetched_reports = {
+                cache_key: outcome
+                for (cache_key, _), outcome in zip(parallel_tasks, outcomes, strict=True)
+            }
+            parallel_invocation_count = len(parallel_tasks)
+            self.stats.model_world_parallel_dispatches += 1
+            self.stats.model_world_parallel_invocations += parallel_invocation_count
         for group_index, (cache_key, records) in enumerate(duplicate_groups):
             multiplicity = len(records)
             lead = records[0]
@@ -6013,6 +6206,7 @@ class EngineMctsPolicy:
                 # several paths in this codebase and its tests, and a ladder that
                 # is not running must not require its scratch state to exist.
                 depth=getattr(self, "_ladder_depth_override", None),
+                prefetched=prefetched_reports.get(cache_key),
             )
             if report is None:
                 # A deadline cannot become un-expired. Avoid even building the
@@ -6303,6 +6497,18 @@ class EngineMctsPolicy:
                     else "stopped_prefix"
                     if locked_choice is not None
                     else "full_budget"
+                ),
+                **(
+                    {
+                        "world_parallelism": {
+                            "workers": parallel_worker_count,
+                            "native_invocations": parallel_invocation_count,
+                            "independent_native_models": parallel_worker_count,
+                            "mode": "fixed_work",
+                        }
+                    }
+                    if parallel_worker_count
+                    else {}
                 ),
                 "early_stop": {
                     "enabled": config.early_stop,

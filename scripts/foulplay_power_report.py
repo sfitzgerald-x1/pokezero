@@ -478,6 +478,7 @@ def main(argv=None) -> int:
                 early_stop_min_sims=cell.get("early_stop_min_sims"),
                 depth_min=cell.get("depth_min"),
                 worlds_min=cell.get("worlds_min"),
+                model_world_workers=cell.get("model_world_workers", 1),
             )
 
         for cell in campaign.get("cells", []):

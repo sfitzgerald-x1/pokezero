@@ -255,6 +255,7 @@ def search_config_id(
     early_stop_min_sims: int | None = None,
     depth_min: int | None = None,
     worlds_min: int | None = None,
+    model_world_workers: int = 1,
     opponent_policy_mode: str = "foul-play",
     opponent_engine_depth: int | None = None,
     opponent_engine_sims: int | None = None,
@@ -273,6 +274,11 @@ def search_config_id(
     depth_label = f"{depth}" if depth_min is None or int(depth_min) >= int(depth) else f"{int(depth_min)}-{depth}"
     worlds_label = f"{worlds}" if worlds_min is None or int(worlds_min) >= int(worlds) else f"{int(worlds_min)}-{worlds}"
     base = f"d{depth_label}-s{sims}-b{batch}-w{worlds_label}"
+    if model_world_workers != 1:
+        # Fixed-work world dispatch should preserve the selected action, but it
+        # changes the resource schedule and is itself the measured treatment.
+        # Never pool its cost/throughput telemetry into the serial control.
+        base += f"+world-parallel-{model_world_workers}"
     # WHO PLAYED. The strongest possible cell difference: a head-to-head cell shares no
     # comparison basis with a vs-foul-play cell -- different opponent, different scale,
     # different null. Without this fragment both render the same id, and
@@ -423,6 +429,7 @@ def config_id_for(args: argparse.Namespace) -> str:
         opponent_engine_sims=args.opponent_engine_sims,
         depth_min=args.engine_depth_min,
         worlds_min=args.engine_worlds_min,
+        model_world_workers=args.engine_model_world_workers,
     )
 
 
@@ -469,6 +476,11 @@ def bridge_argv(args: argparse.Namespace, *, seat: str) -> list[str]:
             "--engine-batch", str(args.batch),
             "--engine-worlds", str(args.worlds),
         ]
+        if args.engine_model_world_workers != 1:
+            argv += [
+                "--engine-model-world-workers",
+                str(args.engine_model_world_workers),
+            ]
         if args.engine_model_path:
             argv += ["--engine-model-path", str(args.engine_model_path)]
         if args.engine_tables_path:
@@ -753,6 +765,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--sims", type=int, default=1024)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--worlds", type=int, default=4)
+    ap.add_argument("--engine-model-world-workers", type=int, default=1,
+                    help="Independent native model handles for fixed-work parallel belief "
+                         "world searches. 1 keeps the serial control; an enabled value is "
+                         "a distinct throughput cell.")
     ap.add_argument("--opponent-priors", action="store_true",
                     help="engine-mcts opponent-side model priors (cells B/E)")
     ap.add_argument("--engine-fpu-reduction", type=float, default=None,
