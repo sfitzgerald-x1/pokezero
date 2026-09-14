@@ -199,15 +199,20 @@ the lower bound must be greater than zero. P1 therefore earns **no extension**
 and supplies no playing-strength claim.
 
 P1 also exposed a runner visibility defect: its immutable manifest carried the
-complete strength readout contract, but the runner wrote only the generic
+complete strength-readout contract, but the runner wrote only the generic
 summary and applicability artifact. The deterministic calculation above is a
 validation of the completed root, not a synthesized terminal artifact and does
-not alter P1. The runner now needs to write an immutable strength readout that
-records the exact bootstrap, all admission checks, and either
-`ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION` or `NO_EXTENSION`; a null
-pilot must finish cleanly with the latter rather than leaving a generic summary
-to be interpreted manually. No successor pilot may be scheduled until that
-capture repair is source-bound and tested.
+not alter P1. [#1390](https://github.com/sfitzgerald-x1/pokezero/pull/1390),
+merged as `973c3cc41e0181bcc42c2690beba34c7a9a92739`, closes that visibility
+gap for future source-bound pilots: the runner now atomically writes
+`OPPONENT_PRIOR_STRENGTH_PILOT_READOUT.json` before `COMPLETE.json`, binds its
+SHA-256 in `COMPLETE.json`, validates the exact registered bootstrap and
+applicability conditions, and records either
+`ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION` or `NO_EXTENSION`. A clean
+null therefore terminates normally as `NO_EXTENSION` rather than requiring
+manual interpretation. This repair neither alters P1 nor authorizes a retry,
+extension, or production promotion of opponent-side priors. No further pilot
+is currently registered because P1 did not meet its strict interval rule.
 
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
@@ -318,6 +323,6 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
 2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. R20 is terminally captured and negative, so retain the repair as correctness-only and do not extend that line.
-3. Preserve R3's pre-game source-admission failure, R4's complete terminal `NONPASS`, and P1's completed root. Do not rerun, recapture, or extend any of them. R7 proved clean applicability, but P1's lower paired-bootstrap delta is exactly neutral, so park opponent-side model priors as a strength mechanism. Repair the strength-readout capture path before any future separately registered candidate is considered.
+3. Preserve R3's pre-game source-admission failure, R4's complete terminal `NONPASS`, and P1's completed root. Do not rerun, recapture, or extend any of them. R7 proved clean applicability, but P1's lower paired-bootstrap delta is exactly neutral, so park opponent-side model priors as a strength mechanism. The future-pilot strength-readout repair merged in #1390; it does not revive this parked candidate.
 4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if a different cleanly applied candidate earns a timed study.
 5. R18, the earlier backup-repair attempt, and clean R20 read did not promote backup repair. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
