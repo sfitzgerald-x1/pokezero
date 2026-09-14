@@ -1,6 +1,6 @@
 # MCTS search improvement: execution status and next decisions
 
-Date: 2026-09-11. This is the live execution companion to the offline plan. It distinguishes implemented safety/correctness work, measured mechanics, and actual playing strength. Nothing below treats a green test, synthetic panel, or new runner as a strength result.
+Last updated: 2026-09-13. This is the live execution companion to the offline plan. It distinguishes implemented safety/correctness work, measured mechanics, and actual playing strength. Nothing below treats a green test, synthetic panel, or new runner as a strength result.
 
 ## Objective
 
@@ -29,6 +29,7 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
 | Whole-decision deadline | [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) introduced the model-only, fixed-work deadline; [#1359](https://github.com/sfitzgerald-x1/pokezero/pull/1359) hardened the native-invocation witness and fail-closed validation. The qualification source is their reviewed combined `main` merge `8609d301399738a8081f0e938a3cc4ed7d39abdd` (reviewed #1359 head `6e2bb3ac4fb50abf7fb358c250a7398686153cff`). The clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
 | Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run and its R18 replacement remain non-bankable for their independent terminal-contract defects. The fresh R20 replacement completed cleanly, with all 12 pairs, 24 games, and 48 policy receipts captured in an immutable terminal snapshot. Its work-capped candidate score was 0.375 (declared interval 0.2917–0.4583) and the frozen readout says `no_automatic_extension`. | The canonical launcher and terminal-capture path now work for a complete source-bound MCTS comparison; this particular backup-repair contrast did not produce a positive pilot signal. | A general no-effect claim, an equal-deadline result, a promotion decision, or use of the 50 reserved confirmation seeds. |
+| Opponent-side model priors | R4 completed its full four-seed mirrored applicability roster with zero restarts and an immutable terminal `NONPASS` snapshot. The candidate applied its model-priced opponent arm 249 times and the incumbent stayed off, but live root-prior fallbacks were nonzero (candidate 104; incumbent 4). | The current source-isolated contrast reaches the intended opponent-prior code path, but does not do so cleanly enough to test the mechanism. | A playing-strength result, an excuse to interpret its games, or authorization for a pilot. |
 
 ## Active route
 
@@ -93,7 +94,7 @@ handoff: retain #1337 as a correctness repair and park backup repair as a
 current strength mechanism. It does not alter either preserved predecessor root
 or authorize use of the reserved confirmation seeds.
 
-### 3. Next candidate: requalify opponent-side model priors on the current checkpoint
+### 3. Opponent-side model priors: terminal applicability NONPASS
 
 The current model path explicitly defaults `use_opponent_priors` to false, so
 the in-tree opponent is uniform even though the checkpoint exposes a separate
@@ -110,14 +111,12 @@ when it cannot construct a correct opponent request order, and it records
 `opponent_prior_arm_decisions` when the native tree actually uses the opponent
 head.
 
-Before any new games, extend the existing source-isolated MCTS transport only
-enough to preserve that applied counter in each durable policy receipt. A
-candidate with a missing, regressing, or zero applied count is a terminal
-NONPASS, regardless of its score. Then run one fresh, source-bound development
-applicability read on the final-enthalf checkpoint; its purpose is to establish
-that the candidate is applied with no live-root fallback, not to claim strength.
-Only a clean, applied read may register a fresh paired pilot with new seeds.
-R18's pilot and confirmation rosters remain permanently excluded.
+The source-isolated transport preserves that applied counter in every durable
+policy receipt. A candidate with a missing, regressing, zero, or
+fallback-contaminated applied counter is terminal `NONPASS`, regardless of its
+games or score. Only a clean, applied read may register a fresh paired pilot
+with new seeds. R18's pilot and confirmation rosters remain permanently
+excluded.
 
 The create-only applicability deployment, capture, and failure paths are
 prepared and tested in pokezero-deploy PR #867. The fresh R3 applicability Job
@@ -128,15 +127,25 @@ with `NameError: bootstrap is not defined`; its preserved artifacts are a
 terminal source-admission failure, not an applicability result. No game,
 telemetry, or score evidence from R3 is bankable.
 
-The fresh R4 replacement is create-only under new object and shared-artifact
-names. Its renderer verifies the clean checkout tied to the receipt contains
-the bootstrap-contract assignment, records that runner-source hash in the
-immutable manifest, and rejects the old `3301f285` tree before Kubernetes
-objects can be created. It is bound to the independently successful R19
+The fresh R4 replacement was create-only under new object and shared-artifact
+names. Its renderer verified the clean checkout tied to the receipt contained
+the bootstrap-contract assignment, recorded that runner-source hash in the
+immutable manifest, and rejected the old `3301f285` tree before Kubernetes
+objects could be created. It was bound to the independently successful R19
 receipt: source commit `eaf37e7` and digest
 `sha256:f0487300616c1c5e6ef466e53554360879f70e83db7fc9df3310ecb569734514`.
-R4 remains an applicability gate, not a strength result: a missing, zero, or
-fallback-contaminated applied counter parks the candidate without games.
+
+R4 then completed all eight mirrored games and all sixteen worker receipts with
+zero restarts. Its candidate applied model-priced opponent arms 249 times and
+the incumbent's counter remained zero, but the durable readout recorded 104
+candidate and 4 incumbent root-prior fallbacks. The gate therefore wrote the
+terminal `OPPONENT_PRIOR_APPLICABILITY_NONPASS` readout and the immutable
+`mcts-opponent-prior-applicability-r4-20260911-terminal` snapshot; the capture
+path is fixed in [pokezero-deploy #875](https://github.com/sfitzgerald-x1/pokezero-deploy/pull/875).
+This is a complete, source-bound falsification of clean applicability, not a
+partial run and not strength evidence. Park the one-boolean candidate. A later
+source-level diagnosis may explain the fallback sites, but must not replay R4,
+reuse its games as a score, or turn this result into a parameter sweep.
 
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
@@ -247,6 +256,6 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
 2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. R20 is terminally captured and negative, so retain the repair as correctness-only and do not extend that line.
-3. Complete and validate the fresh R4 source-bound development applicability read for opponent-side model priors on the current final-enthalf checkpoint. R3's pre-game source-admission failure is preserved and excluded. A missing, zero, or fallback-contaminated applied counter parks the candidate without games.
-4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if the applied opponent-prior read earns a timed study.
+3. Preserve R3's pre-game source-admission failure and R4's complete terminal `NONPASS`. Do not rerun, recapture, or score either; park opponent-side model priors because the live root-prior counters were fallback-contaminated. A bounded source-level diagnosis is allowed only to classify those fallback sites before naming another candidate.
+4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if a different cleanly applied candidate earns a timed study.
 5. R18, the earlier backup-repair attempt, and clean R20 read did not promote backup repair. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
