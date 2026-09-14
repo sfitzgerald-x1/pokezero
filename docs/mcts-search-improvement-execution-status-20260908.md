@@ -147,6 +147,20 @@ partial run and not strength evidence. Park the one-boolean candidate. A later
 source-level diagnosis may explain the fallback sites, but must not replay R4,
 reuse its games as a score, or turn this result into a parameter sweep.
 
+That bounded diagnosis is now complete. The candidate fallbacks are entirely
+localized to `seed-2026092002`, searching as `p2`: 104 live-root fallbacks are
+exactly 26 decisions across four sampled worlds, and the same side records
+4,385 interior fallbacks. The other seven mirrored game-sides have zero
+candidate root and branch fallbacks. That root-plus-interior shape identifies
+the existing fail-closed path for an unavailable opponent request order: with
+no verified order, the native mapper returns an all-unmapped opponent map at
+the root and preserves that refusal through every branch. It is not evidence of
+a bad policy head or a score effect. The sealed R4 artifacts cannot distinguish
+why the upstream public-order walk declined the order (for example, a lost
+permutation versus inconsistent public history), so no mechanics change is
+justified from this run. A future, separately admitted source diagnostic must
+record that refusal reason before attempting to repair the public-order path.
+
 ### 4. Keep the implemented fixed-wall mechanism ready for a future candidate
 
 [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) supplies the
