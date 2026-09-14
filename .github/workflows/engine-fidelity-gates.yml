@@ -1558,8 +1558,12 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 227 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 227 engine-search tests; the suite shrank or grew"
+          # 227 -> 233: fixed-work CPU world dispatch adds six configuration,
+          # concurrency, parity, duplicate-collapse, failure-taxonomy, and
+          # setup-fallback pins.  Keep this exact count synchronized with the
+          # checked-in suite so the guard remains fail-closed.
+          if ! grep -qE 'Ran 233 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 233 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
@@ -2062,8 +2066,11 @@ jobs:
             | tee /tmp/rollout-leaf-arbiter.log
           # 366 -> 367: `test_native_deadline_returns_only_finalized_root_visits`
           # exercises the appended native deadline ABI on the actual model wheel.
-          if ! grep -qE 'Ran 367 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 367 tests"
+          # 367 -> 368: the model-world worker count is part of paired-eval
+          # configuration identity, preventing enabled parallelism from sharing
+          # a result namespace with serial fixed work.
+          if ! grep -qE 'Ran 368 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 368 tests"
             exit 1
           fi
           rollout_leaf_skip_status=0
