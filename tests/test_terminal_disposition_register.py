@@ -734,16 +734,12 @@ def _ledger_row_ids(header: str) -> list[str]:
 def committed_json() -> list[str]:
     """Every committed JSON under `reports/` and `docs/` -- the corpus both censuses use."""
 
-    found: list[str] = []
-    for tree in ("reports", "docs"):
-        for root, dirs, files in os.walk(REPO / tree):
-            dirs[:] = [d for d in dirs if d not in {".git", "__pycache__"}]
-            found += [
-                os.path.relpath(os.path.join(root, name), REPO)
-                for name in files
-                if name.endswith(".json")
-            ]
-    return sorted(found)
+    listed = subprocess.run(
+        ["git", "-C", str(REPO), "ls-files", "-z", "--", "reports", "docs"],
+        capture_output=True,
+        check=True,
+    ).stdout.decode("utf-8").split("\0")
+    return sorted(name for name in listed if name.endswith(".json"))
 
 
 def head_fingerprint() -> str:
