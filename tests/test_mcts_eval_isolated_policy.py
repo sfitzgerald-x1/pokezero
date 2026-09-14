@@ -182,7 +182,7 @@ while True:
         write(stdout, {{"type": "error", "message": "annotation snapshot changed"}})
         continue
     action = 1 if mode == "illegal" else 0
-    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "opponent_prior_arm_decisions": 1, "decision_wall_seconds": 0.25}}
+    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "opponent_prior_arm_decisions": 1, "opponent_request_order_statuses": {{"resolved": 1}}, "decision_wall_seconds": 0.25}}
     if mode == "legacy-stats":
         del stats["root_prior_fallbacks"]
         del stats["branch_prior_fallbacks"]
@@ -390,6 +390,7 @@ class StatsTest(unittest.TestCase):
             "root_prior_fallbacks": 0,
             "branch_prior_fallbacks": 0,
             "opponent_prior_arm_decisions": 3,
+            "opponent_request_order_statuses": {"resolved": 3},
             "decision_wall_seconds": 0.3,
         }
 
@@ -414,6 +415,20 @@ class StatsTest(unittest.TestCase):
         del payload["opponent_prior_arm_decisions"]
         with self.assertRaisesRegex(IsolatedPolicyError, "opponent_prior_arm_decisions"):
             stats.update(payload)
+
+    def test_opponent_request_order_statuses_are_required_and_monotonic(self) -> None:
+        stats = IsolatedPolicyStats()
+        payload = self._payload()
+        stats.update(payload)
+        self.assertEqual(stats.opponent_request_order_statuses, {"resolved": 3})
+        missing = self._payload()
+        del missing["opponent_request_order_statuses"]
+        with self.assertRaisesRegex(IsolatedPolicyError, "opponent_request_order_statuses"):
+            IsolatedPolicyStats().update(missing)
+        regressed = self._payload()
+        regressed["opponent_request_order_statuses"] = {"resolved": 2}
+        with self.assertRaisesRegex(IsolatedPolicyError, "status telemetry regressed"):
+            stats.update(regressed)
 
     def test_scope_counter_aggregate_mismatch_is_refused(self) -> None:
         stats = IsolatedPolicyStats()

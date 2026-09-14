@@ -16,6 +16,7 @@ from pokezero.mcts_eval.head_to_head import (
     HeadToHeadGame,
     HeadToHeadError,
     MctsPolicySpec,
+    PolicyTelemetry,
     PublicOnlyMctsPolicy,
     complete_pair,
     load_pair,
@@ -72,6 +73,23 @@ class _IsolatedPolicy(_Policy):
     """Test double for a policy whose decisions came from another source tree."""
 
     is_source_isolated = True
+
+
+class OpponentOrderTelemetryTest(unittest.TestCase):
+    def test_order_status_deltas_are_preserved_and_must_be_monotonic(self) -> None:
+        before = PolicyTelemetry(opponent_request_order_statuses={"resolved": 2})
+        after = PolicyTelemetry(
+            opponent_request_order_statuses={
+                "resolved": 3,
+                "lost_active_permutation": 1,
+            }
+        )
+        self.assertEqual(
+            after.delta(before).opponent_request_order_statuses,
+            {"resolved": 1, "lost_active_permutation": 1},
+        )
+        with self.assertRaisesRegex(HeadToHeadError, "status telemetry regressed"):
+            before.delta(after)
 
 
 class IsolatedRunnerCliTest(unittest.TestCase):

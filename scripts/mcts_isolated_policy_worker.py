@@ -45,6 +45,7 @@ STATS_FIELDS = (
     "root_prior_fallbacks",
     "branch_prior_fallbacks",
     "opponent_prior_arm_decisions",
+    "opponent_request_order_statuses",
     "decision_wall_seconds",
 )
 
@@ -396,7 +397,16 @@ def _stats_payload(stats: Any) -> dict[str, Any]:
             raise WorkerError(
                 f"source-local policy stats omit required telemetry field {field_name!r}."
             ) from error
-        payload[field_name] = float(value) if field_name == "decision_wall_seconds" else int(value)
+        if field_name == "opponent_request_order_statuses":
+            if not isinstance(value, Mapping):
+                raise WorkerError(
+                    "source-local policy opponent request-order statuses are not a mapping."
+                )
+            payload[field_name] = dict(value)
+        else:
+            payload[field_name] = (
+                float(value) if field_name == "decision_wall_seconds" else int(value)
+            )
     if payload["prior_fallbacks"] != (
         payload["root_prior_fallbacks"] + payload["branch_prior_fallbacks"]
     ):

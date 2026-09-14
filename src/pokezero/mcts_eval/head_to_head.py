@@ -14,7 +14,8 @@ not two labels attached to today's loaded extension.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from collections import Counter
+from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
 import math
@@ -24,6 +25,7 @@ import tempfile
 from typing import Any, Callable, Mapping, Sequence, cast
 
 from ..policy import PolicyContext
+from ..engine_search import OPPONENT_REQUEST_ORDER_STATUS_VALUES
 from .scoring import (
     GameResult,
     MergeError,
@@ -296,6 +298,10 @@ class PolicyTelemetry:
     root_prior_fallbacks: int = 0
     branch_prior_fallbacks: int = 0
     opponent_prior_arm_decisions: int = 0
+    # The per-game delta of source-derived root-order dispositions.  Retaining
+    # this mapping lets a diagnostic separate an unavailable public order from
+    # a genuinely ineffective opponent policy prior.
+    opponent_request_order_statuses: Mapping[str, int] = field(default_factory=dict)
     decision_wall_seconds: float = 0.0
 
     def __post_init__(self) -> None:
@@ -318,6 +324,20 @@ class PolicyTelemetry:
             raise ValueError(
                 "policy prior fallback aggregate must equal root plus branch fallbacks."
             )
+        if not isinstance(self.opponent_request_order_statuses, Mapping):
+            raise ValueError("opponent request-order statuses must be a mapping.")
+        statuses: dict[str, int] = {}
+        for status, count in self.opponent_request_order_statuses.items():
+            if status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
+                raise ValueError(f"unknown opponent request-order status {status!r}.")
+            if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                raise ValueError(
+                    f"opponent request-order status {status!r} has invalid count {count!r}."
+                )
+            statuses[str(status)] = count
+        # A frozen dataclass does not freeze a mutable mapping.  Copy the
+        # receipt payload so a caller cannot alter a validated game afterward.
+        object.__setattr__(self, "opponent_request_order_statuses", statuses)
         if not math.isfinite(self.decision_wall_seconds) or self.decision_wall_seconds < 0:
             raise ValueError("policy decision wall time must be finite and non-negative.")
 
@@ -361,15 +381,34 @@ class PolicyTelemetry:
             opponent_prior_arm_decisions=int(
                 getattr(stats, "opponent_prior_arm_decisions", 0)
             ),
+            opponent_request_order_statuses=dict(
+                getattr(stats, "opponent_request_order_statuses", {})
+            ),
             decision_wall_seconds=float(getattr(stats, "decision_wall_seconds", 0.0)),
         )
 
     def delta(self, before: "PolicyTelemetry") -> "PolicyTelemetry":
-        values = {
-            field: getattr(self, field) - getattr(before, field)
-            for field in self.__dataclass_fields__
-        }
-        if any(value < 0 for value in values.values()):
+        values: dict[str, Any] = {}
+        for field_name in self.__dataclass_fields__:
+            if field_name == "opponent_request_order_statuses":
+                current = self.opponent_request_order_statuses
+                previous = before.opponent_request_order_statuses
+                if any(current.get(status, 0) < count for status, count in previous.items()):
+                    raise HeadToHeadError(
+                        "policy opponent request-order status telemetry regressed during a game."
+                    )
+                values[field_name] = {
+                    status: count - previous.get(status, 0)
+                    for status, count in current.items()
+                    if count > previous.get(status, 0)
+                }
+                continue
+            values[field_name] = getattr(self, field_name) - getattr(before, field_name)
+        if any(
+            value < 0
+            for field_name, value in values.items()
+            if field_name != "opponent_request_order_statuses"
+        ):
             raise HeadToHeadError(
                 "policy telemetry regressed during a game; counters must be monotonic to "
                 "report realized work."
@@ -885,6 +924,11 @@ def summarize_complete_pairs(
     incumbent_walls = tuple(
         wall for game in required for wall in game.incumbent_decision_walls_s
     )
+    candidate_order_statuses: Counter[str] = Counter()
+    incumbent_order_statuses: Counter[str] = Counter()
+    for game in required:
+        candidate_order_statuses.update(game.candidate_telemetry.opponent_request_order_statuses)
+        incumbent_order_statuses.update(game.incumbent_telemetry.opponent_request_order_statuses)
     return {
         "schema_version": "pokezero.mcts-h2h-summary.v1",
         "candidate": candidate.to_payload(),
@@ -934,5 +978,11 @@ def summarize_complete_pairs(
         ),
         "incumbent_opponent_prior_arm_decisions": sum(
             game.incumbent_telemetry.opponent_prior_arm_decisions for game in required
+        ),
+        "candidate_opponent_request_order_statuses": dict(
+            sorted(candidate_order_statuses.items())
+        ),
+        "incumbent_opponent_request_order_statuses": dict(
+            sorted(incumbent_order_statuses.items())
         ),
     }

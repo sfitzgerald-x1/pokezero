@@ -3350,7 +3350,10 @@ def self_recharge_from_action_candidates(observation_metadata: Any) -> bool:
     return normalize_id(str(only.get("move_id") or "")) == _RECHARGE_REQUEST_MOVE_ID
 
 
-_OPPONENT_REQUEST_ORDER_STATUSES = frozenset(
+# Public because source-isolated MCTS transport validates and preserves this
+# exact evidence in a durable game receipt.  Adding a status is a protocol
+# change, not a local telemetry edit.
+OPPONENT_REQUEST_ORDER_STATUS_VALUES = frozenset(
     {
         "resolved",
         "empty_party",
@@ -5809,7 +5812,7 @@ class EngineMctsPolicy:
             self.stats.branch_prior_fallbacks += branch_prior_fallbacks
             if config.use_opponent_priors:
                 expected_order_status = record.get("_opponent_request_order_status")
-                if expected_order_status not in _OPPONENT_REQUEST_ORDER_STATUSES:
+                if expected_order_status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
                     raise EngineSearchWitnessError(
                         "opponent_request_order_status_missing_at_python_boundary"
                     )
