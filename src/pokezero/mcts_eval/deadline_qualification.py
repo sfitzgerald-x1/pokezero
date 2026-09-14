@@ -199,6 +199,21 @@ def validate_deadline_decision(
             raise DeadlineQualificationError(
                 f"{decision_id}: world parallelism did not use remaining-budget dispatch"
             )
+        # The worker count names the requested executor width; it does not by
+        # itself prove that every worker had an independent native evaluator.
+        # The engine emits this separately after refusing a short handle pool.
+        # Require the durable value to match the frozen contract too, so a
+        # hand-edited or incomplete receipt cannot turn shared-handle dispatch
+        # into valid parallel deadline evidence.
+        if _int(
+            parallel.get("independent_native_models"),
+            "world_parallelism.independent_native_models",
+            decision_id=decision_id,
+            minimum=1,
+        ) != requirements.model_world_workers:
+            raise DeadlineQualificationError(
+                f"{decision_id}: independent native model count differs from the frozen contract"
+            )
         parallel_invocation_count = _int(
             parallel.get("native_invocations"),
             "world_parallelism.native_invocations",
