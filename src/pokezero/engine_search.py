@@ -4073,13 +4073,16 @@ class EngineMctsPolicy:
 
         This is deliberately a narrow public hook for the MCTS timing lattice.
         A timed decision should measure one completed policy decision, not the
-        one-time TorchScript module load for the first decision in a cell.
+        one-time TorchScript module load for the first decision in a cell.  An
+        opt-in fixed-work world dispatcher owns one independent native model per
+        worker, so warming only its primary handle would hide the remaining
+        loads in the first measured parallel decision.
         Calling it on a non-model configuration is a harness error rather than
         an invitation to time a different search path.
         """
         if self._config.leaf_eval != "model":
             raise ValueError("warm_model_runtime requires leaf_eval='model'.")
-        self._native()
+        self._native_handles_for_model_world_workers()
 
     def warm_public_prefix_for_replay(
         self,
@@ -5615,11 +5618,16 @@ class EngineMctsPolicy:
                                 "parallel world dispatch returned a non-exception refusal."
                             )
                         raise payload
-                    if not isinstance(payload, Mapping):
-                        raise EngineSearchWitnessError(
-                            "parallel world dispatch returned a non-mapping report."
-                        )
-                    report = dict(payload)
+                    # Keep JSON-decoded values *as is*.  The serial path accepts
+                    # ``json.loads`` here and consumes the native report below;
+                    # an array/scalar therefore raises from that shared
+                    # consumption seam.  Coercing or rejecting it inside this
+                    # parallel-only branch turns the malformed world into a
+                    # recoverable per-world refusal, letting a healthy sibling
+                    # produce a partial aggregate where the serial policy
+                    # rejects the whole decision.  The dispatch mode may change
+                    # throughput, never that failure boundary.
+                    report = payload
                 if time_budget_ms is not None:
                     # A native wheel that accepts the new positional but does
                     # not witness its use is not a timed search. Refuse it

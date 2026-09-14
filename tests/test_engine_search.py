@@ -1618,6 +1618,56 @@ class ModelWorldParallelismTests(unittest.TestCase):
             policy.stats.world_failure_reasons, Counter({"crate_search: parallel refusal": 1})
         )
 
+    def test_parallel_non_object_json_preserves_the_serial_failure_boundary(self) -> None:
+        """A malformed native report must not become a partial-world decision.
+
+        JSON decoding succeeds for arrays, scalars, and ``null``.  The serial
+        path therefore reaches the shared report-consumption seam and raises
+        there.  Parallel dispatch may have already started a healthy sibling,
+        but it must surface the same malformed-report failure rather than
+        absorbing only the bad world and returning that sibling's action.
+        """
+        worlds = [self._world("world-a"), self._world("world-b")]
+        for malformed in ([], None, 0, "not-a-native-report"):
+            with self.subTest(malformed=malformed):
+                reports = {
+                    "world-a": malformed,
+                    "world-b": self._report(10, 90),
+                }
+                serial_native = self._NativeByState(reports)
+                with self.assertRaises(TypeError):
+                    self._run(
+                        self._policy(workers=1),
+                        serial_native,
+                        [serial_native],
+                        worlds,
+                    )
+
+                parallel_handles = [
+                    self._NativeByState(reports),
+                    self._NativeByState(reports),
+                ]
+                with self.assertRaises(TypeError):
+                    self._run(
+                        self._policy(workers=2),
+                        parallel_handles[0],
+                        parallel_handles,
+                        worlds,
+                    )
+
+    def test_warm_model_runtime_warms_every_fixed_work_handle(self) -> None:
+        """The first timed parallel decision must not pay for extra model loads."""
+        policy = object.__new__(EngineMctsPolicy)
+        policy._config = SimpleNamespace(leaf_eval="model", model_world_workers=2)
+        handles = (object(), object())
+        with patch.object(
+            EngineMctsPolicy,
+            "_native_handles_for_model_world_workers",
+            return_value=handles,
+        ) as warm_handles:
+            policy.warm_model_runtime()
+        warm_handles.assert_called_once_with()
+
     def test_parallel_setup_failure_falls_back_instead_of_escaping(self) -> None:
         policy = self._policy(workers=2)
         native = self._NativeByState({"world-a": self._report(70, 30)})
