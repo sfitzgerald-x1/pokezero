@@ -1051,6 +1051,32 @@ class WorldParallelismPilotContractTest(unittest.TestCase):
         module, manifest, *_ = self._inputs()
         self.assertTrue(module._replacement_study_requires_durable_launcher(manifest))
 
+    def test_deadline_totals_use_the_validator_normalized_decision_shape(self) -> None:
+        module = _runner_module()
+        summary = {
+            "decisions": [
+                {
+                    "worlds_searched": 2,
+                    "native_invocations": [
+                        {"completed_iterations": 59},
+                        {"completed_iterations": 52},
+                    ],
+                },
+                {
+                    "worlds_searched": 1,
+                    "native_invocations": [{"completed_iterations": 60}],
+                },
+            ]
+        }
+        self.assertEqual(
+            module._validated_deadline_totals(summary, role="candidate"), (171, 3)
+        )
+
+        with self.assertRaisesRegex(HeadToHeadError, "recomputed decision 0 is malformed"):
+            module._validated_deadline_totals(
+                {"decisions": [{"worlds_searched": 2}]}, role="candidate"
+            )
+
     def test_on_disk_qualification_with_different_checkpoint_is_refused_before_games(self) -> None:
         """A real historical PASS cannot authorize a different live model.
 
