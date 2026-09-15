@@ -87,6 +87,7 @@ OWN_POLICY_PRIOR_STUDY_DECISIONS = (
     "GUIDANCE_HARMED_THIS_CONFIGURATION",
     "TARGET_SIZED_BENEFIT_RULED_OUT",
     "INCONCLUSIVE",
+    "SHARD_COMPLETE",
 )
 MODEL_WORLD_PARALLELISM_PILOT_PAIRS = 8
 MODEL_WORLD_PARALLELISM_PILOT_BOOTSTRAP_RESAMPLES = 10_000
@@ -1593,18 +1594,26 @@ def _own_policy_prior_study_contract(
         "max_guided_to_uniform_mean_wall_ratio",
         "terminal_decisions",
     }
-    if set(study) != required_fields:
+    shard_fields = {"shard_index", "full_roster_sha256"}
+    if set(study) not in (required_fields, required_fields | shard_fields):
         raise HeadToHeadError("own-policy-prior study has unexpected or missing contract fields.")
     if study["schema_version"] != OWN_POLICY_PRIOR_STUDY_SCHEMA_VERSION:
         raise HeadToHeadError("own-policy-prior study has an unrecognized schema.")
     stage = study["stage"]
-    expected_pairs = {"preflight": 4, "strength": 400}
+    expected_pairs = {"preflight": 4, "strength": 400, "strength_shard": 200}
     if stage not in expected_pairs:
         raise HeadToHeadError("own-policy-prior study stage must be 'preflight' or 'strength'.")
     if len(seeds) != expected_pairs[stage] or len(set(seeds)) != len(seeds):
         raise HeadToHeadError(
             f"own-policy-prior {stage} study requires exactly {expected_pairs[stage]} unique mirrored pairs."
         )
+    if stage == "strength_shard":
+        if set(study) != required_fields | shard_fields:
+            raise HeadToHeadError("own-policy-prior strength shard requires sealed shard identity fields.")
+        if study["shard_index"] not in (0, 1) or not isinstance(study["full_roster_sha256"], str) or len(study["full_roster_sha256"]) != 64:
+            raise HeadToHeadError("own-policy-prior strength shard identity is malformed.")
+    elif set(study) != required_fields:
+        raise HeadToHeadError("own-policy-prior non-shard study has unexpected shard identity fields.")
     if study["failure_retry_policy"] != OWN_POLICY_PRIOR_STUDY_FAILURE_RETRY_POLICY:
         raise HeadToHeadError("own-policy-prior study failure/retry policy differs.")
     if tuple(study["terminal_decisions"]) != OWN_POLICY_PRIOR_STUDY_DECISIONS:
@@ -1700,6 +1709,8 @@ def _own_policy_prior_study_contract(
         "max_guided_to_uniform_mean_wall_ratio": 1.05,
         "failure_retry_policy": dict(OWN_POLICY_PRIOR_STUDY_FAILURE_RETRY_POLICY),
         "terminal_decisions": list(OWN_POLICY_PRIOR_STUDY_DECISIONS),
+        "shard_index": study.get("shard_index"),
+        "full_roster_sha256": study.get("full_roster_sha256"),
     }
 
 
@@ -1822,6 +1833,8 @@ def _own_policy_prior_study_readout(
     stage = str(contract["stage"])
     if stage == "preflight":
         decision = "PREFLIGHT_PASS" if validity else "PREFLIGHT_NONPASS"
+    elif stage == "strength_shard":
+        decision = "SHARD_COMPLETE" if validity else "INCONCLUSIVE"
     elif not validity:
         decision = "INCONCLUSIVE"
     else:
