@@ -136,6 +136,13 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             self.assertEqual(active["tree_status"], "explicit_commit_without_git")
             self.assertEqual(active["execution_tree_sha256"], receipt["execution_tree_sha256"])
 
+    def test_reviewed_engine_source_pin_matches_the_checked_in_mechanism(self) -> None:
+        """A source edit cannot leave the runner's qualification pin stale."""
+        self.assertEqual(
+            runner.sha256_file(runner.ROOT / "src" / "pokezero" / "engine_search.py"),
+            runner.REVIEWED_ENGINE_SEARCH_SHA256,
+        )
+
     def test_stale_installed_native_engine_is_refused(self) -> None:
         receipt = {
             "source_files_sha256": {

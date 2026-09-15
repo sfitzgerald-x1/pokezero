@@ -1174,6 +1174,18 @@ class EngineMctsConfig:
             raise ValueError(
                 "model_decision_time_ms is supported only with leaf_eval='model'."
             )
+        elif (
+            isinstance(self.model_native_batch_guard_ms, bool)
+            or not isinstance(self.model_native_batch_guard_ms, int)
+            or self.model_native_batch_guard_ms != 0
+        ):
+            # Like the whole-decision clock, the guard has no implementation
+            # outside the encoded model-search path.  Accepting a non-default
+            # or malformed value there would make a serialized policy appear
+            # to have a deadline behavior that it cannot execute.
+            raise ValueError(
+                "model_native_batch_guard_ms is supported only with leaf_eval='model'."
+            )
         elif self.model_world_workers != 1:
             raise ValueError(
                 "model_world_workers is supported only with leaf_eval='model'."

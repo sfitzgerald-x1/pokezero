@@ -597,6 +597,10 @@ class ModelConfigValidationTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "only with leaf_eval='model'"):
             EngineMctsConfig(model_decision_time_ms=1)
+        for invalid_guard in (1, -1, True, 0.0, "0"):
+            with self.subTest(invalid_guard=invalid_guard):
+                with self.assertRaisesRegex(ValueError, "only with leaf_eval='model'"):
+                    EngineMctsConfig(model_native_batch_guard_ms=invalid_guard)
         with self.assertRaisesRegex(ValueError, "must be positive"):
             EngineMctsConfig(**base, model_decision_time_ms=0)
         with self.assertRaisesRegex(ValueError, "requires model_decision_time_ms"):
