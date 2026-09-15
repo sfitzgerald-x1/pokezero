@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import fcntl
+import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -27,6 +29,7 @@ from pokezero.mcts_eval.head_to_head import (
 )
 from pokezero.mcts_eval.scoring import bootstrap_mean
 from pokezero.policy import PolicyContext
+from pokezero.engine_search import EngineMctsConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -120,6 +123,35 @@ class _OpponentPriorConfig:
     override_telemetry: bool = True
     search_sims: int = 256
     search_batch: int = 16
+
+
+def _world_parallelism_config(**overrides):
+    """Use the real engine dataclass so new knobs cannot escape this test."""
+
+    values = {
+        "worlds": 4,
+        "search_time_ms": 100,
+        "threads": 1,
+        "strict_fallbacks": True,
+        "leaf_eval": "model",
+        "model_device": "cpu",
+        "checkpoint_path": "/checkpoint.pt",
+        "model_path": "/model.ts",
+        "tables_path": "/tables.json",
+        "search_sims": 256,
+        "search_batch": 16,
+        "search_depth": 2,
+        "model_priors": False,
+        "use_opponent_priors": False,
+        "early_stop": False,
+        "model_decision_time_ms": 1_000,
+        "model_native_batch_guard_ms": 64,
+        "model_world_workers": 2,
+        "depth_min": None,
+        "worlds_min": None,
+    }
+    values.update(overrides)
+    return EngineMctsConfig(**values)
 
 
 def _spec(config_id: str, **overrides) -> MctsPolicySpec:
@@ -805,6 +837,298 @@ class OpponentPriorStrengthPilotReadoutTest(unittest.TestCase):
 
         self.assertEqual(readout["decision"], "NO_EXTENSION")
         self.assertFalse(readout["promotion_checks"]["candidate_source_order_statuses_allowed"])
+
+
+class WorldParallelismPilotContractTest(unittest.TestCase):
+    @staticmethod
+    def _runtime_context():
+        observation = {
+            "schema_version": "pokezero.observation.v4",
+            "token_count": 23,
+            "categorical_feature_count": 41,
+            "numeric_feature_count": 132,
+            "transition_token_count": 0,
+            "feature_masks": {"exact_state": True},
+            "category_vocab_sha256": "d" * 64,
+        }
+        return {
+            "checkpoint_contract": {
+                "checkpoint_sha256": "e" * 64,
+                "observation_contract_sha256": "f" * 64,
+                "observation_contract": observation,
+                "model_device": "cpu",
+                "showdown_source_sha256": "a" * 64,
+                "exporter_revision": "pokezero.mcts-eval.exporter.v5",
+            },
+            "showdown_source": {"content_sha256": "a" * 64, "git_clean": True},
+            "engine_fingerprint": "c" * 64,
+        }
+
+    def _inputs(self):
+        module = _runner_module()
+        manifest = {
+            "world_parallelism_pilot": {
+                "schema_version": module.MODEL_WORLD_PARALLELISM_PILOT_SCHEMA_VERSION,
+                "stage": "pilot",
+                "failure_retry_policy": module.MODEL_WORLD_PARALLELISM_PILOT_FAILURE_RETRY_POLICY,
+                "minimum_effect_delta": module.MODEL_WORLD_PARALLELISM_PILOT_MINIMUM_EFFECT_DELTA,
+                "terminal_decisions": list(module.MODEL_WORLD_PARALLELISM_PILOT_DECISIONS),
+                "deadline_qualifications": {
+                    "candidate": {
+                        "root": "/shared/scott-experiment/r16",
+                        "manifest_sha256": "a" * 64,
+                        "pass_sha256": "b" * 64,
+                    },
+                    "incumbent": {
+                        "root": "/shared/scott-experiment/r17",
+                        "manifest_sha256": "c" * 64,
+                        "pass_sha256": "d" * 64,
+                    },
+                },
+            }
+        }
+        identity = {
+            "source_commit": "a" * 40,
+            "source_tree_sha256": "b" * 64,
+            "engine_fingerprint": "c" * 64,
+        }
+        candidate = {**identity, "config_id": "world-workers-2"}
+        incumbent = {**identity, "config_id": "world-workers-1"}
+        bootstrap = {"resamples": 10_000, "seed": 2026091501, "confidence_level": 0.80}
+        seeds = tuple(range(2026091501, 2026091509))
+        return module, manifest, seeds, bootstrap, candidate, incumbent
+
+    @staticmethod
+    def _qualification(role: str, workers: int):
+        return {
+            "root": f"/shared/scott-experiment/{role}",
+            "manifest_sha256": role[0] * 64,
+            "pass_sha256": role[-1] * 64,
+            "requirements": {
+                "expected_decisions": 16,
+                "model_world_workers": workers,
+                "native_batch_guard_ms": 64,
+                "requested_ms": 1_000,
+                "sims_per_world": 256,
+                "worlds": 4,
+            },
+            "completed_iterations_total": 2_384 if workers == 2 else 1_196,
+            "worlds_searched_total": 32 if workers == 2 else 16,
+        }
+
+    def test_contract_requires_exact_same_clock_one_knob_contrast(self) -> None:
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._inputs()
+        with patch.object(
+            module,
+            "_validated_deadline_qualification",
+            side_effect=[self._qualification("candidate", 2), self._qualification("incumbent", 1)],
+        ) as qualified:
+            contract = module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_world_parallelism_config(),
+                incumbent_config=_world_parallelism_config(model_world_workers=1),
+                execution_mode="in_process",
+                **self._runtime_context(),
+            )
+
+        self.assertEqual(contract["pilot_seeds"], list(seeds))
+        self.assertEqual(
+            contract["deadline_qualifications"]["candidate"]["completed_iterations_total"],
+            2_384,
+        )
+        self.assertEqual(qualified.call_count, 2)
+
+        with self.assertRaisesRegex(HeadToHeadError, "only model_world_workers"):
+            module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_world_parallelism_config(),
+                incumbent_config=_world_parallelism_config(
+                    model_world_workers=1,
+                    search_batch=8,
+                ),
+                execution_mode="in_process",
+                **self._runtime_context(),
+            )
+        with self.assertRaisesRegex(HeadToHeadError, "current in-process source"):
+            module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_world_parallelism_config(),
+                incumbent_config=_world_parallelism_config(model_world_workers=1),
+                execution_mode="isolated_build",
+                **self._runtime_context(),
+            )
+
+        # The arms can agree with each other on a changed PUCT constant, yet
+        # R16/R17 would then no longer be evidence for their clock/mechanics.
+        # Use the real config dataclass so this remains true as it grows.
+        with self.assertRaisesRegex(
+            HeadToHeadError, "exact qualified soft-clock configuration"
+        ):
+            module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_world_parallelism_config(c_puct=1.1),
+                incumbent_config=_world_parallelism_config(
+                    model_world_workers=1,
+                    c_puct=1.1,
+                ),
+                execution_mode="in_process",
+                **self._runtime_context(),
+            )
+
+    def test_readout_requires_effect_clean_roots_and_completed_search(self) -> None:
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._inputs()
+        with patch.object(
+            module,
+            "_validated_deadline_qualification",
+            side_effect=[self._qualification("candidate", 2), self._qualification("incumbent", 1)],
+        ):
+            contract = module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_world_parallelism_config(),
+                incumbent_config=_world_parallelism_config(model_world_workers=1),
+                execution_mode="in_process",
+                **self._runtime_context(),
+            )
+        games = [
+            SimpleNamespace(
+                candidate_telemetry=SimpleNamespace(
+                    total_iterations=10,
+                    worlds_searched=2,
+                    root_prior_fallbacks=0,
+                ),
+                incumbent_telemetry=SimpleNamespace(
+                    total_iterations=5,
+                    worlds_searched=1,
+                    root_prior_fallbacks=0,
+                ),
+            )
+            for _ in range(16)
+        ]
+        readout = module._world_parallelism_pilot_readout(
+            contract=contract,
+            summary={
+                "pair_scores": [1.0] * len(seeds),
+                "candidate_decision_wall_summary": {"count": 16, "p95": 1.1},
+                "incumbent_decision_wall_summary": {"count": 16, "p95": 1.0},
+            },
+            games=games,
+        )
+        self.assertEqual(
+            readout["decision"], "ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION"
+        )
+        self.assertTrue(readout["promotion_checks"]["both_arms_completed_model_search"])
+
+        games[0].candidate_telemetry.root_prior_fallbacks = 1
+        null_readout = module._world_parallelism_pilot_readout(
+            contract=contract,
+            summary={"pair_scores": [1.0] * len(seeds)},
+            games=games,
+        )
+        self.assertEqual(null_readout["decision"], "NO_EXTENSION")
+        self.assertFalse(null_readout["promotion_checks"]["zero_root_prior_fallbacks"])
+
+    def test_registered_world_parallelism_pilot_requires_durable_launcher(self) -> None:
+        module, manifest, *_ = self._inputs()
+        self.assertTrue(module._replacement_study_requires_durable_launcher(manifest))
+
+    def test_on_disk_qualification_with_different_checkpoint_is_refused_before_games(self) -> None:
+        """A real historical PASS cannot authorize a different live model.
+
+        This deliberately uses on-disk MANIFEST/PASS bytes rather than mocking
+        the qualification reader: the failure must happen after immutable
+        receipt binding and before an absent decision directory could be read
+        as a resume opportunity.
+        """
+
+        module = _runner_module()
+        runtime = self._runtime_context()
+        expected = module._world_parallelism_qualification_provenance(**runtime)
+        expected["search_config"] = {
+            **expected["search_config"],
+            "model_world_workers": 2,
+        }
+        requirements = {
+            **module.MODEL_WORLD_PARALLELISM_PILOT_DEADLINE_REQUIREMENTS,
+            "model_world_workers": 2,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_parent = Path(directory) / "shared" / "scott-experiment"
+            root = evidence_parent / "candidate"
+            root.mkdir(parents=True)
+            qualification_checkpoint = dict(runtime["checkpoint_contract"])
+            qualification_checkpoint["checkpoint_sha256"] = "0" * 64
+            manifest = {
+                "requirements": requirements,
+                "checkpoint": qualification_checkpoint,
+                "showdown_source": runtime["showdown_source"],
+                "active_source": {
+                    "commit": "1" * 40,
+                    "execution_tree_sha256": "2" * 64,
+                    "tree_status": "clean_git_checkout",
+                },
+                "source_receipt": {
+                    "schema_version": "pokezero.mcts-deadline-source-receipt.v1",
+                    "complete": True,
+                    "source_commit": "1" * 40,
+                    "execution_tree_sha256": "2" * 64,
+                    "engine_fingerprint": runtime["engine_fingerprint"],
+                },
+                "deadline_mechanics": {
+                    "engine_build_fingerprint": {
+                        "fingerprint": runtime["engine_fingerprint"]
+                    },
+                    "engine_search_sha256": expected["engine_search_sha256"],
+                },
+                "search_config": expected["search_config"],
+            }
+            terminal = {
+                "state": "PASS",
+                "marker": "DEADLINE_QUALIFICATION_PASS",
+                "manifest": manifest,
+            }
+            manifest_path = root / "MANIFEST.json"
+            pass_path = root / "PASS.json"
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            pass_path.write_text(
+                json.dumps(terminal, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            raw = {
+                "root": str(root),
+                "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                "pass_sha256": hashlib.sha256(pass_path.read_bytes()).hexdigest(),
+            }
+            with self.assertRaisesRegex(HeadToHeadError, "checkpoint checkpoint_sha256 differs"):
+                module._validated_deadline_qualification(
+                    raw,
+                    role="candidate",
+                    expected_workers=2,
+                    expected_provenance=expected,
+                    evidence_parent=evidence_parent,
+                )
 
 
 class BackupRepairPilotContractTest(unittest.TestCase):
