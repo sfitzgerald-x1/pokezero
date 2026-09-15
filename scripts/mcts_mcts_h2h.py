@@ -162,6 +162,10 @@ ISOLATED_DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
     # Older frozen sources predate this deadline control.  None is the
     # disabled setting and retains their fixed-work MCTS behavior exactly.
     "model_decision_time_ms": None,
+    # A zero native-batch guard also retains the historical deadline behavior.
+    # Any positive guard is a different scheduling policy and cannot be
+    # silently omitted from a source-isolated comparison.
+    "model_native_batch_guard_ms": 0,
     "model_world_workers": 1,
 }
 

@@ -32,6 +32,10 @@ DISABLED_DIAGNOSTIC_COMPATIBILITY_DEFAULTS = {
     "root_selector_q": False,
     "root_selector_shadow": False,
     "model_decision_time_ms": None,
+    # A zero guard is the explicit historical behavior: native batches receive
+    # the entire remaining deadline.  A nonzero guard changes scheduling and
+    # must therefore never be projected onto an older isolated source.
+    "model_native_batch_guard_ms": 0,
     "model_world_workers": 1,
 }
 STATS_FIELDS = (
@@ -63,8 +67,8 @@ def source_engine_config_payload(
 
     The isolated worker must construct the declared historical source policy,
     even if the host gained later diagnostics. This deliberately permits only
-    named diagnostic fields at their disabled defaults, and reports every
-    omission in the source receipt for the host to validate.
+    explicitly allow-listed fields at their disabled defaults, and reports
+    every omission in the source receipt for the host to validate.
     """
 
     source_fields = getattr(config_type, "__dataclass_fields__", None)
