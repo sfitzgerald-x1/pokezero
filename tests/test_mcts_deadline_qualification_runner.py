@@ -59,6 +59,18 @@ class FakeRecord:
 
 
 class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
+    def test_model_world_workers_must_fit_the_frozen_world_count(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = _arguments(Path(temporary) / "out") + [
+                "--worlds",
+                "4",
+                "--model-world-workers",
+                "2",
+            ]
+            self.assertEqual(runner._parse_args(args).model_world_workers, 2)
+            with self.assertRaises(SystemExit):
+                runner._parse_args(args[:-1] + ["5"])
+
     def test_dirty_git_source_is_refused(self) -> None:
         source = ROOT / "pyproject.toml"
         completed = types.SimpleNamespace(stdout="d" * 40 + "\n")
@@ -275,6 +287,7 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
                 FakeDecider.initialized_with,
                 {
                     "model_decision_time_ms": 1000,
+                    "model_world_workers": 1,
                     "model_priors": False,
                     "use_opponent_priors": False,
                 },

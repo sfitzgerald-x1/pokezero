@@ -33,11 +33,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 # installed-build fingerprint separately from the runner image's own receipt.
 SOURCE_RECEIPT_SCHEMA_VERSION = "pokezero.mcts-deadline-source-receipt.v1"
 # The runner can advance independently, but a qualification is only about the
-# deadline mechanism reviewed at this source point.  These values are a second,
-# local guard in addition to the image receipt and installed-build fingerprint.
-REVIEWED_DEADLINE_SOURCE_COMMIT = "8609d301399738a8081f0e938a3cc4ed7d39abdd"
-REVIEWED_ENGINE_SEARCH_SHA256 = "8d647f13440173cf939ea36c7d5940e64544388fb82b0315d2f67c9a9b845eb5"
-REVIEWED_ENGINE_FINGERPRINT = "453b9ff93acbddcba3a03b2e3c3bef190607a30c9e5ad04ca10209e5625aa209"
+# deadline mechanism reviewed at this source point.  The review reference
+# identifies that review, whereas the mounted image receipt binds the actual
+# merged execution commit.  These values are a second, local guard in addition
+# to the image receipt and installed-build fingerprint.
+REVIEWED_DEADLINE_SOURCE_COMMIT = "e9c292d5f3ee857aa92af6e3b70130d950bbaec0"
+REVIEWED_ENGINE_SEARCH_SHA256 = "d728f372f39b33085b252a54c9e707dfedc94b29d841efc3f12c0d9fd7840007"
+REVIEWED_ENGINE_FINGERPRINT = "b5699452474270cb3148a0a83b843c1f4767d9378138007d16e158908a2111d0"
 REQUIRED_RECEIPT_FILES = (
     "scripts/run_mcts_deadline_qualification.py",
     "scripts/engine_build_fingerprint.py",
@@ -288,11 +290,23 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--worlds", type=int, default=4)
     parser.add_argument(
+        "--model-world-workers",
+        type=int,
+        default=1,
+        help=(
+            "Concurrent CPU model-world workers. A timed run records and "
+            "independently validates remaining-budget dispatch for this value."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Reuse only independently revalidated, durable decision units for this exact manifest.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not 0 < args.model_world_workers <= args.worlds:
+        parser.error("--model-world-workers must be in 1..=--worlds")
+    return args
 
 
 def _frozen_manifest(
@@ -330,6 +344,7 @@ def _frozen_manifest(
             "model_priors": False,
             "use_opponent_priors": False,
             "model_decision_time_ms": args.deadline_ms,
+            "model_world_workers": args.model_world_workers,
         },
     }
 
@@ -539,6 +554,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         requested_ms=args.deadline_ms,
         sims_per_world=args.sims,
         worlds=args.worlds,
+        model_world_workers=args.model_world_workers,
         expected_decisions=16,
     )
     corpus_file_sha256 = sha256_file(args.corpus)
@@ -587,6 +603,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         checkpoint_contract,
         args.showdown_root,
         model_decision_time_ms=args.deadline_ms,
+        model_world_workers=args.model_world_workers,
         model_priors=False,
         use_opponent_priors=False,
     )

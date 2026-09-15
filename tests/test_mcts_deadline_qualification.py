@@ -77,6 +77,54 @@ class DeadlineQualificationTest(unittest.TestCase):
         self.assertEqual(summary["world_coverage"]["constructed_total"], 8)
         self.assertEqual(summary["world_coverage"]["searched_total"], 8)
 
+    def test_parallel_deadline_qualification_requires_remaining_budget_dispatch(self) -> None:
+        records = [_record(0, prefix=True), _record(1, prefix=False)]
+        for record in records:
+            record["engine_mcts"]["world_parallelism"] = {
+                "workers": 2,
+                "native_invocations": 2,
+                "independent_native_models": 2,
+                "mode": "deadline_remaining_budget",
+            }
+        requirements = DeadlineQualificationRequirements(
+            expected_decisions=2, model_world_workers=2
+        )
+        summary = validate_deadline_qualification(records, requirements=requirements)
+        self.assertEqual(summary["decision_count"], 2)
+
+        records[0]["engine_mcts"]["world_parallelism"]["mode"] = "fixed_work"
+        with self.assertRaisesRegex(DeadlineQualificationError, "remaining-budget"):
+            validate_deadline_qualification(records, requirements=requirements)
+
+    def test_parallel_deadline_qualification_requires_independent_native_models(self) -> None:
+        records = [_record(0, prefix=True), _record(1, prefix=False)]
+        for record in records:
+            record["engine_mcts"]["world_parallelism"] = {
+                "workers": 2,
+                "native_invocations": 2,
+                "independent_native_models": 2,
+                "mode": "deadline_remaining_budget",
+            }
+        requirements = DeadlineQualificationRequirements(
+            expected_decisions=2, model_world_workers=2
+        )
+
+        for invalid_value in (None, 1, 3):
+            with self.subTest(independent_native_models=invalid_value):
+                invalid = copy.deepcopy(records)
+                if invalid_value is None:
+                    del invalid[0]["engine_mcts"]["world_parallelism"][
+                        "independent_native_models"
+                    ]
+                else:
+                    invalid[0]["engine_mcts"]["world_parallelism"][
+                        "independent_native_models"
+                    ] = invalid_value
+                with self.assertRaisesRegex(
+                    DeadlineQualificationError, "independent_native_models|independent native model"
+                ):
+                    validate_deadline_qualification(invalid, requirements=requirements)
+
     def test_missing_serialized_root_action_cannot_resume_as_valid_evidence(self) -> None:
         record = _record(0, prefix=True)
         del record["root_action"]
