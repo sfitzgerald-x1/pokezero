@@ -15,7 +15,10 @@ import math
 from typing import Any
 
 
-DEADLINE_QUALIFICATION_SCHEMA_VERSION = "pokezero.mcts-deadline-qualification.v2"
+# v3 adds the frozen native-batch guard to every durable decision witness.
+# Earlier v2 qualifications remain historical diagnostics, but cannot be
+# mistaken for evidence of this distinct deadline policy.
+DEADLINE_QUALIFICATION_SCHEMA_VERSION = "pokezero.mcts-deadline-qualification.v3"
 
 
 class DeadlineQualificationError(ValueError):

@@ -6,6 +6,7 @@ import copy
 import unittest
 
 from pokezero.mcts_eval.deadline_qualification import (
+    DEADLINE_QUALIFICATION_SCHEMA_VERSION,
     DeadlineQualificationError,
     DeadlineQualificationRequirements,
     validate_deadline_qualification,
@@ -72,6 +73,7 @@ class DeadlineQualificationTest(unittest.TestCase):
             [_record(0, prefix=True), _record(1, prefix=False)], requirements=self.requirements
         )
         self.assertEqual(summary["decision_count"], 2)
+        self.assertEqual(summary["schema_version"], DEADLINE_QUALIFICATION_SCHEMA_VERSION)
         self.assertEqual(summary["native_prefix_count"], 1)
         self.assertEqual(summary["deadline_overshoot_ms"]["max"], 5.0)
         self.assertEqual(summary["zero_completed_world_refusals"], 0)
