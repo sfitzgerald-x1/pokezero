@@ -26,6 +26,7 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | Raw Q-max selector | Merged in [#1354](https://github.com/sfitzgerald-x1/pokezero/pull/1354), merge `8616a2afb5eff426ec4f37a87e2fe4a8a649c723`. Its terminal-free, two-seat noisy-Q control shows visit-max taking the high-visit action while raw Q-max takes the noisier low-visit action, with a synthetic regret gap. | The conservative stop rule has an exact model-bias counterexample. | How often that error happens in games, or any game-strength estimate. |
 | Encoder fast path | Merged in [#1340](https://github.com/sfitzgerald-x1/pokezero/pull/1340), merge `98faa804188289ecdcc5f5b87eaae8ad39de77eb`; full-path timing is a stable null and this line is parked. | Identifier normalization has bitwise-output coverage and the microbenchmark did not survive to a source-attributable full-path benefit. | A full-search speedup or extra useful work at the same clock. |
 | Timing replay | [#1339](https://github.com/sfitzgerald-x1/pokezero/pull/1339) is merged and its fixed corpus was measured candidate-first twice, then baseline-first. | The candidate's apparent slowdown reverses in the baseline-first block; the result is order/warm-state dominated and is a valid null. | A source-attributable full-search win, numerical-tree parity, or extra useful work at the same clock. |
+| Public-state approximation audit | A read-only audit of the canonical 16-decision timing corpus at `/shared/scott-experiment/mcts-encoder-fullpath-timing-corpus-cd1fbd57-20260908/timing-corpus.jsonl` (corpus SHA-256 `6d4be46153251e8a615275e600a9e557fb109609c9fd3111e7d087c27a6d8d11`; raw-file SHA-256 `a1930e513149d39166fc8fe5e0ddbbfd509cd0d4e50f0319f8f20f29d39a6203`) found no decision with an active public sleep, Substitute, partial-trap, confusion, or Yawn state. Historical event prefixes and move lists may mention Substitute or Rest, but they do not constitute an active target state. | None of these approximations is measurable with the present corpus; it is not a justified search-change or strength-study candidate. | That the states are unimportant in play, that their implementations are correct, or any performance effect. |
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
 | Whole-decision deadline | [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) introduced the model-only, fixed-work deadline; [#1359](https://github.com/sfitzgerald-x1/pokezero/pull/1359) hardened the native-invocation witness and fail-closed validation. The qualification source is their reviewed combined `main` merge `8609d301399738a8081f0e938a3cc4ed7d39abdd` (reviewed #1359 head `6e2bb3ac4fb50abf7fb358c250a7398686153cff`). The clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
 | Model-world parallelism R6 timing preflight | The source-bound R6 Job completed cleanly on two CPU workers at source `017fb434e62bd24fa1c0f2e6ff7b043a56bace0f`, with all three 16-decision serial/parallel pairs preserving fixed work and decision outputs. Warm serial medians were 10.802s, 11.191s, and 10.813s; two-worker medians were 5.408s, 5.488s, and 5.437s: 1.997x median speedup (range 1.989x–2.039x). | Two independent CPU model-world evaluators can nearly halve fixed-work decision wall time without changing the validated fixed-work decision results. | Same-deadline behavior, a hard latency limit, a strength gain, or permission to reinvest the saved wall time without a separate remaining-budget qualification. |
@@ -249,6 +250,31 @@ agreement between its recorded native invocation count and the independent
 deadline ledger. That is the minimum evidence needed before measuring whether
 the R6 throughput headroom improves equal-deadline play.
 
+### 4b. Public-state approximation candidates are unmeasured
+
+A bounded source audit identified four potentially consequential public-state
+approximations: generic induced-sleep duration, Substitute health, partial-trap
+duration, and duration-bearing volatiles such as confusion and Yawn. This is a
+candidate inventory, not evidence that any correction improves the search.
+Rest already has its own exact, scoped provenance path (`restSleepAttempts`);
+generic induced sleep is different because the public snapshot does not expose
+its remaining duration. Replacing that uncertainty with a single guessed value
+would be a new approximation, not a fidelity repair.
+
+The pinned timing corpus has a manifest plus 16 decision records. A read-only
+inspection of each decision's current `public_belief_inputs` found zero active
+instances of all four target families. Some histories contain a completed
+Substitute or a historical Rest event, but no selected decision presents the
+state whose representation would be changed. The corpus therefore cannot
+separate a correction from an inert code path.
+
+Do not implement, benchmark, or strength-test these candidates now. A future
+candidate first needs a source-bound corpus with explicit active-state coverage,
+an exact declared oracle or counterfactual for that state, and an action-choice
+control before it can enter a bounded MCTS study. This is a coverage stop
+decision only: it does not claim that the states are rare or unimportant in
+actual play.
+
 ### 5. Fixed-deadline qualification contract (only after a new candidate earns a timed study)
 
 This is one bounded, development-only gate for the already-merged deadline;
@@ -340,3 +366,4 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 3. Preserve R3's pre-game source-admission failure, R4's complete terminal `NONPASS`, and P1's completed root. Do not rerun, recapture, or extend any of them. R7 proved clean applicability, but P1's lower paired-bootstrap delta is exactly neutral, so park opponent-side model priors as a strength mechanism. The future-pilot strength-readout repair merged in #1390; it does not revive this parked candidate.
 4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if a different cleanly applied candidate earns a timed study.
 5. R18, the earlier backup-repair attempt, and clean R20 read did not promote backup repair. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
+6. Retain the public-state approximation coverage stop decision. Do not modify generic sleep, Substitute, partial-trap, confusion, or Yawn handling until a new source-bound corpus includes the active state and a declared action-choice oracle.
