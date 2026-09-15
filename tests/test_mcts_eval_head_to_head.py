@@ -1194,6 +1194,7 @@ class SourceReceiptTest(unittest.TestCase):
                 "search_sims": 32,
                 "search_batch": 1,
                 "model_decision_time_ms": None,
+                "model_native_batch_guard_ms": 0,
             },
         )
         receipt = {
@@ -1206,7 +1207,9 @@ class SourceReceiptTest(unittest.TestCase):
             "reset_protocol": "policy_method_or_fresh_source_policy.v1",
             "config_compatibility": {
                 "protocol": "disabled-diagnostic-omission.v1",
-                "omitted_disabled_fields": ["model_decision_time_ms"],
+                "omitted_disabled_fields": [
+                    "model_decision_time_ms", "model_native_batch_guard_ms",
+                ],
             },
         }
         self.assertEqual(
@@ -1268,6 +1271,29 @@ class SourceReceiptTest(unittest.TestCase):
             module._validate_isolated_receipt(
                 receipt,
                 policy=missing_field_policy,
+                role="incumbent",
+                bootstrap_sha256="a" * 64,
+            )
+
+        guarded_policy = _spec(
+            "incumbent",
+            policy_id="incumbent",
+            config={
+                "leaf_eval": "model",
+                "search_sims": 32,
+                "search_batch": 1,
+                "model_native_batch_guard_ms": 1,
+            },
+        )
+        receipt["policy"] = guarded_policy.to_payload()
+        receipt["config_compatibility"] = {
+            "protocol": "disabled-diagnostic-omission.v1",
+            "omitted_disabled_fields": ["model_native_batch_guard_ms"],
+        }
+        with self.assertRaisesRegex(HeadToHeadError, "not explicitly disabled"):
+            module._validate_isolated_receipt(
+                receipt,
+                policy=guarded_policy,
                 role="incumbent",
                 bootstrap_sha256="a" * 64,
             )

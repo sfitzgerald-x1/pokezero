@@ -237,6 +237,7 @@ class _LiveEngineTimingDecider:
         showdown_root: str | None,
         *,
         model_decision_time_ms: int | None = None,
+        model_native_batch_guard_ms: int = 0,
         model_world_workers: int = 1,
         model_priors: bool = True,
         use_opponent_priors: bool = False,
@@ -249,12 +250,28 @@ class _LiveEngineTimingDecider:
 
         if model_decision_time_ms is not None and model_decision_time_ms <= 0:
             raise ValueError("model_decision_time_ms must be positive when set")
+        if (
+            isinstance(model_native_batch_guard_ms, bool)
+            or not isinstance(model_native_batch_guard_ms, int)
+            or model_native_batch_guard_ms < 0
+        ):
+            raise ValueError("model_native_batch_guard_ms must be a nonnegative integer")
+        if model_native_batch_guard_ms and model_decision_time_ms is None:
+            raise ValueError("model_native_batch_guard_ms requires model_decision_time_ms")
+        if (
+            model_decision_time_ms is not None
+            and model_native_batch_guard_ms >= model_decision_time_ms
+        ):
+            raise ValueError(
+                "model_native_batch_guard_ms must be smaller than model_decision_time_ms"
+            )
         if model_world_workers <= 0:
             raise ValueError("model_world_workers must be positive")
         if not isinstance(model_priors, bool) or not isinstance(use_opponent_priors, bool):
             raise ValueError("model_priors and use_opponent_priors must be booleans")
         self._contract = contract
         self._model_decision_time_ms = model_decision_time_ms
+        self._model_native_batch_guard_ms = model_native_batch_guard_ms
         self._model_world_workers = model_world_workers
         # The timing lattice measures the established priors-on production
         # path by default.  A bounded qualification may deliberately pin both
@@ -311,6 +328,7 @@ class _LiveEngineTimingDecider:
                 use_opponent_priors=self._use_opponent_priors,
                 early_stop=False,
                 model_decision_time_ms=self._model_decision_time_ms,
+                model_native_batch_guard_ms=self._model_native_batch_guard_ms,
                 model_world_workers=self._model_world_workers,
             ),
             policy_id=f"mcts-timing-{config.config_id}",

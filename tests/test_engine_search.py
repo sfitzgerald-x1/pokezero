@@ -597,8 +597,24 @@ class ModelConfigValidationTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(ValueError, "only with leaf_eval='model'"):
             EngineMctsConfig(model_decision_time_ms=1)
+        for invalid_guard in (1, -1, True, 0.0, "0"):
+            with self.subTest(invalid_guard=invalid_guard):
+                with self.assertRaisesRegex(ValueError, "only with leaf_eval='model'"):
+                    EngineMctsConfig(model_native_batch_guard_ms=invalid_guard)
         with self.assertRaisesRegex(ValueError, "must be positive"):
             EngineMctsConfig(**base, model_decision_time_ms=0)
+        with self.assertRaisesRegex(ValueError, "requires model_decision_time_ms"):
+            EngineMctsConfig(**base, model_native_batch_guard_ms=1)
+        with self.assertRaisesRegex(ValueError, "nonnegative integer"):
+            EngineMctsConfig(**base, model_native_batch_guard_ms=-1)
+        with self.assertRaisesRegex(ValueError, "smaller than"):
+            EngineMctsConfig(
+                **base, model_decision_time_ms=10, model_native_batch_guard_ms=10
+            )
+        guarded = EngineMctsConfig(
+            **base, model_decision_time_ms=10, model_native_batch_guard_ms=3
+        )
+        self.assertEqual(guarded.model_native_batch_guard_ms, 3)
         with self.assertRaisesRegex(ValueError, "early_stop=False"):
             EngineMctsConfig(
                 **base,
@@ -1475,7 +1491,11 @@ class ModelWorldParallelismTests(unittest.TestCase):
 
     @staticmethod
     def _policy(
-        *, workers: int, worlds: int = 2, deadline_ms: int | None = None
+        *,
+        workers: int,
+        worlds: int = 2,
+        deadline_ms: int | None = None,
+        native_batch_guard_ms: int = 0,
     ) -> EngineMctsPolicy:
         policy = object.__new__(EngineMctsPolicy)
         policy.policy_id = "model-world-parallelism-test"
@@ -1489,6 +1509,7 @@ class ModelWorldParallelismTests(unittest.TestCase):
             search_batch=10,
             model_world_workers=workers,
             model_decision_time_ms=deadline_ms,
+            model_native_batch_guard_ms=native_batch_guard_ms,
         )
         policy._tables_json = "{}"
         policy.stats = EngineMctsStats()
@@ -1589,6 +1610,37 @@ class ModelWorldParallelismTests(unittest.TestCase):
         ]
         self.assertEqual([row["status"] for row in invocations], ["completed", "completed"])
         self.assertEqual([row["time_budget_ms"] for row in invocations], [10_000, 10_000])
+
+    def test_parallel_deadline_dispatch_reserves_the_explicit_native_batch_guard(self) -> None:
+        reports = {
+            "world-a": self._timed_report(70, 30, time_budget_ms=9_936),
+            "world-b": self._timed_report(60, 40, time_budget_ms=9_936),
+        }
+        barrier = threading.Barrier(2)
+        handles = [
+            self._BarrierNative(reports, barrier),
+            self._BarrierNative(reports, barrier),
+        ]
+        policy = self._policy(
+            workers=2, deadline_ms=10_000, native_batch_guard_ms=64
+        )
+
+        with patch("pokezero.engine_search.time.perf_counter", return_value=0.0):
+            decision = self._run(
+                policy,
+                native=handles[0],
+                handles=handles,
+                worlds=[self._world("world-a"), self._world("world-b")],
+            )
+
+        for handle in handles:
+            self.assertEqual(handle.calls[0][-1], 9_936)
+        budget = decision.metadata["engine_mcts"]["time_budget"]
+        self.assertEqual(budget["native_batch_guard_ms"], 64)
+        self.assertEqual(
+            [row["time_budget_ms"] for row in budget["native_invocations"]],
+            [9_936, 9_936],
+        )
 
     def test_queued_parallel_deadline_world_never_starts_with_a_stale_budget(self) -> None:
         class _AdvancePastDeadlineNative(self._NativeByState):
@@ -4821,6 +4873,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         worlds: int = 2,
         strict: bool = False,
         model_decision_time_ms: int | None = None,
+        model_native_batch_guard_ms: int = 0,
     ):
         policy = object.__new__(EngineMctsPolicy)
         policy.policy_id = "override-telemetry-test"
@@ -4837,6 +4890,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             use_opponent_priors=opponent_priors,
             strict_fallbacks=strict,
             model_decision_time_ms=model_decision_time_ms,
+            model_native_batch_guard_ms=model_native_batch_guard_ms,
         )
         policy._tables_json = "{}"
         policy.stats = EngineMctsStats()
@@ -4949,6 +5003,77 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertFalse(invocation["time_budget_exhausted"])
         self.assertEqual(invocation["status"], "completed")
         self.assertEqual(invocation["root_visits"], {"side_one": 100, "side_two": 100})
+
+    def test_time_budget_reserves_the_explicit_native_batch_guard_at_the_serial_call_seam(self) -> None:
+        policy = self._policy(
+            worlds=1,
+            model_decision_time_ms=10_000,
+            model_native_batch_guard_ms=64,
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+            opponent=[("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+        )
+        report.update(
+            {
+                "time_budget_enabled": True,
+                "time_budget_ms": 9_936,
+                "time_budget_elapsed_ms": 0.1,
+                "time_budget_exhausted": False,
+                "time_budget_batch_overshoot_ms": 0.0,
+            }
+        )
+
+        with patch("pokezero.engine_search.time.perf_counter", return_value=0.0):
+            decision, native = self._run(policy, [report])
+
+        self.assertEqual(native.calls[0][-1], 9_936)
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["time_budget"]["native_batch_guard_ms"], 64
+        )
+
+    def test_time_budget_rechecks_the_serial_guard_after_argument_construction(self) -> None:
+        clock = SimpleNamespace(now=0.0)
+        policy = self._policy(
+            worlds=1,
+            model_decision_time_ms=10,
+            model_native_batch_guard_ms=2,
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+            opponent=[("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+        )
+        original_native_search_args = native_search_args
+
+        def consume_reserved_window(*args, **kwargs):
+            result = original_native_search_args(*args, **kwargs)
+            # Argument construction is inside the outer decision clock.  The
+            # one millisecond left is less than the two-millisecond guard, so
+            # native must never begin with the earlier eight-millisecond ABI
+            # receipt.
+            clock.now = 0.009
+            return result
+
+        with (
+            patch("pokezero.engine_search.time.perf_counter", lambda: clock.now),
+            patch(
+                "pokezero.engine_search.native_search_args",
+                side_effect=consume_reserved_window,
+            ),
+        ):
+            decision, native = self._run(policy, [report])
+
+        self.assertEqual(native.calls, [])
+        self.assertEqual(
+            decision.metadata["engine_mcts"]["fallback"],
+            "model_time_budget_no_completed_worlds",
+        )
+        budget = decision.metadata["engine_mcts"]["time_budget"]
+        self.assertTrue(budget["exhausted"])
+        self.assertEqual(budget["worlds_budget_skipped"], 1)
+        self.assertEqual(budget["native_invocations"], [])
 
     def test_time_budget_records_one_multiplicity_scaled_native_invocation(self) -> None:
         """Collapsed worlds are one native call, not two falsely capped calls."""

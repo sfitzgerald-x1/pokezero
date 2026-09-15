@@ -77,6 +77,7 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
                 "root_selector_q": False,
                 "root_selector_shadow": False,
                 "model_decision_time_ms": None,
+                "model_native_batch_guard_ms": 0,
             },
             HistoricalEngineMctsConfig,
         )
@@ -87,7 +88,8 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
             {
                 "protocol": "disabled-diagnostic-omission.v1",
                 "omitted_disabled_fields": [
-                    "model_decision_time_ms", "root_selector_q", "root_selector_shadow",
+                    "model_decision_time_ms", "model_native_batch_guard_ms",
+                    "root_selector_q", "root_selector_shadow",
                 ],
             },
         )
@@ -104,6 +106,11 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
         with self.assertRaisesRegex(worker_error, "declared policy enables"):
             source_engine_config_payload(
                 {"leaf_eval": "model", "model_decision_time_ms": 1},
+                HistoricalEngineMctsConfig,
+            )
+        with self.assertRaisesRegex(worker_error, "declared policy enables"):
+            source_engine_config_payload(
+                {"leaf_eval": "model", "model_native_batch_guard_ms": 1},
                 HistoricalEngineMctsConfig,
             )
         with self.assertRaisesRegex(worker_error, "does not support host field"):

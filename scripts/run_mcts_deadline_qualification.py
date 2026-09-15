@@ -38,7 +38,10 @@ SOURCE_RECEIPT_SCHEMA_VERSION = "pokezero.mcts-deadline-source-receipt.v1"
 # merged execution commit.  These values are a second, local guard in addition
 # to the image receipt and installed-build fingerprint.
 REVIEWED_DEADLINE_SOURCE_COMMIT = "e9c292d5f3ee857aa92af6e3b70130d950bbaec0"
-REVIEWED_ENGINE_SEARCH_SHA256 = "d728f372f39b33085b252a54c9e707dfedc94b29d841efc3f12c0d9fd7840007"
+# The native batch guard and its non-model fail-closed boundary are Python-only
+# mechanics. They intentionally leave the native fingerprint below unchanged,
+# but a guarded qualification must bind this reviewed Python source exactly.
+REVIEWED_ENGINE_SEARCH_SHA256 = "cd080fc3de46bd8b8cfdcf1d80c3b4382a210472149816788c62284414860d7a"
 REVIEWED_ENGINE_FINGERPRINT = "b5699452474270cb3148a0a83b843c1f4767d9378138007d16e158908a2111d0"
 REQUIRED_RECEIPT_FILES = (
     "scripts/run_mcts_deadline_qualification.py",
@@ -285,6 +288,15 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out-root", required=True)
     parser.add_argument("--model-device", default="cpu", choices=("cpu", "cuda"))
     parser.add_argument("--deadline-ms", type=int, default=1_000)
+    parser.add_argument(
+        "--native-batch-guard-ms",
+        type=int,
+        default=0,
+        help=(
+            "Reserve this much of the outer decision deadline before beginning a "
+            "native batch. This is an explicit soft-deadline policy, not a hard cap."
+        ),
+    )
     parser.add_argument("--depth", type=int, default=2)
     parser.add_argument("--sims", type=int, default=256)
     parser.add_argument("--batch", type=int, default=16)
@@ -304,6 +316,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         help="Reuse only independently revalidated, durable decision units for this exact manifest.",
     )
     args = parser.parse_args(argv)
+    if not 0 <= args.native_batch_guard_ms < args.deadline_ms:
+        parser.error("--native-batch-guard-ms must be in 0..(--deadline-ms - 1)")
     if not 0 < args.model_world_workers <= args.worlds:
         parser.error("--model-world-workers must be in 1..=--worlds")
     return args
@@ -344,6 +358,7 @@ def _frozen_manifest(
             "model_priors": False,
             "use_opponent_priors": False,
             "model_decision_time_ms": args.deadline_ms,
+            "model_native_batch_guard_ms": args.native_batch_guard_ms,
             "model_world_workers": args.model_world_workers,
         },
     }
@@ -552,6 +567,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
     )
     requirements = DeadlineQualificationRequirements(
         requested_ms=args.deadline_ms,
+        native_batch_guard_ms=args.native_batch_guard_ms,
         sims_per_world=args.sims,
         worlds=args.worlds,
         model_world_workers=args.model_world_workers,
@@ -603,6 +619,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         checkpoint_contract,
         args.showdown_root,
         model_decision_time_ms=args.deadline_ms,
+        model_native_batch_guard_ms=args.native_batch_guard_ms,
         model_world_workers=args.model_world_workers,
         model_priors=False,
         use_opponent_priors=False,
