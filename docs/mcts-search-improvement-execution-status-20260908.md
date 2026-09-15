@@ -1,6 +1,6 @@
 # MCTS search improvement: execution status and next decisions
 
-Last updated: 2026-09-14. This is the live execution companion to the offline plan. It distinguishes implemented safety/correctness work, measured mechanics, and actual playing strength. Nothing below treats a green test, synthetic panel, or new runner as a strength result.
+Last updated: 2026-09-15. This is the live execution companion to the offline plan. It distinguishes implemented safety/correctness work, measured mechanics, and actual playing strength. Nothing below treats a green test, synthetic panel, or new runner as a strength result.
 
 ## Objective
 
@@ -30,6 +30,7 @@ declared work cap only; it must not be relabelled as equal-deadline strength.
 | MCTS-versus-MCTS runner | Merged in [#1341](https://github.com/sfitzgerald-x1/pokezero/pull/1341), merge `c43abac53c4fa6b9f5ca5db453f7e2e0e720ef92`, with source-isolated policy transport and receipt validation added afterward. | Fresh source-bound mirrored games, atomic game units, provenance binding, and fail-closed resumes are implemented. | A score or a timing-equality claim. |
 | Whole-decision deadline | [#1356](https://github.com/sfitzgerald-x1/pokezero/pull/1356) introduced the model-only, fixed-work deadline; [#1359](https://github.com/sfitzgerald-x1/pokezero/pull/1359) hardened the native-invocation witness and fail-closed validation. The qualification source is their reviewed combined `main` merge `8609d301399738a8081f0e938a3cc4ed7d39abdd` (reviewed #1359 head `6e2bb3ac4fb50abf7fb358c250a7398686153cff`). The clock begins before folding and belief construction, reaches native setup and traversal, and records total elapsed time, overshoot, exhaustion, and skipped worlds. | A soft, whole-decision clock with a completed-tree-only native prefix; a started native batch may finish and its overshoot is visible. | A hard latency cap, a guaranteed nonzero prefix on every cold host, comparable same-deadline policy behavior, or stronger play. |
 | Model-world parallelism R6 timing preflight | The source-bound R6 Job completed cleanly on two CPU workers at source `017fb434e62bd24fa1c0f2e6ff7b043a56bace0f`, with all three 16-decision serial/parallel pairs preserving fixed work and decision outputs. Warm serial medians were 10.802s, 11.191s, and 10.813s; two-worker medians were 5.408s, 5.488s, and 5.437s: 1.997x median speedup (range 1.989x–2.039x). | Two independent CPU model-world evaluators can nearly halve fixed-work decision wall time without changing the validated fixed-work decision results. | Same-deadline behavior, a hard latency limit, a strength gain, or permission to reinvest the saved wall time without a separate remaining-budget qualification. |
+| Model-world parallelism soft-clock pilot | The fresh source-bound pilot at `06f30942b50606d2f170b299da034bccc7b89c2c` completed all eight mirrored pairs (16 games) at the same requested 1,000 ms soft clock, with zero restarts, caps, provenance drift, or root-prior fallbacks. The two-worker candidate completed 108,281 iterations and searched 1,499 worlds versus 58,640 and 782 for the one-worker incumbent (1.85x and 1.92x). Candidate p50/p95 decision walls were 1.026/1.092 s versus 1.001/1.074 s. The source-bound readout at `/shared/scott-experiment/mcts-world-h2h-06f30942-20260915-r3/WORLD_PARALLELISM_PILOT_READOUT.json` reports score 0.5625, with declared 80% interval [0.4375, 0.6875], and `NO_EXTENSION`. | The remaining-budget dispatch safely turns two CPU workers into substantially more completed search work under this soft-clock configuration. | A strength gain, a hard latency cap, a confirmation roster, a production setting, or a reason to run a parameter/rescue grid. |
 | Backup-repair strength pilot | The first frozen 12-pair/24-game corrected-versus-uncorrected run and its R18 replacement remain non-bankable for their independent terminal-contract defects. The fresh R20 replacement completed cleanly, with all 12 pairs, 24 games, and 48 policy receipts captured in an immutable terminal snapshot. Its work-capped candidate score was 0.375 (declared interval 0.2917–0.4583) and the frozen readout says `no_automatic_extension`. | The canonical launcher and terminal-capture path now work for a complete source-bound MCTS comparison; this particular backup-repair contrast did not produce a positive pilot signal. | A general no-effect claim, an equal-deadline result, a promotion decision, or use of the 50 reserved confirmation seeds. |
 | Opponent-side model priors | R4's complete applicability result was a terminal `NONPASS`: candidate root-prior fallbacks were 104 and incumbent fallbacks were 4. The fresh R7 source-refusal diagnostic then completed cleanly on source `5ac2f0e68319b02aa7c2e53e3b1b9d879369242e`: its immutable `mcts-opponent-prior-refusal-diagnostic-r7-20260914-terminal` snapshot validates four mirrored pairs, eight games, 16 policy receipts, zero restarts, 575 candidate model-priced opponent arms, zero incumbent arms, and zero root-prior fallbacks for both arms. The separately registered P1 pilot then completed all eight fresh mirrored pairs (16 games, 32 policy receipts) with zero restarts, 750 candidate opponent-prior arms, zero incumbent arms, and zero root-prior fallbacks. Its point estimate was +0.0625, but its declared 80% paired-bootstrap lower delta was exactly 0.0, not strictly positive. | The current four-world/depth-2 configuration reaches the intended opponent-prior code path cleanly, but P1 does not earn a confirmation roster or a strength claim. | A playing-strength improvement, an automatic confirmation, a retry of P1, or production promotion. |
 
@@ -239,16 +240,23 @@ completed work as measurements only.
 
 ### 4a. R6 follow-up: deadline-safe model-world dispatch
 
-R6's timing PASS is an engineering preflight, not a license to drop the
-existing deadline guard. A queued world must compute its budget from the actual
-remaining decision wall immediately before its native call; it must be skipped
-if that wall has already expired. Each started world must retain that exact
-per-invocation budget in the normal native witness, while report absorption
-stays in source world order. A later source-bound deadline qualification must
-require this remaining-budget dispatch mode, the configured worker count, and
-agreement between its recorded native invocation count and the independent
-deadline ledger. That is the minimum evidence needed before measuring whether
-the R6 throughput headroom improves equal-deadline play.
+R6's timing PASS was an engineering preflight, not a license to drop the
+existing deadline guard. A queued world computes its budget from the actual
+remaining decision wall immediately before its native call and is skipped if
+that wall has expired. Each started world retains that exact per-invocation
+budget in the normal native witness, while report absorption stays in source
+world order. R16/R17 supplied the source-bound qualification for the configured
+one- and two-worker modes, including the deadline ledger and a nonzero completed
+prefix; the fresh 16-game pilot then used that same qualified configuration.
+
+The pilot establishes the intended mechanics but not strength. Its candidate
+score was 0.5625 (+0.0625 from neutral), satisfying the declared point threshold
+of +0.05, but the declared 80% paired interval includes neutral (score
+[0.4375, 0.6875]; delta [-0.0625, +0.1875]). The sealed decision is therefore
+`NO_EXTENSION`: park this mechanism as a useful throughput result with
+insufficient strength evidence. Do not consume an unregistered confirmation
+roster, change a production setting, or use a batch/depth/simulation rescue
+grid to reinterpret the result.
 
 ### 4b. Public-state approximation candidates are unmeasured
 
@@ -364,6 +372,6 @@ All cluster work stays in `scott` on `olfusa`. CPU-heavy work first finds an eng
 1. Record #1354's merged raw-Q control as the selector stop decision; do not extend selector work in this iteration.
 2. Preserve both non-bankable pilots. Do not rerun or recapture R18, do not inspect the malformed first pilot's score, and do not spend the R18 confirmation seeds. R20 is terminally captured and negative, so retain the repair as correctness-only and do not extend that line.
 3. Preserve R3's pre-game source-admission failure, R4's complete terminal `NONPASS`, and P1's completed root. Do not rerun, recapture, or extend any of them. R7 proved clean applicability, but P1's lower paired-bootstrap delta is exactly neutral, so park opponent-side model priors as a strength mechanism. The future-pilot strength-readout repair merged in #1390; it does not revive this parked candidate.
-4. Retain #1356's fixed-deadline qualification as a prerequisite for a later timed contrast, but do not run it merely to produce more evaluation data. It follows only if a different cleanly applied candidate earns a timed study.
+4. Retain the completed R16/R17 qualification and the 16-game two-worker pilot as a throughput result. Its declared interval crosses neutral, so do not extend it, consume a confirmation roster, or substitute a parameter grid for evidence of stronger play.
 5. R18, the earlier backup-repair attempt, and clean R20 read did not promote backup repair. Retain the correctness repair; no PUCT/depth/simulation rescue grid, automatic cluster rerun, or reuse of R18 seeds is authorized.
 6. Retain the public-state approximation coverage stop decision. Do not modify generic sleep, Substitute, partial-trap, confusion, or Yawn handling until a new source-bound corpus includes the active state and a declared action-choice oracle.
