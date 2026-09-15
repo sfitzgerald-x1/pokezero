@@ -69,6 +69,25 @@ MODEL_WORLD_PARALLELISM_PILOT_DECISIONS = (
     "ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION",
     "NO_EXTENSION",
 )
+OWN_POLICY_PRIOR_STUDY_SCHEMA_VERSION = "pokezero.mcts-h2h-own-policy-prior-study.v1"
+OWN_POLICY_PRIOR_STUDY_READOUT_SCHEMA_VERSION = (
+    "pokezero.mcts-h2h-own-policy-prior-study-readout.v1"
+)
+OWN_POLICY_PRIOR_STUDY_FAILURE_RETRY_POLICY = {
+    "schema_version": "pokezero.mcts-h2h-failure-retry-policy.v1",
+    "interrupted_before_runner_terminal": "resume_same_root_with_fresh_launcher_attempt",
+    "nonzero_runner_exit": "terminal_failed_no_retry",
+    "malformed_runner_terminal": "nonbankable_no_retry",
+    "completed_game_units": "immutable_reuse_only",
+}
+OWN_POLICY_PRIOR_STUDY_DECISIONS = (
+    "PREFLIGHT_PASS",
+    "PREFLIGHT_NONPASS",
+    "USE_GUIDED_MCTS_AS_RESEARCH_BASELINE",
+    "GUIDANCE_HARMED_THIS_CONFIGURATION",
+    "TARGET_SIZED_BENEFIT_RULED_OUT",
+    "INCONCLUSIVE",
+)
 MODEL_WORLD_PARALLELISM_PILOT_PAIRS = 8
 MODEL_WORLD_PARALLELISM_PILOT_BOOTSTRAP_RESAMPLES = 10_000
 MODEL_WORLD_PARALLELISM_PILOT_CONFIDENCE = 0.80
@@ -1542,6 +1561,326 @@ def _world_parallelism_pilot_readout(
     }
 
 
+def _own_policy_prior_study_contract(
+    manifest: Mapping[str, Any],
+    *,
+    seeds: tuple[int, ...],
+    bootstrap: Mapping[str, Any],
+    candidate_raw: Mapping[str, Any],
+    incumbent_raw: Mapping[str, Any],
+    candidate_config: Any,
+    incumbent_config: Any,
+    execution_mode: str,
+) -> dict[str, Any] | None:
+    """Bind the own-policy-prior ablation to one complete, comparable run.
+
+    This study deliberately does not reuse the model-world contract: that
+    contract froze both self-prior switches off to isolate worker count.  Here
+    the two policies share a source-isolated build and every configuration
+    field except ``model_priors`` must be byte-for-byte equivalent.
+    """
+
+    raw = manifest.get("own_policy_prior_study")
+    if raw is None:
+        return None
+    study = dict(_mapping(raw, label="manifest.own_policy_prior_study"))
+    required_fields = {
+        "schema_version",
+        "stage",
+        "failure_retry_policy",
+        "minimum_effect_delta",
+        "max_p95_decision_wall_seconds",
+        "max_guided_to_uniform_mean_wall_ratio",
+        "terminal_decisions",
+    }
+    if set(study) != required_fields:
+        raise HeadToHeadError("own-policy-prior study has unexpected or missing contract fields.")
+    if study["schema_version"] != OWN_POLICY_PRIOR_STUDY_SCHEMA_VERSION:
+        raise HeadToHeadError("own-policy-prior study has an unrecognized schema.")
+    stage = study["stage"]
+    expected_pairs = {"preflight": 4, "strength": 400}
+    if stage not in expected_pairs:
+        raise HeadToHeadError("own-policy-prior study stage must be 'preflight' or 'strength'.")
+    if len(seeds) != expected_pairs[stage] or len(set(seeds)) != len(seeds):
+        raise HeadToHeadError(
+            f"own-policy-prior {stage} study requires exactly {expected_pairs[stage]} unique mirrored pairs."
+        )
+    if study["failure_retry_policy"] != OWN_POLICY_PRIOR_STUDY_FAILURE_RETRY_POLICY:
+        raise HeadToHeadError("own-policy-prior study failure/retry policy differs.")
+    if tuple(study["terminal_decisions"]) != OWN_POLICY_PRIOR_STUDY_DECISIONS:
+        raise HeadToHeadError("own-policy-prior study terminal decisions differ.")
+    if (
+        int(bootstrap.get("resamples", 0)) != 10_000
+        or float(bootstrap.get("confidence_level", -1.0)) != 0.95
+    ):
+        raise HeadToHeadError(
+            "own-policy-prior study requires 10,000 bootstrap resamples at 95% confidence."
+        )
+    if int(manifest.get("max_decision_rounds", 0)) != 250:
+        raise HeadToHeadError("own-policy-prior study requires max_decision_rounds=250.")
+    minimum_effect = study["minimum_effect_delta"]
+    if (
+        isinstance(minimum_effect, bool)
+        or not isinstance(minimum_effect, (int, float))
+        or float(minimum_effect) != 0.05
+    ):
+        raise HeadToHeadError("own-policy-prior study requires its registered +0.05 effect.")
+    p95_limit = study["max_p95_decision_wall_seconds"]
+    if (
+        isinstance(p95_limit, bool)
+        or not isinstance(p95_limit, (int, float))
+        or float(p95_limit) != 1.20
+    ):
+        raise HeadToHeadError("own-policy-prior study requires the registered 1.20-second p95 limit.")
+    ratio_limit = study["max_guided_to_uniform_mean_wall_ratio"]
+    if (
+        isinstance(ratio_limit, bool)
+        or not isinstance(ratio_limit, (int, float))
+        or float(ratio_limit) != 1.05
+    ):
+        raise HeadToHeadError("own-policy-prior study requires the registered 1.05 mean-wall ratio limit.")
+    if execution_mode != "isolated_build":
+        raise HeadToHeadError("own-policy-prior study requires source-isolated policies for both arms.")
+    identity_fields = ("source_commit", "source_tree_sha256", "engine_fingerprint")
+    if any(candidate_raw.get(field) != incumbent_raw.get(field) for field in identity_fields):
+        raise HeadToHeadError(
+            "own-policy-prior study requires the same verified source identity for both arms."
+        )
+    if candidate_raw.get("config_id") == incumbent_raw.get("config_id"):
+        raise HeadToHeadError("own-policy-prior study requires distinct candidate and incumbent config_id values.")
+    candidate_values = asdict(candidate_config)
+    incumbent_values = asdict(incumbent_config)
+    changed_fields = {
+        field for field in candidate_values if candidate_values.get(field) != incumbent_values.get(field)
+    }
+    if changed_fields != {"model_priors"}:
+        raise HeadToHeadError(
+            "own-policy-prior study permits only model_priors to differ between arms."
+        )
+    if (
+        candidate_values.get("model_priors") is not True
+        or incumbent_values.get("model_priors") is not False
+        or candidate_values.get("use_opponent_priors") is not False
+        or incumbent_values.get("use_opponent_priors") is not False
+        or candidate_values.get("model_world_workers") != 1
+        or incumbent_values.get("model_world_workers") != 1
+        or candidate_values.get("model_decision_time_ms") != 1_000
+        or incumbent_values.get("model_decision_time_ms") != 1_000
+        or candidate_values.get("model_native_batch_guard_ms") != 64
+        or incumbent_values.get("model_native_batch_guard_ms") != 64
+        or candidate_values.get("worlds") != 4
+        or incumbent_values.get("worlds") != 4
+        or candidate_values.get("search_sims") != 256
+        or incumbent_values.get("search_sims") != 256
+        or candidate_values.get("search_batch") != 16
+        or incumbent_values.get("search_batch") != 16
+        or candidate_values.get("search_depth") != 2
+        or incumbent_values.get("search_depth") != 2
+        or candidate_values.get("c_puct") != 1.4
+        or incumbent_values.get("c_puct") != 1.4
+        or candidate_values.get("early_stop") is not False
+        or incumbent_values.get("early_stop") is not False
+        or candidate_values.get("leaf_eval") != "model"
+        or incumbent_values.get("leaf_eval") != "model"
+        or candidate_values.get("model_device") != "cpu"
+        or incumbent_values.get("model_device") != "cpu"
+        or candidate_values.get("override_telemetry") is not True
+        or incumbent_values.get("override_telemetry") is not True
+    ):
+        raise HeadToHeadError(
+            "own-policy-prior study configuration differs from its exact one-worker soft-clock contrast."
+        )
+    return {
+        "schema_version": OWN_POLICY_PRIOR_STUDY_SCHEMA_VERSION,
+        "stage": stage,
+        "registered_seeds": list(seeds),
+        "bootstrap": dict(bootstrap),
+        "minimum_effect_delta": 0.05,
+        "max_p95_decision_wall_seconds": 1.20,
+        "max_guided_to_uniform_mean_wall_ratio": 1.05,
+        "failure_retry_policy": dict(OWN_POLICY_PRIOR_STUDY_FAILURE_RETRY_POLICY),
+        "terminal_decisions": list(OWN_POLICY_PRIOR_STUDY_DECISIONS),
+    }
+
+
+def _own_policy_prior_cap_interval(
+    *, games: list[Any], seeds: tuple[int, ...], bootstrap: Mapping[str, Any], capped_score: float
+) -> dict[str, float]:
+    """Re-score only capped games at a stated guided-arm value, per pair."""
+
+    outcome_score = {"win": 1.0, "tie": 0.5, "loss": 0.0, "cap": capped_score}
+    scores: list[float] = []
+    for seed in seeds:
+        pair = [game for game in games if game.seed == seed]
+        if len(pair) != 2:
+            raise HeadToHeadError("own-policy-prior cap sensitivity has an incomplete mirrored pair.")
+        try:
+            scores.append(sum(outcome_score[game.result.outcome] for game in pair) / 2.0)
+        except KeyError as error:
+            raise HeadToHeadError("own-policy-prior cap sensitivity saw an unknown game outcome.") from error
+    interval = bootstrap_mean(
+        scores,
+        bootstrap_indices(
+            sample_size=len(scores), resamples=int(bootstrap["resamples"]), seed=int(bootstrap["seed"])
+        ),
+        confidence_level=float(bootstrap["confidence_level"]),
+    )
+    return {"point": interval.point - 0.5, "low": interval.low - 0.5, "high": interval.high - 0.5}
+
+
+def _own_policy_prior_study_readout(
+    *, contract: Mapping[str, Any], summary: Mapping[str, Any], games: list[Any]
+) -> dict[str, Any]:
+    """Write the frozen validity and outcome decision for own policy guidance."""
+
+    seeds = tuple(int(value) for value in contract["registered_seeds"])
+    scores = summary.get("pair_scores")
+    if not isinstance(scores, list) or len(scores) != len(seeds):
+        raise HeadToHeadError("own-policy-prior study summary does not cover every registered pair.")
+    candidate_score = _mapping(summary.get("candidate_score"), label="own-policy-prior candidate_score")
+    try:
+        delta = {name: float(candidate_score[name]) - 0.5 for name in ("point", "low", "high")}
+    except (KeyError, TypeError, ValueError) as error:
+        raise HeadToHeadError("own-policy-prior study has malformed paired score interval.") from error
+    if any(not math.isfinite(value) for value in delta.values()):
+        raise HeadToHeadError("own-policy-prior study paired score interval is non-finite.")
+
+    def nonnegative_summary_int(name: str) -> int:
+        value = summary.get(name)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise HeadToHeadError(f"own-policy-prior study summary has invalid {name}={value!r}.")
+        return value
+
+    candidate_root_fallbacks = nonnegative_summary_int("candidate_root_prior_fallbacks")
+    incumbent_root_fallbacks = nonnegative_summary_int("incumbent_root_prior_fallbacks")
+    candidate_iterations = nonnegative_summary_int("candidate_iterations")
+    incumbent_iterations = nonnegative_summary_int("incumbent_iterations")
+    candidate_worlds = nonnegative_summary_int("candidate_worlds_searched")
+    incumbent_worlds = nonnegative_summary_int("incumbent_worlds_searched")
+    candidate_override_measured = nonnegative_summary_int(
+        "candidate_override_measured_decisions"
+    )
+    incumbent_override_measured = nonnegative_summary_int(
+        "incumbent_override_measured_decisions"
+    )
+    candidate_model_overrides = nonnegative_summary_int("candidate_model_override_decisions")
+    incumbent_model_overrides = nonnegative_summary_int("incumbent_model_override_decisions")
+    candidate_walls = _mapping(
+        summary.get("candidate_decision_wall_summary"), label="own-policy-prior candidate wall summary"
+    )
+    incumbent_walls = _mapping(
+        summary.get("incumbent_decision_wall_summary"), label="own-policy-prior incumbent wall summary"
+    )
+    try:
+        candidate_count = int(candidate_walls["count"])
+        incumbent_count = int(incumbent_walls["count"])
+        candidate_p95 = float(candidate_walls["p95_s"])
+        incumbent_p95 = float(incumbent_walls["p95_s"])
+        if candidate_count <= 0 or incumbent_count <= 0:
+            raise ValueError("empty searched-decision wall series")
+        candidate_mean = float(candidate_walls["total_s"]) / candidate_count
+        incumbent_mean = float(incumbent_walls["total_s"]) / incumbent_count
+    except (KeyError, TypeError, ValueError) as error:
+        raise HeadToHeadError("own-policy-prior study has malformed decision wall summary.") from error
+    if (
+        not all(math.isfinite(value) and value >= 0.0 for value in (candidate_p95, incumbent_p95, candidate_mean, incumbent_mean))
+        or incumbent_mean <= 0.0
+    ):
+        raise HeadToHeadError("own-policy-prior study has unusable decision wall measurements.")
+    mean_ratio = candidate_mean / incumbent_mean
+    cap_games = sum(1 for game in games if bool(game.terminal_capped))
+    all_pairs_complete = len(games) == 2 * len(seeds)
+    clean_roots = candidate_root_fallbacks == 0 and incumbent_root_fallbacks == 0
+    both_arms_searched = all(value > 0 for value in (
+        candidate_iterations, incumbent_iterations, candidate_worlds, incumbent_worlds
+    ))
+    guided_arm_has_model_action_witness = candidate_override_measured > 0
+    timing_eligible = (
+        candidate_p95 <= float(contract["max_p95_decision_wall_seconds"])
+        and incumbent_p95 <= float(contract["max_p95_decision_wall_seconds"])
+        and mean_ratio <= float(contract["max_guided_to_uniform_mean_wall_ratio"])
+    )
+    cap_sensitivity = (
+        {
+            "guided_loss": _own_policy_prior_cap_interval(
+                games=games, seeds=seeds, bootstrap=contract["bootstrap"], capped_score=0.0
+            ),
+            "guided_win": _own_policy_prior_cap_interval(
+                games=games, seeds=seeds, bootstrap=contract["bootstrap"], capped_score=1.0
+            ),
+        }
+        if cap_games
+        else None
+    )
+    validity = (
+        all_pairs_complete
+        and clean_roots
+        and both_arms_searched
+        and guided_arm_has_model_action_witness
+        and timing_eligible
+    )
+    stage = str(contract["stage"])
+    if stage == "preflight":
+        decision = "PREFLIGHT_PASS" if validity else "PREFLIGHT_NONPASS"
+    elif not validity:
+        decision = "INCONCLUSIVE"
+    else:
+        cap_direction_stable = cap_sensitivity is None or (
+            cap_sensitivity["guided_loss"]["low"] > 0.0
+            and cap_sensitivity["guided_win"]["low"] > 0.0
+        )
+        cap_harm_stable = cap_sensitivity is None or (
+            cap_sensitivity["guided_loss"]["high"] < 0.0
+            and cap_sensitivity["guided_win"]["high"] < 0.0
+        )
+        cap_target_stable = cap_sensitivity is None or (
+            cap_sensitivity["guided_loss"]["high"] < float(contract["minimum_effect_delta"])
+            and cap_sensitivity["guided_win"]["high"] < float(contract["minimum_effect_delta"])
+        )
+        if (
+            delta["point"] >= float(contract["minimum_effect_delta"])
+            and delta["low"] > 0.0
+            and cap_direction_stable
+        ):
+            decision = "USE_GUIDED_MCTS_AS_RESEARCH_BASELINE"
+        elif delta["high"] < 0.0 and cap_harm_stable:
+            decision = "GUIDANCE_HARMED_THIS_CONFIGURATION"
+        elif delta["high"] < float(contract["minimum_effect_delta"]) and cap_target_stable:
+            decision = "TARGET_SIZED_BENEFIT_RULED_OUT"
+        else:
+            decision = "INCONCLUSIVE"
+    return {
+        "schema_version": OWN_POLICY_PRIOR_STUDY_READOUT_SCHEMA_VERSION,
+        "complete": True,
+        "contract": dict(contract),
+        "candidate_score_delta_from_neutral": delta,
+        "work": {
+            "candidate_iterations": candidate_iterations,
+            "incumbent_iterations": incumbent_iterations,
+            "candidate_worlds_searched": candidate_worlds,
+            "incumbent_worlds_searched": incumbent_worlds,
+            "candidate_override_measured_decisions": candidate_override_measured,
+            "incumbent_override_measured_decisions": incumbent_override_measured,
+            "candidate_model_override_decisions": candidate_model_overrides,
+            "incumbent_model_override_decisions": incumbent_model_overrides,
+            "candidate_decision_wall_summary": dict(candidate_walls),
+            "incumbent_decision_wall_summary": dict(incumbent_walls),
+            "guided_to_uniform_mean_wall_ratio": mean_ratio,
+            "capped_games": cap_games,
+        },
+        "validity_checks": {
+            "all_registered_pairs_complete": all_pairs_complete,
+            "zero_root_prior_fallbacks": clean_roots,
+            "both_arms_completed_model_search": both_arms_searched,
+            "guided_arm_has_model_action_witness": guided_arm_has_model_action_witness,
+            "timing_eligible": timing_eligible,
+        },
+        "cap_sensitivity_delta_from_neutral": cap_sensitivity,
+        "decision": decision,
+        "marker": f"OWN_POLICY_PRIOR_STUDY_{decision}",
+    }
+
+
 def _opponent_prior_applicability_contract(
     manifest: Mapping[str, Any],
     *,
@@ -2318,6 +2657,16 @@ def main(argv: list[str] | None = None) -> int:
         showdown_source=showdown_source,
         engine_fingerprint=engine_fingerprint,
     )
+    own_policy_prior_study_contract = _own_policy_prior_study_contract(
+        manifest,
+        seeds=seeds,
+        bootstrap=bootstrap,
+        candidate_raw=candidate_raw,
+        incumbent_raw=incumbent_raw,
+        candidate_config=candidate_config,
+        incumbent_config=incumbent_config,
+        execution_mode=execution_mode,
+    )
     opponent_prior_applicability_contract = _opponent_prior_applicability_contract(
         manifest,
         candidate_raw=candidate_raw,
@@ -2368,6 +2717,7 @@ def main(argv: list[str] | None = None) -> int:
             "execution_mode": execution_mode,
             "backup_repair_pilot_contract": pilot_contract,
             "world_parallelism_pilot_contract": world_parallelism_pilot_contract,
+            "own_policy_prior_study_contract": own_policy_prior_study_contract,
             "opponent_prior_strength_pilot_contract": opponent_prior_strength_pilot_contract,
             "isolated_policies": (
                 {
@@ -2668,6 +3018,17 @@ def main(argv: list[str] | None = None) -> int:
                 games=all_games,
             ),
         )
+    own_policy_prior_study_readout_path: Path | None = None
+    if own_policy_prior_study_contract is not None:
+        own_policy_prior_study_readout_path = out_root / "OWN_POLICY_PRIOR_STUDY_READOUT.json"
+        _write_immutable_json(
+            own_policy_prior_study_readout_path,
+            _own_policy_prior_study_readout(
+                contract=own_policy_prior_study_contract,
+                summary=summary,
+                games=all_games,
+            ),
+        )
     opponent_prior_applicability_readout_path: Path | None = None
     applicability_readout: dict[str, Any] | None = None
     if opponent_prior_applicability_contract is not None:
@@ -2719,6 +3080,11 @@ def main(argv: list[str] | None = None) -> int:
             "world_parallelism_pilot_readout_sha256": (
                 _sha256_file(world_parallelism_pilot_readout_path)
                 if world_parallelism_pilot_readout_path is not None
+                else None
+            ),
+            "own_policy_prior_study_readout_sha256": (
+                _sha256_file(own_policy_prior_study_readout_path)
+                if own_policy_prior_study_readout_path is not None
                 else None
             ),
             "opponent_prior_applicability_readout_sha256": (

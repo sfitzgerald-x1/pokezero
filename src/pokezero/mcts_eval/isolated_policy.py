@@ -44,6 +44,8 @@ _STATS_FIELDS = (
     "root_prior_fallbacks",
     "branch_prior_fallbacks",
     "opponent_prior_arm_decisions",
+    "override_measured_decisions",
+    "model_override_decisions",
     "opponent_request_order_statuses",
     "opponent_request_order_root_fallback_statuses",
     "decision_wall_seconds",
@@ -292,6 +294,12 @@ class IsolatedPolicyStats:
     root_prior_fallbacks: int = 0
     branch_prior_fallbacks: int = 0
     opponent_prior_arm_decisions: int = 0
+    # These counters prove that the native model-action comparison was live.
+    # They are particularly important for a self-prior ablation: a receipt
+    # saying ``model_priors=true`` is not enough if every scored root was
+    # forced or otherwise unpriceable.
+    override_measured_decisions: int = 0
+    model_override_decisions: int = 0
     # Root-order outcomes are a closed, monotonic diagnostic ledger.  It is
     # intentionally separate from generic fallback counts: the entire purpose
     # of the source-bound opponent-prior diagnostic is to explain *which*
@@ -368,6 +376,10 @@ class IsolatedPolicyStats:
         if self.prior_fallbacks != self.root_prior_fallbacks + self.branch_prior_fallbacks:
             raise IsolatedPolicyError(
                 "isolated policy prior fallback aggregate must equal root plus branch."
+            )
+        if self.model_override_decisions > self.override_measured_decisions:
+            raise IsolatedPolicyError(
+                "isolated policy model overrides cannot exceed measured model-action decisions."
             )
         if sum(self.opponent_request_order_root_fallback_statuses.values()) != self.root_prior_fallbacks:
             raise IsolatedPolicyError(

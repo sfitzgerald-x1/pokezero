@@ -1677,5 +1677,185 @@ class SourceReceiptTest(unittest.TestCase):
             )
 
 
+class OwnPolicyPriorStudyContractTest(unittest.TestCase):
+    @staticmethod
+    def _identity():
+        return {
+            "source_commit": "a" * 40,
+            "source_tree_sha256": "b" * 64,
+            "engine_fingerprint": "c" * 64,
+        }
+
+    def _inputs(self, *, stage="preflight"):
+        module = _runner_module()
+        manifest = {
+            "max_decision_rounds": 250,
+            "own_policy_prior_study": {
+                "schema_version": module.OWN_POLICY_PRIOR_STUDY_SCHEMA_VERSION,
+                "stage": stage,
+                "failure_retry_policy": module.OWN_POLICY_PRIOR_STUDY_FAILURE_RETRY_POLICY,
+                "minimum_effect_delta": 0.05,
+                "max_p95_decision_wall_seconds": 1.20,
+                "max_guided_to_uniform_mean_wall_ratio": 1.05,
+                "terminal_decisions": list(module.OWN_POLICY_PRIOR_STUDY_DECISIONS),
+            },
+        }
+        identity = self._identity()
+        candidate = {**identity, "config_id": "guided-priors"}
+        incumbent = {**identity, "config_id": "uniform-priors"}
+        count = 4 if stage == "preflight" else 400
+        return (
+            module,
+            manifest,
+            tuple(range(2026091501, 2026091501 + count)),
+            {"resamples": 10_000, "seed": 20260915, "confidence_level": 0.95},
+            candidate,
+            incumbent,
+        )
+
+    def _contract(self, *, stage="preflight"):
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._inputs(stage=stage)
+        contract = module._own_policy_prior_study_contract(
+            manifest,
+            seeds=seeds,
+            bootstrap=bootstrap,
+            candidate_raw=candidate,
+            incumbent_raw=incumbent,
+            candidate_config=_world_parallelism_config(
+                model_world_workers=1, model_priors=True, override_telemetry=True
+            ),
+            incumbent_config=_world_parallelism_config(
+                model_world_workers=1, model_priors=False, override_telemetry=True
+            ),
+            execution_mode="isolated_build",
+        )
+        return module, contract, seeds
+
+    @staticmethod
+    def _summary(scores):
+        return {
+            "pair_scores": list(scores),
+            "candidate_score": {"point": sum(scores) / len(scores), "low": 0.51, "high": 0.60},
+            "candidate_root_prior_fallbacks": 0,
+            "incumbent_root_prior_fallbacks": 0,
+            "candidate_iterations": 100,
+            "incumbent_iterations": 100,
+            "candidate_worlds_searched": 16,
+            "incumbent_worlds_searched": 16,
+            "candidate_override_measured_decisions": 16,
+            "incumbent_override_measured_decisions": 0,
+            "candidate_model_override_decisions": 4,
+            "incumbent_model_override_decisions": 0,
+            "candidate_decision_wall_summary": {
+                "count": 16, "total_s": 16.0, "p95_s": 1.1,
+            },
+            "incumbent_decision_wall_summary": {
+                "count": 16, "total_s": 16.0, "p95_s": 1.0,
+            },
+        }
+
+    @staticmethod
+    def _games(seeds, *, capped=False):
+        return [
+            SimpleNamespace(
+                seed=seed,
+                terminal_capped=capped,
+                result=SimpleNamespace(outcome="cap" if capped else "win"),
+            )
+            for seed in seeds
+            for _seat in ("p1", "p2")
+        ]
+
+    def test_contract_binds_the_only_model_prior_difference_and_registered_roster(self) -> None:
+        module, contract, seeds = self._contract()
+        self.assertEqual(contract["registered_seeds"], list(seeds))
+        self.assertEqual(contract["stage"], "preflight")
+
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._inputs()
+        with self.assertRaisesRegex(HeadToHeadError, "only model_priors"):
+            module._own_policy_prior_study_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_world_parallelism_config(
+                    model_world_workers=1, model_priors=True, override_telemetry=True
+                ),
+                incumbent_config=_world_parallelism_config(
+                    model_world_workers=1,
+                    model_priors=False,
+                    search_batch=8,
+                    override_telemetry=True,
+                ),
+                execution_mode="isolated_build",
+            )
+        with self.assertRaisesRegex(HeadToHeadError, "source-isolated"):
+            module._own_policy_prior_study_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_world_parallelism_config(
+                    model_world_workers=1, model_priors=True, override_telemetry=True
+                ),
+                incumbent_config=_world_parallelism_config(
+                    model_world_workers=1, model_priors=False, override_telemetry=True
+                ),
+                execution_mode="in_process",
+            )
+
+    def test_preflight_requires_clean_search_and_timing(self) -> None:
+        module, contract, seeds = self._contract()
+        readout = module._own_policy_prior_study_readout(
+            contract=contract,
+            summary=self._summary([1.0] * len(seeds)),
+            games=self._games(seeds),
+        )
+        self.assertEqual(readout["decision"], "PREFLIGHT_PASS")
+        self.assertTrue(all(readout["validity_checks"].values()))
+
+        rejected_summary = self._summary([1.0] * len(seeds))
+        rejected_summary["candidate_decision_wall_summary"] = {
+            "count": 16, "total_s": 18.0, "p95_s": 1.3,
+        }
+        rejected = module._own_policy_prior_study_readout(
+            contract=contract, summary=rejected_summary, games=self._games(seeds)
+        )
+        self.assertEqual(rejected["decision"], "PREFLIGHT_NONPASS")
+        self.assertFalse(rejected["validity_checks"]["timing_eligible"])
+
+        no_model_witness = self._summary([1.0] * len(seeds))
+        no_model_witness["candidate_override_measured_decisions"] = 0
+        unproven = module._own_policy_prior_study_readout(
+            contract=contract, summary=no_model_witness, games=self._games(seeds)
+        )
+        self.assertEqual(unproven["decision"], "PREFLIGHT_NONPASS")
+        self.assertFalse(unproven["validity_checks"]["guided_arm_has_model_action_witness"])
+
+    def test_strength_readout_distinguishes_positive_harm_and_cap_sensitive_results(self) -> None:
+        module, contract, seeds = self._contract(stage="strength")
+        positive_summary = self._summary([1.0] * len(seeds))
+        positive_summary["candidate_score"] = {"point": 0.60, "low": 0.51, "high": 0.70}
+        positive = module._own_policy_prior_study_readout(
+            contract=contract, summary=positive_summary, games=self._games(seeds)
+        )
+        self.assertEqual(positive["decision"], "USE_GUIDED_MCTS_AS_RESEARCH_BASELINE")
+
+        harmful_summary = self._summary([0.0] * len(seeds))
+        harmful_summary["candidate_score"] = {"point": 0.40, "low": 0.30, "high": 0.49}
+        harmful = module._own_policy_prior_study_readout(
+            contract=contract, summary=harmful_summary, games=self._games(seeds)
+        )
+        self.assertEqual(harmful["decision"], "GUIDANCE_HARMED_THIS_CONFIGURATION")
+
+        cap_sensitive = module._own_policy_prior_study_readout(
+            contract=contract, summary=positive_summary, games=self._games(seeds, capped=True)
+        )
+        self.assertEqual(cap_sensitive["decision"], "INCONCLUSIVE")
+        self.assertIsNotNone(cap_sensitive["cap_sensitivity_delta_from_neutral"])
+
+
 if __name__ == "__main__":
     unittest.main()

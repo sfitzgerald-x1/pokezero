@@ -298,6 +298,11 @@ class PolicyTelemetry:
     root_prior_fallbacks: int = 0
     branch_prior_fallbacks: int = 0
     opponent_prior_arm_decisions: int = 0
+    # Native own-model action witnesses.  Unlike a config receipt, these
+    # establish that at least one live root exposed a model action for the
+    # guided arm to use and for search to compare against.
+    override_measured_decisions: int = 0
+    model_override_decisions: int = 0
     # The per-game delta of source-derived root-order dispositions.  Retaining
     # this mapping lets a diagnostic separate an unavailable public order from
     # a genuinely ineffective opponent policy prior.
@@ -323,12 +328,18 @@ class PolicyTelemetry:
             self.root_prior_fallbacks,
             self.branch_prior_fallbacks,
             self.opponent_prior_arm_decisions,
+            self.override_measured_decisions,
+            self.model_override_decisions,
         )
         if any(value < 0 for value in counters):
             raise ValueError("policy telemetry counters must be non-negative.")
         if self.prior_fallbacks != self.root_prior_fallbacks + self.branch_prior_fallbacks:
             raise ValueError(
                 "policy prior fallback aggregate must equal root plus branch fallbacks."
+            )
+        if self.model_override_decisions > self.override_measured_decisions:
+            raise ValueError(
+                "policy model overrides cannot exceed measured model-action decisions."
             )
         def status_mapping(value: object, *, label: str) -> dict[str, int]:
             if not isinstance(value, Mapping):
@@ -403,6 +414,10 @@ class PolicyTelemetry:
             opponent_prior_arm_decisions=int(
                 getattr(stats, "opponent_prior_arm_decisions", 0)
             ),
+            override_measured_decisions=int(
+                getattr(stats, "override_measured_decisions", 0)
+            ),
+            model_override_decisions=int(getattr(stats, "model_override_decisions", 0)),
             opponent_request_order_statuses=dict(
                 getattr(stats, "opponent_request_order_statuses", {})
             ),
@@ -1018,6 +1033,18 @@ def summarize_complete_pairs(
         ),
         "incumbent_opponent_prior_arm_decisions": sum(
             game.incumbent_telemetry.opponent_prior_arm_decisions for game in required
+        ),
+        "candidate_override_measured_decisions": sum(
+            game.candidate_telemetry.override_measured_decisions for game in required
+        ),
+        "incumbent_override_measured_decisions": sum(
+            game.incumbent_telemetry.override_measured_decisions for game in required
+        ),
+        "candidate_model_override_decisions": sum(
+            game.candidate_telemetry.model_override_decisions for game in required
+        ),
+        "incumbent_model_override_decisions": sum(
+            game.incumbent_telemetry.model_override_decisions for game in required
         ),
         "candidate_opponent_request_order_statuses": dict(
             sorted(candidate_order_statuses.items())
