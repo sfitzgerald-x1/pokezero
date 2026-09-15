@@ -1707,7 +1707,11 @@ class OwnPolicyPriorStudyContractTest(unittest.TestCase):
         identity = self._identity()
         candidate = {**identity, "config_id": "guided-priors"}
         incumbent = {**identity, "config_id": "uniform-priors"}
-        count = 4 if stage == "preflight" else 400
+        count = 4 if stage == "preflight" else 200 if stage == "strength_shard" else 400
+        if stage == "strength_shard":
+            manifest["own_policy_prior_study"].update(
+                {"shard_index": 0, "full_roster_sha256": "d" * 64}
+            )
         return (
             module,
             manifest,
@@ -1859,6 +1863,14 @@ class OwnPolicyPriorStudyContractTest(unittest.TestCase):
         )
         self.assertEqual(cap_sensitive["decision"], "INCONCLUSIVE")
         self.assertIsNotNone(cap_sensitive["cap_sensitivity_delta_from_neutral"])
+
+    def test_strength_shard_is_validated_but_does_not_claim_strength(self) -> None:
+        module, contract, seeds = self._contract(stage="strength_shard")
+        readout = module._own_policy_prior_study_readout(
+            contract=contract, summary=self._summary([1.0] * len(seeds)), games=self._games(seeds)
+        )
+        self.assertEqual(readout["decision"], "SHARD_COMPLETE")
+        self.assertEqual(contract["shard_index"], 0)
 
 
 if __name__ == "__main__":
