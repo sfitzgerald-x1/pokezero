@@ -827,6 +827,12 @@ class EngineMctsConfig:
     # bounded, observable, and tree-consistent instead of returning virtual-loss
     # traversals without their evaluation/backups.
     model_decision_time_ms: int | None = None
+    # Reserve this much of a whole-decision model deadline before beginning a
+    # native batch.  The native engine may finish its final started batch, so
+    # this is an explicit, opt-in allowance for that observed batch-boundary
+    # behavior; it is not an interrupt or a hard wall-time cap.  Zero leaves
+    # the existing deadline dispatch unchanged.
+    model_native_batch_guard_ms: int = 0
     # Fixed-work model searches normally visit independent belief worlds
     # serially. A value above one dispatches those completed-world trees
     # together, then absorbs their reports in the original sampling order.
@@ -1066,10 +1072,30 @@ class EngineMctsConfig:
                     "for a decision, so a floor that passes here can still exceed an "
                     "individual rung's per-world share; it is clamped to the rung."
                 )
+            if (
+                isinstance(self.model_native_batch_guard_ms, bool)
+                or not isinstance(self.model_native_batch_guard_ms, int)
+                or self.model_native_batch_guard_ms < 0
+            ):
+                raise ValueError(
+                    "model_native_batch_guard_ms must be a nonnegative integer."
+                )
+            if (
+                self.model_native_batch_guard_ms > 0
+                and self.model_decision_time_ms is None
+            ):
+                raise ValueError(
+                    "model_native_batch_guard_ms requires model_decision_time_ms to be set."
+                )
             if self.model_decision_time_ms is not None:
                 if self.model_decision_time_ms <= 0:
                     raise ValueError(
                         "model_decision_time_ms must be positive when set."
+                    )
+                if self.model_native_batch_guard_ms >= self.model_decision_time_ms:
+                    raise ValueError(
+                        "model_native_batch_guard_ms must be smaller than "
+                        "model_decision_time_ms."
                     )
                 if self.early_stop:
                     raise ValueError(
@@ -5535,6 +5561,7 @@ class EngineMctsPolicy:
         # allocation and then contributes several belief rows; preserving the
         # distinction is necessary to audit a deadline prefix honestly.
         native_time_budget_invocations: list[dict[str, Any]] = []
+        native_batch_guard_seconds = config.model_native_batch_guard_ms / 1000.0
         time_budget_duration_seconds = (
             config.model_decision_time_ms / 1000.0
             if decision_deadline is not None
@@ -5571,12 +5598,32 @@ class EngineMctsPolicy:
             return {
                 "scope": "whole_model_decision",
                 "requested_ms": config.model_decision_time_ms,
+                "native_batch_guard_ms": config.model_native_batch_guard_ms,
                 "deadline_elapsed_ms": round(elapsed * 1000.0, 3),
                 "deadline_overshoot_ms": round(overshoot * 1000.0, 3),
                 "exhausted": exhausted,
                 "worlds_budget_skipped": budget_skipped_worlds,
                 "native_invocations": native_time_budget_invocations,
             }
+
+        def native_time_budget_at_call_seam() -> int | None:
+            """Return the native budget after reserving an opt-in batch guard.
+
+            A started native batch is intentionally allowed to finish.  The
+            guard therefore reserves time *before* the ABI call rather than
+            pretending to interrupt native work; a nonpositive usable window
+            means that the belief world was never started.
+            """
+            if decision_deadline is None:
+                return None
+            usable_seconds = (
+                decision_deadline - time.perf_counter() - native_batch_guard_seconds
+            )
+            if usable_seconds <= 0:
+                return None
+            # Native requires a positive integer deadline.  Ceil preserves a
+            # still-positive window rather than converting it to a false zero.
+            return max(1, math.ceil(usable_seconds * 1000.0))
 
         def time_budget_fallback_extra() -> dict[str, Any] | None:
             if decision_deadline is None:
@@ -5623,15 +5670,11 @@ class EngineMctsPolicy:
                     "fixed-work parallel invocation carried a deadline receipt."
                 )
             elif decision_deadline is not None:
-                remaining = decision_deadline - time.perf_counter()
-                if remaining <= 0:
+                time_budget_ms = native_time_budget_at_call_seam()
+                if time_budget_ms is None:
                     budget_skipped_worlds += weight
                     native_budget_exhausted = True
                     return None
-                # A positive value is required by the native boundary. Ceil so
-                # Python does not turn a still-positive remainder into a false
-                # zero-ms refusal before native can decide at its batch seam.
-                time_budget_ms = max(1, math.ceil(remaining * 1000.0))
                 # `sims` is the exact allocation threaded to native.  A
                 # duplicate group supplies its multiplicity-scaled amount;
                 # with no override the configured per-world allocation is the
@@ -5654,6 +5697,25 @@ class EngineMctsPolicy:
                         time_budget_ms=time_budget_ms,
                     )
                     native_invocation_started = time_budget_ms is not None
+                    if (
+                        decision_deadline is not None
+                        and config.model_native_batch_guard_ms > 0
+                    ):
+                        # Argument construction is inside the outer decision
+                        # clock.  Re-check at the actual call seam so it cannot
+                        # consume the reserved batch guard and still begin native
+                        # work with the earlier receipt.
+                        time_budget_ms = native_time_budget_at_call_seam()
+                        if time_budget_ms is None:
+                            budget_skipped_worlds += weight
+                            native_budget_exhausted = True
+                            return None
+                        if not search_args or not isinstance(search_args[-1], int):
+                            raise EngineSearchWitnessError(
+                                "deadline serial task omitted its final native deadline budget."
+                            )
+                        search_args[-1] = time_budget_ms
+                        native_invocation_started = True
                     report = json.loads(
                         native.search_batched_multi_encoded(*search_args)
                     )
@@ -6286,10 +6348,9 @@ class EngineMctsPolicy:
                         raise EngineSearchWitnessError(
                             "deadline parallel task carried fixed-work native arguments."
                         )
-                    remaining = decision_deadline - time.perf_counter()
-                    if remaining <= 0:
+                    time_budget_ms = native_time_budget_at_call_seam()
+                    if time_budget_ms is None:
                         return _ParallelWorldPrefetch(completed=False, skipped=True)
-                    time_budget_ms = max(1, math.ceil(remaining * 1000.0))
                     try:
                         search_args = native_search_args(
                             config,
@@ -6320,10 +6381,9 @@ class EngineMctsPolicy:
                     # Refresh the final positional at that same seam: the
                     # receipt must record the budget actually handed to native,
                     # never the earlier construction budget.
-                    remaining = decision_deadline - time.perf_counter()
-                    if remaining <= 0:
+                    time_budget_ms = native_time_budget_at_call_seam()
+                    if time_budget_ms is None:
                         return _ParallelWorldPrefetch(completed=False, skipped=True)
-                    time_budget_ms = max(1, math.ceil(remaining * 1000.0))
                     if not search_args or not isinstance(search_args[-1], int):
                         return _ParallelWorldPrefetch(
                             completed=False,

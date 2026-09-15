@@ -71,6 +71,18 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 runner._parse_args(args[:-1] + ["5"])
 
+    def test_native_batch_guard_must_fit_the_frozen_deadline(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = _arguments(Path(temporary) / "out") + [
+                "--deadline-ms",
+                "1000",
+                "--native-batch-guard-ms",
+                "64",
+            ]
+            self.assertEqual(runner._parse_args(args).native_batch_guard_ms, 64)
+            with self.assertRaises(SystemExit):
+                runner._parse_args(args[:-1] + ["1000"])
+
     def test_dirty_git_source_is_refused(self) -> None:
         source = ROOT / "pyproject.toml"
         completed = types.SimpleNamespace(stdout="d" * 40 + "\n")
@@ -273,6 +285,9 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             self.assertEqual(terminal["summary"]["native_prefix_count"], 1)
             self.assertFalse(terminal["manifest"]["search_config"]["model_priors"])
             self.assertFalse(terminal["manifest"]["search_config"]["use_opponent_priors"])
+            self.assertEqual(
+                terminal["manifest"]["search_config"]["model_native_batch_guard_ms"], 0
+            )
             self.assertEqual(terminal["manifest"]["source_receipt"], receipt)
             self.assertEqual(terminal["manifest"]["showdown_source"], showdown)
             resolver.assert_called_once_with(
@@ -287,6 +302,7 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
                 FakeDecider.initialized_with,
                 {
                     "model_decision_time_ms": 1000,
+                    "model_native_batch_guard_ms": 0,
                     "model_world_workers": 1,
                     "model_priors": False,
                     "use_opponent_priors": False,
