@@ -50,6 +50,8 @@ STATS_FIELDS = (
     "root_prior_fallbacks",
     "branch_prior_fallbacks",
     "opponent_prior_arm_decisions",
+    "override_measured_decisions",
+    "model_override_decisions",
     "opponent_request_order_statuses",
     "opponent_request_order_root_fallback_statuses",
     "decision_wall_seconds",

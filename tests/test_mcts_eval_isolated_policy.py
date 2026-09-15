@@ -182,7 +182,7 @@ while True:
         write(stdout, {{"type": "error", "message": "annotation snapshot changed"}})
         continue
     action = 1 if mode == "illegal" else 0
-    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "opponent_prior_arm_decisions": 1, "opponent_request_order_statuses": {{"resolved": 1}}, "opponent_request_order_root_fallback_statuses": {{}}, "decision_wall_seconds": 0.25}}
+    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "opponent_prior_arm_decisions": 1, "override_measured_decisions": 1, "model_override_decisions": 1, "opponent_request_order_statuses": {{"resolved": 1}}, "opponent_request_order_root_fallback_statuses": {{}}, "decision_wall_seconds": 0.25}}
     if mode == "legacy-stats":
         del stats["root_prior_fallbacks"]
         del stats["branch_prior_fallbacks"]
@@ -390,6 +390,8 @@ class StatsTest(unittest.TestCase):
             "root_prior_fallbacks": 0,
             "branch_prior_fallbacks": 0,
             "opponent_prior_arm_decisions": 3,
+            "override_measured_decisions": 3,
+            "model_override_decisions": 1,
             "opponent_request_order_statuses": {"resolved": 3},
             "opponent_request_order_root_fallback_statuses": {},
             "decision_wall_seconds": 0.3,
