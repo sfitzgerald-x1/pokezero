@@ -249,6 +249,40 @@ agreement between its recorded native invocation count and the independent
 deadline ledger. That is the minimum evidence needed before measuring whether
 the R6 throughput headroom improves equal-deadline play.
 
+### 4b. Fresh R14/R15 qualification falsifies a strict 1,000-ms reading
+
+The new source-bound R14 and R15 development qualifications both completed
+cleanly on the selected idle arm64 engine node
+`np-856c0ba6-71.eu-iceland1-a.compute.internal`, with the same digest-qualified
+`853d7e54` source image, 48 CPU/32 GiB CPU-only allocation, zero restarts, all
+16 durable decisions, and immutable terminal ConfigMaps. They isolate the
+native batch boundary, not playing strength or a new search treatment.
+
+R14 retained the registered four worlds, two model-world workers, 256 requested
+simulations per native invocation, 1,000-ms decision clock, and batch 16. Its
+per-decision source-valid `PASS` summary recorded 32 native prefixes and two
+searched worlds out of four on every decision, but p95/max outer elapsed time
+of 1241.640/1279.537 ms and p95/max deadline overshoot of 235.617/272.484 ms.
+R15 changed only native batch size to 1. It again recorded 32 prefixes and the
+same two-of-four world coverage, while p95/max outer elapsed time fell to
+1049.672/1056.994 ms and p95/max overshoot to 43.956/53.797 ms.
+
+This is a concrete mechanism result: the native clock is observed at a batch
+seam and Python hands native the whole measured remainder. A healthy node,
+image pull, CPU allocation, or additional world worker cannot remove the
+overrun of work already started; reducing the batch reduces, but does not
+eliminate, that overrun. The qualification `PASS` means its source binding,
+completed-prefix witnesses, and durable ledger are valid. It does **not** mean
+the decision finished within 1,000 ms or that all constructed worlds were
+searched.
+
+**Decision:** model-world parallelism remains a fixed-work throughput result,
+not equal-deadline or strength evidence. Do not open a timed strength pilot or
+tune a batch-size grid from these two probes. A future timed candidate must
+either state and enforce an explicit overshoot policy (including any guard band)
+or provide an interruptible native boundary, then qualify both compared policies
+under that identical contract before a same-deadline claim.
+
 ### 5. Fixed-deadline qualification contract (only after a new candidate earns a timed study)
 
 This is one bounded, development-only gate for the already-merged deadline;
