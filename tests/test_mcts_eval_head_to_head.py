@@ -122,6 +122,29 @@ class _OpponentPriorConfig:
     search_batch: int = 16
 
 
+@dataclass(frozen=True)
+class _WorldParallelismConfig:
+    leaf_eval: str = "model"
+    strict_fallbacks: bool = True
+    model_device: str = "cpu"
+    worlds: int = 4
+    search_time_ms: int = 100
+    threads: int = 1
+    search_sims: int = 256
+    search_batch: int = 16
+    search_depth: int = 2
+    early_stop: bool = False
+    model_decision_time_ms: int = 1_000
+    model_native_batch_guard_ms: int = 64
+    model_priors: bool = False
+    use_opponent_priors: bool = False
+    root_selector_q: bool = False
+    root_selector_shadow: bool = False
+    depth_min: int | None = None
+    worlds_min: int | None = None
+    model_world_workers: int = 2
+
+
 def _spec(config_id: str, **overrides) -> MctsPolicySpec:
     values = {
         "config_id": config_id,
@@ -805,6 +828,170 @@ class OpponentPriorStrengthPilotReadoutTest(unittest.TestCase):
 
         self.assertEqual(readout["decision"], "NO_EXTENSION")
         self.assertFalse(readout["promotion_checks"]["candidate_source_order_statuses_allowed"])
+
+
+class WorldParallelismPilotContractTest(unittest.TestCase):
+    def _inputs(self):
+        module = _runner_module()
+        manifest = {
+            "world_parallelism_pilot": {
+                "schema_version": module.MODEL_WORLD_PARALLELISM_PILOT_SCHEMA_VERSION,
+                "stage": "pilot",
+                "failure_retry_policy": module.MODEL_WORLD_PARALLELISM_PILOT_FAILURE_RETRY_POLICY,
+                "minimum_effect_delta": module.MODEL_WORLD_PARALLELISM_PILOT_MINIMUM_EFFECT_DELTA,
+                "terminal_decisions": list(module.MODEL_WORLD_PARALLELISM_PILOT_DECISIONS),
+                "deadline_qualifications": {
+                    "candidate": {
+                        "root": "/shared/scott-experiment/r16",
+                        "manifest_sha256": "a" * 64,
+                        "pass_sha256": "b" * 64,
+                    },
+                    "incumbent": {
+                        "root": "/shared/scott-experiment/r17",
+                        "manifest_sha256": "c" * 64,
+                        "pass_sha256": "d" * 64,
+                    },
+                },
+            }
+        }
+        identity = {
+            "source_commit": "a" * 40,
+            "source_tree_sha256": "b" * 64,
+            "engine_fingerprint": "c" * 64,
+        }
+        candidate = {**identity, "config_id": "world-workers-2"}
+        incumbent = {**identity, "config_id": "world-workers-1"}
+        bootstrap = {"resamples": 10_000, "seed": 2026091501, "confidence_level": 0.80}
+        seeds = tuple(range(2026091501, 2026091509))
+        return module, manifest, seeds, bootstrap, candidate, incumbent
+
+    @staticmethod
+    def _qualification(role: str, workers: int):
+        return {
+            "root": f"/shared/scott-experiment/{role}",
+            "manifest_sha256": role[0] * 64,
+            "pass_sha256": role[-1] * 64,
+            "requirements": {
+                "expected_decisions": 16,
+                "model_world_workers": workers,
+                "native_batch_guard_ms": 64,
+                "requested_ms": 1_000,
+                "sims_per_world": 256,
+                "worlds": 4,
+            },
+            "completed_iterations_total": 2_384 if workers == 2 else 1_196,
+            "worlds_searched_total": 32 if workers == 2 else 16,
+        }
+
+    def test_contract_requires_exact_same_clock_one_knob_contrast(self) -> None:
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._inputs()
+        with patch.object(
+            module,
+            "_validated_deadline_qualification",
+            side_effect=[self._qualification("candidate", 2), self._qualification("incumbent", 1)],
+        ) as qualified:
+            contract = module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_WorldParallelismConfig(),
+                incumbent_config=_WorldParallelismConfig(model_world_workers=1),
+                execution_mode="in_process",
+            )
+
+        self.assertEqual(contract["pilot_seeds"], list(seeds))
+        self.assertEqual(
+            contract["deadline_qualifications"]["candidate"]["completed_iterations_total"],
+            2_384,
+        )
+        self.assertEqual(qualified.call_count, 2)
+
+        with self.assertRaisesRegex(HeadToHeadError, "only model_world_workers"):
+            module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_WorldParallelismConfig(),
+                incumbent_config=_WorldParallelismConfig(
+                    model_world_workers=1,
+                    search_batch=8,
+                ),
+                execution_mode="in_process",
+            )
+        with self.assertRaisesRegex(HeadToHeadError, "current in-process source"):
+            module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_WorldParallelismConfig(),
+                incumbent_config=_WorldParallelismConfig(model_world_workers=1),
+                execution_mode="isolated_build",
+            )
+
+    def test_readout_requires_effect_clean_roots_and_completed_search(self) -> None:
+        module, manifest, seeds, bootstrap, candidate, incumbent = self._inputs()
+        with patch.object(
+            module,
+            "_validated_deadline_qualification",
+            side_effect=[self._qualification("candidate", 2), self._qualification("incumbent", 1)],
+        ):
+            contract = module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_WorldParallelismConfig(),
+                incumbent_config=_WorldParallelismConfig(model_world_workers=1),
+                execution_mode="in_process",
+            )
+        games = [
+            SimpleNamespace(
+                candidate_telemetry=SimpleNamespace(
+                    total_iterations=10,
+                    worlds_searched=2,
+                    root_prior_fallbacks=0,
+                ),
+                incumbent_telemetry=SimpleNamespace(
+                    total_iterations=5,
+                    worlds_searched=1,
+                    root_prior_fallbacks=0,
+                ),
+            )
+            for _ in range(16)
+        ]
+        readout = module._world_parallelism_pilot_readout(
+            contract=contract,
+            summary={
+                "pair_scores": [1.0] * len(seeds),
+                "candidate_decision_wall_summary": {"count": 16, "p95": 1.1},
+                "incumbent_decision_wall_summary": {"count": 16, "p95": 1.0},
+            },
+            games=games,
+        )
+        self.assertEqual(
+            readout["decision"], "ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION"
+        )
+        self.assertTrue(readout["promotion_checks"]["both_arms_completed_model_search"])
+
+        games[0].candidate_telemetry.root_prior_fallbacks = 1
+        null_readout = module._world_parallelism_pilot_readout(
+            contract=contract,
+            summary={"pair_scores": [1.0] * len(seeds)},
+            games=games,
+        )
+        self.assertEqual(null_readout["decision"], "NO_EXTENSION")
+        self.assertFalse(null_readout["promotion_checks"]["zero_root_prior_fallbacks"])
+
+    def test_registered_world_parallelism_pilot_requires_durable_launcher(self) -> None:
+        module, manifest, *_ = self._inputs()
+        self.assertTrue(module._replacement_study_requires_durable_launcher(manifest))
 
 
 class BackupRepairPilotContractTest(unittest.TestCase):

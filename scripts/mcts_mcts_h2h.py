@@ -59,6 +59,34 @@ OPPONENT_PRIOR_STRENGTH_PILOT_DECISIONS = (
     "ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION",
     "NO_EXTENSION",
 )
+MODEL_WORLD_PARALLELISM_PILOT_SCHEMA_VERSION = (
+    "pokezero.mcts-h2h-model-world-parallelism-pilot.v1"
+)
+MODEL_WORLD_PARALLELISM_PILOT_READOUT_SCHEMA_VERSION = (
+    "pokezero.mcts-h2h-model-world-parallelism-pilot-readout.v1"
+)
+MODEL_WORLD_PARALLELISM_PILOT_DECISIONS = (
+    "ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION",
+    "NO_EXTENSION",
+)
+MODEL_WORLD_PARALLELISM_PILOT_PAIRS = 8
+MODEL_WORLD_PARALLELISM_PILOT_BOOTSTRAP_RESAMPLES = 10_000
+MODEL_WORLD_PARALLELISM_PILOT_CONFIDENCE = 0.80
+MODEL_WORLD_PARALLELISM_PILOT_MINIMUM_EFFECT_DELTA = 0.05
+MODEL_WORLD_PARALLELISM_PILOT_FAILURE_RETRY_POLICY = {
+    "schema_version": "pokezero.mcts-h2h-failure-retry-policy.v1",
+    "interrupted_before_runner_terminal": "resume_same_root_with_fresh_launcher_attempt",
+    "nonzero_runner_exit": "terminal_failed_no_retry",
+    "malformed_runner_terminal": "nonbankable_no_retry",
+    "completed_game_units": "immutable_reuse_only",
+}
+MODEL_WORLD_PARALLELISM_PILOT_DEADLINE_REQUIREMENTS = {
+    "expected_decisions": 16,
+    "native_batch_guard_ms": 64,
+    "requested_ms": 1_000,
+    "sims_per_world": 256,
+    "worlds": 4,
+}
 OPPONENT_PRIOR_APPLICABILITY_CONTRACT = {
     "schema_version": OPPONENT_PRIOR_APPLICABILITY_SCHEMA_VERSION,
     "stage": "development_applicability",
@@ -618,7 +646,14 @@ def _bootstrap_contract(manifest: Mapping[str, Any]) -> tuple[dict[str, Any], in
 
 def _replacement_study_requires_durable_launcher(manifest: Mapping[str, Any]) -> bool:
     study = manifest.get("study")
-    return isinstance(study, Mapping) and study.get("schema_version") == BACKUP_REPAIR_PILOT_SCHEMA_VERSION
+    if isinstance(study, Mapping) and study.get("schema_version") == BACKUP_REPAIR_PILOT_SCHEMA_VERSION:
+        return True
+    world_parallelism = manifest.get("world_parallelism_pilot")
+    return (
+        isinstance(world_parallelism, Mapping)
+        and world_parallelism.get("schema_version")
+        == MODEL_WORLD_PARALLELISM_PILOT_SCHEMA_VERSION
+    )
 
 
 def _require_durable_launcher_handoff(out_root: Path) -> None:
@@ -918,6 +953,340 @@ def _backup_repair_pilot_readout(
             "interval_wholly_above_neutral": interval_above_neutral,
         },
         "decision": "ELIGIBLE_FOR_RESERVED_CONFIRMATION" if eligible else "INCONCLUSIVE_OR_NOT_PROMOTED",
+    }
+
+
+def _validated_deadline_qualification(
+    raw: object,
+    *,
+    role: str,
+    expected_workers: int,
+) -> dict[str, Any]:
+    """Revalidate the exact soft-clock qualification before a scored pilot.
+
+    The two-worker candidate is useful only because R16 and R17 demonstrated
+    more completed, source-valid model work under the *same* soft clock.  Do
+    not let a later game manifest merely cite those roots by name: re-read their
+    immutable hashes, requirements, terminal marker, and every durable decision
+    unit before any pilot game is admitted.
+    """
+
+    payload = _mapping(raw, label=f"world_parallelism_pilot.deadline_qualifications.{role}")
+    if set(payload) != {"root", "manifest_sha256", "pass_sha256"}:
+        raise HeadToHeadError(
+            f"{role} deadline qualification must contain exactly root, manifest_sha256, and pass_sha256."
+        )
+    root_raw = payload.get("root")
+    if not isinstance(root_raw, str):
+        raise HeadToHeadError(f"{role} deadline qualification root must be a string.")
+    root = Path(root_raw).resolve()
+    expected_parent = Path("/shared/scott-experiment")
+    try:
+        root.relative_to(expected_parent.resolve())
+    except ValueError as error:
+        raise HeadToHeadError(
+            f"{role} deadline qualification root must be below {expected_parent}."
+        ) from error
+    for field in ("manifest_sha256", "pass_sha256"):
+        value = payload[field]
+        if not isinstance(value, str) or len(value) != 64 or any(
+            character not in "0123456789abcdef" for character in value
+        ):
+            raise HeadToHeadError(f"{role} deadline qualification {field} must be a SHA-256 hex digest.")
+    manifest_path = root / "MANIFEST.json"
+    pass_path = root / "PASS.json"
+    try:
+        if _sha256_file(manifest_path) != payload["manifest_sha256"]:
+            raise HeadToHeadError(f"{role} deadline qualification manifest digest differs.")
+        if _sha256_file(pass_path) != payload["pass_sha256"]:
+            raise HeadToHeadError(f"{role} deadline qualification PASS digest differs.")
+        manifest = _mapping(
+            json.loads(manifest_path.read_text(encoding="utf-8")),
+            label=f"{role} deadline qualification manifest",
+        )
+        passed = _mapping(
+            json.loads(pass_path.read_text(encoding="utf-8")),
+            label=f"{role} deadline qualification PASS",
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise HeadToHeadError(
+            f"cannot read {role} deadline qualification evidence: {error}"
+        ) from error
+    expected_requirements = {
+        **MODEL_WORLD_PARALLELISM_PILOT_DEADLINE_REQUIREMENTS,
+        "model_world_workers": expected_workers,
+    }
+    if manifest.get("requirements") != expected_requirements:
+        raise HeadToHeadError(f"{role} deadline qualification requirements differ.")
+    if passed.get("state") != "PASS" or passed.get("marker") != "DEADLINE_QUALIFICATION_PASS":
+        raise HeadToHeadError(f"{role} deadline qualification is not a terminal PASS.")
+    if passed.get("manifest") != manifest:
+        raise HeadToHeadError(f"{role} deadline qualification PASS does not bind its manifest.")
+    decisions_dir = root / "decisions"
+    try:
+        decision_paths = sorted(decisions_dir.glob("*.json"))
+        if len(decision_paths) != expected_requirements["expected_decisions"]:
+            raise HeadToHeadError(
+                f"{role} deadline qualification has {len(decision_paths)} durable decisions, "
+                f"expected {expected_requirements['expected_decisions']}."
+            )
+        rows = [
+            _mapping(json.loads(path.read_text(encoding="utf-8")), label=str(path))
+            for path in decision_paths
+        ]
+        from pokezero.mcts_eval.deadline_qualification import (  # noqa: PLC0415
+            DeadlineQualificationRequirements,
+            validate_deadline_qualification,
+        )
+
+        recomputed = validate_deadline_qualification(
+            rows,
+            requirements=DeadlineQualificationRequirements(**expected_requirements),
+        )
+    except (OSError, json.JSONDecodeError, TypeError, ValueError) as error:
+        raise HeadToHeadError(
+            f"cannot revalidate {role} deadline qualification decisions: {error}"
+        ) from error
+    if passed.get("summary") != recomputed:
+        raise HeadToHeadError(f"{role} deadline qualification summary differs from durable decisions.")
+    return {
+        "root": str(root),
+        "manifest_sha256": payload["manifest_sha256"],
+        "pass_sha256": payload["pass_sha256"],
+        "requirements": expected_requirements,
+        "completed_iterations_total": sum(
+            int(invocation["completed_iterations"])
+            for row in rows
+            for invocation in row["native_invocations"]
+        ),
+        "worlds_searched_total": sum(int(row["worlds_searched"]) for row in rows),
+    }
+
+
+def _world_parallelism_pilot_contract(
+    manifest: Mapping[str, Any],
+    *,
+    seeds: tuple[int, ...],
+    bootstrap: Mapping[str, Any],
+    candidate_raw: Mapping[str, Any],
+    incumbent_raw: Mapping[str, Any],
+    candidate_config: Any,
+    incumbent_config: Any,
+    execution_mode: str,
+) -> dict[str, Any] | None:
+    """Freeze the first same-soft-clock model-world strength pilot.
+
+    This is deliberately a single two-worker-versus-one-worker contrast.  It
+    inherits its timing eligibility from two independently complete deadline
+    qualifications and cannot be relabelled as a hard-latency study or used to
+    tune any other MCTS setting.
+    """
+
+    raw = manifest.get("world_parallelism_pilot")
+    if raw is None:
+        return None
+    pilot = _mapping(raw, label="manifest.world_parallelism_pilot")
+    expected_fields = {
+        "schema_version",
+        "stage",
+        "failure_retry_policy",
+        "minimum_effect_delta",
+        "terminal_decisions",
+        "deadline_qualifications",
+    }
+    if set(pilot) != expected_fields:
+        raise HeadToHeadError(
+            "model-world parallelism pilot has unexpected or missing contract fields."
+        )
+    if pilot["schema_version"] != MODEL_WORLD_PARALLELISM_PILOT_SCHEMA_VERSION:
+        raise HeadToHeadError("model-world parallelism pilot schema is unrecognized.")
+    if pilot["stage"] != "pilot":
+        raise HeadToHeadError("model-world parallelism pilot must declare stage='pilot'.")
+    if pilot["failure_retry_policy"] != MODEL_WORLD_PARALLELISM_PILOT_FAILURE_RETRY_POLICY:
+        raise HeadToHeadError("model-world parallelism pilot failure/retry policy differs.")
+    if tuple(pilot["terminal_decisions"]) != MODEL_WORLD_PARALLELISM_PILOT_DECISIONS:
+        raise HeadToHeadError("model-world parallelism pilot terminal decisions differ.")
+    minimum_effect = pilot["minimum_effect_delta"]
+    if (
+        isinstance(minimum_effect, bool)
+        or not isinstance(minimum_effect, (int, float))
+        or float(minimum_effect) != MODEL_WORLD_PARALLELISM_PILOT_MINIMUM_EFFECT_DELTA
+    ):
+        raise HeadToHeadError(
+            "model-world parallelism pilot must retain its +0.05 minimum effect."
+        )
+    if execution_mode != "in_process":
+        raise HeadToHeadError("model-world parallelism pilot requires one current in-process source.")
+    identity_fields = ("source_commit", "source_tree_sha256", "engine_fingerprint")
+    if any(candidate_raw.get(field) != incumbent_raw.get(field) for field in identity_fields):
+        raise HeadToHeadError(
+            "model-world parallelism pilot requires the same verified source identity for both arms."
+        )
+    if candidate_raw.get("config_id") == incumbent_raw.get("config_id"):
+        raise HeadToHeadError(
+            "model-world parallelism pilot requires distinct candidate and incumbent config_id values."
+        )
+    if len(seeds) != MODEL_WORLD_PARALLELISM_PILOT_PAIRS:
+        raise HeadToHeadError(
+            f"model-world parallelism pilot requires exactly {MODEL_WORLD_PARALLELISM_PILOT_PAIRS} mirrored pairs."
+        )
+    if (
+        int(bootstrap.get("resamples", 0)) != MODEL_WORLD_PARALLELISM_PILOT_BOOTSTRAP_RESAMPLES
+        or float(bootstrap.get("confidence_level", -1.0))
+        != MODEL_WORLD_PARALLELISM_PILOT_CONFIDENCE
+    ):
+        raise HeadToHeadError(
+            "model-world parallelism pilot requires 10,000 bootstrap resamples at 80% confidence."
+        )
+    candidate_values = asdict(candidate_config)
+    incumbent_values = asdict(incumbent_config)
+    changed_fields = {
+        field
+        for field in candidate_values
+        if candidate_values.get(field) != incumbent_values.get(field)
+    }
+    if changed_fields != {"model_world_workers"}:
+        raise HeadToHeadError(
+            "model-world parallelism pilot permits only model_world_workers to differ."
+        )
+    expected_config = {
+        "leaf_eval": "model",
+        "strict_fallbacks": True,
+        "model_device": "cpu",
+        "worlds": 4,
+        "search_time_ms": 100,
+        "threads": 1,
+        "search_sims": 256,
+        "search_batch": 16,
+        "search_depth": 2,
+        "early_stop": False,
+        "model_decision_time_ms": 1_000,
+        "model_native_batch_guard_ms": 64,
+        "model_priors": False,
+        "use_opponent_priors": False,
+        "root_selector_q": False,
+        "root_selector_shadow": False,
+        "depth_min": None,
+        "worlds_min": None,
+    }
+    for role, values, workers in (
+        ("candidate", candidate_values, 2),
+        ("incumbent", incumbent_values, 1),
+    ):
+        actual = {field: values.get(field) for field in (*expected_config, "model_world_workers")}
+        if actual != {**expected_config, "model_world_workers": workers}:
+            raise HeadToHeadError(
+                f"model-world parallelism pilot {role} does not match the qualified soft-clock configuration."
+            )
+    qualifications = _mapping(
+        pilot["deadline_qualifications"], label="model-world parallelism pilot deadline qualifications"
+    )
+    if set(qualifications) != {"candidate", "incumbent"}:
+        raise HeadToHeadError(
+            "model-world parallelism pilot requires candidate and incumbent deadline qualifications."
+        )
+    return {
+        "schema_version": MODEL_WORLD_PARALLELISM_PILOT_SCHEMA_VERSION,
+        "stage": "pilot",
+        "pilot_seeds": list(seeds),
+        "bootstrap_resamples": MODEL_WORLD_PARALLELISM_PILOT_BOOTSTRAP_RESAMPLES,
+        "bootstrap_seed": int(bootstrap["seed"]),
+        "confidence_level": MODEL_WORLD_PARALLELISM_PILOT_CONFIDENCE,
+        "minimum_effect_delta": MODEL_WORLD_PARALLELISM_PILOT_MINIMUM_EFFECT_DELTA,
+        "failure_retry_policy": dict(MODEL_WORLD_PARALLELISM_PILOT_FAILURE_RETRY_POLICY),
+        "deadline_qualifications": {
+            "candidate": _validated_deadline_qualification(
+                qualifications["candidate"], role="candidate", expected_workers=2
+            ),
+            "incumbent": _validated_deadline_qualification(
+                qualifications["incumbent"], role="incumbent", expected_workers=1
+            ),
+        },
+    }
+
+
+def _world_parallelism_pilot_readout(
+    *,
+    contract: Mapping[str, Any],
+    summary: Mapping[str, Any],
+    games: list[Any],
+) -> dict[str, Any]:
+    """Make a clean positive, null, or failure-contaminated pilot terminal."""
+
+    pair_scores_raw = summary.get("pair_scores")
+    if not isinstance(pair_scores_raw, list):
+        raise HeadToHeadError("model-world parallelism pilot summary has no pair_scores list.")
+    try:
+        pair_scores = tuple(float(value) for value in pair_scores_raw)
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError("model-world parallelism pilot pair scores are malformed.") from error
+    pilot_seeds = tuple(int(value) for value in contract["pilot_seeds"])
+    if len(pair_scores) != len(pilot_seeds):
+        raise HeadToHeadError("model-world parallelism pilot summary does not cover every registered pair.")
+    interval = bootstrap_mean(
+        pair_scores,
+        bootstrap_indices(
+            sample_size=len(pair_scores),
+            resamples=int(contract["bootstrap_resamples"]),
+            seed=int(contract["bootstrap_seed"]),
+        ),
+        confidence_level=float(contract["confidence_level"]),
+    )
+    delta = {
+        "point": interval.point - 0.5,
+        "low": interval.low - 0.5,
+        "high": interval.high - 0.5,
+    }
+    def total(role: str, field: str) -> int:
+        return sum(int(getattr(getattr(game, f"{role}_telemetry"), field)) for game in games)
+
+    candidate_iterations = total("candidate", "total_iterations")
+    incumbent_iterations = total("incumbent", "total_iterations")
+    candidate_worlds = total("candidate", "worlds_searched")
+    incumbent_worlds = total("incumbent", "worlds_searched")
+    candidate_root_fallbacks = total("candidate", "root_prior_fallbacks")
+    incumbent_root_fallbacks = total("incumbent", "root_prior_fallbacks")
+    all_pairs_complete = len(pair_scores) == len(pilot_seeds)
+    clean_live_roots = candidate_root_fallbacks == 0 and incumbent_root_fallbacks == 0
+    both_arms_searched = (
+        candidate_iterations > 0
+        and incumbent_iterations > 0
+        and candidate_worlds > 0
+        and incumbent_worlds > 0
+    )
+    clears_effect = delta["point"] >= float(contract["minimum_effect_delta"])
+    interval_above_neutral = delta["low"] > 0.0
+    eligible = (
+        all_pairs_complete
+        and clean_live_roots
+        and both_arms_searched
+        and clears_effect
+        and interval_above_neutral
+    )
+    return {
+        "schema_version": MODEL_WORLD_PARALLELISM_PILOT_READOUT_SCHEMA_VERSION,
+        "complete": True,
+        "contract": dict(contract),
+        "candidate_score": interval.to_payload(),
+        "candidate_score_delta_from_neutral": delta,
+        "work": {
+            "candidate_iterations": candidate_iterations,
+            "incumbent_iterations": incumbent_iterations,
+            "candidate_worlds_searched": candidate_worlds,
+            "incumbent_worlds_searched": incumbent_worlds,
+            "candidate_decision_wall_summary": summary.get("candidate_decision_wall_summary"),
+            "incumbent_decision_wall_summary": summary.get("incumbent_decision_wall_summary"),
+        },
+        "promotion_checks": {
+            "all_registered_pairs_complete": all_pairs_complete,
+            "zero_root_prior_fallbacks": clean_live_roots,
+            "both_arms_completed_model_search": both_arms_searched,
+            "point_estimate_at_least_minimum_effect": clears_effect,
+            "interval_wholly_above_neutral": interval_above_neutral,
+        },
+        "decision": (
+            "ELIGIBLE_FOR_SEPARATE_CONFIRMATION_REGISTRATION" if eligible else "NO_EXTENSION"
+        ),
     }
 
 
@@ -1684,6 +2053,16 @@ def main(argv: list[str] | None = None) -> int:
             raise HeadToHeadError(
                 "backup-repair pilot requires isolated source builds for both runtime revisions."
             )
+    world_parallelism_pilot_contract = _world_parallelism_pilot_contract(
+        manifest,
+        seeds=seeds,
+        bootstrap=bootstrap,
+        candidate_raw=candidate_raw,
+        incumbent_raw=incumbent_raw,
+        candidate_config=candidate_config,
+        incumbent_config=incumbent_config,
+        execution_mode=execution_mode,
+    )
     opponent_prior_applicability_contract = _opponent_prior_applicability_contract(
         manifest,
         candidate_raw=candidate_raw,
@@ -1733,6 +2112,7 @@ def main(argv: list[str] | None = None) -> int:
             "seeds": list(seeds),
             "execution_mode": execution_mode,
             "backup_repair_pilot_contract": pilot_contract,
+            "world_parallelism_pilot_contract": world_parallelism_pilot_contract,
             "opponent_prior_strength_pilot_contract": opponent_prior_strength_pilot_contract,
             "isolated_policies": (
                 {
@@ -2022,6 +2402,17 @@ def main(argv: list[str] | None = None) -> int:
                 games=all_games,
             ),
         )
+    world_parallelism_pilot_readout_path: Path | None = None
+    if world_parallelism_pilot_contract is not None:
+        world_parallelism_pilot_readout_path = out_root / "WORLD_PARALLELISM_PILOT_READOUT.json"
+        _write_immutable_json(
+            world_parallelism_pilot_readout_path,
+            _world_parallelism_pilot_readout(
+                contract=world_parallelism_pilot_contract,
+                summary=summary,
+                games=all_games,
+            ),
+        )
     opponent_prior_applicability_readout_path: Path | None = None
     applicability_readout: dict[str, Any] | None = None
     if opponent_prior_applicability_contract is not None:
@@ -2069,6 +2460,11 @@ def main(argv: list[str] | None = None) -> int:
             "incumbent_provenance_sha256": incumbent.provenance_sha256,
             "backup_repair_pilot_readout_sha256": (
                 _sha256_file(pilot_readout_path) if pilot_readout_path is not None else None
+            ),
+            "world_parallelism_pilot_readout_sha256": (
+                _sha256_file(world_parallelism_pilot_readout_path)
+                if world_parallelism_pilot_readout_path is not None
+                else None
             ),
             "opponent_prior_applicability_readout_sha256": (
                 _sha256_file(opponent_prior_applicability_readout_path)
