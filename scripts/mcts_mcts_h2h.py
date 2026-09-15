@@ -525,6 +525,65 @@ def _mapping(value: object, *, label: str) -> Mapping[str, Any]:
     return value
 
 
+def _validated_deadline_totals(
+    summary: Mapping[str, Any], *, role: str
+) -> tuple[int, int]:
+    """Derive audit totals from the validator's normalized decision records.
+
+    The sealed decision artifact nests native invocations beneath
+    ``engine_mcts.time_budget``.  ``validate_deadline_qualification`` checks
+    that raw shape and returns a deliberately flatter, normalized ``decisions``
+    list.  Consume that validated list here rather than duplicating the raw
+    artifact path: this makes the H2H admission audit follow the exact schema
+    that was used to recompute the immutable PASS summary.
+    """
+
+    decisions = summary.get("decisions")
+    if not isinstance(decisions, list):
+        raise HeadToHeadError(
+            f"{role} deadline qualification recomputed decisions are malformed."
+        )
+    completed_iterations_total = 0
+    worlds_searched_total = 0
+    for decision_index, decision in enumerate(decisions):
+        record = _mapping(
+            decision,
+            label=f"{role} deadline qualification recomputed decision {decision_index}",
+        )
+        worlds_searched = record.get("worlds_searched")
+        invocations = record.get("native_invocations")
+        if (
+            isinstance(worlds_searched, bool)
+            or not isinstance(worlds_searched, int)
+            or worlds_searched < 0
+            or not isinstance(invocations, list)
+        ):
+            raise HeadToHeadError(
+                f"{role} deadline qualification recomputed decision {decision_index} is malformed."
+            )
+        worlds_searched_total += worlds_searched
+        for invocation_index, invocation in enumerate(invocations):
+            witness = _mapping(
+                invocation,
+                label=(
+                    f"{role} deadline qualification recomputed decision "
+                    f"{decision_index} invocation {invocation_index}"
+                ),
+            )
+            completed_iterations = witness.get("completed_iterations")
+            if (
+                isinstance(completed_iterations, bool)
+                or not isinstance(completed_iterations, int)
+                or completed_iterations < 0
+            ):
+                raise HeadToHeadError(
+                    f"{role} deadline qualification recomputed decision "
+                    f"{decision_index} invocation {invocation_index} is malformed."
+                )
+            completed_iterations_total += completed_iterations
+    return completed_iterations_total, worlds_searched_total
+
+
 def _load_manifest(path: str | Path) -> Mapping[str, Any]:
     try:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -1132,17 +1191,16 @@ def _validated_deadline_qualification(
         ) from error
     if passed.get("summary") != recomputed:
         raise HeadToHeadError(f"{role} deadline qualification summary differs from durable decisions.")
+    completed_iterations_total, worlds_searched_total = _validated_deadline_totals(
+        recomputed, role=role
+    )
     return {
         "root": str(root),
         "manifest_sha256": payload["manifest_sha256"],
         "pass_sha256": payload["pass_sha256"],
         "requirements": expected_requirements,
-        "completed_iterations_total": sum(
-            int(invocation["completed_iterations"])
-            for row in rows
-            for invocation in row["native_invocations"]
-        ),
-        "worlds_searched_total": sum(int(row["worlds_searched"]) for row in rows),
+        "completed_iterations_total": completed_iterations_total,
+        "worlds_searched_total": worlds_searched_total,
         "qualification_provenance": {
             "source_commit": source_commit,
             "source_tree_sha256": source_tree,
