@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import fcntl
+import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -27,6 +29,7 @@ from pokezero.mcts_eval.head_to_head import (
 )
 from pokezero.mcts_eval.scoring import bootstrap_mean
 from pokezero.policy import PolicyContext
+from pokezero.engine_search import EngineMctsConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -122,27 +125,33 @@ class _OpponentPriorConfig:
     search_batch: int = 16
 
 
-@dataclass(frozen=True)
-class _WorldParallelismConfig:
-    leaf_eval: str = "model"
-    strict_fallbacks: bool = True
-    model_device: str = "cpu"
-    worlds: int = 4
-    search_time_ms: int = 100
-    threads: int = 1
-    search_sims: int = 256
-    search_batch: int = 16
-    search_depth: int = 2
-    early_stop: bool = False
-    model_decision_time_ms: int = 1_000
-    model_native_batch_guard_ms: int = 64
-    model_priors: bool = False
-    use_opponent_priors: bool = False
-    root_selector_q: bool = False
-    root_selector_shadow: bool = False
-    depth_min: int | None = None
-    worlds_min: int | None = None
-    model_world_workers: int = 2
+def _world_parallelism_config(**overrides):
+    """Use the real engine dataclass so new knobs cannot escape this test."""
+
+    values = {
+        "worlds": 4,
+        "search_time_ms": 100,
+        "threads": 1,
+        "strict_fallbacks": True,
+        "leaf_eval": "model",
+        "model_device": "cpu",
+        "checkpoint_path": "/checkpoint.pt",
+        "model_path": "/model.ts",
+        "tables_path": "/tables.json",
+        "search_sims": 256,
+        "search_batch": 16,
+        "search_depth": 2,
+        "model_priors": False,
+        "use_opponent_priors": False,
+        "early_stop": False,
+        "model_decision_time_ms": 1_000,
+        "model_native_batch_guard_ms": 64,
+        "model_world_workers": 2,
+        "depth_min": None,
+        "worlds_min": None,
+    }
+    values.update(overrides)
+    return EngineMctsConfig(**values)
 
 
 def _spec(config_id: str, **overrides) -> MctsPolicySpec:
@@ -831,6 +840,30 @@ class OpponentPriorStrengthPilotReadoutTest(unittest.TestCase):
 
 
 class WorldParallelismPilotContractTest(unittest.TestCase):
+    @staticmethod
+    def _runtime_context():
+        observation = {
+            "schema_version": "pokezero.observation.v4",
+            "token_count": 23,
+            "categorical_feature_count": 41,
+            "numeric_feature_count": 132,
+            "transition_token_count": 0,
+            "feature_masks": {"exact_state": True},
+            "category_vocab_sha256": "d" * 64,
+        }
+        return {
+            "checkpoint_contract": {
+                "checkpoint_sha256": "e" * 64,
+                "observation_contract_sha256": "f" * 64,
+                "observation_contract": observation,
+                "model_device": "cpu",
+                "showdown_source_sha256": "a" * 64,
+                "exporter_revision": "pokezero.mcts-eval.exporter.v5",
+            },
+            "showdown_source": {"content_sha256": "a" * 64, "git_clean": True},
+            "engine_fingerprint": "c" * 64,
+        }
+
     def _inputs(self):
         module = _runner_module()
         manifest = {
@@ -896,9 +929,10 @@ class WorldParallelismPilotContractTest(unittest.TestCase):
                 bootstrap=bootstrap,
                 candidate_raw=candidate,
                 incumbent_raw=incumbent,
-                candidate_config=_WorldParallelismConfig(),
-                incumbent_config=_WorldParallelismConfig(model_world_workers=1),
+                candidate_config=_world_parallelism_config(),
+                incumbent_config=_world_parallelism_config(model_world_workers=1),
                 execution_mode="in_process",
+                **self._runtime_context(),
             )
 
         self.assertEqual(contract["pilot_seeds"], list(seeds))
@@ -915,12 +949,13 @@ class WorldParallelismPilotContractTest(unittest.TestCase):
                 bootstrap=bootstrap,
                 candidate_raw=candidate,
                 incumbent_raw=incumbent,
-                candidate_config=_WorldParallelismConfig(),
-                incumbent_config=_WorldParallelismConfig(
+                candidate_config=_world_parallelism_config(),
+                incumbent_config=_world_parallelism_config(
                     model_world_workers=1,
                     search_batch=8,
                 ),
                 execution_mode="in_process",
+                **self._runtime_context(),
             )
         with self.assertRaisesRegex(HeadToHeadError, "current in-process source"):
             module._world_parallelism_pilot_contract(
@@ -929,9 +964,31 @@ class WorldParallelismPilotContractTest(unittest.TestCase):
                 bootstrap=bootstrap,
                 candidate_raw=candidate,
                 incumbent_raw=incumbent,
-                candidate_config=_WorldParallelismConfig(),
-                incumbent_config=_WorldParallelismConfig(model_world_workers=1),
+                candidate_config=_world_parallelism_config(),
+                incumbent_config=_world_parallelism_config(model_world_workers=1),
                 execution_mode="isolated_build",
+                **self._runtime_context(),
+            )
+
+        # The arms can agree with each other on a changed PUCT constant, yet
+        # R16/R17 would then no longer be evidence for their clock/mechanics.
+        # Use the real config dataclass so this remains true as it grows.
+        with self.assertRaisesRegex(
+            HeadToHeadError, "exact qualified soft-clock configuration"
+        ):
+            module._world_parallelism_pilot_contract(
+                manifest,
+                seeds=seeds,
+                bootstrap=bootstrap,
+                candidate_raw=candidate,
+                incumbent_raw=incumbent,
+                candidate_config=_world_parallelism_config(c_puct=1.1),
+                incumbent_config=_world_parallelism_config(
+                    model_world_workers=1,
+                    c_puct=1.1,
+                ),
+                execution_mode="in_process",
+                **self._runtime_context(),
             )
 
     def test_readout_requires_effect_clean_roots_and_completed_search(self) -> None:
@@ -947,9 +1004,10 @@ class WorldParallelismPilotContractTest(unittest.TestCase):
                 bootstrap=bootstrap,
                 candidate_raw=candidate,
                 incumbent_raw=incumbent,
-                candidate_config=_WorldParallelismConfig(),
-                incumbent_config=_WorldParallelismConfig(model_world_workers=1),
+                candidate_config=_world_parallelism_config(),
+                incumbent_config=_world_parallelism_config(model_world_workers=1),
                 execution_mode="in_process",
+                **self._runtime_context(),
             )
         games = [
             SimpleNamespace(
@@ -992,6 +1050,85 @@ class WorldParallelismPilotContractTest(unittest.TestCase):
     def test_registered_world_parallelism_pilot_requires_durable_launcher(self) -> None:
         module, manifest, *_ = self._inputs()
         self.assertTrue(module._replacement_study_requires_durable_launcher(manifest))
+
+    def test_on_disk_qualification_with_different_checkpoint_is_refused_before_games(self) -> None:
+        """A real historical PASS cannot authorize a different live model.
+
+        This deliberately uses on-disk MANIFEST/PASS bytes rather than mocking
+        the qualification reader: the failure must happen after immutable
+        receipt binding and before an absent decision directory could be read
+        as a resume opportunity.
+        """
+
+        module = _runner_module()
+        runtime = self._runtime_context()
+        expected = module._world_parallelism_qualification_provenance(**runtime)
+        expected["search_config"] = {
+            **expected["search_config"],
+            "model_world_workers": 2,
+        }
+        requirements = {
+            **module.MODEL_WORLD_PARALLELISM_PILOT_DEADLINE_REQUIREMENTS,
+            "model_world_workers": 2,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_parent = Path(directory) / "shared" / "scott-experiment"
+            root = evidence_parent / "candidate"
+            root.mkdir(parents=True)
+            qualification_checkpoint = dict(runtime["checkpoint_contract"])
+            qualification_checkpoint["checkpoint_sha256"] = "0" * 64
+            manifest = {
+                "requirements": requirements,
+                "checkpoint": qualification_checkpoint,
+                "showdown_source": runtime["showdown_source"],
+                "active_source": {
+                    "commit": "1" * 40,
+                    "execution_tree_sha256": "2" * 64,
+                    "tree_status": "clean_git_checkout",
+                },
+                "source_receipt": {
+                    "schema_version": "pokezero.mcts-deadline-source-receipt.v1",
+                    "complete": True,
+                    "source_commit": "1" * 40,
+                    "execution_tree_sha256": "2" * 64,
+                    "engine_fingerprint": runtime["engine_fingerprint"],
+                },
+                "deadline_mechanics": {
+                    "engine_build_fingerprint": {
+                        "fingerprint": runtime["engine_fingerprint"]
+                    },
+                    "engine_search_sha256": expected["engine_search_sha256"],
+                },
+                "search_config": expected["search_config"],
+            }
+            terminal = {
+                "state": "PASS",
+                "marker": "DEADLINE_QUALIFICATION_PASS",
+                "manifest": manifest,
+            }
+            manifest_path = root / "MANIFEST.json"
+            pass_path = root / "PASS.json"
+            manifest_path.write_text(
+                json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            pass_path.write_text(
+                json.dumps(terminal, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
+            raw = {
+                "root": str(root),
+                "manifest_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+                "pass_sha256": hashlib.sha256(pass_path.read_bytes()).hexdigest(),
+            }
+            with self.assertRaisesRegex(HeadToHeadError, "checkpoint checkpoint_sha256 differs"):
+                module._validated_deadline_qualification(
+                    raw,
+                    role="candidate",
+                    expected_workers=2,
+                    expected_provenance=expected,
+                    evidence_parent=evidence_parent,
+                )
 
 
 class BackupRepairPilotContractTest(unittest.TestCase):

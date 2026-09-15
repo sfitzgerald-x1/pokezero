@@ -961,6 +961,8 @@ def _validated_deadline_qualification(
     *,
     role: str,
     expected_workers: int,
+    expected_provenance: Mapping[str, Any],
+    evidence_parent: Path = Path("/shared/scott-experiment"),
 ) -> dict[str, Any]:
     """Revalidate the exact soft-clock qualification before a scored pilot.
 
@@ -980,12 +982,11 @@ def _validated_deadline_qualification(
     if not isinstance(root_raw, str):
         raise HeadToHeadError(f"{role} deadline qualification root must be a string.")
     root = Path(root_raw).resolve()
-    expected_parent = Path("/shared/scott-experiment")
     try:
-        root.relative_to(expected_parent.resolve())
+        root.relative_to(evidence_parent.resolve())
     except ValueError as error:
         raise HeadToHeadError(
-            f"{role} deadline qualification root must be below {expected_parent}."
+            f"{role} deadline qualification root must be below {evidence_parent}."
         ) from error
     for field in ("manifest_sha256", "pass_sha256"):
         value = payload[field]
@@ -1022,6 +1023,88 @@ def _validated_deadline_qualification(
         raise HeadToHeadError(f"{role} deadline qualification is not a terminal PASS.")
     if passed.get("manifest") != manifest:
         raise HeadToHeadError(f"{role} deadline qualification PASS does not bind its manifest.")
+
+    # R16/R17 established a *specific* soft-clock result.  A different
+    # checkpoint, observation vocabulary, Showdown runtime, native engine, or
+    # engine-search implementation may have the same row counts while pricing
+    # a different game.  Prove the qualification's frozen mechanics match the
+    # live scored policy before any games are admitted.  The scorer itself is
+    # intentionally allowed to be newer: its source tree changes to add this
+    # guard, while the engine-search and native fingerprints must not.
+    qualification_checkpoint = _mapping(
+        manifest.get("checkpoint"), label=f"{role} deadline qualification checkpoint"
+    )
+    for field in (
+        "checkpoint_sha256",
+        "observation_contract_sha256",
+        "observation_contract",
+        "model_device",
+        "showdown_source_sha256",
+        "exporter_revision",
+    ):
+        if qualification_checkpoint.get(field) != expected_provenance[field]:
+            raise HeadToHeadError(
+                f"{role} deadline qualification checkpoint {field} differs from the live pilot."
+            )
+    qualification_showdown = _mapping(
+        manifest.get("showdown_source"), label=f"{role} deadline qualification Showdown source"
+    )
+    if (
+        qualification_showdown.get("content_sha256")
+        != expected_provenance["showdown_content_sha256"]
+        or qualification_showdown.get("git_clean") is not True
+    ):
+        raise HeadToHeadError(
+            f"{role} deadline qualification Showdown source differs from the live pilot."
+        )
+    active_source = _mapping(
+        manifest.get("active_source"), label=f"{role} deadline qualification active source"
+    )
+    source_commit = active_source.get("commit")
+    source_tree = active_source.get("execution_tree_sha256")
+    if (
+        not isinstance(source_commit, str)
+        or len(source_commit) != 40
+        or any(character not in "0123456789abcdef" for character in source_commit)
+        or not isinstance(source_tree, str)
+        or len(source_tree) != 64
+        or any(character not in "0123456789abcdef" for character in source_tree)
+    ):
+        raise HeadToHeadError(f"{role} deadline qualification active source is malformed.")
+    qualification_receipt = _mapping(
+        manifest.get("source_receipt"), label=f"{role} deadline qualification source receipt"
+    )
+    if (
+        qualification_receipt.get("schema_version")
+        != "pokezero.mcts-deadline-source-receipt.v1"
+        or qualification_receipt.get("complete") is not True
+        or qualification_receipt.get("source_commit") != source_commit
+        or qualification_receipt.get("execution_tree_sha256") != source_tree
+        or qualification_receipt.get("engine_fingerprint")
+        != expected_provenance["engine_fingerprint"]
+    ):
+        raise HeadToHeadError(
+            f"{role} deadline qualification source receipt is not self-consistent with live engine mechanics."
+        )
+    mechanics = _mapping(
+        manifest.get("deadline_mechanics"), label=f"{role} deadline qualification mechanics"
+    )
+    engine_build = _mapping(
+        mechanics.get("engine_build_fingerprint"),
+        label=f"{role} deadline qualification native engine fingerprint",
+    )
+    if (
+        engine_build.get("fingerprint") != expected_provenance["engine_fingerprint"]
+        or mechanics.get("engine_search_sha256")
+        != expected_provenance["engine_search_sha256"]
+    ):
+        raise HeadToHeadError(
+            f"{role} deadline qualification engine mechanics differ from the live pilot."
+        )
+    if manifest.get("search_config") != expected_provenance["search_config"]:
+        raise HeadToHeadError(
+            f"{role} deadline qualification search configuration differs from the live pilot."
+        )
     decisions_dir = root / "decisions"
     try:
         decision_paths = sorted(decisions_dir.glob("*.json"))
@@ -1060,6 +1143,111 @@ def _validated_deadline_qualification(
             for invocation in row["native_invocations"]
         ),
         "worlds_searched_total": sum(int(row["worlds_searched"]) for row in rows),
+        "qualification_provenance": {
+            "source_commit": source_commit,
+            "source_tree_sha256": source_tree,
+            "checkpoint_sha256": qualification_checkpoint["checkpoint_sha256"],
+            "observation_contract_sha256": qualification_checkpoint[
+                "observation_contract_sha256"
+            ],
+            "showdown_content_sha256": qualification_showdown["content_sha256"],
+            "engine_fingerprint": engine_build["fingerprint"],
+            "engine_search_sha256": mechanics["engine_search_sha256"],
+        },
+    }
+
+
+def _world_parallelism_expected_config(
+    values: Mapping[str, Any], *, workers: int
+) -> dict[str, Any]:
+    """Freeze every behavior-bearing engine knob for the first pilot.
+
+    Qualification manifests predate several configuration fields, so comparing
+    a short hand-maintained subset would let a shared PUCT or approximation
+    change sneak in under the same-clock claim.  Start from the current
+    dataclass defaults, set every intentional non-default, then retain only the
+    source-bound artifact paths resolved by the runner.  The only allowed arm
+    difference is handled by the caller.
+    """
+
+    from pokezero.engine_search import EngineMctsConfig  # noqa: PLC0415
+
+    expected = asdict(
+        EngineMctsConfig(
+            worlds=4,
+            search_time_ms=100,
+            threads=1,
+            strict_fallbacks=True,
+            leaf_eval="model",
+            model_device="cpu",
+            checkpoint_path=values.get("checkpoint_path"),
+            model_path=values.get("model_path"),
+            tables_path=values.get("tables_path"),
+            search_sims=256,
+            search_batch=16,
+            search_depth=2,
+            model_priors=False,
+            use_opponent_priors=False,
+            early_stop=False,
+            model_decision_time_ms=1_000,
+            model_native_batch_guard_ms=64,
+            model_world_workers=workers,
+            depth_min=None,
+            worlds_min=None,
+        )
+    )
+    if set(values) != set(expected):
+        raise HeadToHeadError(
+            "model-world parallelism pilot engine configuration field set differs from the active source."
+        )
+    return expected
+
+
+def _world_parallelism_qualification_provenance(
+    *,
+    checkpoint_contract: Mapping[str, Any],
+    showdown_source: Mapping[str, Any],
+    engine_fingerprint: str,
+) -> dict[str, Any]:
+    """Derive the non-negotiable R16/R17-to-live-pilot compatibility keys."""
+
+    required_checkpoint_fields = (
+        "checkpoint_sha256",
+        "observation_contract_sha256",
+        "observation_contract",
+        "model_device",
+        "showdown_source_sha256",
+        "exporter_revision",
+    )
+    missing = [field for field in required_checkpoint_fields if field not in checkpoint_contract]
+    if missing:
+        raise HeadToHeadError(
+            "live checkpoint contract lacks required world-parallelism qualification field "
+            f"{missing[0]!r}."
+        )
+    showdown_content = showdown_source.get("content_sha256")
+    if not isinstance(showdown_content, str) or len(showdown_content) != 64:
+        raise HeadToHeadError("live Showdown source lacks a content SHA-256.")
+    if not isinstance(engine_fingerprint, str) or not engine_fingerprint:
+        raise HeadToHeadError("live native engine lacks a fingerprint.")
+    return {
+        **{field: checkpoint_contract[field] for field in required_checkpoint_fields},
+        "showdown_content_sha256": showdown_content,
+        "engine_fingerprint": engine_fingerprint,
+        "engine_search_sha256": _sha256_file(REPO_ROOT / "src" / "pokezero" / "engine_search.py"),
+        "search_config": {
+            "worlds": 4,
+            "sims": 256,
+            "batch": 16,
+            "depth": 2,
+            "early_stop": False,
+            "model_decision_time_ms": 1_000,
+            "model_native_batch_guard_ms": 64,
+            "model_priors": False,
+            "use_opponent_priors": False,
+            # Filled per role before a qualification is revalidated.
+            "model_world_workers": None,
+        },
     }
 
 
@@ -1073,6 +1261,9 @@ def _world_parallelism_pilot_contract(
     candidate_config: Any,
     incumbent_config: Any,
     execution_mode: str,
+    checkpoint_contract: Mapping[str, Any],
+    showdown_source: Mapping[str, Any],
+    engine_fingerprint: str | None,
 ) -> dict[str, Any] | None:
     """Freeze the first same-soft-clock model-world strength pilot.
 
@@ -1117,6 +1308,8 @@ def _world_parallelism_pilot_contract(
         )
     if execution_mode != "in_process":
         raise HeadToHeadError("model-world parallelism pilot requires one current in-process source.")
+    if engine_fingerprint is None:
+        raise HeadToHeadError("model-world parallelism pilot requires an active native engine fingerprint.")
     identity_fields = ("source_commit", "source_tree_sha256", "engine_fingerprint")
     if any(candidate_raw.get(field) != incumbent_raw.get(field) for field in identity_fields):
         raise HeadToHeadError(
@@ -1149,34 +1342,19 @@ def _world_parallelism_pilot_contract(
         raise HeadToHeadError(
             "model-world parallelism pilot permits only model_world_workers to differ."
         )
-    expected_config = {
-        "leaf_eval": "model",
-        "strict_fallbacks": True,
-        "model_device": "cpu",
-        "worlds": 4,
-        "search_time_ms": 100,
-        "threads": 1,
-        "search_sims": 256,
-        "search_batch": 16,
-        "search_depth": 2,
-        "early_stop": False,
-        "model_decision_time_ms": 1_000,
-        "model_native_batch_guard_ms": 64,
-        "model_priors": False,
-        "use_opponent_priors": False,
-        "root_selector_q": False,
-        "root_selector_shadow": False,
-        "depth_min": None,
-        "worlds_min": None,
-    }
+    qualification_provenance = _world_parallelism_qualification_provenance(
+        checkpoint_contract=checkpoint_contract,
+        showdown_source=showdown_source,
+        engine_fingerprint=engine_fingerprint,
+    )
     for role, values, workers in (
         ("candidate", candidate_values, 2),
         ("incumbent", incumbent_values, 1),
     ):
-        actual = {field: values.get(field) for field in (*expected_config, "model_world_workers")}
-        if actual != {**expected_config, "model_world_workers": workers}:
+        expected = _world_parallelism_expected_config(values, workers=workers)
+        if values != expected:
             raise HeadToHeadError(
-                f"model-world parallelism pilot {role} does not match the qualified soft-clock configuration."
+                f"model-world parallelism pilot {role} does not match the exact qualified soft-clock configuration."
             )
     qualifications = _mapping(
         pilot["deadline_qualifications"], label="model-world parallelism pilot deadline qualifications"
@@ -1196,10 +1374,26 @@ def _world_parallelism_pilot_contract(
         "failure_retry_policy": dict(MODEL_WORLD_PARALLELISM_PILOT_FAILURE_RETRY_POLICY),
         "deadline_qualifications": {
             "candidate": _validated_deadline_qualification(
-                qualifications["candidate"], role="candidate", expected_workers=2
+                qualifications["candidate"],
+                role="candidate",
+                expected_workers=2,
+                expected_provenance={
+                    **qualification_provenance,
+                    "search_config": {
+                        **qualification_provenance["search_config"], "model_world_workers": 2
+                    },
+                },
             ),
             "incumbent": _validated_deadline_qualification(
-                qualifications["incumbent"], role="incumbent", expected_workers=1
+                qualifications["incumbent"],
+                role="incumbent",
+                expected_workers=1,
+                expected_provenance={
+                    **qualification_provenance,
+                    "search_config": {
+                        **qualification_provenance["search_config"], "model_world_workers": 1
+                    },
+                },
             ),
         },
     }
@@ -2062,6 +2256,9 @@ def main(argv: list[str] | None = None) -> int:
         candidate_config=candidate_config,
         incumbent_config=incumbent_config,
         execution_mode=execution_mode,
+        checkpoint_contract=contract.to_manifest(),
+        showdown_source=showdown_source,
+        engine_fingerprint=engine_fingerprint,
     )
     opponent_prior_applicability_contract = _opponent_prior_applicability_contract(
         manifest,
