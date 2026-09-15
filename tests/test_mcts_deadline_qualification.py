@@ -27,6 +27,7 @@ def _record(index: int, *, prefix: bool) -> dict:
             "time_budget": {
                 "scope": "whole_model_decision",
                 "requested_ms": 1000,
+                "native_batch_guard_ms": 0,
                 "deadline_elapsed_ms": 1005.0 if prefix else 900.0,
                 "deadline_overshoot_ms": 5.0 if prefix else 0.0,
                 "exhausted": prefix,
@@ -76,6 +77,21 @@ class DeadlineQualificationTest(unittest.TestCase):
         self.assertEqual(summary["zero_completed_world_refusals"], 0)
         self.assertEqual(summary["world_coverage"]["constructed_total"], 8)
         self.assertEqual(summary["world_coverage"]["searched_total"], 8)
+
+    def test_native_batch_guard_must_match_the_frozen_contract(self) -> None:
+        requirements = DeadlineQualificationRequirements(
+            expected_decisions=2,
+            native_batch_guard_ms=64,
+        )
+        records = [_record(0, prefix=True), _record(1, prefix=False)]
+        for record in records:
+            record["engine_mcts"]["time_budget"]["native_batch_guard_ms"] = 64
+        summary = validate_deadline_qualification(records, requirements=requirements)
+        self.assertEqual(summary["requirements"]["native_batch_guard_ms"], 64)
+
+        records[1]["engine_mcts"]["time_budget"]["native_batch_guard_ms"] = 63
+        with self.assertRaisesRegex(DeadlineQualificationError, "native batch guard"):
+            validate_deadline_qualification(records, requirements=requirements)
 
     def test_parallel_deadline_qualification_requires_remaining_budget_dispatch(self) -> None:
         records = [_record(0, prefix=True), _record(1, prefix=False)]

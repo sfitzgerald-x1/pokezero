@@ -230,6 +230,7 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
                             "time_budget": {
                                 "scope": "whole_model_decision",
                                 "requested_ms": 1000,
+                                "native_batch_guard_ms": 0,
                                 "deadline_elapsed_ms": 1005.0 if prefix else 900.0,
                                 "deadline_overshoot_ms": 5.0 if prefix else 0.0,
                                 "exhausted": prefix,

@@ -27,6 +27,7 @@ class DeadlineQualificationRequirements:
     """The frozen, behavior-bearing allocation for one qualification run."""
 
     requested_ms: int = 1_000
+    native_batch_guard_ms: int = 0
     sims_per_world: int = 256
     worlds: int = 4
     model_world_workers: int = 1
@@ -41,6 +42,15 @@ class DeadlineQualificationRequirements:
             self.expected_decisions,
         ) <= 0:
             raise ValueError("deadline qualification requirements must be positive.")
+        if (
+            isinstance(self.native_batch_guard_ms, bool)
+            or not isinstance(self.native_batch_guard_ms, int)
+            or not 0 <= self.native_batch_guard_ms < self.requested_ms
+        ):
+            raise ValueError(
+                "deadline qualification native_batch_guard_ms must be an integer in "
+                "0..(requested_ms - 1)."
+            )
         if self.model_world_workers > self.worlds:
             raise ValueError(
                 "deadline qualification model_world_workers must not exceed worlds."
@@ -226,6 +236,18 @@ def validate_deadline_decision(
         raise DeadlineQualificationError(f"{decision_id}: deadline witness has the wrong scope")
     if _int(budget.get("requested_ms"), "time_budget.requested_ms", decision_id=decision_id) != requirements.requested_ms:
         raise DeadlineQualificationError(f"{decision_id}: deadline request differs from frozen contract")
+    if (
+        _int(
+            budget.get("native_batch_guard_ms"),
+            "time_budget.native_batch_guard_ms",
+            decision_id=decision_id,
+            minimum=0,
+        )
+        != requirements.native_batch_guard_ms
+    ):
+        raise DeadlineQualificationError(
+            f"{decision_id}: native batch guard differs from frozen contract"
+        )
     elapsed_ms = _finite_number(
         budget.get("deadline_elapsed_ms"), "time_budget.deadline_elapsed_ms", decision_id=decision_id
     )

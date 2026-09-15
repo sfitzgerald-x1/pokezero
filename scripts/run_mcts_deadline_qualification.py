@@ -564,6 +564,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
     )
     requirements = DeadlineQualificationRequirements(
         requested_ms=args.deadline_ms,
+        native_batch_guard_ms=args.native_batch_guard_ms,
         sims_per_world=args.sims,
         worlds=args.worlds,
         model_world_workers=args.model_world_workers,
