@@ -1002,6 +1002,18 @@ def summarize_complete_pairs(
         "incumbent_model_evals": sum(game.incumbent_telemetry.model_evals for game in required),
         "candidate_iterations": sum(game.candidate_telemetry.total_iterations for game in required),
         "incumbent_iterations": sum(game.incumbent_telemetry.total_iterations for game in required),
+        "candidate_worlds_constructed": sum(
+            game.candidate_telemetry.worlds_constructed for game in required
+        ),
+        "incumbent_worlds_constructed": sum(
+            game.incumbent_telemetry.worlds_constructed for game in required
+        ),
+        "candidate_worlds_searched": sum(
+            game.candidate_telemetry.worlds_searched for game in required
+        ),
+        "incumbent_worlds_searched": sum(
+            game.incumbent_telemetry.worlds_searched for game in required
+        ),
         # Prior fallbacks do not necessarily force a chosen-action fallback: the
         # engine can fail closed to uniform priors and continue its search. Keep
         # them visible for the acceptance policy instead of silently treating
