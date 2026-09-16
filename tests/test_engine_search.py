@@ -5692,7 +5692,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
     def test_a_partly_priced_decision_is_refused_not_approximated(self) -> None:
         """Two worlds, one priced. A subset aggregate is a different quantity."""
         policy = self._policy()
-        self._run(
+        decision, _ = self._run(
             policy,
             [
                 self._report([("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
@@ -5705,6 +5705,17 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(
             policy.stats.to_dict()["search_override_unmeasured_causes"],
             {"priors_missing_in_some_worlds": 1},
+        )
+        allocation = decision.metadata["engine_mcts"]["override"]["root_allocation"]
+        self.assertFalse(allocation["prior_authority"])
+        self.assertEqual(allocation["prior_cause"], "priors_missing_in_some_worlds")
+        self.assertEqual(
+            [arm["reported_prior"] for arm in allocation["arms"]], [0.35, 0.65],
+            "the raw vector remains observable for diagnosis",
+        )
+        self.assertEqual(
+            [arm["model_prior"] for arm in allocation["arms"]], [None, None],
+            "a one-world model vector must never be relabelled as a two-world authority",
         )
 
     def test_an_unmappable_model_arm_is_unmeasured_and_leaves_the_stop_counters_alone(
