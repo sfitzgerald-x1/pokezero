@@ -3644,6 +3644,16 @@ class _RootArmAggregate:
     arm_q: dict[str, float]
     #: Acting seat, summed per-world prior shares. Empty when unmeasurable.
     prior_share: Counter
+    #: Acting seat, summed per-world *reported* prior shares. Unlike
+    #: ``prior_share``, this retains the native fallback vector too: the
+    #: kill-switch deliberately leaves every arm at ``1 / n`` while
+    #: ``root_priors`` is null, and a replay needs to witness both facts
+    #: together. It is observational only and never supplies a model argmax.
+    reported_prior_share: Counter
+    #: Number of searched worlds that supplied each reported acting-arm prior.
+    #: A partial vector must never be normalized into an apparently complete
+    #: replay witness.
+    reported_prior_worlds: Counter
     #: Opponent seat, the same two shares. The opponent's arms are in the report
     #: and were never absorbed; they are H4's whole predictor side.
     opponent_visit_share: Counter
@@ -3677,6 +3687,8 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
     """
     visit_share: Counter = Counter()
     prior_share: Counter = Counter()
+    reported_prior_share: Counter = Counter()
+    reported_prior_worlds: Counter = Counter()
     opponent_visit_share: Counter = Counter()
     opponent_prior_share: Counter = Counter()
     q_weight: Counter = Counter()
@@ -3705,6 +3717,13 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
             q_acting = entry["q"] if acting_side_one else 1.0 - entry["q"]
             q_weight[choice] += share
             q_weighted[choice] += share * q_acting
+        arm_priors = [entry.get("prior") for entry in entries]
+        if entries and not any(prior is None for prior in arm_priors):
+            reported_total = sum(arm_priors) or 1.0
+            for entry, prior in zip(entries, arm_priors):
+                choice = entry["move"]
+                reported_prior_share[choice] += prior / reported_total
+                reported_prior_worlds[choice] += 1
         opponent_entries = report.get(
             "side_two" if acting_side_one else "side_one"
         ) or []
@@ -3715,7 +3734,6 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
         if root_priors is None:
             worlds_without_priors += 1
             continue
-        arm_priors = [entry.get("prior") for entry in entries]
         if any(prior is None for prior in arm_priors):
             arms_absent += 1
             continue
@@ -3764,6 +3782,8 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
             if weight > 0.0
         },
         prior_share=Counter() if prior_cause is not None else prior_share,
+        reported_prior_share=reported_prior_share,
+        reported_prior_worlds=reported_prior_worlds,
         opponent_visit_share=opponent_visit_share,
         opponent_prior_share=opponent_prior_share,
         prior_cause=prior_cause,
@@ -7018,6 +7038,43 @@ class EngineMctsPolicy:
         )
         if opponent_prior_choice is not None:
             self.stats.opponent_prior_arm_decisions += 1
+        # This is the complete root-allocation witness used by the own-policy
+        # prior replay.  It is a projection of the reports the completed native
+        # searches already returned -- it neither runs another search nor feeds
+        # any selection.  Keep the raw reported prior separate from the
+        # authority-backed model prior: with ``model_priors=False`` the native
+        # arms correctly retain their uniform ``1 / n`` initialization while
+        # ``root_priors`` remains null.  Conflating those would manufacture a
+        # model preference in the uniform arm.
+        allocation_choices = sorted(
+            set(arms.visit_share).union(arms.reported_prior_share).union(arms.prior_share)
+        )
+        root_allocation = {
+            "worlds": worlds,
+            "prior_authority": cause is None,
+            "prior_cause": cause,
+            "arms": [
+                {
+                    "move": choice,
+                    "visit_share": round(arms.visit_share.get(choice, 0.0) / worlds, 6),
+                    "q": (
+                        None if arms.arm_q.get(choice) is None
+                        else round(arms.arm_q[choice], 6)
+                    ),
+                    "reported_prior": (
+                        None
+                        if arms.reported_prior_worlds.get(choice, 0) != worlds
+                        else round(arms.reported_prior_share[choice] / worlds, 6)
+                    ),
+                    "model_prior": (
+                        None
+                        if cause is not None
+                        else round(arms.prior_share.get(choice, 0.0) / worlds, 6)
+                    ),
+                }
+                for choice in allocation_choices
+            ],
+        }
         row = {
             "battle_id": str(getattr(context, "battle_id", "?")),
             "round": getattr(context, "decision_round_index", None),
@@ -7088,6 +7145,7 @@ class EngineMctsPolicy:
             "search_argmax": search_action_index,
             "model_override": model_override,
             "unmeasured_cause": cause,
+            "root_allocation": root_allocation,
             "model_choice": model_choice,
             "root_q_gap": None if q_gap is None else round(q_gap, 6),
             "root_visit_gap": None if visit_gap is None else round(visit_gap, 6),

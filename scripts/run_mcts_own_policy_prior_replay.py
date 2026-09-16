@@ -179,8 +179,20 @@ def _allocation(payload: Mapping[str, Any], *, arm: str, worlds: int) -> dict[st
         raise DeadlineQualificationError(
             f"{decision_id}: complete root-allocation telemetry is absent (stale source image)"
         )
-    if raw.get("worlds") != worlds:
-        raise DeadlineQualificationError(f"{decision_id}: allocation world count differs from frozen contrast")
+    # ``root_allocation.worlds`` is the number of *completed* native world
+    # reports.  It is intentionally not the configured request: under the
+    # whole-decision soft clock the engine may stop after a prefix, and the
+    # registered study explicitly measures completed worlds and deadline skips.
+    # The frozen contrast still pins the requested four worlds in the manifest
+    # and CLI.  Refusing a valid, nonempty prefix would silently change this
+    # study into a hard-four-world experiment.
+    completed_worlds = raw.get("worlds")
+    if isinstance(completed_worlds, bool) or not isinstance(completed_worlds, int):
+        raise DeadlineQualificationError(f"{decision_id}: allocation completed-world count is not an integer")
+    if not 1 <= completed_worlds <= worlds:
+        raise DeadlineQualificationError(
+            f"{decision_id}: allocation completed-world count is outside the frozen request"
+        )
     authority = raw.get("prior_authority")
     if type(authority) is not bool:
         raise DeadlineQualificationError(f"{decision_id}: allocation prior_authority must be boolean")
@@ -238,7 +250,13 @@ def _allocation(payload: Mapping[str, Any], *, arm: str, worlds: int) -> dict[st
         uniform = 1.0 / len(normalized)
         if any(abs(item["reported_prior"] - uniform) > 2e-5 for item in normalized):
             raise DeadlineQualificationError(f"{decision_id}: uniform arm did not restore uniform root priors")
-    return {"prior_authority": authority, "prior_cause": cause, "arms": normalized}
+    return {
+        "requested_worlds": worlds,
+        "completed_worlds": completed_worlds,
+        "prior_authority": authority,
+        "prior_cause": cause,
+        "arms": normalized,
+    }
 
 
 def _decision_payload(record: Any, telemetry: Mapping[str, Any], *, wall_ms: float, arm: str, worlds: int) -> dict[str, Any]:
@@ -317,12 +335,14 @@ def _allocation_changed(guided: Mapping[str, Any], uniform: Mapping[str, Any]) -
 
 def _summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     walls = {arm: [] for arm in ("guided", "uniform")}
+    completed_worlds = {arm: [] for arm in ("guided", "uniform")}
     nonflat = 0
     allocation_changes = 0
     for row in rows:
         for sequence in row["orders"].values():
             for arm in ("guided", "uniform"):
                 walls[arm].append(float(sequence[arm]["outer_wall_ms"]) / 1000.0)
+                completed_worlds[arm].append(int(sequence[arm]["root_allocation"]["completed_worlds"]))
             priors = [item["model_prior"] for item in sequence["guided"]["root_allocation"]["arms"]]
             if max(priors) - min(priors) > 2e-5:
                 nonflat += 1
@@ -341,6 +361,15 @@ def _summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         "wall_seconds": {
             arm: {"mean": statistics.fmean(values), "p95": sorted(values)[max(0, math.ceil(.95 * len(values)) - 1)]}
             for arm, values in walls.items()
+        },
+        "completed_worlds": {
+            arm: {
+                "samples": len(values),
+                "min": min(values),
+                "max": max(values),
+                "mean": statistics.fmean(values),
+            }
+            for arm, values in completed_worlds.items()
         },
         "guided_to_uniform_mean_wall_ratio": mean_ratio,
         "nonflat_guided_multi_action_observations": nonflat,
