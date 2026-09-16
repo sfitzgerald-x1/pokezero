@@ -26,6 +26,38 @@ def _payload(*, allocation):
 
 
 class RootAllocationTest(unittest.TestCase):
+    def test_parser_refuses_every_non_frozen_runtime_axis(self) -> None:
+        runner = _runner()
+        required = [
+            "--checkpoint", "checkpoint.pt",
+            "--expected-checkpoint-sha256", "a" * 64,
+            "--showdown-root", "/showdown",
+            "--corpus", "corpus.jsonl",
+            "--expected-corpus-sha256", "b" * 64,
+            "--expected-corpus-file-sha256", "c" * 64,
+            "--source-receipt", "receipt.json",
+            "--expected-showdown-source-sha256", "d" * 64,
+            "--out-root", "/out",
+        ]
+        parsed = runner._parse_args(required)
+        self.assertEqual(
+            {name: getattr(parsed, name) for name in runner.FROZEN_CONTRAST},
+            runner.FROZEN_CONTRAST,
+        )
+        for argument, value in (
+            ("--model-device", "cuda"),
+            ("--deadline-ms", "999"),
+            ("--native-batch-guard-ms", "63"),
+            ("--depth", "3"),
+            ("--sims", "255"),
+            ("--batch", "8"),
+            ("--worlds", "3"),
+            ("--model-world-workers", "2"),
+        ):
+            with self.subTest(argument=argument):
+                with self.assertRaises(SystemExit):
+                    runner._parse_args([*required, argument, value])
+
     def test_guided_root_requires_authoritative_normalized_model_priors(self) -> None:
         runner = _runner()
         allocation = runner._allocation(

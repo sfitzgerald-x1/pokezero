@@ -335,6 +335,7 @@ class _LiveEngineTimingDecider:
                 search_sims=config.sims,
                 search_batch=config.batch,
                 search_depth=config.depth,
+                c_puct=1.4,
                 model_priors=self._model_priors,
                 use_opponent_priors=self._use_opponent_priors,
                 override_telemetry=self._override_telemetry,

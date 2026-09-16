@@ -44,6 +44,16 @@ SCHEMA_VERSION = "pokezero.mcts-own-policy-prior-replay.v1"
 EXPECTED_DECISIONS = 16
 EXPECTED_SEAT_COUNT = 8
 ORDERS = (("guided", "uniform"), ("uniform", "guided"))
+FROZEN_CONTRAST = {
+    "model_device": "cpu",
+    "deadline_ms": 1_000,
+    "native_batch_guard_ms": 64,
+    "depth": 2,
+    "sims": 256,
+    "batch": 16,
+    "worlds": 4,
+    "model_world_workers": 1,
+}
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -57,7 +67,7 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-receipt", required=True)
     parser.add_argument("--expected-showdown-source-sha256", required=True)
     parser.add_argument("--out-root", required=True)
-    parser.add_argument("--model-device", default="cpu", choices=("cpu", "cuda"))
+    parser.add_argument("--model-device", default="cpu", choices=("cpu",))
     parser.add_argument("--deadline-ms", type=int, default=1_000)
     parser.add_argument("--native-batch-guard-ms", type=int, default=64)
     parser.add_argument("--depth", type=int, default=2)
@@ -67,12 +77,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--model-world-workers", type=int, default=1)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
-    if not 0 <= args.native_batch_guard_ms < args.deadline_ms:
-        parser.error("--native-batch-guard-ms must be in 0..(--deadline-ms - 1)")
-    if not 0 < args.model_world_workers <= args.worlds:
-        parser.error("--model-world-workers must be in 1..=--worlds")
-    if args.model_world_workers != 1:
-        parser.error("this contrast freezes --model-world-workers=1")
+    for name, expected in FROZEN_CONTRAST.items():
+        actual = getattr(args, name)
+        if actual != expected:
+            parser.error(f"this contrast freezes --{name.replace('_', '-')}={expected!r}")
     return args
 
 
