@@ -14,7 +14,10 @@ dependencies = [
 
 [project.optional-dependencies]
 neural = [
-  "torch>=2.4,<3",
+  # The native model-search extension links this exact libtorch ABI via
+  # tch/torch-sys 0.26.0; keep environment resolution aligned with its
+  # explicit build guard in scripts/build_search_crate_model.sh.
+  "torch>=2.13,<2.14",
   "numpy>=1.26",
   "tensorboard>=2.14",
 ]
