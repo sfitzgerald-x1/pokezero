@@ -2464,6 +2464,22 @@ class Phase2DynamicStateTest(unittest.TestCase):
         self.assertIsNone(snapshot.substitute_depletion["p2"])
         self.assertEqual(_ReplayParser.from_snapshot(snapshot).snapshot(), snapshot)
 
+    def test_perish_zero_faint_clears_terminal_volatile_before_force_switch(self) -> None:
+        parser = _ReplayParser()
+        parser.feed(
+            [
+                "|switch|p1a: Swampert|Swampert, L84|300/300",
+                "|switch|p2a: Misdreavus|Misdreavus, L78|250/250",
+                "|-start|p2a: Misdreavus|perish1",
+                "|-start|p2a: Misdreavus|perish0",
+                "|faint|p2a: Misdreavus",
+            ]
+        )
+        snapshot = parser.snapshot()
+        self.assertEqual(snapshot.volatiles["p2"], ())
+        self.assertEqual(snapshot.direct_materialization_blockers["p2"], ())
+        self.assertEqual(_ReplayParser.from_snapshot(snapshot).snapshot(), snapshot)
+
     def test_volatile_strips_ability_prefix_and_filters_non_volatiles(self) -> None:
         # "ability: Flash Fire" must normalize to the bare tracked id (not "abilityflashfire"),
         # and an untracked -start payload (typechange) must be ignored, not encoded as a volatile.
