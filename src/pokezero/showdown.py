@@ -2921,6 +2921,27 @@ class _ReplayParser:
             # A failed Baton Pass emits its move declaration but no switch request. Do not let
             # that declaration turn a later ordinary switch into a phantom Baton Pass.
             self.pending_baton_pass.discard(_slot_from_ident(parts[2]))
+        if canonical_faint:
+            slot = _slot_from_ident(parts[2])
+            # A forced-switch request is taken *after* this faint line and before the
+            # replacement's ``|switch|`` line.  Every volatile belongs to the fainted
+            # Pokemon, so retaining one through that request would ask direct-world
+            # construction to represent an effect that Showdown has already resolved.
+            #
+            # This is especially important for Perish Song: the terminal residual is
+            # publicly announced as ``perish0`` immediately before ``|faint|``.  There
+            # is no engine-side `perish0` state because it is not a decision state.  Do
+            # not broaden the engine vocabulary to hide that contradiction; retire the
+            # stale parser state at the protocol's real terminal boundary instead.
+            active = self.public_active.get(slot)
+            if (
+                _is_active_protocol_ident(parts[2])
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == parts[2]
+            ):
+                self.volatiles[slot].clear()
+                self.direct_materialization_blockers[slot].clear()
+                self.leech_seed_source_sides.pop(slot, None)
         # Re-seed the toxic ramp from the PUBLIC end-of-turn residual BEFORE the condition update
         # overwrites the pre-damage HP (needed to measure the residual's magnitude).
         self._reseed_toxic_stage_from_residual(parts)
