@@ -1567,8 +1567,10 @@ jobs:
           # fail-closed. 238 -> 241: the native-batch guard adds serial and
           # parallel call-seam reservations plus the post-argument recheck that
           # prevents a stale pre-guard ABI budget from starting native work.
-          if ! grep -qE 'Ran 241 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 241 engine-search tests; the suite shrank or grew"
+          # 241 -> 242: the Rest sleep action-boundary settlement repair needs its
+          # own regression pin.
+          if ! grep -qE 'Ran 242 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 242 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
