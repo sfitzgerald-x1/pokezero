@@ -112,7 +112,47 @@ class RootAllocationTest(unittest.TestCase):
             worlds=4,
         )
         self.assertTrue(allocation["prior_authority"])
+        self.assertEqual(allocation["requested_worlds"], 4)
+        self.assertEqual(allocation["completed_worlds"], 4)
         self.assertEqual([arm["model_prior"] for arm in allocation["arms"]], [.2, .8])
+
+    def test_soft_clock_prefix_records_completed_worlds_without_changing_the_request(self) -> None:
+        runner = _runner()
+        allocation = runner._allocation(
+            _payload(
+                allocation={
+                    "worlds": 1,
+                    "prior_authority": True,
+                    "prior_cause": None,
+                    "arms": [
+                        {"move": "a", "visit_share": .6, "q": .3, "reported_prior": .2, "model_prior": .2},
+                        {"move": "b", "visit_share": .4, "q": .2, "reported_prior": .8, "model_prior": .8},
+                    ],
+                }
+            ),
+            arm="guided",
+            worlds=4,
+        )
+        self.assertEqual(allocation["requested_worlds"], 4)
+        self.assertEqual(allocation["completed_worlds"], 1)
+
+    def test_allocation_rejects_empty_or_over_requested_completed_worlds(self) -> None:
+        runner = _runner()
+        for completed in (0, 5, True, "1"):
+            with self.subTest(completed=completed):
+                payload = _payload(
+                    allocation={
+                        "worlds": completed,
+                        "prior_authority": True,
+                        "prior_cause": None,
+                        "arms": [
+                            {"move": "a", "visit_share": .6, "q": .3, "reported_prior": .2, "model_prior": .2},
+                            {"move": "b", "visit_share": .4, "q": .2, "reported_prior": .8, "model_prior": .8},
+                        ],
+                    }
+                )
+                with self.assertRaisesRegex(DeadlineQualificationError, "completed-world count"):
+                    runner._allocation(payload, arm="guided", worlds=4)
 
     def test_uniform_root_is_not_allowed_to_manufacture_model_preference(self) -> None:
         runner = _runner()
