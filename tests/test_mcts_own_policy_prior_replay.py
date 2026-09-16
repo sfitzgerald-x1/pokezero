@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import importlib.util
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,8 +57,42 @@ class RootAllocationTest(unittest.TestCase):
             ("--model-world-workers", "2"),
         ):
             with self.subTest(argument=argument):
-                with self.assertRaises(SystemExit):
-                    runner._parse_args([*required, argument, value])
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaises(SystemExit):
+                        runner._parse_args([*required, argument, value])
+
+    def test_manifest_records_a_single_arm_difference(self) -> None:
+        runner = _runner()
+        args = SimpleNamespace(
+            depth=2,
+            sims=256,
+            batch=16,
+            worlds=4,
+            deadline_ms=1_000,
+            native_batch_guard_ms=64,
+            model_world_workers=1,
+            corpus="/corpus.jsonl",
+        )
+        manifest = runner._manifest(
+            args=args,
+            receipt={"immutable_image": "registry.example/image@sha256:" + "a" * 64},
+            active={"commit": "b" * 40, "execution_tree_sha256": "c" * 64},
+            corpus=SimpleNamespace(corpus_sha256="d" * 64),
+            corpus_file_sha256="e" * 64,
+            checkpoint=SimpleNamespace(to_manifest=lambda: {"checkpoint": "bound"}),
+            showdown={"content_sha256": "f" * 64},
+        )
+        guided = manifest["guided"]
+        uniform = manifest["uniform"]
+        self.assertEqual(set(guided) ^ set(uniform), set())
+        self.assertEqual(
+            {key: (guided[key], uniform[key]) for key in guided if guided[key] != uniform[key]},
+            {"model_priors": (True, False)},
+        )
+        self.assertEqual(
+            {key: guided[key] for key in runner.FROZEN_ENGINE_CONFIG},
+            runner.FROZEN_ENGINE_CONFIG,
+        )
 
     def test_guided_root_requires_authoritative_normalized_model_priors(self) -> None:
         runner = _runner()

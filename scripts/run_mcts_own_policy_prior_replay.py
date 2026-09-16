@@ -54,6 +54,16 @@ FROZEN_CONTRAST = {
     "worlds": 4,
     "model_world_workers": 1,
 }
+FROZEN_ENGINE_CONFIG = {
+    "search_time_ms": 100,
+    "threads": 1,
+    "leaf_eval": "model",
+    "inference_mode": "local",
+    "c_puct": 1.4,
+    "deep_ko_split": True,
+    "early_stop": False,
+    "use_opponent_priors": False,
+}
 
 
 def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -341,7 +351,7 @@ def _summary(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
 def _manifest(*, args: argparse.Namespace, receipt: Mapping[str, Any], active: Mapping[str, Any], corpus: Any, corpus_file_sha256: str, checkpoint: Any, showdown: Mapping[str, Any]) -> dict[str, Any]:
     fixed = {
         "depth": args.depth, "sims": args.sims, "batch": args.batch, "worlds": args.worlds,
-        "early_stop": False, "use_opponent_priors": False,
+        **FROZEN_ENGINE_CONFIG,
         "model_decision_time_ms": args.deadline_ms,
         "model_native_batch_guard_ms": args.native_batch_guard_ms,
         "model_world_workers": args.model_world_workers,
