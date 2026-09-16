@@ -241,6 +241,7 @@ class _LiveEngineTimingDecider:
         model_world_workers: int = 1,
         model_priors: bool = True,
         use_opponent_priors: bool = False,
+        override_telemetry: bool = False,
     ) -> None:
         from ..collection import env_config_with_policy_spec_masks
         from ..dex import load_showdown_dex_cached
@@ -267,8 +268,13 @@ class _LiveEngineTimingDecider:
             )
         if model_world_workers <= 0:
             raise ValueError("model_world_workers must be positive")
-        if not isinstance(model_priors, bool) or not isinstance(use_opponent_priors, bool):
-            raise ValueError("model_priors and use_opponent_priors must be booleans")
+        if not all(
+            isinstance(value, bool)
+            for value in (model_priors, use_opponent_priors, override_telemetry)
+        ):
+            raise ValueError(
+                "model_priors, use_opponent_priors, and override_telemetry must be booleans"
+            )
         self._contract = contract
         self._model_decision_time_ms = model_decision_time_ms
         self._model_native_batch_guard_ms = model_native_batch_guard_ms
@@ -279,6 +285,11 @@ class _LiveEngineTimingDecider:
         # silently hard-coding it at policy construction.
         self._model_priors = model_priors
         self._use_opponent_priors = use_opponent_priors
+        # Most timing callers must preserve their historical native call shape.
+        # The own-prior replay is an explicit measurement client, so let it ask
+        # for the already-supported root-allocation witness without widening the
+        # default replay contract.
+        self._override_telemetry = override_telemetry
         self._artifacts = materialize_search_artifacts(contract, showdown_root=showdown_root)
         self._env_config = env_config_with_policy_spec_masks(
             LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=True),
@@ -324,8 +335,11 @@ class _LiveEngineTimingDecider:
                 search_sims=config.sims,
                 search_batch=config.batch,
                 search_depth=config.depth,
+                c_puct=1.4,
+                deep_ko_split=True,
                 model_priors=self._model_priors,
                 use_opponent_priors=self._use_opponent_priors,
+                override_telemetry=self._override_telemetry,
                 early_stop=False,
                 model_decision_time_ms=self._model_decision_time_ms,
                 model_native_batch_guard_ms=self._model_native_batch_guard_ms,
