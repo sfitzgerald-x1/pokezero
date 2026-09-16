@@ -381,7 +381,18 @@ class IsolatedPolicyStats:
             raise IsolatedPolicyError(
                 "isolated policy model overrides cannot exceed measured model-action decisions."
             )
-        if sum(self.opponent_request_order_root_fallback_statuses.values()) != self.root_prior_fallbacks:
+        classified_root_fallbacks = sum(
+            self.opponent_request_order_root_fallback_statuses.values()
+        )
+        # This status ledger is emitted only by the opponent-prior arm. The
+        # aggregate root counter, on the other hand, covers the acting policy
+        # map as well. A self-prior-only study can therefore legitimately
+        # report a root fallback with an empty opponent-order ledger. Require
+        # complete classification when that diagnostic is engaged, but do not
+        # mistake an intentionally disabled opponent arm for a telemetry error.
+        if self.opponent_request_order_statuses and (
+            classified_root_fallbacks != self.root_prior_fallbacks
+        ):
             raise IsolatedPolicyError(
                 "isolated policy opponent request-order root-fallback status telemetry "
                 "must equal root_prior_fallbacks."

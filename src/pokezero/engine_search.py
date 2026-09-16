@@ -6060,6 +6060,22 @@ class EngineMctsPolicy:
             self.stats.prior_fallbacks += reported_prior_fallbacks
             self.stats.root_prior_fallbacks += root_prior_fallbacks
             self.stats.branch_prior_fallbacks += branch_prior_fallbacks
+            if config.strict_fallbacks and root_prior_fallbacks:
+                reason = report.get("root_prior_fallback_reason")
+                if not isinstance(reason, str) or not reason:
+                    order_status = report.get("opponent_request_order_status")
+                    reason = (
+                        f"opponent_order_{order_status}"
+                        if isinstance(order_status, str) and order_status
+                        else "unclassified_root_prior_fallback"
+                    )
+                raise EngineSearchFallbackError(
+                    "engine-search root-prior fallback: "
+                    f"battle={getattr(context, 'battle_id', '?')} "
+                    f"round={getattr(context, 'decision_round_index', '?')} "
+                    f"seat={getattr(context, 'player_id', '?')} reason={reason} "
+                    f"count={root_prior_fallbacks}"
+                )
             if config.use_opponent_priors:
                 expected_order_status = record.get("_opponent_request_order_status")
                 if expected_order_status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:

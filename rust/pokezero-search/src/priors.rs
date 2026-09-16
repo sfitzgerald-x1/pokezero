@@ -190,27 +190,61 @@ pub(crate) trait HeadSource {
 /// Returns `None` — leaving the node uniform — when any option lacks an
 /// action-block slot (the whole node falls back rather than zeroing arms the
 /// model cannot see) or the mapped mass underflows.
-fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f32>> {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PriorGatherFailure {
+    EmptyActionMap,
+    UnmappedAction,
+    ActionIndexOutOfRange,
+    InvalidMappedMass,
+    MissingModelHeadRow,
+}
+
+impl PriorGatherFailure {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::EmptyActionMap => "empty_action_map",
+            Self::UnmappedAction => "unmapped_action",
+            Self::ActionIndexOutOfRange => "action_index_out_of_range",
+            Self::InvalidMappedMass => "invalid_mapped_mass",
+            Self::MissingModelHeadRow => "missing_model_head_row",
+        }
+    }
+}
+
+/// The reason-bearing form used at the live root. Interior nodes retain the
+/// historical optional result because their fallback count is sufficient
+/// telemetry; a live root fallback invalidates a strength decision and must
+/// name the source condition that forced it back to uniform.
+fn gather_self_priors_detail(
+    priors_row: &[f32],
+    map: &[Option<usize>],
+) -> Result<Vec<f32>, PriorGatherFailure> {
     if map.is_empty() {
-        return None;
+        return Err(PriorGatherFailure::EmptyActionMap);
     }
     let mut gathered = Vec::with_capacity(map.len());
     let mut sum = 0.0f32;
     for entry in map {
-        let index = (*entry)?;
-        let prior = *priors_row.get(index)?;
+        let index = (*entry).ok_or(PriorGatherFailure::UnmappedAction)?;
+        let prior = *priors_row
+            .get(index)
+            .ok_or(PriorGatherFailure::ActionIndexOutOfRange)?;
         sum += prior;
         gathered.push(prior);
     }
     // NaN comparisons are false, so a non-finite logit would slip past the
     // underflow guard alone and propagate into stat.prior.
     if !sum.is_finite() || sum <= 1e-8 {
-        return None;
+        return Err(PriorGatherFailure::InvalidMappedMass);
     }
     for prior in &mut gathered {
         *prior /= sum;
     }
-    Some(gathered)
+    Ok(gathered)
+}
+
+fn gather_self_priors(priors_row: &[f32], map: &[Option<usize>]) -> Option<Vec<f32>> {
+    gather_self_priors_detail(priors_row, map).ok()
 }
 
 /// One row of a flat `[n_rows, action_count]` prior block.
@@ -567,6 +601,10 @@ pub(crate) fn root_seats(root: &DecisionNode, seat: &dyn SearchingSeat) -> RootS
 pub(crate) struct RootPriorResolution {
     pub acting: Option<Vec<f32>>,
     pub fallbacks: usize,
+    /// Reason only for an acting-seat root fallback. Opponent-root failures
+    /// have their own source-order ledger; this field makes a self-prior
+    /// strength failure diagnosable without guessing from a bare counter.
+    pub acting_fallback_reason: Option<&'static str>,
 }
 
 /// Gather and apply the ROOT node's priors for both seats off row 0 of a
@@ -594,16 +632,25 @@ pub(crate) fn resolve_root_priors(
     ] {
         let Some(map) = map else { continue };
         let side_one = seat.owning_side_one(self_side_one);
-        let gathered = heads
-            .row(seat, 0)
-            .and_then(|priors_row| gather_self_priors(priors_row, map));
+        let gathered = match heads.row(seat, 0) {
+            Some(priors_row) => gather_self_priors_detail(priors_row, map),
+            None => Err(PriorGatherFailure::MissingModelHeadRow),
+        };
         match gathered {
-            Some(priors) if apply_self_priors(root, side_one, &priors) => {
+            Ok(priors) if apply_self_priors(root, side_one, &priors) => {
                 if seat == PriorSeat::Acting {
                     resolution.acting = Some(priors);
                 }
             }
-            _ => resolution.fallbacks += 1,
+            outcome => {
+                resolution.fallbacks += 1;
+                if seat == PriorSeat::Acting {
+                    resolution.acting_fallback_reason = Some(match outcome {
+                        Err(reason) => reason.as_str(),
+                        Ok(_) => "decision_arm_count_mismatch",
+                    });
+                }
+            }
         }
     }
     resolution
@@ -1529,6 +1576,7 @@ mod tests {
         let resolution =
             resolve_root_priors(&mut node, &heads, &Seat(true), &unmapped, Some(&good));
         assert_eq!(resolution.fallbacks, 1);
+        assert_eq!(resolution.acting_fallback_reason, Some("unmapped_action"));
         assert!(
             resolution.acting.is_none(),
             "a fallen-back acting seat must not be echoed as root_priors"
