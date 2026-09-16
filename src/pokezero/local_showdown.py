@@ -2290,7 +2290,19 @@ def _public_materialization_payload(
     deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
     deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
 ) -> dict[str, Any]:
-    replay = state.replay
+    # A live action request is a protocol boundary: the preceding action has
+    # finished even if the omniscient stream reached the request before its
+    # trailing ``|upkeep|``/``|turn|`` chunk reached this process.  A pending
+    # Rest attempt is only pending while that trailing public chunk has not
+    # classified it.  At an actionable boundary it is therefore exactly an
+    # ordinary attempt, not an unknown sleep state.  Settle it on the cloned
+    # materialization replay rather than weakening construction for a genuinely
+    # truncated replay used outside an action boundary.
+    replay = (
+        _settle_pending_rest_sleep_attempts_at_action_boundary(state.replay)
+        if _is_actionable_request(state.self_request)
+        else state.replay
+    )
     sides: dict[PlayerId, dict[str, Any]] = {}
     belief_snapshot = state.belief_engine.snapshot()
     for player in PLAYER_IDS:
@@ -2456,6 +2468,36 @@ def _public_materialization_payload(
         "selfBenchedMoveHistory": _has_self_benched_move_history(state),
         "sides": sides,
     }
+
+
+def _settle_pending_rest_sleep_attempts_at_action_boundary(
+    replay: ShowdownReplayState,
+) -> ShowdownReplayState:
+    """Return an action-boundary replay with only exact ordinary Rest attempts settled.
+
+    ``|cant|...|slp`` precedes the rest of the action's public transcript.  The
+    parser intentionally preserves that incomplete observation for arbitrary
+    prefixes, but an actionable request proves the action itself is over.  Its
+    remaining pending Rest attempts are consequently ordinary timer attempts:
+    this is the same transition the replay parser performs on ``|upkeep|`` or
+    the next ``|turn|``.  Do not repair malformed tracker values here; leaving
+    those untouched keeps downstream construction fail-closed.
+    """
+
+    pending = replay.rest_sleep_pending_attempt
+    if not pending:
+        return replay
+    if any(not isinstance(value, bool) for value in pending.values()):
+        return replay
+    skipped = dict(replay.rest_sleep_skipped_turns)
+    for key, is_pending in pending.items():
+        if is_pending:
+            skipped.pop(key, None)
+    return replace(
+        replay,
+        rest_sleep_pending_attempt={},
+        rest_sleep_skipped_turns=skipped,
+    )
 
 
 def _materialization_toxic_stage(replay: ShowdownReplayState, player: PlayerId) -> int | None:
