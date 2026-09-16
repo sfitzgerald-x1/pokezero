@@ -468,9 +468,21 @@ def build_corpus(
     held_out_seed_start: int,
     held_out_seed_end: int,
     count: int = DEFAULT_DECISION_COUNT,
+    count_per_seat: int | None = None,
     selection_algorithm: str = "least-covered-bucket-then-battle-round-robin.v2",
 ) -> tuple[TimingCorpusManifest, tuple[TimingDecisionRecord, ...]]:
-    selected = select_stratified(records, count=count)
+    if count_per_seat is None:
+        selected = select_stratified(records, count=count)
+    else:
+        if count != 2 * count_per_seat:
+            raise ValueError(
+                "balanced corpus count must equal exactly two times count_per_seat."
+            )
+        selected = select_stratified_balanced_by_seat(
+            records, count_per_seat=count_per_seat
+        )
+        if selection_algorithm == "least-covered-bucket-then-battle-round-robin.v2":
+            selection_algorithm = "least-covered-bucket-per-seat-then-battle-round-robin.v1"
     corpus_sha256 = canonical_json_sha256([record.to_payload() for record in selected])
     manifest = TimingCorpusManifest(
         held_out_seed_start=held_out_seed_start,

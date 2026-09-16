@@ -214,6 +214,32 @@ class SelectionTest(unittest.TestCase):
         with self.assertRaisesRegex(CorpusError, "duplicate decision_id"):
             select_stratified_balanced_by_seat(duplicated, count_per_seat=8)
 
+    def test_balanced_corpus_records_the_seat_balanced_selection_contract(self) -> None:
+        manifest, selected = build_corpus(
+            [_record(index) for index in range(80)],
+            held_out_seed_start=900_000,
+            held_out_seed_end=900_040,
+            count=16,
+            count_per_seat=8,
+        )
+        self.assertEqual(manifest.decision_count, 16)
+        self.assertEqual(
+            manifest.selection_algorithm,
+            "least-covered-bucket-per-seat-then-battle-round-robin.v1",
+        )
+        self.assertEqual(
+            {seat: sum(record.seat == seat for record in selected) for seat in ("p1", "p2")},
+            {"p1": 8, "p2": 8},
+        )
+        with self.assertRaisesRegex(ValueError, "two times count_per_seat"):
+            build_corpus(
+                [_record(index) for index in range(80)],
+                held_out_seed_start=900_000,
+                held_out_seed_end=900_040,
+                count=15,
+                count_per_seat=8,
+            )
+
 
 class RepresentativenessGateTest(unittest.TestCase):
     def test_accepts_two_seats_early_and_late_with_narrow_and_wide_masks(self) -> None:
