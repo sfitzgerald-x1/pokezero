@@ -539,6 +539,28 @@ def _isolated_worker_stderr_path(
     )
 
 
+def _isolated_worker_error_path(
+    out_root: Path,
+    *,
+    attempt_id: str,
+    seed: int,
+    candidate_seat: str,
+    role: str,
+) -> Path:
+    """Return one create-only public-boundary error record per child worker."""
+
+    if role not in {"candidate", "incumbent"}:
+        raise HeadToHeadError(f"unknown isolated worker role {role!r}.")
+    if candidate_seat not in {"p1", "p2"}:
+        raise HeadToHeadError(f"unknown isolated candidate seat {candidate_seat!r}.")
+    return (
+        out_root
+        / "worker-errors"
+        / f"attempt-{attempt_id}"
+        / f"seed-{seed}-{candidate_seat}-{role}.json"
+    )
+
+
 def _mapping(value: object, *, label: str) -> Mapping[str, Any]:
     if not isinstance(value, Mapping):
         raise HeadToHeadError(f"{label} must be a JSON object.")
@@ -2831,6 +2853,15 @@ def main(argv: list[str] | None = None) -> int:
                     "source_root": str(source_root),
                     "showdown_root": str(Path(args.showdown_root).expanduser().resolve()),
                     "worker_bootstrap_sha256": isolated_bootstrap_sha256,
+                    "error_diagnostic_path": str(
+                        _isolated_worker_error_path(
+                            out_root,
+                            attempt_id=isolated_worker_attempt_id,
+                            seed=seed,
+                            candidate_seat=candidate_seat,
+                            role=role,
+                        )
+                    ),
                 },
                 response_timeout_seconds=args.isolated_worker_timeout_seconds,
                 stderr_path=_isolated_worker_stderr_path(

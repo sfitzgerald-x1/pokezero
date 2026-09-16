@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from io import BytesIO
+import json
 from pathlib import Path
 import runpy
+import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -19,9 +21,48 @@ write_frame = WORKER["write_frame"]
 worker_error = WORKER["WorkerError"]
 source_engine_config_payload = WORKER["source_engine_config_payload"]
 stats_payload = WORKER["_stats_payload"]
+write_error_diagnostic = WORKER["_write_error_diagnostic"]
 
 
 class IsolatedPolicyWorkerResetTest(unittest.TestCase):
+    def test_error_diagnostic_persists_only_public_boundary_data(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "error.json"
+            annotations = SimpleNamespace(error_diagnostic_path=target)
+            replay = SimpleNamespace(
+                volatiles={"p1": {"perish0"}},
+                public_active={"p1": SimpleNamespace(ident="p1a: Misdreavus")},
+                public_events=(SimpleNamespace(raw_line="|-start|p1a: Misdreavus|perish0"),),
+            )
+            context = SimpleNamespace(
+                battle_id="battle-1",
+                decision_round_index=39,
+                player_id="p1",
+                requested_players=("p1", "p2"),
+                public_materialization_state=SimpleNamespace(
+                    replay=replay,
+                    self_request={"active": [{"moves": []}]},
+                ),
+            )
+            suffix = write_error_diagnostic(
+                annotations=annotations,
+                context=context,
+                error=worker_error("refused"),
+                receipt={
+                    "commit": "a" * 40,
+                    "tree_sha256": "b" * 64,
+                    "engine_fingerprint": "c" * 64,
+                    "policy": {"policy_id": "test-policy"},
+                },
+            )
+            self.assertIsNone(suffix)
+            payload = json.loads(target.read_text(encoding="utf-8"))
+
+        self.assertEqual(payload["error"], {"type": "WorkerError", "message": "refused"})
+        self.assertEqual(payload["boundary"]["seat"], "p1")
+        self.assertEqual(payload["boundary"]["volatiles"], {"p1": ["perish0"]})
+        self.assertNotIn("requested_observations", payload["boundary"])
+
     def test_stats_payload_refuses_a_source_without_opponent_prior_application_counter(self) -> None:
         stats = SimpleNamespace(
             decisions=1,

@@ -1680,6 +1680,21 @@ class SourceReceiptTest(unittest.TestCase):
                 "worker-stderr/attempt-" + "b" * 32 + "/seed-19-p1-candidate.log",
             )
 
+    def test_isolated_worker_error_path_is_attempt_scoped_and_create_only(self) -> None:
+        module = _runner_module()
+        with tempfile.TemporaryDirectory() as directory:
+            path = module._isolated_worker_error_path(
+                Path(directory),
+                attempt_id="c" * 32,
+                seed=19,
+                candidate_seat="p2",
+                role="incumbent",
+            )
+        self.assertEqual(
+            path.relative_to(directory).as_posix(),
+            "worker-errors/attempt-" + "c" * 32 + "/seed-19-p2-incumbent.json",
+        )
+
 
 class OwnPolicyPriorStudyContractTest(unittest.TestCase):
     @staticmethod

@@ -9,7 +9,9 @@ source rather than to the host rollout process.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
+import json
 from pathlib import Path
 import pickle
 import random
@@ -272,9 +274,14 @@ def _reset_policy(policy: Any, *, recreate: Any) -> tuple[Any, str]:
 class SnapshotAnnotationSource:
     """Per-request copy of the host's public Tier-2 annotation overlay."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, error_diagnostic_path: Path | None = None) -> None:
         self._active = False
         self._overlay: dict[int, tuple[Any, ...]] = {}
+        # This is deliberately an optional, create-only path owned by the host
+        # invocation.  It lets a strict source-worker refusal preserve the
+        # exact PUBLIC boundary which caused it; it is never an input to the
+        # policy and therefore cannot affect a decision.
+        self.error_diagnostic_path = error_diagnostic_path
 
     def set_snapshot(self, payload: object) -> None:
         if not isinstance(payload, Mapping):
@@ -458,6 +465,7 @@ def _worker_start(
     source_root_value = config.get("source_root")
     showdown_root_value = config.get("showdown_root")
     bootstrap_sha256 = config.get("worker_bootstrap_sha256")
+    error_diagnostic_path_value = config.get("error_diagnostic_path")
     if (
         not isinstance(source_root_value, str)
         or not isinstance(showdown_root_value, str)
@@ -467,6 +475,11 @@ def _worker_start(
             "isolated policy worker config requires source_root, showdown_root, and "
             "worker_bootstrap_sha256."
         )
+    if (
+        error_diagnostic_path_value is not None
+        and not isinstance(error_diagnostic_path_value, str)
+    ):
+        raise WorkerError("isolated policy error_diagnostic_path must be a string when supplied.")
     if _sha256_file(Path(__file__).resolve()) != bootstrap_sha256:
         raise WorkerError("isolated policy worker bootstrap does not match its declared hash.")
     source_root = Path(source_root_value).expanduser().resolve()
@@ -505,7 +518,11 @@ def _worker_start(
     source_config_payload, config_compatibility = source_engine_config_payload(
         config_payload, EngineMctsConfig
     )
-    annotations = SnapshotAnnotationSource()
+    annotations = SnapshotAnnotationSource(
+        error_diagnostic_path=(
+            Path(error_diagnostic_path_value) if error_diagnostic_path_value else None
+        )
+    )
 
     def make_engine_policy() -> Any:
         engine_config = EngineMctsConfig(**source_config_payload)
@@ -533,6 +550,89 @@ def _worker_start(
     return engine_policy, make_engine_policy, annotations, receipt, PolicyContext
 
 
+def _public_error_diagnostic(
+    *,
+    context: Any | None,
+    error: Exception,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Return a JSON-safe, public-only record for a failed decision.
+
+    A source-isolated worker sees the same public materialization payload as
+    the policy, but prior to this record a strict refusal crossed the pipe as
+    one string and discarded the only reconstructible boundary.  Keep the
+    active public rows, the calling seat's own request, and the trailing public
+    protocol--not an opponent request, private observation, or model output.
+    """
+
+    state = getattr(context, "public_materialization_state", None)
+    replay = getattr(state, "replay", None)
+    volatiles = getattr(replay, "volatiles", {}) if replay is not None else {}
+    active = getattr(replay, "public_active", {}) if replay is not None else {}
+    events = getattr(replay, "public_events", ()) if replay is not None else ()
+    return {
+        "schema_version": "pokezero.isolated-mcts-worker-error.v1",
+        "error": {"type": type(error).__name__, "message": str(error)},
+        "policy": {
+            "policy_id": receipt.get("policy", {}).get("policy_id"),
+            "source_commit": receipt.get("commit"),
+            "source_tree_sha256": receipt.get("tree_sha256"),
+            "engine_fingerprint": receipt.get("engine_fingerprint"),
+        },
+        "boundary": {
+            "battle_id": getattr(context, "battle_id", None),
+            "decision_round_index": getattr(context, "decision_round_index", None),
+            "seat": getattr(context, "player_id", None),
+            "requested_players": list(getattr(context, "requested_players", ()) or ()),
+            "self_request": getattr(state, "self_request", None),
+            "volatiles": {
+                str(player): sorted(str(value) for value in values)
+                for player, values in dict(volatiles).items()
+            },
+            "public_active": {
+                str(player): (
+                    dataclasses.asdict(value) if dataclasses.is_dataclass(value) else repr(value)
+                )
+                for player, value in dict(active).items()
+            },
+            "last_public_lines": [
+                str(getattr(event, "raw_line", "")) for event in tuple(events)[-32:]
+            ],
+        },
+    }
+
+
+def _write_error_diagnostic(
+    *,
+    annotations: Any,
+    context: Any | None,
+    error: Exception,
+    receipt: Mapping[str, Any],
+) -> str | None:
+    """Write the one failure record, returning a suffix if persistence failed."""
+
+    target = getattr(annotations, "error_diagnostic_path", None)
+    if target is None:
+        return None
+    try:
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("x", encoding="utf-8") as handle:
+            json.dump(
+                _public_error_diagnostic(context=context, error=error, receipt=receipt),
+                handle,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            handle.write("\n")
+    except Exception as diagnostic_error:  # diagnostics must never hide the refusal
+        return (
+            "; public error diagnostic unavailable: "
+            f"{type(diagnostic_error).__name__}: {diagnostic_error}"
+        )
+    return None
+
+
 def _serve() -> int:
     stdin = sys.stdin.buffer
     stdout = sys.stdout.buffer
@@ -544,6 +644,7 @@ def _serve() -> int:
         return 2
     write_frame(stdout, {"type": "hello", "receipt": receipt})
     while True:
+        context = None
         try:
             message = read_frame(stdin)
             kind = message.get("type")
@@ -570,7 +671,16 @@ def _serve() -> int:
                 },
             )
         except Exception as error:
-            write_frame(stdout, {"type": "error", "message": str(error)})
+            suffix = _write_error_diagnostic(
+                annotations=annotations,
+                context=context,
+                error=error,
+                receipt=receipt,
+            )
+            write_frame(
+                stdout,
+                {"type": "error", "message": str(error) + (suffix or "")},
+            )
 
 
 if __name__ == "__main__":
