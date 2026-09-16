@@ -2933,9 +2933,15 @@ class _ReplayParser:
             # is no engine-side `perish0` state because it is not a decision state.  Do
             # not broaden the engine vocabulary to hide that contradiction; retire the
             # stale parser state at the protocol's real terminal boundary instead.
-            self.volatiles[slot].clear()
-            self.direct_materialization_blockers[slot].clear()
-            self.leech_seed_source_sides.pop(slot, None)
+            active = self.public_active.get(slot)
+            if (
+                _is_active_protocol_ident(parts[2])
+                and _is_current_public_active(active)
+                and getattr(active, "ident", None) == parts[2]
+            ):
+                self.volatiles[slot].clear()
+                self.direct_materialization_blockers[slot].clear()
+                self.leech_seed_source_sides.pop(slot, None)
         # Re-seed the toxic ramp from the PUBLIC end-of-turn residual BEFORE the condition update
         # overwrites the pre-damage HP (needed to measure the residual's magnitude).
         self._reseed_toxic_stage_from_residual(parts)
