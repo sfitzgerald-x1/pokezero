@@ -21,6 +21,7 @@ from pokezero.mcts_eval.timing_corpus import (
     phase_bucket,
     read_corpus,
     remaining_bucket,
+    select_stratified_balanced_by_seat,
     select_stratified,
     uncertainty_bucket,
     validate_representative_timing_panel,
@@ -186,6 +187,32 @@ class SelectionTest(unittest.TestCase):
     def test_insufficient_pool_is_terminal(self) -> None:
         with self.assertRaisesRegex(CorpusError, "widen the held-out"):
             select_stratified([_record(i) for i in range(10)], count=256)
+
+    def test_balanced_selection_has_exactly_the_requested_seat_counts(self) -> None:
+        pool = [_record(i) for i in range(80)]
+        first = select_stratified_balanced_by_seat(pool, count_per_seat=8)
+        second = select_stratified_balanced_by_seat(
+            list(reversed(pool)), count_per_seat=8
+        )
+        self.assertEqual(len(first), 16)
+        self.assertEqual(
+            {seat: sum(record.seat == seat for record in first) for seat in ("p1", "p2")},
+            {"p1": 8, "p2": 8},
+        )
+        self.assertEqual(
+            [record.decision_id for record in first],
+            [record.decision_id for record in second],
+        )
+
+    def test_balanced_selection_refuses_a_seat_shortfall_or_duplicate_decision(self) -> None:
+        with self.assertRaisesRegex(CorpusError, "p2 decisions, need 8"):
+            select_stratified_balanced_by_seat(
+                [_record(index, seat="p1") for index in range(16)], count_per_seat=8
+            )
+        duplicated = [_record(index) for index in range(16)]
+        duplicated.append(_record(0, seat="p2"))
+        with self.assertRaisesRegex(CorpusError, "duplicate decision_id"):
+            select_stratified_balanced_by_seat(duplicated, count_per_seat=8)
 
 
 class RepresentativenessGateTest(unittest.TestCase):

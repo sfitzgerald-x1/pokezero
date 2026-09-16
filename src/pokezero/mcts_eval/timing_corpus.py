@@ -341,6 +341,41 @@ def select_stratified(
     return tuple(chosen[:count])
 
 
+def select_stratified_balanced_by_seat(
+    records: Sequence[TimingDecisionRecord],
+    *,
+    count_per_seat: int,
+) -> tuple[TimingDecisionRecord, ...]:
+    """Select the same deterministic stratified panel for each acting seat.
+
+    A panel containing at least one decision for p1 and p2 is sufficient for a
+    generic timing readout, but not for a matched policy-prior replay: an
+    apparent arm difference could otherwise be a seat imbalance.  Select each
+    seat independently, fail before any run when either pool is insufficient,
+    then return a canonical inter-seat order.  Selection is still public-state
+    only and does not inspect outcomes.
+    """
+    if count_per_seat <= 0:
+        raise ValueError("count_per_seat must be positive.")
+    decision_ids = [record.decision_id for record in records]
+    if len(set(decision_ids)) != len(decision_ids):
+        raise CorpusError(
+            "candidate pool has duplicate decision_id values; a balanced replay "
+            "must not run one public decision twice under different seats."
+        )
+    selected: list[TimingDecisionRecord] = []
+    for seat in ("p1", "p2"):
+        seat_records = tuple(record for record in records if record.seat == seat)
+        if len(seat_records) < count_per_seat:
+            raise CorpusError(
+                f"candidate pool has {len(seat_records)} {seat} decisions, need "
+                f"{count_per_seat}; widen the held-out seed range rather than "
+                "unbalancing the replay panel."
+            )
+        selected.extend(select_stratified(seat_records, count=count_per_seat))
+    return tuple(sorted(selected, key=lambda record: record.decision_id))
+
+
 def bucket_counts(records: Iterable[TimingDecisionRecord]) -> dict[str, int]:
     counts = {bucket: 0 for axis in STRATA_AXES for bucket in axis}
     for record in records:
