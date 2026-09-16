@@ -25,6 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from pokezero import engine_world  # noqa: E402
+from pokezero.belief import PublicBattleBeliefEngine  # noqa: E402
 from pokezero.dex import MoveInfo, ShowdownDex, SpeciesInfo  # noqa: E402
 from pokezero.engine_world import (  # noqa: E402
     EngineWorldUnsupported,
@@ -32,7 +33,12 @@ from pokezero.engine_world import (  # noqa: E402
 )
 from pokezero.env import BattleStartOverride  # noqa: E402
 from pokezero.gen3_damage import gen3_hp_stat  # noqa: E402
-from pokezero.local_showdown import _apply_rest_sleep_provenance  # noqa: E402
+from pokezero.local_showdown import (  # noqa: E402
+    PublicBattleMaterializationState,
+    _apply_rest_sleep_provenance,
+    _public_materialization_payload,
+    _settle_pending_rest_sleep_attempts_at_action_boundary,
+)
 from pokezero.showdown import _ReplayParser, parse_showdown_replay  # noqa: E402
 from pokezero.showdown_fixture import FixturePokemon, pack_team  # noqa: E402
 
@@ -941,6 +947,60 @@ class RestSleepRowAnnotationTests(unittest.TestCase):
         self.assertNotIn("restSleepAttempts", rows[0])
         # Producer A, since the attempt is still unclassified at the snapshot.
         self.assertTrue(rows[0]["restSleepAttemptUnsettled"])
+
+    def test_action_boundary_settles_an_ordinary_rest_attempt_before_materialization(self) -> None:
+        """A request proves the action ended even if the public tail arrives late."""
+
+        replay = parse_showdown_replay(
+            self._RESTED + ["|cant|p2a: Skarmory|slp"],
+            battle_id="rest-action-boundary",
+        )
+        rows = _payload(_dex(), sleeper_active=True)["sides"]["p2"]["pokemon"]
+        _apply_rest_sleep_provenance(rows, replay, "p2")
+        self.assertTrue(rows[0]["restSleepAttemptUnsettled"])
+
+        settled = _settle_pending_rest_sleep_attempts_at_action_boundary(replay)
+        rows = _payload(_dex(), sleeper_active=True)["sides"]["p2"]["pokemon"]
+        _apply_rest_sleep_provenance(rows, settled, "p2")
+        self.assertEqual(rows[0]["restSleepAttempts"], 1)
+        self.assertNotIn("restSleepAttemptUnsettled", rows[0])
+
+    def test_actionable_materialization_uses_the_boundary_settlement(self) -> None:
+        """The payload path—not just its helper—does not hand search a false refusal."""
+
+        replay = parse_showdown_replay(
+            self._RESTED + ["|cant|p2a: Skarmory|slp"],
+            battle_id="rest-action-boundary-payload",
+        )
+        request = {
+            "active": [{}],
+            "side": {
+                "id": "p1",
+                "pokemon": [
+                    {
+                        "ident": "p1: Snorlax",
+                        "details": "Snorlax, L80",
+                        "condition": "100/100",
+                        "active": True,
+                    }
+                ],
+            },
+        }
+        state = PublicBattleMaterializationState(
+            player_id="p1",
+            format_id="gen3randombattle",
+            observation_format_id="gen3randombattle",
+            replay=replay,
+            belief_engine=PublicBattleBeliefEngine.from_events(
+                replay.public_events, format_id="gen3randombattle"
+            ),
+            self_request=request,
+        )
+
+        payload = _public_materialization_payload(state)
+        sleeper = payload["sides"]["p2"]["pokemon"][0]
+        self.assertEqual(sleeper["restSleepAttempts"], 1)
+        self.assertNotIn("restSleepAttemptUnsettled", sleeper)
 
     def test_benched_sleep_talk_clock_does_not_tick_until_switch_back(self) -> None:
         rows = self._annotate(self._RESTED + [

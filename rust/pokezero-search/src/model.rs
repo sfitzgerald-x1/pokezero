@@ -965,6 +965,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut model_nanos = 0u128;
     let mut tree_nanos = 0u128;
     let mut root_priors: Option<Vec<f32>> = None;
+    let mut root_prior_fallback_reason: Option<&'static str> = None;
     // The clock is started by the PyO3 boundary, before root parsing, context
     // construction, fold cloning, and this core's tree setup. Python passes
     // the remaining duration from its whole-decision clock, so the two clocks
@@ -1028,6 +1029,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             );
             root_priors = resolved.acting;
             root_prior_fallbacks += resolved.fallbacks;
+            root_prior_fallback_reason = resolved.acting_fallback_reason;
         }
     }
     let _ = crate::leaf::drain_encode_subphases(); // per-search reset
@@ -1507,7 +1509,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
+         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"root_prior_fallback_reason\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1533,6 +1535,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         prior_fallbacks,
         root_prior_fallbacks,
         branch_prior_fallbacks,
+        serde_json::to_string(&root_prior_fallback_reason)
+            .expect("optional static string JSON serialization cannot fail"),
         encode_nanos as f64 / 1e9,
         model_nanos as f64 / 1e9,
         tree_nanos as f64 / 1e9,

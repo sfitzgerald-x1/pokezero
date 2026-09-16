@@ -459,6 +459,23 @@ class StatsTest(unittest.TestCase):
         with self.assertRaisesRegex(IsolatedPolicyError, "must equal root_prior_fallbacks"):
             IsolatedPolicyStats().update(unclassified)
 
+    def test_self_prior_root_fallback_needs_no_opponent_order_classification(self) -> None:
+        """The own-prior study disables opponent priors but still audits root fallback."""
+
+        payload = self._payload()
+        payload.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "opponent_prior_arm_decisions": 0,
+                "opponent_request_order_statuses": {},
+                "opponent_request_order_root_fallback_statuses": {},
+            }
+        )
+        stats = IsolatedPolicyStats()
+        stats.update(payload)
+        self.assertEqual(stats.root_prior_fallbacks, 1)
+
     def test_scope_counter_aggregate_mismatch_is_refused(self) -> None:
         stats = IsolatedPolicyStats()
         payload = self._payload()

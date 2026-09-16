@@ -110,8 +110,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--games", type=int, default=24)
     parser.add_argument("--seed-start", type=int, default=900_000)
     parser.add_argument("--decisions", type=int, default=256)
+    parser.add_argument(
+        "--balanced-decisions-per-seat",
+        type=int,
+        help=(
+            "Select this many public decisions independently for each acting seat. "
+            "Use for matched own-policy-prior replays; it is not the generic timing default."
+        ),
+    )
     parser.add_argument("--max-decision-rounds", type=int, default=250)
     args = parser.parse_args(argv)
+    if args.balanced_decisions_per_seat is not None:
+        if args.balanced_decisions_per_seat <= 0:
+            parser.error("--balanced-decisions-per-seat must be positive")
+        if args.decisions != 2 * args.balanced_decisions_per_seat:
+            parser.error(
+                "--decisions must equal two times --balanced-decisions-per-seat"
+            )
 
     from pokezero.collection import policy_from_spec
     from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -245,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
                     held_out_seed_start=args.seed_start,
                     held_out_seed_end=args.seed_start + games_played,
                     count=args.decisions,
+                    count_per_seat=args.balanced_decisions_per_seat,
                 )
                 validate_representative_timing_panel(candidate)
             except CorpusError as error:  # coverage is retried with the next held-out game
@@ -257,6 +273,11 @@ def main(argv: list[str] | None = None) -> int:
         held_out_seed_start=args.seed_start,
         held_out_seed_end=args.seed_start + games_played,
         count=min(args.decisions, len(records)),
+        count_per_seat=(
+            args.balanced_decisions_per_seat
+            if len(records) >= args.decisions
+            else None
+        ),
     )
     coverage = validate_representative_timing_panel(selected)
     write_corpus(args.out, manifest, selected)

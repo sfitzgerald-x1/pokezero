@@ -4968,6 +4968,28 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         ):
             self._run(policy, [report])
 
+    def test_strict_model_search_refuses_a_live_root_prior_fallback_with_its_reason(self) -> None:
+        """A registered strength run must stop at the first non-uniform live root."""
+        policy = self._policy(worlds=1, strict=True)
+        report = self._report(
+            [("alpha", 60, 0.5, None), ("beta", 40, 0.5, None)],
+            root_priors=None,
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "root_prior_fallback_reason": "unmapped_action",
+            }
+        )
+        with self.assertRaisesRegex(
+            EngineSearchFallbackError,
+            r"root-prior fallback: .*reason=unmapped_action count=1",
+        ):
+            self._run(policy, [report])
+        self.assertEqual(policy.stats.root_prior_fallbacks, 1)
+
     def test_time_budget_reaches_the_outermost_native_slot_with_a_witness(self) -> None:
         # A high budget keeps this a call-contract test rather than a race with
         # the test host. The fake still has to return the native witness; without

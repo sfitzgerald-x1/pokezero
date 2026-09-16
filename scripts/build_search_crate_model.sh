@@ -27,6 +27,10 @@ if [ ! -x "$PYTHON" ]; then
   echo "error: python not found at $PYTHON (pass the venv python as arg 1)" >&2
   exit 1
 fi
+# The build changes into rust/pokezero-search below. Resolve an explicitly
+# relative interpreter path while we are still in the caller's directory so
+# every subsequent build/install invocation targets the same venv.
+PYTHON="$(cd "$(dirname "$PYTHON")" && pwd)/$(basename "$PYTHON")"
 
 export LIBTORCH_USE_PYTORCH=1
 if [[ "${LIBTORCH_BYPASS_VERSION_CHECK+x}" == x ]]; then
