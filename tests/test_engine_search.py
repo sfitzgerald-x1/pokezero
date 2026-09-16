@@ -5517,6 +5517,28 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         block = decision.metadata["engine_mcts"]["override"]
         self.assertEqual((block["model_argmax"], block["search_argmax"]), (1, 0))
         self.assertIs(block["model_override"], True)
+        allocation = block["root_allocation"]
+        self.assertTrue(allocation["prior_authority"])
+        self.assertIsNone(allocation["prior_cause"])
+        self.assertEqual(
+            allocation["arms"],
+            [
+                {
+                    "move": "alpha",
+                    "visit_share": 0.6,
+                    "q": 0.5,
+                    "reported_prior": 0.2,
+                    "model_prior": 0.2,
+                },
+                {
+                    "move": "beta",
+                    "visit_share": 0.4,
+                    "q": 0.5,
+                    "reported_prior": 0.8,
+                    "model_prior": 0.8,
+                },
+            ],
+        )
         # The forkable address, which is the whole point of retaining it.
         self.assertEqual(stats["override_disagreements"], [{
             "battle_id": "early-stop-test",
@@ -5598,6 +5620,15 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         block = decision.metadata["engine_mcts"]["override"]
         self.assertIsNone(block["model_argmax"])
         self.assertIsNone(block["model_override"], "never False on an unmeasured read")
+        allocation = block["root_allocation"]
+        self.assertFalse(allocation["prior_authority"])
+        self.assertEqual(allocation["prior_cause"], "no_root_priors")
+        self.assertEqual(
+            [arm["reported_prior"] for arm in allocation["arms"]], [0.5, 0.5],
+        )
+        self.assertEqual(
+            [arm["model_prior"] for arm in allocation["arms"]], [None, None],
+        )
 
     def test_uniform_arm_priors_do_not_manufacture_a_model_argmax(self) -> None:
         """The defect this counter exists to avoid, made concrete.
