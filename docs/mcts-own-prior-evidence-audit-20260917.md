@@ -44,6 +44,22 @@ samples. They also do not say whether following the policy more closely is
 better. That is why the live study measures fresh mirrored games against raw
 policy, and why its final readout retains direct override and timing telemetry.
 
+### Selected-action and order check
+
+The 16 decision records were also inspected directly. In the
+guided-then-uniform execution order, the two arms selected different legal
+actions in 9 of 16 states; in the reverse order, they differed in 10 of 16.
+Guided MCTS selected the same action in both orders for all 16 states. Uniform
+MCTS changed action in one state, so the records describe a real but small
+warm/order sensitivity in the uniform control rather than a strength sample.
+
+The guided arm's recorded `model_override` field was false in all 32 guided
+replay decisions. Thus this particular diagnostic shows that priors can change
+allocation and often the action chosen relative to uniform MCTS, but it does
+not demonstrate a case where guided search selected away from its own model
+argmax. The live guided-versus-raw study retains an override denominator on
+fresh game states specifically to measure that missing mechanism.
+
 ## Consequence for the active decision
 
 The completed evidence justifies testing guided MCTS rather than assuming it
