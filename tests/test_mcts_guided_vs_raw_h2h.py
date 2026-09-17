@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import importlib.util
+import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -196,6 +197,25 @@ class GuidedConfigTest(unittest.TestCase):
         config["approximate_sleep_turns"] = False
         with self.assertRaisesRegex(Exception, "registered one-second"):
             RUNNER._require_registered_candidate_config(config)
+
+
+class GuidedProgressTest(unittest.TestCase):
+    def test_guided_progress_uses_its_own_schema_without_weakening_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "progress" / "current.json"
+            payload = {"schema_version": RUNNER.PROGRESS_SCHEMA_VERSION, "event": "game_started"}
+            DURABLE._write_progress_json(
+                path,
+                payload,
+                schema_version=RUNNER.PROGRESS_SCHEMA_VERSION,
+            )
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), payload)
+            with self.assertRaisesRegex(Exception, "wrong schema version"):
+                DURABLE._write_progress_json(
+                    path,
+                    {"schema_version": DURABLE.PROGRESS_SCHEMA_VERSION, "event": "game_started"},
+                    schema_version=RUNNER.PROGRESS_SCHEMA_VERSION,
+                )
 
 
 class CompletedGameEvidenceTest(unittest.TestCase):

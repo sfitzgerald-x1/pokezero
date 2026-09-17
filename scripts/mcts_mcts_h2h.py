@@ -474,7 +474,12 @@ def _write_immutable_json(path: Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _write_progress_json(path: Path, payload: Mapping[str, Any]) -> None:
+def _write_progress_json(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    schema_version: str = PROGRESS_SCHEMA_VERSION,
+) -> None:
     """Atomically update the runner's explicitly mutable liveness checkpoint.
 
     Game, receipt, summary, and terminal artifacts are immutable. This one
@@ -485,7 +490,9 @@ def _write_progress_json(path: Path, payload: Mapping[str, Any]) -> None:
 
     if path.parent.name != "progress" or path.name != "current.json":
         raise HeadToHeadError(f"progress checkpoint has an unexpected path: {path}")
-    if payload.get("schema_version") != PROGRESS_SCHEMA_VERSION:
+    if not isinstance(schema_version, str) or not schema_version:
+        raise HeadToHeadError("progress checkpoint schema version is invalid.")
+    if payload.get("schema_version") != schema_version:
         raise HeadToHeadError("progress checkpoint has the wrong schema version.")
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -495,7 +502,7 @@ def _write_progress_json(path: Path, payload: Mapping[str, Any]) -> None:
     except (OSError, json.JSONDecodeError) as error:
         raise HeadToHeadError(f"refusing to replace unreadable progress checkpoint {path}: {error}") from error
     if existing is not None:
-        if not isinstance(existing, Mapping) or existing.get("schema_version") != PROGRESS_SCHEMA_VERSION:
+        if not isinstance(existing, Mapping) or existing.get("schema_version") != schema_version:
             raise HeadToHeadError(f"refusing to replace incompatible progress checkpoint {path}")
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:

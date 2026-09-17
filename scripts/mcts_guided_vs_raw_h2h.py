@@ -400,7 +400,11 @@ def _progress_writer(out_root: Path, *, candidate: MctsPolicySpec, incumbent: Mc
                     "terminal_winner": decision.terminal_winner,
                 }
             )
-        _write_progress_json(out_root / "progress" / "current.json", payload)
+        _write_progress_json(
+            out_root / "progress" / "current.json",
+            payload,
+            schema_version=PROGRESS_SCHEMA_VERSION,
+        )
 
     return write
 
