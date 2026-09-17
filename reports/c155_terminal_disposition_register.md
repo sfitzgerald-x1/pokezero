@@ -332,6 +332,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | current #1338 head after encoder merge | combines the action-choice panel and encoder identifier normalization source inputs | `e682ba4aa0f771ec…` |
 | #1354 deep noisy-Q control | `rust/pokezero-search/src/tree.rs`, +230 test-only lines: a terminal-free two-seat noisy-Q counterexample with explicit source-side damage bounds | `07f8c6de919c4eae…` |
 | #1384 plus own-prior failure diagnosis | `rust/pokezero-search/src/model.rs` and `src/priors.rs`: source-order refusals, then the acting-root fallback reason needed to diagnose a non-bankable strength shard | `9ca3c20a9681b6e5…` |
+| #1408 single-action prior underflow repair | `rust/pokezero-search/src/priors.rs`: a valid sole mapped action is masked certainty before globally-softmaxed `f32` mass can underflow; multi-action underflow remains fail-closed | `3e4378ce5d4bcb7b…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -951,7 +952,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 12 |
 | `t1.hashed_input_files` | 94 |
-| `t1.head_fingerprint` | 9ca3c20a9681b6e5 |
+| `t1.head_fingerprint` | 3e4378ce5d4bcb7b |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
