@@ -14,6 +14,9 @@ It establishes that using model priors in the registered search configuration
 matters relative to uniform priors.  This protocol tests the resulting search
 against the raw policy itself.
 
+The independent artifact audit, including the fixed-public-state diagnostic,
+is recorded in [the own-prior evidence audit](mcts-own-prior-evidence-audit-20260917.md).
+
 ## Frozen comparison
 
 * Candidate: model-leaf engine MCTS with `model_priors=true` and
