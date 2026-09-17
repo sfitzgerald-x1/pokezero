@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import fcntl
 import importlib.util
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +24,8 @@ assert _SPEC is not None and _SPEC.loader is not None
 RUNNER = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = RUNNER
 _SPEC.loader.exec_module(RUNNER)
+
+import mcts_mcts_h2h as DURABLE  # noqa: E402
 
 
 _IDENTITY = {
@@ -108,6 +114,73 @@ class StudyShapeTest(unittest.TestCase):
         manifest["study"]["mirrored_games"] = 3
         with self.assertRaisesRegex(Exception, "twice"):
             RUNNER._validated_study(manifest, seeds=(11, 12))
+
+
+class DurableLauncherHandoffTest(unittest.TestCase):
+    def test_guided_runner_binds_its_own_immutable_launcher_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            out_dir = Path(directory) / "out"
+            attempt_id = "guided-attempt"
+            receipt = out_dir / "launcher-attempts" / f"{attempt_id}.json"
+            receipt.parent.mkdir(parents=True)
+            runner_script = Path(RUNNER.__file__).resolve()
+            DURABLE._write_immutable_json(
+                receipt,
+                {
+                    "schema_version": DURABLE.DURABLE_LAUNCHER_ATTEMPT_SCHEMA_VERSION,
+                    "attempt_id": attempt_id,
+                    "runner_script": str(runner_script),
+                    "runner_script_sha256": DURABLE._sha256_file(runner_script),
+                    "writer_lock": str(out_dir / "runner-writer.lock"),
+                },
+            )
+            lock_path = out_dir / "runner-writer.lock"
+            lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            environment = {
+                DURABLE.DURABLE_LAUNCHER_ATTEMPT_ID_ENV: attempt_id,
+                DURABLE.DURABLE_LAUNCHER_OUT_DIR_ENV: str(out_dir),
+                DURABLE.DURABLE_LAUNCHER_ATTEMPT_RECEIPT_ENV: str(receipt),
+                DURABLE.DURABLE_LAUNCHER_WRITER_LOCK_FD_ENV: str(lock_fd),
+            }
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with patch.dict(os.environ, environment, clear=False):
+                    RUNNER._require_durable_launcher_handoff(
+                        out_dir, runner_script=runner_script
+                    )
+                with patch.dict(os.environ, environment, clear=False):
+                    with self.assertRaisesRegex(Exception, "does not bind this scorer"):
+                        RUNNER._require_durable_launcher_handoff(
+                            out_dir, runner_script=SCRIPTS / "mcts_mcts_h2h.py"
+                        )
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+
+    def test_guided_main_passes_its_own_script_to_handoff_validator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            out_dir = Path(directory) / "out"
+            manifest = Path(directory) / "manifest.json"
+            with (
+                patch.object(RUNNER, "_require_durable_launcher_handoff") as handoff,
+                patch.object(RUNNER, "_load_manifest", side_effect=RuntimeError("stop after handoff")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "stop after handoff"):
+                    RUNNER.main(
+                        [
+                            "--checkpoint",
+                            str(Path(directory) / "checkpoint.pt"),
+                            "--showdown-root",
+                            str(Path(directory) / "showdown"),
+                            "--manifest",
+                            str(manifest),
+                            "--out-dir",
+                            str(out_dir),
+                        ]
+            )
+            handoff.assert_called_once_with(
+                out_dir.resolve(), runner_script=Path(RUNNER.__file__)
+            )
 
 
 class GuidedConfigTest(unittest.TestCase):

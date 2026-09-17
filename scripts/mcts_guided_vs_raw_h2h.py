@@ -418,7 +418,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     out_root = _durable_output_root(args.out_dir)
-    _require_durable_launcher_handoff(out_root)
+    _require_durable_launcher_handoff(out_root, runner_script=Path(__file__))
     manifest = _load_manifest(args.manifest)
     seeds = _seeds(manifest)
     study = _validated_study(manifest, seeds=seeds)
