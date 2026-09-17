@@ -757,7 +757,11 @@ def _replacement_study_requires_durable_launcher(manifest: Mapping[str, Any]) ->
     )
 
 
-def _require_durable_launcher_handoff(out_root: Path) -> None:
+def _require_durable_launcher_handoff(
+    out_root: Path,
+    *,
+    runner_script: Path | None = None,
+) -> None:
     """Reject a v2 replacement run that was not launched with the durable handoff.
 
     A direct scorer invocation could otherwise resume a root after a terminal
@@ -830,7 +834,7 @@ def _require_durable_launcher_handoff(out_root: Path) -> None:
         ) from error
     if not isinstance(receipt, Mapping):
         raise HeadToHeadError("replacement study durable-launcher receipt is not an object.")
-    runner_script = Path(__file__).resolve()
+    runner_script = (runner_script or Path(__file__)).resolve()
     if (
         receipt.get("schema_version") != DURABLE_LAUNCHER_ATTEMPT_SCHEMA_VERSION
         or receipt.get("attempt_id") != attempt_id
