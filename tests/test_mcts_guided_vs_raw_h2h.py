@@ -130,8 +130,10 @@ class CompletedGameEvidenceTest(unittest.TestCase):
         clean = SimpleNamespace(
             fallback_decisions=0,
             root_prior_fallbacks=0,
+            searched_decisions=0,
             model_evals=0,
             total_iterations=0,
+            worlds_constructed=0,
             worlds_searched=0,
         )
         game = SimpleNamespace(candidate_telemetry=clean, incumbent_telemetry=clean)
@@ -140,6 +142,22 @@ class CompletedGameEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "root policy-prior"):
             RUNNER._validate_completed_game(
                 SimpleNamespace(candidate_telemetry=failed_root, incumbent_telemetry=clean)
+            )
+
+    def test_raw_search_counter_is_not_accepted_as_direct_policy_work(self) -> None:
+        clean = SimpleNamespace(
+            fallback_decisions=0,
+            root_prior_fallbacks=0,
+            searched_decisions=0,
+            model_evals=0,
+            total_iterations=0,
+            worlds_constructed=0,
+            worlds_searched=0,
+        )
+        raw_with_search = SimpleNamespace(**{**clean.__dict__, "searched_decisions": 1})
+        with self.assertRaisesRegex(Exception, "recorded search work"):
+            RUNNER._validate_completed_game(
+                SimpleNamespace(candidate_telemetry=clean, incumbent_telemetry=raw_with_search)
             )
 
     def test_summary_requires_a_live_guided_root_witness(self) -> None:

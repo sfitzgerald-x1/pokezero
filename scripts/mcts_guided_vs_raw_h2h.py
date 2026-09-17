@@ -326,7 +326,7 @@ def _raw_witness_payload(game: Any, *, raw_forward_decisions: int) -> dict[str, 
     }
 
 
-def _validate_raw_witness(out_root: Path, game: Any) -> None:
+def _validate_raw_witness(out_root: Path, game: Any) -> Mapping[str, Any]:
     path = _raw_witness_path(out_root, seed=game.seed, candidate_seat=game.candidate_seat)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -339,6 +339,7 @@ def _validate_raw_witness(out_root: Path, game: Any) -> None:
     )
     if dict(payload) != expected:
         raise HeadToHeadError("raw selector witness differs from its immutable completed game.")
+    return payload
 
 
 def _validate_completed_game(game: Any) -> None:
@@ -350,7 +351,13 @@ def _validate_completed_game(game: Any) -> None:
         raise HeadToHeadError("a guided-vs-raw game recorded an action fallback.")
     if candidate.root_prior_fallbacks or raw.root_prior_fallbacks:
         raise HeadToHeadError("a guided-vs-raw game recorded a root policy-prior fallback.")
-    if raw.model_evals or raw.total_iterations or raw.worlds_searched:
+    if (
+        raw.searched_decisions
+        or raw.model_evals
+        or raw.total_iterations
+        or raw.worlds_constructed
+        or raw.worlds_searched
+    ):
         raise HeadToHeadError("raw-policy baseline recorded search work.")
 
 
@@ -599,6 +606,9 @@ def main(argv: list[str] | None = None) -> int:
             on_game=on_game,
         )
         complete_pair(games, seed=seed, candidate=candidate, incumbent=incumbent)
+        for game in games:
+            _validate_completed_game(game)
+            _validate_raw_witness(out_root, game)
         all_games.extend(games)
         write_progress("pair_completed", seed=seed, candidate_seat="both")
         print(f"completed guided-vs-raw mirrored pair seed={seed}", flush=True)
@@ -613,6 +623,15 @@ def main(argv: list[str] | None = None) -> int:
         bootstrap_confidence_level=confidence_level,
     )
     _validate_summary_evidence(summary)
+    raw_forward_decisions = sum(
+        int(_validate_raw_witness(out_root, game)["raw_forward_decisions"])
+        for game in all_games
+    )
+    raw_telemetry_decisions = sum(game.incumbent_telemetry.decisions for game in all_games)
+    if raw_forward_decisions <= 0 or raw_forward_decisions != raw_telemetry_decisions:
+        raise HeadToHeadError(
+            "aggregate raw forward evidence must be positive and equal raw decision telemetry."
+        )
     _write_immutable_json(out_root / "summary.json", summary)
     complete = {
         "schema_version": COMPLETE_SCHEMA_VERSION,
