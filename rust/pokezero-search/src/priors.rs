@@ -186,7 +186,9 @@ pub(crate) trait HeadSource {
 ///
 /// `priors_row` is one row of the UNMASKED softmax; the gathered subset is
 /// renormalized over the mapped options — mathematically identical to the
-/// masked softmax restricted to those actions (exp(l_i)/Σ_mapped exp(l_j)).
+/// masked softmax restricted to those actions (exp(l_i)/Σ_mapped exp(l_j)). A
+/// single legal mapped option is certainty even when the already-softmaxed
+/// global row underflows at that option: its masked distribution is `[1.0]`.
 /// Returns `None` — leaving the node uniform — when any option lacks an
 /// action-block slot (the whole node falls back rather than zeroing arms the
 /// model cannot see) or the mapped mass underflows.
@@ -221,6 +223,22 @@ fn gather_self_priors_detail(
 ) -> Result<Vec<f32>, PriorGatherFailure> {
     if map.is_empty() {
         return Err(PriorGatherFailure::EmptyActionMap);
+    }
+    // There is no allocation decision with exactly one legal mapped action.
+    // Its masked softmax is mathematically `[1.0]`, regardless of how small
+    // its probability became in the *global* f32 softmax. Still read and
+    // validate the mapped entry: `None`, an invalid index, NaN, infinity, and
+    // a negative non-probability remain source-contract failures rather than
+    // becoming a convenient escape hatch for malformed model output.
+    if map.len() == 1 {
+        let index = map[0].ok_or(PriorGatherFailure::UnmappedAction)?;
+        let prior = *priors_row
+            .get(index)
+            .ok_or(PriorGatherFailure::ActionIndexOutOfRange)?;
+        if !prior.is_finite() || prior < 0.0 {
+            return Err(PriorGatherFailure::InvalidMappedMass);
+        }
+        return Ok(vec![1.0]);
     }
     let mut gathered = Vec::with_capacity(map.len());
     let mut sum = 0.0f32;
@@ -772,6 +790,25 @@ mod tests {
     fn gather_of_a_single_mapped_option_is_certainty() {
         let gathered = gather_self_priors(&ROW, &vec![Some(4)]).expect("mass present");
         approx(&gathered, &[1.0]);
+    }
+
+    /// A forced replacement can leave exactly one legal switch. The global
+    /// f32 softmax may underflow that switch to zero because it was normalized
+    /// alongside currently illegal actions, but the masked one-choice policy
+    /// is still exactly certain. Rejecting it would turn a forced move into a
+    /// root-prior fallback and invalidate a strength run for no decision-theory
+    /// reason.
+    #[test]
+    fn gather_of_an_underflowed_single_mapped_option_is_still_certainty() {
+        let gathered = gather_self_priors(&[0.0, 1.0], &vec![Some(0)])
+            .expect("one legal action must not underflow after masking");
+        approx(&gathered, &[1.0]);
+
+        // This exception is only for a valid non-negative probability. A
+        // malformed model row must remain fail-closed even if there is one
+        // legal action.
+        assert_eq!(gather_self_priors(&[f32::NAN, 1.0], &vec![Some(0)]), None);
+        assert_eq!(gather_self_priors(&[-0.1, 1.0], &vec![Some(0)]), None);
     }
 
     /// Order of the map is the order of the output, including when the map is
