@@ -44,7 +44,9 @@ _IDENTITY = {
 }
 
 
-def _public_record(*, seed: int = 19, turn_index: int = 0) -> PublicDecisionRecord:
+def _public_record(
+    *, seed: int = 19, turn_index: int = 0, battle_id: str | None = None
+) -> PublicDecisionRecord:
     observation = PokeZeroObservationV0(
         categorical_ids=(),
         numeric_features=(),
@@ -62,7 +64,7 @@ def _public_record(*, seed: int = 19, turn_index: int = 0) -> PublicDecisionReco
     )
     prototype = PublicDecisionRecord(
         decision_id="pending",
-        battle_id="guided-public-record",
+        battle_id=battle_id or f"mcts-h2h-{seed}-p1",
         seed=seed,
         format_id="gen3randombattle",
         acting_player="p1",
@@ -306,6 +308,28 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 candidate_seat="p1",
             )(record)
             with self.assertRaisesRegex(Exception, "equal guided decision telemetry"):
+                RUNNER._validate_public_decision_evidence(Path(directory), game)
+
+    def test_validator_refuses_record_from_another_battle_with_the_same_seed(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record(battle_id="mcts-h2h-19-p2")
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+            )(record)
+            with self.assertRaisesRegex(Exception, "completed game identity"):
                 RUNNER._validate_public_decision_evidence(Path(directory), game)
 
 

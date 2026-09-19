@@ -419,6 +419,7 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
     if not root.is_dir():
         raise HeadToHeadError("completed game is missing its public decision evidence directory.")
     records: list[PublicDecisionRecord] = []
+    expected_battle_id = f"mcts-h2h-{game.seed}-{game.candidate_seat}"
     for path in sorted(root.glob("turn-*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -446,6 +447,8 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
         )
         if path != expected_path:
             raise HeadToHeadError("public decision evidence path does not match its canonical record identity.")
+        if record.battle_id != expected_battle_id or record.format_id != "gen3randombattle":
+            raise HeadToHeadError("public decision evidence does not bind the completed game identity.")
         records.append(record)
     expected_count = game.candidate_telemetry.decisions
     if expected_count <= 0 or len(records) != expected_count:
