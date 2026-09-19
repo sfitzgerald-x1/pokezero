@@ -36,6 +36,7 @@ from pokezero.engine_search import (  # noqa: E402
     _FALLBACK_SAMPLES_PER_CLASS,
     _REASON_DETAIL_LIMIT,
     _bounded_reason_detail,
+    _decision_branch_prior_fallback_ledger,
     free_decision_features,
     _latch_encoder_tables_to_model_config,
     _locked_aggregate_choice,
@@ -1028,6 +1029,65 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
         self.assertEqual(stop["full_budget_replays"], 2)
         self.assertEqual(policy.stats.total_iterations, 320)
         self.assertEqual(policy.stats.early_stop_full_budget_replays, 2)
+
+    def test_branch_prior_ledger_retains_a_collapsed_prefix_and_each_replay(self) -> None:
+        """A replayed decision retains every completed native fallback event.
+
+        Override telemetry normally rejects early-stop configurations because it
+        measures a full fixed tree.  This deliberately violates that validation
+        *after* construction to drive the internal replay path: one collapsed
+        stopped prefix then one full replay per belief record.  The event ledger
+        must carry all three native calls, not just the two final reports.
+        """
+
+        def with_branch_reason(report: dict, reason: str, count: int) -> dict:
+            reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+            reasons[reason] = count
+            report.update(
+                {
+                    "prior_fallbacks": count,
+                    "root_prior_fallbacks": 0,
+                    "branch_prior_fallbacks": count,
+                    "branch_prior_fallback_reasons": reasons,
+                }
+            )
+            return report
+
+        prefix = with_branch_reason(
+            self._report(30, 30, stopped=True), "unmapped_action", 3
+        )
+        replay_one = with_branch_reason(
+            self._report(60, 40, stopped=False), "invalid_mapped_mass", 2
+        )
+        replay_two = with_branch_reason(
+            self._report(55, 45, stopped=False), "action_index_out_of_range", 2
+        )
+        native = self._Native([prefix, replay_one, replay_two])
+        policy = self._policy(early_stop=True)
+        object.__setattr__(policy._config, "override_telemetry", True)
+
+        decision = self._run(
+            policy,
+            native,
+            [self._world("same-world"), self._world("same-world")],
+        )
+
+        self.assertEqual(len(native.calls), 3)
+        ledger = decision.metadata["engine_mcts"]["override"][
+            "branch_prior_fallbacks"
+        ]
+        self.assertEqual(ledger["native_invocations"], 3)
+        self.assertEqual(ledger["belief_worlds"], 2)
+        self.assertEqual(ledger["branch_prior_fallbacks"], 7)
+        self.assertEqual(ledger["reason_counts"]["unmapped_action"], 3)
+        self.assertEqual(ledger["reason_counts"]["invalid_mapped_mass"], 2)
+        self.assertEqual(ledger["reason_counts"]["action_index_out_of_range"], 2)
+        self.assertEqual(
+            [event["belief_records"] for event in ledger["events"]], [2, 1, 1]
+        )
+        self.assertEqual(
+            [event["collapse_multiplicity"] for event in ledger["events"]], [2, 1, 1]
+        )
 
     def test_failed_required_replay_fails_the_decision_closed(self) -> None:
         native = self._Native(
@@ -5569,6 +5629,75 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(ledger["reason_counts"]["invalid_mapped_mass"], 3)
         self.assertEqual(ledger["events"][0]["belief_records"], 2)
         self.assertEqual(ledger["events"][0]["collapse_multiplicity"], 2)
+
+    def test_branch_prior_fallback_ledger_retains_prefix_and_replay_invocations(
+        self,
+    ) -> None:
+        """A replay adds an event; it never overwrites a stopped prefix's cost."""
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["unmapped_action"] = 3
+        replay_reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        replay_reasons["invalid_mapped_mass"] = 2
+
+        ledger = _decision_branch_prior_fallback_ledger(
+            [
+                {
+                    "native_invocation": 1,
+                    "belief_records": 2,
+                    "collapse_multiplicity": 2,
+                    "branch_prior_fallbacks": 3,
+                    "reason_counts": reasons,
+                },
+                {
+                    "native_invocation": 2,
+                    "belief_records": 1,
+                    "collapse_multiplicity": 1,
+                    "branch_prior_fallbacks": 2,
+                    "reason_counts": replay_reasons,
+                },
+            ],
+            belief_worlds=2,
+        )
+
+        self.assertEqual(ledger["native_invocations"], 2)
+        self.assertEqual(ledger["belief_worlds"], 2)
+        self.assertEqual(ledger["branch_prior_fallbacks"], 5)
+        self.assertEqual(ledger["reason_counts"]["unmapped_action"], 3)
+        self.assertEqual(ledger["reason_counts"]["invalid_mapped_mass"], 2)
+        self.assertEqual(ledger["unclassified_branch_prior_fallbacks"], 0)
+        self.assertTrue(ledger["reason_ledger_complete"])
+        self.assertEqual([row["native_invocation"] for row in ledger["events"]], [1, 2])
+
+    def test_branch_prior_fallback_ledger_marks_legacy_reasonless_counts_unknown(
+        self,
+    ) -> None:
+        """A split-era report remains readable without a fabricated cause."""
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 1,
+            }
+        )
+
+        decision, _ = self._run(policy, [report])
+
+        ledger = decision.metadata["engine_mcts"]["override"][
+            "branch_prior_fallbacks"
+        ]
+        self.assertEqual(ledger["branch_prior_fallbacks"], 1)
+        self.assertEqual(ledger["unclassified_branch_prior_fallbacks"], 1)
+        self.assertFalse(ledger["reason_ledger_complete"])
+        self.assertEqual(
+            ledger["reason_counts"],
+            {name: 0 for name in sorted(BRANCH_PRIOR_FALLBACK_REASON_VALUES)},
+        )
+        self.assertIsNone(ledger["events"][0]["reason_counts"])
 
     def test_branch_prior_fallback_reasons_refuse_an_incomplete_or_inconsistent_ledger(
         self,
