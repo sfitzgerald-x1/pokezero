@@ -191,7 +191,10 @@ pub(crate) trait HeadSource {
 /// global row underflows at that option: its masked distribution is `[1.0]`.
 /// Returns `None` — leaving the node uniform — when any option lacks an
 /// action-block slot (the whole node falls back rather than zeroing arms the
-/// model cannot see) or the mapped mass underflows.
+/// model cannot see), a mapped prior is non-finite/negative, or the mapped
+/// mass is exactly zero.  A tiny *positive* global-softmax mass is still a
+/// valid masked distribution: after restriction to the legal mapped actions,
+/// its relative probabilities can be normalized safely.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PriorGatherFailure {
     EmptyActionMap,
@@ -247,12 +250,17 @@ fn gather_self_priors_detail(
         let prior = *priors_row
             .get(index)
             .ok_or(PriorGatherFailure::ActionIndexOutOfRange)?;
+        if !prior.is_finite() || prior < 0.0 {
+            return Err(PriorGatherFailure::InvalidMappedMass);
+        }
         sum += prior;
         gathered.push(prior);
     }
-    // NaN comparisons are false, so a non-finite logit would slip past the
-    // underflow guard alone and propagate into stat.prior.
-    if !sum.is_finite() || sum <= 1e-8 {
+    // A softmax row is allowed to put almost all of its global mass on actions
+    // that are illegal in this root.  Its finite positive legal tail remains a
+    // perfectly well-defined masked distribution.  Reject only a zero total
+    // (or a defensive non-finite accumulator), not an arbitrary small value.
+    if !sum.is_finite() || sum <= 0.0 {
         return Err(PriorGatherFailure::InvalidMappedMass);
     }
     for prior in &mut gathered {
@@ -857,13 +865,15 @@ mod tests {
     }
 
     #[test]
-    fn underflowing_mapped_mass_falls_back() {
+    fn finite_low_mapped_mass_renormalizes() {
         let row = [1e-12f32, 1e-12, 1.0];
-        assert_eq!(gather_self_priors(&row, &vec![Some(0), Some(1)]), None);
-        // The guard is on the MAPPED mass, so the same row with the big slot
-        // mapped in must succeed — otherwise the test above would also pass
-        // against a "never gather anything" mutant.
-        assert!(gather_self_priors(&row, &vec![Some(0), Some(2)]).is_some());
+        // The global softmax can devote almost all mass to currently illegal
+        // actions.  The positive legal tail must still be normalized rather
+        // than converted to a uniform-prior fallback.
+        let gathered = gather_self_priors(&row, &vec![Some(0), Some(1)])
+            .expect("finite positive mapped mass is a valid distribution");
+        approx(&gathered, &[0.5, 0.5]);
+        assert!(gather_self_priors(&[0.0, 0.0, 1.0], &vec![Some(0), Some(1)]).is_none());
     }
 
     #[test]
