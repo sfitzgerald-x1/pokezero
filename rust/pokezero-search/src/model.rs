@@ -42,7 +42,7 @@ use poke_engine::state::State;
 
 use crate::priors::{
     branch_seats, is_single_none, resolve_root_priors, resolve_round_priors, root_seats, HeadPair,
-    HeadSource,
+    HeadSource, PriorFallbackReasonCounts,
 };
 use crate::tree::{
     finalize, multiply_report_json, root_visit_lock, traverse, BranchSeam, LeafPrice,
@@ -936,6 +936,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut prior_branches = 0usize;
     let mut root_prior_fallbacks = 0usize;
     let mut branch_prior_fallbacks = 0usize;
+    let mut branch_prior_fallback_reasons = PriorFallbackReasonCounts::default();
     // Per-phase wall attribution (plan deliverable 4: "Do not estimate a
     // missing phase by subtracting an assumed model cost"). Every phase is
     // measured directly:
@@ -1391,6 +1392,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             );
             prior_branches += resolved.applied;
             branch_prior_fallbacks += resolved.fallbacks;
+            branch_prior_fallback_reasons.add_assign(resolved.fallback_reasons);
             // SEAT ORIENTATION. The model's value is SELF-relative: every leaf
             // observation is encoded from `leaf_ctx`'s own seat (SELF /
             // OPPONENT token blocks), and the checkpoint's value target is +1
@@ -1482,6 +1484,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         ),
     };
     let prior_fallbacks = root_prior_fallbacks + branch_prior_fallbacks;
+    debug_assert_eq!(
+        branch_prior_fallback_reasons.total(),
+        branch_prior_fallbacks,
+        "every interior prior fallback must carry exactly one reason"
+    );
     // Seat-labelled, because the deferred-leaf audit is a self-vs-opponent
     // question — but the underlying asymmetry is SIDE-absolute (the virtual loss
     // is always written to `s2_stats`), so the searching seat's side ships with
@@ -1509,7 +1516,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"root_prior_fallback_reason\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
+         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"branch_prior_fallback_reasons\":{},\"root_prior_fallback_reason\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1535,6 +1542,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         prior_fallbacks,
         root_prior_fallbacks,
         branch_prior_fallbacks,
+        branch_prior_fallback_reasons.json_object(),
         serde_json::to_string(&root_prior_fallback_reason)
             .expect("optional static string JSON serialization cannot fail"),
         encode_nanos as f64 / 1e9,
