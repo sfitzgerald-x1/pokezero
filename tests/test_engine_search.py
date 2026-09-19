@@ -4304,14 +4304,14 @@ class FallbackAddressTests(unittest.TestCase):
         )
         # And the counts must never be smuggled into the message: that string is the
         # world_failure_reasons key, whose bytes are compared across eras and which
-        # _bounded_reason_detail truncates at 512 chars. Pinned as "exactly one call
-        # site" rather than one forbidden spelling -- `!contains("json_object()}")`
-        # caught a single format-string shape and sailed past
-        # `format!("{} [lossy={}]", raw, ..json_object())`.
+        # _bounded_reason_detail truncates at 512 chars. Pin the lossy ledger's one
+        # report call site rather than every `json_object()` call in model.rs: other
+        # independent report ledgers may legitimately use the same serialization
+        # helper.
         self.assertEqual(
-            model_rs.count("json_object()"), 1,
-            "`json_object()` must have exactly one call site in model.rs (the search "
-            "report); a second one is how the counts reach the reason key",
+            model_rs.count("lossy_subcases.json_object()"), 1,
+            "the lossy-subcase ledger must have exactly one model report call site; "
+            "a second one is how the counts reach the reason key",
         )
 
     def test_the_subcase_key_is_present_in_the_report_even_when_empty(self) -> None:
