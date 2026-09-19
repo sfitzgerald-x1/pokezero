@@ -23,6 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from pokezero.engine_search import (  # noqa: E402
+    BRANCH_PRIOR_FALLBACK_REASON_VALUES,
     EngineMctsConfig,
     EngineMctsPolicy,
     EngineMctsStats,
@@ -5481,6 +5482,54 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         with self.assertRaisesRegex(
             EngineSearchWitnessError,
             "native_prior_fallback_scope_invalid",
+        ):
+            self._run(policy, [report])
+
+    def test_branch_prior_fallback_reasons_are_aggregated_without_becoming_root_failures(
+        self,
+    ) -> None:
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["unmapped_action"] = 2
+        report.update(
+            {
+                "prior_fallbacks": 2,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 2,
+                "branch_prior_fallback_reasons": reasons,
+            }
+        )
+
+        self._run(policy, [report])
+
+        self.assertEqual(policy.stats.root_prior_fallbacks, 0)
+        self.assertEqual(policy.stats.branch_prior_fallbacks, 2)
+        self.assertEqual(policy.stats.branch_prior_fallback_reasons, {"unmapped_action": 2})
+
+    def test_branch_prior_fallback_reasons_refuse_an_incomplete_or_inconsistent_ledger(
+        self,
+    ) -> None:
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 1,
+                "branch_prior_fallback_reasons": {"unmapped_action": 1},
+            }
+        )
+
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError,
+            "native_branch_prior_fallback_reasons_invalid",
         ):
             self._run(policy, [report])
 
