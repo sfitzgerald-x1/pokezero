@@ -477,7 +477,12 @@ impl PriorFallbackReasonCounts {
             + self.decision_arm_count_mismatch
     }
 
-    pub(crate) fn json_object(self) -> String {
+    /// Render the fixed reason vocabulary as the native report's JSON object.
+    ///
+    /// This deliberately does not share the abort ledger's `json_object` name:
+    /// that method is source-pinned as the sole clean-path rendering of lossy
+    /// subcases, while this is a separate, non-lossy report field.
+    pub(crate) fn render_json(self) -> String {
         format!(
             "{{\"empty_action_map\":{},\"unmapped_action\":{},\"action_index_out_of_range\":{},\"invalid_mapped_mass\":{},\"missing_model_head_row\":{},\"decision_arm_count_mismatch\":{}}}",
             self.empty_action_map,
