@@ -192,6 +192,15 @@ def continue_rollout_from_current_state(
         raise ValueError("starting_decision_round_index must be non-negative.")
     if starting_decision_round_index > config.max_decision_rounds:
         raise ValueError("starting_decision_round_index cannot exceed max_decision_rounds.")
+    if config.public_decision_sink is not None and starting_decision_round_index:
+        # This helper creates a fresh suffix trajectory. Projecting that suffix
+        # into `PublicDecisionRecord` would claim it began at turn zero and
+        # fabricate the missing public action history, so durable replay
+        # capture must be refused until a caller can supply the complete public
+        # prefix as well.
+        raise ValueError(
+            "public_decision_sink requires a rollout beginning at decision round zero"
+        )
     if reset_policies:
         _reset_unique_policies(policies)
 

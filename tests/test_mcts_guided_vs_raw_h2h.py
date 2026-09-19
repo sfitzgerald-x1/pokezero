@@ -27,6 +27,12 @@ sys.modules[_SPEC.name] = RUNNER
 _SPEC.loader.exec_module(RUNNER)
 
 import mcts_mcts_h2h as DURABLE  # noqa: E402
+from pokezero.observation import PokeZeroObservationV0  # noqa: E402
+from pokezero.public_decision_corpus import (  # noqa: E402
+    PublicDecisionRecord,
+    PublicObservation,
+    public_decision_id,
+)
 
 
 _IDENTITY = {
@@ -36,6 +42,41 @@ _IDENTITY = {
     "engine_fingerprint": "d" * 64,
     "showdown_source_sha256": "e" * 64,
 }
+
+
+def _public_record(*, seed: int = 19, turn_index: int = 0) -> PublicDecisionRecord:
+    observation = PokeZeroObservationV0(
+        categorical_ids=(),
+        numeric_features=(),
+        token_type_ids=(),
+        attention_mask=(),
+        legal_action_mask=(True, False, False, False, False, False, False, False, False),
+        metadata={
+            "belief_view": {
+                "self_slot": "p1",
+                "opponent_slot": "p2",
+                "self_pokemon": [],
+                "opponent_pokemon": [],
+            }
+        },
+    )
+    prototype = PublicDecisionRecord(
+        decision_id="pending",
+        battle_id="guided-public-record",
+        seed=seed,
+        format_id="gen3randombattle",
+        acting_player="p1",
+        turn_index=turn_index,
+        recorded_action_index=0,
+        observation=PublicObservation.from_observation(observation),
+        history=(),
+        current_legal_action_mask=tuple(observation.legal_action_mask),
+        public_resolved_action_rounds=(),
+        public_belief_view=dict(observation.metadata["belief_view"]),
+    )
+    return PublicDecisionRecord(
+        **{**prototype.__dict__, "decision_id": public_decision_id(prototype)}
+    )
 
 
 class RawSpecTest(unittest.TestCase):
@@ -216,6 +257,56 @@ class GuidedProgressTest(unittest.TestCase):
                     {"schema_version": DURABLE.PROGRESS_SCHEMA_VERSION, "event": "game_started"},
                     schema_version=RUNNER.PROGRESS_SCHEMA_VERSION,
                 )
+
+
+class PublicDecisionEvidenceTest(unittest.TestCase):
+    def test_writer_and_validator_bind_each_guided_decision_immutably(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            writer = RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+            )
+            writer(record)
+            writer(record)  # a resumed game must accept the identical prior unit
+            self.assertEqual(
+                RUNNER._validate_public_decision_evidence(Path(directory), game),
+                (record,),
+            )
+
+    def test_validator_refuses_incomplete_guided_decision_evidence(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=2),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+            )(record)
+            with self.assertRaisesRegex(Exception, "equal guided decision telemetry"):
+                RUNNER._validate_public_decision_evidence(Path(directory), game)
 
 
 class CompletedGameEvidenceTest(unittest.TestCase):

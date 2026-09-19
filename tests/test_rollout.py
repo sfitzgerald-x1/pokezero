@@ -408,6 +408,19 @@ class RolloutDriverTest(unittest.TestCase):
         self.assertEqual([step.turn_index for step in result.trajectory.steps], [2, 3])
         self.assertEqual(result.trajectory.metadata["starting_decision_round_index"], 2)
 
+    def test_continuation_refuses_public_capture_without_its_prior_prefix(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+
+        with self.assertRaisesRegex(ValueError, "requires a rollout beginning"):
+            continue_rollout_from_current_state(
+                env=env,
+                policies={"p1": RandomLegalPolicy()},
+                config=RolloutConfig(public_decision_sink=lambda _record: None),
+                seed=12,
+                starting_decision_round_index=2,
+            )
+        self.assertEqual(env.step_calls, [])
+
     def test_continue_rollout_from_current_state_can_use_cached_first_observation(self) -> None:
         first_observation = observation((False, False, False, False, True, False, False, False, False))
         env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
