@@ -33,6 +33,7 @@ from pokezero.mcts_eval.head_to_head import (  # noqa: E402
     summarize_complete_pairs,
     write_game_immutable,
 )
+from pokezero.public_decision_corpus import PublicDecisionRecord  # noqa: E402
 
 # The mature MCTS-versus-MCTS runner owns the source-hash, immutable-write,
 # Showdown-binding and durable-launcher primitives.  This runner intentionally
@@ -52,6 +53,7 @@ from mcts_mcts_h2h import (  # noqa: E402
 MANIFEST_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-manifest.v1"
 PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
+PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 RAW_SELECTOR = {
     "kind": "deterministic_masked_argmax",
     "deterministic": True,
@@ -308,6 +310,74 @@ def _raw_witness_path(out_root: Path, *, seed: int, candidate_seat: str) -> Path
     return out_root / "raw-selector-witnesses" / f"seed-{seed}-{candidate_seat}.json"
 
 
+def _public_decision_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+) -> Path:
+    if candidate_seat not in {"p1", "p2"}:
+        raise HeadToHeadError("public decision evidence has an invalid candidate seat.")
+    if record.seed != seed or record.acting_player != candidate_seat:
+        raise HeadToHeadError("public decision evidence does not match its game identity.")
+    return (
+        out_root
+        / "public-decision-records"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
+    )
+
+
+def _public_decision_payload(
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+) -> dict[str, Any]:
+    return {
+        "schema_version": PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION,
+        "seed": record.seed,
+        "candidate_seat": candidate_seat,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "record": record.to_dict(),
+    }
+
+
+def _public_decision_writer(
+    out_root: Path,
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    seed: int,
+    candidate_seat: str,
+):
+    """Persist guided decisions as individually immutable public replay units."""
+
+    def write(record: PublicDecisionRecord) -> None:
+        # The rollout hook reports both actors. Only the guided actor is in
+        # scope for the override audit; retaining raw's private decision view
+        # would add storage without adding a search hypothesis.
+        if record.acting_player != candidate_seat:
+            return
+        path = _public_decision_path(
+            out_root, seed=seed, candidate_seat=candidate_seat, record=record
+        )
+        _write_immutable_json(
+            path,
+            _public_decision_payload(
+                candidate=candidate,
+                incumbent=incumbent,
+                candidate_seat=candidate_seat,
+                record=record,
+            ),
+        )
+
+    return write
+
+
 def _raw_witness_payload(game: Any, *, raw_forward_decisions: int) -> dict[str, Any]:
     raw_decisions = game.incumbent_telemetry.decisions
     if raw_forward_decisions != raw_decisions:
@@ -340,6 +410,56 @@ def _validate_raw_witness(out_root: Path, game: Any) -> Mapping[str, Any]:
     if dict(payload) != expected:
         raise HeadToHeadError("raw selector witness differs from its immutable completed game.")
     return payload
+
+
+def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[PublicDecisionRecord, ...]:
+    """Require a complete, source-bound public replay unit for every guided action."""
+
+    root = out_root / "public-decision-records" / f"seed-{game.seed}-{game.candidate_seat}"
+    if not root.is_dir():
+        raise HeadToHeadError("completed game is missing its public decision evidence directory.")
+    records: list[PublicDecisionRecord] = []
+    expected_battle_id = f"mcts-h2h-{game.seed}-{game.candidate_seat}"
+    for path in sorted(root.glob("turn-*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read public decision evidence {path}: {error}") from error
+        if not isinstance(payload, Mapping):
+            raise HeadToHeadError("public decision evidence is not a JSON object.")
+        if (
+            payload.get("schema_version") != PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION
+            or payload.get("seed") != game.seed
+            or payload.get("candidate_seat") != game.candidate_seat
+            or payload.get("candidate_provenance_sha256") != game.candidate.provenance_sha256
+            or payload.get("raw_provenance_sha256") != game.incumbent.provenance_sha256
+        ):
+            raise HeadToHeadError("public decision evidence does not match its completed game.")
+        try:
+            record = PublicDecisionRecord.from_dict(_mapping(payload.get("record"), label="public record"))
+        except (TypeError, ValueError) as error:
+            raise HeadToHeadError(f"public decision evidence has an invalid record: {error}") from error
+        expected_path = _public_decision_path(
+            out_root,
+            seed=game.seed,
+            candidate_seat=game.candidate_seat,
+            record=record,
+        )
+        if path != expected_path:
+            raise HeadToHeadError("public decision evidence path does not match its canonical record identity.")
+        if record.battle_id != expected_battle_id or record.format_id != "gen3randombattle":
+            raise HeadToHeadError("public decision evidence does not bind the completed game identity.")
+        records.append(record)
+    expected_count = game.candidate_telemetry.decisions
+    if expected_count <= 0 or len(records) != expected_count:
+        raise HeadToHeadError(
+            "public decision evidence count must be positive and equal guided decision telemetry."
+        )
+    decision_ids = {record.decision_id for record in records}
+    turn_indices = {record.turn_index for record in records}
+    if len(decision_ids) != len(records) or len(turn_indices) != len(records):
+        raise HeadToHeadError("public decision evidence contains duplicate guided decision identities.")
+    return tuple(records)
 
 
 def _validate_completed_game(game: Any) -> None:
@@ -568,6 +688,13 @@ def main(argv: list[str] | None = None) -> int:
                 format_id="gen3randombattle",
                 record_policy_timing=True,
                 hide_opponent_legal_action_masks=True,
+                public_decision_sink=_public_decision_writer(
+                    out_root,
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    seed=seed,
+                    candidate_seat=candidate_seat,
+                ),
                 decision_sink=lambda decision: write_progress(
                     "decision_committed", seed=seed, candidate_seat=candidate_seat, decision=decision
                 ),
@@ -581,9 +708,11 @@ def main(argv: list[str] | None = None) -> int:
         for game in completed.values():
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
+            _validate_public_decision_evidence(out_root, game)
 
         def on_game(game: Any) -> None:
             _validate_completed_game(game)
+            _validate_public_decision_evidence(out_root, game)
             raw_adapter = raw_adapters.pop((game.seed, game.candidate_seat), None)
             if raw_adapter is None:
                 raise HeadToHeadError("completed game has no retained raw-policy selector witness.")
@@ -613,6 +742,7 @@ def main(argv: list[str] | None = None) -> int:
         for game in games:
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
+            _validate_public_decision_evidence(out_root, game)
         all_games.extend(games)
         write_progress("pair_completed", seed=seed, candidate_seat="both")
         print(f"completed guided-vs-raw mirrored pair seed={seed}", flush=True)

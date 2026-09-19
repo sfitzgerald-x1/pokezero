@@ -12,6 +12,7 @@ from .env import BattleFormat, PlayerId, PokeZeroEnv, TerminalState
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision
 from .public_action_capture import append_public_action_round, public_action_round_from_protocol_lines
+from .public_decision_corpus import PublicDecisionRecord, public_decision_records_from_trajectory
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -30,6 +31,13 @@ class RolloutConfig:
     # been stepped and appended to the trajectory, so callers can expose
     # durable progress without observing or influencing action selection.
     decision_sink: "RolloutDecisionSink | None" = field(default=None, repr=False, compare=False)
+    # Optional public-only evidence hook. It receives one canonical public
+    # replay record for every committed action. Unlike `decision_sink`, this
+    # deliberately carries the acting player's public information set so a
+    # caller can persist exact, independently replayable decision boundaries.
+    public_decision_sink: "RolloutPublicDecisionSink | None" = field(
+        default=None, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if self.max_decision_rounds <= 0:
@@ -69,6 +77,7 @@ class RolloutDecisionProgress:
 
 
 RolloutDecisionSink = Callable[[RolloutDecisionProgress], None]
+RolloutPublicDecisionSink = Callable[[PublicDecisionRecord], None]
 
 
 @dataclass
@@ -183,6 +192,15 @@ def continue_rollout_from_current_state(
         raise ValueError("starting_decision_round_index must be non-negative.")
     if starting_decision_round_index > config.max_decision_rounds:
         raise ValueError("starting_decision_round_index cannot exceed max_decision_rounds.")
+    if config.public_decision_sink is not None and starting_decision_round_index:
+        # This helper creates a fresh suffix trajectory. Projecting that suffix
+        # into `PublicDecisionRecord` would claim it began at turn zero and
+        # fabricate the missing public action history, so durable replay
+        # capture must be refused until a caller can supply the complete public
+        # prefix as well.
+        raise ValueError(
+            "public_decision_sink requires a rollout beginning at decision round zero"
+        )
     if reset_policies:
         _reset_unique_policies(policies)
 
@@ -329,6 +347,12 @@ def continue_rollout_from_current_state(
                 )
             )
 
+        _emit_public_decision_records(
+            config=config,
+            trajectory=trajectory,
+            requested_players=requested_players,
+        )
+
         if step_result.terminal is not None:
             trajectory.record_terminal(step_result.terminal)
             _emit_decision_progress(
@@ -415,6 +439,32 @@ def _emit_decision_progress(
             terminal_winner=terminal.winner if terminal is not None else None,
         )
     )
+
+
+def _emit_public_decision_records(
+    *,
+    config: RolloutConfig,
+    trajectory: BattleTrajectory,
+    requested_players: Sequence[PlayerId],
+) -> None:
+    """Emit public replay records only after their actions reached the trajectory.
+
+    The caller owns its storage durability (for example, flush/fsync and
+    atomic publish). An opted-in sink that fails aborts the rollout: continuing
+    after the declared evidence stream stops would leave an apparently complete
+    aggregate without the decision states needed to audit it.
+    """
+
+    sink = config.public_decision_sink
+    if sink is None:
+        return
+    for player_id in requested_players:
+        records = public_decision_records_from_trajectory(
+            trajectory, acting_player=str(player_id)
+        )
+        if not records:
+            raise RuntimeError("committed decision did not produce a public replay record")
+        sink(records[-1])
 
 
 def _policy_for_player(policies: Mapping[PlayerId, Policy], player_id: PlayerId) -> Policy:
