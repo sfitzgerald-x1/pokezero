@@ -1747,6 +1747,11 @@ class EngineMctsStats:
     prior_fallbacks: int = 0
     root_prior_fallbacks: int = 0
     branch_prior_fallbacks: int = 0
+    # Interior fallback reasons are branch events. They explain whether a
+    # uniform simulated child came from an unavailable action surface, a model
+    # row/mass problem, or a tree-shape disagreement; they are never a live
+    # action-fallback denominator.
+    branch_prior_fallback_reasons: Counter = field(default_factory=Counter)
     # Root-order resolution observed by native opponent-prior invocations.
     # This is per invocation (like the fallback counters above): a replayed
     # world is a second source-bound native call and therefore a second audit
@@ -2162,6 +2167,7 @@ class EngineMctsStats:
             "prior_fallbacks": self.prior_fallbacks,
             "root_prior_fallbacks": self.root_prior_fallbacks,
             "branch_prior_fallbacks": self.branch_prior_fallbacks,
+            "branch_prior_fallback_reasons": dict(self.branch_prior_fallback_reasons),
             "collision_rounds": self.collision_rounds,
             "collision_pending_rounds": self.collision_pending_rounds,
             "collision_selections": self.collision_selections,
@@ -3491,6 +3497,20 @@ OPPONENT_REQUEST_ORDER_STATUS_VALUES = frozenset(
         "rejected_public_order_walk",
         "lost_active_permutation",
         "non_permutation_result",
+    }
+)
+
+# The native crate reports one count for every interior node that reverts to
+# uniform priors. Keep this vocabulary closed so a source/image mismatch cannot
+# silently turn an unrecognised branch failure into an unlabelled aggregate.
+BRANCH_PRIOR_FALLBACK_REASON_VALUES = frozenset(
+    {
+        "empty_action_map",
+        "unmapped_action",
+        "action_index_out_of_range",
+        "invalid_mapped_mass",
+        "missing_model_head_row",
+        "decision_arm_count_mismatch",
     }
 )
 
@@ -6077,9 +6097,34 @@ class EngineMctsPolicy:
                 raise EngineSearchWitnessError(
                     "native_prior_fallback_scope_invalid: aggregate must equal root plus branch"
                 )
+            branch_reason_counts = report.get("branch_prior_fallback_reasons")
+            if branch_reason_counts is not None:
+                if not isinstance(branch_reason_counts, Mapping) or set(
+                    branch_reason_counts
+                ) != BRANCH_PRIOR_FALLBACK_REASON_VALUES:
+                    raise EngineSearchWitnessError(
+                        "native_branch_prior_fallback_reasons_invalid: "
+                        "expected the complete native reason vocabulary"
+                    )
+                if any(
+                    type(count) is not int or count < 0
+                    for count in branch_reason_counts.values()
+                ) or sum(branch_reason_counts.values()) != branch_prior_fallbacks:
+                    raise EngineSearchWitnessError(
+                        "native_branch_prior_fallback_reasons_invalid: "
+                        "reason counts must be non-negative and sum to branch fallbacks"
+                    )
             self.stats.prior_fallbacks += reported_prior_fallbacks
             self.stats.root_prior_fallbacks += root_prior_fallbacks
             self.stats.branch_prior_fallbacks += branch_prior_fallbacks
+            if branch_reason_counts is not None:
+                self.stats.branch_prior_fallback_reasons.update(
+                    {
+                        reason: count
+                        for reason, count in branch_reason_counts.items()
+                        if count
+                    }
+                )
             if config.strict_fallbacks and root_prior_fallbacks:
                 reason = report.get("root_prior_fallback_reason")
                 if not isinstance(reason, str) or not reason:
