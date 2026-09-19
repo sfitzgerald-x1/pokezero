@@ -5504,11 +5504,71 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             }
         )
 
-        self._run(policy, [report])
+        decision, _ = self._run(policy, [report])
 
         self.assertEqual(policy.stats.root_prior_fallbacks, 0)
         self.assertEqual(policy.stats.branch_prior_fallbacks, 2)
         self.assertEqual(policy.stats.branch_prior_fallback_reasons, {"unmapped_action": 2})
+        ledger = decision.metadata["engine_mcts"]["override"][
+            "branch_prior_fallbacks"
+        ]
+        self.assertEqual(
+            ledger["schema_version"],
+            "pokezero.engine-mcts.branch-prior-fallbacks.v1",
+        )
+        self.assertEqual(ledger["native_invocations"], 1)
+        self.assertEqual(ledger["belief_worlds"], 1)
+        self.assertEqual(ledger["branch_prior_fallbacks"], 2)
+        self.assertEqual(ledger["reason_counts"]["unmapped_action"], 2)
+        self.assertEqual(
+            ledger["events"],
+            [
+                {
+                    "native_invocation": 1,
+                    "belief_records": 1,
+                    "collapse_multiplicity": 1,
+                    "branch_prior_fallbacks": 2,
+                    "reason_counts": {
+                        name: (2 if name == "unmapped_action" else 0)
+                        for name in sorted(BRANCH_PRIOR_FALLBACK_REASON_VALUES)
+                    },
+                }
+            ],
+        )
+
+    def test_branch_prior_fallback_ledger_deduplicates_collapsed_belief_records(
+        self,
+    ) -> None:
+        """One multiplicity-scaled native tree is not N fallback events."""
+        policy = self._policy(worlds=2)
+        report = self._report(
+            [("alpha", 120, 0.5, 0.2), ("beta", 80, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["invalid_mapped_mass"] = 3
+        report.update(
+            {
+                "prior_fallbacks": 3,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 3,
+                "branch_prior_fallback_reasons": reasons,
+            }
+        )
+        duplicate_worlds = [self._world("same-world"), self._world("same-world")]
+
+        decision, native = self._run(policy, [report], worlds=duplicate_worlds)
+
+        self.assertEqual(len(native.calls), 1)
+        ledger = decision.metadata["engine_mcts"]["override"][
+            "branch_prior_fallbacks"
+        ]
+        self.assertEqual(ledger["native_invocations"], 1)
+        self.assertEqual(ledger["belief_worlds"], 2)
+        self.assertEqual(ledger["branch_prior_fallbacks"], 3)
+        self.assertEqual(ledger["reason_counts"]["invalid_mapped_mass"], 3)
+        self.assertEqual(ledger["events"][0]["belief_records"], 2)
+        self.assertEqual(ledger["events"][0]["collapse_multiplicity"], 2)
 
     def test_branch_prior_fallback_reasons_refuse_an_incomplete_or_inconsistent_ledger(
         self,

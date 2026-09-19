@@ -3810,6 +3810,90 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
     )
 
 
+def _decision_branch_prior_fallback_ledger(
+    world_runs: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Project native interior-prior failures onto one completed decision.
+
+    ``world_runs`` deliberately contains one record per belief draw, while a
+    collapsed duplicate group is one native tree with a multiplicity-scaled
+    budget.  Summing records would therefore count that one tree N times.  The
+    caller stamps every completed native invocation, including any full-budget
+    replay, so this projection keeps the denominator honest: one event per tree
+    actually run, not per alias of its report.
+
+    The payload is intentionally limited to protocol counters and multiplicity;
+    it is safe to carry beside a selected public decision later without exposing
+    a private state or a model input.
+    """
+
+    by_invocation: dict[int, list[Mapping[str, Any]]] = {}
+    for record in world_runs:
+        invocation = record.get("_branch_prior_fallback_invocation")
+        if type(invocation) is not int or invocation < 1:
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_invocation_missing: completed native report "
+                "has no decision-ledger identity"
+            )
+        by_invocation.setdefault(invocation, []).append(record)
+
+    reason_counts = {reason: 0 for reason in sorted(BRANCH_PRIOR_FALLBACK_REASON_VALUES)}
+    events: list[dict[str, Any]] = []
+    for invocation, records in sorted(by_invocation.items()):
+        report = records[0]["report"]
+        branch_fallbacks = report.get("branch_prior_fallbacks")
+        if type(branch_fallbacks) is not int or branch_fallbacks < 0:
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: native branch fallback count "
+                "is not a non-negative integer"
+            )
+        reasons = report.get("branch_prior_fallback_reasons")
+        if reasons is None:
+            if branch_fallbacks:
+                raise EngineSearchWitnessError(
+                    "branch_prior_fallback_ledger_missing_reasons: nonzero native "
+                    "branch fallback count has no classified reason ledger"
+                )
+            reasons = {reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        if not isinstance(reasons, Mapping) or set(reasons) != BRANCH_PRIOR_FALLBACK_REASON_VALUES:
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: native reason vocabulary is incomplete"
+            )
+        event_reasons = {reason: int(reasons[reason]) for reason in sorted(reasons)}
+        if (
+            any(count < 0 for count in event_reasons.values())
+            or sum(event_reasons.values()) != branch_fallbacks
+        ):
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: event reasons do not sum to "
+                "the native branch fallback count"
+            )
+        for reason, count in event_reasons.items():
+            reason_counts[reason] += count
+        # A collapsed initial invocation appears once per belief draw; a replay
+        # appears once.  Preserve that relationship without mistaking it for
+        # another native failure event.
+        events.append(
+            {
+                "native_invocation": invocation,
+                "belief_records": len(records),
+                "collapse_multiplicity": int(
+                    records[0].get("_collapse_multiplicity", 1)
+                ),
+                "branch_prior_fallbacks": branch_fallbacks,
+                "reason_counts": event_reasons,
+            }
+        )
+    return {
+        "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
+        "native_invocations": len(events),
+        "belief_worlds": len(world_runs),
+        "branch_prior_fallbacks": sum(reason_counts.values()),
+        "reason_counts": reason_counts,
+        "events": events,
+    }
+
+
 def _root_selector_shadow(
     context: PolicyContext,
     arms: _RootArmAggregate,
@@ -6097,6 +6181,12 @@ class EngineMctsPolicy:
                 raise EngineSearchWitnessError(
                     "native_prior_fallback_scope_invalid: aggregate must equal root plus branch"
                 )
+            # Normalize the legacy aggregate-only shape for later
+            # decision-local projection.  The native source report remains the
+            # authority at this boundary; below it, every completed report has
+            # an explicit scoped zero rather than forcing the ledger to guess.
+            report["root_prior_fallbacks"] = root_prior_fallbacks
+            report["branch_prior_fallbacks"] = branch_prior_fallbacks
             branch_reason_counts = report.get("branch_prior_fallback_reasons")
             if branch_reason_counts is not None:
                 if not isinstance(branch_reason_counts, Mapping) or set(
@@ -6312,6 +6402,12 @@ class EngineMctsPolicy:
             duplicates.setdefault(cache_key, []).append(record)
 
         duplicate_groups = list(duplicates.items())
+        # A completed native call may feed several belief records when duplicate
+        # completions are collapsed.  Keep an invocation identity separate from
+        # the collapse key: a stopped duplicate can later replay once per record,
+        # and those replays are distinct trees even though they retain the same
+        # collapse key for the belief accounting.
+        native_invocation_serial = 0
         # Parallel dispatch gives each task both an independent native evaluator
         # and an independent immutable FoldState.  Results are always absorbed
         # in this original group order, preserving the aggregation and
@@ -6560,6 +6656,7 @@ class EngineMctsPolicy:
                         budget_skipped_worlds += len(remaining_records)
                     break
                 continue
+            native_invocation_serial += 1
             # Both counters move ONLY on a search that returned a report, and
             # only together. Incrementing `worlds_collapsed` before the call --
             # where the sim scaling is decided -- broke the invariant below the
@@ -6579,6 +6676,7 @@ class EngineMctsPolicy:
                 record["report"] = dict(report)
                 record["_collapse_key"] = cache_key
                 record["_collapse_multiplicity"] = multiplicity
+                record["_branch_prior_fallback_invocation"] = native_invocation_serial
                 world_runs.append(record)
 
         # Count each SEARCH once, not each record. Duplicate draws share one
@@ -6674,7 +6772,9 @@ class EngineMctsPolicy:
                     if report is None:
                         replay_failed = True
                         break
+                    native_invocation_serial += 1
                     record["report"] = report
+                    record["_branch_prior_fallback_invocation"] = native_invocation_serial
                     final_runs.append(record)
                 world_runs = final_runs
                 self.stats.early_stop_full_budget_replays += full_budget_replays
@@ -6980,6 +7080,7 @@ class EngineMctsPolicy:
         denominator (`overrides / (searched - unmeasured)`) rests on.
         """
         arms = _aggregate_root_arms(world_runs)
+        branch_prior_fallbacks = _decision_branch_prior_fallback_ledger(world_runs)
         worlds = max(len(world_runs), 1)
         # Preserve the production path byte-for-byte when both observational
         # instruments are disabled.  Constructing the request vocabulary is
@@ -7195,6 +7296,11 @@ class EngineMctsPolicy:
             "root_q_gap": None if q_gap is None else round(q_gap, 6),
             "root_visit_gap": None if visit_gap is None else round(visit_gap, 6),
             "opponent_top_arm": opponent_choice,
+            # The aggregate run ledger names total interior fallbacks; this
+            # decision-local projection names which completed native trees
+            # produced them.  It is observational only and is emitted only with
+            # the existing override-telemetry arm.
+            "branch_prior_fallbacks": branch_prior_fallbacks,
             **(
                 {
                     "root_selector_shadow": selector_shadow,
