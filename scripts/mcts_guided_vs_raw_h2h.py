@@ -61,7 +61,7 @@ PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
-    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v3"
+    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v4"
 )
 SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-sealed-override-audit.v1"
@@ -852,7 +852,7 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
 def _guided_override_from_decision(
     guided_policy: PublicOnlyMctsPolicy,
     record: PublicDecisionRecord,
-) -> Mapping[str, Any]:
+) -> tuple[Mapping[str, Any], tuple[str, ...]]:
     address = guided_policy.latest_decision_address
     expected_address = {
         "battle_id": record.battle_id,
@@ -860,13 +860,27 @@ def _guided_override_from_decision(
         "seat": record.acting_player,
         "action_index": record.recorded_action_index,
     }
-    if address != expected_address:
+    if not isinstance(address, Mapping):
+        raise HeadToHeadError("guided policy is missing a public decision address.")
+    address_fields = set(address)
+    if address_fields != set(expected_address) | {"requested_players"}:
+        raise HeadToHeadError("guided policy decision address has unsupported fields.")
+    if {key: address[key] for key in expected_address} != expected_address:
         raise HeadToHeadError(
             "guided policy metadata is not bound to the public decision being committed."
         )
+    requested = address.get("requested_players")
+    if not isinstance(requested, list) or any(player not in {"p1", "p2"} for player in requested):
+        raise HeadToHeadError("guided policy decision has an invalid request boundary.")
+    requested_players = tuple(requested)
+    if requested_players not in {(record.acting_player,), ("p1", "p2")}:
+        raise HeadToHeadError("guided policy decision has an unsupported request boundary.")
     metadata = _mapping(guided_policy.latest_decision_metadata, label="guided decision metadata")
     engine_mcts = _mapping(metadata.get("engine_mcts"), label="guided engine MCTS metadata")
-    return _mapping(engine_mcts.get("override"), label="guided override telemetry")
+    return (
+        _mapping(engine_mcts.get("override"), label="guided override telemetry"),
+        requested_players,
+    )
 
 
 def _branch_prior_ledger_from_override(override: Mapping[str, Any]) -> dict[str, Any]:
@@ -1114,9 +1128,12 @@ def _branch_prior_ledger_payload(
     incumbent: MctsPolicySpec,
     candidate_seat: str,
     record: PublicDecisionRecord,
+    requested_players: tuple[str, ...],
     ledger: Mapping[str, Any],
     selection: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if requested_players not in {(candidate_seat,), ("p1", "p2")}:
+        raise HeadToHeadError("branch-prior ledger has an unsupported request boundary.")
     return {
         "schema_version": BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION,
         "seed": record.seed,
@@ -1130,6 +1147,7 @@ def _branch_prior_ledger_payload(
             "turn_index": record.turn_index,
             "recorded_action_index": record.recorded_action_index,
         },
+        "request_boundary": {"requested_players": list(requested_players)},
         "branch_prior_fallbacks": _validated_branch_prior_ledger(ledger),
         "selection": _validated_selection_evidence(selection, record=record),
     }
@@ -1172,7 +1190,7 @@ def _public_decision_writer(
         path = _public_decision_path(
             out_root, seed=seed, candidate_seat=candidate_seat, record=record
         )
-        override = _guided_override_from_decision(guided_policy, record)
+        override, requested_players = _guided_override_from_decision(guided_policy, record)
         _write_immutable_json(
             path,
             _public_decision_payload(
@@ -1192,6 +1210,7 @@ def _public_decision_writer(
                 incumbent=incumbent,
                 candidate_seat=candidate_seat,
                 record=record,
+                requested_players=requested_players,
                 ledger=_branch_prior_ledger_from_override(override),
                 selection=_selection_evidence_from_override(override, record=record),
             ),
@@ -1343,11 +1362,21 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
             _mapping(ledger_payload.get("selection"), label="guided selection evidence"),
             record=record,
         )
+        request_boundary = _mapping(
+            ledger_payload.get("request_boundary"), label="branch-prior request boundary"
+        )
+        requested_players = request_boundary.get("requested_players")
+        if (
+            not isinstance(requested_players, list)
+            or tuple(requested_players) not in {(game.candidate_seat,), ("p1", "p2")}
+        ):
+            raise HeadToHeadError("branch-prior ledger has an invalid request boundary.")
         expected_ledger_payload = _branch_prior_ledger_payload(
             candidate=game.candidate,
             incumbent=game.incumbent,
             candidate_seat=game.candidate_seat,
             record=record,
+            requested_players=tuple(requested_players),
             ledger=ledger,
             selection=selection,
         )
@@ -1392,10 +1421,22 @@ def _validate_sealed_override_audit_evidence(out_root: Path, game: Any) -> None:
             _mapping(ledger_payload.get("selection"), label="sealed audit source selection"),
             record=record,
         )
+        request_boundary = _mapping(
+            ledger_payload.get("request_boundary"), label="sealed audit source request boundary"
+        )
+        requested_players = request_boundary.get("requested_players")
+        if (
+            not isinstance(requested_players, list)
+            or tuple(requested_players) not in {(game.candidate_seat,), ("p1", "p2")}
+        ):
+            raise HeadToHeadError("sealed audit source ledger has an invalid request boundary.")
         if selection["model_override"] is True:
             if record.turn_index in expected:
                 raise HeadToHeadError("measured override source decisions repeat a round identity.")
-            expected[record.turn_index] = selection
+            expected[record.turn_index] = {
+                "selection": selection,
+                "requested_players": list(requested_players),
+            }
     if len(expected) != expected_count:
         raise HeadToHeadError(
             "guided measured-override telemetry disagrees with its public decision ledger."
@@ -1441,7 +1482,8 @@ def _validate_sealed_override_audit_evidence(out_root: Path, game: Any) -> None:
         if path != expected_path or round_index in rounds or round_index not in expected:
             raise HeadToHeadError("sealed override audit has a duplicate or noncanonical round identity.")
         rounds.add(round_index)
-        selection = expected[round_index]
+        source = expected[round_index]
+        selection = source["selection"]
         expected_evidence = _sealed_search_evidence_from_selection(selection)
         if readout["audit_status"] == "PAIRED":
             audit = _mapping(readout.get("audit"), label="sealed override pair")
@@ -1454,9 +1496,13 @@ def _validate_sealed_override_audit_evidence(out_root: Path, game: Any) -> None:
                     "sealed override audit does not bind its measured public decision selection."
                 )
         elif readout["audit_status"] == "INAPPLICABLE_NON_SIMULTANEOUS":
-            if readout["search_evidence"] != expected_evidence:
+            if (
+                source["requested_players"] != [game.candidate_seat]
+                or readout["requested_players"] != source["requested_players"]
+                or readout["search_evidence"] != expected_evidence
+            ):
                 raise HeadToHeadError(
-                    "inapplicable sealed override audit does not bind its measured public decision selection."
+                    "inapplicable sealed override audit does not bind its measured public decision boundary."
                 )
         else:  # _validated_sealed_override_readout already rejects this; keep closed on drift.
             raise HeadToHeadError("sealed override audit has an unknown disposition.")

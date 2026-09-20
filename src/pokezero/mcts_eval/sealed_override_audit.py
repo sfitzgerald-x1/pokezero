@@ -165,6 +165,16 @@ def evaluate_measured_override_boundary(
     if candidate_seat not in {"p1", "p2"}:
         raise SealedOverrideAuditError("candidate seat must be p1 or p2")
     if candidate_seat not in boundary.decisions:
+        opponent_seat: PlayerId = "p2" if candidate_seat == "p1" else "p1"
+        # The hook is installed for the full rollout.  A normal forced phase
+        # can request only the raw opponent; that phase cannot contribute a
+        # candidate override and has no candidate public-decision record in
+        # the denominator, so it must be ignored rather than aborting the
+        # source game.
+        if tuple(boundary.requested_players) == (opponent_seat,) and set(boundary.decisions) == {
+            opponent_seat
+        }:
+            return None
         raise SealedOverrideAuditError("override audit boundary omits the candidate decision")
     candidate = boundary.decisions[candidate_seat]
     metadata = _json_object(candidate.metadata, label="candidate decision metadata")

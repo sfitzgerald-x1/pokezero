@@ -116,6 +116,7 @@ def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
             "round": record.turn_index,
             "seat": record.acting_player,
             "action_index": record.recorded_action_index,
+            "requested_players": [record.acting_player],
         },
         latest_decision_metadata={
             "engine_mcts": {
@@ -415,7 +416,13 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
             ledger_path = RUNNER._branch_prior_ledger_path(
                 root, seed=19, candidate_seat="p1", record=record
             )
-            DURABLE._write_immutable_json(ledger_path, {"selection": source_selection})
+            DURABLE._write_immutable_json(
+                ledger_path,
+                {
+                    "selection": source_selection,
+                    "request_boundary": {"requested_players": ["p1", "p2"]},
+                },
+            )
             sidecar = RUNNER._sealed_override_audit_path(
                 root, seed=19, candidate_seat="p1", decision_round_index=7
             )
@@ -436,7 +443,13 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
             inapplicable_ledger = RUNNER._branch_prior_ledger_path(
                 inapplicable_root, seed=19, candidate_seat="p1", record=record
             )
-            DURABLE._write_immutable_json(inapplicable_ledger, {"selection": source_selection})
+            DURABLE._write_immutable_json(
+                inapplicable_ledger,
+                {
+                    "selection": source_selection,
+                    "request_boundary": {"requested_players": ["p1"]},
+                },
+            )
             inapplicable_readout = {
                 "schema_version": "pokezero.mcts-sealed-override-audit.v1",
                 "seed": 19,
@@ -472,7 +485,13 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
             bad_ledger_path = RUNNER._branch_prior_ledger_path(
                 bad_root, seed=19, candidate_seat="p1", record=record
             )
-            DURABLE._write_immutable_json(bad_ledger_path, {"selection": source_selection})
+            DURABLE._write_immutable_json(
+                bad_ledger_path,
+                {
+                    "selection": source_selection,
+                    "request_boundary": {"requested_players": ["p1", "p2"]},
+                },
+            )
             bad_sidecar = RUNNER._sealed_override_audit_path(
                 bad_root, seed=19, candidate_seat="p1", decision_round_index=7
             )
@@ -485,6 +504,32 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
             with patch.object(RUNNER, "_validate_public_decision_evidence", return_value=(record,)):
                 with self.assertRaisesRegex(Exception, "does not bind its measured public decision"):
                     RUNNER._validate_sealed_override_audit_evidence(bad_root, game)
+            downgrade_root = root / "downgrade"
+            downgrade_ledger = RUNNER._branch_prior_ledger_path(
+                downgrade_root, seed=19, candidate_seat="p1", record=record
+            )
+            DURABLE._write_immutable_json(
+                downgrade_ledger,
+                {
+                    "selection": source_selection,
+                    "request_boundary": {"requested_players": ["p1", "p2"]},
+                },
+            )
+            downgrade_sidecar = RUNNER._sealed_override_audit_path(
+                downgrade_root, seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            DURABLE._write_immutable_json(
+                downgrade_sidecar,
+                RUNNER._sealed_override_audit_payload(
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat="p1",
+                    readout=inapplicable_readout,
+                ),
+            )
+            with patch.object(RUNNER, "_validate_public_decision_evidence", return_value=(record,)):
+                with self.assertRaisesRegex(Exception, "does not bind its measured public decision boundary"):
+                    RUNNER._validate_sealed_override_audit_evidence(downgrade_root, game)
 
 
 class DurableLauncherHandoffTest(unittest.TestCase):

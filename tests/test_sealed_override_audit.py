@@ -134,6 +134,26 @@ class SealedOverrideAuditTest(unittest.TestCase):
         self.assertEqual(readout["requested_players"], ["p1"])
         self.assertEqual(readout["search_evidence"]["search_argmax"], 4)
 
+    def test_ignores_opponent_only_forced_phase(self) -> None:
+        boundary = _boundary(override=True)
+        opponent_only = RolloutSealedPreStepBoundary(
+            seed=boundary.seed,
+            battle_id=boundary.battle_id,
+            decision_round_index=boundary.decision_round_index,
+            requested_players=("p2",),
+            snapshot=boundary.snapshot,
+            decisions=MappingProxyType({"p2": boundary.decisions["p2"]}),
+        )
+        self.assertIsNone(
+            evaluate_measured_override_boundary(
+                boundary=opponent_only,
+                candidate_seat="p1",
+                env_factory=lambda: self.fail("must not allocate environment"),
+                continuation_policy_factory=lambda: self.fail("must not allocate policies"),
+                rollout_config=object(),
+            )
+        )
+
     def test_rejects_measured_override_when_committed_action_disagrees_with_metadata(self) -> None:
         boundary = _boundary(override=True)
         decisions = dict(boundary.decisions)

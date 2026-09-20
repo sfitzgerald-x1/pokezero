@@ -307,6 +307,11 @@ class PublicOnlyMctsPolicy:
             "round": int(context.decision_round_index),
             "seat": str(context.player_id),
             "action_index": int(getattr(decision, "action_index")),
+            # This is public phase topology, not another player's request
+            # contents.  Preserve it only as a short-lived source binding so
+            # a durable audit can prove whether an override was simultaneous
+            # before deciding that a paired continuation is inapplicable.
+            "requested_players": list(context.requested_players),
         }
         return decision
 
