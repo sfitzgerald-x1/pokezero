@@ -1171,6 +1171,11 @@ mod model_abort_seam_tests {
 
     #[test]
     fn the_gated_abort_seam_rejects_an_attribution_unsafe_branch_with_its_predicate() {
+        // Keep this feature-gated test independently runnable. A full model suite
+        // happened to initialize Python in another test first, which hid this
+        // requirement and forced CI to run hundreds of unrelated tests just to
+        // exercise this seam.
+        pyo3::Python::initialize();
         let s1 = MoveChoice::Move(PokemonMoveIndex::M0);
         let s2 = MoveChoice::Move(PokemonMoveIndex::M0);
         let instructions: Vec<Instruction> = Vec::new();

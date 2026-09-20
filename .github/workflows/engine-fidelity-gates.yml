@@ -1957,48 +1957,20 @@ jobs:
             }
           done
 
-      - name: The abort seam under `--features model` -- COMPILE COVERAGE PLUS ONE BEHAVIOURAL RUNG
+      - name: Model-feature abort seam
         run: |
           set -o pipefail
-          # WHY THIS STEP EXISTS. `tree.rs:305`'s abort gate is `allow(dead_code)` without the
-          # `model` cargo feature, so every crate step above compiles the channel THIS
-          # PR's class travels on out of the build entirely -- report 4 section 4.1, in the CI
-          # config rather than in a measurement run. `model.rs` is likewise never compiled, and
-          # the named `abort_telemetry::*` pins above are source-text assertions over
-          # `include_str!("model.rs")` precisely because of that.
-          #
-          # WHAT IT BUYS, STATED EXACTLY, because overclaiming here would be the same defect in
-          # the other direction. The FIRST revision of this step bought compile coverage and
-          # nothing else, and review proved it: the executed test-NAME set was IDENTICAL with
-          # and without the feature -- 519 names both ways, `comm` empty in both directions --
-          # so no CI test observed an abort under either setting, and section 4.1 was NOT
-          # discharged by adding the flag.
-          #
-          # `tree::model_abort_seam_tests` is the answer to that, and it is deliberately narrow.
-          # It is `cfg`-gated on the feature, so the two builds are now OBSERVABLY different --
-          # 520 tests here against 519 on the plain step -- and it asserts the gated seam
-          # actually REJECTS and that the error carries the predicate the census keys
-          # `world_failure_reasons` by. Null-worlded: replacing the seam's condition with
-          # `if false` reddens exactly that test.
-          #
-          # ⚠ STILL NOT DISCHARGED, and this comment is where a reader will look. The abort
-          # channel is exercised at the SEAM only. Nothing in CI drives a search over a world
-          # and observes `worlds_searched < worlds_constructed`; that needs the
-          # truth-differential harness and its model artifacts and is not a CI job. Treat
-          # "the abort channel is covered in CI" as FALSE and this as one rung of it.
-          #
-          # THE LIBRARY-PATH TRAP, found by running it. `build.rs` embeds an rpath for the
-          # maturin-built cdylib only, so `cargo test --features model` binaries do not get it
-          # and abort at load with SIGABRT. cargo then prints `error: test failed` and NO
-          # `test result: FAILED` line, so a step grepping only for that line would pass on a
-          # run where nothing executed. `set -o pipefail` is what actually catches it; the
-          # library path is what prevents it.
+          # The complete non-model crate suite runs above. This feature-only rung must compile
+          # the model path and exercise the one cfg-gated seam; rerunning every non-model test
+          # here previously added roughly six minutes without increasing feature coverage.
+          # It is intentionally a seam test, not a claim that a full search abort was observed.
           python -m pip install --quiet torch==2.13.0 \
             --index-url https://download.pytorch.org/whl/cpu
           LIBTORCH_USE_PYTORCH=1 \
             LD_LIBRARY_PATH="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')" \
             RUSTFLAGS="-C debug-assertions=yes" \
-            cargo test --release --no-fail-fast --features model \
+            cargo test --release --features model --lib \
+              tree::model_abort_seam_tests::the_gated_abort_seam_rejects_an_attribution_unsafe_branch_with_its_predicate \
               --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/cargo-model.log
           if grep -qE '^test result: FAILED' /tmp/cargo-model.log; then
@@ -2007,11 +1979,8 @@ jobs:
           fi
           model_tests=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo-model.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          # 520, not 519, and the DIFFERENCE is the point: `tree::model_abort_seam_tests` exists
-          # only on this build. Equal floors would mean the two steps could not tell each other
-          # apart, which is the state review found. Measured: plain 519, model 520.
-          if [ "${model_tests:-0}" -lt 520 ]; then
-            echo "::error::expected >= 520 crate tests under --features model, got ${model_tests:-0}"
+          if [ "${model_tests:-0}" -ne 1 ]; then
+            echo "::error::expected exactly one model-gated seam test, got ${model_tests:-0}"
             exit 1
           fi
           # And name the gated pin, because a total can be restored by unrelated tests -- the
