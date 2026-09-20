@@ -164,10 +164,15 @@ def evaluate_measured_override_boundary(
 
     if candidate_seat not in {"p1", "p2"}:
         raise SealedOverrideAuditError("candidate seat must be p1 or p2")
+    # Only a simultaneous boundary can hold the opponent's source action fixed
+    # for both continuation arms.  One-sided request phases are not malformed
+    # MCTS evidence; they are simply outside this audit's valid denominator.
+    # Returning None lets the source rollout continue rather than turning an
+    # inapplicable boundary into a false evaluation failure.
     if tuple(boundary.requested_players) != ("p1", "p2"):
-        raise SealedOverrideAuditError("override audit requires a simultaneous p1/p2 boundary")
+        return None
     if set(boundary.decisions) != {"p1", "p2"}:
-        raise SealedOverrideAuditError("override audit boundary must contain exactly p1/p2 decisions")
+        raise SealedOverrideAuditError("simultaneous override boundary must contain p1/p2 decisions")
     candidate = boundary.decisions[candidate_seat]
     metadata = _json_object(candidate.metadata, label="candidate decision metadata")
     engine_mcts = _json_object(metadata.get("engine_mcts"), label="engine MCTS metadata")
@@ -195,6 +200,7 @@ def evaluate_measured_override_boundary(
     try:
         readout = evaluate_sealed_override_pair(
             snapshot=boundary.snapshot,
+            source_battle_id=boundary.battle_id,
             source_seed=boundary.seed,
             source_decision_round=boundary.decision_round_index,
             subject_player=candidate_seat,

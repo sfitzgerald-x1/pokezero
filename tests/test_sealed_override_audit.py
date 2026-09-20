@@ -104,6 +104,7 @@ class SealedOverrideAuditTest(unittest.TestCase):
 
         kwargs = evaluate.call_args.kwargs
         self.assertIs(kwargs["snapshot"], boundary.snapshot)
+        self.assertEqual(kwargs["source_battle_id"], boundary.battle_id)
         self.assertEqual(kwargs["mcts_action"], 4)
         self.assertEqual(kwargs["raw_action"], 2)
         self.assertEqual(kwargs["opponent_action"], 7)
@@ -111,6 +112,26 @@ class SealedOverrideAuditTest(unittest.TestCase):
         self.assertNotIn("move", kwargs["search_evidence"]["root_allocation"]["arms"][0])
         self.assertEqual(readout["audit"], expected)
         self.assertNotIn("snapshot", readout)
+
+    def test_skips_one_sided_boundary_without_allocating_a_continuation(self) -> None:
+        boundary = _boundary(override=True)
+        one_sided = RolloutSealedPreStepBoundary(
+            seed=boundary.seed,
+            battle_id=boundary.battle_id,
+            decision_round_index=boundary.decision_round_index,
+            requested_players=("p1",),
+            snapshot=boundary.snapshot,
+            decisions=MappingProxyType({"p1": boundary.decisions["p1"]}),
+        )
+        self.assertIsNone(
+            evaluate_measured_override_boundary(
+                boundary=one_sided,
+                candidate_seat="p1",
+                env_factory=lambda: self.fail("must not allocate environment"),
+                continuation_policy_factory=lambda: self.fail("must not allocate policies"),
+                rollout_config=object(),
+            )
+        )
 
     def test_rejects_measured_override_when_committed_action_disagrees_with_metadata(self) -> None:
         boundary = _boundary(override=True)

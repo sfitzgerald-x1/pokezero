@@ -40,6 +40,7 @@ def _validate_action(action: int, *, label: str) -> None:
 def run_sealed_override_continuation(
     *,
     snapshot: LocalShowdownSnapshot,
+    source_battle_id: str,
     source_seed: int,
     source_decision_round: int,
     subject_player: PlayerId,
@@ -64,6 +65,8 @@ def run_sealed_override_continuation(
 
     if not isinstance(snapshot, LocalShowdownSnapshot):
         raise SealedOverrideContinuationError("sealed override audit requires LocalShowdownSnapshot")
+    if not isinstance(source_battle_id, str) or not source_battle_id:
+        raise SealedOverrideContinuationError("source battle id must be non-empty")
     if source_decision_round < 0:
         raise SealedOverrideContinuationError("source decision round must be non-negative")
     if not action_label or not action_label.strip():
@@ -110,7 +113,11 @@ def run_sealed_override_continuation(
         # may say that it was held fixed, but must not disclose it.
         common = {
             "schema_version": SEALED_OVERRIDE_CONTINUATION_SCHEMA_VERSION,
-            "source_battle_id": snapshot.battle_id,
+            # `snapshot.battle_id` is the environment-local identifier
+            # (for example `local-gen3randombattle-...`), whereas the audit
+            # ledger must bind to the caller's rollout battle identity.  The
+            # snapshot is ephemeral and never serialized, so use the latter.
+            "source_battle_id": source_battle_id,
             "source_seed": source_seed,
             "source_decision_round": source_decision_round,
             "subject_player": subject_player,
@@ -194,6 +201,7 @@ def run_sealed_override_continuation(
 def evaluate_sealed_override_pair(
     *,
     snapshot: LocalShowdownSnapshot,
+    source_battle_id: str,
     source_seed: int,
     source_decision_round: int,
     subject_player: PlayerId,
@@ -227,6 +235,7 @@ def evaluate_sealed_override_pair(
         raise SealedOverrideContinuationError("search evidence must be a mapping")
     mcts = run_sealed_override_continuation(
         snapshot=snapshot,
+        source_battle_id=source_battle_id,
         source_seed=source_seed,
         source_decision_round=source_decision_round,
         subject_player=subject_player,
@@ -241,6 +250,7 @@ def evaluate_sealed_override_pair(
     )
     raw = run_sealed_override_continuation(
         snapshot=snapshot,
+        source_battle_id=source_battle_id,
         source_seed=source_seed,
         source_decision_round=source_decision_round,
         subject_player=subject_player,

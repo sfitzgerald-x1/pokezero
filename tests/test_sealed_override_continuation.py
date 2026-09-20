@@ -70,6 +70,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
         ):
             readout = run_sealed_override_continuation(
                 snapshot=self._snapshot(),
+                source_battle_id="source-rollout-17",
                 source_seed=20_260_920,
                 source_decision_round=4,
                 subject_player="p1",
@@ -97,6 +98,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
             ],
         )
         self.assertEqual(readout["schema_version"], SEALED_OVERRIDE_CONTINUATION_SCHEMA_VERSION)
+        self.assertEqual(readout["source_battle_id"], "source-rollout-17")
         self.assertEqual(readout["subject_action"], 4)
         self.assertTrue(readout["opponent_action_held_fixed"])
         self.assertNotIn("fixed_joint_action", readout)
@@ -121,6 +123,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
         ) as continuation:
             readout = run_sealed_override_continuation(
                 snapshot=self._snapshot(),
+                source_battle_id="source-rollout-immediate",
                 source_seed=20_260_921,
                 source_decision_round=2,
                 subject_player="p2",
@@ -142,6 +145,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
         with self.assertRaisesRegex(SealedOverrideContinuationError, "LocalShowdownSnapshot"):
             run_sealed_override_continuation(
                 snapshot=object(),
+                source_battle_id="source-rollout-invalid",
                 source_seed=1,
                 source_decision_round=1,
                 subject_player="p1",
@@ -183,6 +187,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
         ):
             readout = evaluate_sealed_override_pair(
                 snapshot=self._snapshot(),
+                source_battle_id="source-rollout-pair",
                 source_seed=20_260_922,
                 source_decision_round=3,
                 subject_player="p1",
@@ -198,6 +203,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
 
         self.assertEqual(policy_factory_calls, 2)
         self.assertEqual(readout["mcts_action"], 4)
+        self.assertEqual(readout["source_battle_id"], "source-rollout-pair")
         self.assertEqual(readout["raw_action"], 2)
         self.assertTrue(readout["opponent_action_held_fixed"])
         self.assertNotIn("opponent_action", readout)
@@ -211,6 +217,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
         with self.assertRaisesRegex(SealedOverrideContinuationError, "distinct MCTS and raw"):
             evaluate_sealed_override_pair(
                 snapshot=self._snapshot(),
+                source_battle_id="source-rollout-nonoverride",
                 source_seed=1,
                 source_decision_round=1,
                 subject_player="p1",
