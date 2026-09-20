@@ -38,7 +38,7 @@ jobs:
       fidelity: ${{ steps.f.outputs.fidelity }}
       schema_default: ${{ steps.f.outputs.schema_default }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - id: f
@@ -448,9 +448,9 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -462,14 +462,14 @@ jobs:
       # green.  Pin and build the same upstream source explicitly so this gate
       # can reject a skip rather than silently dropping the production rung.
       - name: Checkout pinned Pokemon Showdown for model-path arbiter tests
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: smogon/pokemon-showdown
           ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
           path: .ci/pokemon-showdown
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22.22.2"
           cache: npm
@@ -2133,9 +2133,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -2194,9 +2194,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -2285,9 +2285,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -2401,9 +2401,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -2499,7 +2499,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Depth 2, so the merge commit's two PARENTS exist locally. The default is depth 1,
           # which checks out the right tree but GRAFTS the parents away -- and the first CI run of
@@ -2509,7 +2509,7 @@ jobs:
           # than by reasoning, which is the reason the assertion was written as an assertion.
           fetch-depth: 2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -2518,7 +2518,7 @@ jobs:
         # rather than the branch. This job has no path filter and computes no diff, so the only
         # count that could be taken from the wrong tree is the census's own container count -- and
         # that comes from whatever `actions/checkout` left in the working directory. On
-        # `pull_request`, actions/checkout@v4 checks out `refs/pull/N/merge` by default, so the
+        # `pull_request`, actions/checkout@v5 checks out `refs/pull/N/merge` by default, so the
         # count already derives from the merge result. That default is load-bearing and INVISIBLE:
         # a future `ref: ${{ github.event.pull_request.head.sha }}` line, which looks like a
         # tightening, would silently census a tree that is not the one that would land. Asserted,
