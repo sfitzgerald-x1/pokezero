@@ -706,6 +706,34 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "not a public legal action"):
             RUNNER._selection_evidence_from_override(override, record=record)
 
+    def test_selection_evidence_names_missing_legal_actions_without_aborting_the_game(self) -> None:
+        """A partial engine root is evidence of a vocabulary seam, not a lost run.
+
+        The selected and model actions remain bound to actual native arms, while
+        the public-only sidecar makes every legal action the native root omitted
+        explicit.  This is the failure shape observed in the R3 audit at a late
+        seed-2026092006 decision.
+        """
+        record = _public_record(
+            legal_action_mask=(True, True, True, False, False, False, False, False, False)
+        )
+        selection = _public_selection(
+            record,
+            arms=[
+                {"action_index": 0, "visit_share": 0.6, "q": 0.2, "reported_prior": 0.4, "model_prior": 0.4},
+                {"action_index": 1, "visit_share": 0.4, "q": 0.3, "reported_prior": 0.6, "model_prior": 0.6},
+            ],
+            gap_actions=[0, 1],
+            q_gap=0.1,
+            visit_gap=0.2,
+        )
+        evidence = RUNNER._validated_selection_evidence(selection, record=record)
+        self.assertEqual(evidence["root_allocation_missing_action_indices"], [2])
+
+        forged = {**evidence, "root_allocation_missing_action_indices": []}
+        with self.assertRaisesRegex(Exception, "missing-action coverage disagrees"):
+            RUNNER._validated_selection_evidence(forged, record=record)
+
     def test_selection_evidence_uses_engine_top_pair_witness_for_ties_and_zero_arms(self) -> None:
         tied = _public_record(
             legal_action_mask=(True, True, True, False, False, False, False, False, False)

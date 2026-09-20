@@ -61,7 +61,7 @@ PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
-    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v4"
+    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v5"
 )
 SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-sealed-override-audit.v1"
@@ -900,7 +900,7 @@ def _validated_selection_evidence(
     justified without replaying or exposing the hidden state.
     """
 
-    expected = {
+    required = {
         "model_argmax",
         "search_argmax",
         "model_override",
@@ -910,7 +910,13 @@ def _validated_selection_evidence(
         "root_gap_action_indices",
         "root_allocation",
     }
-    if set(selection) != expected:
+    # The producer does not know the public record, so this field is derived
+    # here and then bound into the durable sidecar.  Accepting its absence is
+    # required for the live producer boundary; accepting a *wrong* persisted
+    # value would turn an engine/request action-surface mismatch into an
+    # apparently complete allocation.
+    coverage_field = "root_allocation_missing_action_indices"
+    if set(selection) not in (required, required | {coverage_field}):
         raise HeadToHeadError("guided selection evidence has unsupported fields.")
     search_action = selection["search_argmax"]
     if (
@@ -1003,8 +1009,28 @@ def _validated_selection_evidence(
         )
     if len({arm["action_index"] for arm in normalized_arms}) != len(normalized_arms):
         raise HeadToHeadError("guided root allocation repeats an own-action arm.")
-    if {arm["action_index"] for arm in normalized_arms} != legal_action_indices:
-        raise HeadToHeadError("guided root allocation does not cover its public legal action space.")
+    covered_action_indices = {arm["action_index"] for arm in normalized_arms}
+    missing_action_indices = sorted(legal_action_indices - covered_action_indices)
+    # The selected search action and, where measured, the model argmax must
+    # still be represented by a native root arm.  Other legal public actions
+    # can be absent when a belief world cannot render their engine equivalent.
+    # That is diagnostic evidence of an engine/request seam, not a reason to
+    # discard all prior durable decisions or crash the evaluation after a long
+    # run.  The immutable sidecar names every omitted public action explicitly.
+    if search_action not in covered_action_indices:
+        raise HeadToHeadError("guided search action is absent from its root allocation.")
+    if model_action is not None and model_action not in covered_action_indices:
+        raise HeadToHeadError("guided model action is absent from its root allocation.")
+    supplied_missing = selection.get(coverage_field)
+    if supplied_missing is not None:
+        if (
+            not isinstance(supplied_missing, list)
+            or any(isinstance(index, bool) or not isinstance(index, int) for index in supplied_missing)
+            or supplied_missing != missing_action_indices
+        ):
+            raise HeadToHeadError(
+                "guided root allocation missing-action coverage disagrees with its public record."
+            )
     if not math.isclose(sum(arm["visit_share"] for arm in normalized_arms), 1.0, abs_tol=1e-5):
         raise HeadToHeadError("guided root visits do not conserve one decision.")
     for key in ("reported_prior", "model_prior"):
@@ -1066,6 +1092,7 @@ def _validated_selection_evidence(
         "root_q_gap": root_q_gap,
         "root_visit_gap": root_visit_gap,
         "root_gap_action_indices": list(gap_actions),
+        "root_allocation_missing_action_indices": missing_action_indices,
         "root_allocation": {
             "worlds": worlds,
             "prior_authority": bool(root["prior_authority"]),
