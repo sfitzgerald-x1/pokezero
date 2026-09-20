@@ -5777,6 +5777,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         block = decision.metadata["engine_mcts"]["override"]
         self.assertEqual((block["model_argmax"], block["search_argmax"]), (1, 0))
         self.assertIs(block["model_override"], True)
+        self.assertEqual(block["root_gap_action_indices"], [0, 1])
         allocation = block["root_allocation"]
         self.assertTrue(allocation["prior_authority"])
         self.assertIsNone(allocation["prior_cause"])

@@ -502,7 +502,7 @@ def _branch_prior_ledger_from_override(override: Mapping[str, Any]) -> dict[str,
 
 
 def _validated_selection_evidence(
-    override: Mapping[str, Any],
+    selection: Mapping[str, Any],
     *,
     record: PublicDecisionRecord,
 ) -> dict[str, Any]:
@@ -521,11 +521,11 @@ def _validated_selection_evidence(
         "unmeasured_cause",
         "root_q_gap",
         "root_visit_gap",
+        "root_gap_action_indices",
         "root_allocation",
     }
-    selection = {key: override.get(key) for key in expected}
-    if not expected.issubset(override):
-        raise HeadToHeadError("guided override telemetry does not expose complete selection evidence.")
+    if set(selection) != expected:
+        raise HeadToHeadError("guided selection evidence has unsupported fields.")
     search_action = selection["search_argmax"]
     if (
         isinstance(search_action, bool)
@@ -571,7 +571,6 @@ def _validated_selection_evidence(
     for arm in arms:
         arm = _mapping(arm, label="guided root allocation arm")
         if set(arm) != {
-            "move",
             "action_index",
             "visit_share",
             "q",
@@ -579,9 +578,6 @@ def _validated_selection_evidence(
             "model_prior",
         }:
             raise HeadToHeadError("guided root allocation arm has unsupported fields.")
-        move = arm.get("move")
-        if not isinstance(move, str) or not move:
-            raise HeadToHeadError("guided root allocation arm move must be a non-empty string.")
         action_index = arm.get("action_index")
         if isinstance(action_index, bool) or action_index not in legal_action_indices:
             raise HeadToHeadError("guided root allocation arm is not a public legal action.")
@@ -593,7 +589,6 @@ def _validated_selection_evidence(
             raise HeadToHeadError("guided root Q must be within [-1, 1] when present.")
         normalized_arms.append(
             {
-                "move": move,
                 "action_index": action_index,
                 "visit_share": visit_share,
                 "q": q,
@@ -603,10 +598,7 @@ def _validated_selection_evidence(
                 "model_prior": optional_number(arm.get("model_prior"), label="guided model prior"),
             }
         )
-    if (
-        len({arm["move"] for arm in normalized_arms}) != len(normalized_arms)
-        or len({arm["action_index"] for arm in normalized_arms}) != len(normalized_arms)
-    ):
+    if len({arm["action_index"] for arm in normalized_arms}) != len(normalized_arms):
         raise HeadToHeadError("guided root allocation repeats an own-action arm.")
     if {arm["action_index"] for arm in normalized_arms} != legal_action_indices:
         raise HeadToHeadError("guided root allocation does not cover its public legal action space.")
@@ -625,15 +617,23 @@ def _validated_selection_evidence(
         raise HeadToHeadError("guided root model-prior authority disagrees with its arms.")
     root_q_gap = optional_number(selection["root_q_gap"], label="guided root Q gap")
     root_visit_gap = optional_number(selection["root_visit_gap"], label="guided root visit gap")
-    leaders = sorted(normalized_arms, key=lambda arm: arm["visit_share"], reverse=True)[:2]
-    expected_visit_gap = (
-        leaders[0]["visit_share"] - leaders[1]["visit_share"] if len(leaders) == 2 else None
-    )
-    if expected_visit_gap is None:
+    gap_actions = selection["root_gap_action_indices"]
+    if not isinstance(gap_actions, list) or len(gap_actions) > 2:
+        raise HeadToHeadError("guided root gap witness must name zero to two public actions.")
+    if (
+        any(isinstance(action, bool) or action not in legal_action_indices for action in gap_actions)
+        or len(set(gap_actions)) != len(gap_actions)
+    ):
+        raise HeadToHeadError("guided root gap witness is not a unique public legal action sequence.")
+    by_action = {arm["action_index"]: arm for arm in normalized_arms}
+    leaders = [by_action[action] for action in gap_actions]
+    if any(arm["visit_share"] <= 0.0 for arm in leaders):
+        raise HeadToHeadError("guided root gap witness must exclude zero-visit actions.")
+    if len(leaders) < 2:
         if root_visit_gap is not None:
             raise HeadToHeadError("guided root visit gap exists without two leading arms.")
     elif root_visit_gap is None or not 0.0 <= root_visit_gap <= 1.0 or not math.isclose(
-        root_visit_gap, expected_visit_gap, abs_tol=1e-5
+        root_visit_gap, leaders[0]["visit_share"] - leaders[1]["visit_share"], abs_tol=1e-5
     ):
         raise HeadToHeadError("guided root visit gap disagrees with its allocation.")
     expected_q_gap = (
@@ -653,6 +653,7 @@ def _validated_selection_evidence(
         "unmeasured_cause": unmeasured_cause,
         "root_q_gap": root_q_gap,
         "root_visit_gap": root_visit_gap,
+        "root_gap_action_indices": list(gap_actions),
         "root_allocation": {
             "worlds": worlds,
             "prior_authority": bool(root["prior_authority"]),
@@ -660,6 +661,53 @@ def _validated_selection_evidence(
             "arms": normalized_arms,
         },
     }
+
+
+def _selection_evidence_from_override(
+    override: Mapping[str, Any], *, record: PublicDecisionRecord
+) -> dict[str, Any]:
+    """Sanitise engine telemetry into public-only, action-indexed evidence."""
+
+    expected = {
+        "model_argmax",
+        "search_argmax",
+        "model_override",
+        "unmeasured_cause",
+        "root_q_gap",
+        "root_visit_gap",
+        "root_gap_action_indices",
+        "root_allocation",
+    }
+    if not expected.issubset(override):
+        raise HeadToHeadError("guided override telemetry does not expose complete selection evidence.")
+    raw_root = _mapping(override["root_allocation"], label="guided engine root allocation")
+    if set(raw_root) != {"worlds", "prior_authority", "prior_cause", "arms"}:
+        raise HeadToHeadError("guided engine root allocation has unsupported fields.")
+    raw_arms = raw_root.get("arms")
+    if not isinstance(raw_arms, list):
+        raise HeadToHeadError("guided engine root allocation arms must be a list.")
+    public_arms = []
+    for arm in raw_arms:
+        arm = _mapping(arm, label="guided engine root allocation arm")
+        if set(arm) != {
+            "move",
+            "action_index",
+            "visit_share",
+            "q",
+            "reported_prior",
+            "model_prior",
+        }:
+            raise HeadToHeadError("guided engine root allocation arm has unsupported fields.")
+        # The public action index is the complete identity.  Never carry an
+        # engine-rendered label (such as typed Hidden Power) beside a public row.
+        public_arms.append({key: arm[key] for key in arm if key != "move"})
+    return _validated_selection_evidence(
+        {
+            key: (dict(raw_root, arms=public_arms) if key == "root_allocation" else override[key])
+            for key in expected
+        },
+        record=record,
+    )
 
 
 def _branch_prior_ledger_payload(
@@ -747,7 +795,7 @@ def _public_decision_writer(
                 candidate_seat=candidate_seat,
                 record=record,
                 ledger=_branch_prior_ledger_from_override(override),
-                selection=override,
+                selection=_selection_evidence_from_override(override, record=record),
             ),
         )
 

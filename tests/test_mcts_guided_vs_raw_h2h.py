@@ -45,14 +45,18 @@ _IDENTITY = {
 
 
 def _public_record(
-    *, seed: int = 19, turn_index: int = 0, battle_id: str | None = None
+    *,
+    seed: int = 19,
+    turn_index: int = 0,
+    battle_id: str | None = None,
+    legal_action_mask: tuple[bool, ...] = (True, False, False, False, False, False, False, False, False),
 ) -> PublicDecisionRecord:
     observation = PokeZeroObservationV0(
         categorical_ids=(),
         numeric_features=(),
         token_type_ids=(),
         attention_mask=(),
-        legal_action_mask=(True, False, False, False, False, False, False, False, False),
+        legal_action_mask=legal_action_mask,
         metadata={
             "belief_view": {
                 "self_slot": "p1",
@@ -121,6 +125,7 @@ def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
                     "unmeasured_cause": None,
                     "root_q_gap": None,
                     "root_visit_gap": None,
+                    "root_gap_action_indices": [record.recorded_action_index],
                     "root_allocation": {
                         "worlds": 1,
                         "prior_authority": True,
@@ -140,6 +145,31 @@ def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
             }
         },
     )
+
+
+def _public_selection(
+    record: PublicDecisionRecord,
+    *,
+    arms: list[dict[str, object]],
+    gap_actions: list[int],
+    q_gap: float | None,
+    visit_gap: float | None,
+) -> dict[str, object]:
+    return {
+        "model_argmax": record.recorded_action_index,
+        "search_argmax": record.recorded_action_index,
+        "model_override": False,
+        "unmeasured_cause": None,
+        "root_q_gap": q_gap,
+        "root_visit_gap": visit_gap,
+        "root_gap_action_indices": gap_actions,
+        "root_allocation": {
+            "worlds": 1,
+            "prior_authority": True,
+            "prior_cause": None,
+            "arms": arms,
+        },
+    }
 
 
 class RawSpecTest(unittest.TestCase):
@@ -338,14 +368,14 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
         override = {**override, "search_argmax": record.recorded_action_index + 1}
         with self.assertRaisesRegex(Exception, "does not match its public decision"):
-            RUNNER._validated_selection_evidence(override, record=record)
+            RUNNER._selection_evidence_from_override(override, record=record)
 
     def test_selection_evidence_refuses_missing_root_q_gap_field(self) -> None:
         record = _public_record()
         override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
         override = {key: value for key, value in override.items() if key != "root_q_gap"}
         with self.assertRaisesRegex(Exception, "complete selection evidence"):
-            RUNNER._validated_selection_evidence(override, record=record)
+            RUNNER._selection_evidence_from_override(override, record=record)
 
     def test_selection_evidence_refuses_an_arm_outside_public_legal_actions(self) -> None:
         record = _public_record()
@@ -355,7 +385,37 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             {**override["root_allocation"]["arms"][0], "action_index": 8}
         ]
         with self.assertRaisesRegex(Exception, "not a public legal action"):
-            RUNNER._validated_selection_evidence(override, record=record)
+            RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_selection_evidence_uses_engine_top_pair_witness_for_ties_and_zero_arms(self) -> None:
+        tied = _public_record(
+            legal_action_mask=(True, True, True, False, False, False, False, False, False)
+        )
+        tied_arms = [
+            {"action_index": 0, "visit_share": 0.5, "q": 0.1, "reported_prior": 0.2, "model_prior": 0.2},
+            {"action_index": 1, "visit_share": 0.5, "q": 0.4, "reported_prior": 0.3, "model_prior": 0.3},
+            {"action_index": 2, "visit_share": 0.0, "q": 0.9, "reported_prior": 0.5, "model_prior": 0.5},
+        ]
+        tie = _public_selection(
+            tied, arms=tied_arms, gap_actions=[1, 0], q_gap=0.3, visit_gap=0.0
+        )
+        self.assertEqual(
+            RUNNER._validated_selection_evidence(tie, record=tied)["root_gap_action_indices"],
+            [1, 0],
+        )
+        one_visited = _public_record(
+            legal_action_mask=(True, True, False, False, False, False, False, False, False)
+        )
+        one_visited_arms = [
+            {"action_index": 0, "visit_share": 1.0, "q": 0.1, "reported_prior": 0.4, "model_prior": 0.4},
+            {"action_index": 1, "visit_share": 0.0, "q": 0.9, "reported_prior": 0.6, "model_prior": 0.6},
+        ]
+        RUNNER._validated_selection_evidence(
+            _public_selection(
+                one_visited, arms=one_visited_arms, gap_actions=[0], q_gap=None, visit_gap=None
+            ),
+            record=one_visited,
+        )
 
     def test_writer_and_validator_bind_each_guided_decision_immutably(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
@@ -390,6 +450,7 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 ledger_payload["branch_prior_fallbacks"]["branch_prior_fallbacks"], 0
             )
             self.assertEqual(ledger_payload["selection"]["search_argmax"], record.recorded_action_index)
+            self.assertNotIn("move", ledger_payload["selection"]["root_allocation"]["arms"][0])
             self.assertEqual(
                 RUNNER._validate_public_decision_evidence(Path(directory), game),
                 (record,),

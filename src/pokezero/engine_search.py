@@ -7210,6 +7210,14 @@ class EngineMctsPolicy:
                 self.stats.root_q_gap_histogram[_gap_bucket(q_gap)] += 1
                 self.stats.root_visit_gap_sum += visit_gap
                 self.stats.root_visit_gap_histogram[_gap_bucket(visit_gap)] += 1
+        # A public audit cannot reproduce `_leading_pair` from a sorted display
+        # list: it must preserve this native aggregation order, including its
+        # zero-arm exclusion and tie rule. Emit only request action indices so
+        # the durable sidecar need not retain engine-rendered labels.
+        root_gap_action_indices = [
+            None if vocabulary is None else vocabulary.action_index(choice)
+            for choice in leaders
+        ]
         # --- the in-tree opponent's arm (H4) ------------------------------
         opponent_choice = _leading_choice(arms.opponent_visit_share)
         if opponent_choice is not None:
@@ -7342,6 +7350,7 @@ class EngineMctsPolicy:
             "model_choice": model_choice,
             "root_q_gap": None if q_gap is None else round(q_gap, 6),
             "root_visit_gap": None if visit_gap is None else round(visit_gap, 6),
+            "root_gap_action_indices": root_gap_action_indices,
             "opponent_top_arm": opponent_choice,
             # The aggregate run ledger names total interior fallbacks; this
             # decision-local projection names which completed native trees
