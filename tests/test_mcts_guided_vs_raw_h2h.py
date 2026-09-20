@@ -128,6 +128,7 @@ def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
                         "arms": [
                             {
                                 "move": "tackle",
+                                "action_index": record.recorded_action_index,
                                 "visit_share": 1.0,
                                 "q": 0.25,
                                 "reported_prior": 1.0,
@@ -344,6 +345,16 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
         override = {key: value for key, value in override.items() if key != "root_q_gap"}
         with self.assertRaisesRegex(Exception, "complete selection evidence"):
+            RUNNER._validated_selection_evidence(override, record=record)
+
+    def test_selection_evidence_refuses_an_arm_outside_public_legal_actions(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {**override, "root_allocation": {**override["root_allocation"]}}
+        override["root_allocation"]["arms"] = [
+            {**override["root_allocation"]["arms"][0], "action_index": 8}
+        ]
+        with self.assertRaisesRegex(Exception, "not a public legal action"):
             RUNNER._validated_selection_evidence(override, record=record)
 
     def test_writer_and_validator_bind_each_guided_decision_immutably(self) -> None:

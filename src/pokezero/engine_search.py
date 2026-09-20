@@ -7232,6 +7232,13 @@ class EngineMctsPolicy:
         allocation_choices = sorted(
             set(arms.visit_share).union(arms.reported_prior_share).union(arms.prior_share)
         )
+        # The root allocation is exported for an external, public-decision
+        # audit.  Preserve the request-vocabulary index already constructed by
+        # the measured override path: a rendered move label alone is neither a
+        # stable action identity (e.g. typed Hidden Power) nor enough to prove
+        # that an exported arm was legal for this public decision.  Do not add
+        # a vocabulary projection to an unmeasured root merely for telemetry;
+        # its absence stays explicit and downstream audit rejects it.
         root_allocation = {
             "worlds": worlds,
             "prior_authority": cause is None,
@@ -7239,6 +7246,9 @@ class EngineMctsPolicy:
             "arms": [
                 {
                     "move": choice,
+                    "action_index": (
+                        None if vocabulary is None else vocabulary.action_index(choice)
+                    ),
                     "visit_share": round(arms.visit_share.get(choice, 0.0) / worlds, 6),
                     "q": (
                         None if arms.arm_q.get(choice) is None

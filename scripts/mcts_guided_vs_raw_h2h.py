@@ -534,7 +534,10 @@ def _validated_selection_evidence(
     ):
         raise HeadToHeadError("guided search action does not match its public decision.")
     model_action = selection["model_argmax"]
-    if model_action is not None and (isinstance(model_action, bool) or not isinstance(model_action, int)):
+    legal_action_indices = {
+        index for index, is_legal in enumerate(record.current_legal_action_mask) if is_legal
+    }
+    if model_action is not None and (isinstance(model_action, bool) or model_action not in legal_action_indices):
         raise HeadToHeadError("guided model action must be an integer or null.")
     model_override = selection["model_override"]
     if model_action is None:
@@ -567,27 +570,46 @@ def _validated_selection_evidence(
     normalized_arms: list[dict[str, Any]] = []
     for arm in arms:
         arm = _mapping(arm, label="guided root allocation arm")
-        if set(arm) != {"move", "visit_share", "q", "reported_prior", "model_prior"}:
+        if set(arm) != {
+            "move",
+            "action_index",
+            "visit_share",
+            "q",
+            "reported_prior",
+            "model_prior",
+        }:
             raise HeadToHeadError("guided root allocation arm has unsupported fields.")
         move = arm.get("move")
         if not isinstance(move, str) or not move:
             raise HeadToHeadError("guided root allocation arm move must be a non-empty string.")
+        action_index = arm.get("action_index")
+        if isinstance(action_index, bool) or action_index not in legal_action_indices:
+            raise HeadToHeadError("guided root allocation arm is not a public legal action.")
         visit_share = _finite_number(arm.get("visit_share"), label="guided root visit share")
         if not 0.0 <= visit_share <= 1.0:
             raise HeadToHeadError("guided root visit share must be within [0, 1].")
+        q = optional_number(arm.get("q"), label="guided root Q")
+        if q is not None and not -1.0 <= q <= 1.0:
+            raise HeadToHeadError("guided root Q must be within [-1, 1] when present.")
         normalized_arms.append(
             {
                 "move": move,
+                "action_index": action_index,
                 "visit_share": visit_share,
-                "q": optional_number(arm.get("q"), label="guided root Q"),
+                "q": q,
                 "reported_prior": optional_number(
                     arm.get("reported_prior"), label="guided reported prior"
                 ),
                 "model_prior": optional_number(arm.get("model_prior"), label="guided model prior"),
             }
         )
-    if len({arm["move"] for arm in normalized_arms}) != len(normalized_arms):
+    if (
+        len({arm["move"] for arm in normalized_arms}) != len(normalized_arms)
+        or len({arm["action_index"] for arm in normalized_arms}) != len(normalized_arms)
+    ):
         raise HeadToHeadError("guided root allocation repeats an own-action arm.")
+    if {arm["action_index"] for arm in normalized_arms} != legal_action_indices:
+        raise HeadToHeadError("guided root allocation does not cover its public legal action space.")
     if not math.isclose(sum(arm["visit_share"] for arm in normalized_arms), 1.0, abs_tol=1e-5):
         raise HeadToHeadError("guided root visits do not conserve one decision.")
     for key in ("reported_prior", "model_prior"):
@@ -597,15 +619,40 @@ def _validated_selection_evidence(
         if any(value is not None for value in values):
             if any(value is None for value in values) or not math.isclose(sum(values), 1.0, abs_tol=1e-5):
                 raise HeadToHeadError(f"guided {key} must cover and conserve all own-action arms.")
+    if bool(root["prior_authority"]) != all(
+        arm["model_prior"] is not None for arm in normalized_arms
+    ):
+        raise HeadToHeadError("guided root model-prior authority disagrees with its arms.")
+    root_q_gap = optional_number(selection["root_q_gap"], label="guided root Q gap")
+    root_visit_gap = optional_number(selection["root_visit_gap"], label="guided root visit gap")
+    leaders = sorted(normalized_arms, key=lambda arm: arm["visit_share"], reverse=True)[:2]
+    expected_visit_gap = (
+        leaders[0]["visit_share"] - leaders[1]["visit_share"] if len(leaders) == 2 else None
+    )
+    if expected_visit_gap is None:
+        if root_visit_gap is not None:
+            raise HeadToHeadError("guided root visit gap exists without two leading arms.")
+    elif root_visit_gap is None or not 0.0 <= root_visit_gap <= 1.0 or not math.isclose(
+        root_visit_gap, expected_visit_gap, abs_tol=1e-5
+    ):
+        raise HeadToHeadError("guided root visit gap disagrees with its allocation.")
+    expected_q_gap = (
+        abs(leaders[0]["q"] - leaders[1]["q"])
+        if len(leaders) == 2 and leaders[0]["q"] is not None and leaders[1]["q"] is not None
+        else None
+    )
+    if expected_q_gap is None:
+        if root_q_gap is not None:
+            raise HeadToHeadError("guided root Q gap exists without two valued leading arms.")
+    elif root_q_gap is None or not math.isclose(root_q_gap, expected_q_gap, abs_tol=1e-5):
+        raise HeadToHeadError("guided root Q gap disagrees with its allocation.")
     return {
         "model_argmax": model_action,
         "search_argmax": search_action,
         "model_override": model_override,
         "unmeasured_cause": unmeasured_cause,
-        "root_q_gap": optional_number(selection["root_q_gap"], label="guided root Q gap"),
-        "root_visit_gap": optional_number(
-            selection["root_visit_gap"], label="guided root visit gap"
-        ),
+        "root_q_gap": root_q_gap,
+        "root_visit_gap": root_visit_gap,
         "root_allocation": {
             "worlds": worlds,
             "prior_authority": bool(root["prior_authority"]),

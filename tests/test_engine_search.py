@@ -5785,6 +5785,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             [
                 {
                     "move": "alpha",
+                    "action_index": 0,
                     "visit_share": 0.6,
                     "q": 0.5,
                     "reported_prior": 0.2,
@@ -5792,6 +5793,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                 },
                 {
                     "move": "beta",
+                    "action_index": 1,
                     "visit_share": 0.4,
                     "q": 0.5,
                     "reported_prior": 0.8,
