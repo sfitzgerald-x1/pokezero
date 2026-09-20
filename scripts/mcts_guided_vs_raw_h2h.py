@@ -108,6 +108,25 @@ REGISTERED_ENGINE_CONFIG = {
     "worlds": 4,
     "worlds_min": None,
 }
+# The sidecar is intentionally not a general-purpose MCTS evaluator: it may
+# only certify a configuration whose search semantics have been registered in
+# advance.  The CUDA deep protocol is the exact fixed-work configuration used
+# for the fallback-concentration investigation.  Keeping both complete
+# dictionaries here means a new run cannot accidentally turn an evidence
+# replay into a look-alike budget sweep by changing one unreviewed knob.
+REGISTERED_DEEP_ENGINE_CONFIG = {
+    **REGISTERED_ENGINE_CONFIG,
+    "model_decision_time_ms": None,
+    "model_device": "cuda",
+    "model_native_batch_guard_ms": 0,
+    "search_depth": 6,
+    "search_sims": 4096,
+    "search_time_ms": 1_000,
+}
+REGISTERED_ENGINE_CONFIGS = (
+    REGISTERED_ENGINE_CONFIG,
+    REGISTERED_DEEP_ENGINE_CONFIG,
+)
 SOURCE_BOUND_ENGINE_PATHS = {"checkpoint_path", "model_path", "tables_path"}
 
 
@@ -304,8 +323,10 @@ def _require_registered_candidate_config(config: Mapping[str, Any]) -> None:
     if config.get("model_priors") is not True or config.get("use_opponent_priors") is not False:
         raise HeadToHeadError("candidate must enable own model priors and disable opponent priors.")
     observed = {key: value for key, value in config.items() if key not in SOURCE_BOUND_ENGINE_PATHS}
-    if observed != REGISTERED_ENGINE_CONFIG:
-        raise HeadToHeadError("candidate differs from the registered one-second guided MCTS configuration.")
+    if observed not in REGISTERED_ENGINE_CONFIGS:
+        raise HeadToHeadError(
+            "candidate differs from every registered guided-MCTS evaluation configuration."
+        )
 
 
 def _raw_witness_path(out_root: Path, *, seed: int, candidate_seat: str) -> Path:

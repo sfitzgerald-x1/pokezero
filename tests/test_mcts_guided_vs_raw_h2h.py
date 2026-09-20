@@ -329,7 +329,14 @@ class GuidedConfigTest(unittest.TestCase):
     def test_unlisted_engine_knob_cannot_drift(self) -> None:
         config = dict(RUNNER.REGISTERED_ENGINE_CONFIG)
         config["approximate_sleep_turns"] = False
-        with self.assertRaisesRegex(Exception, "registered one-second"):
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+    def test_registered_deep_cuda_protocol_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_ENGINE_CONFIG)
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 4095
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
 
