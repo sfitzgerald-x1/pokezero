@@ -403,6 +403,8 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
     if not isinstance(events, list) or len(events) != invocations:
         raise HeadToHeadError("branch prior ledger native invocation count does not match events.")
     normalized_events: list[dict[str, Any]] = []
+    event_reason_totals = {reason: 0 for reason in normalized_reasons}
+    event_unclassified = 0
     for event in events:
         event_mapping = _mapping(event, label="branch prior native invocation")
         if set(event_mapping) != {
@@ -427,6 +429,11 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         )
         if event_reasons is not None and sum(event_reasons.values()) != event_fallbacks:
             raise HeadToHeadError("native invocation reasons do not conserve its fallbacks.")
+        if event_reasons is None:
+            event_unclassified += event_fallbacks
+        else:
+            for reason, count in event_reasons.items():
+                event_reason_totals[reason] += count
         normalized_events.append(
             {
                 "native_invocation": _nonnegative_int(
@@ -447,6 +454,10 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         raise HeadToHeadError("branch prior native invocation identities must be contiguous.")
     if sum(event["branch_prior_fallbacks"] for event in normalized_events) != branch_fallbacks:
         raise HeadToHeadError("branch prior native invocations do not conserve total fallbacks.")
+    if event_reason_totals != normalized_reasons or event_unclassified != unclassified:
+        raise HeadToHeadError(
+            "branch prior native invocation attribution disagrees with its ledger totals."
+        )
     return {
         "schema_version": ledger["schema_version"],
         "native_invocations": invocations,

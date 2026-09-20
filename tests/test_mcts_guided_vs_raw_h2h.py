@@ -302,6 +302,16 @@ class GuidedProgressTest(unittest.TestCase):
 
 
 class PublicDecisionEvidenceTest(unittest.TestCase):
+    def test_branch_prior_ledger_refuses_contradictory_event_attribution(self) -> None:
+        ledger = _branch_prior_ledger(fallbacks=2)
+        ledger["unclassified_branch_prior_fallbacks"] = 3
+        ledger["branch_prior_fallbacks"] = 5
+        ledger["reason_ledger_complete"] = False
+        ledger["events"][0]["branch_prior_fallbacks"] = 5
+        ledger["events"][0]["reason_counts"] = {"unmapped_action": 5}
+        with self.assertRaisesRegex(Exception, "attribution disagrees"):
+            RUNNER._validated_branch_prior_ledger(ledger)
+
     def test_writer_and_validator_bind_each_guided_decision_immutably(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
