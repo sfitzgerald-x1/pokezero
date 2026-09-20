@@ -75,6 +75,12 @@ class EngineSearchWorkflowGuardTests(unittest.TestCase):
             step,
             "the workflow must run the source-derived guard for every exact unittest count",
         )
+        filters = workflow.split("FILTERS: |", 1)[1].split("          BASE:", 1)[0]
+        self.assertIn(
+            "scripts/check_engine_fidelity_unittest_counts.py",
+            filters,
+            "a script-only change must still start the native gate that validates it",
+        )
 
 
 class _FakeObservation:
