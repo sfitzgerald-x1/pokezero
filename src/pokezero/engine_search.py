@@ -3577,14 +3577,19 @@ def opponent_request_order_resolution(
     party = [normalize_id(str(name)) for name in party_species]
     if not party:
         return OpponentRequestOrderResolution(None, "empty_party")
-    if len(set(party)) != len(party):
+    canonical_party = [canonical_gen3_randbat_species_id(name) for name in party]
+    if len(set(party)) != len(party) or len(set(canonical_party)) != len(canonical_party):
         # Slot swaps are resolved by species name downstream, so a duplicated
-        # species makes the mapping ambiguous.
+        # species — including two cosmetic forms of the same Gen 3 randbat
+        # species — makes the public mapping ambiguous.
         return OpponentRequestOrderResolution(None, "duplicate_party")
     opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
     try:
         walk = _public_opponent_team_index_walk(
-            context, opponent_slot=opponent_slot, team_size=len(party)
+            context,
+            opponent_slot=opponent_slot,
+            team_size=len(party),
+            party_index_by_species={species: index for index, species in enumerate(canonical_party)},
         )
     except Exception:  # noqa: BLE001 - never break search over telemetry
         return OpponentRequestOrderResolution(None, "public_order_walk_error")

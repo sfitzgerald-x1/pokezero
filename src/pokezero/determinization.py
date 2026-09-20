@@ -25,6 +25,7 @@ from .search import StartOverrideSource
 from .search_policy import OpponentActionScenario, StartOverridePlanner
 from .showdown_fixture import FixturePokemon, pack_team
 from .tier2 import canonical_move_id
+from .trajectory import TrajectoryStep
 
 
 DEFAULT_RANDBAT_TEAM_SIZE = 6
@@ -526,6 +527,7 @@ def _public_opponent_team_index_walk(
     *,
     opponent_slot: str,
     team_size: int,
+    party_index_by_species: Mapping[str, int] | None = None,
 ) -> tuple[dict[str, int], list[int], int | None] | None:
     """Map public opponent switch targets back to recorded packed-team indices.
 
@@ -558,83 +560,81 @@ def _public_opponent_team_index_walk(
                     return None
                 active_position = 0
 
-    opponent_steps = sorted(
-        (
-            step
-            for step in context.trajectory.steps
-            if step.player_id == opponent_slot and step.turn_index < context.decision_round_index
-        ),
-        key=lambda step: step.turn_index,
+    opponent_steps_by_turn: dict[int, list[TrajectoryStep]] = {}
+    for step in context.trajectory.steps:
+        if step.player_id == opponent_slot and step.turn_index < context.decision_round_index:
+            opponent_steps_by_turn.setdefault(step.turn_index, []).append(step)
+
+    # Only the request-order caller supplies the sampled party index.  It can
+    # therefore reconstruct a public forced replacement that has no opponent
+    # trajectory step; the constraints-only caller deliberately retains its
+    # historical, action-indexed scope rather than guessing from a species name.
+    observed_transition_rounds = (
+        {
+            turn - 1
+            for turn in own_observations
+            if 0 < turn <= context.decision_round_index
+        }
+        if party_index_by_species is not None
+        else set()
     )
-    for step in opponent_steps:
-        next_active = _public_opponent_active_species(own_observations.get(step.turn_index + 1))
-        if is_switch_action(step.action_index) and active_position is not None:
+    for turn_index in sorted(set(opponent_steps_by_turn) | observed_transition_rounds):
+        if turn_index < 0 or turn_index >= context.decision_round_index:
+            continue
+        for step in opponent_steps_by_turn.get(turn_index, ()):
+            if not (is_switch_action(step.action_index) and active_position is not None):
+                continue
             switch_slot = step.action_index - MOVE_ACTION_COUNT
             try:
                 switch_targets = canonical_switch_action_map(active_position, team_size=team_size)
             except ValueError:
                 switch_targets = ()
-            if switch_slot < len(switch_targets):
-                identifier = public_rounds.get(step.turn_index, None)
-                public_action = identifier.actions.get(opponent_slot) if identifier is not None else None
-                switch_species = (
-                    public_action.switched_species
-                    if public_action is not None and public_action.kind == "switch"
-                    else None
+            if switch_slot >= len(switch_targets):
+                continue
+            identifier = public_rounds.get(turn_index, None)
+            public_action = identifier.actions.get(opponent_slot) if identifier is not None else None
+            switch_species = (
+                public_action.switched_species
+                if public_action is not None and public_action.kind == "switch"
+                else None
+            )
+            if switch_species is None and public_action is None:
+                # Only reach for the rolling public-event window when the
+                # round captured NO opponent action at all. `recent_public_events`
+                # is a fixed-size window that still carries switch/drag lines
+                # from earlier rounds, so scanning it whenever the captured
+                # action merely isn't a switch binds a STALE species to this
+                # round's switch slot. The reachable case is a switch the
+                # opponent chose and did not get: Pursuit KOs the switcher, so
+                # the recorded action index is a switch while the captured
+                # public action is the move — and the window then re-reads the
+                # PREVIOUS switch-in and pins it to the wrong party index.
+                # A captured non-switch action is positive evidence; trust it.
+                switch_species = _public_switch_after_decision_round(
+                    own_observations,
+                    opponent_slot=opponent_slot,
+                    self_slot=context.player_id,
+                    turn_index=turn_index,
                 )
-                if switch_species is None and public_action is None:
-                    # Only reach for the rolling public-event window when the
-                    # round captured NO opponent action at all. `recent_public_events`
-                    # is a fixed-size window that still carries switch/drag lines
-                    # from earlier rounds, so scanning it whenever the captured
-                    # action merely isn't a switch binds a STALE species to this
-                    # round's switch slot. The reachable case is a switch the
-                    # opponent chose and did not get: Pursuit KOs the switcher, so
-                    # the recorded action index is a switch while the captured
-                    # public action is the move — and the window then re-reads the
-                    # PREVIOUS switch-in and pins it to the wrong party index.
-                    # A captured non-switch action is positive evidence; trust it.
-                    switch_species = _public_switch_after_decision_round(
-                        own_observations,
-                        opponent_slot=opponent_slot,
-                        self_slot=context.player_id,
-                        turn_index=step.turn_index,
-                    )
-                if switch_species is not None:
-                    target_position = switch_targets[switch_slot]
-                    target_index = current_order[target_position]
-                    if not _assign_team_index_constraint(
-                        constraints,
-                        species=switch_species,
-                        team_index=target_index,
-                        team_size=team_size,
-                    ):
-                        return None
-                    current_order[active_position], current_order[target_position] = (
-                        current_order[target_position],
-                        current_order[active_position],
-                    )
-                    active_species = switch_species
-                    active_position = 0
-                    # Deliberately NOT `continue`: fall through to the
-                    # reconciliation below so the modelled permutation is checked
-                    # against the species actually active at the next boundary.
-                    # One recorded switch action is not necessarily the round's
-                    # only party mutation — a Roar/Whirlwind drag, or a faint
-                    # replacement resolved in the same chunk, moves the opponent's
-                    # party AGAIN after the switch we just decoded. Skipping the
-                    # check left `current_order` describing a party Showdown had
-                    # already moved on from, and every later switch index then
-                    # decoded against the wrong permutation, surfacing one or two
-                    # switches later as a bogus "constraints are inconsistent"
-                    # bail on perfectly consistent public data. The reconciliation
-                    # repairs the permutation when the newly active species is
-                    # already pinned, and otherwise drops `active_position` to
-                    # None, which stops collecting rather than collecting wrong.
-                    # In the ordinary single-mutation round it is a no-op: the
-                    # switched-in species is the one active at the next boundary
-                    # and is already sitting at the active position.
+            if switch_species is None:
+                continue
+            target_position = switch_targets[switch_slot]
+            target_index = current_order[target_position]
+            if not _assign_team_index_constraint(
+                constraints,
+                species=switch_species,
+                team_index=target_index,
+                team_size=team_size,
+            ):
+                return None
+            current_order[active_position], current_order[target_position] = (
+                current_order[target_position],
+                current_order[active_position],
+            )
+            active_species = switch_species
+            active_position = 0
 
+        next_active = _public_opponent_active_species(own_observations.get(turn_index + 1))
         if next_active is None:
             continue
         next_key = _normalize_species_id(next_active)
@@ -646,6 +646,47 @@ def _public_opponent_team_index_walk(
                 active_position=active_position,
             )
         elif active_species is not None and next_key != _normalize_species_id(active_species):
+            # A public switch/drag/replace after an ordinary opponent move has
+            # no action index to decode.  At this caller the sampled party is
+            # unique, however, so the incoming species identifies its original
+            # index.  Locate that index in the permutation already derived from
+            # prior public switches and perform the same slot-zero swap that
+            # Showdown does for a forced replacement.  Require the public event
+            # and an intact active position; otherwise preserve the refusal.
+            replacement_species = _public_switch_after_decision_round(
+                own_observations,
+                opponent_slot=opponent_slot,
+                self_slot=context.player_id,
+                turn_index=turn_index,
+            )
+            original_index = (
+                party_index_by_species.get(next_key)
+                if party_index_by_species is not None
+                else None
+            )
+            if (
+                replacement_species is not None
+                and _normalize_species_id(replacement_species) == next_key
+                and isinstance(original_index, int)
+                and 0 <= original_index < team_size
+                and active_position is not None
+            ):
+                if not _assign_team_index_constraint(
+                    constraints,
+                    species=next_active,
+                    team_index=original_index,
+                    team_size=team_size,
+                ):
+                    return None
+                recovered_position = _move_constrained_species_to_active_position(
+                    current_order,
+                    original_index,
+                    active_position=active_position,
+                )
+                if recovered_position is not None:
+                    active_species = next_active
+                    active_position = recovered_position
+                    continue
             active_species = next_active
             active_position = None
     # `current_order[p]` is the ORIGINAL team index sitting at request slot p --
