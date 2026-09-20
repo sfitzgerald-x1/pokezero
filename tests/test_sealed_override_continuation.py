@@ -9,6 +9,7 @@ from pokezero.rollout import RolloutConfig
 from pokezero.sealed_override_continuation import (
     SEALED_OVERRIDE_CONTINUATION_SCHEMA_VERSION,
     SealedOverrideContinuationError,
+    evaluate_sealed_override_pair,
     run_sealed_override_continuation,
 )
 
@@ -137,6 +138,74 @@ class SealedOverrideContinuationTest(unittest.TestCase):
                 opponent_player="p2",
                 opponent_action=0,
                 action_label="raw-policy",
+                env_factory=lambda: self.fail("must not allocate environment"),
+                continuation_policy_factory=lambda: self.fail("must not allocate policies"),
+                rollout_config=RolloutConfig(),
+            )
+
+    def test_pair_uses_fresh_environment_and_policies_for_both_actions(self) -> None:
+        environments = [_FakeEnv(), _FakeEnv()]
+        factory_calls = 0
+        policy_factory_calls = 0
+
+        def env_factory() -> _FakeEnv:
+            return environments.pop(0)
+
+        def policy_factory() -> dict[str, object]:
+            nonlocal policy_factory_calls
+            policy_factory_calls += 1
+            return {"p1": object(), "p2": object()}
+
+        def fake_continue(**kwargs: object) -> object:
+            action = kwargs["env"].calls[-1][1]["p1"]
+            return SimpleNamespace(
+                decision_round_count=action,
+                terminal=TerminalState(winner="p1", turn_count=10 + action, capped=False),
+            )
+
+        with patch(
+            "pokezero.sealed_override_continuation.LocalShowdownSnapshot",
+            SimpleNamespace,
+        ), patch(
+            "pokezero.sealed_override_continuation.continue_rollout_from_current_state",
+            fake_continue,
+        ):
+            readout = evaluate_sealed_override_pair(
+                snapshot=self._snapshot(),
+                source_seed=20_260_922,
+                source_decision_round=3,
+                subject_player="p1",
+                mcts_action=4,
+                raw_action=2,
+                opponent_player="p2",
+                opponent_action=7,
+                search_evidence={"root_q_gap": 0.125, "root_visit_gap": 0.25},
+                env_factory=env_factory,
+                continuation_policy_factory=policy_factory,
+                rollout_config=RolloutConfig(max_decision_rounds=100),
+            )
+
+        self.assertEqual(policy_factory_calls, 2)
+        self.assertEqual(readout["mcts_action"], 4)
+        self.assertEqual(readout["raw_action"], 2)
+        self.assertEqual(readout["opponent_action"], 7)
+        self.assertEqual(readout["mcts"]["decision_round_count"], 4)
+        self.assertEqual(readout["raw"]["decision_round_count"], 2)
+        self.assertEqual(readout["search_evidence"], {"root_q_gap": 0.125, "root_visit_gap": 0.25})
+        self.assertNotIn("snapshot", readout)
+
+    def test_pair_refuses_a_non_override(self) -> None:
+        with self.assertRaisesRegex(SealedOverrideContinuationError, "distinct MCTS and raw"):
+            evaluate_sealed_override_pair(
+                snapshot=self._snapshot(),
+                source_seed=1,
+                source_decision_round=1,
+                subject_player="p1",
+                mcts_action=1,
+                raw_action=1,
+                opponent_player="p2",
+                opponent_action=2,
+                search_evidence={},
                 env_factory=lambda: self.fail("must not allocate environment"),
                 continuation_policy_factory=lambda: self.fail("must not allocate policies"),
                 rollout_config=RolloutConfig(),

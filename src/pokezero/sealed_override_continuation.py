@@ -175,3 +175,81 @@ def run_sealed_override_continuation(
         close = getattr(env, "close", None)
         if callable(close):
             close()
+
+
+def evaluate_sealed_override_pair(
+    *,
+    snapshot: LocalShowdownSnapshot,
+    source_seed: int,
+    source_decision_round: int,
+    subject_player: PlayerId,
+    mcts_action: int,
+    raw_action: int,
+    opponent_player: PlayerId,
+    opponent_action: int,
+    search_evidence: Mapping[str, Any],
+    env_factory: Callable[[], PokeZeroEnv],
+    continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
+    rollout_config: RolloutConfig,
+    max_continuation_decision_rounds: int | None = None,
+) -> dict[str, Any]:
+    """Return matched independent outcomes for an actual MCTS override.
+
+    Both arms begin from the same ephemeral snapshot and hold the opponent's
+    already-selected source action fixed.  Each arm allocates a new simulator
+    and a new continuation policy set, so neither source search state nor one
+    candidate's continuation state can leak into the other.  ``search_evidence``
+    is caller-supplied, sanitized root Q/visit data; this controller binds it
+    to the action pair but never receives or returns a serializable snapshot.
+    """
+
+    _validate_action(mcts_action, label="MCTS action")
+    _validate_action(raw_action, label="raw action")
+    if mcts_action == raw_action:
+        raise SealedOverrideContinuationError(
+            "sealed override pair requires distinct MCTS and raw actions"
+        )
+    if not isinstance(search_evidence, Mapping):
+        raise SealedOverrideContinuationError("search evidence must be a mapping")
+    mcts = run_sealed_override_continuation(
+        snapshot=snapshot,
+        source_seed=source_seed,
+        source_decision_round=source_decision_round,
+        subject_player=subject_player,
+        subject_action=mcts_action,
+        opponent_player=opponent_player,
+        opponent_action=opponent_action,
+        action_label="mcts-override",
+        env_factory=env_factory,
+        continuation_policy_factory=continuation_policy_factory,
+        rollout_config=rollout_config,
+        max_continuation_decision_rounds=max_continuation_decision_rounds,
+    )
+    raw = run_sealed_override_continuation(
+        snapshot=snapshot,
+        source_seed=source_seed,
+        source_decision_round=source_decision_round,
+        subject_player=subject_player,
+        subject_action=raw_action,
+        opponent_player=opponent_player,
+        opponent_action=opponent_action,
+        action_label="raw-policy",
+        env_factory=env_factory,
+        continuation_policy_factory=continuation_policy_factory,
+        rollout_config=rollout_config,
+        max_continuation_decision_rounds=max_continuation_decision_rounds,
+    )
+    return {
+        "schema_version": "pokezero.sealed-override-pair.v1",
+        "source_battle_id": mcts["source_battle_id"],
+        "source_seed": source_seed,
+        "source_decision_round": source_decision_round,
+        "subject_player": subject_player,
+        "opponent_player": opponent_player,
+        "mcts_action": mcts_action,
+        "raw_action": raw_action,
+        "opponent_action": opponent_action,
+        "search_evidence": dict(search_evidence),
+        "mcts": mcts["continuation"],
+        "raw": raw["continuation"],
+    }
