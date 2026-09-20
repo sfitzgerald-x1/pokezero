@@ -1542,7 +1542,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         prior_fallbacks,
         root_prior_fallbacks,
         branch_prior_fallbacks,
-        branch_prior_fallback_reasons.json_object(),
+        branch_prior_fallback_reasons.render_json(),
         serde_json::to_string(&root_prior_fallback_reason)
             .expect("optional static string JSON serialization cannot fail"),
         encode_nanos as f64 / 1e9,

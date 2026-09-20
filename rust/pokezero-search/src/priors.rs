@@ -477,7 +477,7 @@ impl PriorFallbackReasonCounts {
             + self.decision_arm_count_mismatch
     }
 
-    pub(crate) fn json_object(self) -> String {
+    pub(crate) fn render_json(self) -> String {
         format!(
             "{{\"empty_action_map\":{},\"unmapped_action\":{},\"action_index_out_of_range\":{},\"invalid_mapped_mass\":{},\"missing_model_head_row\":{},\"decision_arm_count_mismatch\":{}}}",
             self.empty_action_map,
