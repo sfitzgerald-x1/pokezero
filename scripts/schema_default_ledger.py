@@ -220,14 +220,22 @@ def derive_surfaces() -> dict[str, set[str]]:
       name: T = GLOBAL.attribute                the value side (2 live sites)
     """
     found: dict[str, set[str]] = {}
+    # All three passes below need the same ASTs. Re-parsing the entire source tree for
+    # aliases, module roots, and declarations made every isolated probe import pay for
+    # three full walks of `src/`. The probes deliberately import a fresh copy of this
+    # module, so that repetition was substantial in CI without adding a second
+    # measurement. Keep the passes separate -- their predicates are independent -- but
+    # share the one source snapshot they are all meant to measure.
+    source_trees: list[tuple[Path, ast.AST]] = []
+    for path in (REPO / "src").rglob("*.py"):
+        try:
+            source_trees.append((path, ast.parse(path.read_text(encoding="utf-8"))))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
     # Aliases for the globals, resolved across all of src/ rather than per file: a surface is
     # declared in one module, and a scan that missed the alias silently de-derived it.
     alias_to_global: dict[str, str] = {}
-    for path in (REPO / "src").rglob("*.py"):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in source_trees:
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 for a in node.names:
@@ -240,11 +248,7 @@ def derive_surfaces() -> dict[str, set[str]]:
     # spuriously derived surface costs EVERY call site of that class name, which is the more
     # expensive of the two over-match directions by this file's own 133-of-390 argument.
     src_module_roots: set[str] = {"pokezero"}
-    for path in (REPO / "src").rglob("*.py"):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in source_trees:
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 for a in node.names:
@@ -315,11 +319,7 @@ def derive_surfaces() -> dict[str, set[str]]:
                         return resolved
         return None
 
-    for path in (REPO / "src").rglob("*.py"):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in source_trees:
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 for st in class_body_statements(node):

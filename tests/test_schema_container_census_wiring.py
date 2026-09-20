@@ -820,7 +820,9 @@ class TheStepsBehaveWhenExecutedTests(unittest.TestCase):
     #: wrong reason -- which is what the all-green control catches.
     GREEN_GATE_ENV = {
         "TOUCHED": "true",
+        "SCHEMA_TOUCHED": "true",
         "RESULT": "success",
+        "SCHEMA": "success",
         "FILTER": "success",
         "REGISTRY": "success",
         "HARNESS": "success",
@@ -1299,10 +1301,14 @@ class TheStepsBehaveWhenExecutedTests(unittest.TestCase):
             ("python-floor-syntax red", {"FLOOR": "failure"}),
             ("the path filter itself red", {"FILTER": "failure"}),
             ("the path filter produced no verdict", {"TOUCHED": ""}),
+            ("the path filter produced no schema-default verdict", {"SCHEMA_TOUCHED": ""}),
             ("mass-gate red", {"RESULT": "failure"}),
             ("mass-gate cancelled", {"RESULT": "cancelled"}),
             ("mass-gate skipped while fidelity paths WERE touched",
              {"RESULT": "skipped", "TOUCHED": "true"}),
+            ("schema-default gate red", {"SCHEMA": "failure"}),
+            ("schema-default gate skipped while its paths WERE touched",
+             {"SCHEMA": "skipped", "SCHEMA_TOUCHED": "true"}),
         ):
             with self.subTest(case=case):
                 run = self._execute(
@@ -1320,7 +1326,13 @@ class TheStepsBehaveWhenExecutedTests(unittest.TestCase):
         allowed = self._execute(
             GATE_STEP,
             job=GATE_JOB,
-            env={**self.GREEN_GATE_ENV, "RESULT": "skipped", "TOUCHED": "false"},
+            env={
+                **self.GREEN_GATE_ENV,
+                "RESULT": "skipped",
+                "TOUCHED": "false",
+                "SCHEMA": "skipped",
+                "SCHEMA_TOUCHED": "false",
+            },
         )
         self.assertEqual(
             allowed.returncode,
