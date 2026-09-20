@@ -2,6 +2,13 @@ name: Fleet worker
 
 on:
   pull_request:
+    # The fleet suites exercise Python worker and MCTS handoff code.  Keeping
+    # them off documentation-only pull requests avoids an editable install and
+    # NumPy download that cannot validate the changed material.  A PR that
+    # combines documentation with code still runs this workflow.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
 
 # A newer commit makes an older pull-request validation result irrelevant.  Keep
 # separate PRs parallel, but stop the superseded matrix before it consumes a
@@ -27,6 +34,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+          # Cache downloaded wheels only.  The editable package is rebuilt
+          # from this pull request's checkout on every run.
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install base worker plus NumPy cache dependency
         run: python -m pip install -e . numpy

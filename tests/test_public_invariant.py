@@ -186,10 +186,18 @@ class DuplicateTestClassTest(unittest.TestCase):
 
 
 class PublicInvariantTest(unittest.TestCase):
-    def test_fleet_worker_workflow_runs_for_every_tracked_change(self) -> None:
+    def test_fleet_worker_workflow_skips_only_documentation_only_changes(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "fleet-worker.yml").read_text(encoding="utf-8")
         self.assertIn("pull_request:\n", workflow)
-        self.assertNotIn("paths:", workflow)
+        self.assertIn("paths-ignore:\n", workflow)
+        # The worker contract is intentionally still checked for every code,
+        # test, script, dependency, data, and workflow edit.  GitHub runs a
+        # paths-ignore workflow whenever a PR includes *any* non-ignored file,
+        # so these are the complete set of safe documentation-only exemptions.
+        self.assertIn('- "docs/**"', workflow)
+        self.assertIn('- "**/*.md"', workflow)
+        ignored = re.findall(r'^\s+- "([^"]+)"\s*$', workflow, flags=re.MULTILINE)
+        self.assertEqual(ignored, ["docs/**", "**/*.md"])
 
     def test_no_personal_paths_in_tracked_files(self) -> None:
         tracked = subprocess.run(
