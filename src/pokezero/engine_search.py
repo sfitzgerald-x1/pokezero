@@ -1483,6 +1483,10 @@ _OVERRIDE_UNMEASURED_CAUSES = (
     _OVERRIDE_UNMEASURED_UNMAPPED,
 )
 
+# Public durable-evidence vocabulary.  The guided-vs-raw sidecar consumes this
+# exact set when it binds an unmeasured root to its source-derived cause.
+OVERRIDE_UNMEASURED_CAUSE_VALUES = frozenset(_OVERRIDE_UNMEASURED_CAUSES)
+
 
 #: Forkable disagreement addresses retained per policy. The fork probe
 #: (section 4b) samples ~50; 64 covers it with headroom while keeping the block
@@ -7210,6 +7214,14 @@ class EngineMctsPolicy:
                 self.stats.root_q_gap_histogram[_gap_bucket(q_gap)] += 1
                 self.stats.root_visit_gap_sum += visit_gap
                 self.stats.root_visit_gap_histogram[_gap_bucket(visit_gap)] += 1
+        # A public audit cannot reproduce `_leading_pair` from a sorted display
+        # list: it must preserve this native aggregation order, including its
+        # zero-arm exclusion and tie rule. Emit only request action indices so
+        # the durable sidecar need not retain engine-rendered labels.
+        root_gap_action_indices = [
+            None if vocabulary is None else vocabulary.action_index(choice)
+            for choice in leaders
+        ]
         # --- the in-tree opponent's arm (H4) ------------------------------
         opponent_choice = _leading_choice(arms.opponent_visit_share)
         if opponent_choice is not None:
@@ -7232,6 +7244,13 @@ class EngineMctsPolicy:
         allocation_choices = sorted(
             set(arms.visit_share).union(arms.reported_prior_share).union(arms.prior_share)
         )
+        # The root allocation is exported for an external, public-decision
+        # audit.  Preserve the request-vocabulary index already constructed by
+        # the measured override path: a rendered move label alone is neither a
+        # stable action identity (e.g. typed Hidden Power) nor enough to prove
+        # that an exported arm was legal for this public decision.  Do not add
+        # a vocabulary projection to an unmeasured root merely for telemetry;
+        # its absence stays explicit and downstream audit rejects it.
         root_allocation = {
             "worlds": worlds,
             "prior_authority": cause is None,
@@ -7239,6 +7258,9 @@ class EngineMctsPolicy:
             "arms": [
                 {
                     "move": choice,
+                    "action_index": (
+                        None if vocabulary is None else vocabulary.action_index(choice)
+                    ),
                     "visit_share": round(arms.visit_share.get(choice, 0.0) / worlds, 6),
                     "q": (
                         None if arms.arm_q.get(choice) is None
@@ -7332,6 +7354,7 @@ class EngineMctsPolicy:
             "model_choice": model_choice,
             "root_q_gap": None if q_gap is None else round(q_gap, 6),
             "root_visit_gap": None if visit_gap is None else round(visit_gap, 6),
+            "root_gap_action_indices": root_gap_action_indices,
             "opponent_top_arm": opponent_choice,
             # The aggregate run ledger names total interior fallbacks; this
             # decision-local projection names which completed native trees

@@ -45,14 +45,18 @@ _IDENTITY = {
 
 
 def _public_record(
-    *, seed: int = 19, turn_index: int = 0, battle_id: str | None = None
+    *,
+    seed: int = 19,
+    turn_index: int = 0,
+    battle_id: str | None = None,
+    legal_action_mask: tuple[bool, ...] = (True, False, False, False, False, False, False, False, False),
 ) -> PublicDecisionRecord:
     observation = PokeZeroObservationV0(
         categorical_ids=(),
         numeric_features=(),
         token_type_ids=(),
         attention_mask=(),
-        legal_action_mask=(True, False, False, False, False, False, False, False, False),
+        legal_action_mask=legal_action_mask,
         metadata={
             "belief_view": {
                 "self_slot": "p1",
@@ -79,6 +83,94 @@ def _public_record(
     return PublicDecisionRecord(
         **{**prototype.__dict__, "decision_id": public_decision_id(prototype)}
     )
+
+
+def _branch_prior_ledger(*, fallbacks: int = 0) -> dict[str, object]:
+    reasons = {reason: 0 for reason in RUNNER.BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+    reasons["unmapped_action"] = fallbacks
+    return {
+        "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
+        "native_invocations": 1,
+        "belief_worlds": 1,
+        "branch_prior_fallbacks": fallbacks,
+        "reason_counts": reasons,
+        "unclassified_branch_prior_fallbacks": 0,
+        "reason_ledger_complete": True,
+        "events": [
+            {
+                "native_invocation": 1,
+                "belief_records": 1,
+                "collapse_multiplicity": 1,
+                "branch_prior_fallbacks": fallbacks,
+                "reason_counts": reasons,
+            }
+        ],
+    }
+
+
+def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
+    return SimpleNamespace(
+        latest_decision_address={
+            "battle_id": record.battle_id,
+            "round": record.turn_index,
+            "seat": record.acting_player,
+            "action_index": record.recorded_action_index,
+        },
+        latest_decision_metadata={
+            "engine_mcts": {
+                "override": {
+                    "branch_prior_fallbacks": _branch_prior_ledger(fallbacks=fallbacks),
+                    "model_argmax": record.recorded_action_index,
+                    "search_argmax": record.recorded_action_index,
+                    "model_override": False,
+                    "unmeasured_cause": None,
+                    "root_q_gap": None,
+                    "root_visit_gap": None,
+                    "root_gap_action_indices": [record.recorded_action_index],
+                    "root_allocation": {
+                        "worlds": 1,
+                        "prior_authority": True,
+                        "prior_cause": None,
+                        "arms": [
+                            {
+                                "move": "tackle",
+                                "action_index": record.recorded_action_index,
+                                "visit_share": 1.0,
+                                "q": 0.25,
+                                "reported_prior": 1.0,
+                                "model_prior": 1.0,
+                            }
+                        ],
+                    },
+                }
+            }
+        },
+    )
+
+
+def _public_selection(
+    record: PublicDecisionRecord,
+    *,
+    arms: list[dict[str, object]],
+    gap_actions: list[int],
+    q_gap: float | None,
+    visit_gap: float | None,
+) -> dict[str, object]:
+    return {
+        "model_argmax": record.recorded_action_index,
+        "search_argmax": record.recorded_action_index,
+        "model_override": False,
+        "unmeasured_cause": None,
+        "root_q_gap": q_gap,
+        "root_visit_gap": visit_gap,
+        "root_gap_action_indices": gap_actions,
+        "root_allocation": {
+            "worlds": 1,
+            "prior_authority": True,
+            "prior_cause": None,
+            "arms": arms,
+        },
+    }
 
 
 class RawSpecTest(unittest.TestCase):
@@ -238,7 +330,14 @@ class GuidedConfigTest(unittest.TestCase):
     def test_unlisted_engine_knob_cannot_drift(self) -> None:
         config = dict(RUNNER.REGISTERED_ENGINE_CONFIG)
         config["approximate_sleep_turns"] = False
-        with self.assertRaisesRegex(Exception, "registered one-second"):
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+    def test_registered_deep_cuda_protocol_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_ENGINE_CONFIG)
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 4095
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
 
@@ -262,6 +361,116 @@ class GuidedProgressTest(unittest.TestCase):
 
 
 class PublicDecisionEvidenceTest(unittest.TestCase):
+    def test_branch_prior_ledger_refuses_contradictory_event_attribution(self) -> None:
+        ledger = _branch_prior_ledger(fallbacks=2)
+        ledger["unclassified_branch_prior_fallbacks"] = 3
+        ledger["branch_prior_fallbacks"] = 5
+        ledger["reason_ledger_complete"] = False
+        ledger["events"][0]["branch_prior_fallbacks"] = 5
+        ledger["events"][0]["reason_counts"] = {
+            **{reason: 0 for reason in RUNNER.BRANCH_PRIOR_FALLBACK_REASON_VALUES},
+            "unmapped_action": 5,
+        }
+        with self.assertRaisesRegex(Exception, "attribution disagrees"):
+            RUNNER._validated_branch_prior_ledger(ledger)
+
+    def test_branch_prior_ledger_refuses_forged_reason_vocabulary(self) -> None:
+        ledger = _branch_prior_ledger(fallbacks=2)
+        ledger["reason_counts"] = {"forged_reason": 2}
+        ledger["events"][0]["reason_counts"] = {"forged_reason": 2}
+        with self.assertRaisesRegex(Exception, "complete native reason vocabulary"):
+            RUNNER._validated_branch_prior_ledger(ledger)
+
+    def test_selection_evidence_refuses_search_action_not_bound_to_public_record(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {**override, "search_argmax": record.recorded_action_index + 1}
+        with self.assertRaisesRegex(Exception, "does not match its public decision"):
+            RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_selection_evidence_refuses_missing_root_q_gap_field(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {key: value for key, value in override.items() if key != "root_q_gap"}
+        with self.assertRaisesRegex(Exception, "complete selection evidence"):
+            RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_selection_evidence_refuses_forged_unmeasured_cause(self) -> None:
+        record = _public_record()
+        selection = _public_selection(
+            record,
+            arms=[
+                {
+                    "action_index": record.recorded_action_index,
+                    "visit_share": 1.0,
+                    "q": 0.25,
+                    "reported_prior": 1.0,
+                    "model_prior": 1.0,
+                }
+            ],
+            gap_actions=[record.recorded_action_index],
+            q_gap=None,
+            visit_gap=None,
+        )
+        selection["unmeasured_cause"] = "forged"
+        with self.assertRaisesRegex(Exception, "does not match its root allocation cause"):
+            RUNNER._validated_selection_evidence(selection, record=record)
+
+    def test_selection_evidence_refuses_an_arm_outside_public_legal_actions(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {**override, "root_allocation": {**override["root_allocation"]}}
+        override["root_allocation"]["arms"] = [
+            {**override["root_allocation"]["arms"][0], "action_index": 8}
+        ]
+        with self.assertRaisesRegex(Exception, "not a public legal action"):
+            RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_selection_evidence_uses_engine_top_pair_witness_for_ties_and_zero_arms(self) -> None:
+        tied = _public_record(
+            legal_action_mask=(True, True, True, False, False, False, False, False, False)
+        )
+        tied_arms = [
+            {"action_index": 0, "visit_share": 0.5, "q": 0.1, "reported_prior": 0.2, "model_prior": 0.2},
+            {"action_index": 1, "visit_share": 0.5, "q": 0.4, "reported_prior": 0.3, "model_prior": 0.3},
+            {"action_index": 2, "visit_share": 0.0, "q": 0.9, "reported_prior": 0.5, "model_prior": 0.5},
+        ]
+        tie = _public_selection(
+            tied, arms=tied_arms, gap_actions=[1, 0], q_gap=0.3, visit_gap=0.0
+        )
+        self.assertEqual(
+            RUNNER._validated_selection_evidence(tie, record=tied)["root_gap_action_indices"],
+            [1, 0],
+        )
+        one_visited = _public_record(
+            legal_action_mask=(True, True, False, False, False, False, False, False, False)
+        )
+        one_visited_arms = [
+            {"action_index": 0, "visit_share": 1.0, "q": 0.1, "reported_prior": 0.4, "model_prior": 0.4},
+            {"action_index": 1, "visit_share": 0.0, "q": 0.9, "reported_prior": 0.6, "model_prior": 0.6},
+        ]
+        RUNNER._validated_selection_evidence(
+            _public_selection(
+                one_visited, arms=one_visited_arms, gap_actions=[0], q_gap=None, visit_gap=None
+            ),
+            record=one_visited,
+        )
+
+    def test_selection_evidence_refuses_a_nonleading_gap_pair(self) -> None:
+        record = _public_record(
+            legal_action_mask=(True, True, True, False, False, False, False, False, False)
+        )
+        arms = [
+            {"action_index": 0, "visit_share": 0.5, "q": 0.1, "reported_prior": 0.2, "model_prior": 0.2},
+            {"action_index": 1, "visit_share": 0.3, "q": 0.4, "reported_prior": 0.3, "model_prior": 0.3},
+            {"action_index": 2, "visit_share": 0.2, "q": 0.3, "reported_prior": 0.5, "model_prior": 0.5},
+        ]
+        with self.assertRaisesRegex(Exception, "does not name the leading"):
+            RUNNER._validated_selection_evidence(
+                _public_selection(record, arms=arms, gap_actions=[1, 2], q_gap=0.1, visit_gap=0.1),
+                record=record,
+            )
+
     def test_writer_and_validator_bind_each_guided_decision_immutably(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
@@ -280,13 +489,47 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 incumbent=incumbent,
                 seed=record.seed,
                 candidate_seat="p1",
+                guided_policy=_guided_for_record(record),
             )
             writer(record)
             writer(record)  # a resumed game must accept the identical prior unit
+            ledger_path = RUNNER._branch_prior_ledger_path(
+                Path(directory), seed=record.seed, candidate_seat="p1", record=record
+            )
+            ledger_payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                ledger_payload["public_decision"]["decision_id"], record.decision_id
+            )
+            self.assertEqual(
+                ledger_payload["branch_prior_fallbacks"]["branch_prior_fallbacks"], 0
+            )
+            self.assertEqual(ledger_payload["selection"]["search_argmax"], record.recorded_action_index)
+            self.assertNotIn("move", ledger_payload["selection"]["root_allocation"]["arms"][0])
             self.assertEqual(
                 RUNNER._validate_public_decision_evidence(Path(directory), game),
                 (record,),
             )
+
+    def test_writer_refuses_to_bind_one_decision_to_another_decision_metadata(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        mismatched = _guided_for_record(record)
+        mismatched.latest_decision_address = {
+            **mismatched.latest_decision_address,
+            "round": record.turn_index + 1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            writer = RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=mismatched,
+            )
+            with self.assertRaisesRegex(Exception, "not bound to the public decision"):
+                writer(record)
 
     def test_validator_refuses_incomplete_guided_decision_evidence(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
@@ -306,6 +549,7 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 incumbent=incumbent,
                 seed=record.seed,
                 candidate_seat="p1",
+                guided_policy=_guided_for_record(record),
             )(record)
             with self.assertRaisesRegex(Exception, "equal guided decision telemetry"):
                 RUNNER._validate_public_decision_evidence(Path(directory), game)
@@ -328,6 +572,7 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 incumbent=incumbent,
                 seed=record.seed,
                 candidate_seat="p1",
+                guided_policy=_guided_for_record(record),
             )(record)
             with self.assertRaisesRegex(Exception, "completed game identity"):
                 RUNNER._validate_public_decision_evidence(Path(directory), game)
