@@ -64,7 +64,7 @@ BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v5"
 )
 SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION = (
-    "pokezero.mcts-guided-vs-raw-sealed-override-audit.v1"
+    "pokezero.mcts-guided-vs-raw-sealed-override-audit.v2"
 )
 RAW_SELECTOR = {
     "kind": "deterministic_masked_argmax",
@@ -532,6 +532,7 @@ def _validated_sealed_search_evidence(value: object) -> dict[str, Any]:
         "root_q_gap",
         "root_visit_gap",
         "root_gap_action_indices",
+        "root_allocation_missing_action_indices",
         "root_allocation",
     }
     if set(evidence) != expected or evidence.get("model_override") is not True:
@@ -590,6 +591,16 @@ def _validated_sealed_search_evidence(value: object) -> dict[str, Any]:
             raise HeadToHeadError(f"sealed {field} must cover and conserve every root arm.")
     if any(arm["model_prior"] is None for arm in normalized_arms):
         raise HeadToHeadError("sealed model-prior authority must cover every root arm.")
+    missing = evidence.get("root_allocation_missing_action_indices")
+    if not isinstance(missing, list):
+        raise HeadToHeadError("sealed root missing-action coverage must be a list.")
+    normalized_missing = [
+        _sealed_action(action, label="sealed root missing action") for action in missing
+    ]
+    if len(set(normalized_missing)) != len(normalized_missing):
+        raise HeadToHeadError("sealed root missing-action coverage repeats an action index.")
+    if set(normalized_missing) & {arm["action_index"] for arm in normalized_arms}:
+        raise HeadToHeadError("sealed root missing-action coverage overlaps its root allocation.")
     gaps = evidence.get("root_gap_action_indices")
     if not isinstance(gaps, list) or len(gaps) > 2:
         raise HeadToHeadError("sealed root gap actions have an unsupported shape.")
@@ -605,6 +616,7 @@ def _validated_sealed_search_evidence(value: object) -> dict[str, Any]:
         "root_q_gap": optional_finite(evidence.get("root_q_gap"), label="sealed root Q gap"),
         "root_visit_gap": optional_finite(evidence.get("root_visit_gap"), label="sealed root visit gap"),
         "root_gap_action_indices": normalized_gaps,
+        "root_allocation_missing_action_indices": normalized_missing,
         "root_allocation": {
             "worlds": worlds,
             "prior_authority": True,
@@ -627,6 +639,7 @@ def _sealed_search_evidence_from_selection(selection: Mapping[str, Any]) -> dict
                 "root_q_gap",
                 "root_visit_gap",
                 "root_gap_action_indices",
+                "root_allocation_missing_action_indices",
                 "root_allocation",
             )
         }
@@ -1055,6 +1068,8 @@ def _validated_selection_evidence(
     ):
         raise HeadToHeadError("guided root gap witness is not a unique public legal action sequence.")
     by_action = {arm["action_index"]: arm for arm in normalized_arms}
+    if any(action not in by_action for action in gap_actions):
+        raise HeadToHeadError("guided root gap witness is absent from its root allocation.")
     leaders = [by_action[action] for action in gap_actions]
     if any(arm["visit_share"] <= 0.0 for arm in leaders):
         raise HeadToHeadError("guided root gap witness must exclude zero-visit actions.")
@@ -1269,6 +1284,57 @@ def _sealed_override_audit_writer(
         evaluate_measured_override_boundary,
     )
 
+    def bind_public_root_coverage(readout: Mapping[str, Any], *, boundary: Any) -> dict[str, Any]:
+        """Bind the controller's sealed evidence to the already-written public ledger.
+
+        The sealed controller runs at the actionable pre-step boundary and
+        deliberately has no public decision record from which to derive the
+        native-root coverage vector.  The public-decision hook has already
+        atomically written that record and its validated branch ledger.  Copy
+        only the derived action-index coverage into the controller readout,
+        after proving every controller-provided field agrees with that ledger.
+        This keeps an incomplete native root visible without allowing the
+        sealed artifact to claim complete action coverage.
+        """
+
+        seed = _nonnegative_int(getattr(boundary, "seed", None), label="sealed source seed")
+        round_index = _nonnegative_int(
+            getattr(boundary, "decision_round_index", None), label="sealed source decision round"
+        )
+        ledger_root = out_root / "branch-prior-fallback-ledgers" / f"seed-{seed}-{candidate_seat}"
+        ledgers = sorted(ledger_root.glob(f"turn-{round_index:03d}-*.json"))
+        if len(ledgers) != 1:
+            raise HeadToHeadError(
+                "sealed override audit requires exactly one public branch ledger at its source round."
+            )
+        try:
+            ledger_payload = json.loads(ledgers[0].read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read sealed audit source ledger: {error}") from error
+        ledger = _mapping(ledger_payload, label="sealed audit source ledger")
+        selection = _mapping(ledger.get("selection"), label="sealed audit source selection")
+        expected_evidence = _sealed_search_evidence_from_selection(selection)
+        expected_controller_evidence = dict(expected_evidence)
+        expected_controller_evidence.pop("root_allocation_missing_action_indices")
+
+        copied = dict(readout)
+        if copied.get("audit_status") == "PAIRED":
+            audit = _mapping(copied.get("audit"), label="sealed override pair")
+            if audit.get("search_evidence") != expected_controller_evidence:
+                raise HeadToHeadError(
+                    "sealed override audit controller evidence disagrees with its public source ledger."
+                )
+            copied["audit"] = {**audit, "search_evidence": expected_evidence}
+        elif copied.get("audit_status") == "INAPPLICABLE_NON_SIMULTANEOUS":
+            if copied.get("search_evidence") != expected_controller_evidence:
+                raise HeadToHeadError(
+                    "inapplicable sealed audit controller evidence disagrees with its public source ledger."
+                )
+            copied["search_evidence"] = expected_evidence
+        else:
+            raise HeadToHeadError("sealed override audit has an unsupported disposition.")
+        return copied
+
     def write(boundary: Any) -> None:
         readout = evaluate_measured_override_boundary(
             boundary=boundary,
@@ -1280,6 +1346,7 @@ def _sealed_override_audit_writer(
         )
         if readout is None:
             return
+        readout = bind_public_root_coverage(readout, boundary=boundary)
         path = _sealed_override_audit_path(
             out_root,
             seed=boundary.seed,
