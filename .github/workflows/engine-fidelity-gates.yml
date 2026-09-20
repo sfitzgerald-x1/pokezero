@@ -1568,9 +1568,10 @@ jobs:
           # parallel call-seam reservations plus the post-argument recheck that
           # prevents a stale pre-guard ABI budget from starting native work.
           # 241 -> 242: the Rest sleep action-boundary settlement repair needs its
-          # own regression pin.
-          if ! grep -qE 'Ran 242 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 242 engine-search tests; the suite shrank or grew"
+          # own regression pin. 242 -> 244: branch-prior fallback reason-ledger
+          # parsing needs both its conservation and malformed-ledger refusal pins.
+          if ! grep -qE 'Ran 248 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 244 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then

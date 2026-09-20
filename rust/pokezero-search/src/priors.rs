@@ -191,7 +191,10 @@ pub(crate) trait HeadSource {
 /// global row underflows at that option: its masked distribution is `[1.0]`.
 /// Returns `None` — leaving the node uniform — when any option lacks an
 /// action-block slot (the whole node falls back rather than zeroing arms the
-/// model cannot see) or the mapped mass underflows.
+/// model cannot see), a mapped prior is non-finite/negative, or the mapped
+/// mass is exactly zero.  A tiny *positive* global-softmax mass is still a
+/// valid masked distribution: after restriction to the legal mapped actions,
+/// its relative probabilities can be normalized safely.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PriorGatherFailure {
     EmptyActionMap,
@@ -213,10 +216,11 @@ impl PriorGatherFailure {
     }
 }
 
-/// The reason-bearing form used at the live root. Interior nodes retain the
-/// historical optional result because their fallback count is sufficient
-/// telemetry; a live root fallback invalidates a strength decision and must
-/// name the source condition that forced it back to uniform.
+/// The reason-bearing gather used both at the live root and at simulated
+/// interior nodes. A root fallback invalidates a live action-selection claim;
+/// an interior fallback only changes how that simulated child is explored.
+/// The latter still needs a reason ledger: a bare count cannot distinguish a
+/// deliberately unrepresentable action surface from malformed model output.
 fn gather_self_priors_detail(
     priors_row: &[f32],
     map: &[Option<usize>],
@@ -247,12 +251,17 @@ fn gather_self_priors_detail(
         let prior = *priors_row
             .get(index)
             .ok_or(PriorGatherFailure::ActionIndexOutOfRange)?;
+        if !prior.is_finite() || prior < 0.0 {
+            return Err(PriorGatherFailure::InvalidMappedMass);
+        }
         sum += prior;
         gathered.push(prior);
     }
-    // NaN comparisons are false, so a non-finite logit would slip past the
-    // underflow guard alone and propagate into stat.prior.
-    if !sum.is_finite() || sum <= 1e-8 {
+    // A softmax row is allowed to put almost all of its global mass on actions
+    // that are illegal in this root.  Its finite positive legal tail remains a
+    // perfectly well-defined masked distribution.  Reject only a zero total
+    // (or a defensive non-finite accumulator), not an arbitrary small value.
+    if !sum.is_finite() || sum <= 0.0 {
         return Err(PriorGatherFailure::InvalidMappedMass);
     }
     for prior in &mut gathered {
@@ -418,13 +427,82 @@ impl<'a> HeadPair<'a> {
     }
 }
 
+/// Reason-level ledger for simulated-node uniform-prior fallbacks.
+///
+/// These are branch events, not root decisions or games. They deliberately
+/// remain separate from the aggregate fallback count so callers cannot turn
+/// one branch event into a false live-action failure.
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) struct PriorFallbackReasonCounts {
+    pub empty_action_map: usize,
+    pub unmapped_action: usize,
+    pub action_index_out_of_range: usize,
+    pub invalid_mapped_mass: usize,
+    pub missing_model_head_row: usize,
+    pub decision_arm_count_mismatch: usize,
+}
+
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+impl PriorFallbackReasonCounts {
+    fn record_gather_failure(&mut self, reason: PriorGatherFailure) {
+        match reason {
+            PriorGatherFailure::EmptyActionMap => self.empty_action_map += 1,
+            PriorGatherFailure::UnmappedAction => self.unmapped_action += 1,
+            PriorGatherFailure::ActionIndexOutOfRange => self.action_index_out_of_range += 1,
+            PriorGatherFailure::InvalidMappedMass => self.invalid_mapped_mass += 1,
+            PriorGatherFailure::MissingModelHeadRow => self.missing_model_head_row += 1,
+        }
+    }
+
+    fn record_arm_count_mismatch(&mut self) {
+        self.decision_arm_count_mismatch += 1;
+    }
+
+    pub(crate) fn add_assign(&mut self, other: Self) {
+        self.empty_action_map += other.empty_action_map;
+        self.unmapped_action += other.unmapped_action;
+        self.action_index_out_of_range += other.action_index_out_of_range;
+        self.invalid_mapped_mass += other.invalid_mapped_mass;
+        self.missing_model_head_row += other.missing_model_head_row;
+        self.decision_arm_count_mismatch += other.decision_arm_count_mismatch;
+    }
+
+    pub(crate) fn total(self) -> usize {
+        self.empty_action_map
+            + self.unmapped_action
+            + self.action_index_out_of_range
+            + self.invalid_mapped_mass
+            + self.missing_model_head_row
+            + self.decision_arm_count_mismatch
+    }
+
+    /// Render the fixed reason vocabulary as the native report's JSON object.
+    ///
+    /// This deliberately does not share the abort ledger's `json_object` name:
+    /// that method is source-pinned as the sole clean-path rendering of lossy
+    /// subcases, while this is a separate, non-lossy report field.
+    pub(crate) fn render_json(self) -> String {
+        format!(
+            "{{\"empty_action_map\":{},\"unmapped_action\":{},\"action_index_out_of_range\":{},\"invalid_mapped_mass\":{},\"missing_model_head_row\":{},\"decision_arm_count_mismatch\":{}}}",
+            self.empty_action_map,
+            self.unmapped_action,
+            self.action_index_out_of_range,
+            self.invalid_mapped_mass,
+            self.missing_model_head_row,
+            self.decision_arm_count_mismatch,
+        )
+    }
+}
+
 /// Number of branches whose priors were gathered AND landed, and the number
-/// that fell back to uniform.
+/// that fell back to uniform, with the reason for every fallback.
 #[cfg_attr(not(feature = "model"), allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) struct PriorResolution {
     pub applied: usize,
     pub fallbacks: usize,
+    pub fallback_reasons: PriorFallbackReasonCounts,
 }
 
 /// Resolve one batch round's pending prior maps against the batch's own prior
@@ -451,12 +529,17 @@ fn resolve_pending_priors(
     let side_one = seat.owning_side_one(self_side_one);
     let mut resolution = PriorResolution::default();
     for (key, row, map) in pending {
-        let priors = heads
-            .row(seat, *row)
-            .and_then(|priors_row| gather_self_priors(priors_row, map));
-        let Some(priors) = priors else {
-            resolution.fallbacks += 1;
-            continue;
+        let priors = match heads.row(seat, *row) {
+            Some(priors_row) => gather_self_priors_detail(priors_row, map),
+            None => Err(PriorGatherFailure::MissingModelHeadRow),
+        };
+        let priors = match priors {
+            Ok(priors) => priors,
+            Err(reason) => {
+                resolution.fallbacks += 1;
+                resolution.fallback_reasons.record_gather_failure(reason);
+                continue;
+            }
         };
         let child = tree.chances[key.0].branches[key.1].child;
         let applied = match child {
@@ -477,6 +560,7 @@ fn resolve_pending_priors(
             resolution.applied += 1;
         } else {
             resolution.fallbacks += 1;
+            resolution.fallback_reasons.record_arm_count_mismatch();
         }
     }
     resolution
@@ -515,6 +599,11 @@ pub(crate) fn resolve_round_priors(
     PriorResolution {
         applied: acting.applied + opponent.applied,
         fallbacks: acting.fallbacks + opponent.fallbacks,
+        fallback_reasons: {
+            let mut counts = acting.fallback_reasons;
+            counts.add_assign(opponent.fallback_reasons);
+            counts
+        },
     }
 }
 
@@ -857,13 +946,15 @@ mod tests {
     }
 
     #[test]
-    fn underflowing_mapped_mass_falls_back() {
+    fn finite_low_mapped_mass_renormalizes() {
         let row = [1e-12f32, 1e-12, 1.0];
-        assert_eq!(gather_self_priors(&row, &vec![Some(0), Some(1)]), None);
-        // The guard is on the MAPPED mass, so the same row with the big slot
-        // mapped in must succeed — otherwise the test above would also pass
-        // against a "never gather anything" mutant.
-        assert!(gather_self_priors(&row, &vec![Some(0), Some(2)]).is_some());
+        // The global softmax can devote almost all mass to currently illegal
+        // actions.  The positive legal tail must still be normalized rather
+        // than converted to a uniform-prior fallback.
+        let gathered = gather_self_priors(&row, &vec![Some(0), Some(1)])
+            .expect("finite positive mapped mass is a valid distribution");
+        approx(&gathered, &[0.5, 0.5]);
+        assert!(gather_self_priors(&[0.0, 0.0, 1.0], &vec![Some(0), Some(1)]).is_none());
     }
 
     #[test]
@@ -1141,7 +1232,8 @@ mod tests {
             resolution,
             PriorResolution {
                 applied: 1,
-                fallbacks: 0
+                fallbacks: 0,
+                fallback_reasons: PriorFallbackReasonCounts::default(),
             }
         );
         let sum = ROW[5] + ROW[1];
@@ -1228,7 +1320,8 @@ mod tests {
             resolution,
             PriorResolution {
                 applied: 3,
-                fallbacks: 0
+                fallbacks: 0,
+                fallback_reasons: PriorFallbackReasonCounts::default(),
             }
         );
         // Branch 1 is the acting seat's alone: its child's side-one arms carry
@@ -1332,7 +1425,8 @@ mod tests {
             resolution,
             PriorResolution {
                 applied: 1,
-                fallbacks: 0
+                fallbacks: 0,
+                fallback_reasons: PriorFallbackReasonCounts::default(),
             }
         );
         let stored = tree.chances[0].branches[0]
@@ -1364,7 +1458,11 @@ mod tests {
             resolution,
             PriorResolution {
                 applied: 0,
-                fallbacks: 1
+                fallbacks: 1,
+                fallback_reasons: PriorFallbackReasonCounts {
+                    decision_arm_count_mismatch: 1,
+                    ..PriorFallbackReasonCounts::default()
+                },
             }
         );
         approx(
@@ -1400,7 +1498,11 @@ mod tests {
             resolution,
             PriorResolution {
                 applied: 0,
-                fallbacks: 1
+                fallbacks: 1,
+                fallback_reasons: PriorFallbackReasonCounts {
+                    unmapped_action: 1,
+                    ..PriorFallbackReasonCounts::default()
+                },
             }
         );
         assert!(tree.chances[0].branches[0].child_opponent_priors.is_none());
@@ -1412,6 +1514,56 @@ mod tests {
                 .collect::<Vec<_>>(),
             &[0.5, 0.5],
         );
+    }
+
+    /// A bare branch-fallback total cannot tell an intentionally unavailable
+    /// action surface from a model-row or tree-shape defect. Every distinct
+    /// uniform-prior path must therefore land in exactly one durable bucket.
+    #[test]
+    fn branch_fallback_reason_ledger_is_exhaustive_and_conserved() {
+        let mut tree = Tree {
+            decisions: vec![decision(2, 2), decision(2, 2)],
+            chances: vec![ChanceNode {
+                branches: vec![
+                    branch(Some(1)),
+                    branch(Some(1)),
+                    branch(Some(1)),
+                    branch(Some(1)),
+                    branch(Some(1)),
+                    branch(Some(1)),
+                ],
+            }],
+        };
+        let pending = vec![
+            ((0usize, 0usize), 0usize, vec![]),
+            ((0usize, 1usize), 0usize, vec![None, Some(0)]),
+            ((0usize, 2usize), 0usize, vec![Some(2), Some(1)]),
+            ((0usize, 3usize), 0usize, vec![Some(0), Some(1)]),
+            ((0usize, 4usize), 2usize, vec![Some(0), Some(1)]),
+            ((0usize, 5usize), 1usize, vec![Some(0)]),
+        ];
+        // Make only the fourth map numerically invalid; the first three and
+        // fifth never read a model probability, and the sixth reads the valid
+        // second row before subsequently disagreeing with the child arity.
+        let heads =
+            HeadPair::new(&[f32::NAN, 0.5, 0.5, 0.5], &[], 2, false).expect("two rows");
+        let resolution = resolve_pending_priors(
+            &mut tree,
+            &pending,
+            &heads,
+            true,
+            PriorSeat::Acting,
+        );
+        let counts = resolution.fallback_reasons;
+        assert_eq!(resolution.applied, 0);
+        assert_eq!(resolution.fallbacks, 6);
+        assert_eq!(counts.empty_action_map, 1);
+        assert_eq!(counts.unmapped_action, 1);
+        assert_eq!(counts.action_index_out_of_range, 1);
+        assert_eq!(counts.invalid_mapped_mass, 1);
+        assert_eq!(counts.missing_model_head_row, 1);
+        assert_eq!(counts.decision_arm_count_mismatch, 1);
+        assert_eq!(counts.total(), resolution.fallbacks);
     }
 
     /// The acting-seat path routes to the acting seat's slot and stats, so the
