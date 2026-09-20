@@ -680,6 +680,13 @@ class GuidedConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
+    def test_registered_deep_opponent_prior_ablation_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 4095
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
 
 class GuidedProgressTest(unittest.TestCase):
     def test_guided_progress_uses_its_own_schema_without_weakening_validation(self) -> None:
