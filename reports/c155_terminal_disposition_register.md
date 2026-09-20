@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`e682ba4aa0f771ec…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`e336c66acb0abc4c…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -954,7 +954,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 12 |
 | `t1.hashed_input_files` | 94 |
-| `t1.head_fingerprint` | 7ea25b3c27d7e5a1 |
+| `t1.head_fingerprint` | e336c66acb0abc4c |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
