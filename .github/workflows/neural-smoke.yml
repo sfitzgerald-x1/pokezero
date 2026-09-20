@@ -11,9 +11,18 @@ on:
       - "src/pokezero/neural_policy.py"
       - "tests/test_neural_policy.py"
 
+# Superseded PR heads do not need a second dependency install and smoke run.
+concurrency:
+  group: neural-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   neural-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
