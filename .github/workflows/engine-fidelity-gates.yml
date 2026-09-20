@@ -52,6 +52,7 @@ jobs:
             scripts/setup_poke_engine.sh
             scripts/vendor_poke_engine_src.sh
             scripts/engine_behavioral_probes.py
+            scripts/check_engine_fidelity_unittest_counts.py
             scripts/engine_build_fingerprint.py
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
@@ -1585,6 +1586,10 @@ jobs:
             echo "::error::the engine-search suite did not report a clean OK"
             exit 1
           fi
+          # Every exact ``Ran N tests`` guard in this workflow is derived from
+          # test-source ASTs before the native build is queued locally.  This
+          # keeps a new test from becoming a late, workflow-only count failure.
+          python scripts/check_engine_fidelity_unittest_counts.py
           # Name the abort-path pins. A total is restorable by unrelated tests, and these
           # SEVEN are the only guards that an aborted world reports anything at all.
           # Counted, not recalled: an earlier revision of this comment said "five" while

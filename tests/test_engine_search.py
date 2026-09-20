@@ -70,6 +70,11 @@ class EngineSearchWorkflowGuardTests(unittest.TestCase):
             "was not updated",
         )
         self.assertGreater(count, 1, "anti-vacuity: the loader found no engine-search tests")
+        self.assertIn(
+            "python scripts/check_engine_fidelity_unittest_counts.py",
+            step,
+            "the workflow must run the source-derived guard for every exact unittest count",
+        )
 
 
 class _FakeObservation:
