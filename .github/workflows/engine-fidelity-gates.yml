@@ -218,6 +218,9 @@ jobs:
           npm run build --prefix .ci/pokemon-showdown
           test -f .ci/pokemon-showdown/dist/sim/dex.js
 
+      # Patch-stack tamper tests fetch the pinned upstream sdist through uv.
+      - uses: astral-sh/setup-uv@v6
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: rust/pokezero-search
