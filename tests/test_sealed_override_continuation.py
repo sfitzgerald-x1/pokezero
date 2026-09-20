@@ -52,6 +52,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
     def test_restores_fixed_joint_action_then_returns_only_terminal_summary(self) -> None:
         env = _FakeEnv()
         continuation_calls: list[dict[str, object]] = []
+        source_sink = lambda _: None
 
         def fake_continue(**kwargs: object) -> object:
             continuation_calls.append(kwargs)
@@ -78,7 +79,12 @@ class SealedOverrideContinuationTest(unittest.TestCase):
                 action_label="mcts-override",
                 env_factory=lambda: env,
                 continuation_policy_factory=lambda: {"p1": object(), "p2": object()},
-                rollout_config=RolloutConfig(max_decision_rounds=100),
+                rollout_config=RolloutConfig(
+                    max_decision_rounds=100,
+                    decision_sink=source_sink,
+                    public_decision_sink=source_sink,
+                    sealed_pre_step_sink=source_sink,
+                ),
                 max_continuation_decision_rounds=25,
             )
 
@@ -91,13 +97,18 @@ class SealedOverrideContinuationTest(unittest.TestCase):
             ],
         )
         self.assertEqual(readout["schema_version"], SEALED_OVERRIDE_CONTINUATION_SCHEMA_VERSION)
-        self.assertEqual(readout["fixed_joint_action"], {"p1": 4, "p2": 7})
+        self.assertEqual(readout["subject_action"], 4)
+        self.assertTrue(readout["opponent_action_held_fixed"])
+        self.assertNotIn("fixed_joint_action", readout)
         self.assertNotIn("snapshot", readout)
         self.assertEqual(readout["continuation"]["terminal"]["winner"], "p1")
         self.assertFalse(readout["continuation"]["terminal_after_fixed_joint_step"])
         self.assertEqual(continuation_calls[0]["starting_decision_round_index"], 5)
         self.assertTrue(continuation_calls[0]["reset_policies"])
         self.assertEqual(continuation_calls[0]["config"].max_decision_rounds, 30)
+        self.assertIsNone(continuation_calls[0]["config"].decision_sink)
+        self.assertIsNone(continuation_calls[0]["config"].public_decision_sink)
+        self.assertIsNone(continuation_calls[0]["config"].sealed_pre_step_sink)
         self.assertEqual(env.calls[-1], "close")
 
     def test_records_immediate_terminal_as_valid_independent_evidence(self) -> None:
@@ -188,7 +199,9 @@ class SealedOverrideContinuationTest(unittest.TestCase):
         self.assertEqual(policy_factory_calls, 2)
         self.assertEqual(readout["mcts_action"], 4)
         self.assertEqual(readout["raw_action"], 2)
-        self.assertEqual(readout["opponent_action"], 7)
+        self.assertTrue(readout["opponent_action_held_fixed"])
+        self.assertNotIn("opponent_action", readout)
+        self.assertNotIn("opponent_action", readout["mcts"])
         self.assertEqual(readout["mcts"]["decision_round_count"], 4)
         self.assertEqual(readout["raw"]["decision_round_count"], 2)
         self.assertEqual(readout["search_evidence"], {"root_q_gap": 0.125, "root_visit_gap": 0.25})

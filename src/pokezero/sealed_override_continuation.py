@@ -104,6 +104,10 @@ def run_sealed_override_continuation(
             opponent_player: opponent_action,
         }
         first_step = env.step(fixed_joint_action)
+        # Do not retain the joint action.  The opponent's committed action is
+        # used exactly once to make the two subject-action arms comparable,
+        # then remains inside this trusted controller.  The durable readout
+        # may say that it was held fixed, but must not disclose it.
         common = {
             "schema_version": SEALED_OVERRIDE_CONTINUATION_SCHEMA_VERSION,
             "source_battle_id": snapshot.battle_id,
@@ -112,7 +116,8 @@ def run_sealed_override_continuation(
             "subject_player": subject_player,
             "opponent_player": opponent_player,
             "action_label": action_label,
-            "fixed_joint_action": dict(fixed_joint_action),
+            "subject_action": subject_action,
+            "opponent_action_held_fixed": True,
         }
         if first_step.terminal is not None:
             if first_step.terminal.capped:
@@ -137,10 +142,19 @@ def run_sealed_override_continuation(
             raise SealedOverrideContinuationError(
                 "fresh continuation policies must cover exactly p1 and p2"
             )
-        config = rollout_config
+        # A source rollout may have any combination of public/progress/audit
+        # hooks installed.  A fresh continuation must not re-enter the audit
+        # controller or append source-run progress/evidence.  Its only output
+        # is the terminal summary returned below.
+        config = replace(
+            rollout_config,
+            decision_sink=None,
+            public_decision_sink=None,
+            sealed_pre_step_sink=None,
+        )
         if max_continuation_decision_rounds is not None:
             config = replace(
-                rollout_config,
+                config,
                 max_decision_rounds=(
                     source_decision_round + 1 + max_continuation_decision_rounds
                 ),
@@ -248,7 +262,7 @@ def evaluate_sealed_override_pair(
         "opponent_player": opponent_player,
         "mcts_action": mcts_action,
         "raw_action": raw_action,
-        "opponent_action": opponent_action,
+        "opponent_action_held_fixed": True,
         "search_evidence": dict(search_evidence),
         "mcts": mcts["continuation"],
         "raw": raw["continuation"],

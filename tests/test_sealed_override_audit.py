@@ -13,16 +13,25 @@ from pokezero.mcts_eval.sealed_override_audit import (
 
 
 def _boundary(*, override: bool | None, cause: str | None = None) -> RolloutSealedPreStepBoundary:
-    metadata = {
+    override_metadata = {
         "model_override": override,
         "unmeasured_cause": cause,
         "model_argmax": 2,
         "search_argmax": 4,
         "root_q_gap": 0.125,
         "root_visit_gap": 0.5,
-        "root_allocation": {"worlds": 4, "arms": []},
-        "branch_prior_fallbacks": {"reason-a": 0},
+        "root_gap_action_indices": [4, 2],
+        "root_allocation": {
+            "worlds": 4,
+            "prior_authority": True,
+            "prior_cause": None,
+            "arms": [
+                {"move": "private-move-a", "action_index": 2, "visit_share": 0.25, "q": 0.25, "reported_prior": 0.6, "model_prior": 0.6},
+                {"move": "private-move-b", "action_index": 4, "visit_share": 0.75, "q": 0.375, "reported_prior": 0.4, "model_prior": 0.4},
+            ],
+        },
     }
+    metadata = {"engine_mcts": {"override": override_metadata}}
     return RolloutSealedPreStepBoundary(
         seed=20_260_920,
         battle_id="audit-battle",
@@ -39,6 +48,31 @@ def _boundary(*, override: bool | None, cause: str | None = None) -> RolloutSeal
 
 
 class SealedOverrideAuditTest(unittest.TestCase):
+    def test_rejects_flat_telemetry_envelope(self) -> None:
+        boundary = _boundary(override=True)
+        decisions = dict(boundary.decisions)
+        decisions["p1"] = PolicyDecision(
+            action_index=4,
+            policy_id="mcts",
+            metadata=boundary.decisions["p1"].metadata["engine_mcts"]["override"],
+        )
+        malformed = RolloutSealedPreStepBoundary(
+            seed=boundary.seed,
+            battle_id=boundary.battle_id,
+            decision_round_index=boundary.decision_round_index,
+            requested_players=boundary.requested_players,
+            snapshot=boundary.snapshot,
+            decisions=MappingProxyType(decisions),
+        )
+        with self.assertRaisesRegex(SealedOverrideAuditError, "engine MCTS metadata"):
+            evaluate_measured_override_boundary(
+                boundary=malformed,
+                candidate_seat="p1",
+                env_factory=lambda: self.fail("must not allocate environment"),
+                continuation_policy_factory=lambda: self.fail("must not allocate policies"),
+                rollout_config=object(),
+            )
+
     def test_filters_clean_and_unmeasured_roots_from_override_denominator(self) -> None:
         for boundary in (_boundary(override=False), _boundary(override=None, cause="no-prior")):
             with self.subTest(boundary=boundary.decisions["p1"].metadata):
@@ -74,6 +108,7 @@ class SealedOverrideAuditTest(unittest.TestCase):
         self.assertEqual(kwargs["raw_action"], 2)
         self.assertEqual(kwargs["opponent_action"], 7)
         self.assertEqual(kwargs["search_evidence"]["root_q_gap"], 0.125)
+        self.assertNotIn("move", kwargs["search_evidence"]["root_allocation"]["arms"][0])
         self.assertEqual(readout["audit"], expected)
         self.assertNotIn("snapshot", readout)
 

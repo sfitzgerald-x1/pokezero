@@ -9,8 +9,10 @@ public artifacts.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any, Callable, Mapping
 
+from ..actions import ACTION_COUNT
 from ..env import PlayerId, PokeZeroEnv
 from ..policy import Policy
 from ..rollout import RolloutConfig, RolloutSealedPreStepBoundary
@@ -37,9 +39,110 @@ def _json_object(value: object, *, label: str) -> dict[str, Any]:
 
 
 def _action(value: object, *, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise SealedOverrideAuditError(f"{label} must be a non-negative action index")
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < ACTION_COUNT:
+        raise SealedOverrideAuditError(f"{label} must be an action index in [0, {ACTION_COUNT})")
     return value
+
+
+def _finite_number(value: object, *, label: str) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise SealedOverrideAuditError(f"{label} must be a finite number or null")
+    return float(value)
+
+
+def _safe_selection_evidence(override: Mapping[str, Any]) -> dict[str, Any]:
+    """Project engine telemetry to action-indexed, non-private audit evidence.
+
+    Engine root-arm records carry a rendered move label for debugging.  A
+    sealed continuation only needs action indices and numeric allocation
+    evidence, so deliberately discard that label before producing any durable
+    output.  Requiring the complete shape also prevents an older engine image
+    from silently producing an incomparable audit row.
+    """
+
+    required = {
+        "model_argmax",
+        "search_argmax",
+        "model_override",
+        "unmeasured_cause",
+        "root_q_gap",
+        "root_visit_gap",
+        "root_gap_action_indices",
+        "root_allocation",
+    }
+    if not required.issubset(override):
+        raise SealedOverrideAuditError("override telemetry is missing selection evidence")
+    root = _json_object(override.get("root_allocation"), label="engine root allocation")
+    if set(root) != {"worlds", "prior_authority", "prior_cause", "arms"}:
+        raise SealedOverrideAuditError("engine root allocation has unsupported fields")
+    worlds = root.get("worlds")
+    if isinstance(worlds, bool) or not isinstance(worlds, int) or worlds <= 0:
+        raise SealedOverrideAuditError("engine root allocation worlds must be positive")
+    if not isinstance(root.get("prior_authority"), bool):
+        raise SealedOverrideAuditError("engine root allocation prior authority must be boolean")
+    prior_cause = root.get("prior_cause")
+    if prior_cause is not None and (not isinstance(prior_cause, str) or not prior_cause):
+        raise SealedOverrideAuditError("engine root allocation prior cause is malformed")
+    raw_arms = root.get("arms")
+    if not isinstance(raw_arms, list) or not raw_arms:
+        raise SealedOverrideAuditError("engine root allocation must include own-action arms")
+    arms: list[dict[str, Any]] = []
+    for raw_arm in raw_arms:
+        arm = _json_object(raw_arm, label="engine root allocation arm")
+        if set(arm) != {
+            "move",
+            "action_index",
+            "visit_share",
+            "q",
+            "reported_prior",
+            "model_prior",
+        }:
+            raise SealedOverrideAuditError("engine root allocation arm has unsupported fields")
+        action_index = _action(arm.get("action_index"), label="root arm action index")
+        visit_share = _finite_number(arm.get("visit_share"), label="root arm visit share")
+        if visit_share is None or not 0.0 <= visit_share <= 1.0:
+            raise SealedOverrideAuditError("root arm visit share must be within [0, 1]")
+        arms.append(
+            {
+                "action_index": action_index,
+                "visit_share": visit_share,
+                "q": _finite_number(arm.get("q"), label="root arm Q"),
+                "reported_prior": _finite_number(
+                    arm.get("reported_prior"), label="root arm reported prior"
+                ),
+                "model_prior": _finite_number(arm.get("model_prior"), label="root arm model prior"),
+            }
+        )
+    if len({arm["action_index"] for arm in arms}) != len(arms):
+        raise SealedOverrideAuditError("engine root allocation repeats an action index")
+    if not math.isclose(sum(arm["visit_share"] for arm in arms), 1.0, abs_tol=1e-5):
+        raise SealedOverrideAuditError("engine root allocation visit shares do not conserve one")
+    return {
+        "model_argmax": _action(override.get("model_argmax"), label="model argmax"),
+        "search_argmax": _action(override.get("search_argmax"), label="search argmax"),
+        "model_override": override.get("model_override"),
+        "root_q_gap": _finite_number(override.get("root_q_gap"), label="root Q gap"),
+        "root_visit_gap": _finite_number(
+            override.get("root_visit_gap"), label="root visit gap"
+        ),
+        "root_gap_action_indices": _safe_action_list(
+            override.get("root_gap_action_indices"), label="root gap action indices"
+        ),
+        "root_allocation": {
+            "worlds": worlds,
+            "prior_authority": root["prior_authority"],
+            "prior_cause": prior_cause,
+            "arms": arms,
+        },
+    }
+
+
+def _safe_action_list(value: object, *, label: str) -> list[int]:
+    if not isinstance(value, list):
+        raise SealedOverrideAuditError(f"{label} must be a list")
+    return [_action(item, label=label) for item in value]
 
 
 def evaluate_measured_override_boundary(
@@ -67,17 +170,20 @@ def evaluate_measured_override_boundary(
         raise SealedOverrideAuditError("override audit boundary must contain exactly p1/p2 decisions")
     candidate = boundary.decisions[candidate_seat]
     metadata = _json_object(candidate.metadata, label="candidate decision metadata")
-    measured = metadata.get("model_override")
+    engine_mcts = _json_object(metadata.get("engine_mcts"), label="engine MCTS metadata")
+    override = _json_object(engine_mcts.get("override"), label="engine MCTS override telemetry")
+    measured = override.get("model_override")
     if measured is False:
         return None
     if measured is not True:
-        if metadata.get("unmeasured_cause") is not None:
+        if override.get("unmeasured_cause") is not None:
             return None
         raise SealedOverrideAuditError(
             "candidate decision has neither a measured override nor an unmeasured cause"
         )
-    model_action = _action(metadata.get("model_argmax"), label="model argmax")
-    search_action = _action(metadata.get("search_argmax"), label="search argmax")
+    evidence = _safe_selection_evidence(override)
+    model_action = evidence["model_argmax"]
+    search_action = evidence["search_argmax"]
     if search_action != candidate.action_index:
         raise SealedOverrideAuditError("search argmax does not equal the committed MCTS action")
     if model_action == search_action:
@@ -86,15 +192,6 @@ def evaluate_measured_override_boundary(
     opponent_action = _action(
         boundary.decisions[opponent_seat].action_index, label="committed opponent action"
     )
-    root_allocation = _json_object(metadata.get("root_allocation"), label="root allocation")
-    evidence = {
-        "model_argmax": model_action,
-        "search_argmax": search_action,
-        "root_q_gap": metadata.get("root_q_gap"),
-        "root_visit_gap": metadata.get("root_visit_gap"),
-        "root_allocation": root_allocation,
-        "branch_prior_fallbacks": metadata.get("branch_prior_fallbacks"),
-    }
     try:
         readout = evaluate_sealed_override_pair(
             snapshot=boundary.snapshot,
