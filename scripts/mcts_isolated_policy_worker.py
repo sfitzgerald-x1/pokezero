@@ -9,6 +9,7 @@ source rather than to the host rollout process.
 
 from __future__ import annotations
 
+from collections import Counter
 import dataclasses
 import hashlib
 import json
@@ -51,6 +52,7 @@ STATS_FIELDS = (
     "prior_fallbacks",
     "root_prior_fallbacks",
     "branch_prior_fallbacks",
+    "branch_prior_fallback_reasons",
     "opponent_prior_arm_decisions",
     "override_measured_decisions",
     "model_override_decisions",
@@ -413,6 +415,7 @@ def _stats_payload(stats: Any) -> dict[str, Any]:
                 f"source-local policy stats omit required telemetry field {field_name!r}."
             ) from error
         if field_name in {
+            "branch_prior_fallback_reasons",
             "opponent_request_order_statuses",
             "opponent_request_order_root_fallback_statuses",
         }:
@@ -420,7 +423,26 @@ def _stats_payload(stats: Any) -> dict[str, Any]:
                 raise WorkerError(
                     "source-local policy opponent request-order status telemetry is not a mapping."
                 )
-            payload[field_name] = dict(value)
+            # EngineMctsStats deliberately uses Counter for this native reason
+            # ledger.  Counter omits every zero-valued reason, while the wire
+            # protocol deliberately requires a complete vocabulary.  Complete
+            # only that known sparse producer form; an ordinary partial mapping
+            # remains malformed and therefore fails closed below.
+            if (
+                field_name == "branch_prior_fallback_reasons"
+                and isinstance(value, Counter)
+            ):
+                from pokezero.engine_search import BRANCH_PRIOR_FALLBACK_REASON_VALUES
+
+                payload[field_name] = {
+                    reason: value.get(reason, 0)
+                    for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+                }
+                for reason, count in value.items():
+                    if reason not in payload[field_name]:
+                        payload[field_name][reason] = count
+            else:
+                payload[field_name] = dict(value)
         else:
             payload[field_name] = (
                 float(value) if field_name == "decision_wall_seconds" else int(value)
@@ -430,6 +452,20 @@ def _stats_payload(stats: Any) -> dict[str, Any]:
     ):
         raise WorkerError(
             "source-local policy prior fallback aggregate must equal root plus branch."
+        )
+    from pokezero.engine_search import BRANCH_PRIOR_FALLBACK_REASON_VALUES
+    if (
+        set(payload["branch_prior_fallback_reasons"])
+        != BRANCH_PRIOR_FALLBACK_REASON_VALUES
+        or any(
+            type(count) is not int or count < 0
+            for count in payload["branch_prior_fallback_reasons"].values()
+        )
+        or sum(payload["branch_prior_fallback_reasons"].values())
+        != payload["branch_prior_fallbacks"]
+    ):
+        raise WorkerError(
+            "source-local policy branch prior fallback reasons must be complete and conserved."
         )
     return payload
 

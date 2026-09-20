@@ -25,7 +25,10 @@ import tempfile
 from typing import Any, Callable, Mapping, Sequence, cast
 
 from ..policy import PolicyContext
-from ..engine_search import OPPONENT_REQUEST_ORDER_STATUS_VALUES
+from ..engine_search import (
+    BRANCH_PRIOR_FALLBACK_REASON_VALUES,
+    OPPONENT_REQUEST_ORDER_STATUS_VALUES,
+)
 from .scoring import (
     GameResult,
     MergeError,
@@ -340,6 +343,10 @@ class PolicyTelemetry:
     prior_fallbacks: int = 0
     root_prior_fallbacks: int = 0
     branch_prior_fallbacks: int = 0
+    # Every interior fallback must retain its native cause.  The aggregate
+    # alone cannot distinguish an absent action surface from malformed model
+    # output when a source-isolated replay is used for diagnosis.
+    branch_prior_fallback_reasons: Mapping[str, int] = field(default_factory=dict)
     opponent_prior_arm_decisions: int = 0
     # Native own-model action witnesses.  Unlike a config receipt, these
     # establish that at least one live root exposed a model action for the
@@ -384,6 +391,31 @@ class PolicyTelemetry:
             raise ValueError(
                 "policy model overrides cannot exceed measured model-action decisions."
             )
+        if not isinstance(self.branch_prior_fallback_reasons, Mapping):
+            raise ValueError("branch prior fallback reasons must be a mapping.")
+        raw_branch_reasons = self.branch_prior_fallback_reasons
+        # Old durable game records predate this diagnostic. They can only be
+        # read as an all-zero ledger; a nonzero aggregate without a cause
+        # remains deliberately invalid.
+        if not raw_branch_reasons and self.branch_prior_fallbacks == 0:
+            raw_branch_reasons = {
+                reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            }
+        if set(raw_branch_reasons) != BRANCH_PRIOR_FALLBACK_REASON_VALUES:
+            raise ValueError(
+                "branch prior fallback reasons must contain the complete native reason vocabulary."
+            )
+        branch_reasons: dict[str, int] = {}
+        for reason, count in raw_branch_reasons.items():
+            if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                raise ValueError(
+                    f"branch prior fallback reason {reason!r} has invalid count {count!r}."
+                )
+            branch_reasons[str(reason)] = count
+        if sum(branch_reasons.values()) != self.branch_prior_fallbacks:
+            raise ValueError(
+                "branch prior fallback reason counts must sum to branch prior fallbacks."
+            )
         def status_mapping(value: object, *, label: str) -> dict[str, int]:
             if not isinstance(value, Mapping):
                 raise ValueError(f"{label} must be a mapping.")
@@ -414,6 +446,7 @@ class PolicyTelemetry:
             "opponent_request_order_root_fallback_statuses",
             root_fallback_statuses,
         )
+        object.__setattr__(self, "branch_prior_fallback_reasons", branch_reasons)
         if not math.isfinite(self.decision_wall_seconds) or self.decision_wall_seconds < 0:
             raise ValueError("policy decision wall time must be finite and non-negative.")
 
@@ -440,6 +473,27 @@ class PolicyTelemetry:
                 "MCTS policy reports a prior fallback aggregate that does not equal root plus "
                 "branch."
             )
+        raw_branch_reasons = getattr(stats, "branch_prior_fallback_reasons", None)
+        if raw_branch_reasons is None:
+            if int(branch_prior_fallbacks):
+                raise HeadToHeadError(
+                    "MCTS policy reports branch prior fallbacks without their native reason ledger."
+                )
+            raw_branch_reasons = {
+                reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            }
+        elif isinstance(raw_branch_reasons, Counter) and set(raw_branch_reasons).issubset(
+            BRANCH_PRIOR_FALLBACK_REASON_VALUES
+        ):
+            # EngineMctsStats uses Counter and only materializes causes it has
+            # observed.  A Counter's missing keys are exact zeros, not unknown
+            # native provenance, so complete that sparse in-process snapshot at
+            # the transport boundary.  Unknown keys deliberately survive to the
+            # closed-vocabulary validator below and fail the run.
+            raw_branch_reasons = {
+                reason: raw_branch_reasons.get(reason, 0)
+                for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            }
         return cls(
             decisions=int(getattr(stats, "decisions", 0)),
             searched_decisions=int(getattr(stats, "searched_decisions", 0)),
@@ -451,6 +505,7 @@ class PolicyTelemetry:
             prior_fallbacks=prior_fallbacks,
             root_prior_fallbacks=int(root_prior_fallbacks),
             branch_prior_fallbacks=int(branch_prior_fallbacks),
+            branch_prior_fallback_reasons=dict(raw_branch_reasons),
             # Historical, non-isolated records may predate this observability
             # counter. The source-isolated transport itself requires it, while
             # durable readers retain backwards compatibility for old artifacts.
@@ -474,6 +529,7 @@ class PolicyTelemetry:
         values: dict[str, Any] = {}
         for field_name in self.__dataclass_fields__:
             if field_name in {
+                "branch_prior_fallback_reasons",
                 "opponent_request_order_statuses",
                 "opponent_request_order_root_fallback_statuses",
             }:
@@ -483,11 +539,17 @@ class PolicyTelemetry:
                     raise HeadToHeadError(
                         "policy opponent request-order status telemetry regressed during a game."
                     )
-                values[field_name] = {
-                    status: count - previous.get(status, 0)
-                    for status, count in current.items()
-                    if count > previous.get(status, 0)
-                }
+                if field_name == "branch_prior_fallback_reasons":
+                    values[field_name] = {
+                        reason: current[reason] - previous.get(reason, 0)
+                        for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+                    }
+                else:
+                    values[field_name] = {
+                        status: count - previous.get(status, 0)
+                        for status, count in current.items()
+                        if count > previous.get(status, 0)
+                    }
                 continue
             values[field_name] = getattr(self, field_name) - getattr(before, field_name)
         if any(
@@ -495,6 +557,7 @@ class PolicyTelemetry:
             for field_name, value in values.items()
             if field_name
             not in {
+                "branch_prior_fallback_reasons",
                 "opponent_request_order_statuses",
                 "opponent_request_order_root_fallback_statuses",
             }

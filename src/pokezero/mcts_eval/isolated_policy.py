@@ -26,7 +26,10 @@ from time import monotonic
 from typing import Any, BinaryIO, Mapping, Sequence
 
 from ..policy import PolicyContext, PolicyDecision
-from ..engine_search import OPPONENT_REQUEST_ORDER_STATUS_VALUES
+from ..engine_search import (
+    BRANCH_PRIOR_FALLBACK_REASON_VALUES,
+    OPPONENT_REQUEST_ORDER_STATUS_VALUES,
+)
 from .head_to_head import HeadToHeadError, MctsPolicySpec, public_only_context
 
 
@@ -43,6 +46,7 @@ _STATS_FIELDS = (
     "prior_fallbacks",
     "root_prior_fallbacks",
     "branch_prior_fallbacks",
+    "branch_prior_fallback_reasons",
     "opponent_prior_arm_decisions",
     "override_measured_decisions",
     "model_override_decisions",
@@ -293,6 +297,7 @@ class IsolatedPolicyStats:
     prior_fallbacks: int = 0
     root_prior_fallbacks: int = 0
     branch_prior_fallbacks: int = 0
+    branch_prior_fallback_reasons: Counter = field(default_factory=Counter)
     opponent_prior_arm_decisions: int = 0
     # These counters prove that the native model-action comparison was live.
     # They are particularly important for a self-prior ablation: a receipt
@@ -321,29 +326,39 @@ class IsolatedPolicyStats:
                 )
             value = payload[field_name]
             if field_name in {
+                "branch_prior_fallback_reasons",
                 "opponent_request_order_statuses",
                 "opponent_request_order_root_fallback_statuses",
             }:
                 if not isinstance(value, Mapping):
                     raise IsolatedPolicyError(
-                        "isolated policy worker reported opponent request-order status "
-                        "telemetry that is not a mapping."
+                        f"isolated policy worker reported {field_name} telemetry that is not a mapping."
                     )
+                valid_values = (
+                    BRANCH_PRIOR_FALLBACK_REASON_VALUES
+                    if field_name == "branch_prior_fallback_reasons"
+                    else OPPONENT_REQUEST_ORDER_STATUS_VALUES
+                )
                 observed: Counter = Counter()
                 for status, count in value.items():
-                    if status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
+                    if status not in valid_values:
                         raise IsolatedPolicyError(
-                            "isolated policy worker reported unknown opponent request-order "
-                            f"status {status!r}."
+                            f"isolated policy worker reported unknown {field_name} key {status!r}."
                         )
                     if not isinstance(count, int) or isinstance(count, bool) or count < 0:
                         raise IsolatedPolicyError(
-                            "isolated policy worker reported invalid opponent request-order "
-                            f"count {status!r}={count!r}."
+                            f"isolated policy worker reported invalid {field_name} count "
+                            f"{status!r}={count!r}."
                         )
                     observed[str(status)] = count
+                if field_name == "branch_prior_fallback_reasons" and set(observed) != valid_values:
+                    raise IsolatedPolicyError(
+                        "isolated policy worker omitted a native branch prior fallback reason."
+                    )
                 previous = self.opponent_request_order_statuses
-                if field_name == "opponent_request_order_root_fallback_statuses":
+                if field_name == "branch_prior_fallback_reasons":
+                    previous = self.branch_prior_fallback_reasons
+                elif field_name == "opponent_request_order_root_fallback_statuses":
                     previous = self.opponent_request_order_root_fallback_statuses
                 if any(observed[status] < count for status, count in previous.items()):
                     raise IsolatedPolicyError(
@@ -376,6 +391,10 @@ class IsolatedPolicyStats:
         if self.prior_fallbacks != self.root_prior_fallbacks + self.branch_prior_fallbacks:
             raise IsolatedPolicyError(
                 "isolated policy prior fallback aggregate must equal root plus branch."
+            )
+        if sum(self.branch_prior_fallback_reasons.values()) != self.branch_prior_fallbacks:
+            raise IsolatedPolicyError(
+                "isolated policy branch prior fallback reasons must equal branch prior fallbacks."
             )
         if self.model_override_decisions > self.override_measured_decisions:
             raise IsolatedPolicyError(

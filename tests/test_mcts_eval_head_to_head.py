@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, replace
 import fcntl
 import hashlib
@@ -29,7 +30,7 @@ from pokezero.mcts_eval.head_to_head import (
 )
 from pokezero.mcts_eval.scoring import bootstrap_mean
 from pokezero.policy import PolicyContext
-from pokezero.engine_search import EngineMctsConfig
+from pokezero.engine_search import BRANCH_PRIOR_FALLBACK_REASON_VALUES, EngineMctsConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -79,6 +80,56 @@ class _IsolatedPolicy(_Policy):
 
 
 class OpponentOrderTelemetryTest(unittest.TestCase):
+    def test_capture_completes_sparse_counter_reason_ledger(self) -> None:
+        policy = _Policy("candidate")
+        policy.stats.prior_fallbacks = 2
+        policy.stats.root_prior_fallbacks = 0
+        policy.stats.branch_prior_fallbacks = 2
+        # EngineMctsStats stores a Counter, whose zero-valued reasons are absent
+        # from the live mapping.  Transport must materialize those known zeros
+        # before applying its exact durable-ledger schema.
+        policy.stats.branch_prior_fallback_reasons = Counter({"unmapped_action": 2})
+
+        telemetry = PolicyTelemetry.capture(policy)
+
+        self.assertEqual(
+            telemetry.branch_prior_fallback_reasons,
+            {
+                reason: 2 if reason == "unmapped_action" else 0
+                for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            },
+        )
+
+    def test_capture_keeps_unknown_counter_reason_fail_closed(self) -> None:
+        policy = _Policy("candidate")
+        policy.stats.prior_fallbacks = 1
+        policy.stats.root_prior_fallbacks = 0
+        policy.stats.branch_prior_fallbacks = 1
+        policy.stats.branch_prior_fallback_reasons = Counter({"unknown_native_reason": 1})
+
+        with self.assertRaisesRegex(ValueError, "complete native reason vocabulary"):
+            PolicyTelemetry.capture(policy)
+
+    def test_branch_reason_deltas_are_preserved_and_must_be_conserved(self) -> None:
+        reasons = {reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        before = PolicyTelemetry(branch_prior_fallback_reasons=reasons)
+        reasons["unmapped_action"] = 2
+        after = PolicyTelemetry(
+            prior_fallbacks=2,
+            branch_prior_fallbacks=2,
+            branch_prior_fallback_reasons=reasons,
+        )
+        self.assertEqual(
+            after.delta(before).branch_prior_fallback_reasons,
+            {**{reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES}, "unmapped_action": 2},
+        )
+        with self.assertRaisesRegex(ValueError, "must sum"):
+            PolicyTelemetry(
+                prior_fallbacks=1,
+                branch_prior_fallbacks=1,
+                branch_prior_fallback_reasons=reasons,
+            )
+
     def test_order_status_deltas_are_preserved_and_must_be_monotonic(self) -> None:
         before = PolicyTelemetry(opponent_request_order_statuses={"resolved": 2})
         after = PolicyTelemetry(
