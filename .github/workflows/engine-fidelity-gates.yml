@@ -178,8 +178,26 @@ jobs:
           echo "schema_default=$schema_default" >> "$GITHUB_OUTPUT"
           echo "fidelity paths touched: $matched"
           echo "schema-default paths touched: $schema_default"
-  mass-gate:
+  # This verifier is pure Python/AST work.  Keeping it ahead of the native
+  # build turns an accidental stale `Ran N tests` pin into a sub-minute
+  # failure, rather than discovering it after the expensive engine, Showdown,
+  # and Rust setup has finished.
+  unittest-count-guards:
     needs: changes
+    if: needs.changes.outputs.fidelity == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Verify exact unittest-count guards against source
+        run: python scripts/check_engine_fidelity_unittest_counts.py
+
+  mass-gate:
+    needs: [changes, unittest-count-guards]
     if: needs.changes.outputs.fidelity == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -730,7 +748,6 @@ jobs:
             echo "::error::the engine-search suite did not report a clean OK"
             exit 1
           fi
-          python scripts/check_engine_fidelity_unittest_counts.py
           for pin in test_an_aborted_world_still_reports_the_subcases_it_observed \
                      test_an_aborted_world_reports_each_observation_exactly_once \
                      test_a_failure_carrying_no_payload_is_a_silent_no_op \
