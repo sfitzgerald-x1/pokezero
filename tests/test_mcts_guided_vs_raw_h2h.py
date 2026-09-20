@@ -675,10 +675,20 @@ class GuidedConfigTest(unittest.TestCase):
 
     def test_registered_deep_opponent_prior_protocol_is_accepted_exactly(self) -> None:
         config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
+        self.assertTrue(config["use_opponent_priors"])
         RUNNER._require_registered_candidate_config(config)
         config["search_sims"] = 4095
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
+
+        for non_opponent_config in (
+            RUNNER.REGISTERED_ENGINE_CONFIG,
+            RUNNER.REGISTERED_DEEP_ENGINE_CONFIG,
+        ):
+            drifted = dict(non_opponent_config)
+            drifted["use_opponent_priors"] = True
+            with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+                RUNNER._require_registered_candidate_config(drifted)
 
 
 class GuidedProgressTest(unittest.TestCase):
