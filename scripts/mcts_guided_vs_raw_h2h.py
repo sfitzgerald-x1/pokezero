@@ -131,9 +131,30 @@ REGISTERED_DEEP_ENGINE_CONFIG = {
     "search_sims": 4096,
     "search_time_ms": 1_000,
 }
+# This is the matched leaf-value ablation of the fixed-work CUDA protocol.
+# Every search knob, own prior, world count, and source-bound input is shared
+# with REGISTERED_DEEP_ENGINE_CONFIG.  Only the native model leaf is replaced
+# by reproducible uniform-rollout prices.  Twelve rollout workers per GPU
+# process fill the 48 CPU allocation across the four GPU processes; the crate
+# test surface establishes that this changes throughput, not rollout values.
+REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG = {
+    **REGISTERED_DEEP_ENGINE_CONFIG,
+    "rollout_leaf_eval": True,
+    "rollout_threads": 12,
+    "rollout_threads_cpu_budget_ack": True,
+}
+# This isolates opponent modeling from the R7 fixed-work protocol.  It keeps
+# the model leaf, own priors, depth, simulation count, worlds, and CUDA path
+# fixed while admitting the model prior at the opponent's decision nodes.
+REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG = {
+    **REGISTERED_DEEP_ENGINE_CONFIG,
+    "use_opponent_priors": True,
+}
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
+    REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG,
+    REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
 )
 SOURCE_BOUND_ENGINE_PATHS = {"checkpoint_path", "model_path", "tables_path"}
 
@@ -376,8 +397,12 @@ def _sealed_override_audit_config(
 def _require_registered_candidate_config(config: Mapping[str, Any]) -> None:
     """Reject a look-alike MCTS configuration before any game is played."""
 
-    if config.get("model_priors") is not True or config.get("use_opponent_priors") is not False:
-        raise HeadToHeadError("candidate must enable own model priors and disable opponent priors.")
+    # Own-policy guidance is required for every registered candidate.  Whether
+    # opponent priors participate is deliberately decided by the exact
+    # registered configuration below, so a matched opponent-prior ablation can
+    # be admitted without opening a free-form evaluator knob.
+    if config.get("model_priors") is not True:
+        raise HeadToHeadError("candidate must enable own model priors.")
     observed = {key: value for key, value in config.items() if key not in SOURCE_BOUND_ENGINE_PATHS}
     if observed not in REGISTERED_ENGINE_CONFIGS:
         raise HeadToHeadError(
