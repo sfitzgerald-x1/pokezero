@@ -673,6 +673,28 @@ class GuidedConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
+    def test_registered_deep_rollout_leaf_ablation_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_DEEP_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {
+                "rollout_leaf_eval": True,
+                "rollout_threads": 12,
+                "rollout_threads_cpu_budget_ack": True,
+            },
+            "the rollout-leaf protocol may differ from fixed-work deep MCTS only on leaf evaluation and its CPU budget acknowledgement",
+        )
+        self.assertEqual(set(config), set(baseline))
+        RUNNER._require_registered_candidate_config(config)
+        config["rollout_threads"] = 11
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
 
 class GuidedProgressTest(unittest.TestCase):
     def test_guided_progress_uses_its_own_schema_without_weakening_validation(self) -> None:
