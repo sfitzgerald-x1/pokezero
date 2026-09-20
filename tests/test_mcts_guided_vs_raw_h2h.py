@@ -339,6 +339,13 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "does not match its public decision"):
             RUNNER._validated_selection_evidence(override, record=record)
 
+    def test_selection_evidence_refuses_missing_root_q_gap_field(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {key: value for key, value in override.items() if key != "root_q_gap"}
+        with self.assertRaisesRegex(Exception, "complete selection evidence"):
+            RUNNER._validated_selection_evidence(override, record=record)
+
     def test_writer_and_validator_bind_each_guided_decision_immutably(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")

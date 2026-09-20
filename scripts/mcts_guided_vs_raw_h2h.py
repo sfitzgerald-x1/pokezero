@@ -524,8 +524,8 @@ def _validated_selection_evidence(
         "root_allocation",
     }
     selection = {key: override.get(key) for key in expected}
-    if set(override).isdisjoint(expected):
-        raise HeadToHeadError("guided override telemetry does not expose selection evidence.")
+    if not expected.issubset(override):
+        raise HeadToHeadError("guided override telemetry does not expose complete selection evidence.")
     search_action = selection["search_argmax"]
     if (
         isinstance(search_action, bool)
