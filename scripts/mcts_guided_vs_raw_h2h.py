@@ -131,9 +131,22 @@ REGISTERED_DEEP_ENGINE_CONFIG = {
     "search_sims": 4096,
     "search_time_ms": 1_000,
 }
+# This is the matched leaf-value ablation of the fixed-work CUDA protocol.
+# Every search knob, own prior, world count, and source-bound input is shared
+# with REGISTERED_DEEP_ENGINE_CONFIG.  Only the native model leaf is replaced
+# by reproducible uniform-rollout prices.  Twelve rollout workers per GPU
+# process fill the 48 CPU allocation across the four GPU processes; the crate
+# test surface establishes that this changes throughput, not rollout values.
+REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG = {
+    **REGISTERED_DEEP_ENGINE_CONFIG,
+    "rollout_leaf_eval": True,
+    "rollout_threads": 12,
+    "rollout_threads_cpu_budget_ack": True,
+}
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
+    REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG,
 )
 SOURCE_BOUND_ENGINE_PATHS = {"checkpoint_path", "model_path", "tables_path"}
 
