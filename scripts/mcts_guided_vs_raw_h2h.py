@@ -131,9 +131,14 @@ REGISTERED_DEEP_ENGINE_CONFIG = {
     "search_sims": 4096,
     "search_time_ms": 1_000,
 }
+REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG = {
+    **REGISTERED_DEEP_ENGINE_CONFIG,
+    "use_opponent_priors": True,
+}
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
+    REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
 )
 SOURCE_BOUND_ENGINE_PATHS = {"checkpoint_path", "model_path", "tables_path"}
 
@@ -376,8 +381,8 @@ def _sealed_override_audit_config(
 def _require_registered_candidate_config(config: Mapping[str, Any]) -> None:
     """Reject a look-alike MCTS configuration before any game is played."""
 
-    if config.get("model_priors") is not True or config.get("use_opponent_priors") is not False:
-        raise HeadToHeadError("candidate must enable own model priors and disable opponent priors.")
+    if config.get("model_priors") is not True:
+        raise HeadToHeadError("candidate must enable own model priors.")
     observed = {key: value for key, value in config.items() if key not in SOURCE_BOUND_ENGINE_PATHS}
     if observed not in REGISTERED_ENGINE_CONFIGS:
         raise HeadToHeadError(
