@@ -799,6 +799,63 @@ def _finite_number(value: object, *, label: str) -> float:
     return float(value)
 
 
+def _validated_branch_prior_unmapped_action_witness(
+    value: object,
+) -> dict[str, dict[str, int]]:
+    """Validate the public-free action-map topology behind a fallback.
+
+    This intentionally retains only aggregate option kinds.  It must never
+    carry a private branch state, a move name, an action identity, or model
+    scores into the paired-outcome artifact.
+    """
+
+    witness = _mapping(value, label="unmapped-action witness")
+    if set(witness) != {"acting", "opponent"}:
+        raise HeadToHeadError("unmapped-action witness must name acting and opponent seats.")
+    normalized: dict[str, dict[str, int]] = {}
+    fields = {"nodes", "move_arms", "switch_arms", "none_arms"}
+    for seat in ("acting", "opponent"):
+        row = _mapping(witness.get(seat), label=f"unmapped-action {seat} witness")
+        if set(row) != fields:
+            raise HeadToHeadError("unmapped-action witness row has an unexpected schema.")
+        normalized_row = {
+            field: _nonnegative_int(row.get(field), label=f"unmapped-action {seat} {field}")
+            for field in sorted(fields)
+        }
+        missing_arms = (
+            normalized_row["move_arms"]
+            + normalized_row["switch_arms"]
+            + normalized_row["none_arms"]
+        )
+        if (
+            (normalized_row["nodes"] == 0) != (missing_arms == 0)
+            or missing_arms < normalized_row["nodes"]
+        ):
+            raise HeadToHeadError("unmapped-action witness does not conserve nodes and arms.")
+        normalized[seat] = normalized_row
+    return normalized
+
+
+def _branch_prior_unmapped_action_witness_nodes(
+    witness: Mapping[str, Mapping[str, int]],
+) -> int:
+    return sum(witness[seat]["nodes"] for seat in ("acting", "opponent"))
+
+
+def _sum_branch_prior_unmapped_action_witnesses(
+    witnesses: Sequence[Mapping[str, Mapping[str, int]]],
+) -> dict[str, dict[str, int]]:
+    total = {
+        seat: {field: 0 for field in ("nodes", "move_arms", "switch_arms", "none_arms")}
+        for seat in ("acting", "opponent")
+    }
+    for witness in witnesses:
+        for seat in ("acting", "opponent"):
+            for field, count in witness[seat].items():
+                total[seat][field] += count
+    return total
+
+
 def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
     """Validate the bounded native-tree evidence safe to retain beside a public row."""
 
@@ -813,8 +870,12 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         "reason_ledger_complete",
         "events",
     }
-    if set(ledger) != expected or ledger.get("schema_version") != (
-        "pokezero.engine-mcts.branch-prior-fallbacks.v1"
+    optional = {"unmapped_action_witness"}
+    if (
+        set(ledger) not in (expected, expected | optional)
+        or ledger.get("schema_version") != (
+            "pokezero.engine-mcts.branch-prior-fallbacks.v1"
+        )
     ):
         raise HeadToHeadError("branch prior ledger has an unexpected schema.")
     invocations = _nonnegative_int(ledger.get("native_invocations"), label="native invocations")
@@ -848,13 +909,14 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
     event_unclassified = 0
     for event in events:
         event_mapping = _mapping(event, label="branch prior native invocation")
-        if set(event_mapping) != {
+        event_expected = {
             "native_invocation",
             "belief_records",
             "collapse_multiplicity",
             "branch_prior_fallbacks",
             "reason_counts",
-        }:
+        }
+        if set(event_mapping) not in (event_expected, event_expected | optional):
             raise HeadToHeadError("branch prior native invocation has unsupported fields.")
         event_reasons = event_mapping.get("reason_counts")
         if event_reasons is not None:
@@ -875,6 +937,15 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         else:
             for reason, count in event_reasons.items():
                 event_reason_totals[reason] += count
+        witness = event_mapping.get("unmapped_action_witness")
+        if witness is not None:
+            witness = _validated_branch_prior_unmapped_action_witness(witness)
+            if event_reasons is None or _branch_prior_unmapped_action_witness_nodes(witness) != (
+                event_reasons["unmapped_action"]
+            ):
+                raise HeadToHeadError(
+                    "unmapped-action witness does not match its native invocation count."
+                )
         normalized_events.append(
             {
                 "native_invocation": _nonnegative_int(
@@ -889,6 +960,7 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
                 ),
                 "branch_prior_fallbacks": event_fallbacks,
                 "reason_counts": event_reasons,
+                **({"unmapped_action_witness": witness} if witness is not None else {}),
             }
         )
     if [event["native_invocation"] for event in normalized_events] != list(range(1, invocations + 1)):
@@ -899,6 +971,16 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         raise HeadToHeadError(
             "branch prior native invocation attribution disagrees with its ledger totals."
         )
+    top_witness = ledger.get("unmapped_action_witness")
+    if top_witness is not None:
+        top_witness = _validated_branch_prior_unmapped_action_witness(top_witness)
+        event_witnesses = [event.get("unmapped_action_witness") for event in normalized_events]
+        if any(witness is None for witness in event_witnesses) or top_witness != (
+            _sum_branch_prior_unmapped_action_witnesses(event_witnesses)
+        ):
+            raise HeadToHeadError(
+                "unmapped-action witness does not conserve across native invocations."
+            )
     return {
         "schema_version": ledger["schema_version"],
         "native_invocations": invocations,
@@ -907,6 +989,7 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         "reason_counts": dict(sorted(normalized_reasons.items())),
         "unclassified_branch_prior_fallbacks": unclassified,
         "reason_ledger_complete": bool(ledger["reason_ledger_complete"]),
+        **({"unmapped_action_witness": top_witness} if top_witness is not None else {}),
         "events": normalized_events,
     }
 

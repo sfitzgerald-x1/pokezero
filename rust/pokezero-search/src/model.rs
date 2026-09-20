@@ -37,6 +37,7 @@ use rand::SeedableRng;
 use tch::{CModule, Device, IValue, Kind, TchError, Tensor};
 
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
+use poke_engine::engine::state::MoveChoice;
 use poke_engine::instruction::Instruction;
 use poke_engine::state::State;
 
@@ -84,6 +85,70 @@ fn parse_device(device: &str) -> PyResult<Device> {
         other => Err(PyValueError::new_err(format!(
             "unsupported device {other:?}: expected cpu, mps, or cuda"
         ))),
+    }
+}
+
+/// Action-surface holes behind interior `unmapped_action` prior fallbacks.
+///
+/// A fallback count alone establishes that a simulated node went uniform, but
+/// not whether its missing action-block entry was a move, a switch, or the
+/// engine's `None` shape.  This witness retains only that public-free topology
+/// and is emitted only beside the existing interior fallback telemetry.
+#[derive(Default)]
+struct UnmappedActionMapWitness {
+    nodes: usize,
+    move_arms: usize,
+    switch_arms: usize,
+    none_arms: usize,
+}
+
+impl UnmappedActionMapWitness {
+    fn record(&mut self, options: &[MoveChoice], map: &[Option<usize>]) {
+        debug_assert_eq!(
+            options.len(),
+            map.len(),
+            "action-map witness must remain aligned with the engine option list"
+        );
+        let mut unmapped = false;
+        for (option, action_index) in options.iter().zip(map) {
+            if action_index.is_some() {
+                continue;
+            }
+            unmapped = true;
+            match option {
+                MoveChoice::Move(_) => self.move_arms += 1,
+                MoveChoice::Switch(_) => self.switch_arms += 1,
+                MoveChoice::None => self.none_arms += 1,
+            }
+        }
+        self.nodes += usize::from(unmapped);
+    }
+
+    fn render_json(&self) -> String {
+        format!(
+            "{{\"nodes\":{},\"move_arms\":{},\"switch_arms\":{},\"none_arms\":{}}}",
+            self.nodes, self.move_arms, self.switch_arms, self.none_arms
+        )
+    }
+}
+
+#[derive(Default)]
+struct BranchUnmappedActionWitness {
+    acting: UnmappedActionMapWitness,
+    opponent: UnmappedActionMapWitness,
+}
+
+impl BranchUnmappedActionWitness {
+    fn nodes(&self) -> usize {
+        self.acting.nodes + self.opponent.nodes
+    }
+
+    fn render_json(&self) -> String {
+        format!(
+            "{{\"acting\":{},\"opponent\":{}}}",
+            self.acting.render_json(),
+            self.opponent.render_json()
+        )
     }
 }
 
@@ -1112,6 +1177,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let mut root_prior_fallbacks = 0usize;
     let mut branch_prior_fallbacks = 0usize;
     let mut branch_prior_fallback_reasons = PriorFallbackReasonCounts::default();
+    let mut branch_unmapped_action_witness = BranchUnmappedActionWitness::default();
     // Per-phase wall attribution (plan deliverable 4: "Do not estimate a
     // missing phase by subtracting an assumed model cost"). Every phase is
     // measured directly:
@@ -1445,6 +1511,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             action_map_nanos += map_started.elapsed().as_nanos();
                             match map_result {
                                 Ok(map) => {
+                                    branch_unmapped_action_witness.acting.record(&options, &map);
                                     pending_maps.push(((seam.chance, seam.branch_index), row, map))
                                 }
                                 Err(error) => {
@@ -1470,11 +1537,16 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                 );
                                 action_map_nanos += map_started.elapsed().as_nanos();
                                 match map_result {
-                                    Ok(map) => pending_opponent_maps.push((
-                                        (seam.chance, seam.branch_index),
-                                        row,
-                                        map,
-                                    )),
+                                    Ok(map) => {
+                                        branch_unmapped_action_witness
+                                            .opponent
+                                            .record(&opponent_options, &map);
+                                        pending_opponent_maps.push((
+                                            (seam.chance, seam.branch_index),
+                                            row,
+                                            map,
+                                        ));
+                                    }
                                     Err(error) => {
                                         leaf_error = Some(error);
                                         return LeafPrice::Ready(0.5);
@@ -1684,6 +1756,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         branch_prior_fallbacks,
         "every interior prior fallback must carry exactly one reason"
     );
+    debug_assert_eq!(
+        branch_unmapped_action_witness.nodes(),
+        branch_prior_fallback_reasons.unmapped_action,
+        "every unmapped action-map node must become exactly one unmapped-action fallback"
+    );
     // Seat-labelled, because the deferred-leaf audit is a self-vs-opponent
     // question — but the underlying asymmetry is SIDE-absolute (the virtual loss
     // is always written to `s2_stats`), so the searching seat's side ships with
@@ -1711,7 +1788,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"branch_prior_fallback_reasons\":{},\"root_prior_fallback_reason\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
+         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"branch_prior_fallback_reasons\":{},\"branch_prior_unmapped_action_witness\":{},\"root_prior_fallback_reason\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1738,6 +1815,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         root_prior_fallbacks,
         branch_prior_fallbacks,
         branch_prior_fallback_reasons.render_json(),
+        branch_unmapped_action_witness.render_json(),
         serde_json::to_string(&root_prior_fallback_reason)
             .expect("optional static string JSON serialization cannot fail"),
         encode_nanos as f64 / 1e9,

@@ -86,10 +86,12 @@ def _public_record(
     )
 
 
-def _branch_prior_ledger(*, fallbacks: int = 0) -> dict[str, object]:
+def _branch_prior_ledger(
+    *, fallbacks: int = 0, unmapped_action_witness: dict[str, object] | None = None
+) -> dict[str, object]:
     reasons = {reason: 0 for reason in RUNNER.BRANCH_PRIOR_FALLBACK_REASON_VALUES}
     reasons["unmapped_action"] = fallbacks
-    return {
+    ledger = {
         "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
         "native_invocations": 1,
         "belief_worlds": 1,
@@ -107,6 +109,10 @@ def _branch_prior_ledger(*, fallbacks: int = 0) -> dict[str, object]:
             }
         ],
     }
+    if unmapped_action_witness is not None:
+        ledger["unmapped_action_witness"] = unmapped_action_witness
+        ledger["events"][0]["unmapped_action_witness"] = unmapped_action_witness
+    return ledger
 
 
 def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
@@ -794,6 +800,28 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         ledger["reason_counts"] = {"forged_reason": 2}
         ledger["events"][0]["reason_counts"] = {"forged_reason": 2}
         with self.assertRaisesRegex(Exception, "complete native reason vocabulary"):
+            RUNNER._validated_branch_prior_ledger(ledger)
+
+    def test_branch_prior_ledger_retains_valid_unmapped_action_witness(self) -> None:
+        witness = {
+            "acting": {"nodes": 2, "move_arms": 1, "switch_arms": 1, "none_arms": 0},
+            "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+        }
+        ledger = _branch_prior_ledger(fallbacks=2, unmapped_action_witness=witness)
+
+        self.assertEqual(
+            RUNNER._validated_branch_prior_ledger(ledger)["unmapped_action_witness"],
+            witness,
+        )
+
+    def test_branch_prior_ledger_refuses_unmapped_witness_that_miscounts_nodes(self) -> None:
+        witness = {
+            "acting": {"nodes": 1, "move_arms": 1, "switch_arms": 0, "none_arms": 0},
+            "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+        }
+        ledger = _branch_prior_ledger(fallbacks=2, unmapped_action_witness=witness)
+
+        with self.assertRaisesRegex(Exception, "does not match its native invocation count"):
             RUNNER._validated_branch_prior_ledger(ledger)
 
     def test_selection_evidence_refuses_search_action_not_bound_to_public_record(self) -> None:
