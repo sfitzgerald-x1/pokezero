@@ -16,6 +16,15 @@ name: Engine fidelity gates
 
 on:
   pull_request:
+
+# A new commit supersedes an older pull-request head. Without this, each quick
+# follow-up starts another full native-engine build and the 15–30 minute mass
+# gate continues consuming a runner after its result can no longer be merged.
+# Keep runs isolated by PR so unrelated pull requests still validate in parallel.
+concurrency:
+  group: engine-fidelity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # The path filter used to live on the workflow trigger. A REQUIRED status check
   # cannot be path-filtered that way: on a PR that touches none of these paths the
@@ -27,6 +36,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       fidelity: ${{ steps.f.outputs.fidelity }}
+      schema_default: ${{ steps.f.outputs.schema_default }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -396,10 +406,20 @@ jobs:
           if ! changed=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE...$HEAD"); then
             echo "could not diff $BASE..$HEAD; running the gates anyway"
             echo "fidelity=true" >> "$GITHUB_OUTPUT"
+            echo "schema_default=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "$changed"
           matched=false
+          schema_default=false
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              *.py|tests/data/schema_default_allowlist.json|.github/workflows/engine-fidelity-gates.yml)
+                schema_default=true
+                ;;
+            esac
+          done <<< "$changed"
           while IFS= read -r pattern; do
             [ -z "$pattern" ] && continue
             # The old trigger `paths:` list carried a one-line rationale per entry
@@ -417,7 +437,9 @@ jobs:
             done <<< "$changed"
           done <<< "$FILTERS"
           echo "fidelity=$matched" >> "$GITHUB_OUTPUT"
+          echo "schema_default=$schema_default" >> "$GITHUB_OUTPUT"
           echo "fidelity paths touched: $matched"
+          echo "schema-default paths touched: $schema_default"
   mass-gate:
     needs: changes
     if: needs.changes.outputs.fidelity == 'true'
@@ -621,27 +643,6 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/armoracle.log; then
             echo "::error::the collapsed-arm mass oracle SKIPPED; it must never skip"
-            exit 1
-          fi
-
-      # The schema-default gate is worthless if it never runs, and it did not: it was authored
-      # with no workflow step, so "fails at authorship" meant "fails for whoever remembers to run
-      # it". A SKIP is treated as a FAILURE here -- the gate skips when the ledger reports an
-      # unparsable file, and on this job that means something else broke, not that the check is
-      # inapplicable.
-      - name: Schema-default conflation gate
-        run: |
-          set -o pipefail
-          python -m unittest tests.test_schema_default_ledger tests.test_schema_with_selector -v \
-            2>&1 | tee /tmp/schemagate.log
-          # Parse the SUMMARY, not the whole -v log: `grep skipped` over verbose output would
-          # trip on any future test name or docstring containing the word.
-          if tail -5 /tmp/schemagate.log | grep -qE 'skipped=[0-9]+|OK \(skipped'; then
-            echo "::error::the schema-default gate SKIPPED -- the ledger could not measure the tree"
-            exit 1
-          fi
-          if ! grep -qE 'Ran 25 tests' /tmp/schemagate.log; then
-            echo "::error::expected 25 tests across the ledger gate and the selector; suite changed"
             exit 1
           fi
 
@@ -2110,6 +2111,39 @@ jobs:
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
 
+  # This is a source-only ownership check. It previously waited behind the full
+  # native-engine build and every engine fidelity probe, even though it imports no
+  # package code and needs neither Rust nor Showdown. Keep its verdict required,
+  # but run it in parallel and bound it independently so a schema regression is
+  # diagnosed as such instead of presenting as a stalled mass gate.
+  schema-default:
+    needs: changes
+    if: needs.changes.outputs.schema_default == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Schema-default conflation gate
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_schema_default_ledger tests.test_schema_with_selector -v \
+            2>&1 | tee /tmp/schemagate.log
+          # Parse the SUMMARY, not the whole -v log: `grep skipped` over verbose output would
+          # trip on any future test name or docstring containing the word.
+          if tail -5 /tmp/schemagate.log | grep -qE 'skipped=[0-9]+|OK \(skipped'; then
+            echo "::error::the schema-default gate SKIPPED -- the ledger could not measure the tree"
+            exit 1
+          fi
+          if ! grep -qE 'Ran 25 tests' /tmp/schemagate.log; then
+            echo "::error::expected 25 tests across the ledger gate and the selector; suite changed"
+            exit 1
+          fi
+
   # The seed registry, re-derived from the committed artifacts.
   #
   # DELIBERATELY NOT BEHIND THE `changes` FILTER, and deliberately not a step inside
@@ -2822,7 +2856,7 @@ jobs:
   # the job executes, the guard fires, and nothing depends on the result. Any job
   # added to this workflow must be added here too, or it is advisory.
   gate-status:
-    needs: [changes, mass-gate, seed-registry, harness-provenance, python-floor-syntax, schema-container-census]
+    needs: [changes, mass-gate, schema-default, seed-registry, harness-provenance, python-floor-syntax, schema-container-census]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2830,7 +2864,9 @@ jobs:
       - name: Report the fidelity gate result
         env:
           TOUCHED: ${{ needs.changes.outputs.fidelity }}
+          SCHEMA_TOUCHED: ${{ needs.changes.outputs.schema_default }}
           RESULT: ${{ needs.mass-gate.result }}
+          SCHEMA: ${{ needs.schema-default.result }}
           FILTER: ${{ needs.changes.result }}
           REGISTRY: ${{ needs.seed-registry.result }}
           HARNESS: ${{ needs.harness-provenance.result }}
@@ -2840,7 +2876,9 @@ jobs:
           set -euo pipefail
           echo "changes result: ${FILTER}"
           echo "fidelity paths touched: ${TOUCHED}"
+          echo "schema-default paths touched: ${SCHEMA_TOUCHED}"
           echo "mass-gate result: ${RESULT}"
+          echo "schema-default result: ${SCHEMA}"
           echo "seed-registry result: ${REGISTRY}"
           echo "harness-provenance result: ${HARNESS}"
           echo "python-floor-syntax result: ${FLOOR}"
@@ -2911,10 +2949,9 @@ jobs:
           # empty string -- not "false" -- and `mass-gate` reads `skipped` because
           # its dependency never succeeded. The skipped arm's `= "true"` guard does
           # not fire on "", so this job printed "gates correctly not run" and exited
-          # 0: a green REQUIRED check on a PR whose gates never ran. There is no
-          # `concurrency:` block in this repo, so the only thing that cancels a run
-          # is a person -- which made an 11-second window in which anyone with write
-          # access could cancel `changes` and mint themselves a passing gate.
+          # 0: a green REQUIRED check on a PR whose gates never ran. Superseded runs
+          # are now cancelled automatically, so treating a cancelled `changes` job as
+          # an explicit failure is what prevents that cancellation from minting a pass.
           if [ "${FILTER}" != "success" ]; then
             echo "::error::the path-filter job did not succeed (${FILTER}); the gates did not run"
             exit 1
@@ -2922,6 +2959,18 @@ jobs:
           # And demand an explicit negative rather than "anything that is not true".
           if [ "${TOUCHED}" != "true" ] && [ "${TOUCHED}" != "false" ]; then
             echo "::error::path filter produced no verdict (fidelity='${TOUCHED}')"
+            exit 1
+          fi
+          if [ "${SCHEMA_TOUCHED}" != "true" ] && [ "${SCHEMA_TOUCHED}" != "false" ]; then
+            echo "::error::path filter produced no schema-default verdict (schema_default='${SCHEMA_TOUCHED}')"
+            exit 1
+          fi
+          if [ "${SCHEMA_TOUCHED}" = "true" ] && [ "${SCHEMA}" != "success" ]; then
+            echo "::error::schema-default gate did not pass (${SCHEMA})"
+            exit 1
+          fi
+          if [ "${SCHEMA_TOUCHED}" = "false" ] && [ "${SCHEMA}" != "skipped" ]; then
+            echo "::error::schema-default gate ran despite no schema-default path change (${SCHEMA})"
             exit 1
           fi
 
