@@ -286,6 +286,7 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
             "battle_id": "mcts-h2h-19-p1",
             "candidate_seat": "p1",
             "decision_round_index": 7,
+            "audit_status": "PAIRED",
             "audit": {
                 "schema_version": "pokezero.sealed-override-pair.v1",
                 "source_battle_id": "mcts-h2h-19-p1",
@@ -427,6 +428,39 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
             DURABLE._write_immutable_json(sidecar, payload)
             with patch.object(RUNNER, "_validate_public_decision_evidence", return_value=(record,)):
                 RUNNER._validate_sealed_override_audit_evidence(root, game)
+            # A measured override on a forced one-sided phase cannot hold an
+            # opponent action fixed.  It still needs a canonical sidecar so
+            # the game-level denominator proves that the audit did not omit
+            # the event merely because no paired continuation is possible.
+            inapplicable_root = root / "inapplicable"
+            inapplicable_ledger = RUNNER._branch_prior_ledger_path(
+                inapplicable_root, seed=19, candidate_seat="p1", record=record
+            )
+            DURABLE._write_immutable_json(inapplicable_ledger, {"selection": source_selection})
+            inapplicable_readout = {
+                "schema_version": "pokezero.mcts-sealed-override-audit.v1",
+                "seed": 19,
+                "battle_id": "mcts-h2h-19-p1",
+                "candidate_seat": "p1",
+                "decision_round_index": 7,
+                "audit_status": "INAPPLICABLE_NON_SIMULTANEOUS",
+                "requested_players": ["p1"],
+                "search_evidence": RUNNER._sealed_search_evidence_from_selection(source_selection),
+            }
+            inapplicable_sidecar = RUNNER._sealed_override_audit_path(
+                inapplicable_root, seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            DURABLE._write_immutable_json(
+                inapplicable_sidecar,
+                RUNNER._sealed_override_audit_payload(
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat="p1",
+                    readout=inapplicable_readout,
+                ),
+            )
+            with patch.object(RUNNER, "_validate_public_decision_evidence", return_value=(record,)):
+                RUNNER._validate_sealed_override_audit_evidence(inapplicable_root, game)
             bad_root = root / "bad"
             bad_readout = self._readout()
             bad_audit = bad_readout["audit"]  # type: ignore[index]

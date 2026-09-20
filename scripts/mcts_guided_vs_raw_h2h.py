@@ -637,9 +637,13 @@ def _validated_sealed_override_readout(value: object, *, candidate_seat: str) ->
     """Normalize the complete public-safe controller result before persistence."""
 
     readout = _mapping(value, label="sealed override audit readout")
-    if set(readout) != {
-        "schema_version", "seed", "battle_id", "candidate_seat", "decision_round_index", "audit"
-    } or readout.get("schema_version") != "pokezero.mcts-sealed-override-audit.v1":
+    base_fields = {
+        "schema_version", "seed", "battle_id", "candidate_seat", "decision_round_index", "audit_status"
+    }
+    if (
+        not base_fields.issubset(readout)
+        or readout.get("schema_version") != "pokezero.mcts-sealed-override-audit.v1"
+    ):
         raise HeadToHeadError("sealed override audit readout has an unsupported shape.")
     if readout.get("candidate_seat") != candidate_seat:
         raise HeadToHeadError("sealed override audit readout has the wrong candidate seat.")
@@ -650,6 +654,26 @@ def _validated_sealed_override_readout(value: object, *, candidate_seat: str) ->
     battle_id = readout.get("battle_id")
     if not isinstance(battle_id, str) or not battle_id:
         raise HeadToHeadError("sealed override audit readout has an invalid battle identity.")
+    audit_status = readout.get("audit_status")
+    if audit_status == "INAPPLICABLE_NON_SIMULTANEOUS":
+        if set(readout) != base_fields | {"requested_players", "search_evidence"}:
+            raise HeadToHeadError("inapplicable sealed override audit has an unsupported shape.")
+        if readout.get("requested_players") != [candidate_seat]:
+            raise HeadToHeadError("inapplicable sealed override audit has the wrong request boundary.")
+        return {
+            "schema_version": "pokezero.mcts-sealed-override-audit.v1",
+            "seed": seed,
+            "battle_id": battle_id,
+            "candidate_seat": candidate_seat,
+            "decision_round_index": round_index,
+            "audit_status": audit_status,
+            "requested_players": [candidate_seat],
+            "search_evidence": _validated_sealed_search_evidence(
+                readout.get("search_evidence")
+            ),
+        }
+    if audit_status != "PAIRED" or set(readout) != base_fields | {"audit"}:
+        raise HeadToHeadError("sealed override audit readout has an unsupported disposition.")
     audit = _mapping(readout.get("audit"), label="sealed override pair")
     expected = {
         "schema_version", "source_battle_id", "source_seed", "source_decision_round",
@@ -683,6 +707,7 @@ def _validated_sealed_override_readout(value: object, *, candidate_seat: str) ->
         "battle_id": battle_id,
         "candidate_seat": candidate_seat,
         "decision_round_index": round_index,
+        "audit_status": "PAIRED",
         "audit": {
             "schema_version": "pokezero.sealed-override-pair.v1",
             "source_battle_id": battle_id,
@@ -1416,16 +1441,25 @@ def _validate_sealed_override_audit_evidence(out_root: Path, game: Any) -> None:
         if path != expected_path or round_index in rounds or round_index not in expected:
             raise HeadToHeadError("sealed override audit has a duplicate or noncanonical round identity.")
         rounds.add(round_index)
-        audit = _mapping(readout.get("audit"), label="sealed override pair")
         selection = expected[round_index]
-        if (
-            audit["mcts_action"] != selection["search_argmax"]
-            or audit["raw_action"] != selection["model_argmax"]
-            or audit["search_evidence"] != _sealed_search_evidence_from_selection(selection)
-        ):
-            raise HeadToHeadError(
-                "sealed override audit does not bind its measured public decision selection."
-            )
+        expected_evidence = _sealed_search_evidence_from_selection(selection)
+        if readout["audit_status"] == "PAIRED":
+            audit = _mapping(readout.get("audit"), label="sealed override pair")
+            if (
+                audit["mcts_action"] != selection["search_argmax"]
+                or audit["raw_action"] != selection["model_argmax"]
+                or audit["search_evidence"] != expected_evidence
+            ):
+                raise HeadToHeadError(
+                    "sealed override audit does not bind its measured public decision selection."
+                )
+        elif readout["audit_status"] == "INAPPLICABLE_NON_SIMULTANEOUS":
+            if readout["search_evidence"] != expected_evidence:
+                raise HeadToHeadError(
+                    "inapplicable sealed override audit does not bind its measured public decision selection."
+                )
+        else:  # _validated_sealed_override_readout already rejects this; keep closed on drift.
+            raise HeadToHeadError("sealed override audit has an unknown disposition.")
     if rounds != set(expected):
         raise HeadToHeadError("sealed override audit does not cover every measured public override.")
 

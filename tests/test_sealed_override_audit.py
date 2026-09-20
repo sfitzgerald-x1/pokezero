@@ -113,7 +113,7 @@ class SealedOverrideAuditTest(unittest.TestCase):
         self.assertEqual(readout["audit"], expected)
         self.assertNotIn("snapshot", readout)
 
-    def test_skips_one_sided_boundary_without_allocating_a_continuation(self) -> None:
+    def test_records_one_sided_boundary_without_allocating_a_continuation(self) -> None:
         boundary = _boundary(override=True)
         one_sided = RolloutSealedPreStepBoundary(
             seed=boundary.seed,
@@ -123,15 +123,16 @@ class SealedOverrideAuditTest(unittest.TestCase):
             snapshot=boundary.snapshot,
             decisions=MappingProxyType({"p1": boundary.decisions["p1"]}),
         )
-        self.assertIsNone(
-            evaluate_measured_override_boundary(
-                boundary=one_sided,
-                candidate_seat="p1",
-                env_factory=lambda: self.fail("must not allocate environment"),
-                continuation_policy_factory=lambda: self.fail("must not allocate policies"),
-                rollout_config=object(),
-            )
+        readout = evaluate_measured_override_boundary(
+            boundary=one_sided,
+            candidate_seat="p1",
+            env_factory=lambda: self.fail("must not allocate environment"),
+            continuation_policy_factory=lambda: self.fail("must not allocate policies"),
+            rollout_config=object(),
         )
+        self.assertEqual(readout["audit_status"], "INAPPLICABLE_NON_SIMULTANEOUS")
+        self.assertEqual(readout["requested_players"], ["p1"])
+        self.assertEqual(readout["search_evidence"]["search_argmax"], 4)
 
     def test_rejects_measured_override_when_committed_action_disagrees_with_metadata(self) -> None:
         boundary = _boundary(override=True)

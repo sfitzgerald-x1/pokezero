@@ -164,15 +164,8 @@ def evaluate_measured_override_boundary(
 
     if candidate_seat not in {"p1", "p2"}:
         raise SealedOverrideAuditError("candidate seat must be p1 or p2")
-    # Only a simultaneous boundary can hold the opponent's source action fixed
-    # for both continuation arms.  One-sided request phases are not malformed
-    # MCTS evidence; they are simply outside this audit's valid denominator.
-    # Returning None lets the source rollout continue rather than turning an
-    # inapplicable boundary into a false evaluation failure.
-    if tuple(boundary.requested_players) != ("p1", "p2"):
-        return None
-    if set(boundary.decisions) != {"p1", "p2"}:
-        raise SealedOverrideAuditError("simultaneous override boundary must contain p1/p2 decisions")
+    if candidate_seat not in boundary.decisions:
+        raise SealedOverrideAuditError("override audit boundary omits the candidate decision")
     candidate = boundary.decisions[candidate_seat]
     metadata = _json_object(candidate.metadata, label="candidate decision metadata")
     engine_mcts = _json_object(metadata.get("engine_mcts"), label="engine MCTS metadata")
@@ -193,6 +186,29 @@ def evaluate_measured_override_boundary(
         raise SealedOverrideAuditError("search argmax does not equal the committed MCTS action")
     if model_action == search_action:
         raise SealedOverrideAuditError("measured override has identical model and search actions")
+    # A paired continuation requires a committed source action for both seats.
+    # A forced, one-sided phase cannot meet that contract, but it remains a
+    # measured override that must be durably accounted for so the game-level
+    # validator can distinguish inapplicability from an omitted sidecar.
+    if tuple(boundary.requested_players) != ("p1", "p2"):
+        if tuple(boundary.requested_players) != (candidate_seat,) or set(boundary.decisions) != {
+            candidate_seat
+        }:
+            raise SealedOverrideAuditError(
+                "one-sided override boundary must contain exactly the candidate decision"
+            )
+        return {
+            "schema_version": "pokezero.mcts-sealed-override-audit.v1",
+            "seed": boundary.seed,
+            "battle_id": boundary.battle_id,
+            "candidate_seat": candidate_seat,
+            "decision_round_index": boundary.decision_round_index,
+            "audit_status": "INAPPLICABLE_NON_SIMULTANEOUS",
+            "requested_players": [candidate_seat],
+            "search_evidence": evidence,
+        }
+    if set(boundary.decisions) != {"p1", "p2"}:
+        raise SealedOverrideAuditError("simultaneous override boundary must contain p1/p2 decisions")
     opponent_seat: PlayerId = "p2" if candidate_seat == "p1" else "p1"
     opponent_action = _action(
         boundary.decisions[opponent_seat].action_index, label="committed opponent action"
@@ -222,5 +238,6 @@ def evaluate_measured_override_boundary(
         "battle_id": boundary.battle_id,
         "candidate_seat": candidate_seat,
         "decision_round_index": boundary.decision_round_index,
+        "audit_status": "PAIRED",
         "audit": readout,
     }
