@@ -1574,8 +1574,11 @@ jobs:
           # 244 -> 245: the measured-override audit adapter is driven from the
           # production telemetry envelope, so its source schema cannot drift from
           # the sealed continuation audit without this native-engine pin failing.
-          if ! grep -qE 'Ran 249 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 249 engine-search tests; the suite shrank or grew"
+          # EngineSearchWorkflowGuardTests derives this exact value from the
+          # module's loader, so future suite growth now fails locally before this
+          # expensive native gate is queued.
+          if ! grep -qE 'Ran 250 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 250 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then

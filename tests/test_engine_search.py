@@ -45,6 +45,33 @@ from pokezero.engine_search import (  # noqa: E402
 )
 
 
+class EngineSearchWorkflowGuardTests(unittest.TestCase):
+    """Keep the workflow-only exact-count pin synchronized before CI runs.
+
+    The native fidelity workflow intentionally rejects both a shrunken and a
+    grown engine-search suite. That guard is valuable, but it lives in YAML,
+    so a normal local unittest run could not previously tell an author that a
+    new regression test also needed the pinned count updated. The result was
+    an otherwise-good pull request failing only after the expensive native
+    build had completed.
+    """
+
+    def test_workflow_exact_count_matches_this_module(self) -> None:
+        loaded = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+        count = loaded.countTestCases()
+        workflow = Path(ROOT, ".github", "workflows", "engine-fidelity-gates.yml").read_text()
+        step = workflow.split("- name: Engine-search telemetry pins", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            f"Ran {count} tests",
+            step,
+            "the engine-search suite changed but its workflow-only exact-count guard "
+            "was not updated",
+        )
+        self.assertGreater(count, 1, "anti-vacuity: the loader found no engine-search tests")
+
+
 class _FakeObservation:
     def __init__(self, mask, candidates):
         self.legal_action_mask = mask
