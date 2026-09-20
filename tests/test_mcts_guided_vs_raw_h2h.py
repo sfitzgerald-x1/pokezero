@@ -252,6 +252,119 @@ class StudyShapeTest(unittest.TestCase):
             RUNNER._validated_study(manifest, seeds=(11, 12))
 
 
+class SealedOverrideAuditContractTest(unittest.TestCase):
+    def test_optional_audit_contract_requires_the_registered_raw_selector(self) -> None:
+        self.assertIsNone(RUNNER._sealed_override_audit_config({}))
+        manifest = {
+            "sealed_override_audit": {
+                "schema_version": RUNNER.SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION,
+                "continuation_selector": dict(RUNNER.RAW_SELECTOR),
+                "max_continuation_decision_rounds": 400,
+            }
+        }
+        self.assertEqual(
+            RUNNER._sealed_override_audit_config(manifest).max_continuation_decision_rounds,
+            400,
+        )
+        manifest["sealed_override_audit"]["continuation_selector"] = {
+            **RUNNER.RAW_SELECTOR,
+            "search": True,
+        }
+        with self.assertRaisesRegex(Exception, "registered deterministic raw selector"):
+            RUNNER._sealed_override_audit_config(manifest)
+
+    def test_writer_persists_only_the_controller_readout(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        boundary = SimpleNamespace(seed=19, decision_round_index=7)
+        readout = {
+            "schema_version": "pokezero.mcts-sealed-override-audit.v1",
+            "seed": 19,
+            "battle_id": "mcts-h2h-19-p1",
+            "candidate_seat": "p1",
+            "decision_round_index": 7,
+            "audit": {
+                "schema_version": "pokezero.sealed-override-pair.v1",
+                "mcts_action": 2,
+                "raw_action": 1,
+                "opponent_action_held_fixed": True,
+                "mcts": {"terminal": {"winner": "p1", "capped": False}},
+                "raw": {"terminal": {"winner": "p2", "capped": False}},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            with patch(
+                "pokezero.mcts_eval.sealed_override_audit.evaluate_measured_override_boundary",
+                return_value=readout,
+            ) as evaluate:
+                writer = RUNNER._sealed_override_audit_writer(
+                    Path(directory),
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat="p1",
+                    env_factory=object(),
+                    continuation_policy_factory=object(),
+                    continuation_rollout_config=object(),
+                    max_continuation_decision_rounds=400,
+                )
+                writer(boundary)
+            evaluate.assert_called_once()
+            path = RUNNER._sealed_override_audit_path(
+                Path(directory), seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["candidate_provenance_sha256"], "guided-provenance")
+            self.assertEqual(payload["readout"]["audit"]["mcts_action"], 2)
+            self.assertTrue(payload["readout"]["audit"]["opponent_action_held_fixed"])
+            self.assertNotIn("opponent_action", payload["readout"]["audit"])
+            RUNNER._validate_sealed_override_audit_evidence(
+                Path(directory),
+                SimpleNamespace(
+                    seed=19,
+                    candidate_seat="p1",
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_telemetry=SimpleNamespace(model_override_decisions=1),
+                ),
+            )
+
+    def test_validator_rejects_a_private_opponent_action(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        with tempfile.TemporaryDirectory() as directory:
+            path = RUNNER._sealed_override_audit_path(
+                Path(directory), seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            DURABLE._write_immutable_json(
+                path,
+                {
+                    "schema_version": RUNNER.SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION,
+                    "candidate_provenance_sha256": candidate.provenance_sha256,
+                    "raw_provenance_sha256": incumbent.provenance_sha256,
+                    "candidate_seat": "p1",
+                    "readout": {
+                        "schema_version": "pokezero.mcts-sealed-override-audit.v1",
+                        "seed": 19,
+                        "battle_id": "mcts-h2h-19-p1",
+                        "candidate_seat": "p1",
+                        "decision_round_index": 7,
+                        "audit": {"opponent_action": 4, "opponent_action_held_fixed": True},
+                    },
+                },
+            )
+            with self.assertRaisesRegex(Exception, "forbidden private source state"):
+                RUNNER._validate_sealed_override_audit_evidence(
+                    Path(directory),
+                    SimpleNamespace(
+                        seed=19,
+                        candidate_seat="p1",
+                        candidate=candidate,
+                        incumbent=incumbent,
+                        candidate_telemetry=SimpleNamespace(model_override_decisions=1),
+                    ),
+                )
+
+
 class DurableLauncherHandoffTest(unittest.TestCase):
     def test_guided_runner_binds_its_own_immutable_launcher_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

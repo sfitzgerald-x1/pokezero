@@ -62,6 +62,9 @@ PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-de
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v3"
 )
+SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION = (
+    "pokezero.mcts-guided-vs-raw-sealed-override-audit.v1"
+)
 RAW_SELECTOR = {
     "kind": "deterministic_masked_argmax",
     "deterministic": True,
@@ -269,6 +272,18 @@ class RawPolicyStats:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class SealedOverrideAuditConfig:
+    """The explicit, source-bound continuation-audit contract.
+
+    The audit is deliberately opt-in: each measured override launches two
+    independent continuations, which is appropriate for a focused causal
+    study but would silently change the cost of an ordinary strength run.
+    """
+
+    max_continuation_decision_rounds: int
+
+
 class DeterministicRawPolicyAdapter:
     """Give the raw policy a safe context entry point and honest telemetry."""
 
@@ -319,6 +334,42 @@ def _validated_study(manifest: Mapping[str, Any], *, seeds: tuple[int, ...]) -> 
     }:
         raise HeadToHeadError("study.failure_retry_policy is not the registered durable policy.")
     return study
+
+
+def _sealed_override_audit_config(
+    manifest: Mapping[str, Any],
+) -> SealedOverrideAuditConfig | None:
+    """Parse the optional, fail-closed override-continuation contract.
+
+    A missing block means this remains an ordinary public-evidence study.  If
+    the block is present, every *measured* guided override must receive both
+    independent raw-policy continuations; sampling only convenient overrides
+    would make the causal denominator depend on the search result.
+    """
+
+    raw = manifest.get("sealed_override_audit")
+    if raw is None:
+        return None
+    audit = _mapping(raw, label="manifest.sealed_override_audit")
+    expected = {
+        "schema_version",
+        "continuation_selector",
+        "max_continuation_decision_rounds",
+    }
+    if set(audit) != expected:
+        raise HeadToHeadError("manifest.sealed_override_audit has unsupported fields.")
+    if audit.get("schema_version") != SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION:
+        raise HeadToHeadError("manifest.sealed_override_audit has an unsupported schema version.")
+    if dict(_mapping(audit.get("continuation_selector"), label="sealed audit selector")) != RAW_SELECTOR:
+        raise HeadToHeadError(
+            "sealed override continuations must use the registered deterministic raw selector."
+        )
+    maximum = audit.get("max_continuation_decision_rounds")
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum <= 0:
+        raise HeadToHeadError(
+            "sealed override audit max_continuation_decision_rounds must be a positive integer."
+        )
+    return SealedOverrideAuditConfig(max_continuation_decision_rounds=maximum)
 
 
 def _require_registered_candidate_config(config: Mapping[str, Any]) -> None:
@@ -375,6 +426,70 @@ def _branch_prior_ledger_path(
         / f"seed-{seed}-{candidate_seat}"
         / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
     )
+
+
+def _sealed_override_audit_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    decision_round_index: int,
+) -> Path:
+    """Return the sealed controller's immutable, non-private readout path."""
+
+    if candidate_seat not in {"p1", "p2"}:
+        raise HeadToHeadError("sealed override audit has an invalid candidate seat.")
+    if (
+        isinstance(decision_round_index, bool)
+        or not isinstance(decision_round_index, int)
+        or decision_round_index < 0
+    ):
+        raise HeadToHeadError("sealed override audit has an invalid decision round.")
+    return (
+        out_root
+        / "sealed-override-audits"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"round-{decision_round_index:03d}.json"
+    )
+
+
+def _sealed_override_audit_payload(
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    readout: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Wrap a controller readout in source identities, without private state."""
+
+    audit = _mapping(readout, label="sealed override audit readout")
+    required = {
+        "schema_version",
+        "seed",
+        "battle_id",
+        "candidate_seat",
+        "decision_round_index",
+        "audit",
+    }
+    if set(audit) != required or audit.get("candidate_seat") != candidate_seat:
+        raise HeadToHeadError("sealed override audit readout has an unsupported shape.")
+    if audit.get("schema_version") != "pokezero.mcts-sealed-override-audit.v1":
+        raise HeadToHeadError("sealed override audit readout has an unsupported schema version.")
+    # JSON-round-trip before persistence proves that a controller never leaks
+    # its ephemeral source snapshot through an unserializable object.
+    try:
+        copied = json.loads(json.dumps(dict(audit), sort_keys=True, separators=(",", ":")))
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError("sealed override audit readout is not JSON-safe.") from error
+    if not isinstance(copied, dict):
+        raise HeadToHeadError("sealed override audit did not serialize to a JSON object.")
+    return {
+        "schema_version": SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "candidate_seat": candidate_seat,
+        "readout": copied,
+    }
 
 
 def _nonnegative_int(value: object, *, label: str) -> int:
@@ -852,6 +967,59 @@ def _public_decision_writer(
     return write
 
 
+def _sealed_override_audit_writer(
+    out_root: Path,
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    env_factory: Any,
+    continuation_policy_factory: Any,
+    continuation_rollout_config: Any,
+    max_continuation_decision_rounds: int,
+):
+    """Evaluate and durably retain every measured override at its source boundary.
+
+    ``RolloutDriver`` calls this trusted hook after selecting the simultaneous
+    actions but before committing them.  The controller consumes the
+    actionable snapshot synchronously and persists only an immutable terminal
+    readout.  It never writes the snapshot, opponent action, or observation.
+    """
+
+    from pokezero.mcts_eval.sealed_override_audit import (  # noqa: PLC0415
+        evaluate_measured_override_boundary,
+    )
+
+    def write(boundary: Any) -> None:
+        readout = evaluate_measured_override_boundary(
+            boundary=boundary,
+            candidate_seat=candidate_seat,
+            env_factory=env_factory,
+            continuation_policy_factory=continuation_policy_factory,
+            rollout_config=continuation_rollout_config,
+            max_continuation_decision_rounds=max_continuation_decision_rounds,
+        )
+        if readout is None:
+            return
+        path = _sealed_override_audit_path(
+            out_root,
+            seed=boundary.seed,
+            candidate_seat=candidate_seat,
+            decision_round_index=boundary.decision_round_index,
+        )
+        _write_immutable_json(
+            path,
+            _sealed_override_audit_payload(
+                candidate=candidate,
+                incumbent=incumbent,
+                candidate_seat=candidate_seat,
+                readout=readout,
+            ),
+        )
+
+    return write
+
+
 def _raw_witness_payload(game: Any, *, raw_forward_decisions: int) -> dict[str, Any]:
     raw_decisions = game.incumbent_telemetry.decisions
     if raw_forward_decisions != raw_decisions:
@@ -965,6 +1133,78 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
     return tuple(records)
 
 
+def _validate_sealed_override_audit_evidence(out_root: Path, game: Any) -> None:
+    """Require one non-private terminal readout for every measured override."""
+
+    expected_count = game.candidate_telemetry.model_override_decisions
+    if isinstance(expected_count, bool) or not isinstance(expected_count, int) or expected_count < 0:
+        raise HeadToHeadError("guided telemetry has an invalid measured-override count.")
+    root = out_root / "sealed-override-audits" / f"seed-{game.seed}-{game.candidate_seat}"
+    paths = sorted(root.glob("round-*.json")) if root.is_dir() else []
+    if len(paths) != expected_count:
+        raise HeadToHeadError(
+            "sealed override audit count must equal the completed game's measured overrides."
+        )
+    expected_battle_id = f"mcts-h2h-{game.seed}-{game.candidate_seat}"
+    rounds: set[int] = set()
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read sealed override audit {path}: {error}") from error
+        if not isinstance(payload, Mapping) or set(payload) != {
+            "schema_version",
+            "candidate_provenance_sha256",
+            "raw_provenance_sha256",
+            "candidate_seat",
+            "readout",
+        }:
+            raise HeadToHeadError("sealed override audit has an unsupported wrapper shape.")
+        if (
+            payload.get("schema_version") != SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION
+            or payload.get("candidate_provenance_sha256") != game.candidate.provenance_sha256
+            or payload.get("raw_provenance_sha256") != game.incumbent.provenance_sha256
+            or payload.get("candidate_seat") != game.candidate_seat
+        ):
+            raise HeadToHeadError("sealed override audit does not bind the completed game.")
+        readout = _mapping(payload.get("readout"), label="sealed override audit readout")
+        if set(readout) != {
+            "schema_version",
+            "seed",
+            "battle_id",
+            "candidate_seat",
+            "decision_round_index",
+            "audit",
+        } or (
+            readout.get("schema_version") != "pokezero.mcts-sealed-override-audit.v1"
+            or readout.get("seed") != game.seed
+            or readout.get("battle_id") != expected_battle_id
+            or readout.get("candidate_seat") != game.candidate_seat
+        ):
+            raise HeadToHeadError("sealed override audit readout does not bind its source decision.")
+        round_index = readout.get("decision_round_index")
+        expected_path = _sealed_override_audit_path(
+            out_root,
+            seed=game.seed,
+            candidate_seat=game.candidate_seat,
+            decision_round_index=round_index,
+        )
+        if path != expected_path or round_index in rounds:
+            raise HeadToHeadError("sealed override audit has a duplicate or noncanonical round identity.")
+        rounds.add(round_index)
+        audit = _mapping(readout.get("audit"), label="sealed override pair")
+        forbidden = {"snapshot", "opponent_action", "observations", "history"}
+        if forbidden.intersection(audit):
+            raise HeadToHeadError("sealed override audit contains forbidden private source state.")
+        if audit.get("opponent_action_held_fixed") is not True:
+            raise HeadToHeadError("sealed override audit did not hold the source opponent action fixed.")
+        for arm in ("mcts", "raw"):
+            continuation = _mapping(audit.get(arm), label=f"sealed {arm} continuation")
+            terminal = _mapping(continuation.get("terminal"), label=f"sealed {arm} terminal")
+            if terminal.get("capped") is not False or terminal.get("winner") not in {"p1", "p2", None}:
+                raise HeadToHeadError("sealed override audit did not reach an uncapped terminal result.")
+
+
 def _validate_completed_game(game: Any) -> None:
     """Reject a persisted game whose live decision evidence is not admissible."""
 
@@ -1049,6 +1289,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest = _load_manifest(args.manifest)
     seeds = _seeds(manifest)
     study = _validated_study(manifest, seeds=seeds)
+    sealed_override_audit = _sealed_override_audit_config(manifest)
     resamples, bootstrap_seed, confidence_level = _bootstrap(manifest)
     max_decision_rounds = manifest.get("max_decision_rounds")
     if isinstance(max_decision_rounds, bool) or not isinstance(max_decision_rounds, int) or max_decision_rounds <= 0:
@@ -1138,6 +1379,38 @@ def main(argv: list[str] | None = None) -> int:
     set_source = load_gen3_randbat_source_cached(args.showdown_root)
     write_progress = _progress_writer(out_root, candidate=candidate, incumbent=incumbent)
 
+    def continuation_policy_factory() -> Mapping[str, Any]:
+        """Allocate two clean raw policies after a fixed source action.
+
+        Both continuation arms use this factory, so the only variable between
+        them is the source MCTS-versus-raw action under audit.  Loading fresh
+        policies is intentional: policy state, timing, and cached request data
+        from either arm must not flow into the other one.
+        """
+
+        def raw_policy() -> PublicOnlyMctsPolicy:
+            adapter = DeterministicRawPolicyAdapter(
+                load_transformer_policy(
+                    args.checkpoint,
+                    device=args.device,
+                    deterministic=True,
+                    exploration_epsilon=0.0,
+                    sampling_temperature=1.0,
+                    family_gated_selection=False,
+                ),
+                policy_id=incumbent.policy_id,
+            )
+            return PublicOnlyMctsPolicy(adapter)
+
+        return {"p1": raw_policy(), "p2": raw_policy()}
+
+    continuation_rollout_config = RolloutConfig(
+        max_decision_rounds=max_decision_rounds,
+        format_id="gen3randombattle",
+        record_policy_timing=False,
+        hide_opponent_legal_action_masks=True,
+    )
+
     _write_immutable_json(
         out_root / "manifest.json",
         {
@@ -1183,6 +1456,20 @@ def main(argv: list[str] | None = None) -> int:
         raw_adapters[(seed, candidate_seat)] = raw_adapter
         raw = PublicOnlyMctsPolicy(raw_adapter)
         other_seat = "p2" if candidate_seat == "p1" else "p1"
+        sealed_sink = None
+        if sealed_override_audit is not None:
+            sealed_sink = _sealed_override_audit_writer(
+                out_root,
+                candidate=candidate,
+                incumbent=incumbent,
+                candidate_seat=candidate_seat,
+                env_factory=lambda: LocalShowdownEnv(env_config),
+                continuation_policy_factory=continuation_policy_factory,
+                continuation_rollout_config=continuation_rollout_config,
+                max_continuation_decision_rounds=(
+                    sealed_override_audit.max_continuation_decision_rounds
+                ),
+            )
         driver = RolloutDriver(
             env=env,
             policies={candidate_seat: guided, other_seat: raw},
@@ -1202,6 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
                 decision_sink=lambda decision: write_progress(
                     "decision_committed", seed=seed, candidate_seat=candidate_seat, decision=decision
                 ),
+                sealed_pre_step_sink=sealed_sink,
             ),
         )
         return driver, guided, raw
@@ -1213,10 +1501,14 @@ def main(argv: list[str] | None = None) -> int:
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
             _validate_public_decision_evidence(out_root, game)
+            if sealed_override_audit is not None:
+                _validate_sealed_override_audit_evidence(out_root, game)
 
         def on_game(game: Any) -> None:
             _validate_completed_game(game)
             _validate_public_decision_evidence(out_root, game)
+            if sealed_override_audit is not None:
+                _validate_sealed_override_audit_evidence(out_root, game)
             raw_adapter = raw_adapters.pop((game.seed, game.candidate_seat), None)
             if raw_adapter is None:
                 raise HeadToHeadError("completed game has no retained raw-policy selector witness.")
@@ -1247,6 +1539,8 @@ def main(argv: list[str] | None = None) -> int:
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
             _validate_public_decision_evidence(out_root, game)
+            if sealed_override_audit is not None:
+                _validate_sealed_override_audit_evidence(out_root, game)
         all_games.extend(games)
         write_progress("pair_completed", seed=seed, candidate_seat="both")
         print(f"completed guided-vs-raw mirrored pair seed={seed}", flush=True)
