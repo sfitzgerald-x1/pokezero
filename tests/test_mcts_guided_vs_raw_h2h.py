@@ -317,16 +317,15 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
         return readout
 
     @staticmethod
-    def _write_source_ledger(root: Path) -> None:
+    def _write_source_ledger(root: Path, *, record: PublicDecisionRecord) -> None:
         """Write the public-ledger selection the controller must bind to."""
 
         evidence = SealedOverrideAuditContractTest._readout()["audit"]["search_evidence"]  # type: ignore[index]
         selection = {**evidence, "unmeasured_cause": None}
         DURABLE._write_immutable_json(
-            root
-            / "branch-prior-fallback-ledgers"
-            / "seed-19-p1"
-            / "turn-007-source-decision.json",
+            RUNNER._branch_prior_ledger_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            ),
             {"selection": selection, "request_boundary": {"requested_players": ["p1", "p2"]}},
         )
 
@@ -354,14 +353,19 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
         boundary = SimpleNamespace(seed=19, decision_round_index=7)
+        record = _public_record(
+            seed=19,
+            turn_index=7,
+            recorded_action_index=2,
+            legal_action_mask=(False, True, True, False, False, False, False, False, False),
+        )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._write_source_ledger(root)
             with patch(
                 "pokezero.mcts_eval.sealed_override_audit.evaluate_measured_override_boundary",
                 return_value=self._controller_readout(),
             ) as evaluate:
-                writer = RUNNER._sealed_override_audit_writer(
+                pre_step_writer, public_writer = RUNNER._sealed_override_audit_writer(
                     root,
                     candidate=candidate,
                     incumbent=incumbent,
@@ -371,8 +375,15 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
                     continuation_rollout_config=object(),
                     max_continuation_decision_rounds=400,
                 )
-                writer(boundary)
-                writer(boundary)
+                # The sealed pre-step hook cannot write the durable sidecar
+                # yet: its matching public record/ledger does not exist until
+                # after ``env.step`` commits the action.
+                pre_step_writer(boundary)
+                self.assertFalse((root / "sealed-override-audits").exists())
+                self._write_source_ledger(root, record=record)
+                public_writer(record)
+                pre_step_writer(boundary)
+                public_writer(record)
             self.assertEqual(evaluate.call_count, 2)
             path = RUNNER._sealed_override_audit_path(
                 root, seed=19, candidate_seat="p1", decision_round_index=7
@@ -394,20 +405,27 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
         boundary = SimpleNamespace(seed=19, decision_round_index=7)
+        record = _public_record(
+            seed=19,
+            turn_index=7,
+            recorded_action_index=2,
+            legal_action_mask=(False, True, True, False, False, False, False, False, False),
+        )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self._write_source_ledger(root)
             with patch(
                 "pokezero.mcts_eval.sealed_override_audit.evaluate_measured_override_boundary",
                 return_value=self._controller_readout(nested_private=True),
             ):
-                writer = RUNNER._sealed_override_audit_writer(
+                pre_step_writer, public_writer = RUNNER._sealed_override_audit_writer(
                     root, candidate=candidate, incumbent=incumbent, candidate_seat="p1",
                     env_factory=object(), continuation_policy_factory=object(),
                     continuation_rollout_config=object(), max_continuation_decision_rounds=400,
                 )
+                pre_step_writer(boundary)
+                self._write_source_ledger(root, record=record)
                 with self.assertRaisesRegex(Exception, "disagrees with its public source ledger"):
-                    writer(boundary)
+                    public_writer(record)
             self.assertFalse((Path(directory) / "sealed-override-audits").exists())
 
     def test_validator_requires_sidecar_selection_to_match_measured_public_override(self) -> None:

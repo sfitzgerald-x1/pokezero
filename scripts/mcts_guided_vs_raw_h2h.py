@@ -1284,31 +1284,30 @@ def _sealed_override_audit_writer(
         evaluate_measured_override_boundary,
     )
 
-    def bind_public_root_coverage(readout: Mapping[str, Any], *, boundary: Any) -> dict[str, Any]:
-        """Bind the controller's sealed evidence to the already-written public ledger.
+    pending: dict[tuple[int, int], Mapping[str, Any]] = {}
 
-        The sealed controller runs at the actionable pre-step boundary and
-        deliberately has no public decision record from which to derive the
-        native-root coverage vector.  The public-decision hook has already
-        atomically written that record and its validated branch ledger.  Copy
-        only the derived action-index coverage into the controller readout,
-        after proving every controller-provided field agrees with that ledger.
-        This keeps an incomplete native root visible without allowing the
-        sealed artifact to claim complete action coverage.
+    def bind_public_root_coverage(
+        readout: Mapping[str, Any], *, record: PublicDecisionRecord
+    ) -> dict[str, Any]:
+        """Bind the controller's sealed evidence to the committed public ledger.
+
+        The sealed controller runs before ``env.step`` and deliberately has no
+        public decision record from which to derive the native-root coverage
+        vector.  Keep its result in memory until the public-decision hook
+        commits the same round's ledger.  Then copy only the derived
+        action-index coverage into the controller readout, after proving every
+        controller-provided field agrees with that ledger.  This keeps an
+        incomplete native root visible without allowing the sealed artifact to
+        claim complete action coverage.
         """
 
-        seed = _nonnegative_int(getattr(boundary, "seed", None), label="sealed source seed")
-        round_index = _nonnegative_int(
-            getattr(boundary, "decision_round_index", None), label="sealed source decision round"
+        if record.acting_player != candidate_seat:
+            raise HeadToHeadError("sealed override audit received the wrong public decision seat.")
+        ledger_path = _branch_prior_ledger_path(
+            out_root, seed=record.seed, candidate_seat=candidate_seat, record=record
         )
-        ledger_root = out_root / "branch-prior-fallback-ledgers" / f"seed-{seed}-{candidate_seat}"
-        ledgers = sorted(ledger_root.glob(f"turn-{round_index:03d}-*.json"))
-        if len(ledgers) != 1:
-            raise HeadToHeadError(
-                "sealed override audit requires exactly one public branch ledger at its source round."
-            )
         try:
-            ledger_payload = json.loads(ledgers[0].read_text(encoding="utf-8"))
+            ledger_payload = json.loads(ledger_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise HeadToHeadError(f"cannot read sealed audit source ledger: {error}") from error
         ledger = _mapping(ledger_payload, label="sealed audit source ledger")
@@ -1335,7 +1334,7 @@ def _sealed_override_audit_writer(
             raise HeadToHeadError("sealed override audit has an unsupported disposition.")
         return copied
 
-    def write(boundary: Any) -> None:
+    def pre_step_write(boundary: Any) -> None:
         readout = evaluate_measured_override_boundary(
             boundary=boundary,
             candidate_seat=candidate_seat,
@@ -1346,12 +1345,28 @@ def _sealed_override_audit_writer(
         )
         if readout is None:
             return
-        readout = bind_public_root_coverage(readout, boundary=boundary)
+        key = (
+            _nonnegative_int(getattr(boundary, "seed", None), label="sealed source seed"),
+            _nonnegative_int(
+                getattr(boundary, "decision_round_index", None), label="sealed source decision round"
+            ),
+        )
+        if key in pending:
+            raise HeadToHeadError("sealed override audit repeats a pending source round.")
+        pending[key] = readout
+
+    def public_decision_write(record: PublicDecisionRecord) -> None:
+        if record.acting_player != candidate_seat:
+            return
+        readout = pending.pop((record.seed, record.turn_index), None)
+        if readout is None:
+            return
+        readout = bind_public_root_coverage(readout, record=record)
         path = _sealed_override_audit_path(
             out_root,
-            seed=boundary.seed,
+            seed=record.seed,
             candidate_seat=candidate_seat,
-            decision_round_index=boundary.decision_round_index,
+            decision_round_index=record.turn_index,
         )
         _write_immutable_json(
             path,
@@ -1363,7 +1378,7 @@ def _sealed_override_audit_writer(
             ),
         )
 
-    return write
+    return pre_step_write, public_decision_write
 
 
 def _raw_witness_payload(game: Any, *, raw_forward_decisions: int) -> dict[str, Any]:
@@ -1855,9 +1870,18 @@ def main(argv: list[str] | None = None) -> int:
         raw_adapters[(seed, candidate_seat)] = raw_adapter
         raw = PublicOnlyMctsPolicy(raw_adapter)
         other_seat = "p2" if candidate_seat == "p1" else "p1"
+        public_decision_writer = _public_decision_writer(
+            out_root,
+            candidate=candidate,
+            incumbent=incumbent,
+            seed=seed,
+            candidate_seat=candidate_seat,
+            guided_policy=guided,
+        )
+        public_sink = public_decision_writer
         sealed_sink = None
         if sealed_override_audit is not None:
-            sealed_sink = _sealed_override_audit_writer(
+            sealed_sink, sealed_public_sink = _sealed_override_audit_writer(
                 out_root,
                 candidate=candidate,
                 incumbent=incumbent,
@@ -1869,6 +1893,14 @@ def main(argv: list[str] | None = None) -> int:
                     sealed_override_audit.max_continuation_decision_rounds
                 ),
             )
+
+            def public_sink(record: PublicDecisionRecord) -> None:
+                # The public ledger must commit before the sealed readout is
+                # materialized: the sealed pre-step hook has no legal-action
+                # record from which to derive root coverage itself.
+                public_decision_writer(record)
+                sealed_public_sink(record)
+
         driver = RolloutDriver(
             env=env,
             policies={candidate_seat: guided, other_seat: raw},
@@ -1877,14 +1909,7 @@ def main(argv: list[str] | None = None) -> int:
                 format_id="gen3randombattle",
                 record_policy_timing=True,
                 hide_opponent_legal_action_masks=True,
-                public_decision_sink=_public_decision_writer(
-                    out_root,
-                    candidate=candidate,
-                    incumbent=incumbent,
-                    seed=seed,
-                    candidate_seat=candidate_seat,
-                    guided_policy=guided,
-                ),
+                public_decision_sink=public_sink,
                 decision_sink=lambda decision: write_progress(
                     "decision_committed", seed=seed, candidate_seat=candidate_seat, decision=decision
                 ),
