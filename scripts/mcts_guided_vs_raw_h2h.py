@@ -1140,7 +1140,6 @@ def _selection_evidence_from_override(
     raw_arms = raw_root.get("arms")
     if not isinstance(raw_arms, list):
         raise HeadToHeadError("guided engine root allocation arms must be a list.")
-    public_arms = []
     for arm in raw_arms:
         arm = _mapping(arm, label="guided engine root allocation arm")
         if set(arm) != {
@@ -1152,6 +1151,52 @@ def _selection_evidence_from_override(
             "model_prior",
         }:
             raise HeadToHeadError("guided engine root allocation arm has unsupported fields.")
+
+    legal_action_indices = [
+        index for index, is_legal in enumerate(record.current_legal_action_mask) if is_legal
+    ]
+    if len(legal_action_indices) == 1 and override["unmeasured_cause"] is not None:
+        # A public singleton is a committed action, not a search choice.  A
+        # belief world can still expose an engine-only root arm (for example a
+        # recharge/No Move vocabulary difference), but that arm cannot be an
+        # alternate public action and therefore cannot justify or invalidate an
+        # override.  Preserve the decision and its source-derived unmeasured
+        # cause while projecting the only legal public action as a canonical,
+        # no-choice allocation.  A claimed measured singleton stays strict --
+        # it must explain its real public root below. This branch is therefore
+        # limited to a singleton *and* an engine-declared unmeasured cause; a
+        # non-public arm on any genuine choice remains a hard failure.
+        forced_action = legal_action_indices[0]
+        return _validated_selection_evidence(
+            {
+                "model_argmax": override["model_argmax"],
+                "search_argmax": override["search_argmax"],
+                "model_override": override["model_override"],
+                "unmeasured_cause": override["unmeasured_cause"],
+                "root_q_gap": None,
+                "root_visit_gap": None,
+                "root_gap_action_indices": [forced_action],
+                "root_allocation": {
+                    "worlds": raw_root["worlds"],
+                    "prior_authority": raw_root["prior_authority"],
+                    "prior_cause": raw_root["prior_cause"],
+                    "arms": [
+                        {
+                            "action_index": forced_action,
+                            "visit_share": 1.0,
+                            "q": None,
+                            "reported_prior": None,
+                            "model_prior": None,
+                        }
+                    ],
+                },
+            },
+            record=record,
+        )
+
+    public_arms = []
+    for arm in raw_arms:
+        arm = _mapping(arm, label="guided engine root allocation arm")
         # The public action index is the complete identity.  Never carry an
         # engine-rendered label (such as typed Hidden Power) beside a public row.
         public_arms.append({key: arm[key] for key in arm if key != "move"})

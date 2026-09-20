@@ -759,6 +759,69 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "not a public legal action"):
             RUNNER._selection_evidence_from_override(override, record=record)
 
+    def test_forced_singleton_projects_no_choice_without_hiding_real_choice_mismatch(self) -> None:
+        """A one-action request cannot carry a meaningful MCTS override claim.
+
+        The engine can retain hidden-world arms which do not name that public
+        action.  They must not terminate a multi-hour run after the rollout has
+        already committed the forced public action, but the resulting sidecar
+        must stay explicitly unmeasured and contain no synthetic prior or Q.
+        """
+        record = _public_record(
+            legal_action_mask=(True, False, False, False, False, False, False, False, False)
+        )
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {
+            **override,
+            "model_argmax": None,
+            "model_override": None,
+            "unmeasured_cause": "no_root_priors",
+            "root_q_gap": None,
+            "root_visit_gap": None,
+            "root_gap_action_indices": [],
+            "root_allocation": {
+                "worlds": 1,
+                "prior_authority": False,
+                "prior_cause": "no_root_priors",
+                "arms": [
+                    {
+                        **override["root_allocation"]["arms"][0],
+                        "action_index": None,
+                        "visit_share": 0.25,
+                        "q": 0.75,
+                        "reported_prior": None,
+                        "model_prior": None,
+                    },
+                    {
+                        **override["root_allocation"]["arms"][0],
+                        "move": "switch hidden-world-only",
+                        "action_index": 8,
+                        "visit_share": 0.75,
+                        "q": -0.5,
+                        "reported_prior": None,
+                        "model_prior": None,
+                    },
+                ],
+            },
+        }
+        evidence = RUNNER._selection_evidence_from_override(override, record=record)
+        self.assertEqual(evidence["unmeasured_cause"], "no_root_priors")
+        self.assertEqual(evidence["model_argmax"], None)
+        self.assertEqual(evidence["model_override"], None)
+        self.assertEqual(evidence["root_allocation_missing_action_indices"], [])
+        self.assertEqual(
+            evidence["root_allocation"]["arms"],
+            [
+                {
+                    "action_index": 0,
+                    "visit_share": 1.0,
+                    "q": None,
+                    "reported_prior": None,
+                    "model_prior": None,
+                }
+            ],
+        )
+
     def test_selection_evidence_names_missing_legal_actions_without_aborting_the_game(self) -> None:
         """A partial engine root is evidence of a vocabulary seam, not a lost run.
 
