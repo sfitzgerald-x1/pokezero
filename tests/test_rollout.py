@@ -56,6 +56,11 @@ class ScriptedEnv:
             return self.requested_sequence[len(self.step_calls)]
         return ()
 
+    def snapshot_actionable_boundary(self) -> dict[str, int]:
+        """Minimal private-boundary stand-in used by the sealed-hook tests."""
+
+        return {"committed_steps": len(self.step_calls)}
+
     def step(self, actions: dict[str, int]) -> StepResult:
         self.step_calls.append(dict(actions))
         terminal = self.terminal()
@@ -213,6 +218,46 @@ class RolloutDriverTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "durable public evidence unavailable"):
             driver.run(seed=76)
         self.assertEqual(len(env.step_calls), 1)
+
+    def test_rollout_emits_sealed_boundary_after_selection_before_source_step(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1", "p2")], terminal_after_steps=1)
+        boundaries = []
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": RandomLegalPolicy(), "p2": SimpleLegalPolicy(switch_probability=0.0)},
+            config=RolloutConfig(sealed_pre_step_sink=boundaries.append),
+        )
+
+        driver.run(seed=77, battle_id="sealed-boundary-battle")
+
+        self.assertEqual(len(boundaries), 1)
+        boundary = boundaries[0]
+        self.assertEqual(boundary.seed, 77)
+        self.assertEqual(boundary.battle_id, "sealed-boundary-battle")
+        self.assertEqual(boundary.decision_round_index, 0)
+        self.assertEqual(boundary.requested_players, ("p1", "p2"))
+        self.assertEqual(boundary.snapshot, {"committed_steps": 0})
+        self.assertEqual(
+            {player: decision.action_index for player, decision in boundary.decisions.items()},
+            env.step_calls[0],
+        )
+        with self.assertRaises(TypeError):
+            boundary.decisions["p1"] = boundary.decisions["p1"]
+
+    def test_rollout_refuses_sealed_capture_without_actionable_snapshot(self) -> None:
+        class NoSnapshotEnv(ScriptedEnv):
+            snapshot_actionable_boundary = None
+
+        env = NoSnapshotEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": RandomLegalPolicy()},
+            config=RolloutConfig(sealed_pre_step_sink=lambda _boundary: None),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "snapshot_actionable_boundary"):
+            driver.run(seed=78)
+        self.assertEqual(env.step_calls, [])
 
     def test_rollout_caps_when_environment_does_not_terminal(self) -> None:
         env = ScriptedEnv(requested_sequence=[("p1", "p2")] * 5, terminal_after_steps=None)
