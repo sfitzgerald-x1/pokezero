@@ -1210,7 +1210,7 @@ class TheDerivationsReadSomethingTests(unittest.TestCase):
         indices = [i for i, line in enumerate(lines) if line.strip() == expected]
         self.assertEqual(len(indices), 1)
         preceding = "\n".join(lines[max(0, indices[0] - 6) : indices[0]])
-        self.assertIn("uses: actions/checkout@v4", preceding)
+        self.assertIn("uses: actions/checkout@v5", preceding)
         self.assertEqual(workflow_showdown_checkouts(), [lines[indices[0]]])
 
     def test_the_single_seat_subkey_scan_finds_the_unkeyed_counter(self) -> None:
