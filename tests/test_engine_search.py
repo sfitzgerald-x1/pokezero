@@ -5812,6 +5812,61 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             "model_choice": "beta",
         }])
 
+    def test_measured_override_metadata_drives_the_sealed_audit_adapter(self) -> None:
+        """The producer's actual envelope is admissible without move labels.
+
+        This is intentionally not a hand-written controller fixture.  It drives
+        the production engine telemetry path and passes the resulting decision
+        directly to the boundary adapter, catching source-schema drift before a
+        cluster audit can discover it after a long run.
+        """
+        from types import MappingProxyType
+
+        from pokezero.mcts_eval.sealed_override_audit import (
+            evaluate_measured_override_boundary,
+        )
+        from pokezero.policy import PolicyDecision
+        from pokezero.rollout import RolloutSealedPreStepBoundary
+
+        policy = self._policy()
+        decision, _ = self._run(
+            policy,
+            [self._report(
+                [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                root_priors=[0.2, 0.8],
+            )],
+        )
+        boundary = RolloutSealedPreStepBoundary(
+            seed=20_260_920,
+            battle_id="engine-produced-audit",
+            decision_round_index=0,
+            requested_players=("p1", "p2"),
+            snapshot=object(),
+            decisions=MappingProxyType(
+                {
+                    "p1": decision,
+                    "p2": PolicyDecision(action_index=1, policy_id="opponent"),
+                }
+            ),
+        )
+        with patch(
+            "pokezero.mcts_eval.sealed_override_audit.evaluate_sealed_override_pair",
+            return_value={"paired": "readout"},
+        ) as evaluate:
+            readout = evaluate_measured_override_boundary(
+                boundary=boundary,
+                candidate_seat="p1",
+                env_factory=lambda: self.fail("must not allocate an environment"),
+                continuation_policy_factory=lambda: self.fail("must not allocate policies"),
+                rollout_config=object(),
+            )
+
+        self.assertEqual(readout["audit"], {"paired": "readout"})
+        evidence = evaluate.call_args.kwargs["search_evidence"]
+        self.assertEqual((evidence["model_argmax"], evidence["search_argmax"]), (1, 0))
+        self.assertEqual([arm["action_index"] for arm in evidence["root_allocation"]["arms"]], [0, 1])
+        self.assertTrue(all("move" not in arm for arm in evidence["root_allocation"]["arms"]))
+
     def test_agreement_does_not_fire(self) -> None:
         """Same visits, priors moved onto the SAME arm: measured, not an override.
 
