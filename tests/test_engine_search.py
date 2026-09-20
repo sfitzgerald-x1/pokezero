@@ -70,10 +70,18 @@ class EngineSearchWorkflowGuardTests(unittest.TestCase):
             "was not updated",
         )
         self.assertGreater(count, 1, "anti-vacuity: the loader found no engine-search tests")
+        early_guard = workflow.split("  unittest-count-guards:", 1)[1].split(
+            "\n  mass-gate:", 1
+        )[0]
         self.assertIn(
             "python scripts/check_engine_fidelity_unittest_counts.py",
-            step,
-            "the workflow must run the source-derived guard for every exact unittest count",
+            early_guard,
+            "the source-derived guard must run before the expensive native mass gate",
+        )
+        self.assertIn(
+            "timeout-minutes: 5",
+            early_guard,
+            "the static guard must stay a bounded fast-fail job",
         )
         filters = workflow.split("FILTERS: |", 1)[1].split("          BASE:", 1)[0]
         self.assertIn(
