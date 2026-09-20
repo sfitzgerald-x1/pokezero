@@ -94,7 +94,6 @@ jobs:
             scripts/collapsed_arm_mass_oracle.py
             tests/data/collapsed_arm_mass_oracle.json
             tests/test_drag_limit_is_a_last_resort.py
-            scripts/fidelity_gate_events.py
             tests/test_poke_engine_patch_stack.py
             tests/test_engine_gen3_abilities.py
             tests/test_rest_sleep_refund_boundary.py
