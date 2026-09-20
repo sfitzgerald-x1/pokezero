@@ -11,6 +11,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
+from pokezero.engine_search import BRANCH_PRIOR_FALLBACK_REASON_VALUES
+
 
 REPO = Path(__file__).resolve().parents[1]
 WORKER = runpy.run_path(str(REPO / "scripts" / "mcts_isolated_policy_worker.py"))
@@ -75,6 +77,9 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
             prior_fallbacks=0,
             root_prior_fallbacks=0,
             branch_prior_fallbacks=0,
+            branch_prior_fallback_reasons={
+                name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            },
             decision_wall_seconds=0.25,
         )
 
@@ -93,6 +98,9 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
             prior_fallbacks=1,
             root_prior_fallbacks=1,
             branch_prior_fallbacks=0,
+            branch_prior_fallback_reasons={
+                name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            },
             opponent_prior_arm_decisions=0,
             opponent_request_order_statuses={"lost_active_permutation": 1},
             opponent_request_order_root_fallback_statuses={"lost_active_permutation": 1},
