@@ -439,6 +439,18 @@ class PolicyTelemetry:
             raw_branch_reasons = {
                 reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
             }
+        elif isinstance(raw_branch_reasons, Mapping) and set(raw_branch_reasons).issubset(
+            BRANCH_PRIOR_FALLBACK_REASON_VALUES
+        ):
+            # EngineMctsStats uses Counter and only materializes causes it has
+            # observed.  A Counter's missing keys are exact zeros, not unknown
+            # native provenance, so complete that sparse in-process snapshot at
+            # the transport boundary.  Unknown keys deliberately survive to the
+            # closed-vocabulary validator below and fail the run.
+            raw_branch_reasons = {
+                reason: raw_branch_reasons.get(reason, 0)
+                for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            }
         return cls(
             decisions=int(getattr(stats, "decisions", 0)),
             searched_decisions=int(getattr(stats, "searched_decisions", 0)),

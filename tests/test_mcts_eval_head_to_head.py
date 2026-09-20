@@ -79,6 +79,36 @@ class _IsolatedPolicy(_Policy):
 
 
 class OpponentOrderTelemetryTest(unittest.TestCase):
+    def test_capture_completes_sparse_counter_reason_ledger(self) -> None:
+        policy = _Policy("candidate")
+        policy.stats.prior_fallbacks = 2
+        policy.stats.root_prior_fallbacks = 0
+        policy.stats.branch_prior_fallbacks = 2
+        # EngineMctsStats stores a Counter, whose zero-valued reasons are absent
+        # from the live mapping.  Transport must materialize those known zeros
+        # before applying its exact durable-ledger schema.
+        policy.stats.branch_prior_fallback_reasons = {"unmapped_action": 2}
+
+        telemetry = PolicyTelemetry.capture(policy)
+
+        self.assertEqual(
+            telemetry.branch_prior_fallback_reasons,
+            {
+                reason: 2 if reason == "unmapped_action" else 0
+                for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            },
+        )
+
+    def test_capture_keeps_unknown_counter_reason_fail_closed(self) -> None:
+        policy = _Policy("candidate")
+        policy.stats.prior_fallbacks = 1
+        policy.stats.root_prior_fallbacks = 0
+        policy.stats.branch_prior_fallbacks = 1
+        policy.stats.branch_prior_fallback_reasons = {"unknown_native_reason": 1}
+
+        with self.assertRaisesRegex(ValueError, "complete native reason vocabulary"):
+            PolicyTelemetry.capture(policy)
+
     def test_branch_reason_deltas_are_preserved_and_must_be_conserved(self) -> None:
         reasons = {reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
         before = PolicyTelemetry(branch_prior_fallback_reasons=reasons)
