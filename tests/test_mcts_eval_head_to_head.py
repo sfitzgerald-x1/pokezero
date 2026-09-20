@@ -29,7 +29,7 @@ from pokezero.mcts_eval.head_to_head import (
 )
 from pokezero.mcts_eval.scoring import bootstrap_mean
 from pokezero.policy import PolicyContext
-from pokezero.engine_search import EngineMctsConfig
+from pokezero.engine_search import BRANCH_PRIOR_FALLBACK_REASON_VALUES, EngineMctsConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -79,6 +79,26 @@ class _IsolatedPolicy(_Policy):
 
 
 class OpponentOrderTelemetryTest(unittest.TestCase):
+    def test_branch_reason_deltas_are_preserved_and_must_be_conserved(self) -> None:
+        reasons = {reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        before = PolicyTelemetry(branch_prior_fallback_reasons=reasons)
+        reasons["unmapped_action"] = 2
+        after = PolicyTelemetry(
+            prior_fallbacks=2,
+            branch_prior_fallbacks=2,
+            branch_prior_fallback_reasons=reasons,
+        )
+        self.assertEqual(
+            after.delta(before).branch_prior_fallback_reasons,
+            {**{reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES}, "unmapped_action": 2},
+        )
+        with self.assertRaisesRegex(ValueError, "must sum"):
+            PolicyTelemetry(
+                prior_fallbacks=1,
+                branch_prior_fallbacks=1,
+                branch_prior_fallback_reasons=reasons,
+            )
+
     def test_order_status_deltas_are_preserved_and_must_be_monotonic(self) -> None:
         before = PolicyTelemetry(opponent_request_order_statuses={"resolved": 2})
         after = PolicyTelemetry(

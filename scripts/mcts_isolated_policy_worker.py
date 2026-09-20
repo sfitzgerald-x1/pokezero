@@ -51,6 +51,7 @@ STATS_FIELDS = (
     "prior_fallbacks",
     "root_prior_fallbacks",
     "branch_prior_fallbacks",
+    "branch_prior_fallback_reasons",
     "opponent_prior_arm_decisions",
     "override_measured_decisions",
     "model_override_decisions",
@@ -413,6 +414,7 @@ def _stats_payload(stats: Any) -> dict[str, Any]:
                 f"source-local policy stats omit required telemetry field {field_name!r}."
             ) from error
         if field_name in {
+            "branch_prior_fallback_reasons",
             "opponent_request_order_statuses",
             "opponent_request_order_root_fallback_statuses",
         }:
@@ -430,6 +432,20 @@ def _stats_payload(stats: Any) -> dict[str, Any]:
     ):
         raise WorkerError(
             "source-local policy prior fallback aggregate must equal root plus branch."
+        )
+    from pokezero.engine_search import BRANCH_PRIOR_FALLBACK_REASON_VALUES
+    if (
+        set(payload["branch_prior_fallback_reasons"])
+        != BRANCH_PRIOR_FALLBACK_REASON_VALUES
+        or any(
+            type(count) is not int or count < 0
+            for count in payload["branch_prior_fallback_reasons"].values()
+        )
+        or sum(payload["branch_prior_fallback_reasons"].values())
+        != payload["branch_prior_fallbacks"]
+    ):
+        raise WorkerError(
+            "source-local policy branch prior fallback reasons must be complete and conserved."
         )
     return payload
 
