@@ -114,7 +114,27 @@ def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
         latest_decision_metadata={
             "engine_mcts": {
                 "override": {
-                    "branch_prior_fallbacks": _branch_prior_ledger(fallbacks=fallbacks)
+                    "branch_prior_fallbacks": _branch_prior_ledger(fallbacks=fallbacks),
+                    "model_argmax": record.recorded_action_index,
+                    "search_argmax": record.recorded_action_index,
+                    "model_override": False,
+                    "unmeasured_cause": None,
+                    "root_q_gap": None,
+                    "root_visit_gap": None,
+                    "root_allocation": {
+                        "worlds": 1,
+                        "prior_authority": True,
+                        "prior_cause": None,
+                        "arms": [
+                            {
+                                "move": "tackle",
+                                "visit_share": 1.0,
+                                "q": 0.25,
+                                "reported_prior": 1.0,
+                                "model_prior": 1.0,
+                            }
+                        ],
+                    },
                 }
             }
         },
@@ -312,6 +332,13 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "attribution disagrees"):
             RUNNER._validated_branch_prior_ledger(ledger)
 
+    def test_selection_evidence_refuses_search_action_not_bound_to_public_record(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {**override, "search_argmax": record.recorded_action_index + 1}
+        with self.assertRaisesRegex(Exception, "does not match its public decision"):
+            RUNNER._validated_selection_evidence(override, record=record)
+
     def test_writer_and_validator_bind_each_guided_decision_immutably(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
@@ -344,6 +371,7 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             self.assertEqual(
                 ledger_payload["branch_prior_fallbacks"]["branch_prior_fallbacks"], 0
             )
+            self.assertEqual(ledger_payload["selection"]["search_argmax"], record.recorded_action_index)
             self.assertEqual(
                 RUNNER._validate_public_decision_evidence(Path(directory), game),
                 (record,),

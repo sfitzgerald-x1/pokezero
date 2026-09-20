@@ -14,6 +14,7 @@ import argparse
 from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
+import math
 from pathlib import Path
 import sys
 import time
@@ -55,7 +56,7 @@ PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
-    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v1"
+    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v2"
 )
 RAW_SELECTOR = {
     "kind": "deterministic_masked_argmax",
@@ -357,6 +358,12 @@ def _nonnegative_int(value: object, *, label: str) -> int:
     return value
 
 
+def _finite_number(value: object, *, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise HeadToHeadError(f"{label} must be a finite number.")
+    return float(value)
+
+
 def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
     """Validate the bounded native-tree evidence safe to retain beside a public row."""
 
@@ -470,10 +477,10 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
     }
 
 
-def _branch_prior_ledger_from_decision(
+def _guided_override_from_decision(
     guided_policy: PublicOnlyMctsPolicy,
     record: PublicDecisionRecord,
-) -> dict[str, Any]:
+) -> Mapping[str, Any]:
     address = guided_policy.latest_decision_address
     expected_address = {
         "battle_id": record.battle_id,
@@ -487,8 +494,125 @@ def _branch_prior_ledger_from_decision(
         )
     metadata = _mapping(guided_policy.latest_decision_metadata, label="guided decision metadata")
     engine_mcts = _mapping(metadata.get("engine_mcts"), label="guided engine MCTS metadata")
-    override = _mapping(engine_mcts.get("override"), label="guided override telemetry")
+    return _mapping(engine_mcts.get("override"), label="guided override telemetry")
+
+
+def _branch_prior_ledger_from_override(override: Mapping[str, Any]) -> dict[str, Any]:
     return _validated_branch_prior_ledger(override.get("branch_prior_fallbacks"))
+
+
+def _validated_selection_evidence(
+    override: Mapping[str, Any],
+    *,
+    record: PublicDecisionRecord,
+) -> dict[str, Any]:
+    """Project the safe, decision-local root allocation used by MCTS selection.
+
+    This deliberately excludes opponent arms and world inputs.  It retains the
+    candidate's legal action labels, own prior, visit share and Q estimate so a
+    later independent continuation audit can test whether an override was
+    justified without replaying or exposing the hidden state.
+    """
+
+    expected = {
+        "model_argmax",
+        "search_argmax",
+        "model_override",
+        "unmeasured_cause",
+        "root_q_gap",
+        "root_visit_gap",
+        "root_allocation",
+    }
+    selection = {key: override.get(key) for key in expected}
+    if set(override).isdisjoint(expected):
+        raise HeadToHeadError("guided override telemetry does not expose selection evidence.")
+    search_action = selection["search_argmax"]
+    if (
+        isinstance(search_action, bool)
+        or not isinstance(search_action, int)
+        or search_action != record.recorded_action_index
+    ):
+        raise HeadToHeadError("guided search action does not match its public decision.")
+    model_action = selection["model_argmax"]
+    if model_action is not None and (isinstance(model_action, bool) or not isinstance(model_action, int)):
+        raise HeadToHeadError("guided model action must be an integer or null.")
+    model_override = selection["model_override"]
+    if model_action is None:
+        if model_override is not None:
+            raise HeadToHeadError("unmeasured guided decision cannot claim a model override.")
+    elif not isinstance(model_override, bool) or model_override != (model_action != search_action):
+        raise HeadToHeadError("guided model override disagrees with the selected actions.")
+    unmeasured_cause = selection["unmeasured_cause"]
+    if unmeasured_cause is not None and (
+        not isinstance(unmeasured_cause, str) or not unmeasured_cause
+    ):
+        raise HeadToHeadError("guided unmeasured cause must be a non-empty string or null.")
+    def optional_number(value: object, *, label: str) -> float | None:
+        return None if value is None else _finite_number(value, label=label)
+
+    root = _mapping(selection["root_allocation"], label="guided root allocation")
+    if set(root) != {"worlds", "prior_authority", "prior_cause", "arms"}:
+        raise HeadToHeadError("guided root allocation has unsupported fields.")
+    worlds = _nonnegative_int(root.get("worlds"), label="guided root allocation worlds")
+    if worlds <= 0 or not isinstance(root.get("prior_authority"), bool):
+        raise HeadToHeadError("guided root allocation has invalid authority metadata.")
+    prior_cause = root.get("prior_cause")
+    if prior_cause is not None and (not isinstance(prior_cause, str) or not prior_cause):
+        raise HeadToHeadError("guided root allocation prior cause must be a non-empty string or null.")
+    if bool(root["prior_authority"]) != (prior_cause is None):
+        raise HeadToHeadError("guided root allocation authority disagrees with its cause.")
+    arms = root.get("arms")
+    if not isinstance(arms, list) or not arms:
+        raise HeadToHeadError("guided root allocation must include at least one own-action arm.")
+    normalized_arms: list[dict[str, Any]] = []
+    for arm in arms:
+        arm = _mapping(arm, label="guided root allocation arm")
+        if set(arm) != {"move", "visit_share", "q", "reported_prior", "model_prior"}:
+            raise HeadToHeadError("guided root allocation arm has unsupported fields.")
+        move = arm.get("move")
+        if not isinstance(move, str) or not move:
+            raise HeadToHeadError("guided root allocation arm move must be a non-empty string.")
+        visit_share = _finite_number(arm.get("visit_share"), label="guided root visit share")
+        if not 0.0 <= visit_share <= 1.0:
+            raise HeadToHeadError("guided root visit share must be within [0, 1].")
+        normalized_arms.append(
+            {
+                "move": move,
+                "visit_share": visit_share,
+                "q": optional_number(arm.get("q"), label="guided root Q"),
+                "reported_prior": optional_number(
+                    arm.get("reported_prior"), label="guided reported prior"
+                ),
+                "model_prior": optional_number(arm.get("model_prior"), label="guided model prior"),
+            }
+        )
+    if len({arm["move"] for arm in normalized_arms}) != len(normalized_arms):
+        raise HeadToHeadError("guided root allocation repeats an own-action arm.")
+    if not math.isclose(sum(arm["visit_share"] for arm in normalized_arms), 1.0, abs_tol=1e-5):
+        raise HeadToHeadError("guided root visits do not conserve one decision.")
+    for key in ("reported_prior", "model_prior"):
+        values = [arm[key] for arm in normalized_arms]
+        if any(value is not None and not 0.0 <= value <= 1.0 for value in values):
+            raise HeadToHeadError(f"guided {key} must be within [0, 1] when present.")
+        if any(value is not None for value in values):
+            if any(value is None for value in values) or not math.isclose(sum(values), 1.0, abs_tol=1e-5):
+                raise HeadToHeadError(f"guided {key} must cover and conserve all own-action arms.")
+    return {
+        "model_argmax": model_action,
+        "search_argmax": search_action,
+        "model_override": model_override,
+        "unmeasured_cause": unmeasured_cause,
+        "root_q_gap": optional_number(selection["root_q_gap"], label="guided root Q gap"),
+        "root_visit_gap": optional_number(
+            selection["root_visit_gap"], label="guided root visit gap"
+        ),
+        "root_allocation": {
+            "worlds": worlds,
+            "prior_authority": bool(root["prior_authority"]),
+            "prior_cause": prior_cause,
+            "arms": normalized_arms,
+        },
+    }
 
 
 def _branch_prior_ledger_payload(
@@ -498,6 +622,7 @@ def _branch_prior_ledger_payload(
     candidate_seat: str,
     record: PublicDecisionRecord,
     ledger: Mapping[str, Any],
+    selection: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
         "schema_version": BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION,
@@ -513,6 +638,7 @@ def _branch_prior_ledger_payload(
             "recorded_action_index": record.recorded_action_index,
         },
         "branch_prior_fallbacks": _validated_branch_prior_ledger(ledger),
+        "selection": _validated_selection_evidence(selection, record=record),
     }
 
 
@@ -553,6 +679,7 @@ def _public_decision_writer(
         path = _public_decision_path(
             out_root, seed=seed, candidate_seat=candidate_seat, record=record
         )
+        override = _guided_override_from_decision(guided_policy, record)
         _write_immutable_json(
             path,
             _public_decision_payload(
@@ -572,7 +699,8 @@ def _public_decision_writer(
                 incumbent=incumbent,
                 candidate_seat=candidate_seat,
                 record=record,
-                ledger=_branch_prior_ledger_from_decision(guided_policy, record),
+                ledger=_branch_prior_ledger_from_override(override),
+                selection=override,
             ),
         )
 
@@ -665,12 +793,17 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
         if not isinstance(ledger_payload, Mapping):
             raise HeadToHeadError("branch-prior ledger evidence is not a JSON object.")
         ledger = _validated_branch_prior_ledger(ledger_payload.get("branch_prior_fallbacks"))
+        selection = _validated_selection_evidence(
+            _mapping(ledger_payload.get("selection"), label="guided selection evidence"),
+            record=record,
+        )
         expected_ledger_payload = _branch_prior_ledger_payload(
             candidate=game.candidate,
             incumbent=game.incumbent,
             candidate_seat=game.candidate_seat,
             record=record,
             ledger=ledger,
+            selection=selection,
         )
         if dict(ledger_payload) != expected_ledger_payload:
             raise HeadToHeadError("branch-prior ledger evidence does not bind its public decision.")
