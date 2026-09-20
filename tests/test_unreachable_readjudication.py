@@ -1411,13 +1411,14 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         carrying = [n for n, line in enumerate(lines, 1) if self.INVOCATION.search(line)]
         comments = [n for n in carrying if lines[n - 1].strip().startswith("#")]
         self.assertEqual(
-            len(comments), 1,
-            "the workflow no longer carries the invocation string inside exactly one "
-            "comment; this control's own premise has moved and must be re-measured",
+            comments,
+            [],
+            "workflow comments must not carry executable unittest invocations; the "
+            "scanner must derive its inventory from runnable commands only",
         )
         self.assertEqual(
             [line for line, _, _, _ in self._sites()],
-            [n for n in carrying if n not in set(comments)],
+            carrying,
             "the `run:`-body walk and a flat scan disagree about which lines invoke the "
             "runner. A body the walk stops recognising takes its steps' guards out of "
             "coverage silently, which is #1205 with a different cause.",
@@ -1429,7 +1430,6 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         # rewording, because the value is what a citation IS.
         sites = self._sites()
         forbidden = {
-            "the invocation-carrying comment": [comments[0]],
             "an executable invocation": [line for line, _, _, _ in sites],
             "a `Ran N tests` guard": [g for _, _, g, _ in sites if g is not None],
         }
@@ -1454,19 +1454,6 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
                         "above it, silently -- which is how C156's four stale citations "
                         "were born. Describe the step; do not number it.",
                     )
-        # `reports/c156` may cite the four SITES by line, because its §1 scopes them to
-        # `dbb40c5c` and a citation scoped to a commit cannot go stale. The comment line is
-        # not one of those and is where the report's own stale citation was.
-        with open(os.path.join(REPO, "reports/c156_workflow_guard_scan_closure.md"),
-                  encoding="utf-8") as handle:
-            report = handle.read()
-        self.assertEqual(
-            [n for n, text in enumerate(report.splitlines(), 1)
-             if ":%d" % comments[0] in text], [],
-            "reports/c156 cites the invocation-carrying comment BY LINE NUMBER "
-            f"(currently {comments[0]}). Describe it; the line is derived here.",
-        )
-
     def test_every_scanned_module_matches_the_ast_derivations_assumptions(self) -> None:
         """`derived == printed` rests on THREE things `_methods` does not itself check.
 
@@ -1613,11 +1600,11 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
             int(self._all(r"had to turn this module RED\. All (\d+) do\.", battery)),
             len(entries),
         )
-        self.assertEqual(
-            int(self._all(r"Battery: (\d+) mutations applied, \1 caught", self._step())),
-            len(entries),
-            "the workflow comment states a battery size this module's enumerated list does "
-            "not have. The comment is the copy a reader meets first.",
+        self.assertNotRegex(
+            self._step(),
+            r"Battery: \d+ mutations applied, \d+ caught",
+            "the workflow must not duplicate the mutation-battery size in commentary; "
+            "the executable test inventory and the report are the maintained sources",
         )
         with open(os.path.join(REPO, "reports/c156_workflow_guard_scan_closure.md"),
                   encoding="utf-8") as handle:

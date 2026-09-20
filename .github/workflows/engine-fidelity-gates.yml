@@ -1,42 +1,17 @@
 name: Engine fidelity gates
 
-# C116 Phase 1 item 4, the wiring half. The mass gate and the behavioural probes are
-# the only instruments that can see defects the transition differential is structurally
-# blind to -- anything that moves probability mass between branches while leaving each
-# branch's damage components intact. Before this workflow existed, nothing ran them:
-# the two other workflows run six named modules between them and neither builds
-# poke_engine, so `tests/test_branch_mass_reconstruction.py` was a standing test that
-# nothing executed. Adversarial review had to substitute for it three times.
-#
-# THE IMPORTS ARE DELIBERATELY HARD. Do not "fix" a missing-wheel failure with
-# try/except ImportError + skipIf, the convention some other engine tests use. A gate
-# that skips when the wheel is absent is precisely how the previous era's fixtures read
-# PASS while asserting nothing -- six of them. If the wheel will not build, this job
-# must go red, not green-with-a-skip.
 
 on:
   pull_request:
 
-# Every job in this workflow only reads the pull-request merge result and its
-# pinned upstream source.  Keep the workflow token read-only, and avoid leaving
-# even that token in any checkout's Git configuration.
 permissions:
   contents: read
 
-# A new commit supersedes an older pull-request head. Without this, each quick
-# follow-up starts another full native-engine build and the 15–30 minute mass
-# gate continues consuming a runner after its result can no longer be merged.
-# Keep runs isolated by PR so unrelated pull requests still validate in parallel.
 concurrency:
   group: engine-fidelity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # The path filter used to live on the workflow trigger. A REQUIRED status check
-  # cannot be path-filtered that way: on a PR that touches none of these paths the
-  # workflow never starts, the check never reports, and the PR is blocked forever
-  # waiting for a job that will not run. So the trigger is unconditional and the
-  # filtering moved here, with `gate-status` below reporting on every PR.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -64,131 +39,37 @@ jobs:
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
             tests/test_branch_mass_reconstruction.py
-            # C152's pool census: the measurement behind the one owed family discharged
-            # by a reachability VERDICT rather than a fixture. Listed for the same
-            # reason the collapsed-arm oracle's pair is listed below -- a PR that
-            # DELETES the artifact or its generator would otherwise trip no workflow at
-            # all, which is the failure mode this file forbids twice. The mass-gate step
-            # reads the artifact, so a deletion reddens once the job actually runs.
             tests/data/c152_pool_reachability_census.json
             scripts/c152_pool_reachability_census.py
-            # Without these the classifier half of B1 -- which edits the differential --
-            # triggers no workflow at all. Found by review of #1081.
             scripts/engine_transition_differential.py
-            # The harness digest. It is IMPORTED by the differential, so breaking it
-            # breaks every mass-gate step that loads the differential; and it is a
-            # member of its own closure, so editing it moves the harness identity
-            # stamped into every sweep. Its own pin file is listed for the reason every
-            # other pin file here is -- a PR whose only change weakens it must still
-            # trip this workflow -- and it additionally has an unconditional job of its
-            # own below, `harness-provenance`.
             scripts/harness_digest.py
             tests/test_harness_digest_provenance.py
-            # The final-holdout guard's pins. Listed so a PR that ONLY weakens the
-            # pin file still trips this workflow -- otherwise the guard could be
-            # disarmed by a test-only edit that never triggers its own gate.
             tests/test_final_holdout_guard.py
-            # The coverage-bound pins. Listed so a PR that only weakens them still
-            # trips this workflow.
             tests/test_single_seat_coverage_bound.py
-            # C144's boundary verdict partition. The COVERAGE partition above and this
-            # VERDICT partition are different partitions of different sets, and
-            # conflating them is what produced the false two-term identity. Listed with
-            # a STEP below, and with its two counterexample artifacts, so a PR that
-            # deletes either one cannot go green without tripping this workflow.
             tests/test_boundary_verdict_partition.py
             scripts/cert_sweep_readout.py
             reports/c26_structural_probe_report.json
             reports/c27_structural_probe_report.json
-            # C146's never-fired census, which re-derives §3.5's absence lists from the
-            # artifacts instead of restating them. Its taxonomy pins read
-            # `src/pokezero/engine_world.py` and `scripts/engine_transition_differential.py`
-            # by AST, and both are already listed above, so a new refusal reason or a new
-            # `classify_divergence` return site trips this workflow. The pin file and its
-            # two counterexample artifacts are listed for the same reason
-            # `test_boundary_verdict_partition.py` is: a PR whose only change weakens the
-            # census, or deletes the c32/c43 witnesses the matchers are pinned against,
-            # must not be able to go green without running it.
             tests/test_never_fired_counter_census.py
             reports/c32_fail_diagnosis.json
             reports/c43_coverage_shortfall_diagnosis.json
-            # ⚠ C152's THIRTEEN artifacts were never listed here, and that is a live gap
-            # rather than a tidy-up. They are members of the exact-count pins in BOTH
-            # `tests/test_boundary_verdict_partition.py` (103) and
-            # `tests/test_never_fired_counter_census.py` (401), and `mass-gate` is the only
-            # job that runs either -- so a PR whose only change is deleting one of them
-            # matches no filter, skips this job entirely and goes green. `seed-registry`
-            # cannot cover it: the wide-census shards sit below `FIDELITY_SEED_FLOOR` and
-            # that module does not see them at all. This is the exact failure mode the
-            # C147 block above is annotated against, one revision later, in the PR that
-            # added the standing rule about instruments.
             reports/artifacts/c152_*.json
-            # C153's wide-seed negative census: the instrument behind §8's "a negative
-            # measured only inside the two permitted windows is a claim about those
-            # windows". Its twelve sweep shards are corpus members of the same two exact
-            # counts, and its derived census artifact plus generator plus pin are listed
-            # for the reason every pin file here is listed -- a PR whose only change
-            # weakens or deletes one of them must not be able to go green without running
-            # this job.
             reports/artifacts/c153_*.json
             scripts/c153_wide_negative_census.py
             tests/test_wide_seed_negative_census.py
-            # C154's re-adjudication of section 4's 26 UNREACHABLE verdicts. Listed for the
-            # reason every pin file and artifact above is listed: `mass-gate` is the only
-            # job that runs the pin, so without these three lines a PR whose only change is
-            # deleting the artifact, the generator or the pin matches no filter, skips this
-            # job entirely and goes green.
-            #
-            # ⚠ This comment previously said the artifact "is NOT a member of the two
-            # exact-count corpora (it sits under tests/data/ on purpose)". That was true of
-            # a placement made on a hazard nobody had measured, and review measured it
-            # false: in `reports/artifacts/` the never-fired census reports `Ran 22 tests
-            # ... OK` on it, because its reason names appear only in prose, which that
-            # census's matcher excludes in terms. The artifact IS a corpus member now
-            # (401 -> 402), so its deletion is caught twice -- here and by the exact count.
-            # The comment is corrected rather than deleted: it is the record of why the
-            # file moved.
             reports/artifacts/c154_unreachable_readjudication.json
             scripts/c154_unreachable_readjudication.py
             tests/test_unreachable_readjudication.py
-            # ⚠ THE LEDGER ITSELF AND ITS UNIFORMITY PIN MATCHED NOTHING across all 74
-            # patterns above, and `mass-gate` is the only job that runs the uniformity
-            # step. That module holds an EXACT §3 row inventory and, as of C153, the
-            # header sentence's row count too -- so a PR whose only change is deleting a
-            # gap row from `reports/c138_known_gaps_ledger.md` matched no filter, skipped
-            # this job and went green. Found by widening C153's own path-filter audit
-            # after it had already caught the C152 block above and stopped one file short
-            # of the file it was itself editing. `reports/c150_...` is the same class: an
-            # artifact a permanent ledger cell cites, with no filter entry.
             reports/c138_known_gaps_ledger.md
             tests/test_ledger_table_uniformity.py
             reports/artifacts/c150_band_split_trade_census.json
-            # C155's terminal-disposition register and its pin. Listed for the reason every
-            # pin file and document above is listed: `mass-gate` is the only job that runs
-            # the pin, so without these two lines a PR whose only change is deleting or
-            # editing the register matches no filter, skips this job and goes green. The
-            # register is the document an owner reads to decide whether
-            # `RATIFIED_SWEEP_PRECONDITION` holds, which makes an unrun pin on it the
-            # single worst place in this file for the gap the C152 block above records.
             reports/c155_terminal_disposition_register.md
             tests/test_terminal_disposition_register.py
-            # The Transform forme-ident battery. `src/pokezero/**` already triggers this
-            # job, so the FIX is covered; this line covers the pin itself, for the reason
-            # every entry above is listed -- a PR whose only change is deleting the module
-            # matches no other filter, skips `mass-gate` (the only job that runs it) and
-            # goes green.
             tests/test_transform_forme_ident.py
-            # The coverage-bound pins' ENTIRE input. Without these listed, a PR whose
-            # only change is deleting one of them skips mass-gate and goes green.
             reports/artifacts/c131_leechseed_main_dev_sweep.json
             reports/artifacts/c131_leechseed_main_holdout_sweep.json
             reports/artifacts/c131_leechseed_fix_dev_sweep.json
             reports/artifacts/c131_leechseed_fix_holdout_sweep.json
-            # C147's EIGHT G33b sweeps -- a pre-merge base/gate pair and a merged one, both
-            # retained. Listed for the same reason as the c131 four
-            # above: they are corpus members of the exact-count pin in
-            # tests/test_boundary_verdict_partition.py, so a PR whose only change is
-            # deleting one of them must trip this workflow rather than skip it.
             reports/artifacts/c147_g33b_base_dev_sweep.json
             reports/artifacts/c147_g33b_base_holdout_sweep.json
             reports/artifacts/c147_g33b_gate_dev_sweep.json
@@ -197,92 +78,27 @@ jobs:
             reports/artifacts/c147_g33b_merged_base_holdout_sweep.json
             reports/artifacts/c147_g33b_merged_gate_dev_sweep.json
             reports/artifacts/c147_g33b_merged_gate_holdout_sweep.json
-            # The remaining five C147 artifacts -- two row replays, two merged row replays
-            # and the reach census -- are outside the sweep corpus but INSIDE the
-            # never-fired counter corpus (360), whose count is equally exact. One glob
-            # rather than five lines, and it also covers the eight named above.
             reports/artifacts/c147_g33b_*.json
             src/pokezero/**
-            # C145: the Encore-on-transform pins, which are what hold `19100170/71-72`
-            # closed. Listed so a PR that ONLY weakens the pin file still trips this
-            # workflow -- and note the file was previously run by no step at all.
             tests/test_engine_world_encore_transform.py
-            # Q2: the NON-transformed Encore branch's third id source (the public
-            # `lastUsedMove` latch), with a STEP below. Same reason as the line above,
-            # and the same hole it was closing: before its step existed the file would
-            # have been run by NO workflow, because CI names modules one by one and
-            # never discovers `tests/`.
             tests/test_engine_world_encore_last_used.py
-            # C153: the Taunt volatile pins, with a STEP below. Same reason as the
-            # line above -- `src/pokezero/**` covers `engine_world.py`, not the file
-            # that holds the counter's value and the engine-fidelity half.
             tests/test_engine_world_taunt.py
-            # The engine-search telemetry pins, with a STEP below. Listed for the reason
-            # every other test file here is: a PR whose only change weakens these pins --
-            # deleting the abort-path tests, or the cross-language attribute-name pin that
-            # is the sole guard against the Rust and Python spellings drifting -- must still
-            # trip the gate. `src/pokezero/**` covers the module they pin but not the pins.
             tests/test_engine_search.py
-            # The source-derived opponent request-order pins, with the named step below.
-            # The failure classes are a cross-language diagnostic protocol: deleting or
-            # weakening their only direct tests must trigger the same gate that proves the
-            # native report can be attributed to a source refusal.
             tests/test_opponent_request_order.py
-            # Direction 2 of the oracle, with a STEP below. Same reason as every
-            # other test file here: `src/pokezero/**` covers `public_projection.py`
-            # but not the pins on it, and a PR whose only change widens the render
-            # HP band's pins or drops the plain-poison fixture must still trip the
-            # gate. #1215 shipped this file with no entry and no step at all.
             tests/test_public_projection.py
-            # The dropped-`|move|`-line instrument, with a STEP below. Listed for the
-            # same reason as the module above: a PR whose only change weakens the
-            # gap pins -- the two layouts where the party cure's walk reaches the
-            # ACTIVE's own clear first, which the renderer still drops silently --
-            # must trip this gate rather than ride in under `src/pokezero/**`.
             tests/test_render_dropped_move_line_crate.py
             tests/test_sleep_talk_phaze_drag.py
             tests/test_instruction_event_mapping.py
-            # This PR pins `Ran 8 tests` on crit-kill-split, so its own edits must trigger.
             tests/test_crit_kill_split_patch.py
-            # C138's enumeration oracle: the fixtures and the shipping-engine
-            # comparison, the module that builds both, and the PINNED enumerated
-            # truth. All three are listed. The artifact especially: a PR whose only
-            # change is regenerating it is exactly the shape its own README warns
-            # against ("NEVER regenerate it from the shipping build to make a test
-            # pass"), and without this entry that PR would skip the gate.
             tests/test_collapsed_arm_mass_oracle.py
             scripts/collapsed_arm_mass_oracle.py
             tests/data/collapsed_arm_mass_oracle.json
             tests/test_drag_limit_is_a_last_resort.py
-            # Imported by the differential (engine_transition_differential.py:105).
-            scripts/fidelity_gate_events.py
             tests/test_poke_engine_patch_stack.py
-            # A5 lives here. Without this entry the patch that fixes it triggers the
-            # workflow (via the .patch and patches.txt globs) but the suite holding its
-            # pins is not even a trigger, let alone a step.
             tests/test_engine_gen3_abilities.py
-            # Pins `Ran 6 tests` and a no-skip guard on the pyo3 binding boundary.
-            # Omitting it is self-defeating: a PR that adds a skipIf or drops the
-            # nonzero assertion touches only this file, so the gate that would
-            # catch it never runs. Found by review of #1108.
             tests/test_rest_sleep_refund_boundary.py
-            # Pins the harness write side: the double-count guard and the
-            # capability probe's negative control. Same reason as the line above --
-            # a PR that weakens only this file must still trigger the gate.
             tests/test_rest_sleep_refund_write_side.py
-            # Holds test_member_coverage_is_locked_to_the_pokemon_spec_surface, an
-            # AUTOMATIC guard that every PokemonSpec field appears in the transport
-            # attestation. It caught rest_sleep_pending_refund the moment the field
-            # was added -- and nobody saw it, because this module was in no
-            # workflow's FILTERS and no step. A guard nothing runs. Found by review
-            # of #1113.
             tests/test_engine_stat_attestation.py
-            # The denominator rule and the four harnesses that adopt it. Without these a PR
-            # that guts differential_denominator.py -- or moves an `attempted` counter back
-            # above a skip decision, which is exactly the bug review caught in #1154 --
-            # triggers no workflow at all. Added with a STEP below rather than filters alone,
-            # because a filter with no step is the "guard nothing runs" this file already
-            # documents twice.
             scripts/differential_denominator.py
             scripts/leaf_vs_reality.py
             scripts/leaf_root_parity.py
@@ -290,35 +106,11 @@ jobs:
             scripts/fidelity_gate_events.py
             tests/test_differential_denominator.py
             tests/test_denominator_adoption.py
-            # The spread-gate provenance pin. Listed with a STEP below, and the step is
-            # honest that it cannot execute the assertions: the pin needs a pokemon-showdown
-            # checkout, CI builds none, and the default root is outside the repo and
-            # untracked -- so 5 of the 6 skip here; only the fixture lint executes. Without this entry a PR that DELETES the pin
-            # trips no workflow at all, which is the failure mode this file forbids twice and
-            # which this very pin was subject to for 37 commits after #1123.
             tests/test_spread_gate_provenance.py
             tests/_showdown_root.py
-            # The leaf self-recharge derivation pin. Review found the P3 freeze lift pinned by
-            # NOTHING -- reverting it at the binary level left 146/146 green, because the only
-            # things that caught it were the two corpus-driven harnesses, and the corpus is
-            # gitignored. This test needs no CORPUS but does need a Showdown checkout for the
-            # dex, so like the spread-gate pin above it SKIPS here; the step below pins that
-            # skip count so the file cannot shrink unnoticed. Listing a filter with no step is
-            # the "guard nothing runs" pattern this file names twice, and a first version of
-            # this entry did exactly that.
             tests/test_leaf_self_recharge_derivation.py
             tests/test_leaf_encoder.py
-            # C116 Phase 2's scope gate. Listed for the same reason as the entries
-            # above: a PR whose only change is adding a file to the mention ledger,
-            # widening _IMPORT_PROBE_EXCLUSIONS, or deleting the collapsed-fan pin
-            # touches nothing else -- so without this line the gate that would object
-            # is not even a trigger.
             tests/test_roll_enumeration_scope.py
-            # Phase 1 instrument 2 — rollout-leaf arbiter. The witness and schema
-            # travel through six files; the recorded mutation battery must be rerun
-            # whenever any one of them or either killer suite moves. A source-only
-            # filter misses four writer/readers under scripts/, while a pin-only
-            # filter lets a weakened battery go green without running its consumers.
             src/pokezero/engine_search.py
             src/pokezero/foulplay_bridge.py
             scripts/foulplay_paired_eval.py
@@ -328,19 +120,9 @@ jobs:
             scripts/battle_bridge_boundary_requests.mjs
             scripts/hc_depth_grid.py
             scripts/mcts_acceptance_h2h.py
-            # The canonical uniform-leaf writer consumes externally materialised
-            # successor states, calls the direct native row pricer, and invokes
-            # the deploy-side estimand gate.  Its own state/provenance pins must
-            # run if either the writer or the pin moves; `rust/**` above covers
-            # the native surface it calls.
             scripts/price_uniform_rollout_leaves.py
             scripts/mutate_rollout_leaf_witness.py
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
-            # `test_rollout_model_priors` imports the encoded native fixture from this
-            # sibling, while the mutation runner imports the repository pytest setup.
-            # They are both part of the arbiter pin's execution closure: changing either
-            # one must start the model-wheel gate rather than letting a test-only edit
-            # weaken or skip it under a green status.
             tests/test_model_priors_search.py
             tests/conftest.py
             tests/test_rollout_model_priors.py
@@ -348,42 +130,12 @@ jobs:
             tests/test_rollout_leaf_arbiter.py
             tests/test_rollout_leaf_witness_mutation_battery.py
             tests/test_price_uniform_rollout_leaves.py
-            # V1's checkpoint conversion is a writer on the model path.  The
-            # converter and both its direct and load-path pin suites must start
-            # the model-wheel gate even when a PR changes only test or script
-            # bytes; `src/pokezero/**` alone cannot cover that closure.
             scripts/convert_value_head.py
             tests/test_convert_value_head.py
             tests/test_value_head_capacity.py
-            # The FoulPlay throughput calibration is a distinct paired-data
-            # contract.  Its reader refuses mixed 1000/760-ms conditions and
-            # forged think telemetry, while the paired driver owns the named
-            # condition identity that prevents those shards pooling with a
-            # normal raw arm.  Exercise both whenever either side moves.
             tests/test_foulplay_paired_eval.py
             tests/test_foulplay_budget_calibration.py
             tests/test_battle_bridge_boundary_requests.py
-            # The schema-default gate and everything it depends on. 332 of its 390 rows live
-            # outside src/ (288 tests/, 43 scripts/, 1 docs/).
-            #
-            # ⚠ NAMING THESE FILES DOES NOT CLOSE THE HOLE, and an earlier revision of this comment
-            # claimed it did, in the past tense. `mass-gate` runs only when this filter matches, and
-            # matching the filter's 89 patterns against the tree leaves 329 of 390 rows (84%)
-            # untriggered, spread over 100 of the 126 files that hold a row. Both breakdowns, since
-            # mixing the two units made an earlier revision of this comment read as though
-            # 62+37+1 should total 329:
-            #     rows  untriggered: 286 tests/ + 42 scripts/ + 1 docs/ = 329 of 390
-            #     files untriggered:  62 tests/ + 37 scripts/ + 1 docs/ = 100 of 126
-            # So the PR-level claim "a new
-            # default reader fails in the PR that introduces it" holds only for PRs that ALSO touch
-            # src/pokezero/**, this workflow, or the gate artifacts below. The lines below close
-            # the artifact half: a PR that regenerates or deletes the allowlist now trips the job,
-            # which it did not before. The tests/ and scripts/ half is left open deliberately
-            # rather than papered over -- broadening to `tests/**` would run this job on nearly
-            # every PR in the repo, which is a cost decision, not a hygiene one. Worse, the gate's own artifacts
-            # were unlisted, so a PR that regenerated or deleted the allowlist tripped nothing:
-            # the same "a guard nothing runs" shape this file already records twice above, and the
-            # exact failure the header calls forbidden.
             scripts/schema_default_ledger.py
             tests/test_schema_default_ledger.py
             tests/test_schema_with_selector.py
@@ -394,23 +146,6 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          # Fail CLOSED: if the diff cannot be computed, run the gates.
-          # THREE dots: diff from the merge base, which is what GitHub's own
-          # `paths:` filter and the Files-changed view use. A two-dot diff against
-          # the base-branch TIP normally over-matches (harmless), but if an
-          # identical change also landed on main the trees agree, the file drops
-          # out, and a touched path silently stops matching.
-          #
-          # --no-renames: with rename detection on (the default), `git mv
-          # src/pokezero/x.py lib/` reports ONLY the destination, so moving a file
-          # OUT of a gated directory would match nothing and skip the gates on a
-          # change certain to break them.
-          # core.quotePath=false: git otherwise C-quotes non-ASCII paths, emitting
-          # `"src/pokezero/caf\303\251.py"` -- with literal quotes -- which then
-          # matches no glob. That is the ONE direction in which this filter is
-          # narrower than GitHub's `paths:` rather than wider, i.e. the only
-          # fail-OPEN divergence. No non-ASCII path exists in the tree today; this
-          # keeps it that way by construction rather than by luck.
           if ! changed=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE...$HEAD"); then
             echo "could not diff $BASE..$HEAD; running the gates anyway"
             echo "fidelity=true" >> "$GITHUB_OUTPUT"
@@ -430,11 +165,6 @@ jobs:
           done <<< "$changed"
           while IFS= read -r pattern; do
             [ -z "$pattern" ] && continue
-            # The old trigger `paths:` list carried a one-line rationale per entry
-            # ("Found by review of #1081", "A5 lives here", ...). A YAML block
-            # scalar cannot hold YAML comments, so they live inside it and are
-            # skipped here -- deleting the provenance of each glob was not worth
-            # the tidiness.
             case "$pattern" in \#*) continue ;; esac
             while IFS= read -r file; do
               [ -z "$file" ] && continue
@@ -462,18 +192,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          # Cache package downloads only. The checkout and all native artifacts
-          # are still built from this PR's source on every run.
           cache: pip
           cache-dependency-path: pyproject.toml
 
       - uses: dtolnay/rust-toolchain@stable
 
-      # The model-path arbiter classes create a real encoded search.  They need
-      # the Gen 3 dex and the encoder tables derived from it; without a built
-      # Showdown tree, unittest SKIPs those 21 behaviour tests while reporting
-      # green.  Pin and build the same upstream source explicitly so this gate
-      # can reject a skip rather than silently dropping the production rung.
       - name: Checkout pinned Pokemon Showdown for model-path arbiter tests
         uses: actions/checkout@v5
         with:
@@ -495,12 +218,6 @@ jobs:
           npm run build --prefix .ci/pokemon-showdown
           test -f .ci/pokemon-showdown/dist/sim/dex.js
 
-      # uv is REQUIRED, not optional: scripts/vendor_poke_engine_src.sh and
-      # scripts/setup_poke_engine.sh call `uv run ... pip download` and `uv pip
-      # install` with no fallback, and uv is not on the ubuntu runner image. Without
-      # it the build dies at step [1/8] with exit 127 on every run -- and, worse, the
-      # patch-stack tamper guard SKIPS rather than fails (see below). Found by review
-      # of #1080.
       - uses: astral-sh/setup-uv@v6
 
       - uses: Swatinem/rust-cache@v2
@@ -508,31 +225,12 @@ jobs:
           workspaces: rust/pokezero-search
 
       - name: Install build tooling
-        # numpy is explicit rather than implied. It is an OPTIONAL dependency (the `neural`
-        # extra in pyproject.toml), but three of the four differential harnesses --
-        # leaf_vs_reality.py, leaf_root_parity.py and prior_mapping_assert.py -- `import numpy`
-        # at module level. Without it they cannot be IMPORTED here at all, so the denominator
-        # step's acceptance subtests errored for three of four harnesses on this step's first
-        # real CI run. Installing the extra itself would drag in torch for nothing; numpy alone
-        # is what the harnesses actually need.
         run: python -m pip install -e . maturin numpy pytest
 
-      # The patch stack must apply at fuzz 0 and hash to its pins before anything is
-      # built. This is also the tamper guard: PATCHED_TARGET_TREE_SHA256 rejects a
-      # zero-context hunk that applied in the wrong place.
-      # tests/test_poke_engine_patch_stack.py calls self.skipTest when `uv` is absent,
-      # and that skip covers EXPECTED_FINAL_SHA256 and PATCHED_TARGET_TREE_SHA256 --
-      # the tamper guard this step exists for. unittest then exits 0 and the step goes
-      # green having asserted nothing. The uv install above is what makes this real;
-      # the skip assertion below is what keeps it real.
       - name: Patch stack integrity
         run: |
           set -o pipefail
           python -m unittest tests.test_poke_engine_patch_stack -v 2>&1 | tee /tmp/patchstack.log
-          # A count assertion as well as a skip assertion. grep-for-'skipped'
-          # cannot notice a DELETED test: removing three of four leaves the step
-          # green, which is the "reads PASS while asserting less than intended"
-          # shape this workflow's header forbids. Found by review of #1081.
           if ! grep -qE 'Ran 4 tests' /tmp/patchstack.log; then
             echo "::error::expected 4 tests; the suite shrank or grew"
             exit 1
@@ -545,15 +243,6 @@ jobs:
       - name: Build and install the gen3 engine and the search crate
         run: bash scripts/build_search_crate_engine.sh
 
-      # Direction 2 of the oracle. #1215 shipped this module and no job ran it,
-      # which is report 4 section 4.7's named hazard verbatim: a new test module is
-      # invisible here by default because the workflow names modules one at a time,
-      # and a gate no job runs is not a gate. It went a whole PR unenforced, and
-      # the follow-up that found the module header still asserting two retracted
-      # coverage claims found them in a file CI never loaded.
-      # Exact count, not a floor: this module's pins are the band width of the HP
-      # comparator and the two units of the render arm, and both are the kind of
-      # thing a silently-shrinking suite stops noticing.
       - name: Public projection oracle (direction 2)
         run: |
           set -o pipefail
@@ -563,28 +252,11 @@ jobs:
             echo "::error::expected 130 public-projection pins; the suite shrank or grew"
             exit 1
           fi
-          # A clean OK with no skips. RenderBandWidthTests is the only thing pinning
-          # the HP band, which is the dominant determinant of the largest figure the
-          # render arm publishes, and a skipIf on it would turn that figure back
-          # into an unverified one.
           if ! grep -qE '^OK$' /tmp/pubproj.log; then
             echo "::error::public-projection pins did not report a clean OK"
             exit 1
           fi
 
-      # The dropped-`|move|`-line instrument, through the SHIPPED renderer. Its own
-      # step for the reason the step above has one: the workflow names modules one at
-      # a time, so a new test module is invisible here by DEFAULT, and #1215 shipped
-      # direction 2 itself with no entry and no step at all.
-      #
-      # THE NO-SKIP GUARD IS THE POINT OF THIS STEP, not boilerplate. Three of these
-      # six pins call `pokezero_search.branch_events` on a constructed state and are
-      # `skipIf`-guarded on the native module; they are the only thing that ties the
-      # instrument to the actual renderer, and the comparator pins in
-      # `test_public_projection` cannot notice a renderer change. A venv without the
-      # crate would skip exactly those three and still print OK -- an instrument that
-      # cannot report failure reporting success, which is the failure this whole
-      # instrument exists to remove.
       - name: Dropped protocol line instrument (direction 2)
         run: |
           set -o pipefail
@@ -603,34 +275,13 @@ jobs:
             exit 1
           fi
 
-      # Behaviour is the only thing a stale .so cannot fake: --check validates the
-      # patch set against the stamp, but a restamp without a rebuild leaves a stale
-      # wheel that --check calls current. This has bitten twice.
-      # Redundant with the build script, which runs the probes at [7/8] and the stamp
-      # at [6/8] -- so the build step fails on a probe failure BEFORE reaching here.
-      # Kept as named steps anyway: when the build fails, "Behavioural probes" in the
-      # step list tells the next reader which instrument objected. The PR body's claim
-      # that "each step can fail only for its own reason" was inaccurate and is
-      # withdrawn.
       - name: Behavioural probes
         run: python scripts/engine_behavioral_probes.py
 
-      # The instrument this workflow exists for. Compares branch masses against an
-      # integer reconstruction that shares none of the partition logic.
       - name: Mass gate
         run: |
           set -o pipefail
           python -m unittest tests.test_branch_mass_reconstruction -v 2>&1 | tee /tmp/massgate.log
-          # A count assertion as well as a skip assertion. grep-for-'skipped'
-          # cannot notice a DELETED test: removing three of four leaves the step
-          # green, which is the "reads PASS while asserting less than intended"
-          # shape this workflow's header forbids. Found by review of #1081.
-          # 6 -> 14: C119 obligation 1 / c137 section 4's four owed families landed
-          # as OWED_CASES with eight methods of their own (seven, plus the Rain Dish
-          # waiver pin added in review). The two matrices are counted together
-          # because they are one module and one gate; the per-matrix guards that CI
-          # cannot see are test_the_fixture_matrix_is_the_expected_size (9) and
-          # test_the_owed_matrix_is_the_expected_size (7).
           if ! grep -qE 'Ran 14 tests' /tmp/massgate.log; then
             echo "::error::expected 14 tests; the suite shrank or grew"
             exit 1
@@ -640,12 +291,6 @@ jobs:
             exit 1
           fi
 
-      # C138. The mass gate above compares ONE scalar -- total KO mass -- against a
-      # reconstruction that has no notion of a secondary, which is precisely the
-      # axis cause A8 lives on. This compares the full outcome-mass functional,
-      # mass per (defender faints?, defender's end status), against ENUMERATED
-      # truth from the roll-enumeration build, cross-checked against an independent
-      # Python enumeration so a wrong oracle cannot bless a wrong recipe.
       - name: Collapsed-arm mass oracle
         run: |
           set -o pipefail
@@ -660,26 +305,6 @@ jobs:
             exit 1
           fi
 
-      # C116 Phase 2. Roll enumeration is a flag-gated reference ORACLE consumed by
-      # tests; NOTHING that ships takes that path, the transition differential very
-      # much included. Two costs if that slips: enumeration measured 2.38 ms -> 8.88 s
-      # per midgame_3v3 decision at depth 4 / 1024 sims, and a differential running
-      # enumerated certifies a code path production never takes, which silently blinds
-      # the 200-game fidelity gate to the surface that actually ships.
-      #
-      # The gate is BEHAVIOURAL, after review defeated the textual version: a file
-      # containing only `import engine_transition_differential` mentioned no flag,
-      # matched no allowlist, and enabled enumeration process-wide (and in every child)
-      # while the scan stayed green. Each check now spawns a child, imports a surface
-      # into it, and requires the engine's fan back COLLAPSED at [112, 160]. The flag is
-      # latched per process by a OnceLock, so an in-process toggle would measure
-      # whichever path happened to be latched first.
-      #
-      # The surface list is DISCOVERED, not hardcoded. A second review pass showed the
-      # hardcoded five-tuple left 22 of 37 engine-touching modules outside every probe --
-      # including src/pokezero/engine_env.py, which runs pokezero_search.env_step and is
-      # reached by the pokezero-rollout console script. With an enabler there a real
-      # search process came back ENUMERATED and this step still read `Ran 14 tests OK`.
       - name: Roll-enumeration scope gate
         run: |
           set -o pipefail
@@ -693,13 +318,6 @@ jobs:
             exit 1
           fi
 
-      # A5: the contact secondary vs. the attacker's same-turn wake. These two pins
-      # were RED at 0 against 33.3333 / 8.3333 / 6.6667 before the patch. They are
-      # named individually rather than run as a module because AbilityCatalogTests
-      # in the same file needs a built Showdown checkout and legitimately SKIPS in
-      # CI -- a module-wide "must not skip" assertion would be a false gate, and a
-      # module-wide count would go green on a skip. Deleting either pin makes the
-      # unittest invocation itself fail to resolve, which is the point.
       - name: Contact-ability wake-ordering pins
         run: |
           set -o pipefail
@@ -711,20 +329,11 @@ jobs:
             echo "::error::expected 2 A5 pins; the set shrank or grew"
             exit 1
           fi
-          # Without this, "OK (skipped=2)" reads as a pass. It did, locally, against
-          # a venv with no wheel -- the pins asserted nothing and looked green.
           if grep -q 'skipped' /tmp/a5pins.log; then
             echo "::error::the A5 pins SKIPPED; they must never skip"
             exit 1
           fi
 
-      # The ENGINE's own suite. Nothing ran it before this step: the only cargo
-      # test in any workflow targets rust/pokezero-search, so every test in
-      # third_party/poke-engine-src/tests/ was a pin nothing executed -- the
-      # defect this workflow's header forbids, and the same one that let the
-      # #1105 wheel break reach CI. The gen3 Rest-refund tests added alongside
-      # this step are worthless without it. Runs after the build, which is what
-      # materialises the patched source tree.
       - name: Engine gen3 suite
         run: |
           set -o pipefail
@@ -736,10 +345,6 @@ jobs:
             echo "::error::expected 34 gen3 engine tests to pass; the suite shrank, grew, or failed"
             exit 1
           fi
-          # And NAME the pins. A total can be restored by unrelated tests, which
-          # is the defect the crate step below calls out; a count alone would let
-          # the Rest-refund tests be deleted and replaced with any six others.
-          # Each of these has a killed mutant behind it.
           for pin in \
             test_rest_refund_is_credited_on_switch_in \
             test_rest_refund_is_clamped_to_the_legal_maximum \
@@ -766,29 +371,6 @@ jobs:
             }
           done
 
-      # The engine's --lib target: the `#[cfg(test)] mod`s inside
-      # third_party/poke-engine-src/src/. `--test test_gen3` above selects ONE
-      # integration target and compiles nothing under src/, so the FIVE unit tests
-      # there ran in no workflow at all -- `state.rs`'s
-      # `rest_sleep_pending_refund_tests` (four, added by #1105 alongside the step
-      # above) and `instruction.rs`'s `test_instruction_size`. That is the same defect
-      # the step above is named for, one cargo TARGET down instead of one crate down.
-      #
-      # Found by review of #1166. The three immobilizer-marker tests were MOVED out of
-      # `src/state.rs` into `tests/test_gen3.rs` so the step above would run them,
-      # which fixes those three and leaves the hole. This closes the hole.
-      # `test_instruction_size` is the one that matters most for that patch: it is the
-      # only assertion anywhere on `size_of::<Instruction>()`, and a new variant is
-      # exactly what moves it.
-      #
-      # PROVEN RED BY CONSTRUCTION, not by reading this file. The body below was
-      # extracted verbatim from this YAML and run against a live patched tree:
-      #   * unmutated -> exit 0 at 5/5.
-      #   * `rest_sleep_pending_refund_tests` deleted -> exit 1 (count 1). Caught ONLY
-      #     here: `--test test_gen3` stays 32/32 green and the crate suite stays green
-      #     above its floor, so before this step those four pins were deletable with
-      #     every gate green.
-      #   * one pin renamed, count still 5 -> exit 1 on the named-pin arm.
       - name: Engine lib suite
         run: |
           set -o pipefail
@@ -800,8 +382,6 @@ jobs:
             echo "::error::expected 5 engine lib tests to pass; the suite shrank, grew, or failed"
             exit 1
           fi
-          # And NAME them, for the reason the step above gives: a total can be
-          # restored by unrelated tests. Both arms measured red by construction.
           for pin in \
             instruction::test::test_instruction_size \
             state::rest_sleep_pending_refund_tests::apply_then_reverse_is_bit_identical \
@@ -814,15 +394,6 @@ jobs:
             }
           done
 
-      # The pyo3 boundary is a blind spot that already cost one red-CI cycle on
-      # #1105: adding a field to the engine's Pokemon broke the wheel build, and
-      # nothing local caught it because `cargo test -p pokezero-search` never
-      # compiles poke-engine-py. Compiling is necessary but NOT sufficient --
-      # `impl Into<Pokemon>` keeps compiling while hardcoding a value, which is a
-      # silent wrong answer on the exact path production uses to build state
-      # (poke_engine_adapter.py: engine.State(...)). Only a nonzero assertion
-      # distinguishes "carried" from "hardcoded"; verified by reintroducing the
-      # literal 0, which fails 2 of these 5.
       - name: Engine binding boundary pins
         run: |
           set -o pipefail
@@ -832,9 +403,6 @@ jobs:
             echo "::error::expected 6 boundary pins; the suite shrank or grew"
             exit 1
           fi
-          # The module imports poke_engine at top level precisely so a missing
-          # wheel is an ERROR, not a skip. Assert it anyway: a future edit that
-          # adds skipIf would otherwise quietly disarm the whole file.
           if grep -q 'skipped' /tmp/boundary.log; then
             echo "::error::a binding boundary pin SKIPPED"
             exit 1
@@ -845,16 +413,6 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_differential_denominator \
             tests.test_denominator_adoption -v 2>&1 | tee /tmp/denominator.log
-          # CI does NOT execute the real-driver acceptance -- it needs corpus/golden-v4,
-          # which is gitignored, so it skips here. That is the layer which caught the
-          # round-1 bug in #1154, and it runs only on a developer machine. Said plainly
-          # rather than as reassurance.
-          #
-          # The skip COUNT is pinned as well as the ran-count, for the reason the
-          # "Engine binding boundary pins" step above gives: a future `skipIf` would
-          # otherwise keep `Ran N` green while disarming the acceptance entirely -- the
-          # "guard nothing runs" pattern this file already documents twice, and the very
-          # reason this step exists.
           if ! grep -qE 'Ran 31 tests' /tmp/denominator.log; then
             echo "::error::denominator pins changed count; the suite shrank or grew"
             exit 1
@@ -864,40 +422,10 @@ jobs:
             exit 1
           fi
 
-      # The reserved final holdout. Seeds >= 19,200,000 are for exactly ONE
-      # measurement, ever, and that reservation used to live only in a plan
-      # document -- until a convenience shell loop over three --seed-start values
-      # executed 60 games of it. The guard refuses such runs; these pins keep the
-      # guard honest, so they have to actually run.
-      #
-      # NOTE ON SKIPS, learned the hard way. The first version of this step said
-      # "this job builds Showdown" and errored on any skip. CI builds no Showdown --
-      # no workflow installs node, none is tracked, and two steps in this same job
-      # say so outright -- so the ordering pin skipped and this step went RED on
-      # every PR that tripped the filter. A permanently-red gate discriminates
-      # nothing: the only way back to green is to delete the step, which is the
-      # failure mode the guard exists to prevent, one level up. The ordering pin now
-      # stubs its collaborators and needs no checkout, so the no-skip assertion
-      # below is meaningful rather than self-defeating.
       - name: Spread-gate provenance pin (shape only -- CANNOT run here)
         run: |
           set -o pipefail
           python -m unittest tests.test_spread_gate_provenance -v 2>&1 | tee /tmp/spreadgate.log
-          # READ THIS BEFORE TRUSTING A GREEN. Five of the six tests are SKIPPED in CI; only the
-          # fixture lint executes. The two-way provenance assertions do NOT run here.
-          # The pin drives a real randbats set source, CI builds no Showdown (two steps in this
-          # job say so), and the default root is outside the repo and untracked. So this step
-          # verifies SHAPE for five of them -- that the pin still exists, still has 6 tests, and
-          # still skips for the stated reason rather than silently shrinking -- plus ONE real
-          # assertion: the fixture lint was moved out of the skip-gated class so CI executes
-          # something. Review measured why that mattered: gut all 18 assertions while keeping 6
-          # tests and a shape-only step still passes.
-          #
-          # That is worth a step anyway. Between #1123 and this commit the file was in no
-          # filter and no step, so deleting it outright would have tripped nothing -- the
-          # "guard nothing runs" pattern this workflow's header forbids, applied to the guard
-          # that pins checkpoint provenance in both directions. The assertions are exercised on
-          # a developer machine with POKEZERO_SHOWDOWN_ROOT set; see reports/ for the red runs.
           if ! grep -qE 'Ran 6 tests' /tmp/spreadgate.log; then
             echo "::error::spread-gate pin changed count; the two-way provenance test shrank or grew"
             exit 1
@@ -911,11 +439,6 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_leaf_self_recharge_derivation -v 2>&1 | tee /tmp/leafrecharge.log
-          # Skips in CI: _pair() needs a Showdown checkout for the dex. Shape only, same
-          # bargain as the spread-gate step above and disclosed for the same reason.
-          # It is worth a step because the thing it pins -- leaf.rs deriving our own
-          # MUSTRECHARGE rather than passing the root's -- was pinned by NOTHING until this
-          # PR: reverting it at the binary level left 146/146 Python tests green.
           if ! grep -qE 'Ran 4 tests' /tmp/leafrecharge.log; then
             echo "::error::leaf self-recharge pin changed count; the derivation pin shrank or grew"
             exit 1
@@ -930,39 +453,15 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_final_holdout_guard -v 2>&1 \
             | tee /tmp/holdout.log
-          # 14 -> 25 (C151): `TheBurnedBlockAndTheOwnerRatificationTests`. Eleven pins for
-          # the two properties this file did not previously have -- that
-          # `19,200,000`-`19,200,259` is BURNED and no opt-in reopens it, and that
-          # `OWNER_RATIFIED` carries the window and the owner's name so a blessing is a
-          # reviewable diff rather than a sentence in a document an agent can walk past.
-          # 24 -> 25 on review: the AGGREGATION refusal's rationale was pinned nowhere, so
-          # rewriting it down to "reserved" left both suites green while the execution
-          # message's rationale was pinned three ways.
           if ! grep -qE 'Ran 25 tests' /tmp/holdout.log; then
             echo "::error::expected 25 final-holdout pins; the suite shrank or grew"
             exit 1
           fi
-          # No pin may skip. Every one runs without a Showdown checkout by
-          # construction, so a skip means someone reintroduced an environmental
-          # dependency and disarmed a pin.
-          #
-          # Assert on a BARE `OK` rather than grepping for 'skipped'. The step's own
-          # log already contains "engine build-freshness check SKIPPED" twice, so the
-          # lowercase grep passed only by letter case -- one character from
-          # reintroducing the red-gate incident above. `^OK$` is strictly stronger:
-          # unittest prints `OK (skipped=N)` when anything skips.
           if ! grep -qE '^OK$' /tmp/holdout.log; then
             echo "::error::final-holdout pins did not report a clean OK (skip or failure)"
             exit 1
           fi
 
-      # The differential measures ~87% of boundaries, not the ~96.6% its own
-      # `measured_fraction_of_full_rounds` reports: that metric's denominator is
-      # `boundaries_full_round`, which by construction EXCLUDES single-seat plies
-      # (~10% of boundaries, and almost all of the deferred-residual population --
-      # all of it except a simultaneous double faint). These pins keep the real
-      # denominator recoverable from any report, so a residue figure cannot be read
-      # as full coverage. reports/c132.
       - name: Single-seat coverage bound
         run: |
           set -o pipefail
@@ -977,19 +476,6 @@ jobs:
             exit 1
           fi
 
-      # The VERDICT partition, which is a different partition from the coverage one
-      # above and was asserted with the wrong number of terms for the whole
-      # C111-C141 era: `matched + diverged == boundaries_measured` is FALSE, because
-      # `engine_error` and `skip:strict_all_branches_lossy` are both counted after
-      # `boundaries_measured` has already incremented. reports/c144.
-      #
-      # C142 makes it FIVE-term (`skip:rump_branch_set`) and takes the module 23 -> 26,
-      # adding the two sufficiency pins for the membership rule and the artifact-shape
-      # pin. The count below is EXACT for the same reason #1163 chose an exact count over
-      # a floor: a floor was the one fail-open in its mutation battery. Note that this
-      # guard lives in YAML, so no local `unittest` or `pytest` run can see it -- it is
-      # invisible to the "run the suite and diff the failing set" check, which is how a
-      # module that grew without its guard following reached an approved PR.
       - name: Boundary verdict partition
         run: |
           set -o pipefail
@@ -999,23 +485,11 @@ jobs:
             echo "::error::expected 26 verdict-partition pins; the suite shrank or grew"
             exit 1
           fi
-          # A clean OK with no skips. The module's anti-vacuity pins -- that the
-          # artifact corpus is non-empty, and that c26/c27 still REFUTE the two-term
-          # form -- are the only reason the rest of it means anything, so a skipIf
-          # added to either must be a red gate rather than a quieter green one.
           if ! grep -qE '^OK$' /tmp/verdict.log; then
             echo "::error::verdict-partition pins did not report a clean OK"
             exit 1
           fi
 
-      # C146. The ledger has asserted a false "never fired" four times, and each error
-      # propagated because citing the ledger felt like verification. This module computes
-      # the fired/never-fired partition from every committed JSON under `reports/` and
-      # `docs/` and asserts it as an exact SET EQUALITY in both directions, so a counter
-      # that starts firing is red rather than a silent widening. Exact count, not a floor,
-      # for the reason #1163 established. Battery: 10 mutations applied, 9 caught; the
-      # tenth is the documented fail-open (a subset assertion carrying H15's wrong
-      # six-class expectation passes), which is why the pin asserts equality.
       - name: Never-fired counter census
         run: |
           set -o pipefail
@@ -1025,23 +499,11 @@ jobs:
             echo "::error::expected 22 never-fired census pins; the suite shrank or grew"
             exit 1
           fi
-          # A clean OK with no skips. The three matcher pins in
-          # TheMatchersThemselvesAreExercisedTests are the only reason the absence pins
-          # mean anything -- skipping one turns every absence assertion vacuous.
           if ! grep -qE '^OK$' /tmp/neverfired.log; then
             echo "::error::never-fired census pins did not report a clean OK"
             exit 1
           fi
 
-      # C153. The census step above is the CORPUS instrument, and §8's newest standing
-      # rule says in its own sentence that a corpus instrument cannot catch this class of
-      # error: `strict:branch_event_legal_error:BranchLegalRollError` and
-      # `skip:rump_branch_set` are 0 in every artifact committed before C152 and fire
-      # immediately on unregistered seeds. The rule landed with no instrument. This step is
-      # it -- a MEASUREMENT taken somewhere new, pinned as a fired/not-observed partition
-      # over 10,000 games on unregistered seeds `1,001,000`-`1,010,999`, with the scope
-      # written into every verdict. Its own module so the census above keeps its
-      # `Ran 22 tests` guard untouched, per C150's precedent. Exact count, not a floor.
       - name: Wide-seed negative census
         run: |
           set -o pipefail
@@ -1051,43 +513,11 @@ jobs:
             echo "::error::expected 37 wide-seed census pins; the suite shrank or grew"
             exit 1
           fi
-          # A clean OK with no skips. TheAbsencePinsAreNotVacuousTests is the only reason
-          # the fired/not-observed partition means anything -- every absence in it is a
-          # loop over the same twelve shards, and a loop over a shard set that stopped
-          # being read passes. Skipping it turns the whole module vacuous.
           if ! grep -qE '^OK$' /tmp/widecensus.log; then
             echo "::error::wide-seed census pins did not report a clean OK"
             exit 1
           fi
 
-      # C154. Section 4's 26 UNREACHABLE verdicts, re-adjudicated against C153's rule
-      # ("trace the raise site to the caller that actually reaches it"). The corpus census
-      # and the wide-seed census cannot do this job -- section 4's rows are neither
-      # counters nor sweeps -- so this is a third instrument, not a wider run of an
-      # existing one. Its load-bearing property is that every citation in every
-      # demonstration is RE-DERIVED from source on each run, which is what stops the 26
-      # from ageing into the fifteen-stale-citations shape #1202 produced. Its own module
-      # so the two censuses keep their exact-count guards untouched, per C150's precedent.
-      # Battery: 35 mutations applied, 35 caught, listed in the module docstring -- number
-      # 8 survived the first version, 13-23 are review's, each one a sentence of this
-      # pass's own that was asserted beyond what it traced, and 24-35 are C156's. Exact
-      # count, not a floor, and no longer a typed one: the module derives this number from
-      # its own enumerated list and reads it back out of THIS comment.
-      #
-      # ⚠ This module also re-derives EVERY `Ran N tests` guard in this file from its
-      # module's AST. That is not scope creep: bumping this step's own guard was done with
-      # an unbounded string replace that also rewrote the FINAL-HOLDOUT step's guard --
-      # which gates OWNER_RATIFIED, BURNED_FINAL_HOLDOUT and the burn -- to a count its
-      # suite can never print, so it stopped failing closed and nothing noticed.
-      #
-      # ⚠ AND THE SCAN ITSELF WAS BLIND TO FOUR OF THIS FILE'S 26 EXECUTABLE STEPS until
-      # C156 (#1205). It looked at most twelve lines past each invocation; the denominator
-      # pair, the spread-gate pin, the stat attestation and the SEED REGISTRY put their
-      # guard 12, 16, 30 and 23 lines out, behind comment blocks exactly like this one, and
-      # the scan emitted no entry for them at all -- no error, no skip, absent. Setting the
-      # seed-registry guard to a count its suite can never print left this module green.
-      # Step extent is now derived from the `run:` body, and coverage is ASSERTED: an
-      # executable step with no reachable guard reddens here.
       - name: Section 4 unreachable re-adjudication
         run: |
           set -o pipefail
@@ -1097,28 +527,11 @@ jobs:
             echo "::error::expected 38 re-adjudication pins; the suite shrank or grew"
             exit 1
           fi
-          # A clean OK with no skips. TheAbsencePinsAreNotVacuousTests is the only reason
-          # the 26 zeroes mean anything -- every one of them is a lookup into one dict
-          # built from one file, and a census that read nothing would make all 26 rows
-          # EASIER to assert. Skipping it turns the whole module vacuous.
           if ! grep -qE '^OK$' /tmp/c154readj.log; then
             echo "::error::re-adjudication pins did not report a clean OK"
             exit 1
           fi
 
-      # C150. C116 item 14 requires a pool-reachability check recorded next to every
-      # known-gaps entry, and the ledger records it in a COLUMN -- so a row that gains a
-      # cell delimiter has that check DROPPED by GFM while it stays in the bytes. That
-      # happened at `a587e614^`: G37 (20 pipes) and G37b (9) against a 6-pipe / 5-column
-      # header both rendered with an EMPTY Reachability cell. #1166 fixed them and the file
-      # has been clean at every commit since; what it did not leave was a control, and its
-      # own note says so ("not pinned ... filed as a follow-up"). This step is that
-      # follow-up, as its own module so the census above keeps its `Ran 22 tests` guard
-      # untouched. Note the escape rule here is GFM's real one -- a pipe preceded by ANY
-      # backslash is escaped, verified against cmarkgfm and GitHub's /markdown API -- after
-      # a first revision of this module used a parity rule and falsely condemned two rows.
-      # Battery: 9 mutations applied, 9 caught, listed in the module docstring. Exact count,
-      # not a floor, for the reason #1163 established.
       - name: Ledger table uniformity
         run: |
           set -o pipefail
@@ -1128,55 +541,11 @@ jobs:
             echo "::error::expected 19 ledger-table pins; the suite shrank or grew"
             exit 1
           fi
-          # A clean OK with no skips. TheHistoricalDropIsCaughtTests feeds the checker the
-          # pre-#1166 bytes of both dropped rows, and TheEscapeRuleMatchesRealRenderersTests
-          # pins the delimiter rule itself; skipping either turns every uniformity
-          # assertion into an unverified matcher.
           if ! grep -qE '^OK$' /tmp/ledgertables.log; then
             echo "::error::ledger table-uniformity pins did not report a clean OK"
             exit 1
           fi
 
-      # C155. The terminal-disposition register. `RATIFIED_SWEEP_PRECONDITION` gates the
-      # program's one terminal measurement on "the ledger is terminal AND the engine
-      # fingerprint is declared frozen", and the list of what stands between here and that
-      # had been RECONSTRUCTED three times by three agents with different numbering each
-      # time. This step is what makes the committed version a maintained document rather
-      # than a fourth reconstruction: the item inventory is exact and ORDERED (ids are
-      # permanent, so a renumbering is red), the statuses are re-derived in BOTH directions
-      # -- flipping an OPEN item to discharged manufactures terminality and flipping the
-      # discharged one to OPEN manufactures openness, and both fail -- and every figure in
-      # its Appendix A is re-derived from tracked bytes, committed artifacts and anchors
-      # resolved with uniqueness required, imported from C153's census rather than copied.
-      #
-      # Battery: 79 mutations applied, 79 caught, plus
-      # one NEGATIVE CONTROL verified green AND ONE DISCLOSED SURVIVOR deliberately not
-      # counted as caught, listed in the module docstring -- a
-      # MUTATION count, not the test count, which a first revision of this comment conflated
-      # by writing the module's 34 tests here. FORTY-TWO of the 79 are applied only to the tree
-      # and never to the document, because a pin that reads a document against a hard-coded
-      # copy of itself passes every document-side mutation; the first revision claimed ten
-      # and two of those ten edited the register. Exact count, not a floor, per #1163.
-      #
-      # ⚠ #1205: the guard scan added in #1204 does not cover every guard here, so do not
-      # assume it will catch a drift in this one. MEASURED, and the denominator is
-      # EXECUTABLE sites -- one line in this file carrying the invocation is a comment and
-      # is not a guard. Merged tree: 26 executable, 22 resolved, 4 unresolved; this step IS
-      # one of the 22, deriving 53 from the module's AST. #1205's own "24 of 20" was exact
-      # at 6ef682bf and its COUNTS are now stale -- main gained #1203's guarded Taunt step,
-      # so main reads 25/21 -- while its FINDING, the same four unresolved steps, is not.
-      # The register re-derives all three numbers rather than stating them, and pins the
-      # unresolved SET by module name because that half does not churn.
-      #
-      # ⚠ THIS STEP FAILED IN CI WHILE GREEN ON TWO LOCAL TREES, and the reason is worth
-      # carrying: GitHub gates on refs/pull/<n>/merge. #1203 added an invocation to main
-      # after this branch was cut and this branch added its own -- each tree reads 25, the
-      # merge reads 26. A PR touching this file must merge origin/main (never rebase) and
-      # re-derive. The assertion says so in its own failure message.
-      # (This comment deliberately does not spell the invocation literally -- the scan
-      # matches on that string, and a revision of this very comment that quoted it added
-      # itself to the count. C154's self-match trap, twice on one step.)
-      # The count below was re-derived the same way and from a local run.
       - name: Terminal disposition register
         run: |
           set -o pipefail
@@ -1186,22 +555,11 @@ jobs:
             echo "::error::expected 53 register pins; the suite shrank or grew"
             exit 1
           fi
-          # A clean OK with no skips. TheDerivationsReadSomethingTests is the only reason
-          # the zeroes in Appendix A mean anything -- every one of them is a loop over a
-          # corpus or a scan of one file, and a scan that read nothing reports zero and
-          # looks like a clean result. Skipping it turns four absences vacuous at once.
           if ! grep -qE '^OK$' /tmp/c155register.log; then
             echo "::error::terminal-disposition register pins did not report a clean OK"
             exit 1
           fi
 
-      # C150. The ledger's G8 cell cites this census by number, and a cited number that
-      # nothing re-derives is exactly how the 124,188-fixture figures it replaced became
-      # unauditable. Re-run the census and require the committed artifact to match it
-      # byte-for-byte. The script also exits non-zero on `real_trades != 0`, on a broken
-      # closure identity, and on any of the three crate fixtures disagreeing with the
-      # transcription -- so a transcription that drifts away from the engine is red here
-      # rather than silently wrong in the ledger.
       - name: G8 band-split trade census reproduces its artifact
         run: |
           set -o pipefail
@@ -1213,28 +571,11 @@ jobs:
             exit 1
           fi
 
-      # The transport attestation, which nothing ran before this. Its
-      # member-coverage test fails automatically whenever a PokemonSpec field is
-      # added without extending the spec-vs-native comparison -- which is exactly
-      # what #1113 did at 7abf3343, invisibly, because no workflow executed it.
       - name: Engine stat attestation
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_stat_attestation -v 2>&1 \
             | tee /tmp/attest.log
-          # The module has TWO skipTest sites, and only one of them can fire here:
-          # test_real_replay_materializes_and_attests_transport_with_source_hash
-          # needs a built Showdown checkout (dist/sim/index.js), which CI has not
-          # got. The other (test_real_adapter_positive_and_negative_controls, on
-          # "poke-engine is not installed/ready") cannot fire only because this step
-          # runs AFTER the build -- move it above and you get two skips and a red
-          # gate: right outcome, misleading message.
-          #
-          # So a bare '^OK$' is a FALSE gate -- it red-flagged this step on the first
-          # attempt, because the author's machine HAS a Showdown checkout and saw
-          # 16/16 clean. A module-wide no-skip assertion would be the same trap the
-          # A5 step above documents. Allow the one reachable skip BY NAME and nothing
-          # else, which is stricter than tolerating any skip.
           if ! grep -qE '^OK( \(skipped=1\))?$' /tmp/attest.log; then
             echo "::error::the transport attestation suite did not end OK"
             exit 1
@@ -1254,21 +595,12 @@ jobs:
             echo "::error::expected 16 attestation tests; the suite shrank or grew"
             exit 1
           fi
-          # The guard this step exists for. It fails automatically whenever a
-          # PokemonSpec field is added without extending the attestation, so it must
-          # actually RUN, not merely be present in a skipped module.
           grep -qE '^test_member_coverage_is_locked_to_the_pokemon_spec_surface \(.*\)( |$)' \
             /tmp/attest.log || {
             echo "::error::the PokemonSpec coverage guard did not run"
             exit 1
           }
 
-      # Row 2 step 4. Two SILENT failure modes, neither visible without a test:
-      # folding the refund into rest_turns while also banking it double-counts and
-      # the engine clamps the result (mon sleeps too long, nothing errors), and a
-      # binding that drops the field builds a state with the refund simply gone.
-      # The dropping-binding negative control is what makes the probe more than
-      # decoration -- the same shape that let #1105's wheel break reach CI.
       - name: Rest refund write-side pins
         run: |
           set -o pipefail
@@ -1278,25 +610,14 @@ jobs:
             echo "::error::expected 6 write-side pins; the suite shrank or grew"
             exit 1
           fi
-          # Anchored on the word boundary, not a bare grep for 'skipped': this
-          # domain is full of 'skippedTime' and a docstring first line would red
-          # the gate for nothing.
           if grep -qE '(^|[^a-zA-Z])skipped=' /tmp/writeside.log; then
             echo "::error::a write-side pin SKIPPED"
             exit 1
           fi
-          # expectedFailure reads as OK to every check above. Review disarmed the
-          # negative control with @unittest.expectedFailure and all four
-          # assertions still passed -- count, no-skip, and a bare name grep.
           if grep -qE 'expected failures|unexpected successes' /tmp/writeside.log; then
             echo "::error::a write-side pin is marked expectedFailure"
             exit 1
           fi
-          # `unittest -v` prints the DOCSTRING line, not the test-name line, before
-          # '... ok' -- so a per-pin '... ok' match (the gen3 step's shape) silently
-          # matches nothing here for any test that has a docstring. Instead: require
-          # the run to end OK, which means all five passed, and require each name to
-          # be present, which means these five are the five that ran.
           if ! grep -qE '^OK$' /tmp/writeside.log; then
             echo "::error::the write-side suite did not end OK"
             exit 1
@@ -1314,20 +635,10 @@ jobs:
             }
           done
 
-      # test_search_depth_tactics is deliberately NOT here. It is skipUnless a built
-      # Showdown checkout (dist/sim/index.js) is present, which CI does not have, so it
-      # skipped in its entirety and the step's only real assertion was the static
-      # patch-text one. Including a suite that cannot run is how a gate reads green
-      # while asserting nothing -- the defect this workflow's header forbids. Add it
-      # back only alongside a Showdown checkout and build.
       - name: Search-side regression gates
         run: |
           set -o pipefail
           python -m unittest tests.test_crit_kill_split_patch -v 2>&1 | tee /tmp/searchgates.log
-          # A count assertion as well as a skip assertion. grep-for-'skipped'
-          # cannot notice a DELETED test: removing three of four leaves the step
-          # green, which is the "reads PASS while asserting less than intended"
-          # shape this workflow's header forbids. Found by review of #1081.
           if ! grep -qE 'Ran 8 tests' /tmp/searchgates.log; then
             echo "::error::expected 8 tests; the suite shrank or grew"
             exit 1
@@ -1337,13 +648,6 @@ jobs:
             exit 1
           fi
 
-      # The crate is already built above, so this costs about a minute -- and it is
-      # what makes the renderer pins real. CI passed on #1081 while never running the
-      # four pins that cleared its BLOCK, because no workflow runs cargo test. A pin
-      # nothing executes is the #1080 lesson repeated one layer down.
-      # The classifier's own pin. Without this step the drag-limit reordering ships a
-      # pin nothing executes -- the exact shape the crate step's comment condemns, one
-      # layer down. Found by review of #1086.
       - name: Classifier pins
         run: |
           set -o pipefail
@@ -1357,23 +661,6 @@ jobs:
             exit 1
           fi
 
-      # C145: the Encore-on-a-transformed-active pins. These shipped with #1148 and
-      # NO workflow ran them -- `grep -rn encore .github/workflows/` returned nothing
-      # across all three files, so the pin that closed `19100170/71-72` was inert. The
-      # same shape the two steps above condemn, one PR later. `src/pokezero/**` is
-      # already in this workflow's path filter, so a change to `engine_world.py`
-      # triggers the job; it just never ran this file.
-      # Includes LockIndexToResidualBlockTests, which renders the CONSTRUCTED world
-      # and is the only assertion tying the lock index to Showdown's
-      # `|-heal|...|[from] item: Leftovers` line. It imports pokezero_search
-      # UNGUARDED for that reason -- a skip here retires the pin silently.
-      # Red/green measured in reports/c145_itemleftovers_row_adjudication.md §5.3.
-      # 22 -> 30 with CopiedMovesetLivePpTests, which pins that the copied moveset
-      # carries the request's LIVE pp/disabled rather than the transform seed. Its
-      # `test_a_drained_copy_leaves_the_engine_no_move` also imports the crate
-      # unguarded, for the same reason: it asserts at the engine that a drained copy
-      # produces `MoveChoice::None`, which is the token `_map_choices` resolves onto
-      # the request's substituted `struggle`.
       - name: Encore-on-transform world-construction pins
         run: |
           set -o pipefail
@@ -1388,45 +675,6 @@ jobs:
             exit 1
           fi
 
-      # Q2 (`encore_move_unknown`, opponent seat): the sibling of the step above, on the
-      # NON-transformed Encore branch. The transformed branch has consulted
-      # `sides[slot]["lastUsedMove"]` since C145; the non-transformed one did not, so an
-      # Encored mon that had been immobilised past the 24-line `recent_public_events`
-      # window refused every world. 95/1682 gen3 randbat variants, 91.30% of the
-      # world-failure census in the 2026-08-09 capture run.
-      #
-      # WHY THIS STEP EXISTS AT ALL, and it is the same hole the note above records: this
-      # workflow names modules one by one and nothing in CI discovers `tests/`. Without a
-      # step the whole battery would be run by NO job -- a fix whose tests CI never
-      # executes. The count guard lives in YAML for the reason the rest of this file
-      # gives: no local `unittest` or `pytest` run can see it, so a battery that shrinks
-      # is red here rather than quietly green.
-      #
-      # READ THIS BEFORE TRUSTING A GREEN. 18 of the 23 tests execute here; 5 SKIP.
-      # The 18 need no engine and no Showdown checkout -- `battle_spec_from_payload` is
-      # pure construction over a payload literal -- and those are the behavioural pins.
-      # The 5 that skip are `PoolCannotReachTheLockedMoveDivergenceTests`, which scans
-      # the real gen3 set pool and `data/moves.ts` to bound at ZERO the one shape where
-      # the `lastUsedMove` latch and the Encore event scan disagree (a `[from] lockedmove`
-      # continuation, which advances Showdown's `lastMove` but not the latch). CI builds
-      # no Showdown, so they cannot run here -- the same honest gap the spread-gate step
-      # above documents. What DOES run in their place is
-      # `TheReachabilityClaimIsTiedToAMeasuredPoolTests`, a staleness alarm holding the
-      # committed pool census to the shape that scan was measured against, so a
-      # regenerated pool reddens here rather than leaving the zero silently stale.
-      #
-      # The skip count is pinned EXACTLY, not forbidden: `skipped=5` and no more. A sixth
-      # skip means a behavioural pin quietly acquired a Showdown dependency, which is how
-      # a battery goes vacuous while still reporting OK. Per-METHOD skip decorators keep
-      # the reported count at 23 in both environments; a class-level skip would collapse
-      # to one entry and drop the count to 18, defeating the count guard.
-      #
-      # 21 -> 23 with `TheSwitchSentinelSeedsTheEnginesOwnVariantTests`, which pins the
-      # UN-encored branch's `switch:0` seeding on both seats. Nothing pinned it: renaming
-      # the `"switch"` literal at that call site sent the sentinel into the resolver,
-      # which cannot match it, so the seeding silently became `""` with nothing red. The
-      # dead no-op `if last_used_move_id == "switch": last_used_move_id = "switch"` that
-      # sat next to the latch and read like a guard is deleted in the same commit.
       - name: Encore public-lastUsedMove world-construction pins
         run: |
           set -o pipefail
@@ -1441,20 +689,6 @@ jobs:
             exit 1
           fi
 
-      # C153: the Taunt volatile. `taunt` was tracked-but-unsupported, so a Taunt
-      # boundary refused with `volatile_unsupported` and no world was ever built.
-      # Half of what this file pins is engine fidelity -- that the vendored gen3
-      # wheel filters Status moves out of a TAUNTed side's options, and that the
-      # seeded counter of 1 expires the volatile after exactly ONE end-of-turn
-      # rather than two. Neither can be checked without a built engine, so the
-      # module imports `poke_engine` UNGUARDED and a skip here is an error, not a
-      # pass.
-      #
-      # The exact count is NOT a behavioural guard -- review is right that it restates
-      # the membership assertion M1 already kills. It is a DELETION guard, which is the
-      # reason the two steps above give and the one thing no local `unittest` run can
-      # see: it lives in YAML, so a PR that removes the fidelity half of this file trips
-      # here rather than reading as green.
       - name: Taunt volatile world-construction and fidelity pins
         run: |
           set -o pipefail
@@ -1464,36 +698,11 @@ jobs:
             echo "::error::expected 13 tests; the suite shrank or grew"
             exit 1
           fi
-          # Anchored, not a substring match over the whole verbose log: the bare
-          # `grep -q skipped` this replaced would fire on any test NAME or docstring
-          # containing the word, and would equally miss nothing -- it was a guard whose
-          # true and false cases were both unreliable.
           if grep -qE '\bskipped=[1-9]|\.\.\. skipped' /tmp/taunt.log; then
             echo "::error::a Taunt pin SKIPPED; they must never skip"
             exit 1
           fi
 
-      # The `-transform` ident seam. A gen3 randbats forme is NICKNAMED after its base
-      # species (`data/random-battles/gen3/teams.ts:619`), and `-transform` carries idents,
-      # so a `Deoxys-Defense` announced itself as `Deoxys`; `belief.py` recorded that off
-      # the ident while reading the ACTOR's species from the tracked belief, and
-      # `engine_world._apply_transform` then refused every world. 24 truth-rejected
-      # decisions on census control block runE-ctrl512-s4-r1000.
-      #
-      # WHY THIS STEP EXISTS: this workflow names modules one by one and nothing in CI
-      # discovers `tests/`, so a NEW module is invisible by default -- the fix would ship
-      # with a battery that no job runs. Same hole the two steps above each document.
-      #
-      # READ BEFORE TRUSTING A GREEN. 33 of the 37 execute here; 4 SKIP, and the skip count
-      # is pinned EXACTLY rather than forbidden. The 3 are the producer-side reads --
-      # `teams.ts`, `sim/pokemon.ts` and the gen3 randbat pool reachability census (13
-      # forme carriers, 7 Transform carriers out of 1682) and the forme NAMING LAW the
-      # belief-side bound relies on (1516/1516 entries) -- and CI builds no Showdown
-      # checkout, the same honest gap the spread-gate and Encore steps record. A FIFTH
-      # skip means a behavioural pin quietly acquired a Showdown dependency, which is how a
-      # battery goes vacuous while still printing OK. Per-METHOD decorators keep the
-      # reported total at 37 in both environments; a class-level skip would collapse to one
-      # entry and drop the total to 33, defeating the count guard.
       - name: Transform forme-ident belief and world-construction pins
         run: |
           set -o pipefail
@@ -1508,89 +717,10 @@ jobs:
             exit 1
           fi
 
-      # The engine-search telemetry seam, which NO workflow ran before this. Checked with
-      # `grep -rn test_engine_search .github/workflows/` on main: zero hits across all
-      # three files, while `src/pokezero/**` has been in this job's path filter all along
-      # -- so every PR that edited `engine_search.py` triggered the gate and the module
-      # holding that file's pins was not a step. The same "guard nothing runs" shape the
-      # three steps above each document one PR after the other.
-      #
-      # It holds the abort-path pins added with the sub-case carry: that an ABORTED world
-      # still reports what it observed (which this seam silently discarded), that it is not
-      # double-counted, that a payload of the wrong shape is a no-op rather than a crash
-      # inside the handler whose job is to keep the other worlds alive, and the two
-      # CROSS-LANGUAGE pins. Those last two
-      # matter most here: the Rust unit tests read the attribute name through the crate's
-      # own constant, so they are insensitive to a rename by construction, and the Python
-      # pin is the ONLY thing that fails when the two sides drift. RE-MEASURED on the
-      # merged tree: changing `ABORT_PAYLOAD_ATTR`'s value in Rust alone leaves all 451
-      # crate tests green (0 failed), and reddens exactly one thing anywhere --
-      # `test_the_crate_and_python_agree_on_the_abort_payload_attribute` in the step
-      # below, 112 of 113. An earlier revision of this comment said 429, a total this
-      # branch never had at any point; the figure is the one the run printed.
-      #
-      # 113 -> 128 with the world-collapse change. The delta is 15 TESTS THAT ALREADY
-      # EXISTED and never ran: 13 collapse/cache-key tests sat below this module's
-      # `unittest.main()`, where `python -m unittest` cannot see them, plus 2 added by its
-      # review. This exact-count pin read 113 straight through that PR precisely BECAUSE
-      # the tests were invisible -- the count guard cannot see a test that does not run,
-      # so "the total held" was not evidence the suite was intact. The 112-of-113 mutation
-      # ratio above was measured on the pre-collapse tree and has NOT been re-run here;
-      # only the total is re-measured (`Ran 128 tests`, OK, on the merged tree).
-      #
-      # 128 -> 135 with the Tier-2 pruned-conclusion fix: the seven
-      # `Tier2PrunedConclusionTests`. All seven are NEW and all seven RUN (they sit above
-      # this module's `unittest.main()`); counted from the run, not from the diff.
-      #
-      # 135 -> 141 with that fix's review follow-up: six more
-      # `Tier2PrunedConclusionTests`, all NEW and all above `unittest.main()`. Two pin
-      # properties whose MUTANTS SURVIVED the 135 (the record is per-seat, not per-battle;
-      # the record holds what the fold APPLIED, not what the source OFFERED); two pin both
-      # sides of the applied-record invariant's new guard; two close axes that survived a
-      # LATER count. THREE of the six exist because a mutant survived a suite that had
-      # already been called complete -- the safer-direction one survived 138, and the
-      # record-CARDINALITY pair survived 139, every other test in the class having offered
-      # exactly one index. Counted from the run (`Ran 141 tests`, OK), not from the diff.
-      #
-      # EXACT count, not a floor, for the reason #1163 gave: a floor was the one fail-open
-      # in its mutation battery, and this guard lives in YAML where no local `unittest`
-      # run can see it.
-      #
-      # 202 -> 211 on this merge tree: the selector-shadow hardening adds eight checks;
-      # the isolated-worker lifecycle repair adds `EngineMctsPolicyResetTest`, which
-      # proves a completed battle cannot carry live folds, consumed annotations, or
-      # ladder state into the next battle while cumulative telemetry remains cumulative.
-      # 211 -> 217: the whole-decision deadline adds configuration, timing-witness,
-      # zero-completed-world, and deadline-prefix pins. They are search telemetry
-      # contracts, so this is the one exact-count guard that must move with them.
-      # 217 -> 224: native-invocation receipts add seven rejection/conservation
-      # checks: multiplicity-scaled allocation, completed-final-batch overrun, forged work,
-      # opposite-root conservation, scalar validity, cross-field timing
-      # consistency, and preservation of an earlier refused invocation.
-      # Counted from the real merged suite, not the diff; the exact-count guard below
-      # rejects a stale suite size rather than treating it as a pass.
       - name: Engine-search telemetry pins
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          # 227 -> 238: fixed-work CPU world dispatch adds configuration,
-          # concurrency, parity (including malformed reports), duplicate-collapse,
-          # failure-taxonomy, setup-fallback, and warmup-coverage pins. Deadline
-          # parallel dispatch adds remaining-budget, queued-expiry, and
-          # post-argument-construction expiry pins. Keep this exact count
-          # synchronized with the checked-in suite so the guard remains
-          # fail-closed. 238 -> 241: the native-batch guard adds serial and
-          # parallel call-seam reservations plus the post-argument recheck that
-          # prevents a stale pre-guard ABI budget from starting native work.
-          # 241 -> 242: the Rest sleep action-boundary settlement repair needs its
-          # own regression pin. 242 -> 244: branch-prior fallback reason-ledger
-          # parsing needs both its conservation and malformed-ledger refusal pins.
-          # 244 -> 245: the measured-override audit adapter is driven from the
-          # production telemetry envelope, so its source schema cannot drift from
-          # the sealed continuation audit without this native-engine pin failing.
-          # EngineSearchWorkflowGuardTests derives this exact value from the
-          # module's loader, so future suite growth now fails locally before this
-          # expensive native gate is queued.
           if ! grep -qE 'Ran 250 tests' /tmp/enginesearch.log; then
             echo "::error::expected 250 engine-search tests; the suite shrank or grew"
             exit 1
@@ -1599,22 +729,7 @@ jobs:
             echo "::error::the engine-search suite did not report a clean OK"
             exit 1
           fi
-          # Every exact ``Ran N tests`` guard in this workflow is derived from
-          # test-source ASTs before the native build is queued locally.  This
-          # keeps a new test from becoming a late, workflow-only count failure.
           python scripts/check_engine_fidelity_unittest_counts.py
-          # Name the abort-path pins. A total is restorable by unrelated tests, and these
-          # SEVEN are the only guards that an aborted world reports anything at all.
-          # Counted, not recalled: an earlier revision of this comment said "five" while
-          # listing six, which is the same off-by-one the crate block below records
-          # having made twice.
-          #
-          # Matched as "declared and RAN", not "... ok". These tests have docstrings, so
-          # unittest -v prints the verdict on the FOLLOWING line, and the policy's own
-          # fallback logging interleaves into it -- a `\.\.\. ok` pattern silently matches
-          # nothing and the loop becomes decoration. Verified locally against the real log.
-          # Ran + exact count + a clean `^OK$` above is what establishes they PASSED; this
-          # loop establishes they EXIST. Same construction as the attestation step.
           for pin in test_an_aborted_world_still_reports_the_subcases_it_observed \
                      test_an_aborted_world_reports_each_observation_exactly_once \
                      test_a_failure_carrying_no_payload_is_a_silent_no_op \
@@ -1628,12 +743,6 @@ jobs:
             }
           done
 
-      # The opponent-prior applicability read is allowed to explain a root fallback
-      # only through this source-derived request-order protocol.  A previously added
-      # fixture module had neither a path-filter entry nor a workflow step: a test-only
-      # weakening could therefore merge green, and this PR's new refusal status would be
-      # locally exercised but absent from required CI.  Keep the exact count to reject a
-      # silently shrinking refusal census.
       - name: Opponent request-order source pins
         run: |
           set -o pipefail
@@ -1651,20 +760,6 @@ jobs:
       - name: Crate suites, including the renderer pins
         run: |
           set -o pipefail
-          # RUSTFLAGS is load-bearing. tree.rs:139 gates
-          # debug_assert_probability_conservation on cfg!(debug_assertions), and
-          # [profile.release] sets only lto/codegen-units -- so plain
-          # `cargo test --release` compiles OUT the crate's own probability-mass
-          # invariant plus six debug_assert!s in tree.rs. A mass-gate workflow running
-          # the crate in the one profile where its mass assertion does not exist is the
-          # defect this job is named after. Found by review of #1083.
-          # --no-fail-fast IS LOAD-BEARING, and its absence was measured rather than
-          # suspected. cargo stops after the first failing TARGET, so with one failing lib
-          # test only 4 of 36 binaries ran: measured on this tree by applying a single
-          # fail-open mutant, 4 binaries with the flag absent versus 36 with it present. Every
-          # renderer pin named in the loop below lives in a target that never executed, so the
-          # step reported one failure and 32 binaries' worth of verdicts were never rendered.
-          # `grep -rn "no-fail-fast"` had no hits anywhere in the tracked tree.
           RUSTFLAGS="-C debug-assertions=yes" \
             cargo test --release --no-fail-fast \
               --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
@@ -1673,237 +768,12 @@ jobs:
             echo "::error::a crate suite failed"
             exit 1
           fi
-          # Count TESTS, not suites. An earlier version counted `test result: ok` lines,
-          # i.e. test BINARIES -- so review deleted all four #1081 renderer pins and the
-          # step stayed GREEN at 32 suites while the test total fell 366 -> 362. The step
-          # whose stated purpose is "what makes the renderer pins real" was blind to
-          # their deletion: the Python steps got a test-count assertion and the crate got
-          # a file-count assertion. `#[ignore]` on a pin was equally invisible.
           passed=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          # Floor RAISED 366 -> 423 (#1157) -> 428 (immobilizer markers), and it is always
-          # set to the EXACT current total. A floor below the total is the same blindness the
-          # comment above describes: at 366 it would have absorbed every Protect pin with 55
-          # to spare, and at 420 it still absorbed the three UNIT pins -- deleting exactly
-          # those three lands on 420 and passes, while they are the sole killers of five
-          # mutants. Raise it deliberately when tests are added.
-          #
-          # 423 -> 429 is a NET figure and worth spelling out, because a floor is blind to a
-          # SWAP as well as to a deletion. Derived by differencing the two test-NAME sets --
-          # a clean `origin/main` e0a23e4e worktree with its own 71-patch vendor, against this
-          # tree -- and not by arithmetic on the totals:
-          #
-          #   base 423 result lines / 423 distinct names; head 429 / 429; NO duplicate name in
-          #   either build, so the set difference is exact rather than approximate
-          #   ADDED    11
-          #   REMOVED   5  a_two_sided_refusal_keys_canonically_and_fits_the_python_seam
-          #                attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion
-          #                every_attract_subcase_literal_is_pinned
-          #                the_attract_refusal_names_its_subcase
-          #                the_attract_subcase_reports_every_live_predicate_not_just_the_first
-          #   NET      +6, and 423 + 6 == 429 == the floor enforced below
-          #
-          # Nothing was lost. TWO of the five were RELOCATED, and both replacements are in the
-          # ADDED set and pass:
-          #   * `attracted_and_paralyzed_empty_tails_fail_closed_with_or_without_confusion` ->
-          #     its INVERSE, `no_branch_of_an_attracted_or_paralyzed_fan_refuses_any_more`,
-          #     which is the stronger claim: zero refusals across the whole matrix the old test
-          #     covered, rather than one expected refusal per case.
-          #   * `a_two_sided_refusal_keys_canonically_and_fits_the_python_seam` -> a direct unit
-          #     test of the keying function itself,
-          #     `events::tests::the_attribution_unsafe_label_is_deduplicated_and_sorted`.
-          # THREE are OBSOLETE rather than relocated: they pinned the
-          # `attract_empty_tail_ambiguous` refusal being OPEN, and its five sub-case literals,
-          # and neither exists on the render path any more -- there is no refusal left to name.
-          # Verified rather than assumed: grepping `events.rs` for a live emitter of that family
-          # returns exactly two hits and BOTH are `#[should_panic]` fixtures inside
-          # `#[cfg(test)]`, which pass the slug in deliberately to prove the paired-tag assert
-          # fires. Nothing on the production path can emit it.
-          #
-          # All ELEVEN added names are pinned in the loop below -- 22 pins total, every one of
-          # them resolving in the same run these figures came from. Counted, not recalled: an
-          # earlier revision of this block said "ten".
-          #
-          # THE COUNTS HERE HAVE BEEN WRONG TWICE, and both times a single command would have
-          # said so. First, 428 was written 429, counted off a run that still had a scratch
-          # probe file in `tests/` -- a floor ABOVE the total fails every PR, so that one
-          # announces itself. Then this block asserted "+6 with NOTHING REMOVED" alongside
-          # "DELETES six" and "the four are not regressions": three different figures against a
-          # measured five. The "nothing removed" came from a real difference that was run
-          # against the PREVIOUS branch head and then carried forward across the very commit
-          # that deleted these five, instead of being re-run. A cross-check a change makes
-          # about itself is worth exactly one thing: running it.
-          #
-          # Floor RAISED 429 -> 436 by the Sleep Talk double damage-dealt reset guard, which
-          # adds SEVEN tests and removes none. 436 WAS the exact total on that branch BEFORE it
-          # merged `origin/main`; it is NOT the current total. DO NOT read a number out of this
-          # paragraph -- the governing value is the `-lt` below, and every paragraph in this
-          # block is a historical derivation kept as its own branch's record. At the time of
-          # writing the floor below reads 451, measured on the merged tree (#1169's
-          # `abort_telemetry.rs` is the most recent raise); a first draft of this very sentence
-          # said "443" and was stale within a day, which is the whole reason it now points at
-          # the code instead of restating a figure. An "EXACT current total" left standing next
-          # to a different floor is precisely the stale cross-check this block warns about three
-          # times, and it had recreated itself here across a merge. The 429
-          # arithmetic above is the immobilizer-marker change's own derivation and stays as its
-          # record. Measured the same way -- differencing test-NAME sets, not the totals --
-          # against an `origin/main` 99c77eb7 worktree with its own 73-patch vendor:
-          #   base 429 result lines / 429 distinct names; head 436 / 436; no duplicate name in
-          #   either build.  ADDED 7, REMOVED 0, NET +7, and 429 + 7 == 436 == the floor below.
-          # Counting note, because a naive `^test NAME \.\.\. ok` grep gets 431 here and the
-          # 5-test gap looks like duplicates: FIVE of the 436 are `#[should_panic]`, whose
-          # result line is `test NAME - should panic ... ok`. Doc-tests contribute 0. None of
-          # the seven pins below is `#[should_panic]`, so the `grep -qxE` in the loop is safe
-          # for them -- it would NOT match a should_panic test.
-          # The seven are the whole of
-          # `rust/pokezero-search/tests/gen3_sleeptalk_damage_dealt_reset.rs` and every one is
-          # named in the loop below.
-          #
-          # The SEVENTH was added by review, and it is the load-bearing one: the guard
-          # `state.use_damage_dealt && (!choice.sleep_talk_move || !choice.first_move)` restores
-          # the double reset for every SECOND-MOVING Sleep Talk user and SURVIVED the original
-          # six, because all six gave the sleeper speed 500. Mutation, not the green suite,
-          # found that.
-          # 429 -> 436 with C147's seven G33b pins, all seven named in the loop below.
-          # MEASURED on the MERGED tree by summing this step's own expression over a local
-          # run -- `429 + 7` agrees, but the figure comes from the run, not the arithmetic,
-          # because this branch merged `origin/main` after its first measurement and a floor
-          # carried across a merge is exactly the stale cross-check the paragraph above
-          # describes. Same run: 436 `... ok` lines, 0 failures, 1 ignored, and no NAME
-          # removed against the pre-merge head.
-          #
-          # MERGE OF THE TWO SEVENS -- and the reason this line is not 436. C147 (#1171) and
-          # the Sleep Talk guard each raised the floor 429 -> 436 INDEPENDENTLY, for DIFFERENT
-          # sevens: C147's `g33b_*` residual-bucket pins and this change's
-          # `gen3_sleeptalk_damage_dealt_reset.rs` pins. Both sides of the merge therefore said
-          # 436 while the merged tree holds 429 + 7 + 7. A floor left at 436 would stay GREEN
-          # across the merge and absorb the deletion of an entire seven -- the same blindness
-          # this block already warns about twice, arriving by a route neither side could see
-          # alone. MEASURED on the merged tree by summing this step's own expression, not by
-          # arithmetic: 443 result lines, 443 distinct names,
-          # 0 failures, no NAME removed against either parent. All 36 pins below resolve in
-          # that same run.
-          #
-          # AND NOW A THIRD SEVEN-PLUS-EIGHT, by the same route the paragraph above just
-          # documented. The abort-path sub-case carry adds eight `abort_telemetry.rs`
-          # pins, all eight named in the loop below. This branch has now been merged
-          # forward TWICE and re-measured BOTH times, because every figure it could have
-          # carried was stale on arrival: it enforced 431 against its own base of 423,
-          # main went to 436 under it, and then main went to 443 by merging two
-          # independent sevens that each read 436. 431, 436 and 443 are each a floor that
-          # stays GREEN on the merged tree while absorbing deletions -- 443 would absorb
-          # this change's entire eight. So, not differenced and not `443 + 8`: the figure
-          # below is the sum this step's own expression produces over a local
-          # `RUSTFLAGS="-C debug-assertions=yes" cargo test --release` of the merged tree
-          # -- 451 passed, 0 failed, 1 pre-existing ignore, and 451 `... ok`
-          # lines agreeing with the sum. Discrimination replayed against that log with this
-          # step body extracted verbatim from the YAML: 452 fails, 451 passes, 451 fails on any
-          # single deletion, and 450 silently absorbs one.
-          #
-          # AND A FOURTH RAISE, 451 -> 461: ledger G8's Leech Seed residual band split adds
-          # the TEN pins in `rust/pokezero-search/tests/gen3_leechseed_residual_band_split.rs`
-          # and removes none. Not `451 + 10`: measured by differencing test-NAME sets, per the
-          # discipline the paragraphs above arrived at the hard way. Base is this same tree with
-          # `third_party/poke-engine-src/src/gen3/generate_instructions.rs` reverted to its
-          # 73-patch preimage and the new test file moved aside -- the crate suite compiles the
-          # vendored engine directly, so that is a real base build and not an arithmetic one.
-          #   base 451 sum / 451 distinct names; head 461 / 461; no duplicate name in either.
-          #   ADDED 10 (all ten named in the loop below), REMOVED 0, NET +10.
-          # 451 would absorb the deletion of the entire ten, which is the blindness the
-          # paragraph above describes arriving for the fourth time.
-          #
-          # It read 459 in the first revision of this PR, when the file held eight tests. Review
-          # found the count guard -- the predicate carrying the whole "never a trade" claim -- had
-          # NO behavioural pin: all eight stayed green with it deleted, and so did this suite at
-          # 459, `--test test_gen3`, the engine lib suite, test_branch_mass_reconstruction and
-          # test_collapsed_arm_mass_oracle. The two added tests reach the guard's decline path.
-          #
-          # RAISED 461 -> 519. The 461 was the exact head total when it was written and was
-          # then left unraised across subsequent PRs, so by the time this change arrived the
-          # suite passed 517 and the floor would have absorbed the deletion of 56 tests --
-          # including every fixture the Sleep-Talk zero-heal guard depends on. That is the
-          # same blindness the paragraphs above describe, arriving for the fifth time, and it
-          # is why the floor is only meaningful when it EQUALS the current total.
-          #   measured on this tree: 519 summed `test result: ok` passes across 36 binaries,
-          #   `cargo test --release --no-fail-fast`, 0 failures. Identical under
-          #   `--features model` (519, and the executed test-NAME sets are equal in both
-          #   directions), which is why the model step below asserts the same number.
-          # Anyone adding a test raises this line. That is the intended cost.
           if [ "${passed:-0}" -lt 519 ]; then
             echo "::error::expected >= 519 crate tests, got ${passed:-0}"
             exit 1
           fi
-          # And name the pins: a total can be restored by unrelated tests.
-          # The Protect-marker pins (#1157). This arm RENDERS a protocol line into a
-          # SEARCHED world, and its two failure modes are opposite: fabricate a Protect
-          # line over a full-HP absorb activation, or render the line but leave the world
-          # refused so nothing is reclaimed. Review demonstrated BOTH with the suite green
-          # before these fixtures existed -- deleting the entire walk arm passed 418/418.
-          # Named here because the count gate cannot see four tests vanish out of 421.
-          #
-          # The immobilizer-marker pins (this change). Same argument, and review demonstrated
-          # it concretely: `an_attracted_sleeptalk_user_never_reaches_the_unnamed_callee_walk`
-          # is the SOLE killer of two mutants -- moving the marker arm below the Sleep Talk
-          # block, and doing that with the walk's explicit arm also deleted, which is the
-          # exact silent swallow a pure marker causes at the walk's bare `sim.apply`
-          # fall-through. `an_asleep_..._renders_slp_not_attract` is the sole thing standing
-          # between the markers and a FABRICATED `|cant|..|Attract` on a turn the sleep gate
-          # blocked. Deleting all ten and letting the total be restored by unrelated tests is
-          # exactly the hole the floor cannot see.
-          #
-          # `the_markers_de_collapse_what_combine_duplicate_instructions_had_merged` (added in
-          # review) is the ONLY test anywhere that records the branch-set change the markers
-          # actually make -- `grep` for `62.5`, `73.75` or a branch-count assertion on an
-          # attracted/paralyzed fan finds nothing else in either suite. It is not a sole
-          # killer and is not claimed as one: two mutations were measured against it, the
-          # paralysis/Attract ordering swap and full-paralysis 1/4 -> 1/2, and two other
-          # tests redden under those too.
-          #
-          # The LAST SEVEN are the Sleep Talk double damage-dealt reset pins. They are the only
-          # tests in the repo that reach the guarded block at all: the #1048 attribution oracle
-          # and every other sleep-talk fixture build state through `State::default()`, which
-          # leaves `use_damage_dealt` FALSE, so reverting the guard leaves all of them green.
-          # Delete these seven and the engine defect comes back with 429/429 passing.
-          # `a_second_moving_sleep_talk_user_also_emits_the_reset_exactly_once` is the SOLE
-          # killer of the `|| !choice.first_move` escape hatch and must not be dropped as a
-          # near-duplicate of the sleeper-first pin: move order is the discriminator.
-          #
-          # And the abort-path carry pins (`abort_telemetry::*`). Named for a reason the
-          # others do not have: `model.rs` is behind the `model` cargo feature, so it needs
-          # libtorch and `cargo test` NEVER COMPILES IT. Two of these carry the whole
-          # wiring between the search loop and the ledger.
-          # `the_search_path_records_into_the_ledger_and_attaches_it_on_abort` is a
-          # source-text assertion over `include_str!("model.rs")` -- delete it and the
-          # abort arm can be removed from the search path with everything else green (the
-          # 418/418 shape). `a_contained_poke_engine_panic_still_reports_what_the_world_
-          # observed` is the ORDERING guard: review demonstrated a regression that put the
-          # attach inside the panic guard, compiled, and passed a source-text ordering pin
-          # written specifically to catch it, so the ordering now lives in
-          # `guarded_search_with_ledger` and this test is what holds it.
-          #
-          # And the G8 band-split pins. The two `a_poisoned_defender_*` names are the load-
-          # bearing pair and they must NOT be dropped as "controls": they are the SOLE killers
-          # of the gate deletion. Measured, not argued -- replacing `if defender_leech_seeded {`
-          # with `if true {` at both call sites reddens exactly those two (plus the mass test,
-          # whose split-vs-collapsed sanity assertion also fails), while all five split
-          # assertions stay GREEN, because an unconditional split satisfies every one of them.
-          # A clean unstatused control would have been worthless here: with no residual there is
-          # no lethality threshold and no band arm on either build. The controls are POISONED,
-          # which ticks the same `maxhp / 8` Leech Seed drains, so they share the fixture's whole
-          # arithmetic and differ only in whether the killing residual transfers.
-          # Full revert to the 73-patch preimage reddens 5 of the 8 original tests.
-          #
-          # The last TWO names are the count guard's, and they are the only tests anywhere that
-          # reach its decline path. Review found that predicate pinned by nothing behavioural:
-          # deleting it left all eight original tests green, plus this whole suite, `--test
-          # test_gen3`, the engine lib suite, test_branch_mass_reconstruction and
-          # test_collapsed_arm_mass_oracle -- because both original fixtures sit on fans whose f32
-          # and integer bases AGREE, so neither can reach the decline. Fixture C (attack 66 /
-          # defense 300 / maxhp 160 / hp 47, threshold 27) does: head keeps one arm at 27, and
-          # guard-deleted emits [27, 28, 29, 30] with total branch mass 105.859375 %. That mass is
-          # the point -- it is conjured from a basis mismatch and `update_percentage` cannot see
-          # it. Measured red-with-the-guard-removed and green-with-it by deleting the predicate
-          # and running.
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
                      two_spikes_layers_chip_the_deeper_amount_and_stay_tagged \
                      with_no_spikes_the_drag_emits_no_chip_and_no_spikes_tag \
@@ -1973,10 +843,6 @@ jobs:
       - name: Model-feature abort seam
         run: |
           set -o pipefail
-          # The complete non-model crate suite runs above. This feature-only rung must compile
-          # the model path and exercise the one cfg-gated seam; rerunning every non-model test
-          # here previously added roughly six minutes without increasing feature coverage.
-          # It is intentionally a seam test, not a claim that a full search abort was observed.
           python -m pip install --quiet torch==2.13.0 \
             --index-url https://download.pytorch.org/whl/cpu
           LIBTORCH_USE_PYTORCH=1 \
@@ -1996,8 +862,6 @@ jobs:
             echo "::error::expected exactly one model-gated seam test, got ${model_tests:-0}"
             exit 1
           fi
-          # And name the gated pin, because a total can be restored by unrelated tests -- the
-          # lesson the plain step's own comment records.
           gated=tree::model_abort_seam_tests::the_gated_abort_seam_rejects_an_attribution_unsafe_branch_with_its_predicate
           grep -qxE "test $gated \.\.\. ok" /tmp/cargo-model.log || {
             echo "::error::the model-gated abort-seam pin did not run"
@@ -2007,26 +871,15 @@ jobs:
       - name: The production-read pin runs at all -- build the native module and run it
         run: |
           set -o pipefail
-          # `events.rs` names `tests/test_crate_protect_marker_state_reads.py` as THE pin for
-          # the three state facts the Sleep Talk zero-heal guard reads, and no CI job ran it.
-          # Adding it to a module list alone would not have been enough: the module is
-          # `skipIf(pokezero_search is None)` and no job builds the native module, so it would
-          # have SKIPPED and reported green -- an instrument that cannot report failure.
-          # So the wheel is built first, and the skip is made loud below.
           maturin build --release --manifest-path rust/pokezero-search/Cargo.toml --out /tmp/wheels
           python -m pip install --quiet --force-reinstall --no-deps /tmp/wheels/*.whl
           python -c "import pokezero_search; print('native module ok')"
           python -m unittest tests.test_crate_protect_marker_state_reads -v 2>&1 \
             | tee /tmp/protectread.log
-          # A SKIP HERE IS A FAILURE. The module's whole value is that it exercises the
-          # production READ, which every crate unit test passes in as a literal.
           if grep -qE 'skipped|OK \(skipped' /tmp/protectread.log; then
             echo "::error::the production-read pin SKIPPED; the native module was not importable"
             exit 1
           fi
-          # EXACT, in the shape #1204's scan pairs -- a `>=` comparison is unpairable and
-          # showed up as a NEW blind spot in `test_the_guard_scan_coverage_triple_is_re_derived`
-          # the moment this step was added. That gate is the reason this line is a literal.
           if ! grep -qE 'Ran 13 tests' /tmp/protectread.log; then
             echo "::error::the production-read pin did not run all 13 tests"
             exit 1
@@ -2037,17 +890,6 @@ jobs:
           POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
         run: |
           set -o pipefail
-          # The Phase 1 arbiter is a model-path feature. A plain maturin wheel makes
-          # its behavioral tests skip, which is no CI coverage at all. Build a wheel
-          # with the same libtorch environment as the feature-gated crate rung above,
-          # then execute every writer, reader, fidelity, mutation-record, and
-          # FoulPlay budget-calibration pin.
-          #
-          # Keep auditwheel out of this build.  Its repair phase copies PyTorch's
-          # shared libraries into the wheel, which loads a second libtorch beside the
-          # runtime Python already imported and can SIGSEGV during the extension
-          # import.  The supported model-wheel recipe deliberately links the venv's
-          # PyTorch runtime instead; see scripts/build_search_crate_model.sh.
           rollout_leaf_torch_lib="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')"
           export LD_LIBRARY_PATH="${rollout_leaf_torch_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
           LIBTORCH_USE_PYTORCH=1 python -m maturin build \
@@ -2066,19 +908,11 @@ jobs:
             tests.test_foulplay_budget_calibration \
             tests.test_battle_bridge_boundary_requests -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          # 366 -> 367: `test_native_deadline_returns_only_finalized_root_visits`
-          # exercises the appended native deadline ABI on the actual model wheel.
-          # 367 -> 368: the model-world worker count is part of paired-eval
-          # configuration identity, preventing enabled parallelism from sharing
-          # a result namespace with serial fixed work.
           if ! grep -qE 'Ran 368 tests' /tmp/rollout-leaf-arbiter.log; then
             echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 368 tests"
             exit 1
           fi
           rollout_leaf_skip_status=0
-          # Inspect only unittest's summary form.  The verbose output is
-          # deliberately full of test names and assertions about skipped
-          # work, so a bare `grep skipped` would reject a clean run.
           grep -qE '^OK \(.*skipped=[1-9][0-9]*.*\)$' /tmp/rollout-leaf-arbiter.log \
             || rollout_leaf_skip_status=$?
           if [ "$rollout_leaf_skip_status" -eq 0 ]; then
@@ -2093,22 +927,11 @@ jobs:
             echo "::error::the arbiter and calibration suite did not report a clean OK"
             exit 1
           fi
-          # `build_search_crate_engine.sh` attests the engine and its plain
-          # search wheel.  This step then deliberately replaces that second
-          # consumer with the model-feature wheel it just exercised.  Re-attest
-          # only after all no-skip/count/OK guards above pass: at this point both
-          # installed consumers are current, and the final workflow check below
-          # verifies this new artifact identity rather than the superseded wheel.
           python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
 
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
 
-  # This is a source-only ownership check. It previously waited behind the full
-  # native-engine build and every engine fidelity probe, even though it imports no
-  # package code and needs neither Rust nor Showdown. Keep its verdict required,
-  # but run it in parallel and bound it independently so a schema regression is
-  # diagnosed as such instead of presenting as a stalled mass gate.
   schema-default:
     needs: changes
     if: needs.changes.outputs.schema_default == 'true'
@@ -2128,8 +951,6 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_schema_default_ledger tests.test_schema_with_selector -v \
             2>&1 | tee /tmp/schemagate.log
-          # Parse the SUMMARY, not the whole -v log: `grep skipped` over verbose output would
-          # trip on any future test name or docstring containing the word.
           if tail -5 /tmp/schemagate.log | grep -qE 'skipped=[0-9]+|OK \(skipped'; then
             echo "::error::the schema-default gate SKIPPED -- the ledger could not measure the tree"
             exit 1
@@ -2139,41 +960,6 @@ jobs:
             exit 1
           fi
 
-  # The seed registry, re-derived from the committed artifacts.
-  #
-  # DELIBERATELY NOT BEHIND THE `changes` FILTER, and deliberately not a step inside
-  # `mass-gate`. Two reasons, both concrete:
-  #
-  #   1. Its only real input is `docs/engine_divergence_ledger_20260728.md` plus every
-  #      committed JSON under `reports/` and `docs/`. Putting the ledger in the FILTERS
-  #      list would fire the 60-minute engine build on every prose edit to a 5,000-line
-  #      document, which is the surest way to get the filter narrowed again later.
-  #      Leaving it out would let a PR that edits only the ledger -- which is exactly
-  #      how the false final-holdout row got in -- skip the pin entirely.
-  #   2. It imports nothing but the standard library, on purpose: no `poke_engine`, no
-  #      Showdown checkout, no numpy. So it costs a checkout and 0.3 s, and it can run
-  #      unconditionally without the "skips when the wheel is absent" failure this
-  #      workflow's header forbids.
-  #
-  # What it pins: `tests/test_seed_registry_coverage.py`. Every fidelity seed
-  # (`19,000,000`+) in the committed record lies inside a band the ledger's seed
-  # registry records, and every band the registry records has a committed witness. At
-  # `553cf2c3` the registry said the final-holdout block was "reserved, untouched"
-  # while `reports/artifacts/c141_final_holdout_sweep.json` had swept 200 games of it,
-  # and said the swept span was `19,200,000`-`19,200,199` when it was
-  # `19,200,060`-`19,200,259`. Nothing parsed the table, so both stood.
-  #
-  # Its result is consumed by `gate-status` below, which is the only required context.
-  # Running unconditionally is what makes the job unskippable; being in `gate-status`'s
-  # `needs` is what makes it matter. The first revision had the first without the
-  # second and was therefore advisory -- see the note on `gate-status`.
-  #
-  # `tests/test_seed_registry_coverage.py` is intentionally absent from the FILTERS
-  # list above, and that is not the omission it looks like. Everything in that list is
-  # there so a PR weakening a pin still trips `mass-gate`; this pin does not run in
-  # `mass-gate` at all, and its own job has no filter, so a PR that weakens it runs it
-  # by construction. Adding it to FILTERS would only start the engine build for a
-  # module that does not use the engine.
   seed-registry:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2191,82 +977,15 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_seed_registry_coverage -v 2>&1 \
             | tee /tmp/seedregistry.log
-          # EXACT, not a floor, for the reason #1163 established: a floor was the one
-          # fail-open in its mutation battery. Note this guard lives in YAML and no
-          # local `unittest` or `pytest` run can see it -- a module that grows without
-          # its count following is how an approved PR reached CI red here before.
-          # 27 -> 30 on review: the three pins that hold `_load_or_die` to raising
-          # rather than swallowing a decode error, which is the fail-open the sibling
-          # census removed and this module briefly reintroduced.
-          # 30 -> 41 (C151): `TheRatifiedC151WindowIsNotYetSweptTests`, the eleven pins
-          # that keep "RATIFIED" and "SWEPT" apart for `19,300,000`-`19,300,199` -- absent
-          # from `REGISTERED_BANDS` because ratification is not a witness, disjoint from
-          # every consumed band and from the burned block, untouched by any committed
-          # artifact, and tied to `OWNER_RATIFIED` in the guard so the ledger row, the
-          # prediction document and the code cannot drift apart. That class is meant to go
-          # RED when the sweep lands, so this number drops back when it is deleted as part
-          # of the ratification bookkeeping.
-          #
-          # NOTE for whoever edits that module next: it must keep running WITHOUT the
-          # engine. This job is a bare checkout plus setup-python -- no build, no install --
-          # so a plain `from engine_transition_differential import ...` raises
-          # ModuleNotFoundError here while passing on any dev machine. That is why the
-          # module reads the guard's constants with `ast` instead. See `guard_constant`.
           if ! grep -qE 'Ran 41 tests' /tmp/seedregistry.log; then
             echo "::error::expected 41 seed-registry pins; the suite shrank or grew"
             exit 1
           fi
-          # A clean OK with no skips. `TheSelectorItselfIsExercisedTests` and the two
-          # corpus anti-vacuity pins are the only reason the coverage assertions mean
-          # anything: skip them and every "no seed escapes its band" claim goes vacuous.
           if ! grep -qE '^OK$' /tmp/seedregistry.log; then
             echo "::error::seed-registry pins did not report a clean OK (skip or failure)"
             exit 1
           fi
 
-  # The harness digest: the Python half of the measuring instrument, and the drift
-  # that half has already produced.
-  #
-  # WHAT IT PINS: `tests/test_harness_digest_provenance.py`. The engine fingerprint
-  # covers the patch set and the search crate and NOTHING under `scripts/` or
-  # `src/pokezero/`, so a sweep's provenance names the engine and not the harness
-  # that rendered both sides and decided what "matched" means. Over the committed
-  # corpus that is not theoretical: 29 distinct engine fingerprints, SIX of them
-  # spanning more than one `source_commit`, and one confirmed live -- dev
-  # `strict:diverged_on_full_branch_set` = 1 on a fresh base build but absent from
-  # the C142 artifact at the same fingerprint `5fa147ff`, because the counter landed
-  # in the differential after C142's sweeps. `source_commit` made that DETECTABLE and
-  # nothing asserted it.
-  #
-  # IT ALSO PINS THAT THE CLOSURE IS CLOSED, which is not the same assertion as the
-  # membership list and is the one that matters most here. Review caught the first
-  # revision of `scripts/harness_digest.py` dropping every relative import: the
-  # closure came out at 16 files instead of 73, blind to `gen3_damage`,
-  # `showdown_fixture` and `poke_engine_backend` -- all on the live sweep path --
-  # while the exact-membership pin stayed green, because a list of what the resolver
-  # FOUND cannot detect what it never looked for. `ClosureCompletenessTests`
-  # re-derives relative-import targets with an independent implementation and is
-  # what makes a future truncation red by construction.
-  #
-  # SAME SHAPE AS `seed-registry` ABOVE, and for the same two reasons:
-  #
-  #   1. DELIBERATELY NOT BEHIND THE `changes` FILTER. Its inputs include every
-  #      committed JSON under `reports/` and `docs/`, and putting those behind the
-  #      filter would fire the 60-minute engine build on every artifact edit; leaving
-  #      them out would let a PR that only adds an artifact skip the pin entirely.
-  #      Running unconditionally costs a checkout and ~2 s.
-  #   2. It imports nothing but the standard library plus two stdlib-only repo
-  #      modules loaded BY FILE LOCATION (`scripts/harness_digest.py`,
-  #      `scripts/engine_build_fingerprint.py`). No `poke_engine`, no Showdown
-  #      checkout. The differential is read with `ast`, never imported -- a plain
-  #      `import engine_transition_differential` raises ModuleNotFoundError on this
-  #      bare checkout while passing on any dev machine. See that module's header.
-  #
-  # Its result is consumed by `gate-status` below, which is the only required
-  # context. Running unconditionally is what makes the job unskippable; being in
-  # `gate-status`'s `needs` is what makes it MATTER. This repo has found four inert
-  # pins, the last a CI job whose result nothing consumed -- see the note on
-  # `gate-status`. Both halves are present here by construction.
   harness-provenance:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2284,20 +1003,10 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_harness_digest_provenance -v 2>&1 \
             | tee /tmp/harness.log
-          # EXACT, not a floor -- a floor was the one fail-open in #1163's mutation
-          # battery. This guard lives in YAML and no local `unittest` or `pytest` run
-          # can see it: a module that grows without its count following is how an
-          # approved PR reached CI red here before.
           if ! grep -qE 'Ran 28 tests' /tmp/harness.log; then
             echo "::error::expected 28 harness-digest pins; the suite shrank or grew"
             exit 1
           fi
-          # A clean OK with no skips. The anti-vacuity pins -- the selector's blob
-          # count, the non-empty `build_inputs()`, the named world/matcher/adapter
-          # members of the closure, and the naive relative-import scan that keeps the
-          # COMPLETENESS pin from passing over an empty set -- are the only reason the
-          # coverage claims mean anything; skip them and every statement about what
-          # the digest covers goes vacuous.
           if ! grep -qE '^OK$' /tmp/harness.log; then
             echo "::error::harness-digest pins did not report a clean OK (skip or failure)"
             exit 1
@@ -2306,33 +1015,16 @@ jobs:
       - name: The digest is computable on a bare checkout
         run: |
           set -euo pipefail
-          # The unittest run above loads the module by file location. This proves the
-          # shipped CLI path works too, with no repo modules on sys.path and no engine
-          # installed -- which is the state a fresh operator is in when they go to
-          # record what harness produced a sweep.
           python scripts/harness_digest.py --print
 
-      # A gate no job runs is not a gate. This workflow names test modules one by one,
-      # so a NEW module is invisible to CI by default -- #1212 had to add its own step
-      # for exactly this reason. Named here rather than left to a discovery run.
       - name: Truth-injection differential instrument
         run: |
           set -o pipefail
           python -m unittest tests.test_truth_differential -v 2>&1 | tee /tmp/truthdiff.log
-          # EXACT, not a floor. A floor was the one fail-open in #1163's mutation
-          # battery, and this guard lives in YAML where no local run can see it.
           if ! grep -qE 'Ran 67 tests' /tmp/truthdiff.log; then
             echo "::error::expected 67 truth-differential tests; the suite shrank or grew"
             exit 1
           fi
-          # THE pins, named. `ForcedRefusalTests` is the reason the census number can be
-          # believed at all: an instrument that cannot report failure will report
-          # success, and this campaign has hit that repeatedly. These four run on a bare
-          # runner (no Showdown checkout), so unlike the plan/truth-source classes
-          # they must never skip. The spelling here is deliberate: the register's
-          # `test_the_workflow_scan_sees_the_comment_it_excludes` counts lines in this
-          # file containing the hyphenated checkout name and requires exactly one, so a
-          # second mention here would turn a control into a failure.
           for pin in \
             test_a_forced_construction_refusal_is_counted_and_attributed \
             test_forcing_the_truth_arm_leaves_the_production_arm_byte_identical \
@@ -2349,8 +1041,6 @@ jobs:
             test_a_request_with_no_legal_candidates_is_silent_not_a_finding \
             test_unmapped_persistent_still_forces_after_the_decision_returns \
             test_the_docstring_disclaims_the_era_launch_trigger ; do
-            # `-A2` because unittest -v puts a docstring's first line between the
-            # test name and its verdict.
             if ! grep -A2 -E "^${pin} " /tmp/truthdiff.log | grep -qE '\.\.\. ok$'; then
               echo "::error::instrument pin ${pin} did not run and pass"
               exit 1
@@ -2361,30 +1051,6 @@ jobs:
             exit 1
           fi
 
-  # ---------------------------------------------------------------------------------------------
-  # Its OWN job, unconditional: no `if:` and no `needs:`, matching the seed-registry and
-  # harness-provenance precedent above. It was first written as step 12 of 43 inside `mass-gate`,
-  # which carries `if: needs.changes.outputs.fidelity == 'true'` -- so review measured it against
-  # the 50 most recent non-merge first-parent commits on main and found 5 that touched .py and
-  # would NOT have run it. Three specific holes, all closed by making it unconditional:
-  #   - `pyproject.toml` was not in FILTERS, so a PR CHANGING the declared floor never ran the
-  #     gate that derives from that declaration;
-  #   - `scripts/check_python_floor_syntax.py` was not in FILTERS either, so a PR gutting the
-  #     gate did not run it;
-  #   - it sat after "Build and install the gen3 engine", so an engine-build failure prevented a
-  #     check needing only `git` and `ruff` from ever running.
-  # A gate that runs only when you touch the thing it guards is the "guard nothing runs" shape
-  # this file already records three times.
-  #
-  # WHY: pyproject declares requires-python >= 3.11, but every other job here pins 3.12, so
-  # nothing compared the code against its own declared floor. One file used a backslash inside an
-  # f-string (legal 3.12+, SyntaxError on 3.11) and the breach was invisible in both directions:
-  # CI could not see it, and locally it failed COLLECTION for three test modules plus one script
-  # -- which read as "four files you work around", while the suite silently measured 116 tests and
-  # 1398 subtests fewer than it appeared to. Two artifacts rotted inside those modules.
-  #
-  # No pure-Python guard is possible: PEP 701 removed the restriction from CPython's parser, so
-  # ast.parse(feature_version=(3,11)) on 3.12 ACCEPTS what 3.11 rejects. Hence ruff.
   python-floor-syntax:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2398,27 +1064,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install ruff
-        # PINNED. The whole gate rests on the literal diagnostic name `invalid-syntax`, and that
-        # name has not always existed: ruff 0.8.0 reports NOTHING for `type A = int` at
-        # --target-version=py311 (verified: rc=0, "All checks passed!"). An unpinned linter is a
-        # gate whose behaviour changes with no commit, and a rename would return this gate to
-        # permanent green. torch is pinned in this same workflow for the same reason.
         run: python -m pip install --quiet 'ruff==0.16.2'
 
       - name: The gate reddens on known-bad input
-        # Kill-confirm IN CI, before trusting the green run below. Without it, a ruff rename or an
-        # output-format change makes the gate silently permanent-green: the script exits 0 and still
-        # prints its success line, so the shape grep cannot see it. A pin stops accidental drift;
-        # this stops silent drift.
-        #
-        # Driven by the script's own `--self-test`, which derives the floor from pyproject and picks
-        # a fixture invalid AT THAT FLOOR. The previous version hardcoded `--target-version=py311`
-        # in this step, so raising requires-python to >=3.12 would have left it attesting a
-        # capability the gate no longer exercises -- verified: at floor py312 the py311 fixture
-        # returns "All checks passed!". A hardcoded duplicate of a derived value is the defect class
-        # this whole gate exists to close, and it was sitting in the gate's own kill-confirm.
-        #
-        # An unknown floor exits 2 rather than silently attesting nothing.
         run: |
           set -o pipefail
           set +e
@@ -2437,10 +1085,6 @@ jobs:
 
       - name: Python floor syntax gate
         run: |
-          # `set +e` around the pipeline, deliberately. GitHub's default shell is `bash -e {0}`,
-          # so a nonzero exit aborted the step AT the pipeline and every ::error:: annotation
-          # below was unreachable -- the step still failed red, but by accident of -e rather than
-          # by the written logic, and the documented "exit 2 fails too" described a dead branch.
           set -o pipefail
           set +e
           python scripts/check_python_floor_syntax.py 2>&1 | tee /tmp/floorsyntax.log
@@ -2460,31 +1104,6 @@ jobs:
           fi
 
 
-  # A CORRECT GATE THAT NOTHING RAN. `scripts/schema_container_census.py` enumerates every literal
-  # container of schema NAMES in src/ and scripts/ and aborts on any that is unclassified. It was
-  # not "a check that cannot fail" -- it failed exactly as designed, and no workflow, no test and no
-  # human ever invoked it: its only caller was `scripts/schema_rotation_drill.sh:667`, and that
-  # script's only caller is a person with 17-70 minutes to spend.
-  #
-  # Measured consequence, re-derived here by `git archive` extract per commit rather than taken from
-  # a report: the census went RED at e496e9b8 (the v4 default rotation moved a container's line, so
-  # one row went stale and one container went unclassified while the COUNT stayed 19/19), and stayed
-  # red across EIGHT consecutive first-parent commits on main -- through SEVEN subsequent PR merges
-  # -- until #1276 re-keyed the row. Nothing reported it once. That is worse than a gate that cannot
-  # fail, because the file reads as though the property is guarded.
-  #
-  # UNCONDITIONAL, with no `if:` and no entry in the `changes` filter above. The census's scan roots
-  # are src/ AND scripts/, so any filter would have to cover both, and a filter that is wrong in the
-  # narrow direction restores exactly the hole this job closes. The census is stdlib-only (`ast`,
-  # `pathlib`, `argparse`) -- no wheel, no `pip install`, no torch -- and runs in well under a
-  # second, so running it on every PR is cheaper than the reasoning needed to trust a filter.
-  #
-  # SIX STEPS, and the last one is the reason this job is not itself an instance of its own header.
-  # `tests/test_schema_container_census_wiring.py` pins that this job exists, is unconditional, and
-  # is consumed by `gate-status` -- and for one revision of this PR that module ran nowhere, so
-  # every one of those pins was as inert as the census had been. It runs here, in the same
-  # unconditional wheel-free job, because a pin on this job that lives in a skippable one is the
-  # same defect at one remove.
   schema-container-census:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -2492,12 +1111,6 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-          # Depth 2, so the merge commit's two PARENTS exist locally. The default is depth 1,
-          # which checks out the right tree but GRAFTS the parents away -- and the first CI run of
-          # this job proved it the loud way: `git rev-list --parents -n 1 HEAD` reported zero
-          # parents, `HEAD^2` did not resolve, and the assertion below failed the job on a
-          # perfectly good tree. A false red on the required check, caught on the first run rather
-          # than by reasoning, which is the reason the assertion was written as an assertion.
           fetch-depth: 2
 
       - uses: actions/setup-python@v6
@@ -2505,29 +1118,6 @@ jobs:
           python-version: "3.12"
 
       - name: The tree censused is the MERGE result, not the branch tip
-        # The prior finding in this repo that whole-file counts must derive from the MERGE ref
-        # rather than the branch. This job has no path filter and computes no diff, so the only
-        # count that could be taken from the wrong tree is the census's own container count -- and
-        # that comes from whatever `actions/checkout` left in the working directory. On
-        # `pull_request`, actions/checkout@v5 checks out `refs/pull/N/merge` by default, so the
-        # count already derives from the merge result. That default is load-bearing and INVISIBLE:
-        # a future `ref: ${{ github.event.pull_request.head.sha }}` line, which looks like a
-        # tightening, would silently census a tree that is not the one that would land. Asserted,
-        # not assumed -- the same reason the filter job above fails closed.
-        #
-        # ⚠ ALL THREE ARMS ARE EXECUTED, not pattern-matched. This body's `exit 1`s were pinned by a
-        # regex over bare `exit N` lines (arms 1 and 2) and by nothing at all (arm 3), and six ways
-        # of spelling "exit 0" that the regex cannot see -- a trailing comment, `true && exit 0`, a
-        # trailing semicolon, an EXIT trap, a call to a function that exits, and wrapping the
-        # `exit 1` in `if false; then ... fi` -- were each measured GREEN on the whole wiring suite.
-        # tests/test_schema_container_census_wiring.py now builds a throwaway repo with a real merge
-        # commit and RUNS this script against four checkouts, one per arm plus the merge result.
-        #
-        # AND THE THREE ARMS MASK EACH OTHER, which is why each case there also asserts that no
-        # OTHER arm spoke: a branch tip has no `HEAD^2` either, so arm 2 covers for a dead arm 1;
-        # and a failed `HEAD^2` leaves `second_parent` empty, so arm 3 covers for a dead arm 2. Both
-        # were live misses until the assertion moved from "the step exited 1" to "this arm decided".
-        # Keep each arm's `::error::` text distinct -- that is what makes the arm identifiable.
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
@@ -2535,9 +1125,6 @@ jobs:
           head_commit=$(git rev-parse HEAD)
           echo "censusing ${head_commit}; PR head is ${HEAD_SHA}"
 
-          # THE LOAD-BEARING HALF, and deliberately the one that needs no history: if the checked
-          # out commit IS the PR head, this job is censusing the branch tip. That is what a `ref:`
-          # line would cause, and it is decidable from one `rev-parse` at any clone depth.
           if [ "${head_commit}" = "${HEAD_SHA}" ]; then
             echo "::error::HEAD is the PR head itself, so the census is counting the BRANCH TIP"
             echo "::error::rather than the merge result. Remove the \`ref:\` from this job's"
@@ -2545,14 +1132,6 @@ jobs:
             exit 1
           fi
 
-          # THE POSITIVE CONFIRMATION, and it is a hard failure when the parent is missing. An
-          # earlier revision of this step made a missing `HEAD^2` a green `note:`, on the reasoning
-          # that failing closed there only reddens the check over clone depth. That was FAIL-OPEN
-          # for the case the step exists to catch: `ref: main` or `ref: ${{ github.base_ref }}`
-          # checks out a SINGLE-parent base tip, so the check above passes (HEAD is not the PR
-          # head), `HEAD^2` does not resolve, and the step would have gone green while the census
-          # counted the base tree. `fetch-depth: 2` above is what makes demanding the parent safe;
-          # the tolerant arm was compensating for a depth this job no longer uses.
           if ! second_parent=$(git rev-parse --verify --quiet 'HEAD^2'); then
             echo "::error::HEAD has no second parent, so this is not a merge commit -- the census"
             echo "::error::would count a single-parent tree (the base tip, or the PR head) rather"
@@ -2568,47 +1147,6 @@ jobs:
           echo "confirmed: HEAD is the merge of the base with PR head ${HEAD_SHA}"
 
       - name: The census reddens on known-bad input
-        # Kill-confirm IN CI, before trusting the green run below -- the convention the floor gate
-        # above already sets, and the point of this whole job. Wiring in a gate without proving it
-        # can still fail reproduces the original defect one level down: the step would report green
-        # whether or not the census is capable of aborting.
-        #
-        # Run against a COPY, so the perturbation cannot reach the real run. The census resolves its
-        # repo root from `__file__`, so a copy censuses the copy; and it excludes only the RUNNING
-        # script by resolved path, so the copied census is skipped as itself rather than scanned.
-        #
-        # ONE PERTURBATION PER CASE, and every abort path this job relies on gets its own. An
-        # earlier revision perturbed only an unclassified container, which trips the PRE-EXISTING
-        # count-equality abort -- so the four aborts added alongside this job were confirmed by
-        # nothing here, which is the same "unproven where it counts" shape the job header objects
-        # to. Each case below rebuilds the scratch tree from scratch so the perturbations cannot
-        # compound and let one case pass on another's abort.
-        #
-        # Expected codes are exact, not "non-zero": 15 is the census's verdict and 1 is
-        # "the spec cannot be read". A case that returns the OTHER red is a real change in meaning
-        # and must not be waved through.
-        #
-        # AND THE CODE ALONE IS NOT ENOUGH, which review caught: FOUR distinct aborts return 15, so
-        # an edit that broke case 2's KEY instead of its CLASS -- say by mistyping the path in the
-        # perl expression, leaving a stale row plus an unclassified container -- would still exit 15
-        # and still pass, while no longer exercising the per-file pin at all. Each case therefore
-        # names the abort it means, and the copied census's OWN output is grepped for it.
-        #
-        # That grep is not the self-grep the verdict step below refuses to do, and the distinction
-        # is which process wrote the line: here the log is written by the SUBJECT (the copied
-        # census, a separate process whose behaviour is what this step is measuring), whereas a
-        # self-grep reads a log the asserting step wrote itself and can therefore forge with an
-        # `echo`. This step cannot forge the census's abort text without editing the census.
-        #
-        # ⚠ AND THE `fail` ARM AT THE BOTTOM IS EXECUTED. It was pinned by a regex over bare
-        # `exit N` lines, and six spellings that regex cannot see were each measured green on the
-        # whole wiring suite -- so this step could run all five cases, print `::error::` for one that
-        # returned the wrong code, and exit 0. That is worse than having no kill-confirm, because the
-        # real census run below is trusted BECAUSE this step passed. The wiring module runs this
-        # body against a `python` that answers per scratch case, spoils ONE case at a time in two
-        # ways (wrong code, and right code via the wrong abort -- the two arms of `expect`), and
-        # requires the step to redden on each. Keep the scratch directory names distinct: they are
-        # the only thing a per-case stand-in can dispatch on.
         run: |
           set -euo pipefail
           spec=tests/data/schema_drill_schema_containers.txt
@@ -2623,7 +1161,6 @@ jobs:
           }
 
           expect() {
-            # expect <name> <wanted rc> <substring the census itself must print>
             set +e
             python "${scratch}/scripts/schema_container_census.py" > "${scratch}/census.log" 2>&1
             rc=$?
@@ -2644,30 +1181,21 @@ jobs:
             fi
           }
 
-          # 1. An unclassified container -> the count-equality abort. 20 containers against 19
-          #    rows, so the count arm fires BEFORE the `unclassified` arm and its text is the one
-          #    asserted; naming the wrong arm's text here would fail this case, which is the point.
           build unclassified
           printf 'KILL_CONFIRM_TABLE = {"v3", "v4"}\n' \
             > "${scratch}/src/pokezero/zz_census_kill_confirm.py"
           expect "unclassified container" 15 "needs its own row"
 
-          # 2. A REGISTER row demoted to PARTIAL -> the per-file class pin. Counts stay 19/19 and
-          #    every container still has a row, so ONLY the pin can see this -- which is exactly
-          #    why this case must prove the PIN's abort fired and not some other 15.
           build classflip
           perl -0pi -e 's/^REGISTER(\s+src\/pokezero\/rollout_cli\.py)/PARTIAL $1/m' \
             "${scratch}/tests/data/schema_drill_schema_containers.txt"
           expect "REGISTER demoted to PARTIAL" 15 "per-file classification counts do not match"
 
-          # 3. Two contradictory rows for one container -> exit 1, and note the arithmetic this
-          #    catches: the duplicate SHRINKS len(spec), so the count check reads 19 == 19.
           build conflict
           grep -m1 '^REGISTER' "${spec}" | sed 's/^REGISTER/PARTIAL /' \
             >> "${scratch}/tests/data/schema_drill_schema_containers.txt"
           expect "conflicting duplicate row" 1 "CONFLICTING rows for"
 
-          # 4. Two unnamed containers on ONE physical line, with a row -> the collapse abort.
           build collapse
           printf 'def f(x):\n    return x in {"v3", "v4"} or x in {"v3", "v4"}\n' \
             > "${scratch}/src/pokezero/zz_census_collapse.py"
@@ -2675,10 +1203,6 @@ jobs:
             >> "${scratch}/tests/data/schema_drill_schema_containers.txt"
           expect "two containers collapsed onto one line" 15 "container node(s) collapsed into"
 
-          # 5. THE NEGATIVE CONTROL, without which the four above prove only that SOMETHING
-          #    reddens: an unperturbed copy must be green. If this is red, the cases above are
-          #    passing on a broken scratch tree rather than on their own perturbation. Its needle
-          #    is the census's success line, so "exit 0 because it did nothing" is not a pass.
           build clean
           expect "unperturbed copy (negative control)" 0 "every schema-name container is classified"
 
@@ -2689,39 +1213,6 @@ jobs:
           fi
 
       - name: Schema-container census
-        # THE VERDICT IS THIS STEP'S EXIT CODE. Deliberately no `tee` and no grep of output this
-        # step itself wrote. Counted on this file rather than quoted: 34 of `mass-gate`'s 44 steps
-        # assert on a log their own step produced, a shape held together only by `set -o pipefail`
-        # under `bash -e`. There is nothing for a success-line grep to add here anyway: the census
-        # returns 15 from every abort it can reach and 0 only after its final print, so the code
-        # already IS the verdict.
-        #
-        # THIS STEP, not the job. An earlier form of this comment claimed "0 of this job's 5 steps"
-        # asserts on its own log, and the wiring-test step added below makes that stale in BOTH the
-        # count and the property -- so it is restated at the granularity where it is true rather
-        # than left to age. That step reads a `Ran N tests` / `OK` tail, and the honest reading is
-        # that the tail belongs to the SUITE it ran, not to the step's own verdict: the suite is a
-        # separate process and the step cannot decide its own result. An earlier form of this
-        # comment went further and said the invocation is pinned "so an `echo`-forged log fails a
-        # test". THAT WAS TRUE ONLY OF FORGES THAT REPLACE THE INVOCATION. Review measured two that
-        # KEEP it -- `|| true` plus an appended summary, and an env-gated wrapper around the whole
-        # body -- and both exited 0 over a suite whose own log said `FAILED (failures=1)`. The step
-        # below is rewritten so the runner's STATUS is its verdict; see its comment.
-        #
-        # THE CAPTURE IS PART OF THE INVOCATION, and that is the whole point of the line below.
-        # A standalone `rc=$?` on its own line pins nothing about WHOSE status it captures: review
-        # inserted one ordinary diagnostic `echo` between the two lines and measured `STEP EXIT=0`
-        # on a tree where the census exited 15, with all 22 wiring pins green. `cmd || rc=$?`
-        # cannot be orphaned that way because there is no second statement to displace, and
-        # tests/test_schema_container_census_wiring.py EXECUTES this step's own `run:` body against
-        # a stubbed census to assert the step's status tracks it -- a pin no textual match can be
-        # talked past.
-        #
-        # ANY non-zero is red, not only 15. `classification()` raises `SystemExit(str)` -- exit 1 --
-        # for a spec row that is malformed, duplicated or self-contradictory, and an interpreter
-        # error is exit 1 too. "The gate could not run" must never read as green; that is the lesson
-        # the floor gate's `exit 2` arm records, and the reason this arm is written out rather than
-        # left to `-e`.
         run: |
           set -o pipefail
           rc=0
@@ -2735,11 +1226,6 @@ jobs:
             echo "::error::tests/data/schema_drill_schema_containers.txt -- an unregistered"
             echo "::error::container makes its consumers fail on the drill's own omission, and"
             echo "::error::NINE schema-keyed structures went unregistered that way, one at a time."
-            # "NINE structures" and not "nine times", because the census's own abort printed just
-            # above this says "which has happened six times" -- SIX being the number found by the
-            # run-read-a-stack-trace-add-one loop, NINE the total structures the spec file records.
-            # Both are true and they count different things; a CI reader sees both in one log, so
-            # this one names its unit.
             exit 1
           fi
           if [ "${rc}" -ne 0 ]; then
@@ -2749,87 +1235,27 @@ jobs:
             exit 1
           fi
 
-      # A GATE NO JOB RUNS IS NOT A GATE, and this step exists because the review of this very PR
-      # found that sentence being violated by the PR that quotes it. `tests/test_schema_container_
-      # census_wiring.py` pins the structure, the consumption and the behaviour of everything above
-      # -- and executed NOWHERE. `grep -rn test_schema_container_census_wiring .github/ scripts/`
-      # returned zero hits, so the whole battery was local-only: a job-level `if: false`, a
-      # `continue-on-error`, removal from `gate-status`'s `needs:`, an `exit 1` flipped to `exit 0`,
-      # an emptied pin table and `fetch-depth: 2` -> `1` would each have landed on main GREEN.
-      #
-      # This workflow names test modules ONE BY ONE -- 34 executable `-m unittest` invocation sites
-      # counting THIS one, derived by the scan in tests/test_unreachable_readjudication.py rather
-      # than by eye, with no `unittest discover` and no pytest step in .github/ -- so a NEW module
-      # is invisible to CI by default. #1212 had to add its own step for exactly this reason, and so
-      # does this one. Running it here rather than in `mass-gate` keeps it in the same unconditional
-      # wheel-free job as the census it describes: ~2 s, stdlib only, and it cannot be skipped.
-      #
-      # The invocation is deliberately NOT spelled with its `python` prefix in this comment: two
-      # repo-wide pins (test_unreachable_readjudication, test_terminal_disposition_register) assert
-      # the workflow carries that string inside EXACTLY ONE comment, as their own anti-vacuity
-      # control for telling comments from executable steps. Adding a second reddens both, which is
-      # how this note came to be written -- the control worked.
-      #
-      # ⚠ THE RUNNER'S STATUS IS THIS STEP'S VERDICT, and the first revision of this step got that
-      # wrong in a way review measured rather than argued. It ran the suite through `tee` into
-      # /tmp/censuswiring.log and then grepped that FILE. Two forges keep the real invocation and
-      # still land green:
-      #
-      #   * `|| true` on the invocation, then `printf 'Ran N tests\nOK\n' >> ` the same log. The log
-      #     ends `FAILED (failures=1)` followed by the appended pair; both greps match; the step
-      #     exits 0. Measured with a real weakening riding along (`gate-status`'s census arm flipped
-      #     to `exit 0`): suite red, step green. Spelled without a literal count in the forge it
-      #     reddens nothing else in the repository either.
-      #   * an env-gated `if [ "${RUN_...:-0}" = "1" ]; then ... fi` around the WHOLE body. Nothing
-      #     runs, no log is written, the step exits 0, and every textual pin on it still holds --
-      #     the invocation string is present, both guards still `exit 1`.
-      #
-      # A file is extensible by any later command, so a guard reading one can never be the verdict.
-      # So: the status is captured IN the invocation (`|| rc=$?`, which nothing can displace), the
-      # output is captured into a SHELL VARIABLE rather than a file, and the summary is required to
-      # be the runner's own last three lines rather than merely present somewhere. All three are
-      # executed -- not pattern-matched -- by
-      # tests/test_schema_container_census_wiring.py, which runs this step's `run:` body against a
-      # stub that chooses the status and the tail independently.
       - name: The census wiring pins
         run: |
           set -o pipefail
           rc=0
           log=$(python -m unittest tests.test_schema_container_census_wiring -v 2>&1) || rc=$?
           printf '%s\n' "${log}"
-          # THE VERDICT. A non-zero runner is red whatever its output says, which is what the two
-          # forges above defeated: neither can survive this arm without also editing the capture
-          # line, and the capture line is a whole-line pin AND executed.
           if [ "${rc}" -ne 0 ]; then
             echo "::error::the census wiring pins did not pass (the runner exited ${rc}). Every"
             echo "::error::structural, consumption and behavioural pin on the schema-container"
             echo "::error::census job is asserted by that module and by nothing else."
             exit 1
           fi
-          # The runner's own tail, read with parameter expansion rather than `tail`/`head`: a
-          # pipeline whose reader exits early can return 141 under `set -o pipefail`, and a SIGPIPE
-          # misread as a verdict is the same defect this whole job is about.
           last=${log##*$'\n'}
           without_last=${log%$'\n'*}
           without_two=${without_last%$'\n'*}
           summary=${without_two##*$'\n'}
-          # A clean OK, read as the runner's LAST line. `unittest` prints the summary last, so a
-          # tail-anchored check cannot be satisfied by text appended after a failure -- and a plain
-          # `grep -qE '^OK$'` could.
           if [ "${last}" != "OK" ]; then
             echo "::error::the census wiring pins did not END in a clean OK (skip, failure, or"
             echo "::error::output written after the runner finished). Last line: ${last}"
             exit 1
           fi
-          # EXACT, not a floor -- a floor is the one fail-open shape this repo's mutation batteries
-          # have caught before. Anchored to the runner's own summary line (third from last, `Ran N
-          # tests in <time>`) rather than matched anywhere in the log, for the reason above. This
-          # guard lives in YAML where no local `unittest` run can see it, which is how an approved
-          # PR has reddened CI here; the module therefore asserts on this very line itself
-          # (test_the_workflow_test_count_guard_matches_this_module), deriving the number from the
-          # loader, and that assertion is scoped to THIS STEP -- job-scoping it was a live hole,
-          # because `Ran 22 tests` is not unique in this file and a sibling step's guard satisfied
-          # it while this one was weakened to a floor.
           if ! grep -qE '^Ran 32 tests in ' <<<"${summary}"; then
             echo "::error::expected 32 census-wiring pins as the runner's own summary line; the"
             echo "::error::suite shrank, grew, or that line is not the runner's. Update this count"
@@ -2838,25 +1264,6 @@ jobs:
           fi
 
 
-  # THE REQUIRED CHECK. Runs on every pull request, whatever it touches, so it can
-  # always report. It is the only job in this workflow that should ever be marked
-  # required in branch protection -- requiring `mass-gate` directly would block any
-  # PR that does not touch the fidelity paths, because a skipped job never reports.
-  #
-  # Fails when the gates ran and failed, and when they were cancelled or errored.
-  # Passes only on success or on a deliberate skip. `if: always()` is load-bearing:
-  # without it this job inherits the skip and stops reporting, restoring exactly the
-  # hole it exists to close.
-  #
-  # `seed-registry` IS IN `needs`, and that is not decoration. Branch protection
-  # requires exactly one context -- this one -- so a job absent from this list runs,
-  # goes red, and changes nothing: branch protection is satisfied by a green
-  # `gate-status` that never looked at it. The first revision of the seed-registry job
-  # had precisely that shape, and it was observed live: `seed-registry pass 8s` beside
-  # `gate-status pass 3s`, the reporter returning before the job it was meant to
-  # report on could have mattered. That is the four-inert-pins hazard one level up --
-  # the job executes, the guard fires, and nothing depends on the result. Any job
-  # added to this workflow must be added here too, or it is advisory.
   gate-status:
     needs: [changes, mass-gate, schema-default, seed-registry, harness-provenance, python-floor-syntax, schema-container-census]
     if: always()
@@ -2886,79 +1293,30 @@ jobs:
           echo "python-floor-syntax result: ${FLOOR}"
           echo "schema-container-census result: ${CENSUS}"
 
-          # The seed registry, checked FIRST and with no case analysis, because there
-          # is none to do: `seed-registry` carries no `if:`, depends on no other job,
-          # and needs no wheel, so `skipped` is not reachable for it the way it is for
-          # `mass-gate`. Anything that is not `success` -- failure, cancelled, or the
-          # empty string a job that never ran leaves behind -- is a red gate. Demanding
-          # the positive rather than excluding a list of negatives is the same shape
-          # the TOUCHED check below settled on, and for the same reason: the excluded
-          # list is what goes stale.
           if [ "${REGISTRY}" != "success" ]; then
             echo "::error::the seed-registry pins did not pass (${REGISTRY}); the fidelity seed registry in docs/engine_divergence_ledger_20260728.md no longer agrees with the committed artifacts"
             exit 1
           fi
 
-          # The harness digest, checked with the same shape and for the same reason:
-          # `harness-provenance` carries no `if:`, depends on no other job, and needs
-          # no wheel, so `skipped` is not reachable for it. Demand the positive rather
-          # than exclude a list of negatives -- the excluded list is what goes stale --
-          # so `failure`, `cancelled`, and the empty string a job that never ran leaves
-          # behind are all red.
           if [ "${HARNESS}" != "success" ]; then
             echo "::error::the harness-digest pins did not pass (${HARNESS}); the Python half of the measuring instrument is unidentified, or an engine fingerprint now spans a different set of source commits than the six historical groups"
             exit 1
           fi
 
-          # The declared-floor gate, same shape and same reason: `python-floor-syntax` carries
-          # no `if:`, depends on no other job, and needs no wheel, so `skipped` is not reachable
-          # for it. Listing it in `needs:` alone would NOT have been enough -- this job runs
-          # `if: always()`, so without an explicit check it reports green while the floor gate is
-          # red. Demand the positive, so `failure`, `cancelled` and the empty string a job that
-          # never ran leaves behind are all red.
           if [ "${FLOOR}" != "success" ]; then
             echo "::error::the declared-floor syntax gate did not pass (${FLOOR}); a tracked file uses syntax newer than requires-python declares, or the gate could not run -- either way the floor is unverified"
             exit 1
           fi
 
-          # The schema-container census, same shape and same reason: `schema-container-census`
-          # carries no `if:`, depends on no other job and needs no wheel, so `skipped` is not
-          # reachable for it. Listing it in `needs:` alone would NOT be enough -- this job runs
-          # `if: always()`, so without an explicit check it reports green while the census is red,
-          # and the census would be advisory: running, aborting, and changing nothing. That is
-          # precisely the observed `seed-registry pass 8s` / `gate-status pass 3s` shape recorded
-          # above, and it is the SECOND-order form of the very defect the census job exists to fix
-          # -- a correct check whose result nothing consumes is not meaningfully different from a
-          # correct check nothing runs. Demand the positive, so `failure`, `cancelled` and the
-          # empty string a job that never ran leaves behind are all red.
-          #
-          # ⚠ THIS ARM IS EXECUTED BY tests/test_schema_container_census_wiring.py, and it is the
-          # arm that most needed it: this job is the ONLY required context, so every other pin in
-          # that module is about a job whose result nothing has to read. The arm was pinned by a
-          # regex over bare `exit N` lines, and all six spellings that regex cannot see -- including
-          # `if false; then exit 1; fi`, which adds no `exit 0` anywhere -- made this step exit 0
-          # over `CENSUS=failure` with the whole wiring suite green. The module now runs THIS body
-          # with the seven `needs.*.result` names bound by hand, once per red value of each, and
-          # asserts both the status and WHICH arm printed. If a name in the `env:` block above is
-          # renamed, that module fails LOCALLY rather than this step dying on `set -u` after a push.
           if [ "${CENSUS}" != "success" ]; then
             echo "::error::the schema-container census did not pass (${CENSUS}); a container of schema names in src/ or scripts/ is unclassified, a classification row is stale, duplicated or self-contradictory, or the per-class counts drifted from their pin -- either way the rotation drill cannot know where to register a synthetic schema"
             exit 1
           fi
 
-          # The filter job must have SUCCEEDED before its output means anything.
-          # Without this, a failed or cancelled `changes` job leaves TOUCHED as the
-          # empty string -- not "false" -- and `mass-gate` reads `skipped` because
-          # its dependency never succeeded. The skipped arm's `= "true"` guard does
-          # not fire on "", so this job printed "gates correctly not run" and exited
-          # 0: a green REQUIRED check on a PR whose gates never ran. Superseded runs
-          # are now cancelled automatically, so treating a cancelled `changes` job as
-          # an explicit failure is what prevents that cancellation from minting a pass.
           if [ "${FILTER}" != "success" ]; then
             echo "::error::the path-filter job did not succeed (${FILTER}); the gates did not run"
             exit 1
           fi
-          # And demand an explicit negative rather than "anything that is not true".
           if [ "${TOUCHED}" != "true" ] && [ "${TOUCHED}" != "false" ]; then
             echo "::error::path filter produced no verdict (fidelity='${TOUCHED}')"
             exit 1

@@ -2527,14 +2527,17 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
 
     @staticmethod
     def _step() -> str:
-        """This module's workflow step, sliced off so a sibling step's numbers cannot
-        satisfy a claim about this one. A first version of this check read the whole file
-        and matched C150's `Battery: 10 mutations`, reporting agreement with a comment
-        forty steps away."""
+        """Return this module's executable workflow step only.
+
+        The workflow is intentionally free of historical prose.  Anchor on the step's
+        stable display name and stop at the next step, so a sibling command cannot
+        satisfy a claim about this module.
+        """
 
         text = _text(WORKFLOW)
-        start = text.index("# C155. The terminal-disposition register.")
-        return text[start:].split("      # C150. The ledger's G8 cell", 1)[0]
+        start = text.index("      - name: Terminal disposition register\n")
+        remainder = text[start:]
+        return remainder.split("\n      - name:", 1)[0]
 
     @staticmethod
     def _battery() -> str:
@@ -2565,7 +2568,6 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             ("register test evidence", r"→ \*\*Ran (\d+) tests, OK\*\*", register),
             ("workflow guard", r"Ran (\d+) tests' /tmp/c155register", step),
             ("workflow error message", r"expected (\d+) register pins", step),
-            ("workflow AST", r"deriving (\d+) from the module's AST", step),
         ):
             with self.subTest(site=label):
                 self.assertEqual(int(self._all(pattern, haystack)), derived)
@@ -2574,11 +2576,8 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         """⚠ FINDING A OF REVIEW ROUND TWO, and the check that then failed in CI.
 
         The register states how much of #1204's `Ran N tests` guard scan reaches this
-        workflow. Round one typed "21 of the 25" and "four" and was RIGHT. Round two
-        "re-corrected" it to 20-of-25 / 21-of-26 by counting a COMMENT line carrying the
-        invocation string as a guard site -- the same self-match trap the sentence beside it
-        discloses, caught for its visible effect and shipped for its arithmetic one. So the
-        triple became derived rather than stated.
+        workflow. The counts are derived from executable lines, never copied workflow
+        commentary: comments are not CI behavior and must not become a hidden contract.
 
         ⚠ AND THEN IT WENT RED IN CI WHILE GREEN ON TWO REVIEWERS' TREES, which is the most
         useful thing that happened to this module. GitHub runs the gate on
@@ -2645,10 +2644,10 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             }
         )
 
-        # Anti-vacuity, and this control is the specific one the finding earns: the file DOES
-        # carry the invocation inside a comment, so `executable == len(carrying)` would mean
-        # the scan had stopped telling them apart -- which is the defect itself.
-        self.assertEqual(len(comments), 1, carrying)
+        # The workflow carries no invocation strings in commentary.  That keeps comments
+        # removable without changing the executable gate and makes this scan's denominator
+        # unambiguous.
+        self.assertEqual(comments, [], carrying)
         self.assertGreater(executable, 20)
         self.assertGreater(resolved, 15)
         # And the second anti-vacuity control, which zero unresolved makes necessary: with
@@ -2720,7 +2719,6 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         for label, pattern, haystack in (
             ("docstring header", r"^ (\d+) applied, \1 caught", battery),
             ("register §6", r"\*\*(\d+) mutations applied, \1 caught\*\*", register),
-            ("workflow comment", r"Battery: (\d+) mutations applied, \1 caught", step),
         ):
             with self.subTest(site=label):
                 self.assertEqual(int(self._all(pattern, haystack)), total)
@@ -2755,7 +2753,6 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         self.assertIn(size, words, f"block B has {size} entries; extend `words`")
         word = words[size]
         self.assertRegex(battery, rf"BLOCK B -- B\d+-B\d+, {word} mutations")
-        self.assertRegex(self._step(), rf"\b{word} of the \d+ are applied only to the tree")
         self.assertRegex(_text(REGISTER), rf"(?i)\b{word.lower()} is the measured figure")
 
     def test_the_readings_and_zero_paragraph_counts_are_stated_as_measured(self) -> None:
