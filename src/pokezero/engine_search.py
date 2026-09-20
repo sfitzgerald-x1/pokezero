@@ -3814,6 +3814,74 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
     )
 
 
+def _validated_branch_prior_unmapped_action_witness(value: Any) -> dict[str, dict[str, int]]:
+    """Validate the public-free shape witness for an `unmapped_action` fallback.
+
+    The witness identifies only which engine option kind lacked a policy-slot
+    correspondence. It intentionally carries no private state, policy score,
+    move name, or branch identity.
+    """
+
+    if not isinstance(value, Mapping) or set(value) != {"acting", "opponent"}:
+        raise EngineSearchWitnessError(
+            "branch_prior_fallback_ledger_invalid: unmapped-action witness must name "
+            "acting and opponent seats"
+        )
+    normalized: dict[str, dict[str, int]] = {}
+    for seat in ("acting", "opponent"):
+        row = value[seat]
+        if not isinstance(row, Mapping) or set(row) != {
+            "nodes",
+            "move_arms",
+            "switch_arms",
+            "none_arms",
+        }:
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: unmapped-action witness row "
+                "has an unexpected shape"
+            )
+        normalized_row = {name: row[name] for name in sorted(row)}
+        if any(type(count) is not int or count < 0 for count in normalized_row.values()):
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: unmapped-action witness counts "
+                "must be non-negative integers"
+            )
+        missing_arms = (
+            normalized_row["move_arms"]
+            + normalized_row["switch_arms"]
+            + normalized_row["none_arms"]
+        )
+        if (normalized_row["nodes"] == 0) != (missing_arms == 0) or missing_arms < normalized_row[
+            "nodes"
+        ]:
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: unmapped-action witness does "
+                "not conserve nodes and missing arms"
+            )
+        normalized[seat] = normalized_row
+    return normalized
+
+
+def _branch_prior_unmapped_action_witness_nodes(
+    witness: Mapping[str, Mapping[str, int]],
+) -> int:
+    return sum(witness[seat]["nodes"] for seat in ("acting", "opponent"))
+
+
+def _sum_branch_prior_unmapped_action_witnesses(
+    witnesses: Sequence[Mapping[str, Mapping[str, int]]],
+) -> dict[str, dict[str, int]]:
+    total = {
+        seat: {name: 0 for name in ("nodes", "move_arms", "switch_arms", "none_arms")}
+        for seat in ("acting", "opponent")
+    }
+    for witness in witnesses:
+        for seat, row in witness.items():
+            for name, count in row.items():
+                total[seat][name] += count
+    return total
+
+
 def _decision_branch_prior_fallback_ledger(
     native_events: Sequence[Mapping[str, Any]],
     *,
@@ -3872,6 +3940,21 @@ def _decision_branch_prior_fallback_ledger(
                 )
             for reason, count in event_reasons.items():
                 reason_counts[reason] += count
+        witness = event.get("unmapped_action_witness")
+        if witness is not None:
+            witness = _validated_branch_prior_unmapped_action_witness(witness)
+            if event_reasons is None:
+                raise EngineSearchWitnessError(
+                    "branch_prior_fallback_ledger_invalid: an unmapped-action witness "
+                    "requires classified native fallback reasons"
+                )
+            if _branch_prior_unmapped_action_witness_nodes(witness) != event_reasons[
+                "unmapped_action"
+            ]:
+                raise EngineSearchWitnessError(
+                    "branch_prior_fallback_ledger_invalid: unmapped-action witness nodes "
+                    "do not equal the classified native fallback count"
+                )
         events.append(
             {
                 "native_invocation": invocation,
@@ -3879,12 +3962,19 @@ def _decision_branch_prior_fallback_ledger(
                 "collapse_multiplicity": event.get("collapse_multiplicity"),
                 "branch_prior_fallbacks": branch_fallbacks,
                 "reason_counts": event_reasons,
+                **({"unmapped_action_witness": witness} if witness is not None else {}),
             }
         )
     if len({event["native_invocation"] for event in events}) != len(events):
         raise EngineSearchWitnessError(
             "branch_prior_fallback_ledger_invalid: native invocation identity repeated"
         )
+    witnesses = [event.get("unmapped_action_witness") for event in events]
+    aggregate_witness = (
+        None
+        if any(witness is None for witness in witnesses)
+        else _sum_branch_prior_unmapped_action_witnesses(witnesses)
+    )
     return {
         "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
         "native_invocations": len(events),
@@ -3893,6 +3983,7 @@ def _decision_branch_prior_fallback_ledger(
         "reason_counts": reason_counts,
         "unclassified_branch_prior_fallbacks": unclassified,
         "reason_ledger_complete": unclassified == 0,
+        **({"unmapped_action_witness": aggregate_witness} if aggregate_witness is not None else {}),
         "events": events,
     }
 
@@ -6222,6 +6313,21 @@ class EngineMctsPolicy:
                         if count
                     }
                 )
+            branch_unmapped_action_witness = report.get(
+                "branch_prior_unmapped_action_witness"
+            )
+            if branch_unmapped_action_witness is not None:
+                branch_unmapped_action_witness = _validated_branch_prior_unmapped_action_witness(
+                    branch_unmapped_action_witness
+                )
+                if branch_reason_counts is None or _branch_prior_unmapped_action_witness_nodes(
+                    branch_unmapped_action_witness
+                ) != branch_reason_counts["unmapped_action"]:
+                    raise EngineSearchWitnessError(
+                        "native_branch_prior_unmapped_action_witness_invalid: "
+                        "witness nodes must equal classified unmapped-action fallbacks"
+                    )
+                report["branch_prior_unmapped_action_witness"] = branch_unmapped_action_witness
             if config.strict_fallbacks and root_prior_fallbacks:
                 reason = report.get("root_prior_fallback_reason")
                 if not isinstance(reason, str) or not reason:
@@ -6430,6 +6536,9 @@ class EngineMctsPolicy:
                         None
                         if report.get("branch_prior_fallback_reasons") is None
                         else dict(report["branch_prior_fallback_reasons"])
+                    ),
+                    "unmapped_action_witness": report.get(
+                        "branch_prior_unmapped_action_witness"
                     ),
                 }
             )
