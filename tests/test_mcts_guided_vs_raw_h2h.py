@@ -673,6 +673,22 @@ class GuidedConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
+    def test_registered_deep_opponent_prior_protocol_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
+        self.assertTrue(config["use_opponent_priors"])
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 4095
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+        # Flipping the *deep* control would reproduce the exact registered
+        # configuration above; the shallow registered protocol must not gain
+        # opponent priors merely because that axis is now allowed elsewhere.
+        drifted = dict(RUNNER.REGISTERED_ENGINE_CONFIG)
+        drifted["use_opponent_priors"] = True
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(drifted)
+
 
 class GuidedProgressTest(unittest.TestCase):
     def test_guided_progress_uses_its_own_schema_without_weakening_validation(self) -> None:
