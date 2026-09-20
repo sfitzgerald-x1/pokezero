@@ -16,6 +16,21 @@ name: Engine fidelity gates
 
 on:
   pull_request:
+
+# Every job in this workflow only reads the pull-request merge result and its
+# pinned upstream source.  Keep the workflow token read-only, and avoid leaving
+# even that token in any checkout's Git configuration.
+permissions:
+  contents: read
+
+# A new commit supersedes an older pull-request head. Without this, each quick
+# follow-up starts another full native-engine build and the 15–30 minute mass
+# gate continues consuming a runner after its result can no longer be merged.
+# Keep runs isolated by PR so unrelated pull requests still validate in parallel.
+concurrency:
+  group: engine-fidelity-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # The path filter used to live on the workflow trigger. A REQUIRED status check
   # cannot be path-filtered that way: on a PR that touches none of these paths the
@@ -27,10 +42,12 @@ jobs:
     timeout-minutes: 10
     outputs:
       fidelity: ${{ steps.f.outputs.fidelity }}
+      schema_default: ${{ steps.f.outputs.schema_default }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: f
         env:
           FILTERS: |
@@ -42,6 +59,7 @@ jobs:
             scripts/setup_poke_engine.sh
             scripts/vendor_poke_engine_src.sh
             scripts/engine_behavioral_probes.py
+            scripts/check_engine_fidelity_unittest_counts.py
             scripts/engine_build_fingerprint.py
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
@@ -396,10 +414,20 @@ jobs:
           if ! changed=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE...$HEAD"); then
             echo "could not diff $BASE..$HEAD; running the gates anyway"
             echo "fidelity=true" >> "$GITHUB_OUTPUT"
+            echo "schema_default=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "$changed"
           matched=false
+          schema_default=false
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              *.py|tests/data/schema_default_allowlist.json|.github/workflows/engine-fidelity-gates.yml)
+                schema_default=true
+                ;;
+            esac
+          done <<< "$changed"
           while IFS= read -r pattern; do
             [ -z "$pattern" ] && continue
             # The old trigger `paths:` list carried a one-line rationale per entry
@@ -417,7 +445,9 @@ jobs:
             done <<< "$changed"
           done <<< "$FILTERS"
           echo "fidelity=$matched" >> "$GITHUB_OUTPUT"
+          echo "schema_default=$schema_default" >> "$GITHUB_OUTPUT"
           echo "fidelity paths touched: $matched"
+          echo "schema-default paths touched: $schema_default"
   mass-gate:
     needs: changes
     if: needs.changes.outputs.fidelity == 'true'
@@ -425,9 +455,11 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -439,14 +471,14 @@ jobs:
       # green.  Pin and build the same upstream source explicitly so this gate
       # can reject a skip rather than silently dropping the production rung.
       - name: Checkout pinned Pokemon Showdown for model-path arbiter tests
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: smogon/pokemon-showdown
           ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
           path: .ci/pokemon-showdown
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22.22.2"
           cache: npm
@@ -621,27 +653,6 @@ jobs:
           fi
           if grep -q 'skipped' /tmp/armoracle.log; then
             echo "::error::the collapsed-arm mass oracle SKIPPED; it must never skip"
-            exit 1
-          fi
-
-      # The schema-default gate is worthless if it never runs, and it did not: it was authored
-      # with no workflow step, so "fails at authorship" meant "fails for whoever remembers to run
-      # it". A SKIP is treated as a FAILURE here -- the gate skips when the ledger reports an
-      # unparsable file, and on this job that means something else broke, not that the check is
-      # inapplicable.
-      - name: Schema-default conflation gate
-        run: |
-          set -o pipefail
-          python -m unittest tests.test_schema_default_ledger tests.test_schema_with_selector -v \
-            2>&1 | tee /tmp/schemagate.log
-          # Parse the SUMMARY, not the whole -v log: `grep skipped` over verbose output would
-          # trip on any future test name or docstring containing the word.
-          if tail -5 /tmp/schemagate.log | grep -qE 'skipped=[0-9]+|OK \(skipped'; then
-            echo "::error::the schema-default gate SKIPPED -- the ledger could not measure the tree"
-            exit 1
-          fi
-          if ! grep -qE 'Ran 25 tests' /tmp/schemagate.log; then
-            echo "::error::expected 25 tests across the ledger gate and the selector; suite changed"
             exit 1
           fi
 
@@ -1568,15 +1579,26 @@ jobs:
           # parallel call-seam reservations plus the post-argument recheck that
           # prevents a stale pre-guard ABI budget from starting native work.
           # 241 -> 242: the Rest sleep action-boundary settlement repair needs its
-          # own regression pin.
-          if ! grep -qE 'Ran 242 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 242 engine-search tests; the suite shrank or grew"
+          # own regression pin. 242 -> 244: branch-prior fallback reason-ledger
+          # parsing needs both its conservation and malformed-ledger refusal pins.
+          # 244 -> 245: the measured-override audit adapter is driven from the
+          # production telemetry envelope, so its source schema cannot drift from
+          # the sealed continuation audit without this native-engine pin failing.
+          # EngineSearchWorkflowGuardTests derives this exact value from the
+          # module's loader, so future suite growth now fails locally before this
+          # expensive native gate is queued.
+          if ! grep -qE 'Ran 250 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 250 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
             echo "::error::the engine-search suite did not report a clean OK"
             exit 1
           fi
+          # Every exact ``Ran N tests`` guard in this workflow is derived from
+          # test-source ASTs before the native build is queued locally.  This
+          # keeps a new test from becoming a late, workflow-only count failure.
+          python scripts/check_engine_fidelity_unittest_counts.py
           # Name the abort-path pins. A total is restorable by unrelated tests, and these
           # SEVEN are the only guards that an aborted world reports anything at all.
           # Counted, not recalled: an earlier revision of this comment said "five" while
@@ -1944,48 +1966,20 @@ jobs:
             }
           done
 
-      - name: The abort seam under `--features model` -- COMPILE COVERAGE PLUS ONE BEHAVIOURAL RUNG
+      - name: Model-feature abort seam
         run: |
           set -o pipefail
-          # WHY THIS STEP EXISTS. `tree.rs:305`'s abort gate is `allow(dead_code)` without the
-          # `model` cargo feature, so every crate step above compiles the channel THIS
-          # PR's class travels on out of the build entirely -- report 4 section 4.1, in the CI
-          # config rather than in a measurement run. `model.rs` is likewise never compiled, and
-          # the named `abort_telemetry::*` pins above are source-text assertions over
-          # `include_str!("model.rs")` precisely because of that.
-          #
-          # WHAT IT BUYS, STATED EXACTLY, because overclaiming here would be the same defect in
-          # the other direction. The FIRST revision of this step bought compile coverage and
-          # nothing else, and review proved it: the executed test-NAME set was IDENTICAL with
-          # and without the feature -- 519 names both ways, `comm` empty in both directions --
-          # so no CI test observed an abort under either setting, and section 4.1 was NOT
-          # discharged by adding the flag.
-          #
-          # `tree::model_abort_seam_tests` is the answer to that, and it is deliberately narrow.
-          # It is `cfg`-gated on the feature, so the two builds are now OBSERVABLY different --
-          # 520 tests here against 519 on the plain step -- and it asserts the gated seam
-          # actually REJECTS and that the error carries the predicate the census keys
-          # `world_failure_reasons` by. Null-worlded: replacing the seam's condition with
-          # `if false` reddens exactly that test.
-          #
-          # ⚠ STILL NOT DISCHARGED, and this comment is where a reader will look. The abort
-          # channel is exercised at the SEAM only. Nothing in CI drives a search over a world
-          # and observes `worlds_searched < worlds_constructed`; that needs the
-          # truth-differential harness and its model artifacts and is not a CI job. Treat
-          # "the abort channel is covered in CI" as FALSE and this as one rung of it.
-          #
-          # THE LIBRARY-PATH TRAP, found by running it. `build.rs` embeds an rpath for the
-          # maturin-built cdylib only, so `cargo test --features model` binaries do not get it
-          # and abort at load with SIGABRT. cargo then prints `error: test failed` and NO
-          # `test result: FAILED` line, so a step grepping only for that line would pass on a
-          # run where nothing executed. `set -o pipefail` is what actually catches it; the
-          # library path is what prevents it.
+          # The complete non-model crate suite runs above. This feature-only rung must compile
+          # the model path and exercise the one cfg-gated seam; rerunning every non-model test
+          # here previously added roughly six minutes without increasing feature coverage.
+          # It is intentionally a seam test, not a claim that a full search abort was observed.
           python -m pip install --quiet torch==2.13.0 \
             --index-url https://download.pytorch.org/whl/cpu
           LIBTORCH_USE_PYTORCH=1 \
             LD_LIBRARY_PATH="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')" \
             RUSTFLAGS="-C debug-assertions=yes" \
-            cargo test --release --no-fail-fast --features model \
+            cargo test --release --features model --lib \
+              tree::model_abort_seam_tests::the_gated_abort_seam_rejects_an_attribution_unsafe_branch_with_its_predicate \
               --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/cargo-model.log
           if grep -qE '^test result: FAILED' /tmp/cargo-model.log; then
@@ -1994,11 +1988,8 @@ jobs:
           fi
           model_tests=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo-model.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          # 520, not 519, and the DIFFERENCE is the point: `tree::model_abort_seam_tests` exists
-          # only on this build. Equal floors would mean the two steps could not tell each other
-          # apart, which is the state review found. Measured: plain 519, model 520.
-          if [ "${model_tests:-0}" -lt 520 ]; then
-            echo "::error::expected >= 520 crate tests under --features model, got ${model_tests:-0}"
+          if [ "${model_tests:-0}" -ne 1 ]; then
+            echo "::error::expected exactly one model-gated seam test, got ${model_tests:-0}"
             exit 1
           fi
           # And name the gated pin, because a total can be restored by unrelated tests -- the
@@ -2109,6 +2100,41 @@ jobs:
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
 
+  # This is a source-only ownership check. It previously waited behind the full
+  # native-engine build and every engine fidelity probe, even though it imports no
+  # package code and needs neither Rust nor Showdown. Keep its verdict required,
+  # but run it in parallel and bound it independently so a schema regression is
+  # diagnosed as such instead of presenting as a stalled mass gate.
+  schema-default:
+    needs: changes
+    if: needs.changes.outputs.schema_default == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Schema-default conflation gate
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_schema_default_ledger tests.test_schema_with_selector -v \
+            2>&1 | tee /tmp/schemagate.log
+          # Parse the SUMMARY, not the whole -v log: `grep skipped` over verbose output would
+          # trip on any future test name or docstring containing the word.
+          if tail -5 /tmp/schemagate.log | grep -qE 'skipped=[0-9]+|OK \(skipped'; then
+            echo "::error::the schema-default gate SKIPPED -- the ledger could not measure the tree"
+            exit 1
+          fi
+          if ! grep -qE 'Ran 25 tests' /tmp/schemagate.log; then
+            echo "::error::expected 25 tests across the ledger gate and the selector; suite changed"
+            exit 1
+          fi
+
   # The seed registry, re-derived from the committed artifacts.
   #
   # DELIBERATELY NOT BEHIND THE `changes` FILTER, and deliberately not a step inside
@@ -2148,9 +2174,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -2239,9 +2267,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -2355,9 +2385,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -2453,8 +2485,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
+          persist-credentials: false
           # Depth 2, so the merge commit's two PARENTS exist locally. The default is depth 1,
           # which checks out the right tree but GRAFTS the parents away -- and the first CI run of
           # this job proved it the loud way: `git rev-list --parents -n 1 HEAD` reported zero
@@ -2463,7 +2496,7 @@ jobs:
           # than by reasoning, which is the reason the assertion was written as an assertion.
           fetch-depth: 2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -2472,7 +2505,7 @@ jobs:
         # rather than the branch. This job has no path filter and computes no diff, so the only
         # count that could be taken from the wrong tree is the census's own container count -- and
         # that comes from whatever `actions/checkout` left in the working directory. On
-        # `pull_request`, actions/checkout@v4 checks out `refs/pull/N/merge` by default, so the
+        # `pull_request`, actions/checkout@v5 checks out `refs/pull/N/merge` by default, so the
         # count already derives from the merge result. That default is load-bearing and INVISIBLE:
         # a future `ref: ${{ github.event.pull_request.head.sha }}` line, which looks like a
         # tightening, would silently census a tree that is not the one that would land. Asserted,
@@ -2821,7 +2854,7 @@ jobs:
   # the job executes, the guard fires, and nothing depends on the result. Any job
   # added to this workflow must be added here too, or it is advisory.
   gate-status:
-    needs: [changes, mass-gate, seed-registry, harness-provenance, python-floor-syntax, schema-container-census]
+    needs: [changes, mass-gate, schema-default, seed-registry, harness-provenance, python-floor-syntax, schema-container-census]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -2829,7 +2862,9 @@ jobs:
       - name: Report the fidelity gate result
         env:
           TOUCHED: ${{ needs.changes.outputs.fidelity }}
+          SCHEMA_TOUCHED: ${{ needs.changes.outputs.schema_default }}
           RESULT: ${{ needs.mass-gate.result }}
+          SCHEMA: ${{ needs.schema-default.result }}
           FILTER: ${{ needs.changes.result }}
           REGISTRY: ${{ needs.seed-registry.result }}
           HARNESS: ${{ needs.harness-provenance.result }}
@@ -2839,7 +2874,9 @@ jobs:
           set -euo pipefail
           echo "changes result: ${FILTER}"
           echo "fidelity paths touched: ${TOUCHED}"
+          echo "schema-default paths touched: ${SCHEMA_TOUCHED}"
           echo "mass-gate result: ${RESULT}"
+          echo "schema-default result: ${SCHEMA}"
           echo "seed-registry result: ${REGISTRY}"
           echo "harness-provenance result: ${HARNESS}"
           echo "python-floor-syntax result: ${FLOOR}"
@@ -2910,10 +2947,9 @@ jobs:
           # empty string -- not "false" -- and `mass-gate` reads `skipped` because
           # its dependency never succeeded. The skipped arm's `= "true"` guard does
           # not fire on "", so this job printed "gates correctly not run" and exited
-          # 0: a green REQUIRED check on a PR whose gates never ran. There is no
-          # `concurrency:` block in this repo, so the only thing that cancels a run
-          # is a person -- which made an 11-second window in which anyone with write
-          # access could cancel `changes` and mint themselves a passing gate.
+          # 0: a green REQUIRED check on a PR whose gates never ran. Superseded runs
+          # are now cancelled automatically, so treating a cancelled `changes` job as
+          # an explicit failure is what prevents that cancellation from minting a pass.
           if [ "${FILTER}" != "success" ]; then
             echo "::error::the path-filter job did not succeed (${FILTER}); the gates did not run"
             exit 1
@@ -2921,6 +2957,18 @@ jobs:
           # And demand an explicit negative rather than "anything that is not true".
           if [ "${TOUCHED}" != "true" ] && [ "${TOUCHED}" != "false" ]; then
             echo "::error::path filter produced no verdict (fidelity='${TOUCHED}')"
+            exit 1
+          fi
+          if [ "${SCHEMA_TOUCHED}" != "true" ] && [ "${SCHEMA_TOUCHED}" != "false" ]; then
+            echo "::error::path filter produced no schema-default verdict (schema_default='${SCHEMA_TOUCHED}')"
+            exit 1
+          fi
+          if [ "${SCHEMA_TOUCHED}" = "true" ] && [ "${SCHEMA}" != "success" ]; then
+            echo "::error::schema-default gate did not pass (${SCHEMA})"
+            exit 1
+          fi
+          if [ "${SCHEMA_TOUCHED}" = "false" ] && [ "${SCHEMA}" != "skipped" ]; then
+            echo "::error::schema-default gate ran despite no schema-default path change (${SCHEMA})"
             exit 1
           fi
 

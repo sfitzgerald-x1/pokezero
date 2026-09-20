@@ -36,12 +36,51 @@ from pokezero.engine_search import (  # noqa: E402
     _FALLBACK_SAMPLES_PER_CLASS,
     _REASON_DETAIL_LIMIT,
     _bounded_reason_detail,
+    _decision_branch_prior_fallback_ledger,
     free_decision_features,
     _latch_encoder_tables_to_model_config,
     _locked_aggregate_choice,
     _world_visit_shares,
     native_search_args,
 )
+
+
+class EngineSearchWorkflowGuardTests(unittest.TestCase):
+    """Keep the workflow-only exact-count pin synchronized before CI runs.
+
+    The native fidelity workflow intentionally rejects both a shrunken and a
+    grown engine-search suite. That guard is valuable, but it lives in YAML,
+    so a normal local unittest run could not previously tell an author that a
+    new regression test also needed the pinned count updated. The result was
+    an otherwise-good pull request failing only after the expensive native
+    build had completed.
+    """
+
+    def test_workflow_exact_count_matches_this_module(self) -> None:
+        loaded = unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
+        count = loaded.countTestCases()
+        workflow = Path(ROOT, ".github", "workflows", "engine-fidelity-gates.yml").read_text()
+        step = workflow.split("- name: Engine-search telemetry pins", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn(
+            f"Ran {count} tests",
+            step,
+            "the engine-search suite changed but its workflow-only exact-count guard "
+            "was not updated",
+        )
+        self.assertGreater(count, 1, "anti-vacuity: the loader found no engine-search tests")
+        self.assertIn(
+            "python scripts/check_engine_fidelity_unittest_counts.py",
+            step,
+            "the workflow must run the source-derived guard for every exact unittest count",
+        )
+        filters = workflow.split("FILTERS: |", 1)[1].split("          BASE:", 1)[0]
+        self.assertIn(
+            "scripts/check_engine_fidelity_unittest_counts.py",
+            filters,
+            "a script-only change must still start the native gate that validates it",
+        )
 
 
 class _FakeObservation:
@@ -1028,6 +1067,65 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
         self.assertEqual(stop["full_budget_replays"], 2)
         self.assertEqual(policy.stats.total_iterations, 320)
         self.assertEqual(policy.stats.early_stop_full_budget_replays, 2)
+
+    def test_branch_prior_ledger_retains_a_collapsed_prefix_and_each_replay(self) -> None:
+        """A replayed decision retains every completed native fallback event.
+
+        Override telemetry normally rejects early-stop configurations because it
+        measures a full fixed tree.  This deliberately violates that validation
+        *after* construction to drive the internal replay path: one collapsed
+        stopped prefix then one full replay per belief record.  The event ledger
+        must carry all three native calls, not just the two final reports.
+        """
+
+        def with_branch_reason(report: dict, reason: str, count: int) -> dict:
+            reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+            reasons[reason] = count
+            report.update(
+                {
+                    "prior_fallbacks": count,
+                    "root_prior_fallbacks": 0,
+                    "branch_prior_fallbacks": count,
+                    "branch_prior_fallback_reasons": reasons,
+                }
+            )
+            return report
+
+        prefix = with_branch_reason(
+            self._report(30, 30, stopped=True), "unmapped_action", 3
+        )
+        replay_one = with_branch_reason(
+            self._report(60, 40, stopped=False), "invalid_mapped_mass", 2
+        )
+        replay_two = with_branch_reason(
+            self._report(55, 45, stopped=False), "action_index_out_of_range", 2
+        )
+        native = self._Native([prefix, replay_one, replay_two])
+        policy = self._policy(early_stop=True)
+        object.__setattr__(policy._config, "override_telemetry", True)
+
+        decision = self._run(
+            policy,
+            native,
+            [self._world("same-world"), self._world("same-world")],
+        )
+
+        self.assertEqual(len(native.calls), 3)
+        ledger = decision.metadata["engine_mcts"]["override"][
+            "branch_prior_fallbacks"
+        ]
+        self.assertEqual(ledger["native_invocations"], 3)
+        self.assertEqual(ledger["belief_worlds"], 2)
+        self.assertEqual(ledger["branch_prior_fallbacks"], 7)
+        self.assertEqual(ledger["reason_counts"]["unmapped_action"], 3)
+        self.assertEqual(ledger["reason_counts"]["invalid_mapped_mass"], 2)
+        self.assertEqual(ledger["reason_counts"]["action_index_out_of_range"], 2)
+        self.assertEqual(
+            [event["belief_records"] for event in ledger["events"]], [2, 1, 1]
+        )
+        self.assertEqual(
+            [event["collapse_multiplicity"] for event in ledger["events"]], [2, 1, 1]
+        )
 
     def test_failed_required_replay_fails_the_decision_closed(self) -> None:
         native = self._Native(
@@ -4304,14 +4402,14 @@ class FallbackAddressTests(unittest.TestCase):
         )
         # And the counts must never be smuggled into the message: that string is the
         # world_failure_reasons key, whose bytes are compared across eras and which
-        # _bounded_reason_detail truncates at 512 chars. Pinned as "exactly one call
-        # site" rather than one forbidden spelling -- `!contains("json_object()}")`
-        # caught a single format-string shape and sailed past
-        # `format!("{} [lossy={}]", raw, ..json_object())`.
+        # _bounded_reason_detail truncates at 512 chars. Pin the lossy ledger's one
+        # report call site rather than every `json_object()` call in model.rs: other
+        # independent report ledgers may legitimately use the same serialization
+        # helper.
         self.assertEqual(
-            model_rs.count("json_object()"), 1,
-            "`json_object()` must have exactly one call site in model.rs (the search "
-            "report); a second one is how the counts reach the reason key",
+            model_rs.count("lossy_subcases.json_object()"), 1,
+            "the lossy-subcase ledger must have exactly one model report call site; "
+            "a second one is how the counts reach the reason key",
         )
 
     def test_the_subcase_key_is_present_in_the_report_even_when_empty(self) -> None:
@@ -5504,11 +5602,140 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             }
         )
 
-        self._run(policy, [report])
+        decision, _ = self._run(policy, [report])
 
         self.assertEqual(policy.stats.root_prior_fallbacks, 0)
         self.assertEqual(policy.stats.branch_prior_fallbacks, 2)
         self.assertEqual(policy.stats.branch_prior_fallback_reasons, {"unmapped_action": 2})
+        ledger = decision.metadata["engine_mcts"]["override"][
+            "branch_prior_fallbacks"
+        ]
+        self.assertEqual(
+            ledger["schema_version"],
+            "pokezero.engine-mcts.branch-prior-fallbacks.v1",
+        )
+        self.assertEqual(ledger["native_invocations"], 1)
+        self.assertEqual(ledger["belief_worlds"], 1)
+        self.assertEqual(ledger["branch_prior_fallbacks"], 2)
+        self.assertEqual(ledger["reason_counts"]["unmapped_action"], 2)
+        self.assertEqual(
+            ledger["events"],
+            [
+                {
+                    "native_invocation": 1,
+                    "belief_records": 1,
+                    "collapse_multiplicity": 1,
+                    "branch_prior_fallbacks": 2,
+                    "reason_counts": {
+                        name: (2 if name == "unmapped_action" else 0)
+                        for name in sorted(BRANCH_PRIOR_FALLBACK_REASON_VALUES)
+                    },
+                }
+            ],
+        )
+
+    def test_branch_prior_fallback_ledger_deduplicates_collapsed_belief_records(
+        self,
+    ) -> None:
+        """One multiplicity-scaled native tree is not N fallback events."""
+        policy = self._policy(worlds=2)
+        report = self._report(
+            [("alpha", 120, 0.5, 0.2), ("beta", 80, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["invalid_mapped_mass"] = 3
+        report.update(
+            {
+                "prior_fallbacks": 3,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 3,
+                "branch_prior_fallback_reasons": reasons,
+            }
+        )
+        duplicate_worlds = [self._world("same-world"), self._world("same-world")]
+
+        decision, native = self._run(policy, [report], worlds=duplicate_worlds)
+
+        self.assertEqual(len(native.calls), 1)
+        ledger = decision.metadata["engine_mcts"]["override"][
+            "branch_prior_fallbacks"
+        ]
+        self.assertEqual(ledger["native_invocations"], 1)
+        self.assertEqual(ledger["belief_worlds"], 2)
+        self.assertEqual(ledger["branch_prior_fallbacks"], 3)
+        self.assertEqual(ledger["reason_counts"]["invalid_mapped_mass"], 3)
+        self.assertEqual(ledger["events"][0]["belief_records"], 2)
+        self.assertEqual(ledger["events"][0]["collapse_multiplicity"], 2)
+
+    def test_branch_prior_fallback_ledger_retains_prefix_and_replay_invocations(
+        self,
+    ) -> None:
+        """A replay adds an event; it never overwrites a stopped prefix's cost."""
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["unmapped_action"] = 3
+        replay_reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        replay_reasons["invalid_mapped_mass"] = 2
+
+        ledger = _decision_branch_prior_fallback_ledger(
+            [
+                {
+                    "native_invocation": 1,
+                    "belief_records": 2,
+                    "collapse_multiplicity": 2,
+                    "branch_prior_fallbacks": 3,
+                    "reason_counts": reasons,
+                },
+                {
+                    "native_invocation": 2,
+                    "belief_records": 1,
+                    "collapse_multiplicity": 1,
+                    "branch_prior_fallbacks": 2,
+                    "reason_counts": replay_reasons,
+                },
+            ],
+            belief_worlds=2,
+        )
+
+        self.assertEqual(ledger["native_invocations"], 2)
+        self.assertEqual(ledger["belief_worlds"], 2)
+        self.assertEqual(ledger["branch_prior_fallbacks"], 5)
+        self.assertEqual(ledger["reason_counts"]["unmapped_action"], 3)
+        self.assertEqual(ledger["reason_counts"]["invalid_mapped_mass"], 2)
+        self.assertEqual(ledger["unclassified_branch_prior_fallbacks"], 0)
+        self.assertTrue(ledger["reason_ledger_complete"])
+        self.assertEqual([row["native_invocation"] for row in ledger["events"]], [1, 2])
+
+    def test_branch_prior_fallback_ledger_marks_legacy_reasonless_counts_unknown(
+        self,
+    ) -> None:
+        """A split-era report remains readable without a fabricated cause."""
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 1,
+            }
+        )
+
+        decision, _ = self._run(policy, [report])
+
+        ledger = decision.metadata["engine_mcts"]["override"][
+            "branch_prior_fallbacks"
+        ]
+        self.assertEqual(ledger["branch_prior_fallbacks"], 1)
+        self.assertEqual(ledger["unclassified_branch_prior_fallbacks"], 1)
+        self.assertFalse(ledger["reason_ledger_complete"])
+        self.assertEqual(
+            ledger["reason_counts"],
+            {name: 0 for name in sorted(BRANCH_PRIOR_FALLBACK_REASON_VALUES)},
+        )
+        self.assertIsNone(ledger["events"][0]["reason_counts"])
 
     def test_branch_prior_fallback_reasons_refuse_an_incomplete_or_inconsistent_ledger(
         self,
@@ -5588,6 +5815,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         block = decision.metadata["engine_mcts"]["override"]
         self.assertEqual((block["model_argmax"], block["search_argmax"]), (1, 0))
         self.assertIs(block["model_override"], True)
+        self.assertEqual(block["root_gap_action_indices"], [0, 1])
         allocation = block["root_allocation"]
         self.assertTrue(allocation["prior_authority"])
         self.assertIsNone(allocation["prior_cause"])
@@ -5596,6 +5824,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             [
                 {
                     "move": "alpha",
+                    "action_index": 0,
                     "visit_share": 0.6,
                     "q": 0.5,
                     "reported_prior": 0.2,
@@ -5603,6 +5832,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                 },
                 {
                     "move": "beta",
+                    "action_index": 1,
                     "visit_share": 0.4,
                     "q": 0.5,
                     "reported_prior": 0.8,
@@ -5619,6 +5849,61 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             "search_argmax": 0,
             "model_choice": "beta",
         }])
+
+    def test_measured_override_metadata_drives_the_sealed_audit_adapter(self) -> None:
+        """The producer's actual envelope is admissible without move labels.
+
+        This is intentionally not a hand-written controller fixture.  It drives
+        the production engine telemetry path and passes the resulting decision
+        directly to the boundary adapter, catching source-schema drift before a
+        cluster audit can discover it after a long run.
+        """
+        from types import MappingProxyType
+
+        from pokezero.mcts_eval.sealed_override_audit import (
+            evaluate_measured_override_boundary,
+        )
+        from pokezero.policy import PolicyDecision
+        from pokezero.rollout import RolloutSealedPreStepBoundary
+
+        policy = self._policy()
+        decision, _ = self._run(
+            policy,
+            [self._report(
+                [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                root_priors=[0.2, 0.8],
+            )],
+        )
+        boundary = RolloutSealedPreStepBoundary(
+            seed=20_260_920,
+            battle_id="engine-produced-audit",
+            decision_round_index=0,
+            requested_players=("p1", "p2"),
+            snapshot=object(),
+            decisions=MappingProxyType(
+                {
+                    "p1": decision,
+                    "p2": PolicyDecision(action_index=1, policy_id="opponent"),
+                }
+            ),
+        )
+        with patch(
+            "pokezero.mcts_eval.sealed_override_audit.evaluate_sealed_override_pair",
+            return_value={"paired": "readout"},
+        ) as evaluate:
+            readout = evaluate_measured_override_boundary(
+                boundary=boundary,
+                candidate_seat="p1",
+                env_factory=lambda: self.fail("must not allocate an environment"),
+                continuation_policy_factory=lambda: self.fail("must not allocate policies"),
+                rollout_config=object(),
+            )
+
+        self.assertEqual(readout["audit"], {"paired": "readout"})
+        evidence = evaluate.call_args.kwargs["search_evidence"]
+        self.assertEqual((evidence["model_argmax"], evidence["search_argmax"]), (1, 0))
+        self.assertEqual([arm["action_index"] for arm in evidence["root_allocation"]["arms"]], [0, 1])
+        self.assertTrue(all("move" not in arm for arm in evidence["root_allocation"]["arms"]))
 
     def test_agreement_does_not_fire(self) -> None:
         """Same visits, priors moved onto the SAME arm: measured, not an override.

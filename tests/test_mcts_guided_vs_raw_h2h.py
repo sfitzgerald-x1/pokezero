@@ -27,6 +27,12 @@ sys.modules[_SPEC.name] = RUNNER
 _SPEC.loader.exec_module(RUNNER)
 
 import mcts_mcts_h2h as DURABLE  # noqa: E402
+from pokezero.observation import PokeZeroObservationV0  # noqa: E402
+from pokezero.public_decision_corpus import (  # noqa: E402
+    PublicDecisionRecord,
+    PublicObservation,
+    public_decision_id,
+)
 
 
 _IDENTITY = {
@@ -36,6 +42,137 @@ _IDENTITY = {
     "engine_fingerprint": "d" * 64,
     "showdown_source_sha256": "e" * 64,
 }
+
+
+def _public_record(
+    *,
+    seed: int = 19,
+    turn_index: int = 0,
+    battle_id: str | None = None,
+    recorded_action_index: int = 0,
+    legal_action_mask: tuple[bool, ...] = (True, False, False, False, False, False, False, False, False),
+) -> PublicDecisionRecord:
+    observation = PokeZeroObservationV0(
+        categorical_ids=(),
+        numeric_features=(),
+        token_type_ids=(),
+        attention_mask=(),
+        legal_action_mask=legal_action_mask,
+        metadata={
+            "belief_view": {
+                "self_slot": "p1",
+                "opponent_slot": "p2",
+                "self_pokemon": [],
+                "opponent_pokemon": [],
+            }
+        },
+    )
+    prototype = PublicDecisionRecord(
+        decision_id="pending",
+        battle_id=battle_id or f"mcts-h2h-{seed}-p1",
+        seed=seed,
+        format_id="gen3randombattle",
+        acting_player="p1",
+        turn_index=turn_index,
+        recorded_action_index=recorded_action_index,
+        observation=PublicObservation.from_observation(observation),
+        history=(),
+        current_legal_action_mask=tuple(observation.legal_action_mask),
+        public_resolved_action_rounds=(),
+        public_belief_view=dict(observation.metadata["belief_view"]),
+    )
+    return PublicDecisionRecord(
+        **{**prototype.__dict__, "decision_id": public_decision_id(prototype)}
+    )
+
+
+def _branch_prior_ledger(*, fallbacks: int = 0) -> dict[str, object]:
+    reasons = {reason: 0 for reason in RUNNER.BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+    reasons["unmapped_action"] = fallbacks
+    return {
+        "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
+        "native_invocations": 1,
+        "belief_worlds": 1,
+        "branch_prior_fallbacks": fallbacks,
+        "reason_counts": reasons,
+        "unclassified_branch_prior_fallbacks": 0,
+        "reason_ledger_complete": True,
+        "events": [
+            {
+                "native_invocation": 1,
+                "belief_records": 1,
+                "collapse_multiplicity": 1,
+                "branch_prior_fallbacks": fallbacks,
+                "reason_counts": reasons,
+            }
+        ],
+    }
+
+
+def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
+    return SimpleNamespace(
+        latest_decision_address={
+            "battle_id": record.battle_id,
+            "round": record.turn_index,
+            "seat": record.acting_player,
+            "action_index": record.recorded_action_index,
+            "requested_players": [record.acting_player],
+        },
+        latest_decision_metadata={
+            "engine_mcts": {
+                "override": {
+                    "branch_prior_fallbacks": _branch_prior_ledger(fallbacks=fallbacks),
+                    "model_argmax": record.recorded_action_index,
+                    "search_argmax": record.recorded_action_index,
+                    "model_override": False,
+                    "unmeasured_cause": None,
+                    "root_q_gap": None,
+                    "root_visit_gap": None,
+                    "root_gap_action_indices": [record.recorded_action_index],
+                    "root_allocation": {
+                        "worlds": 1,
+                        "prior_authority": True,
+                        "prior_cause": None,
+                        "arms": [
+                            {
+                                "move": "tackle",
+                                "action_index": record.recorded_action_index,
+                                "visit_share": 1.0,
+                                "q": 0.25,
+                                "reported_prior": 1.0,
+                                "model_prior": 1.0,
+                            }
+                        ],
+                    },
+                }
+            }
+        },
+    )
+
+
+def _public_selection(
+    record: PublicDecisionRecord,
+    *,
+    arms: list[dict[str, object]],
+    gap_actions: list[int],
+    q_gap: float | None,
+    visit_gap: float | None,
+) -> dict[str, object]:
+    return {
+        "model_argmax": record.recorded_action_index,
+        "search_argmax": record.recorded_action_index,
+        "model_override": False,
+        "unmeasured_cause": None,
+        "root_q_gap": q_gap,
+        "root_visit_gap": visit_gap,
+        "root_gap_action_indices": gap_actions,
+        "root_allocation": {
+            "worlds": 1,
+            "prior_authority": True,
+            "prior_cause": None,
+            "arms": arms,
+        },
+    }
 
 
 class RawSpecTest(unittest.TestCase):
@@ -117,6 +254,337 @@ class StudyShapeTest(unittest.TestCase):
             RUNNER._validated_study(manifest, seeds=(11, 12))
 
 
+class SealedOverrideAuditContractTest(unittest.TestCase):
+    @staticmethod
+    def _readout(*, nested_private: bool = False) -> dict[str, object]:
+        evidence: dict[str, object] = {
+            "model_argmax": 1,
+            "search_argmax": 2,
+            "model_override": True,
+            "root_q_gap": 0.25,
+            "root_visit_gap": 0.5,
+            "root_gap_action_indices": [2, 1],
+            "root_allocation_missing_action_indices": [],
+            "root_allocation": {
+                "worlds": 1,
+                "prior_authority": True,
+                "prior_cause": None,
+                "arms": [
+                    {"action_index": 1, "visit_share": 0.25, "q": 0.25, "reported_prior": 0.4, "model_prior": 0.4},
+                    {"action_index": 2, "visit_share": 0.75, "q": 0.5, "reported_prior": 0.6, "model_prior": 0.6},
+                ],
+            },
+        }
+        if nested_private:
+            evidence["root_allocation"]["snapshot"] = "forbidden"  # type: ignore[index]
+        continuation = {
+            "decision_round_count": 1,
+            "terminal_after_fixed_joint_step": False,
+            "terminal": {"winner": "p1", "turn_count": 3, "capped": False},
+        }
+        return {
+            "schema_version": "pokezero.mcts-sealed-override-audit.v1",
+            "seed": 19,
+            "battle_id": "mcts-h2h-19-p1",
+            "candidate_seat": "p1",
+            "decision_round_index": 7,
+            "audit_status": "PAIRED",
+            "audit": {
+                "schema_version": "pokezero.sealed-override-pair.v1",
+                "source_battle_id": "mcts-h2h-19-p1",
+                "source_seed": 19,
+                "source_decision_round": 7,
+                "subject_player": "p1",
+                "opponent_player": "p2",
+                "mcts_action": 2,
+                "raw_action": 1,
+                "opponent_action_held_fixed": True,
+                "search_evidence": evidence,
+                "mcts": continuation,
+                "raw": {**continuation, "terminal": {"winner": "p2", "turn_count": 4, "capped": False}},
+            },
+        }
+
+    @classmethod
+    def _controller_readout(cls, *, nested_private: bool = False) -> dict[str, object]:
+        """Mirror the pre-binding controller shape at the sealed boundary."""
+
+        readout = cls._readout(nested_private=nested_private)
+        audit = readout["audit"]  # type: ignore[index]
+        evidence = dict(audit["search_evidence"])  # type: ignore[index]
+        evidence.pop("root_allocation_missing_action_indices")
+        audit["search_evidence"] = evidence  # type: ignore[index]
+        return readout
+
+    @staticmethod
+    def _write_source_ledger(root: Path, *, record: PublicDecisionRecord) -> None:
+        """Write the public-ledger selection the controller must bind to."""
+
+        evidence = SealedOverrideAuditContractTest._readout()["audit"]["search_evidence"]  # type: ignore[index]
+        selection = {**evidence, "unmeasured_cause": None}
+        DURABLE._write_immutable_json(
+            RUNNER._branch_prior_ledger_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            ),
+            {"selection": selection, "request_boundary": {"requested_players": ["p1", "p2"]}},
+        )
+
+    def test_optional_audit_contract_requires_the_registered_raw_selector(self) -> None:
+        self.assertIsNone(RUNNER._sealed_override_audit_config({}))
+        manifest = {
+            "sealed_override_audit": {
+                "schema_version": RUNNER.SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION,
+                "continuation_selector": dict(RUNNER.RAW_SELECTOR),
+                "max_continuation_decision_rounds": 400,
+            }
+        }
+        self.assertEqual(
+            RUNNER._sealed_override_audit_config(manifest).max_continuation_decision_rounds,
+            400,
+        )
+        manifest["sealed_override_audit"]["continuation_selector"] = {
+            **RUNNER.RAW_SELECTOR,
+            "search": True,
+        }
+        with self.assertRaisesRegex(Exception, "registered deterministic raw selector"):
+            RUNNER._sealed_override_audit_config(manifest)
+
+    def test_writer_persists_only_the_controller_readout(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        boundary = SimpleNamespace(seed=19, decision_round_index=7)
+        record = _public_record(
+            seed=19,
+            turn_index=7,
+            recorded_action_index=2,
+            legal_action_mask=(False, True, True, False, False, False, False, False, False),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch(
+                "pokezero.mcts_eval.sealed_override_audit.evaluate_measured_override_boundary",
+                return_value=self._controller_readout(),
+            ) as evaluate:
+                pre_step_writer, public_writer = RUNNER._sealed_override_audit_writer(
+                    root,
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat="p1",
+                    env_factory=object(),
+                    continuation_policy_factory=object(),
+                    continuation_rollout_config=object(),
+                    max_continuation_decision_rounds=400,
+                )
+                # The sealed pre-step hook cannot write the durable sidecar
+                # yet: its matching public record/ledger does not exist until
+                # after ``env.step`` commits the action.
+                pre_step_writer(boundary)
+                self.assertFalse((root / "sealed-override-audits").exists())
+                self._write_source_ledger(root, record=record)
+                public_writer(record)
+                pre_step_writer(boundary)
+                public_writer(record)
+            self.assertEqual(evaluate.call_count, 2)
+            path = RUNNER._sealed_override_audit_path(
+                root, seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["candidate_provenance_sha256"], "guided-provenance")
+            self.assertEqual(payload["readout"]["audit"]["mcts_action"], 2)
+            self.assertTrue(payload["readout"]["audit"]["opponent_action_held_fixed"])
+            self.assertNotIn("opponent_action", payload["readout"]["audit"])
+            self.assertEqual(
+                payload["readout"]["audit"]["search_evidence"][
+                    "root_allocation_missing_action_indices"
+                ],
+                [],
+            )
+            self.assertEqual(path.read_text(encoding="utf-8"), path.read_text(encoding="utf-8"))
+
+    def test_writer_rejects_nested_private_controller_data_before_immutable_write(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        boundary = SimpleNamespace(seed=19, decision_round_index=7)
+        record = _public_record(
+            seed=19,
+            turn_index=7,
+            recorded_action_index=2,
+            legal_action_mask=(False, True, True, False, False, False, False, False, False),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch(
+                "pokezero.mcts_eval.sealed_override_audit.evaluate_measured_override_boundary",
+                return_value=self._controller_readout(nested_private=True),
+            ):
+                pre_step_writer, public_writer = RUNNER._sealed_override_audit_writer(
+                    root, candidate=candidate, incumbent=incumbent, candidate_seat="p1",
+                    env_factory=object(), continuation_policy_factory=object(),
+                    continuation_rollout_config=object(), max_continuation_decision_rounds=400,
+                )
+                pre_step_writer(boundary)
+                self._write_source_ledger(root, record=record)
+                with self.assertRaisesRegex(Exception, "disagrees with its public source ledger"):
+                    public_writer(record)
+            self.assertFalse((Path(directory) / "sealed-override-audits").exists())
+
+    def test_validator_requires_sidecar_selection_to_match_measured_public_override(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record(
+            turn_index=7,
+            recorded_action_index=2,
+            legal_action_mask=(False, True, True, False, False, False, False, False, False),
+        )
+        source_selection = RUNNER._validated_selection_evidence(
+            {
+                "model_argmax": 1,
+                "search_argmax": 2,
+                "model_override": True,
+                "unmeasured_cause": None,
+                "root_q_gap": 0.25,
+                "root_visit_gap": 0.5,
+                "root_gap_action_indices": [2, 1],
+                "root_allocation": {
+                    "worlds": 1,
+                    "prior_authority": True,
+                    "prior_cause": None,
+                    "arms": [
+                        {"action_index": 1, "visit_share": 0.25, "q": 0.25, "reported_prior": 0.4, "model_prior": 0.4},
+                        {"action_index": 2, "visit_share": 0.75, "q": 0.5, "reported_prior": 0.6, "model_prior": 0.6},
+                    ],
+                },
+            },
+            record=record,
+        )
+        game = SimpleNamespace(
+            seed=19,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(model_override_decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_path = RUNNER._branch_prior_ledger_path(
+                root, seed=19, candidate_seat="p1", record=record
+            )
+            DURABLE._write_immutable_json(
+                ledger_path,
+                {
+                    "selection": source_selection,
+                    "request_boundary": {"requested_players": ["p1", "p2"]},
+                },
+            )
+            sidecar = RUNNER._sealed_override_audit_path(
+                root, seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            payload = RUNNER._sealed_override_audit_payload(
+                candidate=candidate,
+                incumbent=incumbent,
+                candidate_seat="p1",
+                readout=self._readout(),
+            )
+            DURABLE._write_immutable_json(sidecar, payload)
+            with patch.object(RUNNER, "_validate_public_decision_evidence", return_value=(record,)):
+                RUNNER._validate_sealed_override_audit_evidence(root, game)
+            # A measured override on a forced one-sided phase cannot hold an
+            # opponent action fixed.  It still needs a canonical sidecar so
+            # the game-level denominator proves that the audit did not omit
+            # the event merely because no paired continuation is possible.
+            inapplicable_root = root / "inapplicable"
+            inapplicable_ledger = RUNNER._branch_prior_ledger_path(
+                inapplicable_root, seed=19, candidate_seat="p1", record=record
+            )
+            DURABLE._write_immutable_json(
+                inapplicable_ledger,
+                {
+                    "selection": source_selection,
+                    "request_boundary": {"requested_players": ["p1"]},
+                },
+            )
+            inapplicable_readout = {
+                "schema_version": "pokezero.mcts-sealed-override-audit.v1",
+                "seed": 19,
+                "battle_id": "mcts-h2h-19-p1",
+                "candidate_seat": "p1",
+                "decision_round_index": 7,
+                "audit_status": "INAPPLICABLE_NON_SIMULTANEOUS",
+                "requested_players": ["p1"],
+                "search_evidence": RUNNER._sealed_search_evidence_from_selection(source_selection),
+            }
+            inapplicable_sidecar = RUNNER._sealed_override_audit_path(
+                inapplicable_root, seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            DURABLE._write_immutable_json(
+                inapplicable_sidecar,
+                RUNNER._sealed_override_audit_payload(
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat="p1",
+                    readout=inapplicable_readout,
+                ),
+            )
+            with patch.object(RUNNER, "_validate_public_decision_evidence", return_value=(record,)):
+                RUNNER._validate_sealed_override_audit_evidence(inapplicable_root, game)
+            bad_root = root / "bad"
+            bad_readout = self._readout()
+            bad_audit = bad_readout["audit"]  # type: ignore[index]
+            bad_evidence = bad_audit["search_evidence"]  # type: ignore[index]
+            bad_audit["mcts_action"] = 1
+            bad_audit["raw_action"] = 2
+            bad_evidence["model_argmax"] = 2
+            bad_evidence["search_argmax"] = 1
+            bad_ledger_path = RUNNER._branch_prior_ledger_path(
+                bad_root, seed=19, candidate_seat="p1", record=record
+            )
+            DURABLE._write_immutable_json(
+                bad_ledger_path,
+                {
+                    "selection": source_selection,
+                    "request_boundary": {"requested_players": ["p1", "p2"]},
+                },
+            )
+            bad_sidecar = RUNNER._sealed_override_audit_path(
+                bad_root, seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            DURABLE._write_immutable_json(
+                bad_sidecar,
+                RUNNER._sealed_override_audit_payload(
+                    candidate=candidate, incumbent=incumbent, candidate_seat="p1", readout=bad_readout
+                ),
+            )
+            with patch.object(RUNNER, "_validate_public_decision_evidence", return_value=(record,)):
+                with self.assertRaisesRegex(Exception, "does not bind its measured public decision"):
+                    RUNNER._validate_sealed_override_audit_evidence(bad_root, game)
+            downgrade_root = root / "downgrade"
+            downgrade_ledger = RUNNER._branch_prior_ledger_path(
+                downgrade_root, seed=19, candidate_seat="p1", record=record
+            )
+            DURABLE._write_immutable_json(
+                downgrade_ledger,
+                {
+                    "selection": source_selection,
+                    "request_boundary": {"requested_players": ["p1", "p2"]},
+                },
+            )
+            downgrade_sidecar = RUNNER._sealed_override_audit_path(
+                downgrade_root, seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            DURABLE._write_immutable_json(
+                downgrade_sidecar,
+                RUNNER._sealed_override_audit_payload(
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat="p1",
+                    readout=inapplicable_readout,
+                ),
+            )
+            with patch.object(RUNNER, "_validate_public_decision_evidence", return_value=(record,)):
+                with self.assertRaisesRegex(Exception, "does not bind its measured public decision boundary"):
+                    RUNNER._validate_sealed_override_audit_evidence(downgrade_root, game)
+
+
 class DurableLauncherHandoffTest(unittest.TestCase):
     def test_guided_runner_binds_its_own_immutable_launcher_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -195,7 +663,14 @@ class GuidedConfigTest(unittest.TestCase):
     def test_unlisted_engine_knob_cannot_drift(self) -> None:
         config = dict(RUNNER.REGISTERED_ENGINE_CONFIG)
         config["approximate_sleep_turns"] = False
-        with self.assertRaisesRegex(Exception, "registered one-second"):
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+    def test_registered_deep_cuda_protocol_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_ENGINE_CONFIG)
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 4095
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
 
@@ -216,6 +691,339 @@ class GuidedProgressTest(unittest.TestCase):
                     {"schema_version": DURABLE.PROGRESS_SCHEMA_VERSION, "event": "game_started"},
                     schema_version=RUNNER.PROGRESS_SCHEMA_VERSION,
                 )
+
+
+class PublicDecisionEvidenceTest(unittest.TestCase):
+    def test_branch_prior_ledger_refuses_contradictory_event_attribution(self) -> None:
+        ledger = _branch_prior_ledger(fallbacks=2)
+        ledger["unclassified_branch_prior_fallbacks"] = 3
+        ledger["branch_prior_fallbacks"] = 5
+        ledger["reason_ledger_complete"] = False
+        ledger["events"][0]["branch_prior_fallbacks"] = 5
+        ledger["events"][0]["reason_counts"] = {
+            **{reason: 0 for reason in RUNNER.BRANCH_PRIOR_FALLBACK_REASON_VALUES},
+            "unmapped_action": 5,
+        }
+        with self.assertRaisesRegex(Exception, "attribution disagrees"):
+            RUNNER._validated_branch_prior_ledger(ledger)
+
+    def test_branch_prior_ledger_refuses_forged_reason_vocabulary(self) -> None:
+        ledger = _branch_prior_ledger(fallbacks=2)
+        ledger["reason_counts"] = {"forged_reason": 2}
+        ledger["events"][0]["reason_counts"] = {"forged_reason": 2}
+        with self.assertRaisesRegex(Exception, "complete native reason vocabulary"):
+            RUNNER._validated_branch_prior_ledger(ledger)
+
+    def test_selection_evidence_refuses_search_action_not_bound_to_public_record(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {**override, "search_argmax": record.recorded_action_index + 1}
+        with self.assertRaisesRegex(Exception, "does not match its public decision"):
+            RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_selection_evidence_refuses_missing_root_q_gap_field(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {key: value for key, value in override.items() if key != "root_q_gap"}
+        with self.assertRaisesRegex(Exception, "complete selection evidence"):
+            RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_selection_evidence_refuses_forged_unmeasured_cause(self) -> None:
+        record = _public_record()
+        selection = _public_selection(
+            record,
+            arms=[
+                {
+                    "action_index": record.recorded_action_index,
+                    "visit_share": 1.0,
+                    "q": 0.25,
+                    "reported_prior": 1.0,
+                    "model_prior": 1.0,
+                }
+            ],
+            gap_actions=[record.recorded_action_index],
+            q_gap=None,
+            visit_gap=None,
+        )
+        selection["unmeasured_cause"] = "forged"
+        with self.assertRaisesRegex(Exception, "does not match its root allocation cause"):
+            RUNNER._validated_selection_evidence(selection, record=record)
+
+    def test_selection_evidence_refuses_an_arm_outside_public_legal_actions(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {**override, "root_allocation": {**override["root_allocation"]}}
+        override["root_allocation"]["arms"] = [
+            {**override["root_allocation"]["arms"][0], "action_index": 8}
+        ]
+        with self.assertRaisesRegex(Exception, "not a public legal action"):
+            RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_forced_singleton_projects_no_choice_without_hiding_real_choice_mismatch(self) -> None:
+        """A one-action request cannot carry a meaningful MCTS override claim.
+
+        The engine can retain hidden-world arms which do not name that public
+        action.  They must not terminate a multi-hour run after the rollout has
+        already committed the forced public action, but the resulting sidecar
+        must stay explicitly unmeasured and contain no synthetic prior or Q.
+        """
+        record = _public_record(
+            legal_action_mask=(True, False, False, False, False, False, False, False, False)
+        )
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {
+            **override,
+            "model_argmax": None,
+            "model_override": None,
+            "unmeasured_cause": "no_root_priors",
+            "root_q_gap": None,
+            "root_visit_gap": None,
+            "root_gap_action_indices": [],
+            "root_allocation": {
+                "worlds": 1,
+                "prior_authority": False,
+                "prior_cause": "no_root_priors",
+                "arms": [
+                    {
+                        **override["root_allocation"]["arms"][0],
+                        "action_index": None,
+                        "visit_share": 0.25,
+                        "q": 0.75,
+                        "reported_prior": None,
+                        "model_prior": None,
+                    },
+                    {
+                        **override["root_allocation"]["arms"][0],
+                        "move": "switch hidden-world-only",
+                        "action_index": 8,
+                        "visit_share": 0.75,
+                        "q": -0.5,
+                        "reported_prior": None,
+                        "model_prior": None,
+                    },
+                ],
+            },
+        }
+        evidence = RUNNER._selection_evidence_from_override(override, record=record)
+        self.assertEqual(evidence["unmeasured_cause"], "no_root_priors")
+        self.assertEqual(evidence["model_argmax"], None)
+        self.assertEqual(evidence["model_override"], None)
+        self.assertEqual(evidence["root_allocation_missing_action_indices"], [])
+        self.assertEqual(
+            evidence["root_allocation"]["arms"],
+            [
+                {
+                    "action_index": 0,
+                    "visit_share": 1.0,
+                    "q": None,
+                    "reported_prior": None,
+                    "model_prior": None,
+                }
+            ],
+        )
+
+    def test_selection_evidence_names_missing_legal_actions_without_aborting_the_game(self) -> None:
+        """A partial engine root is evidence of a vocabulary seam, not a lost run.
+
+        The selected and model actions remain bound to actual native arms, while
+        the public-only sidecar makes every legal action the native root omitted
+        explicit.  This is the failure shape observed in the R3 audit at a late
+        seed-2026092006 decision.
+        """
+        record = _public_record(
+            legal_action_mask=(True, True, True, False, False, False, False, False, False)
+        )
+        selection = _public_selection(
+            record,
+            arms=[
+                {"action_index": 0, "visit_share": 0.6, "q": 0.2, "reported_prior": 0.4, "model_prior": 0.4},
+                {"action_index": 1, "visit_share": 0.4, "q": 0.3, "reported_prior": 0.6, "model_prior": 0.6},
+            ],
+            gap_actions=[0, 1],
+            q_gap=0.1,
+            visit_gap=0.2,
+        )
+        selection.update({"model_argmax": 1, "model_override": True})
+        evidence = RUNNER._validated_selection_evidence(selection, record=record)
+        self.assertEqual(evidence["root_allocation_missing_action_indices"], [2])
+        self.assertEqual(
+            RUNNER._sealed_search_evidence_from_selection(evidence)[
+                "root_allocation_missing_action_indices"
+            ],
+            [2],
+        )
+
+        forged = {**evidence, "root_allocation_missing_action_indices": []}
+        with self.assertRaisesRegex(Exception, "missing-action coverage disagrees"):
+            RUNNER._validated_selection_evidence(forged, record=record)
+
+    def test_selection_evidence_rejects_gap_witness_outside_native_root(self) -> None:
+        record = _public_record(
+            legal_action_mask=(True, True, True, False, False, False, False, False, False)
+        )
+        selection = _public_selection(
+            record,
+            arms=[
+                {"action_index": 0, "visit_share": 0.6, "q": 0.2, "reported_prior": 0.4, "model_prior": 0.4},
+                {"action_index": 1, "visit_share": 0.4, "q": 0.3, "reported_prior": 0.6, "model_prior": 0.6},
+            ],
+            gap_actions=[2, 0],
+            q_gap=0.1,
+            visit_gap=0.2,
+        )
+        with self.assertRaisesRegex(Exception, "gap witness is absent from its root allocation"):
+            RUNNER._validated_selection_evidence(selection, record=record)
+
+    def test_selection_evidence_uses_engine_top_pair_witness_for_ties_and_zero_arms(self) -> None:
+        tied = _public_record(
+            legal_action_mask=(True, True, True, False, False, False, False, False, False)
+        )
+        tied_arms = [
+            {"action_index": 0, "visit_share": 0.5, "q": 0.1, "reported_prior": 0.2, "model_prior": 0.2},
+            {"action_index": 1, "visit_share": 0.5, "q": 0.4, "reported_prior": 0.3, "model_prior": 0.3},
+            {"action_index": 2, "visit_share": 0.0, "q": 0.9, "reported_prior": 0.5, "model_prior": 0.5},
+        ]
+        tie = _public_selection(
+            tied, arms=tied_arms, gap_actions=[1, 0], q_gap=0.3, visit_gap=0.0
+        )
+        self.assertEqual(
+            RUNNER._validated_selection_evidence(tie, record=tied)["root_gap_action_indices"],
+            [1, 0],
+        )
+        one_visited = _public_record(
+            legal_action_mask=(True, True, False, False, False, False, False, False, False)
+        )
+        one_visited_arms = [
+            {"action_index": 0, "visit_share": 1.0, "q": 0.1, "reported_prior": 0.4, "model_prior": 0.4},
+            {"action_index": 1, "visit_share": 0.0, "q": 0.9, "reported_prior": 0.6, "model_prior": 0.6},
+        ]
+        RUNNER._validated_selection_evidence(
+            _public_selection(
+                one_visited, arms=one_visited_arms, gap_actions=[0], q_gap=None, visit_gap=None
+            ),
+            record=one_visited,
+        )
+
+    def test_selection_evidence_refuses_a_nonleading_gap_pair(self) -> None:
+        record = _public_record(
+            legal_action_mask=(True, True, True, False, False, False, False, False, False)
+        )
+        arms = [
+            {"action_index": 0, "visit_share": 0.5, "q": 0.1, "reported_prior": 0.2, "model_prior": 0.2},
+            {"action_index": 1, "visit_share": 0.3, "q": 0.4, "reported_prior": 0.3, "model_prior": 0.3},
+            {"action_index": 2, "visit_share": 0.2, "q": 0.3, "reported_prior": 0.5, "model_prior": 0.5},
+        ]
+        with self.assertRaisesRegex(Exception, "does not name the leading"):
+            RUNNER._validated_selection_evidence(
+                _public_selection(record, arms=arms, gap_actions=[1, 2], q_gap=0.1, visit_gap=0.1),
+                record=record,
+            )
+
+    def test_writer_and_validator_bind_each_guided_decision_immutably(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            writer = RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=_guided_for_record(record),
+            )
+            writer(record)
+            writer(record)  # a resumed game must accept the identical prior unit
+            ledger_path = RUNNER._branch_prior_ledger_path(
+                Path(directory), seed=record.seed, candidate_seat="p1", record=record
+            )
+            ledger_payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                ledger_payload["public_decision"]["decision_id"], record.decision_id
+            )
+            self.assertEqual(
+                ledger_payload["branch_prior_fallbacks"]["branch_prior_fallbacks"], 0
+            )
+            self.assertEqual(ledger_payload["selection"]["search_argmax"], record.recorded_action_index)
+            self.assertNotIn("move", ledger_payload["selection"]["root_allocation"]["arms"][0])
+            self.assertEqual(
+                RUNNER._validate_public_decision_evidence(Path(directory), game),
+                (record,),
+            )
+
+    def test_writer_refuses_to_bind_one_decision_to_another_decision_metadata(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        mismatched = _guided_for_record(record)
+        mismatched.latest_decision_address = {
+            **mismatched.latest_decision_address,
+            "round": record.turn_index + 1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            writer = RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=mismatched,
+            )
+            with self.assertRaisesRegex(Exception, "not bound to the public decision"):
+                writer(record)
+
+    def test_validator_refuses_incomplete_guided_decision_evidence(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=2),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=_guided_for_record(record),
+            )(record)
+            with self.assertRaisesRegex(Exception, "equal guided decision telemetry"):
+                RUNNER._validate_public_decision_evidence(Path(directory), game)
+
+    def test_validator_refuses_record_from_another_battle_with_the_same_seed(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record(battle_id="mcts-h2h-19-p2")
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=_guided_for_record(record),
+            )(record)
+            with self.assertRaisesRegex(Exception, "completed game identity"):
+                RUNNER._validate_public_decision_evidence(Path(directory), game)
 
 
 class CompletedGameEvidenceTest(unittest.TestCase):

@@ -121,7 +121,13 @@ def dotted_segments(node: ast.AST) -> list[str]:
     return list(reversed(parts))
 
 
-def is_pokezero_submodule(node: ast.ImportFrom, name: str, *, importer: Path | None = None) -> bool:
+def is_pokezero_submodule(
+    node: ast.ImportFrom,
+    name: str,
+    *,
+    importer: Path | None = None,
+    source_root: Path | None = None,
+) -> bool:
     """Is `name` in `from <node.module> import <name>` a pokezero SUBMODULE, or just a name?
 
     Derived from the filesystem, not from the name's shape. `from pokezero import observation`
@@ -137,6 +143,7 @@ def is_pokezero_submodule(node: ast.ImportFrom, name: str, *, importer: Path | N
     contradicting statements in one function is worse than the wrong one alone, because a reader
     who stops at the docstring never reaches the correction.
     """
+    root = source_root or REPO / "src"
     if node.level > 0:
         # Resolve against the IMPORTING file's package, walking up `node.level - 1` directories, and
         # then through `node.module` if there is one.
@@ -149,13 +156,13 @@ def is_pokezero_submodule(node: ast.ImportFrom, name: str, *, importer: Path | N
         # `from .mcts_eval import observation` -- a NAME, not a module -- scored 1 where it should
         # score 0. That sentence was itself the enumeration-from-memory this file accuses itself of
         # three lines away.
-        base = (importer.parent if importer is not None else REPO / "src" / "pokezero")
+        base = importer.parent if importer is not None else root / "pokezero"
         for _ in range(node.level - 1):
             base = base.parent
         package = base / Path(*(node.module or "").split(".")) if node.module else base
     else:
         parts = (node.module or "").split(".")
-        package = REPO / "src" / Path(*parts)
+        package = root / Path(*parts)
     return (package / f"{name}.py").is_file() or (package / name / "__init__.py").is_file()
 
 
@@ -200,7 +207,7 @@ def class_body_statements(node: ast.ClassDef):
             stack.extend(handler.body)
 
 
-def derive_surfaces() -> dict[str, set[str]]:
+def derive_surfaces(source_root: Path | None = None) -> dict[str, set[str]]:
     """{callable name -> kwargs that silently default to the global default}.
 
     SPELLING COVERAGE MATTERS MORE HERE THAN IN `sites_in`. A missed read in `sites_in` loses one
@@ -220,14 +227,23 @@ def derive_surfaces() -> dict[str, set[str]]:
       name: T = GLOBAL.attribute                the value side (2 live sites)
     """
     found: dict[str, set[str]] = {}
+    root = source_root or REPO / "src"
+    # All three passes below need the same ASTs. Re-parsing the entire source tree for
+    # aliases, module roots, and declarations made every isolated probe import pay for
+    # three full walks of `src/`. Keep the passes separate -- their predicates are independent --
+    # but share the one source snapshot they are all meant to measure. The test suite can pass a
+    # tiny temporary source root to exercise declaration spellings without repeatedly scanning the
+    # production tree.
+    source_trees: list[tuple[Path, ast.AST]] = []
+    for path in root.rglob("*.py"):
+        try:
+            source_trees.append((path, ast.parse(path.read_text(encoding="utf-8"))))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
     # Aliases for the globals, resolved across all of src/ rather than per file: a surface is
     # declared in one module, and a scan that missed the alias silently de-derived it.
     alias_to_global: dict[str, str] = {}
-    for path in (REPO / "src").rglob("*.py"):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in source_trees:
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 for a in node.names:
@@ -240,16 +256,14 @@ def derive_surfaces() -> dict[str, set[str]]:
     # spuriously derived surface costs EVERY call site of that class name, which is the more
     # expensive of the two over-match directions by this file's own 133-of-390 argument.
     src_module_roots: set[str] = {"pokezero"}
-    for path in (REPO / "src").rglob("*.py"):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in source_trees:
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
                 for a in node.names:
                     if node.level > 0 or (node.module or "").startswith("pokezero"):
-                        if is_pokezero_submodule(node, a.name, importer=path):
+                        if is_pokezero_submodule(
+                            node, a.name, importer=path, source_root=root
+                        ):
                             src_module_roots.add(a.asname or a.name)
             elif isinstance(node, ast.Import):
                 for a in node.names:
@@ -315,11 +329,7 @@ def derive_surfaces() -> dict[str, set[str]]:
                         return resolved
         return None
 
-    for path in (REPO / "src").rglob("*.py"):
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError):
-            continue
+    for path, tree in source_trees:
         for node in ast.walk(tree):
             if isinstance(node, ast.ClassDef):
                 for st in class_body_statements(node):

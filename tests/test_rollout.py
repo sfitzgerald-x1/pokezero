@@ -14,6 +14,14 @@ def observation(mask: tuple[bool, ...]) -> PokeZeroObservationV0:
         token_type_ids=tuple(0 for _ in range(spec.token_count)),
         attention_mask=tuple(True for _ in range(spec.token_count)),
         legal_action_mask=mask,
+        metadata={
+            "belief_view": {
+                "self_slot": "p1",
+                "opponent_slot": "p2",
+                "self_pokemon": [],
+                "opponent_pokemon": [],
+            }
+        },
     )
 
 
@@ -47,6 +55,11 @@ class ScriptedEnv:
         if len(self.step_calls) < len(self.requested_sequence):
             return self.requested_sequence[len(self.step_calls)]
         return ()
+
+    def snapshot_actionable_boundary(self) -> dict[str, int]:
+        """Minimal private-boundary stand-in used by the sealed-hook tests."""
+
+        return {"committed_steps": len(self.step_calls)}
 
     def step(self, actions: dict[str, int]) -> StepResult:
         self.step_calls.append(dict(actions))
@@ -167,6 +180,84 @@ class RolloutDriverTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "durable progress unavailable"):
             driver.run(seed=74)
         self.assertEqual(len(env.step_calls), 1)
+
+    def test_rollout_emits_canonical_public_record_after_each_committed_action(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",), ("p1",)], terminal_after_steps=2)
+        records = []
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": RandomLegalPolicy()},
+            config=RolloutConfig(max_decision_rounds=3, public_decision_sink=records.append),
+        )
+
+        result = driver.run(seed=75, battle_id="public-record-battle")
+
+        self.assertEqual(result.decision_round_count, 2)
+        self.assertEqual(len(records), 2)
+        self.assertEqual([record.turn_index for record in records], [0, 1])
+        self.assertEqual([record.battle_id for record in records], ["public-record-battle"] * 2)
+        self.assertEqual([record.seed for record in records], [75, 75])
+        self.assertEqual([record.acting_player for record in records], ["p1", "p1"])
+        self.assertTrue(records[0].current_legal_action_mask[records[0].recorded_action_index])
+        self.assertTrue(records[1].current_legal_action_mask[records[1].recorded_action_index])
+        self.assertEqual(len(records[0].history), 0)
+        self.assertEqual(len(records[1].history), 1)
+
+    def test_rollout_fails_closed_when_public_evidence_sink_fails(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+
+        def fail(_record) -> None:
+            raise RuntimeError("durable public evidence unavailable")
+
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": RandomLegalPolicy()},
+            config=RolloutConfig(public_decision_sink=fail),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "durable public evidence unavailable"):
+            driver.run(seed=76)
+        self.assertEqual(len(env.step_calls), 1)
+
+    def test_rollout_emits_sealed_boundary_after_selection_before_source_step(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1", "p2")], terminal_after_steps=1)
+        boundaries = []
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": RandomLegalPolicy(), "p2": SimpleLegalPolicy(switch_probability=0.0)},
+            config=RolloutConfig(sealed_pre_step_sink=boundaries.append),
+        )
+
+        driver.run(seed=77, battle_id="sealed-boundary-battle")
+
+        self.assertEqual(len(boundaries), 1)
+        boundary = boundaries[0]
+        self.assertEqual(boundary.seed, 77)
+        self.assertEqual(boundary.battle_id, "sealed-boundary-battle")
+        self.assertEqual(boundary.decision_round_index, 0)
+        self.assertEqual(boundary.requested_players, ("p1", "p2"))
+        self.assertEqual(boundary.snapshot, {"committed_steps": 0})
+        self.assertEqual(
+            {player: decision.action_index for player, decision in boundary.decisions.items()},
+            env.step_calls[0],
+        )
+        with self.assertRaises(TypeError):
+            boundary.decisions["p1"] = boundary.decisions["p1"]
+
+    def test_rollout_refuses_sealed_capture_without_actionable_snapshot(self) -> None:
+        class NoSnapshotEnv(ScriptedEnv):
+            snapshot_actionable_boundary = None
+
+        env = NoSnapshotEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+        driver = RolloutDriver(
+            env=env,
+            policies={"p1": RandomLegalPolicy()},
+            config=RolloutConfig(sealed_pre_step_sink=lambda _boundary: None),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "snapshot_actionable_boundary"):
+            driver.run(seed=78)
+        self.assertEqual(env.step_calls, [])
 
     def test_rollout_caps_when_environment_does_not_terminal(self) -> None:
         env = ScriptedEnv(requested_sequence=[("p1", "p2")] * 5, terminal_after_steps=None)
@@ -361,6 +452,19 @@ class RolloutDriverTest(unittest.TestCase):
         self.assertEqual(result.terminal, TerminalState(winner="p1", turn_count=2))
         self.assertEqual([step.turn_index for step in result.trajectory.steps], [2, 3])
         self.assertEqual(result.trajectory.metadata["starting_decision_round_index"], 2)
+
+    def test_continuation_refuses_public_capture_without_its_prior_prefix(self) -> None:
+        env = ScriptedEnv(requested_sequence=[("p1",)], terminal_after_steps=1)
+
+        with self.assertRaisesRegex(ValueError, "requires a rollout beginning"):
+            continue_rollout_from_current_state(
+                env=env,
+                policies={"p1": RandomLegalPolicy()},
+                config=RolloutConfig(public_decision_sink=lambda _record: None),
+                seed=12,
+                starting_decision_round_index=2,
+            )
+        self.assertEqual(env.step_calls, [])
 
     def test_continue_rollout_from_current_state_can_use_cached_first_observation(self) -> None:
         first_observation = observation((False, False, False, False, True, False, False, False, False))

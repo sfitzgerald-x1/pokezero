@@ -17,8 +17,10 @@ import json
 import re
 from collections import Counter
 import ast
+import functools
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -43,19 +45,27 @@ HIGH_WATER_MARK = 59
 LEDGER = REPO / "scripts" / "schema_default_ledger.py"
 
 
+@functools.cache
+def _ledger_module():
+    """Load the production ledger once for probes that do not mutate its source."""
+    import importlib.util
+
+    _sweep_probe_residue()
+    spec = importlib.util.spec_from_file_location("_ledger_test", LEDGER)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+@functools.cache
 def _constructor_names() -> tuple[str, ...]:
     """The ledger's own CONSTRUCTOR_NAMES, read rather than mirrored.
 
     A literal copy in this file is what left `__post_init__` unpinned: narrowing the gate's tuple to
     drop only that name stayed green, while the comment claimed the assertion was derived from it.
     """
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("_ledger_ctor_names", LEDGER)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return tuple(module.CONSTRUCTOR_NAMES)
+    return tuple(_ledger_module().CONSTRUCTOR_NAMES)
 
 
 def _sweep_probe_residue() -> list[str]:
@@ -76,9 +86,9 @@ def _sweep_probe_residue() -> list[str]:
     return swept
 
 
-def _derive() -> list[dict]:
-    """Re-derive from the tree. Never read a cached count -- that is the error being retired."""
-    _sweep_probe_residue()
+@functools.cache
+def _derived_snapshot() -> tuple[tuple[tuple[str, object], ...], ...]:
+    """Read one immutable full-tree ledger snapshot for assertions in this test process."""
     proc = subprocess.run(
         [sys.executable, str(LEDGER), "--json"], capture_output=True, text=True
     )
@@ -92,7 +102,13 @@ def _derive() -> list[dict]:
         )
     if proc.returncode != 0:
         raise AssertionError(f"ledger derivation failed:\n{proc.stderr}")
-    return json.loads(proc.stdout)
+    return tuple(tuple(sorted(row.items())) for row in json.loads(proc.stdout))
+
+
+def _derive() -> list[dict]:
+    """Re-derive from the cleaned tree without re-running identical subprocess scans."""
+    _sweep_probe_residue()
+    return [dict(row) for row in _derived_snapshot()]
 
 
 def _key(row: dict) -> str:
@@ -281,15 +297,8 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
         return dict(counts)
 
     def _surfaces(self) -> list[str]:
-        import importlib.util
-
         _sweep_probe_residue()
-
-        spec = importlib.util.spec_from_file_location("_ledger_surfaces", LEDGER)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        return sorted(module.SURFACES)
+        return sorted(_ledger_module().SURFACES)
 
     def test_the_docstring_table_lists_every_surface_with_the_derived_count(self) -> None:
         derived = self._derived_counts()
@@ -495,14 +504,8 @@ class LedgerDocstringIsHeldToTheToolTest(unittest.TestCase):
 
     def _kind_vocabulary(self) -> list[str]:
         """Every non-surface kind the ledger KNOWS, from its own KIND_DESCRIPTIONS."""
-        import importlib.util
-
         _sweep_probe_residue()
-        spec = importlib.util.spec_from_file_location("_ledger_kinds", LEDGER)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        vocab = sorted(module.KIND_DESCRIPTIONS)
+        vocab = sorted(_ledger_module().KIND_DESCRIPTIONS)
         self.assertTrue(
             vocab,
             "the ledger has an empty KIND_DESCRIPTIONS, so this guard has no vocabulary and the "
@@ -774,28 +777,26 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
     ]
 
     def _surfaces_with(self, source: str) -> dict:
-        """Re-derive SURFACES with a probe module dropped into src/pokezero/.
+        """Derive against a tiny, isolated source tree instead of repeatedly rescanning the repo.
 
-        Inside `src/` because `derive_surfaces()` only scans there -- which is itself one of the
-        documented open routes. Untracked and deleted in the `finally`, so the committed
-        denominator cannot move.
+        The ledger accepts a source root expressly so declaration-recognition probes can test the
+        production parser without creating files under the checkout.  The fixture contains the
+        package paths that module-root resolution needs; probe imports are parsed, never executed.
         """
-        import importlib.util
-
-        # Sweep any residue from a crashed or concurrent earlier run FIRST. A leaked probe in the
-        # live src/ tree reddens three unrelated tests, which review reproduced -- the failure then
-        # points at the wrong thing entirely.
-        _sweep_probe_residue()
-        probe = REPO / "src" / "pokezero" / f"_surface_probe_{id(source):x}.py"
-        try:
-            probe.write_text(source, encoding="utf-8")
-            spec = importlib.util.spec_from_file_location(f"_ledger_surf_{id(source):x}", LEDGER)
-            module = importlib.util.module_from_spec(spec)
-            assert spec.loader is not None
-            spec.loader.exec_module(module)
-            return dict(module.SURFACES)
-        finally:
-            probe.unlink(missing_ok=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = Path(tmp) / "src"
+            package = source_root / "pokezero"
+            (package / "mcts_eval").mkdir(parents=True)
+            for relative in (
+                "__init__.py",
+                "observation.py",
+                "showdown.py",
+                "mcts_eval/__init__.py",
+                "mcts_eval/lattice.py",
+            ):
+                (package / relative).touch()
+            (package / "probe.py").write_text(source, encoding="utf-8")
+            return dict(_ledger_module().derive_surfaces(source_root))
 
     def test_every_declaration_spelling_derives_its_surface(self) -> None:
         for label, source in self.PROBES:
@@ -847,15 +848,15 @@ class SurfaceDerivationSeesEverySpellingTest(unittest.TestCase):
                 )
 
     def test_the_probes_do_not_disturb_the_committed_surface_set(self) -> None:
-        before = self._surfaces_with("x = 1\n")
+        module = _ledger_module()
+        before = dict(module.SURFACES)
         for _, source in self.PROBES:
             self._surfaces_with(source)
         self.assertEqual(
-            sorted(before), sorted(self._surfaces_with("x = 1\n")),
-            "the probes changed the derived surface set; one leaked into src/.",
+            before,
+            module.SURFACES,
+            "an isolated declaration probe changed the committed source tree's surface map.",
         )
-        leftover = sorted(p.name for p in (REPO / "src" / "pokezero").glob("_surface_probe_*.py"))
-        self.assertEqual(leftover, [], f"probe files left behind: {leftover}")
 
 
 class LedgerSeesEverySpellingTest(unittest.TestCase):
@@ -985,12 +986,6 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
         because the probe must not move the committed denominator. The file is removed in the
         `finally` so a failure cannot leave a probe behind to be committed by accident.
         """
-        import importlib.util
-
-        spec = importlib.util.spec_from_file_location("_ledger_under_test", LEDGER)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
         # INSIDE src/pokezero/, not at the repo root. A relative import only means anything
         # from inside the package: once `is_pokezero_submodule` began resolving
         # `from . import X` against the IMPORTING file's own directory (round 9), a probe at
@@ -1002,7 +997,7 @@ class LedgerSeesEverySpellingTest(unittest.TestCase):
         )
         try:
             probe.write_text(source, encoding="utf-8")
-            return module.sites_in(probe)
+            return _ledger_module().sites_in(probe)
         finally:
             probe.unlink(missing_ok=True)
 

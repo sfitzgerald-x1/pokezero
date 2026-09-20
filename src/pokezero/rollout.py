@@ -6,12 +6,14 @@ from dataclasses import dataclass, field
 import hashlib
 import random
 from time import perf_counter
+from types import MappingProxyType
 from typing import Callable, Mapping, Sequence
 
 from .env import BattleFormat, PlayerId, PokeZeroEnv, TerminalState
 from .observation import PokeZeroObservationV0
 from .policy import Policy, PolicyContext, PolicyDecision
 from .public_action_capture import append_public_action_round, public_action_round_from_protocol_lines
+from .public_decision_corpus import PublicDecisionRecord, public_decision_records_from_trajectory
 from .trajectory import BattleTrajectory, TrajectoryStep
 
 
@@ -30,6 +32,22 @@ class RolloutConfig:
     # been stepped and appended to the trajectory, so callers can expose
     # durable progress without observing or influencing action selection.
     decision_sink: "RolloutDecisionSink | None" = field(default=None, repr=False, compare=False)
+    # Optional public-only evidence hook. It receives one canonical public
+    # replay record for every committed action. Unlike `decision_sink`, this
+    # deliberately carries the acting player's public information set so a
+    # caller can persist exact, independently replayable decision boundaries.
+    public_decision_sink: "RolloutPublicDecisionSink | None" = field(
+        default=None, repr=False, compare=False
+    )
+    # Trusted-controller-only hook at the last source boundary before a joint
+    # action is committed.  It deliberately receives a restorable simulator
+    # snapshot plus both selected actions, but must never be used as a policy
+    # input or persisted in a public record.  Its only supported consumer is a
+    # sealed audit controller which retains terminal summaries and bindings,
+    # not the private state itself.
+    sealed_pre_step_sink: "RolloutSealedPreStepSink | None" = field(
+        default=None, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if self.max_decision_rounds <= 0:
@@ -69,6 +87,28 @@ class RolloutDecisionProgress:
 
 
 RolloutDecisionSink = Callable[[RolloutDecisionProgress], None]
+RolloutPublicDecisionSink = Callable[[PublicDecisionRecord], None]
+
+
+@dataclass(frozen=True)
+class RolloutSealedPreStepBoundary:
+    """A private, restorable source boundary after selection and before step.
+
+    This event is intentionally unavailable to ordinary collection and public
+    replay sinks.  The snapshot must remain in the trusted audit controller's
+    process; a durable artifact may include only source bindings, selected
+    actions, and independently-derived continuation terminal summaries.
+    """
+
+    seed: int
+    battle_id: str
+    decision_round_index: int
+    requested_players: tuple[PlayerId, ...]
+    snapshot: object
+    decisions: Mapping[PlayerId, PolicyDecision]
+
+
+RolloutSealedPreStepSink = Callable[[RolloutSealedPreStepBoundary], None]
 
 
 @dataclass
@@ -183,6 +223,15 @@ def continue_rollout_from_current_state(
         raise ValueError("starting_decision_round_index must be non-negative.")
     if starting_decision_round_index > config.max_decision_rounds:
         raise ValueError("starting_decision_round_index cannot exceed max_decision_rounds.")
+    if config.public_decision_sink is not None and starting_decision_round_index:
+        # This helper creates a fresh suffix trajectory. Projecting that suffix
+        # into `PublicDecisionRecord` would claim it began at turn zero and
+        # fabricate the missing public action history, so durable replay
+        # capture must be refused until a caller can supply the complete public
+        # prefix as well.
+        raise ValueError(
+            "public_decision_sink requires a rollout beginning at decision round zero"
+        )
     if reset_policies:
         _reset_unique_policies(policies)
 
@@ -291,6 +340,16 @@ def continue_rollout_from_current_state(
                 )
             decisions[player_id] = decision
 
+        _emit_sealed_pre_step_boundary(
+            config=config,
+            env=env,
+            seed=seed,
+            battle_id=battle_id,
+            decision_round_index=decision_round_index,
+            requested_players=requested_players,
+            decisions=decisions,
+        )
+
         step_started = perf_counter()
         step_result = env.step(
             {player_id: decision.action_index for player_id, decision in decisions.items()}
@@ -328,6 +387,12 @@ def continue_rollout_from_current_state(
                     },
                 )
             )
+
+        _emit_public_decision_records(
+            config=config,
+            trajectory=trajectory,
+            requested_players=requested_players,
+        )
 
         if step_result.terminal is not None:
             trajectory.record_terminal(step_result.terminal)
@@ -415,6 +480,73 @@ def _emit_decision_progress(
             terminal_winner=terminal.winner if terminal is not None else None,
         )
     )
+
+
+def _emit_sealed_pre_step_boundary(
+    *,
+    config: RolloutConfig,
+    env: PokeZeroEnv,
+    seed: int,
+    battle_id: str,
+    decision_round_index: int,
+    requested_players: Sequence[PlayerId],
+    decisions: Mapping[PlayerId, PolicyDecision],
+) -> None:
+    """Give a trusted audit controller one private snapshot before ``env.step``.
+
+    The snapshot is captured here, rather than by handing the live environment
+    to a consumer, so a sink cannot mutate source state between selection and
+    commit.  A missing actionable snapshot is a configuration error: accepting
+    a weaker post-step or public-only substitute would make an override audit
+    claim independent continuation evidence without an actual source boundary.
+    """
+
+    sink = config.sealed_pre_step_sink
+    if sink is None:
+        return
+    snapshotter = getattr(env, "snapshot_actionable_boundary", None)
+    if not callable(snapshotter):
+        raise RuntimeError(
+            "sealed pre-step evidence requires an environment with "
+            "snapshot_actionable_boundary()"
+        )
+    snapshot = snapshotter()
+    sink(
+        RolloutSealedPreStepBoundary(
+            seed=seed,
+            battle_id=battle_id,
+            decision_round_index=decision_round_index,
+            requested_players=tuple(requested_players),
+            snapshot=snapshot,
+            decisions=MappingProxyType(dict(decisions)),
+        )
+    )
+
+
+def _emit_public_decision_records(
+    *,
+    config: RolloutConfig,
+    trajectory: BattleTrajectory,
+    requested_players: Sequence[PlayerId],
+) -> None:
+    """Emit public replay records only after their actions reached the trajectory.
+
+    The caller owns its storage durability (for example, flush/fsync and
+    atomic publish). An opted-in sink that fails aborts the rollout: continuing
+    after the declared evidence stream stops would leave an apparently complete
+    aggregate without the decision states needed to audit it.
+    """
+
+    sink = config.public_decision_sink
+    if sink is None:
+        return
+    for player_id in requested_players:
+        records = public_decision_records_from_trajectory(
+            trajectory, acting_player=str(player_id)
+        )
+        if not records:
+            raise RuntimeError("committed decision did not produce a public replay record")
+        sink(records[-1])
 
 
 def _policy_for_player(policies: Mapping[PlayerId, Policy], player_id: PlayerId) -> Policy:
