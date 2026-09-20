@@ -61,10 +61,10 @@ PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
-    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v4"
+    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v5"
 )
 SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION = (
-    "pokezero.mcts-guided-vs-raw-sealed-override-audit.v1"
+    "pokezero.mcts-guided-vs-raw-sealed-override-audit.v2"
 )
 RAW_SELECTOR = {
     "kind": "deterministic_masked_argmax",
@@ -532,6 +532,7 @@ def _validated_sealed_search_evidence(value: object) -> dict[str, Any]:
         "root_q_gap",
         "root_visit_gap",
         "root_gap_action_indices",
+        "root_allocation_missing_action_indices",
         "root_allocation",
     }
     if set(evidence) != expected or evidence.get("model_override") is not True:
@@ -590,6 +591,16 @@ def _validated_sealed_search_evidence(value: object) -> dict[str, Any]:
             raise HeadToHeadError(f"sealed {field} must cover and conserve every root arm.")
     if any(arm["model_prior"] is None for arm in normalized_arms):
         raise HeadToHeadError("sealed model-prior authority must cover every root arm.")
+    missing = evidence.get("root_allocation_missing_action_indices")
+    if not isinstance(missing, list):
+        raise HeadToHeadError("sealed root missing-action coverage must be a list.")
+    normalized_missing = [
+        _sealed_action(action, label="sealed root missing action") for action in missing
+    ]
+    if len(set(normalized_missing)) != len(normalized_missing):
+        raise HeadToHeadError("sealed root missing-action coverage repeats an action index.")
+    if set(normalized_missing) & {arm["action_index"] for arm in normalized_arms}:
+        raise HeadToHeadError("sealed root missing-action coverage overlaps its root allocation.")
     gaps = evidence.get("root_gap_action_indices")
     if not isinstance(gaps, list) or len(gaps) > 2:
         raise HeadToHeadError("sealed root gap actions have an unsupported shape.")
@@ -605,6 +616,7 @@ def _validated_sealed_search_evidence(value: object) -> dict[str, Any]:
         "root_q_gap": optional_finite(evidence.get("root_q_gap"), label="sealed root Q gap"),
         "root_visit_gap": optional_finite(evidence.get("root_visit_gap"), label="sealed root visit gap"),
         "root_gap_action_indices": normalized_gaps,
+        "root_allocation_missing_action_indices": normalized_missing,
         "root_allocation": {
             "worlds": worlds,
             "prior_authority": True,
@@ -627,6 +639,7 @@ def _sealed_search_evidence_from_selection(selection: Mapping[str, Any]) -> dict
                 "root_q_gap",
                 "root_visit_gap",
                 "root_gap_action_indices",
+                "root_allocation_missing_action_indices",
                 "root_allocation",
             )
         }
@@ -900,7 +913,7 @@ def _validated_selection_evidence(
     justified without replaying or exposing the hidden state.
     """
 
-    expected = {
+    required = {
         "model_argmax",
         "search_argmax",
         "model_override",
@@ -910,7 +923,13 @@ def _validated_selection_evidence(
         "root_gap_action_indices",
         "root_allocation",
     }
-    if set(selection) != expected:
+    # The producer does not know the public record, so this field is derived
+    # here and then bound into the durable sidecar.  Accepting its absence is
+    # required for the live producer boundary; accepting a *wrong* persisted
+    # value would turn an engine/request action-surface mismatch into an
+    # apparently complete allocation.
+    coverage_field = "root_allocation_missing_action_indices"
+    if set(selection) not in (required, required | {coverage_field}):
         raise HeadToHeadError("guided selection evidence has unsupported fields.")
     search_action = selection["search_argmax"]
     if (
@@ -1003,8 +1022,28 @@ def _validated_selection_evidence(
         )
     if len({arm["action_index"] for arm in normalized_arms}) != len(normalized_arms):
         raise HeadToHeadError("guided root allocation repeats an own-action arm.")
-    if {arm["action_index"] for arm in normalized_arms} != legal_action_indices:
-        raise HeadToHeadError("guided root allocation does not cover its public legal action space.")
+    covered_action_indices = {arm["action_index"] for arm in normalized_arms}
+    missing_action_indices = sorted(legal_action_indices - covered_action_indices)
+    # The selected search action and, where measured, the model argmax must
+    # still be represented by a native root arm.  Other legal public actions
+    # can be absent when a belief world cannot render their engine equivalent.
+    # That is diagnostic evidence of an engine/request seam, not a reason to
+    # discard all prior durable decisions or crash the evaluation after a long
+    # run.  The immutable sidecar names every omitted public action explicitly.
+    if search_action not in covered_action_indices:
+        raise HeadToHeadError("guided search action is absent from its root allocation.")
+    if model_action is not None and model_action not in covered_action_indices:
+        raise HeadToHeadError("guided model action is absent from its root allocation.")
+    supplied_missing = selection.get(coverage_field)
+    if supplied_missing is not None:
+        if (
+            not isinstance(supplied_missing, list)
+            or any(isinstance(index, bool) or not isinstance(index, int) for index in supplied_missing)
+            or supplied_missing != missing_action_indices
+        ):
+            raise HeadToHeadError(
+                "guided root allocation missing-action coverage disagrees with its public record."
+            )
     if not math.isclose(sum(arm["visit_share"] for arm in normalized_arms), 1.0, abs_tol=1e-5):
         raise HeadToHeadError("guided root visits do not conserve one decision.")
     for key in ("reported_prior", "model_prior"):
@@ -1029,6 +1068,8 @@ def _validated_selection_evidence(
     ):
         raise HeadToHeadError("guided root gap witness is not a unique public legal action sequence.")
     by_action = {arm["action_index"]: arm for arm in normalized_arms}
+    if any(action not in by_action for action in gap_actions):
+        raise HeadToHeadError("guided root gap witness is absent from its root allocation.")
     leaders = [by_action[action] for action in gap_actions]
     if any(arm["visit_share"] <= 0.0 for arm in leaders):
         raise HeadToHeadError("guided root gap witness must exclude zero-visit actions.")
@@ -1066,6 +1107,7 @@ def _validated_selection_evidence(
         "root_q_gap": root_q_gap,
         "root_visit_gap": root_visit_gap,
         "root_gap_action_indices": list(gap_actions),
+        "root_allocation_missing_action_indices": missing_action_indices,
         "root_allocation": {
             "worlds": worlds,
             "prior_authority": bool(root["prior_authority"]),
@@ -1242,7 +1284,57 @@ def _sealed_override_audit_writer(
         evaluate_measured_override_boundary,
     )
 
-    def write(boundary: Any) -> None:
+    pending: dict[tuple[int, int], Mapping[str, Any]] = {}
+
+    def bind_public_root_coverage(
+        readout: Mapping[str, Any], *, record: PublicDecisionRecord
+    ) -> dict[str, Any]:
+        """Bind the controller's sealed evidence to the committed public ledger.
+
+        The sealed controller runs before ``env.step`` and deliberately has no
+        public decision record from which to derive the native-root coverage
+        vector.  Keep its result in memory until the public-decision hook
+        commits the same round's ledger.  Then copy only the derived
+        action-index coverage into the controller readout, after proving every
+        controller-provided field agrees with that ledger.  This keeps an
+        incomplete native root visible without allowing the sealed artifact to
+        claim complete action coverage.
+        """
+
+        if record.acting_player != candidate_seat:
+            raise HeadToHeadError("sealed override audit received the wrong public decision seat.")
+        ledger_path = _branch_prior_ledger_path(
+            out_root, seed=record.seed, candidate_seat=candidate_seat, record=record
+        )
+        try:
+            ledger_payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read sealed audit source ledger: {error}") from error
+        ledger = _mapping(ledger_payload, label="sealed audit source ledger")
+        selection = _mapping(ledger.get("selection"), label="sealed audit source selection")
+        expected_evidence = _sealed_search_evidence_from_selection(selection)
+        expected_controller_evidence = dict(expected_evidence)
+        expected_controller_evidence.pop("root_allocation_missing_action_indices")
+
+        copied = dict(readout)
+        if copied.get("audit_status") == "PAIRED":
+            audit = _mapping(copied.get("audit"), label="sealed override pair")
+            if audit.get("search_evidence") != expected_controller_evidence:
+                raise HeadToHeadError(
+                    "sealed override audit controller evidence disagrees with its public source ledger."
+                )
+            copied["audit"] = {**audit, "search_evidence": expected_evidence}
+        elif copied.get("audit_status") == "INAPPLICABLE_NON_SIMULTANEOUS":
+            if copied.get("search_evidence") != expected_controller_evidence:
+                raise HeadToHeadError(
+                    "inapplicable sealed audit controller evidence disagrees with its public source ledger."
+                )
+            copied["search_evidence"] = expected_evidence
+        else:
+            raise HeadToHeadError("sealed override audit has an unsupported disposition.")
+        return copied
+
+    def pre_step_write(boundary: Any) -> None:
         readout = evaluate_measured_override_boundary(
             boundary=boundary,
             candidate_seat=candidate_seat,
@@ -1253,11 +1345,28 @@ def _sealed_override_audit_writer(
         )
         if readout is None:
             return
+        key = (
+            _nonnegative_int(getattr(boundary, "seed", None), label="sealed source seed"),
+            _nonnegative_int(
+                getattr(boundary, "decision_round_index", None), label="sealed source decision round"
+            ),
+        )
+        if key in pending:
+            raise HeadToHeadError("sealed override audit repeats a pending source round.")
+        pending[key] = readout
+
+    def public_decision_write(record: PublicDecisionRecord) -> None:
+        if record.acting_player != candidate_seat:
+            return
+        readout = pending.pop((record.seed, record.turn_index), None)
+        if readout is None:
+            return
+        readout = bind_public_root_coverage(readout, record=record)
         path = _sealed_override_audit_path(
             out_root,
-            seed=boundary.seed,
+            seed=record.seed,
             candidate_seat=candidate_seat,
-            decision_round_index=boundary.decision_round_index,
+            decision_round_index=record.turn_index,
         )
         _write_immutable_json(
             path,
@@ -1269,7 +1378,7 @@ def _sealed_override_audit_writer(
             ),
         )
 
-    return write
+    return pre_step_write, public_decision_write
 
 
 def _raw_witness_payload(game: Any, *, raw_forward_decisions: int) -> dict[str, Any]:
@@ -1761,9 +1870,18 @@ def main(argv: list[str] | None = None) -> int:
         raw_adapters[(seed, candidate_seat)] = raw_adapter
         raw = PublicOnlyMctsPolicy(raw_adapter)
         other_seat = "p2" if candidate_seat == "p1" else "p1"
+        public_decision_writer = _public_decision_writer(
+            out_root,
+            candidate=candidate,
+            incumbent=incumbent,
+            seed=seed,
+            candidate_seat=candidate_seat,
+            guided_policy=guided,
+        )
+        public_sink = public_decision_writer
         sealed_sink = None
         if sealed_override_audit is not None:
-            sealed_sink = _sealed_override_audit_writer(
+            sealed_sink, sealed_public_sink = _sealed_override_audit_writer(
                 out_root,
                 candidate=candidate,
                 incumbent=incumbent,
@@ -1775,6 +1893,14 @@ def main(argv: list[str] | None = None) -> int:
                     sealed_override_audit.max_continuation_decision_rounds
                 ),
             )
+
+            def public_sink(record: PublicDecisionRecord) -> None:
+                # The public ledger must commit before the sealed readout is
+                # materialized: the sealed pre-step hook has no legal-action
+                # record from which to derive root coverage itself.
+                public_decision_writer(record)
+                sealed_public_sink(record)
+
         driver = RolloutDriver(
             env=env,
             policies={candidate_seat: guided, other_seat: raw},
@@ -1783,14 +1909,7 @@ def main(argv: list[str] | None = None) -> int:
                 format_id="gen3randombattle",
                 record_policy_timing=True,
                 hide_opponent_legal_action_masks=True,
-                public_decision_sink=_public_decision_writer(
-                    out_root,
-                    candidate=candidate,
-                    incumbent=incumbent,
-                    seed=seed,
-                    candidate_seat=candidate_seat,
-                    guided_policy=guided,
-                ),
+                public_decision_sink=public_sink,
                 decision_sink=lambda decision: write_progress(
                     "decision_committed", seed=seed, candidate_seat=candidate_seat, decision=decision
                 ),
