@@ -3,9 +3,20 @@ name: Fleet worker
 on:
   pull_request:
 
+# A newer commit makes an older pull-request validation result irrelevant.  Keep
+# separate PRs parallel, but stop the superseded matrix before it consumes a
+# runner that cannot affect the merge decision.
+concurrency:
+  group: fleet-worker-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   fanin-crash-matrix:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
