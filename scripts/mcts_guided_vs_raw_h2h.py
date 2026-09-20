@@ -54,6 +54,9 @@ MANIFEST_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-manifest.v1"
 PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
+BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
+    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v1"
+)
 RAW_SELECTOR = {
     "kind": "deterministic_masked_argmax",
     "deterministic": True,
@@ -329,6 +332,179 @@ def _public_decision_path(
     )
 
 
+def _branch_prior_ledger_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+) -> Path:
+    """Return the immutable, public-safe native-branch witness address."""
+
+    if record.seed != seed or record.acting_player != candidate_seat:
+        raise HeadToHeadError("branch prior ledger does not match its public decision identity.")
+    return (
+        out_root
+        / "branch-prior-fallback-ledgers"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
+    )
+
+
+def _nonnegative_int(value: object, *, label: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise HeadToHeadError(f"{label} must be a non-negative integer.")
+    return value
+
+
+def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
+    """Validate the bounded native-tree evidence safe to retain beside a public row."""
+
+    ledger = _mapping(value, label="branch prior fallback ledger")
+    expected = {
+        "schema_version",
+        "native_invocations",
+        "belief_worlds",
+        "branch_prior_fallbacks",
+        "reason_counts",
+        "unclassified_branch_prior_fallbacks",
+        "reason_ledger_complete",
+        "events",
+    }
+    if set(ledger) != expected or ledger.get("schema_version") != (
+        "pokezero.engine-mcts.branch-prior-fallbacks.v1"
+    ):
+        raise HeadToHeadError("branch prior ledger has an unexpected schema.")
+    invocations = _nonnegative_int(ledger.get("native_invocations"), label="native invocations")
+    _nonnegative_int(ledger.get("belief_worlds"), label="belief worlds")
+    branch_fallbacks = _nonnegative_int(
+        ledger.get("branch_prior_fallbacks"), label="branch prior fallbacks"
+    )
+    unclassified = _nonnegative_int(
+        ledger.get("unclassified_branch_prior_fallbacks"), label="unclassified fallbacks"
+    )
+    if not isinstance(ledger.get("reason_ledger_complete"), bool):
+        raise HeadToHeadError("branch prior ledger completeness must be boolean.")
+    if bool(ledger["reason_ledger_complete"]) != (unclassified == 0):
+        raise HeadToHeadError("branch prior ledger completeness disagrees with unclassified counts.")
+    reason_counts = _mapping(ledger.get("reason_counts"), label="branch prior reason counts")
+    if not reason_counts or any(
+        not isinstance(reason, str) or not reason
+        for reason in reason_counts
+    ):
+        raise HeadToHeadError("branch prior reason ledger must name a non-empty reason vocabulary.")
+    normalized_reasons = {
+        reason: _nonnegative_int(count, label=f"branch prior reason {reason!r}")
+        for reason, count in reason_counts.items()
+    }
+    if sum(normalized_reasons.values()) + unclassified != branch_fallbacks:
+        raise HeadToHeadError("branch prior reasons do not conserve total fallbacks.")
+    events = ledger.get("events")
+    if not isinstance(events, list) or len(events) != invocations:
+        raise HeadToHeadError("branch prior ledger native invocation count does not match events.")
+    normalized_events: list[dict[str, Any]] = []
+    for event in events:
+        event_mapping = _mapping(event, label="branch prior native invocation")
+        if set(event_mapping) != {
+            "native_invocation",
+            "belief_records",
+            "collapse_multiplicity",
+            "branch_prior_fallbacks",
+            "reason_counts",
+        }:
+            raise HeadToHeadError("branch prior native invocation has unsupported fields.")
+        event_reasons = event_mapping.get("reason_counts")
+        if event_reasons is not None:
+            event_reasons = _mapping(event_reasons, label="native invocation reason counts")
+            if set(event_reasons) != set(normalized_reasons):
+                raise HeadToHeadError("native invocation reason vocabulary differs from its ledger.")
+            event_reasons = {
+                reason: _nonnegative_int(count, label=f"native reason {reason!r}")
+                for reason, count in event_reasons.items()
+            }
+        event_fallbacks = _nonnegative_int(
+            event_mapping.get("branch_prior_fallbacks"), label="native invocation fallbacks"
+        )
+        if event_reasons is not None and sum(event_reasons.values()) != event_fallbacks:
+            raise HeadToHeadError("native invocation reasons do not conserve its fallbacks.")
+        normalized_events.append(
+            {
+                "native_invocation": _nonnegative_int(
+                    event_mapping.get("native_invocation"), label="native invocation identity"
+                ),
+                "belief_records": _nonnegative_int(
+                    event_mapping.get("belief_records"), label="native invocation belief records"
+                ),
+                "collapse_multiplicity": _nonnegative_int(
+                    event_mapping.get("collapse_multiplicity"),
+                    label="native invocation collapse multiplicity",
+                ),
+                "branch_prior_fallbacks": event_fallbacks,
+                "reason_counts": event_reasons,
+            }
+        )
+    if [event["native_invocation"] for event in normalized_events] != list(range(1, invocations + 1)):
+        raise HeadToHeadError("branch prior native invocation identities must be contiguous.")
+    if sum(event["branch_prior_fallbacks"] for event in normalized_events) != branch_fallbacks:
+        raise HeadToHeadError("branch prior native invocations do not conserve total fallbacks.")
+    return {
+        "schema_version": ledger["schema_version"],
+        "native_invocations": invocations,
+        "belief_worlds": int(ledger["belief_worlds"]),
+        "branch_prior_fallbacks": branch_fallbacks,
+        "reason_counts": dict(sorted(normalized_reasons.items())),
+        "unclassified_branch_prior_fallbacks": unclassified,
+        "reason_ledger_complete": bool(ledger["reason_ledger_complete"]),
+        "events": normalized_events,
+    }
+
+
+def _branch_prior_ledger_from_decision(
+    guided_policy: PublicOnlyMctsPolicy,
+    record: PublicDecisionRecord,
+) -> dict[str, Any]:
+    address = guided_policy.latest_decision_address
+    expected_address = {
+        "battle_id": record.battle_id,
+        "round": record.turn_index,
+        "seat": record.acting_player,
+        "action_index": record.recorded_action_index,
+    }
+    if address != expected_address:
+        raise HeadToHeadError(
+            "guided policy metadata is not bound to the public decision being committed."
+        )
+    metadata = _mapping(guided_policy.latest_decision_metadata, label="guided decision metadata")
+    engine_mcts = _mapping(metadata.get("engine_mcts"), label="guided engine MCTS metadata")
+    override = _mapping(engine_mcts.get("override"), label="guided override telemetry")
+    return _validated_branch_prior_ledger(override.get("branch_prior_fallbacks"))
+
+
+def _branch_prior_ledger_payload(
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+    ledger: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION,
+        "seed": record.seed,
+        "candidate_seat": candidate_seat,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "public_decision": {
+            "decision_id": record.decision_id,
+            "battle_id": record.battle_id,
+            "acting_player": record.acting_player,
+            "turn_index": record.turn_index,
+            "recorded_action_index": record.recorded_action_index,
+        },
+        "branch_prior_fallbacks": _validated_branch_prior_ledger(ledger),
+    }
+
+
 def _public_decision_payload(
     *,
     candidate: MctsPolicySpec,
@@ -353,6 +529,7 @@ def _public_decision_writer(
     incumbent: MctsPolicySpec,
     seed: int,
     candidate_seat: str,
+    guided_policy: PublicOnlyMctsPolicy,
 ):
     """Persist guided decisions as individually immutable public replay units."""
 
@@ -372,6 +549,19 @@ def _public_decision_writer(
                 incumbent=incumbent,
                 candidate_seat=candidate_seat,
                 record=record,
+            ),
+        )
+        ledger_path = _branch_prior_ledger_path(
+            out_root, seed=seed, candidate_seat=candidate_seat, record=record
+        )
+        _write_immutable_json(
+            ledger_path,
+            _branch_prior_ledger_payload(
+                candidate=candidate,
+                incumbent=incumbent,
+                candidate_seat=candidate_seat,
+                record=record,
+                ledger=_branch_prior_ledger_from_decision(guided_policy, record),
             ),
         )
 
@@ -449,6 +639,30 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
             raise HeadToHeadError("public decision evidence path does not match its canonical record identity.")
         if record.battle_id != expected_battle_id or record.format_id != "gen3randombattle":
             raise HeadToHeadError("public decision evidence does not bind the completed game identity.")
+        ledger_path = _branch_prior_ledger_path(
+            out_root,
+            seed=game.seed,
+            candidate_seat=game.candidate_seat,
+            record=record,
+        )
+        try:
+            ledger_payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(
+                f"public decision evidence is missing its readable branch-prior ledger: {error}"
+            ) from error
+        if not isinstance(ledger_payload, Mapping):
+            raise HeadToHeadError("branch-prior ledger evidence is not a JSON object.")
+        ledger = _validated_branch_prior_ledger(ledger_payload.get("branch_prior_fallbacks"))
+        expected_ledger_payload = _branch_prior_ledger_payload(
+            candidate=game.candidate,
+            incumbent=game.incumbent,
+            candidate_seat=game.candidate_seat,
+            record=record,
+            ledger=ledger,
+        )
+        if dict(ledger_payload) != expected_ledger_payload:
+            raise HeadToHeadError("branch-prior ledger evidence does not bind its public decision.")
         records.append(record)
     expected_count = game.candidate_telemetry.decisions
     if expected_count <= 0 or len(records) != expected_count:
@@ -694,6 +908,7 @@ def main(argv: list[str] | None = None) -> int:
                     incumbent=incumbent,
                     seed=seed,
                     candidate_seat=candidate_seat,
+                    guided_policy=guided,
                 ),
                 decision_sink=lambda decision: write_progress(
                     "decision_committed", seed=seed, candidate_seat=candidate_seat, decision=decision

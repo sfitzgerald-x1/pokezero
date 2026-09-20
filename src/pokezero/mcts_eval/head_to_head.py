@@ -246,6 +246,13 @@ class PublicOnlyMctsPolicy:
     def __init__(self, policy: Any) -> None:
         self._policy = policy
         self.policy_id = str(policy.policy_id)
+        # The rollout commits the public record after both players have chosen,
+        # while the candidate's native-search witness exists only on its
+        # decision.  Retain exactly that one metadata mapping so a durable
+        # evaluator can bind its public record to the decision-local evidence.
+        # This is deliberately not added to the public context or trajectory.
+        self._latest_decision_metadata: Mapping[str, Any] = {}
+        self._latest_decision_address: Mapping[str, Any] | None = None
         self.requires_public_materialization_state = bool(
             getattr(policy, "requires_public_materialization_state", False)
         )
@@ -260,6 +267,26 @@ class PublicOnlyMctsPolicy:
 
         return bool(getattr(self._policy, "is_source_isolated", False))
 
+    @property
+    def latest_decision_metadata(self) -> Mapping[str, Any]:
+        """Metadata from this wrapper's most recently selected action.
+
+        A caller must still bind the fields it consumes to its public record;
+        this property is only a short-lived transport across rollout commit.
+        """
+
+        return dict(self._latest_decision_metadata)
+
+    @property
+    def latest_decision_address(self) -> Mapping[str, Any] | None:
+        """Public identity of the metadata exposed by ``latest_decision_metadata``."""
+
+        return (
+            None
+            if self._latest_decision_address is None
+            else dict(self._latest_decision_address)
+        )
+
     def select_action(self, observation: Any, *, rng: Any) -> Any:
         return self._policy.select_action(observation, rng=rng)
 
@@ -270,7 +297,18 @@ class PublicOnlyMctsPolicy:
                 f"{self.policy_id} has no context-aware selector; refusing to degrade MCTS to "
                 "the context-free path."
             )
-        return selector(public_only_context(context), rng=rng)
+        decision = selector(public_only_context(context), rng=rng)
+        metadata = getattr(decision, "metadata", {})
+        if not isinstance(metadata, Mapping):
+            raise HeadToHeadError(f"{self.policy_id} returned non-mapping decision metadata.")
+        self._latest_decision_metadata = dict(metadata)
+        self._latest_decision_address = {
+            "battle_id": str(context.battle_id),
+            "round": int(context.decision_round_index),
+            "seat": str(context.player_id),
+            "action_index": int(getattr(decision, "action_index")),
+        }
+        return decision
 
     def reset(self) -> None:
         reset = getattr(self._policy, "reset", None)

@@ -81,6 +81,46 @@ def _public_record(
     )
 
 
+def _branch_prior_ledger(*, fallbacks: int = 0) -> dict[str, object]:
+    reasons = {"unmapped_action": fallbacks}
+    return {
+        "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
+        "native_invocations": 1,
+        "belief_worlds": 1,
+        "branch_prior_fallbacks": fallbacks,
+        "reason_counts": reasons,
+        "unclassified_branch_prior_fallbacks": 0,
+        "reason_ledger_complete": True,
+        "events": [
+            {
+                "native_invocation": 1,
+                "belief_records": 1,
+                "collapse_multiplicity": 1,
+                "branch_prior_fallbacks": fallbacks,
+                "reason_counts": reasons,
+            }
+        ],
+    }
+
+
+def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
+    return SimpleNamespace(
+        latest_decision_address={
+            "battle_id": record.battle_id,
+            "round": record.turn_index,
+            "seat": record.acting_player,
+            "action_index": record.recorded_action_index,
+        },
+        latest_decision_metadata={
+            "engine_mcts": {
+                "override": {
+                    "branch_prior_fallbacks": _branch_prior_ledger(fallbacks=fallbacks)
+                }
+            }
+        },
+    )
+
+
 class RawSpecTest(unittest.TestCase):
     def test_raw_spec_freezes_exact_no_search_selector(self) -> None:
         raw = {
@@ -280,13 +320,45 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 incumbent=incumbent,
                 seed=record.seed,
                 candidate_seat="p1",
+                guided_policy=_guided_for_record(record),
             )
             writer(record)
             writer(record)  # a resumed game must accept the identical prior unit
+            ledger_path = RUNNER._branch_prior_ledger_path(
+                Path(directory), seed=record.seed, candidate_seat="p1", record=record
+            )
+            ledger_payload = json.loads(ledger_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                ledger_payload["public_decision"]["decision_id"], record.decision_id
+            )
+            self.assertEqual(
+                ledger_payload["branch_prior_fallbacks"]["branch_prior_fallbacks"], 0
+            )
             self.assertEqual(
                 RUNNER._validate_public_decision_evidence(Path(directory), game),
                 (record,),
             )
+
+    def test_writer_refuses_to_bind_one_decision_to_another_decision_metadata(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        mismatched = _guided_for_record(record)
+        mismatched.latest_decision_address = {
+            **mismatched.latest_decision_address,
+            "round": record.turn_index + 1,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            writer = RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=mismatched,
+            )
+            with self.assertRaisesRegex(Exception, "not bound to the public decision"):
+                writer(record)
 
     def test_validator_refuses_incomplete_guided_decision_evidence(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
@@ -306,6 +378,7 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 incumbent=incumbent,
                 seed=record.seed,
                 candidate_seat="p1",
+                guided_policy=_guided_for_record(record),
             )(record)
             with self.assertRaisesRegex(Exception, "equal guided decision telemetry"):
                 RUNNER._validate_public_decision_evidence(Path(directory), game)
@@ -328,6 +401,7 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 incumbent=incumbent,
                 seed=record.seed,
                 candidate_seat="p1",
+                guided_policy=_guided_for_record(record),
             )(record)
             with self.assertRaisesRegex(Exception, "completed game identity"):
                 RUNNER._validate_public_decision_evidence(Path(directory), game)
