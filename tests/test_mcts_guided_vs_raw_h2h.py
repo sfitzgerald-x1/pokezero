@@ -417,6 +417,21 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             record=one_visited,
         )
 
+    def test_selection_evidence_refuses_a_nonleading_gap_pair(self) -> None:
+        record = _public_record(
+            legal_action_mask=(True, True, True, False, False, False, False, False, False)
+        )
+        arms = [
+            {"action_index": 0, "visit_share": 0.5, "q": 0.1, "reported_prior": 0.2, "model_prior": 0.2},
+            {"action_index": 1, "visit_share": 0.3, "q": 0.4, "reported_prior": 0.3, "model_prior": 0.3},
+            {"action_index": 2, "visit_share": 0.2, "q": 0.3, "reported_prior": 0.5, "model_prior": 0.5},
+        ]
+        with self.assertRaisesRegex(Exception, "does not name the leading"):
+            RUNNER._validated_selection_evidence(
+                _public_selection(record, arms=arms, gap_actions=[1, 2], q_gap=0.1, visit_gap=0.1),
+                record=record,
+            )
+
     def test_writer_and_validator_bind_each_guided_decision_immutably(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")

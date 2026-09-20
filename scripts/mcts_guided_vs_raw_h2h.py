@@ -56,7 +56,7 @@ PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
-    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v2"
+    "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v3"
 )
 RAW_SELECTOR = {
     "kind": "deterministic_masked_argmax",
@@ -629,6 +629,15 @@ def _validated_selection_evidence(
     leaders = [by_action[action] for action in gap_actions]
     if any(arm["visit_share"] <= 0.0 for arm in leaders):
         raise HeadToHeadError("guided root gap witness must exclude zero-visit actions.")
+    positive_visits = sorted(
+        (arm["visit_share"] for arm in normalized_arms if arm["visit_share"] > 0.0),
+        reverse=True,
+    )
+    expected_gap_count = min(2, len(positive_visits))
+    if len(leaders) != expected_gap_count or sorted(
+        (arm["visit_share"] for arm in leaders), reverse=True
+    ) != positive_visits[:expected_gap_count]:
+        raise HeadToHeadError("guided root gap witness does not name the leading visited arms.")
     if len(leaders) < 2:
         if root_visit_gap is not None:
             raise HeadToHeadError("guided root visit gap exists without two leading arms.")
