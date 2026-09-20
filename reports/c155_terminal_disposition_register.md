@@ -334,6 +334,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1384 plus own-prior failure diagnosis | `rust/pokezero-search/src/model.rs` and `src/priors.rs`: source-order refusals, then the acting-root fallback reason needed to diagnose a non-bankable strength shard | `9ca3c20a9681b6e5…` |
 | #1408 single-action prior underflow repair | `rust/pokezero-search/src/priors.rs`: a valid sole mapped action is masked certainty before globally-softmaxed `f32` mass can underflow; multi-action underflow remains fail-closed | `3e4378ce5d4bcb7b…` |
 | #1415 branch-prior fallback reason ledger | `rust/pokezero-search/src/model.rs` and `src/priors.rs`: six exhaustive interior-fallback causes are emitted and conserved, while valid finite low-mass legal priors remain accepted | `e3483c2b281fb346…` |
+| #1425 model-feature abort seam cleanup | `rust/pokezero-search/src/tree.rs`: make the feature-gated seam test self-initializing so CI can run it independently of unrelated test order | `7ea25b3c27d7e5a1…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -953,7 +954,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 12 |
 | `t1.hashed_input_files` | 94 |
-| `t1.head_fingerprint` | b2d37a537fb74749 |
+| `t1.head_fingerprint` | 7ea25b3c27d7e5a1 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
