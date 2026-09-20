@@ -1483,6 +1483,10 @@ _OVERRIDE_UNMEASURED_CAUSES = (
     _OVERRIDE_UNMEASURED_UNMAPPED,
 )
 
+# Public durable-evidence vocabulary.  The guided-vs-raw sidecar consumes this
+# exact set when it binds an unmeasured root to its source-derived cause.
+OVERRIDE_UNMEASURED_CAUSE_VALUES = frozenset(_OVERRIDE_UNMEASURED_CAUSES)
+
 
 #: Forkable disagreement addresses retained per policy. The fork probe
 #: (section 4b) samples ~50; 64 covers it with headroom while keeping the block

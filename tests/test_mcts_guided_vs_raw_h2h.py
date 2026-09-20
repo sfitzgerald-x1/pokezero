@@ -86,7 +86,8 @@ def _public_record(
 
 
 def _branch_prior_ledger(*, fallbacks: int = 0) -> dict[str, object]:
-    reasons = {"unmapped_action": fallbacks}
+    reasons = {reason: 0 for reason in RUNNER.BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+    reasons["unmapped_action"] = fallbacks
     return {
         "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
         "native_invocations": 1,
@@ -366,8 +367,18 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         ledger["branch_prior_fallbacks"] = 5
         ledger["reason_ledger_complete"] = False
         ledger["events"][0]["branch_prior_fallbacks"] = 5
-        ledger["events"][0]["reason_counts"] = {"unmapped_action": 5}
+        ledger["events"][0]["reason_counts"] = {
+            **{reason: 0 for reason in RUNNER.BRANCH_PRIOR_FALLBACK_REASON_VALUES},
+            "unmapped_action": 5,
+        }
         with self.assertRaisesRegex(Exception, "attribution disagrees"):
+            RUNNER._validated_branch_prior_ledger(ledger)
+
+    def test_branch_prior_ledger_refuses_forged_reason_vocabulary(self) -> None:
+        ledger = _branch_prior_ledger(fallbacks=2)
+        ledger["reason_counts"] = {"forged_reason": 2}
+        ledger["events"][0]["reason_counts"] = {"forged_reason": 2}
+        with self.assertRaisesRegex(Exception, "complete native reason vocabulary"):
             RUNNER._validated_branch_prior_ledger(ledger)
 
     def test_selection_evidence_refuses_search_action_not_bound_to_public_record(self) -> None:
@@ -383,6 +394,27 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         override = {key: value for key, value in override.items() if key != "root_q_gap"}
         with self.assertRaisesRegex(Exception, "complete selection evidence"):
             RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_selection_evidence_refuses_forged_unmeasured_cause(self) -> None:
+        record = _public_record()
+        selection = _public_selection(
+            record,
+            arms=[
+                {
+                    "action_index": record.recorded_action_index,
+                    "visit_share": 1.0,
+                    "q": 0.25,
+                    "reported_prior": 1.0,
+                    "model_prior": 1.0,
+                }
+            ],
+            gap_actions=[record.recorded_action_index],
+            q_gap=None,
+            visit_gap=None,
+        )
+        selection["unmeasured_cause"] = "forged"
+        with self.assertRaisesRegex(Exception, "does not match its root allocation cause"):
+            RUNNER._validated_selection_evidence(selection, record=record)
 
     def test_selection_evidence_refuses_an_arm_outside_public_legal_actions(self) -> None:
         record = _public_record()

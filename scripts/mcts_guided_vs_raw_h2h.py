@@ -35,6 +35,10 @@ from pokezero.mcts_eval.head_to_head import (  # noqa: E402
     write_game_immutable,
 )
 from pokezero.public_decision_corpus import PublicDecisionRecord  # noqa: E402
+from pokezero.engine_search import (  # noqa: E402
+    BRANCH_PRIOR_FALLBACK_REASON_VALUES,
+    OVERRIDE_UNMEASURED_CAUSE_VALUES,
+)
 
 # The mature MCTS-versus-MCTS runner owns the source-hash, immutable-write,
 # Showdown-binding and durable-launcher primitives.  This runner intentionally
@@ -416,11 +420,10 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
     if bool(ledger["reason_ledger_complete"]) != (unclassified == 0):
         raise HeadToHeadError("branch prior ledger completeness disagrees with unclassified counts.")
     reason_counts = _mapping(ledger.get("reason_counts"), label="branch prior reason counts")
-    if not reason_counts or any(
-        not isinstance(reason, str) or not reason
-        for reason in reason_counts
-    ):
-        raise HeadToHeadError("branch prior reason ledger must name a non-empty reason vocabulary.")
+    if set(reason_counts) != BRANCH_PRIOR_FALLBACK_REASON_VALUES:
+        raise HeadToHeadError(
+            "branch prior reason ledger must use the complete native reason vocabulary."
+        )
     normalized_reasons = {
         reason: _nonnegative_int(count, label=f"branch prior reason {reason!r}")
         for reason, count in reason_counts.items()
@@ -585,6 +588,23 @@ def _validated_selection_evidence(
         raise HeadToHeadError("guided root allocation prior cause must be a non-empty string or null.")
     if bool(root["prior_authority"]) != (prior_cause is None):
         raise HeadToHeadError("guided root allocation authority disagrees with its cause.")
+    if unmeasured_cause != prior_cause:
+        raise HeadToHeadError(
+            "guided unmeasured cause does not match its root allocation cause."
+        )
+    if unmeasured_cause is None:
+        if model_action is None or not isinstance(model_override, bool):
+            raise HeadToHeadError(
+                "measured guided selection must include a model action and override verdict."
+            )
+    elif (
+        unmeasured_cause not in OVERRIDE_UNMEASURED_CAUSE_VALUES
+        or model_action is not None
+        or model_override is not None
+    ):
+        raise HeadToHeadError(
+            "unmeasured guided selection has an unsupported cause or measured fields."
+        )
     arms = root.get("arms")
     if not isinstance(arms, list) or not arms:
         raise HeadToHeadError("guided root allocation must include at least one own-action arm.")
