@@ -482,7 +482,7 @@ class PolicyTelemetry:
             raw_branch_reasons = {
                 reason: 0 for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
             }
-        elif isinstance(raw_branch_reasons, Mapping) and set(raw_branch_reasons).issubset(
+        elif isinstance(raw_branch_reasons, Counter) and set(raw_branch_reasons).issubset(
             BRANCH_PRIOR_FALLBACK_REASON_VALUES
         ):
             # EngineMctsStats uses Counter and only materializes causes it has

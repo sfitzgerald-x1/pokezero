@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from io import BytesIO
 import json
 from pathlib import Path
@@ -116,6 +117,66 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
             stats_payload(stats)["opponent_request_order_root_fallback_statuses"],
             {"lost_active_permutation": 1},
         )
+
+    def test_stats_payload_completes_the_native_sparse_counter_reason_ledger(self) -> None:
+        def stats_with(reasons: Counter[str], branch_fallbacks: int) -> SimpleNamespace:
+            return SimpleNamespace(
+                decisions=1,
+                searched_decisions=1,
+                fallback_decisions=0,
+                model_evals=4,
+                total_iterations=8,
+                worlds_constructed=1,
+                worlds_searched=1,
+                prior_fallbacks=branch_fallbacks,
+                root_prior_fallbacks=0,
+                branch_prior_fallbacks=branch_fallbacks,
+                branch_prior_fallback_reasons=reasons,
+                opponent_prior_arm_decisions=0,
+                override_measured_decisions=1,
+                model_override_decisions=1,
+                opponent_request_order_statuses={},
+                opponent_request_order_root_fallback_statuses={},
+                decision_wall_seconds=0.25,
+            )
+
+        self.assertEqual(
+            stats_payload(stats_with(Counter(), 0))["branch_prior_fallback_reasons"],
+            {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES},
+        )
+        self.assertEqual(
+            stats_payload(stats_with(Counter({"unmapped_action": 2}), 2))[
+                "branch_prior_fallback_reasons"
+            ],
+            {
+                name: 2 if name == "unmapped_action" else 0
+                for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            },
+        )
+
+    def test_stats_payload_keeps_unknown_native_counter_reason_fail_closed(self) -> None:
+        stats = SimpleNamespace(
+            decisions=1,
+            searched_decisions=1,
+            fallback_decisions=0,
+            model_evals=4,
+            total_iterations=8,
+            worlds_constructed=1,
+            worlds_searched=1,
+            prior_fallbacks=1,
+            root_prior_fallbacks=0,
+            branch_prior_fallbacks=1,
+            branch_prior_fallback_reasons=Counter({"future_reason": 1}),
+            opponent_prior_arm_decisions=0,
+            override_measured_decisions=1,
+            model_override_decisions=1,
+            opponent_request_order_statuses={},
+            opponent_request_order_root_fallback_statuses={},
+            decision_wall_seconds=0.25,
+        )
+
+        with self.assertRaisesRegex(worker_error, "complete and conserved"):
+            stats_payload(stats)
 
     def test_config_projection_allows_only_explicit_disabled_diagnostics(self) -> None:
         class HistoricalEngineMctsConfig:

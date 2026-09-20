@@ -9,6 +9,7 @@ source rather than to the host rollout process.
 
 from __future__ import annotations
 
+from collections import Counter
 import dataclasses
 import hashlib
 import json
@@ -422,7 +423,26 @@ def _stats_payload(stats: Any) -> dict[str, Any]:
                 raise WorkerError(
                     "source-local policy opponent request-order status telemetry is not a mapping."
                 )
-            payload[field_name] = dict(value)
+            # EngineMctsStats deliberately uses Counter for this native reason
+            # ledger.  Counter omits every zero-valued reason, while the wire
+            # protocol deliberately requires a complete vocabulary.  Complete
+            # only that known sparse producer form; an ordinary partial mapping
+            # remains malformed and therefore fails closed below.
+            if (
+                field_name == "branch_prior_fallback_reasons"
+                and isinstance(value, Counter)
+            ):
+                from pokezero.engine_search import BRANCH_PRIOR_FALLBACK_REASON_VALUES
+
+                payload[field_name] = {
+                    reason: value.get(reason, 0)
+                    for reason in BRANCH_PRIOR_FALLBACK_REASON_VALUES
+                }
+                for reason, count in value.items():
+                    if reason not in payload[field_name]:
+                        payload[field_name][reason] = count
+            else:
+                payload[field_name] = dict(value)
         else:
             payload[field_name] = (
                 float(value) if field_name == "decision_wall_seconds" else int(value)

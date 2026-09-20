@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, replace
 import fcntl
 import hashlib
@@ -87,7 +88,7 @@ class OpponentOrderTelemetryTest(unittest.TestCase):
         # EngineMctsStats stores a Counter, whose zero-valued reasons are absent
         # from the live mapping.  Transport must materialize those known zeros
         # before applying its exact durable-ledger schema.
-        policy.stats.branch_prior_fallback_reasons = {"unmapped_action": 2}
+        policy.stats.branch_prior_fallback_reasons = Counter({"unmapped_action": 2})
 
         telemetry = PolicyTelemetry.capture(policy)
 
@@ -104,7 +105,7 @@ class OpponentOrderTelemetryTest(unittest.TestCase):
         policy.stats.prior_fallbacks = 1
         policy.stats.root_prior_fallbacks = 0
         policy.stats.branch_prior_fallbacks = 1
-        policy.stats.branch_prior_fallback_reasons = {"unknown_native_reason": 1}
+        policy.stats.branch_prior_fallback_reasons = Counter({"unknown_native_reason": 1})
 
         with self.assertRaisesRegex(ValueError, "complete native reason vocabulary"):
             PolicyTelemetry.capture(policy)
