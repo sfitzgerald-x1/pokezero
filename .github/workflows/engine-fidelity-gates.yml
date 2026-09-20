@@ -17,6 +17,12 @@ name: Engine fidelity gates
 on:
   pull_request:
 
+# Every job in this workflow only reads the pull-request merge result and its
+# pinned upstream source.  Keep the workflow token read-only, and avoid leaving
+# even that token in any checkout's Git configuration.
+permissions:
+  contents: read
+
 # A new commit supersedes an older pull-request head. Without this, each quick
 # follow-up starts another full native-engine build and the 15–30 minute mass
 # gate continues consuming a runner after its result can no longer be merged.
@@ -41,6 +47,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          persist-credentials: false
       - id: f
         env:
           FILTERS: |
@@ -449,6 +456,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
@@ -2103,6 +2112,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
@@ -2164,6 +2175,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
@@ -2255,6 +2268,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
@@ -2371,6 +2386,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
@@ -2470,6 +2487,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
+          persist-credentials: false
           # Depth 2, so the merge commit's two PARENTS exist locally. The default is depth 1,
           # which checks out the right tree but GRAFTS the parents away -- and the first CI run of
           # this job proved it the loud way: `git rev-list --parents -n 1 HEAD` reported zero
