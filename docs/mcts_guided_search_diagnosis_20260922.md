@@ -1,8 +1,9 @@
 # Guided MCTS diagnosis: branch-prior and override evidence
 
-**Status: preliminary, 2026-09-22.**  This records the evidence available
-before the terminal-only leaf-shadow study completes.  It is not a strength
-claim and it does not recommend retraining the value head yet.
+**Status: updated, 2026-09-22.** This records terminal-only model-leaf
+evidence and the completed branch-prior/override audits. It is not a strength
+claim. The leaf evidence supports prioritizing a policy-consistent value-head
+measurement before assuming that deeper search will improve play.
 
 ## What the large branch-prior count means
 
@@ -83,29 +84,64 @@ The fallback-heavy `2026092006` contributes 43 of those paired records and is
 near neutral (MCTS 21 wins, raw 22); it is a stress case, not a proof that all
 of its overrides are losing.
 
-## Decisive next evidence
+## Completed terminal-only model-leaf shadow
 
-The active source-bound job `mcts-model-leaf-shadow-752b2f84-r2` runs the
-production model-value tree unchanged and records, for exactly reached leaves,
-the learned value beside an independent uniform continuation **only when that
-continuation terminates**.  Cap and dead-end continuations are durable
-coverage exclusions, never labels. This is a real calibration measurement for
-the tree-generated state distribution, but it estimates a *uniform-policy*
-terminal target. It cannot by itself prove that the learned value head is
-misaligned with the checkpoint-policy/Foul-Play continuation target that
-matters to strength.
+The complete R4 artifact at
+`/shared/scott-experiment/mcts-model-leaf-shadow-repair-a60da9eb-20260922-r4`
+ran the production model-value tree and recorded the learned leaf value beside
+a terminal uniform-continuation result only when that continuation terminated.
+It contains four paired seeds (`2026092004` through `2026092007`), eight games,
+and **11,318,403** labelled leaves. **71,177** capped or dead-end continuations
+are durable coverage exclusions, not labels.
 
-The second active source-bound job,
-`mcts-model-leaf-shadow-topology-63d0eca5-r3`, repeats that observational
-terminal-only measurement from source commit
-`63d0eca5b8c625670e7c9ebae8293feff6da9d8f` and adds an observational
-unmapped-action topology witness. It will classify each fallback as a
-move/switch/other action-map shape without changing tree selection. A mapping
-repair remains contingent on that classification and on a controlled action or
-outcome effect.
+| Metric against terminal uniform continuation | Value |
+| --- | ---: |
+| Pearson correlation | 0.29349 |
+| Kendall tau-b | 0.08983 |
+| mean absolute error | 0.40896 |
+| RMSE | 0.51165 |
+| learned-value mean | 0.44777 |
+| terminal-outcome mean | 0.51684 |
 
-The decisive leaf-value experiment after these jobs is therefore a
-policy-consistent terminal continuation measurement over a preserved sample
-of native frontier states. Only if the value is poorly ranked against that
-target should we prioritize value-head retraining; otherwise the leading next
-targets are opponent modeling, tree allocation, or backup/search mechanics.
+This is a weak ranking signal on the states the tree actually reaches, plus a
+large calibration offset. It explains how a value head can be competitive with
+Foul Play or another one-step chooser yet still fail to improve MCTS: direct
+choice needs the correct ordering near the live root; MCTS repeatedly ranks
+deep, off-policy leaves and compounds small ordering errors through selection
+and backup.
+
+The R4 result is source-bound to `a60da9eb`, not the later `195a89c5` source
+used by the failed opponent-prior R3 attempt. It is strong evidence about the
+mechanism but not a replacement for a source-matched strength experiment. It
+also uses uniform continuations, not Foul Play; it therefore does **not** prove
+that the head disagrees with Foul Play on the same leaves.
+
+## Opponent-prior applicability correction
+
+The source-matched R3 opponent-prior job was terminally failed and is not
+bankable. Its first failure was not a generic mapping error: at seed
+`2026092006`, round 28, the public determinization could no longer prove the
+opponent's active party permutation and reported
+`lost_active_permutation`. The implementation correctly refused to invent an
+opponent action-head ordering, but strict mode also discarded the entire
+mirrored game.
+
+The successor experiment keeps strict mode. It permits only one audited
+exception: exactly one root fallback with a null acting-seat fallback reason
+and matching source/native status `lost_active_permutation`. Self-prior
+fallbacks, mapped-action failures, multiple root fallbacks, and every other
+opponent-order status remain terminal. Its separate applicability contract can
+report whether all retained fallbacks meet that exact condition; it cannot be
+used as a strength promotion.
+
+## Next decisive evidence
+
+1. Complete the source-matched own-prior control, then run the reviewed
+   selective opponent-prior applicability diagnostic. It establishes whether
+   opponent priors are meaningfully applicable without disguising root defects.
+2. Measure the same preserved frontier states with a policy-consistent/Foul
+   Play continuation target. If their ranking is also weak, value-head
+   calibration is the primary search bottleneck rather than opponent ordering.
+3. Only promote a revised value head or search mechanism after a durable paired
+   GPU strength study with a separately registered, zero-unexpected-fallback
+   contract.

@@ -594,6 +594,12 @@ class EngineMctsConfig:
     # For sweeps/CI that require zero fallbacks; production keeps the safe
     # uniform-legal fallback (a crash mid-collection is worse than a miss).
     strict_fallbacks: bool = False
+    # A source-audited opponent-prior diagnostic may retain the uniform
+    # opponent prior only when the public trajectory proves that the active
+    # permutation was lost. This is deliberately not a general fallback
+    # escape hatch: it does not permit self-prior, mapping, or any other
+    # opponent-order fallback in a strict run.
+    allow_lost_active_permutation_opponent_root_fallback: bool = False
     # --- full in-crate pipeline (plan v3 "Integration endgame") ---
     # "hp_fraction": poke-engine's native MCTS + handcrafted eval (the POC
     # path; stays the default until the paired read). "model": per belief
@@ -6558,22 +6564,7 @@ class EngineMctsPolicy:
                         "witness nodes must equal classified unmapped-action fallbacks"
                     )
                 report["branch_prior_unmapped_action_witness"] = branch_unmapped_action_witness
-            if config.strict_fallbacks and root_prior_fallbacks:
-                reason = report.get("root_prior_fallback_reason")
-                if not isinstance(reason, str) or not reason:
-                    order_status = report.get("opponent_request_order_status")
-                    reason = (
-                        f"opponent_order_{order_status}"
-                        if isinstance(order_status, str) and order_status
-                        else "unclassified_root_prior_fallback"
-                    )
-                raise EngineSearchFallbackError(
-                    "engine-search root-prior fallback: "
-                    f"battle={getattr(context, 'battle_id', '?')} "
-                    f"round={getattr(context, 'decision_round_index', '?')} "
-                    f"seat={getattr(context, 'player_id', '?')} reason={reason} "
-                    f"count={root_prior_fallbacks}"
-                )
+            allowed_lost_active_permutation_root_fallback = False
             if config.use_opponent_priors:
                 expected_order_status = record.get("_opponent_request_order_status")
                 if expected_order_status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
@@ -6599,6 +6590,41 @@ class EngineMctsPolicy:
                     self.stats.opponent_request_order_root_fallback_statuses[
                         reported_order_status
                     ] += root_prior_fallbacks
+                # An unresolvable public active permutation is not evidence
+                # that the model's acting policy, the action map, or a
+                # resolved opponent order failed. The native report exposes
+                # acting-seat failures in ``root_prior_fallback_reason``;
+                # requiring it to be null, a single root fallback, and the
+                # exact source/native status leaves no broad strict-mode hole.
+                # All other statuses -- including a parser/walk error -- stay
+                # terminal for a registered experiment.
+                allowed_lost_active_permutation_root_fallback = (
+                    config.allow_lost_active_permutation_opponent_root_fallback
+                    and expected_order_status == "lost_active_permutation"
+                    and reported_order_status == "lost_active_permutation"
+                    and root_prior_fallbacks == 1
+                    and report.get("root_prior_fallback_reason") is None
+                )
+            if (
+                config.strict_fallbacks
+                and root_prior_fallbacks
+                and not allowed_lost_active_permutation_root_fallback
+            ):
+                reason = report.get("root_prior_fallback_reason")
+                if not isinstance(reason, str) or not reason:
+                    order_status = report.get("opponent_request_order_status")
+                    reason = (
+                        f"opponent_order_{order_status}"
+                        if isinstance(order_status, str) and order_status
+                        else "unclassified_root_prior_fallback"
+                    )
+                raise EngineSearchFallbackError(
+                    "engine-search root-prior fallback: "
+                    f"battle={getattr(context, 'battle_id', '?')} "
+                    f"round={getattr(context, 'decision_round_index', '?')} "
+                    f"seat={getattr(context, 'player_id', '?')} reason={reason} "
+                    f"count={root_prior_fallbacks}"
+                )
             # Per-INVOCATION like the phase walls above: a conservatively
             # replayed world collided that many times twice and must report it.
             # `.get(...) or 0` keeps a pre-collision-counter wheel readable.
