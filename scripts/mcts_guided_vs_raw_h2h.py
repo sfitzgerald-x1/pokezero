@@ -39,6 +39,7 @@ from pokezero.actions import ACTION_COUNT  # noqa: E402
 from pokezero.engine_search import (  # noqa: E402
     BRANCH_PRIOR_FALLBACK_REASON_VALUES,
     OVERRIDE_UNMEASURED_CAUSE_VALUES,
+    aggregate_model_rollout_shadow,
 )
 
 # The mature MCTS-versus-MCTS runner owns the source-hash, immutable-write,
@@ -65,6 +66,9 @@ BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
 )
 SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-sealed-override-audit.v2"
+)
+MODEL_ROLLOUT_SHADOW_EVIDENCE_SCHEMA_VERSION = (
+    "pokezero.mcts-guided-vs-raw-model-rollout-shadow.v1"
 )
 RAW_SELECTOR = {
     "kind": "deterministic_masked_argmax",
@@ -450,6 +454,25 @@ def _branch_prior_ledger_path(
     return (
         out_root
         / "branch-prior-fallback-ledgers"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
+    )
+
+
+def _model_rollout_shadow_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+) -> Path:
+    """Return the immutable, public-safe leaf-agreement witness address."""
+
+    if record.seed != seed or record.acting_player != candidate_seat:
+        raise HeadToHeadError("model-rollout shadow does not match its public decision identity.")
+    return (
+        out_root
+        / "model-rollout-shadow-ledgers"
         / f"seed-{seed}-{candidate_seat}"
         / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
     )
@@ -922,6 +945,75 @@ def _guided_override_from_decision(
     )
 
 
+def _candidate_uses_model_rollout_shadow(candidate: MctsPolicySpec) -> bool:
+    config = getattr(candidate, "config", {})
+    return isinstance(config, Mapping) and config.get("rollout_leaf_shadow") is True
+
+
+def _validated_model_rollout_shadow(value: object) -> dict[str, Any]:
+    """Accept only terminal uniform-rollout labels for the leaf diagnostic.
+
+    The native aggregate is intentionally aggregate-only, but it is still the
+    exact per-decision evidence unit.  Capped/dead-end rollouts use a
+    handcrafted fallback rather than a terminal outcome and therefore cannot
+    answer the model-calibration question.
+    """
+
+    shadow = _mapping(value, label="guided model-rollout shadow")
+    aggregate = aggregate_model_rollout_shadow(
+        [
+            {
+                "rollout_leaf_mode": "model_value_shadow_rollout",
+                "rollouts_run": shadow.get("rollouts_run"),
+                "rollout_terminal_hits": shadow.get("rollout_terminal_hits"),
+                "rollout_cap_hits": shadow.get("rollout_cap_hits"),
+                "rollout_dead_ends": shadow.get("rollout_dead_ends"),
+                "model_rollout_shadow": shadow,
+            }
+        ]
+    )
+    if aggregate["rollout_cap_hits"] or aggregate["rollout_dead_ends"]:
+        raise HeadToHeadError(
+            "model-rollout shadow contains nonterminal cap/dead-end fallback labels."
+        )
+    native_invocations = shadow.get("native_invocations")
+    if isinstance(native_invocations, bool) or not isinstance(native_invocations, int) or native_invocations <= 0:
+        raise HeadToHeadError("model-rollout shadow has an invalid native-invocation denominator.")
+    # JSON round-tripping both validates the durable representation and strips
+    # mapping subclasses before an immutable artifact is written.
+    try:
+        normalized = json.loads(json.dumps(dict(shadow), sort_keys=True, allow_nan=False))
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError(f"model-rollout shadow is not JSON-safe: {error}") from error
+    if not isinstance(normalized, dict):
+        raise HeadToHeadError("model-rollout shadow did not normalize to a JSON object.")
+    return normalized
+
+
+def _model_rollout_shadow_payload(
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+    shadow: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": MODEL_ROLLOUT_SHADOW_EVIDENCE_SCHEMA_VERSION,
+        "seed": record.seed,
+        "candidate_seat": candidate_seat,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "public_decision": {
+            "decision_id": record.decision_id,
+            "battle_id": record.battle_id,
+            "turn_index": record.turn_index,
+            "recorded_action_index": record.recorded_action_index,
+        },
+        "model_rollout_shadow": dict(shadow),
+    }
+
+
 def _branch_prior_ledger_from_override(override: Mapping[str, Any]) -> dict[str, Any]:
     return _validated_branch_prior_ledger(override.get("branch_prior_fallbacks"))
 
@@ -1328,6 +1420,23 @@ def _public_decision_writer(
                 selection=_selection_evidence_from_override(override, record=record),
             ),
         )
+        if _candidate_uses_model_rollout_shadow(candidate):
+            metadata = _mapping(guided_policy.latest_decision_metadata, label="guided decision metadata")
+            engine_mcts = _mapping(metadata.get("engine_mcts"), label="guided engine MCTS metadata")
+            shadow = _validated_model_rollout_shadow(engine_mcts.get("model_rollout_shadow"))
+            shadow_path = _model_rollout_shadow_path(
+                out_root, seed=seed, candidate_seat=candidate_seat, record=record
+            )
+            _write_immutable_json(
+                shadow_path,
+                _model_rollout_shadow_payload(
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat=candidate_seat,
+                    record=record,
+                    shadow=shadow,
+                ),
+            )
 
     return write
 
@@ -1562,6 +1671,28 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
         )
         if dict(ledger_payload) != expected_ledger_payload:
             raise HeadToHeadError("branch-prior ledger evidence does not bind its public decision.")
+        if _candidate_uses_model_rollout_shadow(game.candidate):
+            shadow_path = _model_rollout_shadow_path(
+                out_root, seed=game.seed, candidate_seat=game.candidate_seat, record=record
+            )
+            try:
+                shadow_payload = json.loads(shadow_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise HeadToHeadError(
+                    f"public decision evidence is missing its readable model-rollout shadow: {error}"
+                ) from error
+            if not isinstance(shadow_payload, Mapping):
+                raise HeadToHeadError("model-rollout shadow evidence is not a JSON object.")
+            shadow = _validated_model_rollout_shadow(shadow_payload.get("model_rollout_shadow"))
+            expected_shadow_payload = _model_rollout_shadow_payload(
+                candidate=game.candidate,
+                incumbent=game.incumbent,
+                candidate_seat=game.candidate_seat,
+                record=record,
+                shadow=shadow,
+            )
+            if dict(shadow_payload) != expected_shadow_payload:
+                raise HeadToHeadError("model-rollout shadow evidence does not bind its public decision.")
         records.append(record)
     expected_count = game.candidate_telemetry.decisions
     if expected_count <= 0 or len(records) != expected_count:

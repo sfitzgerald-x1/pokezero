@@ -1109,9 +1109,9 @@ class ModelRolloutShadowAggregationTest(unittest.TestCase):
         return {
             "rollout_leaf_mode": mode,
             "rollouts_run": 96,
-            "rollout_terminal_hits": 90,
-            "rollout_cap_hits": 4,
-            "rollout_dead_ends": 2,
+            "rollout_terminal_hits": 96,
+            "rollout_cap_hits": 0,
+            "rollout_dead_ends": 0,
             "model_rollout_shadow": {
                 "value_frame": "side_one_absolute",
                 "partition": "seed_ordinal_parity_v1",
@@ -1120,7 +1120,7 @@ class ModelRolloutShadowAggregationTest(unittest.TestCase):
             },
         }
 
-    def test_aggregate_preserves_split_and_fallback_denominator(self) -> None:
+    def test_aggregate_preserves_split_and_terminal_denominator(self) -> None:
         aggregated = engine_search.aggregate_model_rollout_shadow(
             [self._report(), self._report()]
         )
@@ -1128,7 +1128,7 @@ class ModelRolloutShadowAggregationTest(unittest.TestCase):
         self.assertEqual(aggregated["fit"]["leaves"], 4)
         self.assertEqual(aggregated["heldout"]["leaves"], 2)
         self.assertEqual(aggregated["rollouts_run"], 192)
-        self.assertAlmostEqual(aggregated["rollout_fallback_fraction"], 0.0625)
+        self.assertAlmostEqual(aggregated["rollout_fallback_fraction"], 0.0)
 
     def test_aggregate_refuses_a_replacement_rollout_mode(self) -> None:
         with self.assertRaises(EngineSearchWitnessError):
@@ -1136,8 +1136,16 @@ class ModelRolloutShadowAggregationTest(unittest.TestCase):
 
     def test_aggregate_refuses_nonterminal_or_missing_trial_partition(self) -> None:
         report = self._report()
+        report["rollout_terminal_hits"] = 95
         report["rollout_dead_ends"] = 1
         with self.assertRaises(EngineSearchWitnessError):
+            engine_search.aggregate_model_rollout_shadow([report])
+
+    def test_aggregate_refuses_terminally_partitioned_cap_fallback(self) -> None:
+        report = self._report()
+        report["rollout_terminal_hits"] = 95
+        report["rollout_cap_hits"] = 1
+        with self.assertRaisesRegex(EngineSearchWitnessError, "nonterminal"):
             engine_search.aggregate_model_rollout_shadow([report])
 
 

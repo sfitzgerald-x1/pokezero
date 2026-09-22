@@ -150,6 +150,42 @@ def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
     )
 
 
+def _terminal_model_rollout_shadow() -> dict[str, object]:
+    moments = {
+        "leaves": 2,
+        "model_sum": 1.0,
+        "rollout_sum": 1.0,
+        "model_sq_sum": 0.6,
+        "rollout_sq_sum": 1.0,
+        "cross_sum": 0.6,
+        "absolute_error_sum": 0.4,
+        "squared_error_sum": 0.2,
+        "concordant_pairs": 1,
+        "discordant_pairs": 0,
+        "tied_pairs": 0,
+    }
+    return {
+        "value_frame": "side_one_absolute",
+        "partition": "seed_ordinal_parity_v1",
+        "native_invocations": 1,
+        "fit": dict(moments),
+        "heldout": {**moments, "leaves": 1},
+        "rollouts_run": 3,
+        "rollout_terminal_hits": 3,
+        "rollout_cap_hits": 0,
+        "rollout_dead_ends": 0,
+        "rollout_fallback_fraction": 0.0,
+    }
+
+
+def _guided_for_shadow_record(record: PublicDecisionRecord):
+    guided = _guided_for_record(record)
+    guided.latest_decision_metadata["engine_mcts"]["model_rollout_shadow"] = (
+        _terminal_model_rollout_shadow()
+    )
+    return guided
+
+
 def _public_selection(
     record: PublicDecisionRecord,
     *,
@@ -1022,6 +1058,56 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(Exception, "not bound to the public decision"):
                 writer(record)
+
+    def test_shadow_writer_requires_and_binds_terminal_leaf_evidence(self) -> None:
+        candidate = SimpleNamespace(
+            provenance_sha256="guided-provenance", config={"rollout_leaf_shadow": True}
+        )
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            RUNNER._public_decision_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=_guided_for_shadow_record(record),
+            )(record)
+            sidecar = RUNNER._model_rollout_shadow_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            )
+            self.assertTrue(sidecar.is_file())
+            self.assertEqual(RUNNER._validate_public_decision_evidence(root, game), (record,))
+
+    def test_shadow_writer_refuses_nonterminal_leaf_labels(self) -> None:
+        candidate = SimpleNamespace(
+            provenance_sha256="guided-provenance", config={"rollout_leaf_shadow": True}
+        )
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_shadow_record(record)
+        shadow = guided.latest_decision_metadata["engine_mcts"]["model_rollout_shadow"]
+        shadow["rollout_terminal_hits"] = 2
+        shadow["rollout_cap_hits"] = 1
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(Exception, "nonterminal"):
+                RUNNER._public_decision_writer(
+                    Path(directory),
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    seed=record.seed,
+                    candidate_seat="p1",
+                    guided_policy=guided,
+                )(record)
 
     def test_validator_refuses_incomplete_guided_decision_evidence(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")

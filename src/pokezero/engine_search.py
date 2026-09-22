@@ -2779,6 +2779,10 @@ def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict
         raise EngineSearchWitnessError(
             "model_rollout_shadow rollout outcome partition does not equal rollouts_run."
         )
+    if result["rollout_cap_hits"] or result["rollout_dead_ends"]:
+        raise EngineSearchWitnessError(
+            "model_rollout_shadow contains nonterminal cap/dead-end rollout fallback labels."
+        )
     if sum(result[split]["leaves"] for split in MODEL_ROLLOUT_SHADOW_SPLITS) <= 0:
         raise EngineSearchWitnessError("model_rollout_shadow compared zero model leaves.")
     result["rollout_fallback_fraction"] = (
