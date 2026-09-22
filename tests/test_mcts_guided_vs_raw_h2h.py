@@ -745,6 +745,34 @@ class GuidedConfigTest(unittest.TestCase):
                 with self.assertRaisesRegex(Exception, "must be a boolean"):
                     RUNNER._require_registered_candidate_config(config)
 
+    def test_deep_opponent_prior_manifest_inherits_cuda_without_overriding_it(self) -> None:
+        manifest_config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
+        manifest_config.pop("model_device")
+        raw = {
+            "config_id": "guided-mcts-own-priors-fullwork-deep-d6-s4096-opponent-priors",
+            "policy_id": "guided-mcts-own-priors-fullwork-deep-d6-s4096",
+            "checkpoint_sha256": _IDENTITY["checkpoint_sha256"],
+            "source_commit": _IDENTITY["source_commit"],
+            "engine_fingerprint": _IDENTITY["engine_fingerprint"],
+            "engine_config": manifest_config,
+        }
+        policy, _ = DURABLE._runtime_spec(
+            raw,
+            role="guided candidate",
+            checkpoint="/tmp/checkpoint",
+            checkpoint_sha256=_IDENTITY["checkpoint_sha256"],
+            source_commit=_IDENTITY["source_commit"],
+            source_tree_sha256=_IDENTITY["source_tree_sha256"],
+            engine_fingerprint=_IDENTITY["engine_fingerprint"],
+            showdown_source_sha256=_IDENTITY["showdown_source_sha256"],
+            model_path="/tmp/model",
+            tables_path="/tmp/tables",
+            device="cuda",
+        )
+        self.assertEqual(policy.config["model_device"], "cuda")
+        self.assertNotIn("model_device", manifest_config)
+        RUNNER._require_registered_candidate_config(policy.config)
+
     def test_registered_deep_rollout_leaf_ablation_is_accepted_exactly(self) -> None:
         config = dict(RUNNER.REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG)
         baseline = RUNNER.REGISTERED_DEEP_ENGINE_CONFIG

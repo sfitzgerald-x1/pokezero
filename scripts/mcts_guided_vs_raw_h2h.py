@@ -103,6 +103,7 @@ REGISTERED_ENGINE_CONFIG = {
     "rollout_branch_on_damage": False,
     "rollout_count": 32,
     "rollout_leaf_eval": False,
+    "rollout_leaf_shadow": False,
     "rollout_max_plies": 200,
     "rollout_policy": "uniform",
     "rollout_seed": 0,
