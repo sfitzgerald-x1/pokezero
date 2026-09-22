@@ -2829,6 +2829,11 @@ def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict
         result["excluded_nonterminal_leaf_fraction"] = None
         return result
 
+    if result["rollout_leaf_rows"] == 0:
+        raise EngineSearchWitnessError(
+            "model_rollout_shadow ran rollout trials without any priced leaf rows."
+        )
+
     # A zero-label *decision* remains valid observational evidence: the model
     # tree still ran unchanged, while every attempted uniform continuation hit
     # the safety cap or a dead end.  It must be durably visible rather than

@@ -1223,6 +1223,19 @@ class ModelRolloutShadowAggregationTest(unittest.TestCase):
         with self.assertRaisesRegex(EngineSearchWitnessError, "without any rollout trials"):
             engine_search.aggregate_model_rollout_shadow([report])
 
+    def test_aggregate_refuses_trials_without_priced_leaf_rows(self) -> None:
+        report = self._report(fit_leaves=0, heldout_leaves=0)
+        report["leaves_priced"] = 0
+        report["model_rollout_shadow"]["terminal_leaf_rows"] = 0
+        report["model_rollout_shadow"]["fit"] = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        report["model_rollout_shadow"]["heldout"] = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        with self.assertRaisesRegex(EngineSearchWitnessError, "without any priced leaf rows"):
+            engine_search.aggregate_model_rollout_shadow([report])
+
 
 # ---------------------------------------------------------------------------
 # The witness on the SHIPPING path

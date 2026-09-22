@@ -1060,6 +1060,23 @@ def _validated_model_rollout_shadow(value: object) -> dict[str, Any]:
             }
         ]
     )
+    # These rates and availability flags are DERIVED, not producer authority.
+    # Require the durable source to say exactly what the independently
+    # recomputed partition says.  In particular, a terminal-only tree has no
+    # rollout denominator; accepting ``0.0`` or ``True`` there would turn an
+    # absence of a learned-leaf observation into a false quality claim.
+    for field in (
+        "rollout_trials_available",
+        "terminal_label_available",
+        "rollout_fallback_fraction",
+        "excluded_nonterminal_leaf_fraction",
+    ):
+        if shadow.get(field) != aggregate[field]:
+            raise HeadToHeadError(
+                "model-rollout shadow derived field does not match its own "
+                f"terminal/trial partition: {field}={shadow.get(field)!r}, "
+                f"expected {aggregate[field]!r}."
+            )
     native_invocations = shadow.get("native_invocations")
     if isinstance(native_invocations, bool) or not isinstance(native_invocations, int) or native_invocations <= 0:
         raise HeadToHeadError("model-rollout shadow has an invalid native-invocation denominator.")

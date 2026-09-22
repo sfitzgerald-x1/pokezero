@@ -27,6 +27,7 @@ sys.modules[_SPEC.name] = RUNNER
 _SPEC.loader.exec_module(RUNNER)
 
 import mcts_mcts_h2h as DURABLE  # noqa: E402
+import pokezero.engine_search as ENGINE_SEARCH  # noqa: E402
 from pokezero.observation import PokeZeroObservationV0  # noqa: E402
 from pokezero.public_decision_corpus import (  # noqa: E402
     PublicDecisionRecord,
@@ -182,7 +183,10 @@ def _terminal_model_rollout_shadow() -> dict[str, object]:
         "rollout_terminal_hits": 3,
         "rollout_cap_hits": 0,
         "rollout_dead_ends": 0,
+        "rollout_trials_available": True,
+        "terminal_label_available": True,
         "rollout_fallback_fraction": 0.0,
+        "excluded_nonterminal_leaf_fraction": 0.0,
     }
 
 
@@ -1132,6 +1136,8 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         shadow["excluded_nonterminal_leaf_rows"] = 1
         shadow["fit"]["leaves"] = 1
         shadow["heldout"]["leaves"] = 1
+        shadow["rollout_fallback_fraction"] = 1 / 3
+        shadow["excluded_nonterminal_leaf_fraction"] = 1 / 3
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             RUNNER._public_decision_writer(
@@ -1147,6 +1153,27 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             )
             written = json.loads(sidecar.read_text(encoding="utf-8"))["model_rollout_shadow"]
             self.assertEqual(written["excluded_nonterminal_leaf_rows"], 1)
+
+    def test_shadow_validator_refuses_forged_zero_trial_derived_fields(self) -> None:
+        shadow = {
+            "value_frame": "side_one_absolute",
+            "partition": "seed_ordinal_parity_v1",
+            "native_invocations": 1,
+            "terminal_leaf_rows": 0,
+            "excluded_nonterminal_leaf_rows": 0,
+            "fit": {field: 0 for field in ENGINE_SEARCH.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS},
+            "heldout": {field: 0 for field in ENGINE_SEARCH.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS},
+            "rollouts_run": 0,
+            "rollout_terminal_hits": 0,
+            "rollout_cap_hits": 0,
+            "rollout_dead_ends": 0,
+            "rollout_trials_available": True,
+            "terminal_label_available": False,
+            "rollout_fallback_fraction": 0.0,
+            "excluded_nonterminal_leaf_fraction": None,
+        }
+        with self.assertRaisesRegex(RUNNER.HeadToHeadError, "derived field does not match"):
+            RUNNER._validated_model_rollout_shadow(shadow)
 
     def test_validator_refuses_incomplete_guided_decision_evidence(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
