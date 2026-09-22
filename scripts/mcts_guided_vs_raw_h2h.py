@@ -143,10 +143,23 @@ REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG = {
     "rollout_threads": 12,
     "rollout_threads_cpu_budget_ack": True,
 }
+# This observational protocol reaches precisely the same model-valued frontier
+# as fixed-work deep MCTS, then records one independent uniform terminal
+# continuation for each leaf.  It is not a rollout-leaf strength arm: the
+# learned value remains the one selected and backed up by the native tree.
+REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG = {
+    **REGISTERED_DEEP_ENGINE_CONFIG,
+    "rollout_count": 1,
+    "rollout_leaf_shadow": True,
+    "rollout_max_plies": 1000,
+    "rollout_threads": 12,
+    "rollout_threads_cpu_budget_ack": True,
+}
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
     REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG,
+    REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG,
 )
 SOURCE_BOUND_ENGINE_PATHS = {"checkpoint_path", "model_path", "tables_path"}
 

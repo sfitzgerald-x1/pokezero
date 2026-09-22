@@ -695,6 +695,28 @@ class GuidedConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
+    def test_registered_model_leaf_shadow_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_DEEP_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {
+                "rollout_count": 1,
+                "rollout_leaf_shadow": True,
+                "rollout_max_plies": 1000,
+                "rollout_threads": 12,
+                "rollout_threads_cpu_budget_ack": True,
+            },
+        )
+        RUNNER._require_registered_candidate_config(config)
+        config["rollout_count"] = 2
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
 
 class GuidedProgressTest(unittest.TestCase):
     def test_guided_progress_uses_its_own_schema_without_weakening_validation(self) -> None:
