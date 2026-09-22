@@ -71,20 +71,41 @@ There is no supported claim that either gap identifies a beneficial override:
 the 62 records are too small and correlated, and the local continuation
 policy intentionally differs from an independent Foul Play evaluation.
 
+Reading the 62 immutable `sealed-override-audits/*/round-*.json` records
+directly gives a more specific negative result: the point-biserial correlation
+between root-Q gap and the MCTS-minus-raw continuation result is `-0.0651`;
+the corresponding visit-share-gap correlation is `0.0036`. The outcome cells
+have Q-gap medians `0.024038` (MCTS-only wins), `0.037226` (raw-only wins),
+and `0.029674` (same outcome). This is not enough data for a calibrated
+effect-size claim, but it rejects the simpler account that larger native
+root-Q or visit separations were consistently identifying better overrides.
+The fallback-heavy `2026092006` contributes 43 of those paired records and is
+near neutral (MCTS 21 wins, raw 22); it is a stress case, not a proof that all
+of its overrides are losing.
+
 ## Decisive next evidence
 
 The active source-bound job `mcts-model-leaf-shadow-752b2f84-r2` runs the
 production model-value tree unchanged and records, for exactly reached leaves,
 the learned value beside an independent uniform continuation **only when that
 continuation terminates**.  Cap and dead-end continuations are durable
-coverage exclusions, never labels.  Its held-out moments will distinguish:
+coverage exclusions, never labels. This is a real calibration measurement for
+the tree-generated state distribution, but it estimates a *uniform-policy*
+terminal target. It cannot by itself prove that the learned value head is
+misaligned with the checkpoint-policy/Foul-Play continuation target that
+matters to strength.
 
-1. poor leaf calibration or ranking on the tree-generated distribution, which
-   supports prioritizing value-head data/training; from
-2. adequate leaf calibration with weak overrides, which directs the next
-   intervention toward opponent modeling, tree allocation, or backup/search
-   mechanics.
+The second active source-bound job,
+`mcts-model-leaf-shadow-topology-63d0eca5-r3`, repeats that observational
+terminal-only measurement from source commit
+`63d0eca5b8c625670e7c9ebae8293feff6da9d8f` and adds an observational
+unmapped-action topology witness. It will classify each fallback as a
+move/switch/other action-map shape without changing tree selection. A mapping
+repair remains contingent on that classification and on a controlled action or
+outcome effect.
 
-This job does not carry the branch action-topology witness.  Its result can
-only answer the terminal-leaf value question; the mapping classification is a
-separate follow-up measurement.
+The decisive leaf-value experiment after these jobs is therefore a
+policy-consistent terminal continuation measurement over a preserved sample
+of native frontier states. Only if the value is poorly ranked against that
+target should we prioritize value-head retraining; otherwise the leading next
+targets are opponent modeling, tree allocation, or backup/search mechanics.
