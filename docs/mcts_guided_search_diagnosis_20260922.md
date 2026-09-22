@@ -38,10 +38,12 @@ cannot explain a global strength result on its own.
 
 The prior artifact predates the topology witness, so it cannot distinguish a
 missing move arm, switch arm, or `None` engine-option shape.  The active
-successor records those categories per seat while preserving the same search
-semantics.  A mapping repair is not justified until that witness identifies a
-repairable category and a controlled comparison shows an effect on root
-actions or outcomes.
+leaf-shadow successor deliberately uses source commit `752b2f84`, which also
+predates that witness; it must not be used to classify the mapping hole.  A
+separate fresh, source-bound topology diagnostic is required after this
+leaf-value readout.  A mapping repair is not justified until that witness
+identifies a repairable category and a controlled comparison shows an effect
+on root actions or outcomes.
 
 ## Fixed-opponent override audit
 
@@ -83,5 +85,6 @@ coverage exclusions, never labels.  Its held-out moments will distinguish:
    intervention toward opponent modeling, tree allocation, or backup/search
    mechanics.
 
-The same job also carries the new branch action-topology witness, so it can
-separate a repairable mapping hole from a benign or irreducible option shape.
+This job does not carry the branch action-topology witness.  Its result can
+only answer the terminal-leaf value question; the mapping classification is a
+separate follow-up measurement.
