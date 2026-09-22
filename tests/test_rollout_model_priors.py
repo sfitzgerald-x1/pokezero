@@ -399,6 +399,31 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
                       "depth_occupancy", "expansions", "leaf_evals"):
             self.assertIn(field, production, f"{field} must be in the compared set")
 
+    def test_shadow_rollouts_preserve_the_model_tree_and_emit_split_moments(self) -> None:
+        """The diagnostic must never reprice the tree it observes.
+
+        A post-hoc model-vs-rollout comparison of two separate trees cannot
+        establish this: repricing changes which leaves are selected.  Here the
+        production fields are compared directly, while the shadow's new fields
+        prove it priced nonempty, pre-partitioned heldout leaves.
+        """
+        production = self._search(mode=None)
+        shadow = self._search(mode="model_value_shadow_rollout")
+        shadow_only = set(shadow) - set(production)
+        self.assertEqual(
+            self._differing(production, shadow, ignore=shadow_only),
+            [],
+            "shadow rollouts must not change any production search field",
+        )
+        self.assertEqual(shadow["rollout_leaf_mode"], "model_value_shadow_rollout")
+        moments = shadow["model_rollout_shadow"]
+        self.assertEqual(moments["value_frame"], "side_one_absolute")
+        self.assertEqual(moments["partition"], "seed_ordinal_parity_v1")
+        self.assertGreater(
+            moments["fit"]["leaves"] + moments["heldout"]["leaves"], 0
+        )
+        self.assertGreater(shadow["rollouts_run"], 0)
+
     def test_native_deadline_returns_only_finalized_root_visits(self) -> None:
         """A tiny budget may stop the tree, never a selected-but-unbacked row.
 
@@ -950,6 +975,23 @@ class RolloutModelPriorsConfigTest(unittest.TestCase):
         config = self._config(rollout_leaf_eval=False, rollout_threads=4)
         self.assertFalse(config.rollout_leaf_eval)
 
+    def test_shadow_is_a_model_priors_observation_not_a_rollout_arm(self) -> None:
+        config = self._config(rollout_leaf_eval=False, rollout_leaf_shadow=True)
+        self.assertTrue(config.rollout_leaf_shadow)
+        self.assertFalse(config.rollout_leaf_eval)
+        with self.assertRaises(ValueError) as caught:
+            self._config(rollout_leaf_shadow=True)
+        self.assertIn("mutually exclusive", str(caught.exception))
+
+    def test_shadow_refuses_a_different_tree(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            self._config(
+                rollout_leaf_eval=False,
+                rollout_leaf_shadow=True,
+                model_priors=False,
+            )
+        self.assertIn("requires model_priors=True", str(caught.exception))
+
 
 class RolloutSeamCallAssemblyTest(unittest.TestCase):
     """The positional contract, which is where a silent search change hides.
@@ -1038,6 +1080,65 @@ class RolloutSeamCallAssemblyTest(unittest.TestCase):
             args[17:],
             ["rollout", 16, 250, "uniform", 99, 1, False],
         )
+
+    def test_shadow_uses_a_distinct_native_mode(self) -> None:
+        args = self._args(rollout_leaf_shadow=True)
+        self.assertEqual(args[17], "model_value_shadow_rollout")
+
+
+class ModelRolloutShadowAggregationTest(unittest.TestCase):
+    """The durable diagnostic is aggregate-only and fails closed."""
+
+    @staticmethod
+    def _report(*, fit_leaves=2, heldout_leaves=1, mode="model_value_shadow_rollout"):
+        def moments(leaves):
+            return {
+                "leaves": leaves,
+                "model_sum": float(leaves),
+                "rollout_sum": float(leaves) / 2,
+                "model_sq_sum": float(leaves),
+                "rollout_sq_sum": float(leaves) / 4,
+                "cross_sum": float(leaves) / 2,
+                "absolute_error_sum": float(leaves) / 2,
+                "squared_error_sum": float(leaves) / 4,
+                "concordant_pairs": 1,
+                "discordant_pairs": 0,
+                "tied_pairs": 0,
+            }
+
+        return {
+            "rollout_leaf_mode": mode,
+            "rollouts_run": 96,
+            "rollout_terminal_hits": 90,
+            "rollout_cap_hits": 4,
+            "rollout_dead_ends": 2,
+            "model_rollout_shadow": {
+                "value_frame": "side_one_absolute",
+                "partition": "seed_ordinal_parity_v1",
+                "fit": moments(fit_leaves),
+                "heldout": moments(heldout_leaves),
+            },
+        }
+
+    def test_aggregate_preserves_split_and_fallback_denominator(self) -> None:
+        aggregated = engine_search.aggregate_model_rollout_shadow(
+            [self._report(), self._report()]
+        )
+        self.assertEqual(aggregated["native_invocations"], 2)
+        self.assertEqual(aggregated["fit"]["leaves"], 4)
+        self.assertEqual(aggregated["heldout"]["leaves"], 2)
+        self.assertEqual(aggregated["rollouts_run"], 192)
+        self.assertAlmostEqual(aggregated["rollout_fallback_fraction"], 0.0625)
+
+    def test_aggregate_refuses_a_replacement_rollout_mode(self) -> None:
+        with self.assertRaises(EngineSearchWitnessError):
+            engine_search.aggregate_model_rollout_shadow([self._report(mode="rollout")])
+
+    def test_aggregate_refuses_nonterminal_or_missing_trial_partition(self) -> None:
+        report = self._report()
+        report["rollout_dead_ends"] = 1
+        with self.assertRaises(EngineSearchWitnessError):
+            engine_search.aggregate_model_rollout_shadow([report])
 
 
 # ---------------------------------------------------------------------------

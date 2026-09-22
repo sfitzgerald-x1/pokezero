@@ -717,6 +717,12 @@ class EngineMctsConfig:
     #: field for field, and the gate reads False on the rollout pricer and on a
     #: changed batch.
     rollout_leaf_eval: bool = False
+    #: Observational companion to ``rollout_leaf_eval``: retain the production
+    #: model values in backup, while pricing the exact reached leaves with the
+    #: rollout oracle and emitting only split aggregate agreement statistics.
+    #: It is deliberately separate from the replacement arm so a calibration
+    #: probe cannot alter the tree whose frontier it claims to audit.
+    rollout_leaf_shadow: bool = False
     #: Damage-roll branching INSIDE rollouts. Independent of the search's own
     #: `branch_on_damage`: a rollout samples one outcome either way, so this only
     #: refines the sampled damage distribution.
@@ -964,6 +970,11 @@ class EngineMctsConfig:
                     "rollout_policy must be 'uniform' (the only in-crate policy "
                     f"implemented), got {self.rollout_policy!r}."
                 )
+        if self.rollout_leaf_eval and self.rollout_leaf_shadow:
+            raise ValueError(
+                "rollout_leaf_eval and rollout_leaf_shadow are mutually exclusive: "
+                "one replaces the leaf value and the other must preserve it."
+            )
         if self.rollout_leaf_eval:
             # The seam only exists on the model path. Silently ignoring the flag
             # on any other `leaf_eval` is how a cell gets banked as "oracle-leaf
@@ -1045,6 +1056,36 @@ class EngineMctsConfig:
                     "host, and its realized work is not recorded anywhere, so cores taken "
                     "here weaken the opponent in the direction that flatters this arm. Set "
                     "the ack only after checking cores against the run's shard concurrency."
+                )
+        if self.rollout_leaf_shadow:
+            if self.leaf_eval != "model":
+                raise ValueError(
+                    "rollout_leaf_shadow=True requires leaf_eval='model': it audits "
+                    "the production encoded model-leaf search, not the sequential "
+                    f"path (got leaf_eval={self.leaf_eval!r})."
+                )
+            if not self.model_priors:
+                raise ValueError(
+                    "rollout_leaf_shadow=True requires model_priors=True: the "
+                    "diagnostic must traverse the same model-prior tree as the "
+                    "production configuration it audits."
+                )
+            if self.rollout_count <= 0 or self.rollout_max_plies <= 0 or self.rollout_threads <= 0:
+                raise ValueError(
+                    "rollout_leaf_shadow=True requires positive rollout_count, "
+                    "rollout_max_plies, and rollout_threads."
+                )
+            if self.rollout_policy != "uniform":
+                raise ValueError(
+                    "rollout_leaf_shadow=True requires rollout_policy='uniform' "
+                    "(the only in-crate oracle currently implemented)."
+                )
+            if self.rollout_threads > 1 and not self.rollout_threads_cpu_budget_ack:
+                raise ValueError(
+                    f"rollout_threads={self.rollout_threads} > 1 requires "
+                    "rollout_threads_cpu_budget_ack=True for rollout_leaf_shadow: "
+                    "the paired opponent is time-budgeted and must not be silently "
+                    "weakened by shadow rollout CPU contention."
                 )
         if self.leaf_eval == "model":
             if not self.model_path or not self.checkpoint_path or not self.tables_path:
@@ -2552,6 +2593,8 @@ def native_search_args(
     # written as, and the reason it is a widening chain rather than four
     # independent `if`s.
     rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
+    rollout_leaf_shadow = bool(getattr(config, "rollout_leaf_shadow", False))
+    rollout_seam_enabled = rollout_leaf_eval or rollout_leaf_shadow
     if time_budget_ms is not None and time_budget_ms <= 0:
         raise ValueError("time_budget_ms must be positive when passed to native search.")
     if (
@@ -2559,7 +2602,7 @@ def native_search_args(
         or config.use_opponent_priors
         or fpu_reduction is not None
         or override_telemetry
-        or rollout_leaf_eval
+        or rollout_seam_enabled
         or time_budget_ms is not None
     ):
         search_args.extend([early_stop_min_sims, record["side_key"] == "side_one"])
@@ -2567,14 +2610,14 @@ def native_search_args(
         config.use_opponent_priors
         or fpu_reduction is not None
         or override_telemetry
-        or rollout_leaf_eval
+        or rollout_seam_enabled
         or time_budget_ms is not None
     ):
         search_args.append(bool(config.use_opponent_priors))
     if (
         fpu_reduction is not None
         or override_telemetry
-        or rollout_leaf_eval
+        or rollout_seam_enabled
         or time_budget_ms is not None
     ):
         # `None` is the crate's own default for this slot, so materializing it to
@@ -2582,7 +2625,7 @@ def native_search_args(
         # above, whose default is False and whose materialized value is the
         # config's.
         search_args.append(None if fpu_reduction is None else float(fpu_reduction))
-    if override_telemetry or rollout_leaf_eval or time_budget_ms is not None:
+    if override_telemetry or rollout_seam_enabled or time_budget_ms is not None:
         # `arm_priors` is pure telemetry, so materializing it to reach the slot
         # behind it must pass the config's OWN value, never an unconditional
         # True: writing True here would silently switch the arm-name column on
@@ -2607,10 +2650,16 @@ def native_search_args(
     # otherwise an integer budget would land in ``rollout_leaf_mode``. This
     # changes no rollout behavior when the seam is off (the mode remains None),
     # but keeps the native positional ABI explicit and testable.
-    if rollout_leaf_eval or time_budget_ms is not None:
+    if rollout_seam_enabled or time_budget_ms is not None:
         search_args.extend(
             [
-                "rollout" if rollout_leaf_eval else None,
+                (
+                    "rollout"
+                    if rollout_leaf_eval
+                    else "model_value_shadow_rollout"
+                    if rollout_leaf_shadow
+                    else None
+                ),
                 int(config.rollout_count),
                 int(config.rollout_max_plies),
                 str(config.rollout_policy),
@@ -2622,6 +2671,120 @@ def native_search_args(
     if time_budget_ms is not None:
         search_args.append(int(time_budget_ms))
     return search_args
+
+
+MODEL_ROLLOUT_SHADOW_MODE = "model_value_shadow_rollout"
+MODEL_ROLLOUT_SHADOW_SPLITS = ("fit", "heldout")
+MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS = (
+    "leaves",
+    "model_sum",
+    "rollout_sum",
+    "model_sq_sum",
+    "rollout_sq_sum",
+    "cross_sum",
+    "absolute_error_sum",
+    "squared_error_sum",
+    "concordant_pairs",
+    "discordant_pairs",
+    "tied_pairs",
+)
+
+
+def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Validate and aggregate the native shadow without retaining leaf state.
+
+    The model still supplied every value to backup.  These are therefore
+    observational moments over the exact reached leaves, not a second search
+    and not a selectable correction.  Refuse an old/miswired wheel rather than
+    emitting a decision that merely *claims* to contain the probe.
+    """
+    if not reports:
+        raise EngineSearchWitnessError(
+            "rollout_leaf_shadow=True completed no native invocation carrying a shadow report."
+        )
+    result: dict[str, Any] = {
+        "value_frame": "side_one_absolute",
+        "partition": "seed_ordinal_parity_v1",
+        "native_invocations": len(reports),
+    }
+    for split in MODEL_ROLLOUT_SHADOW_SPLITS:
+        result[split] = {field: 0 for field in MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS}
+    result["rollouts_run"] = 0
+    result["rollout_terminal_hits"] = 0
+    result["rollout_cap_hits"] = 0
+    result["rollout_dead_ends"] = 0
+    for report in reports:
+        if report.get("rollout_leaf_mode") != MODEL_ROLLOUT_SHADOW_MODE:
+            raise EngineSearchWitnessError(
+                "rollout_leaf_shadow=True did not preserve the production model value: "
+                f"native mode was {report.get('rollout_leaf_mode')!r}."
+            )
+        shadow = report.get("model_rollout_shadow")
+        if not isinstance(shadow, Mapping):
+            raise EngineSearchWitnessError(
+                "rollout_leaf_shadow=True native report omitted model_rollout_shadow."
+            )
+        if (
+            shadow.get("value_frame") != "side_one_absolute"
+            or shadow.get("partition") != "seed_ordinal_parity_v1"
+        ):
+            raise EngineSearchWitnessError(
+                "model_rollout_shadow carried an unknown value frame or partition."
+            )
+        for split in MODEL_ROLLOUT_SHADOW_SPLITS:
+            moments = shadow.get(split)
+            if not isinstance(moments, Mapping):
+                raise EngineSearchWitnessError(
+                    f"model_rollout_shadow omitted {split!r} moments."
+                )
+            for moment_name in MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS:
+                value = moments.get(moment_name)
+                count = moment_name in {
+                    "leaves",
+                    "concordant_pairs",
+                    "discordant_pairs",
+                    "tied_pairs",
+                }
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or (count and (not isinstance(value, int) or value < 0))
+                ):
+                    raise EngineSearchWitnessError(
+                        f"model_rollout_shadow {split}.{moment_name} is not numeric: {value!r}."
+                    )
+                result[split][moment_name] += value
+        for rollout_field in (
+            "rollouts_run",
+            "rollout_terminal_hits",
+            "rollout_cap_hits",
+            "rollout_dead_ends",
+        ):
+            value = report.get(rollout_field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise EngineSearchWitnessError(
+                    f"model_rollout_shadow native report omitted nonnegative {rollout_field}."
+                )
+            result[rollout_field] += value
+    total_rollouts = result["rollouts_run"]
+    if total_rollouts <= 0:
+        raise EngineSearchWitnessError("model_rollout_shadow priced zero rollout trials.")
+    if (
+        result["rollout_terminal_hits"]
+        + result["rollout_cap_hits"]
+        + result["rollout_dead_ends"]
+        != total_rollouts
+    ):
+        raise EngineSearchWitnessError(
+            "model_rollout_shadow rollout outcome partition does not equal rollouts_run."
+        )
+    if sum(result[split]["leaves"] for split in MODEL_ROLLOUT_SHADOW_SPLITS) <= 0:
+        raise EngineSearchWitnessError("model_rollout_shadow compared zero model leaves.")
+    result["rollout_fallback_fraction"] = (
+        result["rollout_cap_hits"] + result["rollout_dead_ends"]
+    ) / total_rollouts
+    return result
 
 
 #: The pricer name the Python layer is allowed to ask for. `EngineMctsConfig`
@@ -5695,8 +5858,10 @@ class EngineMctsPolicy:
         # pricer priced the leaves" is the question the witness exists to answer and
         # the answer must survive a run that somehow mixed two.
         rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
+        rollout_leaf_shadow = bool(getattr(config, "rollout_leaf_shadow", False))
         rollout_ledger: Counter[str] = Counter()
         rollout_modes: Counter[str] = Counter()
+        model_rollout_shadow_reports: list[Mapping[str, Any]] = []
         budget_skipped_worlds = 0
         native_budget_exhausted = False
         # These are compute invocations, not belief-world rows.  A collapsed
@@ -6340,6 +6505,13 @@ class EngineMctsPolicy:
                     setattr(
                         self.stats, stat_name, getattr(self.stats, stat_name) + value
                     )
+            if rollout_leaf_shadow:
+                # Do not fold this into the rollout-arm ledger: that ledger
+                # means "these values drove backup" while shadow rollouts must
+                # never drive selection or backup.  Preserve one native report
+                # per invocation; duplicate belief weighting has already been
+                # spent in the fixed-work tree and must not duplicate labels.
+                model_rollout_shadow_reports.append(report)
             return report
 
         for world, state in worlds:
@@ -6958,6 +7130,11 @@ class EngineMctsPolicy:
             if rollout_leaf_eval
             else None
         )
+        model_rollout_shadow = (
+            aggregate_model_rollout_shadow(model_rollout_shadow_reports)
+            if rollout_leaf_shadow
+            else None
+        )
         metadata = {
             "engine_mcts": {
                 "leaf_eval": "model",
@@ -7031,6 +7208,11 @@ class EngineMctsPolicy:
                 # never truthiness -- see the guard, which refuses an empty
                 # witness rather than letting it be omitted as falsey.
                 **({"rollout_leaf": rollout_witness} if rollout_witness is not None else {}),
+                **(
+                    {"model_rollout_shadow": model_rollout_shadow}
+                    if model_rollout_shadow is not None
+                    else {}
+                ),
             }
         }
         # AND THE RUN REFUSES IF THE TWO DISAGREE. This call is what makes a missing

@@ -789,6 +789,15 @@ impl Drop for PhaseTimer<'_> {
 pub(crate) enum EncodedLeafMode {
     /// Production: the checkpoint's value head, seat-reflected.
     ModelValue,
+    /// Observational-only leaf audit.  The tree is still priced with
+    /// [`Self::ModelValue`]; terminal-rollout values are computed for the exact
+    /// same reached leaves and emitted as aggregate, split-heldout statistics.
+    ///
+    /// This is deliberately a distinct mode rather than a post-hoc comparison
+    /// of two searches.  Repricing the tree changes which leaves are reached,
+    /// so two separately-run trees cannot answer whether the production value
+    /// head ranks *its own* frontier correctly.
+    ModelValueShadowRollout,
     /// R terminal rollouts, side-one-absolute and NOT seat-reflected. The
     /// arbiter arm. Skips the model forward on leaves that cannot host a child
     /// decision node, because under rollout leaves nothing reads their tensor.
@@ -816,12 +825,16 @@ pub(crate) enum EncodedLeafMode {
 
 impl EncodedLeafMode {
     fn prices_by_rollout(self) -> bool {
-        !matches!(self, Self::ModelValue)
+        matches!(
+            self,
+            Self::Rollout | Self::RolloutEncodeAll | Self::RolloutSkipAll
+        )
     }
 
     fn name(self) -> &'static str {
         match self {
             Self::ModelValue => "model_value",
+            Self::ModelValueShadowRollout => "model_value_shadow_rollout",
             Self::Rollout => "rollout",
             Self::RolloutEncodeAll => "rollout_encode_all",
             Self::RolloutSkipAll => "rollout_skip_all",
@@ -836,6 +849,150 @@ impl EncodedLeafMode {
 pub(crate) struct EncodedRolloutSeam<'a> {
     pub mode: EncodedLeafMode,
     pub cfg: &'a crate::rollout::RolloutConfig,
+}
+
+/// Sufficient statistics for one immutable train/heldout partition of the
+/// production tree's reached leaves.  We intentionally retain no leaf state,
+/// action, or private observation: downstream calibration can fit an affine
+/// mapping from these moments, while the diagnostic artifact cannot become an
+/// accidental replay corpus.
+#[derive(Default)]
+struct LeafShadowMoments {
+    leaves: u64,
+    model_sum: f64,
+    rollout_sum: f64,
+    model_sq_sum: f64,
+    rollout_sq_sum: f64,
+    cross_sum: f64,
+    absolute_error_sum: f64,
+    squared_error_sum: f64,
+    concordant_pairs: u64,
+    discordant_pairs: u64,
+    tied_pairs: u64,
+}
+
+impl LeafShadowMoments {
+    fn observe(&mut self, model: f32, rollout: f32) {
+        let model = f64::from(model);
+        let rollout = f64::from(rollout);
+        self.leaves += 1;
+        self.model_sum += model;
+        self.rollout_sum += rollout;
+        self.model_sq_sum += model * model;
+        self.rollout_sq_sum += rollout * rollout;
+        self.cross_sum += model * rollout;
+        self.absolute_error_sum += (model - rollout).abs();
+        self.squared_error_sum += (model - rollout) * (model - rollout);
+    }
+
+    fn observe_pair(
+        &mut self,
+        first_model: f32,
+        first_rollout: f32,
+        second_model: f32,
+        second_rollout: f32,
+    ) {
+        let product =
+            f64::from(first_model - second_model) * f64::from(first_rollout - second_rollout);
+        if product > 0.0 {
+            self.concordant_pairs += 1;
+        } else if product < 0.0 {
+            self.discordant_pairs += 1;
+        } else {
+            self.tied_pairs += 1;
+        }
+    }
+
+    fn json_fields(&self) -> String {
+        format!(
+            "{{\"leaves\":{},\"model_sum\":{:.9},\"rollout_sum\":{:.9},\"model_sq_sum\":{:.9},\"rollout_sq_sum\":{:.9},\"cross_sum\":{:.9},\"absolute_error_sum\":{:.9},\"squared_error_sum\":{:.9},\"concordant_pairs\":{},\"discordant_pairs\":{},\"tied_pairs\":{}}}",
+            self.leaves,
+            self.model_sum,
+            self.rollout_sum,
+            self.model_sq_sum,
+            self.rollout_sq_sum,
+            self.cross_sum,
+            self.absolute_error_sum,
+            self.squared_error_sum,
+            self.concordant_pairs,
+            self.discordant_pairs,
+            self.tied_pairs,
+        )
+    }
+}
+
+/// A heldout partition is assigned before any values are looked at.  The tree
+/// seed and per-tree rollout ordinal are both fixed at the search boundary, so
+/// reruns with the same input have the same split and no scheduling dependence.
+#[derive(Default)]
+struct ModelRolloutShadowStats {
+    fit: LeafShadowMoments,
+    heldout: LeafShadowMoments,
+}
+
+impl ModelRolloutShadowStats {
+    fn is_heldout(search_seed: u64, ordinal: u64) -> bool {
+        let mixed =
+            search_seed ^ ordinal.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ ordinal.rotate_left(29);
+        // A 50/50 split makes the result legible per search invocation while
+        // preserving an independent partition for calibration assessment.
+        mixed.count_ones() & 1 == 1
+    }
+
+    fn observe_round(
+        &mut self,
+        search_seed: u64,
+        ordinals: &[u64],
+        model_values: &[f32],
+        rollout_values: &[f32],
+    ) -> Result<(), PyErr> {
+        if ordinals.len() != model_values.len() || model_values.len() != rollout_values.len() {
+            return Err(PyValueError::new_err(format!(
+                "shadow leaf rows disagree: ordinals={}, model_values={}, rollout_values={}",
+                ordinals.len(),
+                model_values.len(),
+                rollout_values.len(),
+            )));
+        }
+        for ((ordinal, model), rollout) in ordinals.iter().zip(model_values).zip(rollout_values) {
+            let moments = if Self::is_heldout(search_seed, *ordinal) {
+                &mut self.heldout
+            } else {
+                &mut self.fit
+            };
+            moments.observe(*model, *rollout);
+        }
+        // This is a local same-pricing-round ranking statistic, not a root
+        // action-ranking claim.  Comparing leaves across unrelated rounds
+        // would turn different branch contexts into a false comparison.
+        for first in 0..model_values.len() {
+            for second in (first + 1)..model_values.len() {
+                let first_heldout = Self::is_heldout(search_seed, ordinals[first]);
+                if first_heldout == Self::is_heldout(search_seed, ordinals[second]) {
+                    let moments = if first_heldout {
+                        &mut self.heldout
+                    } else {
+                        &mut self.fit
+                    };
+                    moments.observe_pair(
+                        model_values[first],
+                        rollout_values[first],
+                        model_values[second],
+                        rollout_values[second],
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn json_fields(&self) -> String {
+        format!(
+            "\"model_rollout_shadow\":{{\"value_frame\":\"side_one_absolute\",\"partition\":\"seed_ordinal_parity_v1\",\"fit\":{},\"heldout\":{}}}",
+            self.fit.json_fields(),
+            self.heldout.json_fields(),
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -905,11 +1062,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     //    the render would make worlds survive here that production kills, and
     //    that is a search difference, not an optimisation.
     let mut rollout_stats = crate::rollout::RolloutStats::default();
+    let mut model_rollout_shadow = ModelRolloutShadowStats::default();
     let mut rollout_ordinal_next: u64 = 0;
     // Leaves whose model forward was skipped because no prior map needed it.
     let mut encode_skipped = 0usize;
     let rollout_mode = rollout_seam.as_ref().map(|seam| seam.mode);
     let prices_by_rollout = rollout_mode.is_some_and(EncodedLeafMode::prices_by_rollout);
+    let shadow_rollout = matches!(rollout_mode, Some(EncodedLeafMode::ModelValueShadowRollout));
     let mut rng = StdRng::seed_from_u64(seed);
     let mut completed = 0usize;
     let mut rounds = 0usize;
@@ -1199,7 +1358,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     let needs_forward = match rollout_mode {
                         // Production and the fidelity control: the forward IS
                         // the leaf value.
-                        None | Some(EncodedLeafMode::ModelValue) => true,
+                        None
+                        | Some(EncodedLeafMode::ModelValue)
+                        | Some(EncodedLeafMode::ModelValueShadowRollout) => true,
                         // The reference: rollout values, no skip.
                         Some(EncodedLeafMode::RolloutEncodeAll) => true,
                         // The mutant: skip unconditionally, which drops the
@@ -1435,6 +1596,24 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 crate::rollout::price_rows(&rollout_rows, &rollout_ordinals, seam.cfg)?;
             rollout_stats.merge(&round_stats);
             values
+        } else if shadow_rollout {
+            let seam = rollout_seam
+                .as_ref()
+                .expect("shadow_rollout implies the seam is present");
+            let (rollout_values, round_stats) =
+                crate::rollout::price_rows(&rollout_rows, &rollout_ordinals, seam.cfg)?;
+            // The shadow never supplies `row_values`: its only purpose is to
+            // audit model values for the exact leaves the production tree
+            // already reached.  Keeping this before `finalize` avoids a second
+            // tree and makes a choice-equivalence gate possible.
+            model_rollout_shadow.observe_round(
+                seed,
+                &rollout_ordinals,
+                &model_values,
+                &rollout_values,
+            )?;
+            rollout_stats.merge(&round_stats);
+            model_values
         } else {
             model_values
         };
@@ -1603,22 +1782,30 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // every field production has.
     let extra = match &rollout_seam {
         None => extra,
-        Some(seam) => format!(
-            "{extra},\"rollout_leaf_mode\":\"{}\",\"rollout_encode_skipped\":{},{}",
-            seam.mode.name(),
-            encode_skipped,
-            // `to_rollout_only_json_fields`, NOT `to_json_fields`. This commit
-            // added that split precisely so the encoded core would stop
-            // emitting a second `"rounds"` key beside the one it has reported
-            // since before this seam existed -- and then called the un-split
-            // helper anyway, so the duplicate shipped. Measured on the report
-            // string: `key "rounds" occurrences=2`. Harmless today only because
-            // the two values coincide and `json.loads` keeps the last, which is
-            // exactly why no assertion could see it. `rollout_report_has_no_duplicate_keys`
-            // is the gate, and it parses the raw string rather than the dict --
-            // a dict cannot represent the defect.
-            rollout_stats.to_rollout_only_json_fields(seam.cfg),
-        ),
+        Some(seam) => {
+            let shadow_fields = if shadow_rollout {
+                format!(",{}", model_rollout_shadow.json_fields())
+            } else {
+                String::new()
+            };
+            format!(
+                "{extra},\"rollout_leaf_mode\":\"{}\",\"rollout_encode_skipped\":{},{}{}",
+                seam.mode.name(),
+                encode_skipped,
+                // `to_rollout_only_json_fields`, NOT `to_json_fields`. This commit
+                // added that split precisely so the encoded core would stop
+                // emitting a second `"rounds"` key beside the one it has reported
+                // since before this seam existed -- and then called the un-split
+                // helper anyway, so the duplicate shipped. Measured on the report
+                // string: `key "rounds" occurrences=2`. Harmless today only because
+                // the two values coincide and `json.loads` keeps the last, which is
+                // exactly why no assertion could see it. `rollout_report_has_no_duplicate_keys`
+                // is the gate, and it parses the raw string rather than the dict --
+                // a dict cannot represent the defect.
+                rollout_stats.to_rollout_only_json_fields(seam.cfg),
+                shadow_fields,
+            )
+        }
     };
     Ok(multiply_report_json(
         &outcome,
@@ -2069,6 +2256,7 @@ impl NativeLeafModel {
         let rollout_mode = match rollout_leaf_mode {
             None => None,
             Some("model_value") => Some(EncodedLeafMode::ModelValue),
+            Some("model_value_shadow_rollout") => Some(EncodedLeafMode::ModelValueShadowRollout),
             Some("rollout") => Some(EncodedLeafMode::Rollout),
             // Gate fixtures. Named, documented on `EncodedLeafMode`, and not
             // reachable from `EngineMctsConfig`.
@@ -2077,7 +2265,8 @@ impl NativeLeafModel {
             Some(other) => {
                 return Err(PyValueError::new_err(format!(
                     "unknown rollout_leaf_mode {other:?}; supported: 'model_value' (the \
-                     fidelity control), 'rollout' (the arbiter arm), or None (production)"
+                     fidelity control), 'model_value_shadow_rollout' (observational leaf audit), \
+                     'rollout' (the arbiter arm), or None (production)"
                 )))
             }
         };
