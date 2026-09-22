@@ -305,12 +305,13 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         use_opponent_priors: bool = True,
         row_inputs: str | None = None,
         time_budget_ms: int | None = None,
+        position: dict | None = None,
         _raw: bool = False,
     ):
         """One encoded search. `mode=None` is PRODUCTION: the seam's positionals
         are not appended at all, so the call is byte for byte the pre-seam one.
         """
-        position = self.position
+        position = self.position if position is None else position
         fold = pokezero_search.FoldState.from_payload(position["fold_state"])
         args = [
             position["state_str"],
@@ -419,10 +420,109 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         moments = shadow["model_rollout_shadow"]
         self.assertEqual(moments["value_frame"], "side_one_absolute")
         self.assertEqual(moments["partition"], "seed_ordinal_parity_v1")
-        self.assertGreater(
-            moments["fit"]["leaves"] + moments["heldout"]["leaves"], 0
+        labeled_leaves = moments["fit"]["leaves"] + moments["heldout"]["leaves"]
+        if labeled_leaves:
+            # An ordinary learned-value leaf must have a real sampled label;
+            # otherwise this would merely assert that the extra JSON columns
+            # appeared, not that the observational pricer exercised them.
+            self.assertGreater(shadow["rollouts_run"], 0)
+        elif shadow["leaves_priced"] == 0:
+            # Exact terminal resolution happens before the learned evaluator is
+            # consulted.  It is a valid zero-denominator observation, not a
+            # missing rollout label or a reason to fabricate a trial count.
+            self.assertEqual(shadow["rollouts_run"], 0)
+            self.assertEqual(shadow["leaves_priced"], 0)
+            self.assertEqual(shadow["rollout_plies"], 0)
+            self.assertEqual(shadow["rollout_terminal_hits"], 0)
+            self.assertEqual(shadow["rollout_cap_hits"], 0)
+            self.assertEqual(shadow["rollout_dead_ends"], 0)
+            self.assertEqual(shadow["leaf_evals"], 0)
+            self.assertEqual(moments["terminal_leaf_rows"], 0)
+            self.assertEqual(moments["excluded_nonterminal_leaf_rows"], 0)
+            self.assertEqual(moments["fit"]["leaves"], 0)
+            self.assertEqual(moments["heldout"]["leaves"], 0)
+            for split in engine_search.MODEL_ROLLOUT_SHADOW_SPLITS:
+                self.assertEqual(
+                    moments[split],
+                    {
+                        field: 0
+                        for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+                    },
+                    "a zero-trial terminal resolution must not carry a hidden "
+                    f"{split} moment",
+                )
+        else:
+            # A real learned-leaf observation can have no calibration label
+            # when every sampled continuation reached the cap/dead-end safety
+            # path.  That is coverage evidence, not an exact-terminal tree and
+            # not a fabricated zero-denominator result.
+            self.assertGreater(shadow["rollouts_run"], 0)
+            self.assertEqual(moments["terminal_leaf_rows"], 0)
+            self.assertEqual(
+                moments["excluded_nonterminal_leaf_rows"],
+                shadow["leaves_priced"],
+            )
+            for split in engine_search.MODEL_ROLLOUT_SHADOW_SPLITS:
+                self.assertEqual(
+                    moments[split],
+                    {
+                        field: 0
+                        for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+                    },
+                    "an all-nonterminal observation must not manufacture a "
+                    f"{split} calibration moment",
+                )
+
+    def test_shadow_rollouts_price_a_nonterminal_committed_fixture(self) -> None:
+        """The native seam must still exercise its positive pricing path.
+
+        A short cap can leave every reached learned leaf without an admissible
+        terminal label.  This fixture deliberately uses the committed root,
+        one rollout per leaf, and the independently tested longer cap, for
+        which the same native path demonstrably reaches terminal outcomes.
+        """
+        production = self._search(mode=None)
+        shadow = self._search(
+            mode="model_value_shadow_rollout",
+            rollouts=1,
+            max_plies=400,
         )
-        self.assertGreater(shadow["rollouts_run"], 0)
+        shadow_only = set(shadow) - set(production)
+        self.assertEqual(
+            self._differing(production, shadow, ignore=shadow_only),
+            [],
+            "the positive native-pricing fixture must preserve every production "
+            "search field too",
+        )
+        moments = shadow["model_rollout_shadow"]
+        labeled_leaves = moments["fit"]["leaves"] + moments["heldout"]["leaves"]
+        self.assertGreater(
+            shadow["leaves_priced"],
+            0,
+            "the nonterminal fixture must reach learned leaves to price",
+        )
+        self.assertGreater(
+            shadow["rollouts_run"],
+            0,
+            "a nonterminal learned leaf must launch real observational trials",
+        )
+        self.assertGreater(
+            labeled_leaves,
+            0,
+            "the committed nonterminal fixture must retain at least one terminal label",
+        )
+        self.assertEqual(
+            shadow["rollouts_run"],
+            shadow["leaves_priced"],
+            "every reached learned leaf receives every configured shadow trial",
+        )
+        self.assertEqual(
+            shadow["rollout_terminal_hits"]
+            + shadow["rollout_cap_hits"]
+            + shadow["rollout_dead_ends"],
+            shadow["rollouts_run"],
+            "the native trial outcomes must partition the positive denominator",
+        )
 
     def test_native_deadline_returns_only_finalized_root_visits(self) -> None:
         """A tiny budget may stop the tree, never a selected-but-unbacked row.
