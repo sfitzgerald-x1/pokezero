@@ -2784,8 +2784,6 @@ def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict
             )
         result["rollout_leaf_rows"] += leaf_rows
     total_rollouts = result["rollouts_run"]
-    if total_rollouts <= 0:
-        raise EngineSearchWitnessError("model_rollout_shadow priced zero rollout trials.")
     if (
         result["rollout_terminal_hits"]
         + result["rollout_cap_hits"]
@@ -2807,6 +2805,30 @@ def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict
         raise EngineSearchWitnessError(
             "model_rollout_shadow terminal/excluded row partition does not equal leaves_priced."
         )
+    # An immediately terminal tree needs no learned-leaf price and therefore
+    # launches no shadow rollouts.  That is a valid, important observation: it
+    # says the exact terminal resolver settled the branch before the learned
+    # value could influence backup.  Do not turn it into a fabricated zero
+    # rollout *rate*, and do not crash the live game merely because this
+    # observational probe has no population at this decision.  Conversely,
+    # fail closed if a purported zero-trial report smuggles any row or moment
+    # through: there is no denominator on which such a value could be honest.
+    if total_rollouts == 0:
+        if result["rollout_leaf_rows"] != 0:
+            raise EngineSearchWitnessError(
+                "model_rollout_shadow priced leaf rows without any rollout trials."
+            )
+        for split in MODEL_ROLLOUT_SHADOW_SPLITS:
+            if any(result[split][field] != 0 for field in MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS):
+                raise EngineSearchWitnessError(
+                    "model_rollout_shadow reported moments without any rollout trials."
+                )
+        result["rollout_trials_available"] = False
+        result["terminal_label_available"] = False
+        result["rollout_fallback_fraction"] = None
+        result["excluded_nonterminal_leaf_fraction"] = None
+        return result
+
     # A zero-label *decision* remains valid observational evidence: the model
     # tree still ran unchanged, while every attempted uniform continuation hit
     # the safety cap or a dead end.  It must be durably visible rather than
@@ -2814,6 +2836,7 @@ def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict
     # terminal study readout, not this per-decision transport seam, decides
     # whether the aggregate terminal coverage is sufficient to answer the
     # calibration question.
+    result["rollout_trials_available"] = True
     result["terminal_label_available"] = terminal_label_rows > 0
     result["rollout_fallback_fraction"] = (
         result["rollout_cap_hits"] + result["rollout_dead_ends"]

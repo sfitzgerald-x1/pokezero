@@ -1172,6 +1172,57 @@ class ModelRolloutShadowAggregationTest(unittest.TestCase):
         self.assertEqual(aggregated["terminal_leaf_rows"], 0)
         self.assertEqual(aggregated["excluded_nonterminal_leaf_rows"], 3)
 
+    def test_aggregate_preserves_an_immediately_terminal_tree_without_trials(self) -> None:
+        """Exact terminal leaves are not missing rollout measurements.
+
+        The production tree resolves these leaves before the learned value (and
+        thus before the observational shadow) is needed.  The shadow must carry
+        that denominator-zero fact explicitly instead of aborting the game or
+        emitting a made-up zero fallback rate.
+        """
+        zero_moments = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        report = {
+            "rollout_leaf_mode": "model_value_shadow_rollout",
+            "leaves_priced": 0,
+            "rollouts_run": 0,
+            "rollout_terminal_hits": 0,
+            "rollout_cap_hits": 0,
+            "rollout_dead_ends": 0,
+            "model_rollout_shadow": {
+                "value_frame": "side_one_absolute",
+                "partition": "seed_ordinal_parity_v1",
+                "terminal_leaf_rows": 0,
+                "excluded_nonterminal_leaf_rows": 0,
+                "fit": dict(zero_moments),
+                "heldout": dict(zero_moments),
+            },
+        }
+
+        aggregated = engine_search.aggregate_model_rollout_shadow([report])
+
+        self.assertFalse(aggregated["rollout_trials_available"])
+        self.assertFalse(aggregated["terminal_label_available"])
+        self.assertIsNone(aggregated["rollout_fallback_fraction"])
+        self.assertIsNone(aggregated["excluded_nonterminal_leaf_fraction"])
+
+    def test_aggregate_refuses_a_zero_trial_report_with_moments(self) -> None:
+        report = self._report()
+        report["leaves_priced"] = 0
+        report["rollouts_run"] = 0
+        report["rollout_terminal_hits"] = 0
+        report["model_rollout_shadow"]["terminal_leaf_rows"] = 0
+        report["model_rollout_shadow"]["fit"] = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        report["model_rollout_shadow"]["heldout"] = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        report["model_rollout_shadow"]["fit"]["model_sum"] = 0.5
+        with self.assertRaisesRegex(EngineSearchWitnessError, "without any rollout trials"):
+            engine_search.aggregate_model_rollout_shadow([report])
+
 
 # ---------------------------------------------------------------------------
 # The witness on the SHIPPING path
