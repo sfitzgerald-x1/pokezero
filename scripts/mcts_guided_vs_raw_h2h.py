@@ -135,6 +135,15 @@ REGISTERED_DEEP_ENGINE_CONFIG = {
     "search_sims": 4096,
     "search_time_ms": 1_000,
 }
+# The opponent-model ablation keeps the fixed-work CUDA tree identical to the
+# registered deep protocol, but seeds opponent expansions from the checkpoint's
+# opponent head.  It is deliberately a separate registered arm: changing this
+# flag alters the searched game model, so it must never be smuggled into an
+# existing deep result under the same identity.
+REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG = {
+    **REGISTERED_DEEP_ENGINE_CONFIG,
+    "use_opponent_priors": True,
+}
 # This is the matched leaf-value ablation of the fixed-work CUDA protocol.
 # Every search knob, own prior, world count, and source-bound input is shared
 # with REGISTERED_DEEP_ENGINE_CONFIG.  Only the native model leaf is replaced
@@ -162,6 +171,7 @@ REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG = {
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
+    REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
     REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG,
     REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG,
 )
@@ -406,8 +416,13 @@ def _sealed_override_audit_config(
 def _require_registered_candidate_config(config: Mapping[str, Any]) -> None:
     """Reject a look-alike MCTS configuration before any game is played."""
 
-    if config.get("model_priors") is not True or config.get("use_opponent_priors") is not False:
-        raise HeadToHeadError("candidate must enable own model priors and disable opponent priors.")
+    if config.get("model_priors") is not True:
+        raise HeadToHeadError("candidate must enable own model priors.")
+    if (
+        config.get("use_opponent_priors") is not True
+        and config.get("use_opponent_priors") is not False
+    ):
+        raise HeadToHeadError("candidate use_opponent_priors must be a boolean.")
     observed = {key: value for key, value in config.items() if key not in SOURCE_BOUND_ENGINE_PATHS}
     if observed not in REGISTERED_ENGINE_CONFIGS:
         raise HeadToHeadError(

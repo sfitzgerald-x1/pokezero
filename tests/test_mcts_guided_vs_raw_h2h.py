@@ -721,6 +721,30 @@ class GuidedConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
+    def test_registered_deep_opponent_prior_protocol_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_DEEP_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {"use_opponent_priors": True},
+            "the opponent-model ablation may differ from fixed-work deep MCTS only on opponent priors",
+        )
+        self.assertEqual(set(config), set(baseline))
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 4095
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+        for invalid in (1, 0):
+            with self.subTest(invalid=invalid):
+                config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
+                config["use_opponent_priors"] = invalid
+                with self.assertRaisesRegex(Exception, "must be a boolean"):
+                    RUNNER._require_registered_candidate_config(config)
+
     def test_registered_deep_rollout_leaf_ablation_is_accepted_exactly(self) -> None:
         config = dict(RUNNER.REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG)
         baseline = RUNNER.REGISTERED_DEEP_ENGINE_CONFIG
