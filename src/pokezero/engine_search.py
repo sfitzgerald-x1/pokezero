@@ -2713,6 +2713,9 @@ def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict
     result["rollout_terminal_hits"] = 0
     result["rollout_cap_hits"] = 0
     result["rollout_dead_ends"] = 0
+    result["rollout_leaf_rows"] = 0
+    result["terminal_leaf_rows"] = 0
+    result["excluded_nonterminal_leaf_rows"] = 0
     for report in reports:
         if report.get("rollout_leaf_mode") != MODEL_ROLLOUT_SHADOW_MODE:
             raise EngineSearchWitnessError(
@@ -2731,6 +2734,13 @@ def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict
             raise EngineSearchWitnessError(
                 "model_rollout_shadow carried an unknown value frame or partition."
             )
+        for leaf_field in ("terminal_leaf_rows", "excluded_nonterminal_leaf_rows"):
+            value = shadow.get(leaf_field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise EngineSearchWitnessError(
+                    f"model_rollout_shadow {leaf_field} is not a nonnegative integer: {value!r}."
+                )
+            result[leaf_field] += value
         for split in MODEL_ROLLOUT_SHADOW_SPLITS:
             moments = shadow.get(split)
             if not isinstance(moments, Mapping):
@@ -2767,6 +2777,12 @@ def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict
                     f"model_rollout_shadow native report omitted nonnegative {rollout_field}."
                 )
             result[rollout_field] += value
+        leaf_rows = report.get("leaves_priced")
+        if isinstance(leaf_rows, bool) or not isinstance(leaf_rows, int) or leaf_rows < 0:
+            raise EngineSearchWitnessError(
+                "model_rollout_shadow native report omitted nonnegative leaves_priced."
+            )
+        result["rollout_leaf_rows"] += leaf_rows
     total_rollouts = result["rollouts_run"]
     if total_rollouts <= 0:
         raise EngineSearchWitnessError("model_rollout_shadow priced zero rollout trials.")
@@ -2779,15 +2795,32 @@ def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict
         raise EngineSearchWitnessError(
             "model_rollout_shadow rollout outcome partition does not equal rollouts_run."
         )
-    if result["rollout_cap_hits"] or result["rollout_dead_ends"]:
+    terminal_label_rows = sum(result[split]["leaves"] for split in MODEL_ROLLOUT_SHADOW_SPLITS)
+    if terminal_label_rows != result["terminal_leaf_rows"]:
         raise EngineSearchWitnessError(
-            "model_rollout_shadow contains nonterminal cap/dead-end rollout fallback labels."
+            "model_rollout_shadow terminal label rows do not equal its split moments."
         )
-    if sum(result[split]["leaves"] for split in MODEL_ROLLOUT_SHADOW_SPLITS) <= 0:
-        raise EngineSearchWitnessError("model_rollout_shadow compared zero model leaves.")
+    if (
+        result["terminal_leaf_rows"] + result["excluded_nonterminal_leaf_rows"]
+        != result["rollout_leaf_rows"]
+    ):
+        raise EngineSearchWitnessError(
+            "model_rollout_shadow terminal/excluded row partition does not equal leaves_priced."
+        )
+    # A zero-label *decision* remains valid observational evidence: the model
+    # tree still ran unchanged, while every attempted uniform continuation hit
+    # the safety cap or a dead end.  It must be durably visible rather than
+    # aborting the production game or quietly receiving a fallback label. The
+    # terminal study readout, not this per-decision transport seam, decides
+    # whether the aggregate terminal coverage is sufficient to answer the
+    # calibration question.
+    result["terminal_label_available"] = terminal_label_rows > 0
     result["rollout_fallback_fraction"] = (
         result["rollout_cap_hits"] + result["rollout_dead_ends"]
     ) / total_rollouts
+    result["excluded_nonterminal_leaf_fraction"] = (
+        result["excluded_nonterminal_leaf_rows"] / result["rollout_leaf_rows"]
+    )
     return result
 
 

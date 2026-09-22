@@ -951,12 +951,13 @@ def _candidate_uses_model_rollout_shadow(candidate: MctsPolicySpec) -> bool:
 
 
 def _validated_model_rollout_shadow(value: object) -> dict[str, Any]:
-    """Accept only terminal uniform-rollout labels for the leaf diagnostic.
+    """Accept an honest terminal-only uniform-rollout leaf diagnostic.
 
     The native aggregate is intentionally aggregate-only, but it is still the
-    exact per-decision evidence unit.  Capped/dead-end rollouts use a
-    handcrafted fallback rather than a terminal outcome and therefore cannot
-    answer the model-calibration question.
+    exact per-decision evidence unit. Capped/dead-end trials are reported as
+    excluded coverage, never placed in the terminal moments; rejecting the
+    entire production decision for one such observational miss would change
+    the study population rather than protect its estimand.
     """
 
     shadow = _mapping(value, label="guided model-rollout shadow")
@@ -964,6 +965,10 @@ def _validated_model_rollout_shadow(value: object) -> dict[str, Any]:
         [
             {
                 "rollout_leaf_mode": "model_value_shadow_rollout",
+                "leaves_priced": (
+                    shadow.get("terminal_leaf_rows", 0)
+                    + shadow.get("excluded_nonterminal_leaf_rows", 0)
+                ),
                 "rollouts_run": shadow.get("rollouts_run"),
                 "rollout_terminal_hits": shadow.get("rollout_terminal_hits"),
                 "rollout_cap_hits": shadow.get("rollout_cap_hits"),
@@ -972,10 +977,6 @@ def _validated_model_rollout_shadow(value: object) -> dict[str, Any]:
             }
         ]
     )
-    if aggregate["rollout_cap_hits"] or aggregate["rollout_dead_ends"]:
-        raise HeadToHeadError(
-            "model-rollout shadow contains nonterminal cap/dead-end fallback labels."
-        )
     native_invocations = shadow.get("native_invocations")
     if isinstance(native_invocations, bool) or not isinstance(native_invocations, int) or native_invocations <= 0:
         raise HeadToHeadError("model-rollout shadow has an invalid native-invocation denominator.")

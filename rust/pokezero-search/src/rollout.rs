@@ -263,19 +263,26 @@ fn pick(policy: RolloutPolicy, rng: &mut StdRng, options: &[MoveChoice]) -> Move
 /// State` to successive rollouts. This mirrors what `expand_edge` does around
 /// the pricing seam, and it is why the leaf clone can be reused across all R
 /// trials of one leaf instead of cloned R times.
+struct RolloutTrial {
+    value: f32,
+    terminal: bool,
+}
+
 fn rollout_once(
     state: &mut State,
     cfg: &RolloutConfig,
     rng: &mut StdRng,
     stats: &mut RolloutStats,
-) -> f32 {
+) -> RolloutTrial {
     let mut applied: Vec<Vec<poke_engine::instruction::Instruction>> = Vec::new();
     let mut value: Option<f32> = None;
+    let mut terminal = false;
     for _ in 0..cfg.max_plies {
         let over = state.battle_is_over();
         if over != 0.0 {
             stats.terminal_hits += 1;
             value = Some(if over > 0.0 { 1.0 } else { 0.0 });
+            terminal = true;
             break;
         }
         let (s1_options, s2_options) = state.get_all_options();
@@ -285,8 +292,7 @@ fn rollout_once(
         }
         let s1 = pick(cfg.policy, rng, &s1_options);
         let s2 = pick(cfg.policy, rng, &s2_options);
-        let branches =
-            generate_instructions_from_move_pair(state, &s1, &s2, cfg.branch_on_damage);
+        let branches = generate_instructions_from_move_pair(state, &s1, &s2, cfg.branch_on_damage);
         if branches.is_empty() {
             stats.dead_ends += 1;
             break;
@@ -311,7 +317,12 @@ fn rollout_once(
     for instructions in applied.iter().rev() {
         state.reverse_instructions(instructions);
     }
-    value.expect("value set on every exit path")
+    RolloutTrial {
+        value: value.expect("value set on every exit path"),
+        // Keep this per-trial bit beside the value: the model-value shadow must
+        // never mistake the HP-fraction fallback for an outcome label.
+        terminal,
+    }
 }
 
 /// One trial's outcome for one leaf. Stored per (row, trial) rather than
@@ -325,7 +336,7 @@ fn rollout_trial(
     cfg: &RolloutConfig,
     scratch: &mut State,
     stats: &mut RolloutStats,
-) -> f32 {
+) -> RolloutTrial {
     scratch.clone_from(leaf);
     let mut rng = StdRng::seed_from_u64(rollout_seed(cfg.seed, ordinal, trial));
     let value = rollout_once(scratch, cfg, &mut rng, stats);
@@ -411,66 +422,90 @@ fn reduce_trials(trials: &[f32], rows: usize, r: usize) -> Result<Vec<f32>, Stri
 /// are complements, so the bug is silent on p1 and total on p2. Rollout rows
 /// must therefore bypass the reflection, and
 /// `model.rs::rollout_values_are_not_seat_reflected` is the gate that says so.
-pub(crate) fn price_rows(
+struct PricedRolloutTrials {
+    values: Vec<f32>,
+    terminal: Vec<bool>,
+    stats: RolloutStats,
+}
+
+/// Price every `(row, trial)` pair once.  Callers choose whether a cap/dead-end
+/// fallback is a legitimate pricing value (`price_rows`) or an excluded
+/// observational label (`price_terminal_rows`).
+fn price_trials(
     rows: &[State],
     ordinals: &[u64],
     cfg: &RolloutConfig,
-) -> PyResult<(Vec<f32>, RolloutStats)> {
+) -> PyResult<PricedRolloutTrials> {
     let n = rows.len();
     let r = cfg.rollouts as usize;
     let mut stats = RolloutStats::default();
     if n == 0 {
-        return Ok((Vec::new(), stats));
+        return Ok(PricedRolloutTrials {
+            values: Vec::new(),
+            terminal: Vec::new(),
+            stats,
+        });
     }
     stats.leaves_priced = n as u64;
     let tasks = n * r;
     let mut trials = vec![f32::NAN; tasks];
+    let mut terminal = vec![false; tasks];
     let threads = cfg.threads.max(1).min(tasks);
     if threads == 1 {
         let mut scratch = rows[0].clone();
         for task in 0..tasks {
             let (row, trial) = (task / r, task % r);
-            trials[task] =
-                rollout_trial(&rows[row], ordinals[row], trial as u32, cfg, &mut scratch, &mut stats);
+            let outcome = rollout_trial(
+                &rows[row],
+                ordinals[row],
+                trial as u32,
+                cfg,
+                &mut scratch,
+                &mut stats,
+            );
+            trials[task] = outcome.value;
+            terminal[task] = outcome.terminal;
         }
     } else {
         let cursor = AtomicU64::new(0);
-        let collected: Vec<(Vec<(usize, f32)>, RolloutStats)> = std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..threads)
-                .map(|_| {
-                    let cursor = &cursor;
-                    scope.spawn(move || {
-                        let mut local: Vec<(usize, f32)> = Vec::new();
-                        let mut local_stats = RolloutStats::default();
-                        let mut scratch = rows[0].clone();
-                        loop {
-                            let task = cursor.fetch_add(1, Ordering::Relaxed) as usize;
-                            if task >= tasks {
-                                break;
+        let collected: Vec<(Vec<(usize, RolloutTrial)>, RolloutStats)> =
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = (0..threads)
+                    .map(|_| {
+                        let cursor = &cursor;
+                        scope.spawn(move || {
+                            let mut local: Vec<(usize, RolloutTrial)> = Vec::new();
+                            let mut local_stats = RolloutStats::default();
+                            let mut scratch = rows[0].clone();
+                            loop {
+                                let task = cursor.fetch_add(1, Ordering::Relaxed) as usize;
+                                if task >= tasks {
+                                    break;
+                                }
+                                let (row, trial) = (task / r, task % r);
+                                let outcome = rollout_trial(
+                                    &rows[row],
+                                    ordinals[row],
+                                    trial as u32,
+                                    cfg,
+                                    &mut scratch,
+                                    &mut local_stats,
+                                );
+                                local.push((task, outcome));
                             }
-                            let (row, trial) = (task / r, task % r);
-                            let value = rollout_trial(
-                                &rows[row],
-                                ordinals[row],
-                                trial as u32,
-                                cfg,
-                                &mut scratch,
-                                &mut local_stats,
-                            );
-                            local.push((task, value));
-                        }
-                        (local, local_stats)
+                            (local, local_stats)
+                        })
                     })
-                })
-                .collect();
-            handles
-                .into_iter()
-                .map(|h| h.join().expect("rollout worker panicked"))
-                .collect()
-        });
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().expect("rollout worker panicked"))
+                    .collect()
+            });
         for (local, local_stats) in &collected {
-            for (task, value) in local {
-                trials[*task] = *value;
+            for (task, outcome) in local {
+                trials[*task] = outcome.value;
+                terminal[*task] = outcome.terminal;
             }
             // `leaves_priced` is set once above from the row count; workers
             // count rollouts, not leaves, so nothing double-counts here.
@@ -493,8 +528,54 @@ pub(crate) fn price_rows(
     //
     // `events.rs` already wrote this rule down for this crate; the seam simply
     // has to obey it.
-    let values = reduce_trials(&trials, n, r).map_err(PyValueError::new_err)?;
-    Ok((values, stats))
+    // Validate the values before exposing either the ordinary pricing path or
+    // the terminal-only observational path.  A terminal bit is not permission
+    // to conceal an unpriced trial.
+    reduce_trials(&trials, n, r).map_err(PyValueError::new_err)?;
+    Ok(PricedRolloutTrials {
+        values: trials,
+        terminal,
+        stats,
+    })
+}
+
+pub(crate) fn price_rows(
+    rows: &[State],
+    ordinals: &[u64],
+    cfg: &RolloutConfig,
+) -> PyResult<(Vec<f32>, RolloutStats)> {
+    let priced = price_trials(rows, ordinals, cfg)?;
+    let values = reduce_trials(&priced.values, rows.len(), cfg.rollouts as usize)
+        .map_err(PyValueError::new_err)?;
+    Ok((values, priced.stats))
+}
+
+/// Price rows for an observational calibration label only.
+///
+/// A row is present only when *every* trial reached a real terminal outcome.
+/// Capped and dead-end trials remain fully counted in `RolloutStats`, but their
+/// HP-fraction fallbacks are deliberately never returned as labels.  This lets
+/// the diagnostic report its coverage honestly without aborting the production
+/// model-value search it shadows.
+pub(crate) fn price_terminal_rows(
+    rows: &[State],
+    ordinals: &[u64],
+    cfg: &RolloutConfig,
+) -> PyResult<(Vec<Option<f32>>, RolloutStats)> {
+    let priced = price_trials(rows, ordinals, cfg)?;
+    let r = cfg.rollouts as usize;
+    let values = reduce_trials(&priced.values, rows.len(), r).map_err(PyValueError::new_err)?;
+    let terminal_rows = values
+        .into_iter()
+        .enumerate()
+        .map(|(row, value)| {
+            priced.terminal[row * r..(row + 1) * r]
+                .iter()
+                .all(|terminal| *terminal)
+                .then_some(value)
+        })
+        .collect();
+    Ok((terminal_rows, priced.stats))
 }
 
 /// Price externally materialised successor states under the uniform rollout
@@ -587,16 +668,20 @@ pub(crate) fn price_uniform_rollout_rows(
         seed: rollout_seed,
         threads: rollout_threads,
     };
-    let (values, stats) = crate::panic_guard::catch_native_panic(|| {
-        price_rows(&rows, &ordinals, &cfg)
-    })?;
-    if values.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+    let (values, stats) =
+        crate::panic_guard::catch_native_panic(|| price_rows(&rows, &ordinals, &cfg))?;
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))
+    {
         return Err(PyValueError::new_err(
             "uniform rollout row pricer produced a non-finite or out-of-range value",
         ));
     }
     let values_json = serde_json::to_string(&values).map_err(|error| {
-        PyValueError::new_err(format!("could not serialise uniform rollout values: {error}"))
+        PyValueError::new_err(format!(
+            "could not serialise uniform rollout values: {error}"
+        ))
     })?;
     Ok(format!(
         "{{\"schema\":\"pokezero.uniform-rollout-row-prices.v1\",\
@@ -817,7 +902,9 @@ pub(crate) fn puct_search_multi_rollout(
             &rcfg,
         )
     })?;
-    let extra = result.stats.to_json_fields(&rcfg, leaf_batch, result.rounds);
+    let extra = result
+        .stats
+        .to_json_fields(&rcfg, leaf_batch, result.rounds);
     let evaluator_name = match leaf_mode_parsed {
         LeafMode::Rollout => "rollout",
         LeafMode::HpFraction => "hp_fraction",
@@ -875,6 +962,25 @@ mod tests {
             map.remove(key);
         }
         serde_json::to_string(&serde_json::Value::Object(map)).expect("re-serializes")
+    }
+
+    #[test]
+    fn terminal_only_rows_exclude_cap_fallbacks_without_aborting_the_pricer() {
+        let row = parse_state(MINIMAL.trim()).expect("fixture parses");
+        let config = RolloutConfig {
+            rollouts: 1,
+            max_plies: 1,
+            policy: RolloutPolicy::Uniform,
+            branch_on_damage: false,
+            seed: 7,
+            threads: 1,
+        };
+        let (values, stats) = price_terminal_rows(&[row], &[0], &config)
+            .expect("an excluded terminal label is not a pricing failure");
+        assert_eq!(values, vec![None]);
+        assert_eq!(stats.rollouts_run, 1);
+        assert_eq!(stats.terminal_hits, 0);
+        assert_eq!(stats.cap_hits + stats.dead_ends, 1);
     }
 
     /// THE FIDELITY GATE. The rollout driver at `leaf_batch = 1` with
@@ -944,16 +1050,8 @@ mod tests {
     ///    because nothing downstream reads the leaf value.
     #[test]
     fn fidelity_gate_reads_false_on_batch_and_on_pricer() {
-        let baseline = crate::tree::puct_search_multi(
-            MINIMAL.trim(),
-            1200,
-            3,
-            1.4,
-            99,
-            true,
-            None,
-        )
-        .expect("production search runs");
+        let baseline = crate::tree::puct_search_multi(MINIMAL.trim(), 1200, 3, 1.4, 99, true, None)
+            .expect("production search runs");
         let batched = puct_search_multi_rollout(
             MINIMAL.trim(),
             1200,
@@ -1045,13 +1143,39 @@ mod tests {
     #[test]
     fn thread_count_does_not_change_values() {
         let one = puct_search_multi_rollout(
-            MINIMAL.trim(), 200, 2, 1.4, 3, true, None,
-            8, 60, "uniform", 4242, 1, false, 1, "rollout",
+            MINIMAL.trim(),
+            200,
+            2,
+            1.4,
+            3,
+            true,
+            None,
+            8,
+            60,
+            "uniform",
+            4242,
+            1,
+            false,
+            1,
+            "rollout",
         )
         .expect("runs");
         let many = puct_search_multi_rollout(
-            MINIMAL.trim(), 200, 2, 1.4, 3, true, None,
-            8, 60, "uniform", 4242, 6, false, 1, "rollout",
+            MINIMAL.trim(),
+            200,
+            2,
+            1.4,
+            3,
+            true,
+            None,
+            8,
+            60,
+            "uniform",
+            4242,
+            6,
+            false,
+            1,
+            "rollout",
         )
         .expect("runs");
         let strip = |r: &str| {
@@ -1072,8 +1196,21 @@ mod tests {
     fn rollout_seed_is_wired_and_r_reduces_spread() {
         let root_value = |rollout_seed: u64, r: u32| -> f64 {
             let report = puct_search_multi_rollout(
-                MINIMAL.trim(), 300, 2, 1.4, 11, true, None,
-                r, 80, "uniform", rollout_seed, 4, false, 1, "rollout",
+                MINIMAL.trim(),
+                300,
+                2,
+                1.4,
+                11,
+                true,
+                None,
+                r,
+                80,
+                "uniform",
+                rollout_seed,
+                4,
+                false,
+                1,
+                "rollout",
             )
             .expect("runs");
             let v: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1104,16 +1241,47 @@ mod tests {
     fn boundary_rejections_read_false() {
         let call = |rollouts: u32, max_plies: u32, policy: &str, batch: usize, mode: &str| {
             puct_search_multi_rollout(
-                MINIMAL.trim(), 10, 2, 1.4, 0, true, None,
-                rollouts, max_plies, policy, 0, 1, false, batch, mode,
+                MINIMAL.trim(),
+                10,
+                2,
+                1.4,
+                0,
+                true,
+                None,
+                rollouts,
+                max_plies,
+                policy,
+                0,
+                1,
+                false,
+                batch,
+                mode,
             )
         };
-        assert!(call(0, 10, "uniform", 1, "rollout").is_err(), "rollouts=0 accepted");
-        assert!(call(4, 0, "uniform", 1, "rollout").is_err(), "max_plies=0 accepted");
-        assert!(call(4, 10, "greedy", 1, "rollout").is_err(), "unknown policy accepted");
-        assert!(call(4, 10, "uniform", 0, "rollout").is_err(), "leaf_batch=0 accepted");
-        assert!(call(4, 10, "uniform", 1, "oracle").is_err(), "unknown leaf_mode accepted");
-        assert!(call(4, 10, "uniform", 1, "rollout").is_ok(), "valid call rejected");
+        assert!(
+            call(0, 10, "uniform", 1, "rollout").is_err(),
+            "rollouts=0 accepted"
+        );
+        assert!(
+            call(4, 0, "uniform", 1, "rollout").is_err(),
+            "max_plies=0 accepted"
+        );
+        assert!(
+            call(4, 10, "greedy", 1, "rollout").is_err(),
+            "unknown policy accepted"
+        );
+        assert!(
+            call(4, 10, "uniform", 0, "rollout").is_err(),
+            "leaf_batch=0 accepted"
+        );
+        assert!(
+            call(4, 10, "uniform", 1, "oracle").is_err(),
+            "unknown leaf_mode accepted"
+        );
+        assert!(
+            call(4, 10, "uniform", 1, "rollout").is_ok(),
+            "valid call rejected"
+        );
     }
 
     /// The cap-hit accounting is honest: a 1-ply cap makes essentially every
@@ -1122,8 +1290,21 @@ mod tests {
     #[test]
     fn fallback_fraction_reports_the_blend() {
         let report = puct_search_multi_rollout(
-            MINIMAL.trim(), 100, 2, 1.4, 1, true, None,
-            4, 1, "uniform", 7, 1, false, 1, "rollout",
+            MINIMAL.trim(),
+            100,
+            2,
+            1.4,
+            1,
+            true,
+            None,
+            4,
+            1,
+            "uniform",
+            7,
+            1,
+            false,
+            1,
+            "rollout",
         )
         .expect("runs");
         let v: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1142,8 +1323,21 @@ mod tests {
     #[test]
     fn terminal_leaves_price_exactly_under_rollouts() {
         let report = puct_search_multi_rollout(
-            ANALYTIC_TOXIC.trim(), 400, 1, 1.4, 0, true, None,
-            8, 100, "uniform", 5, 2, false, 1, "rollout",
+            ANALYTIC_TOXIC.trim(),
+            400,
+            1,
+            1.4,
+            0,
+            true,
+            None,
+            8,
+            100,
+            "uniform",
+            5,
+            2,
+            false,
+            1,
+            "rollout",
         )
         .expect("runs");
         let v: serde_json::Value = serde_json::from_str(&report).unwrap();
@@ -1181,7 +1375,9 @@ mod tests {
         assert_eq!(value["rollout_policy"], "uniform");
         assert_eq!(value["leaves_priced"], 2);
         assert_eq!(value["rollouts_run"], 8);
-        let values = value["values"].as_array().expect("one value per supplied row");
+        let values = value["values"]
+            .as_array()
+            .expect("one value per supplied row");
         assert_eq!(values.len(), 2);
         assert!(values.iter().all(|entry| {
             entry
@@ -1203,14 +1399,16 @@ mod tests {
     #[test]
     fn direct_uniform_row_pricer_refuses_duplicate_ordinals_and_degenerate_config() {
         let states = vec![MINIMAL.trim().to_owned(), MINIMAL.trim().to_owned()];
-        assert!(price_uniform_rollout_rows(states.clone(), vec![17, 17], 4, 60, 0, 1, false)
-            .is_err());
-        assert!(price_uniform_rollout_rows(states.clone(), vec![17], 4, 60, 0, 1, false)
-            .is_err());
-        assert!(price_uniform_rollout_rows(states.clone(), vec![17, 29], 0, 60, 0, 1, false)
-            .is_err());
-        assert!(price_uniform_rollout_rows(states.clone(), vec![17, 29], 4, 0, 0, 1, false)
-            .is_err());
+        assert!(
+            price_uniform_rollout_rows(states.clone(), vec![17, 17], 4, 60, 0, 1, false).is_err()
+        );
+        assert!(price_uniform_rollout_rows(states.clone(), vec![17], 4, 60, 0, 1, false).is_err());
+        assert!(
+            price_uniform_rollout_rows(states.clone(), vec![17, 29], 0, 60, 0, 1, false).is_err()
+        );
+        assert!(
+            price_uniform_rollout_rows(states.clone(), vec![17, 29], 4, 0, 0, 1, false).is_err()
+        );
         assert!(price_uniform_rollout_rows(states, vec![17, 29], 4, 60, 0, 0, false).is_err());
     }
 }

@@ -1108,6 +1108,7 @@ class ModelRolloutShadowAggregationTest(unittest.TestCase):
 
         return {
             "rollout_leaf_mode": mode,
+            "leaves_priced": fit_leaves + heldout_leaves,
             "rollouts_run": 96,
             "rollout_terminal_hits": 96,
             "rollout_cap_hits": 0,
@@ -1115,6 +1116,8 @@ class ModelRolloutShadowAggregationTest(unittest.TestCase):
             "model_rollout_shadow": {
                 "value_frame": "side_one_absolute",
                 "partition": "seed_ordinal_parity_v1",
+                "terminal_leaf_rows": fit_leaves + heldout_leaves,
+                "excluded_nonterminal_leaf_rows": 0,
                 "fit": moments(fit_leaves),
                 "heldout": moments(heldout_leaves),
             },
@@ -1134,19 +1137,40 @@ class ModelRolloutShadowAggregationTest(unittest.TestCase):
         with self.assertRaises(EngineSearchWitnessError):
             engine_search.aggregate_model_rollout_shadow([self._report(mode="rollout")])
 
-    def test_aggregate_refuses_nonterminal_or_missing_trial_partition(self) -> None:
+    def test_aggregate_refuses_missing_trial_partition(self) -> None:
         report = self._report()
         report["rollout_terminal_hits"] = 95
         report["rollout_dead_ends"] = 1
+        report["model_rollout_shadow"]["excluded_nonterminal_leaf_rows"] = 1
         with self.assertRaises(EngineSearchWitnessError):
             engine_search.aggregate_model_rollout_shadow([report])
 
-    def test_aggregate_refuses_terminally_partitioned_cap_fallback(self) -> None:
+    def test_aggregate_records_but_excludes_nonterminal_fallback_rows(self) -> None:
         report = self._report()
         report["rollout_terminal_hits"] = 95
         report["rollout_cap_hits"] = 1
-        with self.assertRaisesRegex(EngineSearchWitnessError, "nonterminal"):
-            engine_search.aggregate_model_rollout_shadow([report])
+        report["leaves_priced"] = 4
+        report["model_rollout_shadow"]["terminal_leaf_rows"] = 3
+        report["model_rollout_shadow"]["excluded_nonterminal_leaf_rows"] = 1
+        report["model_rollout_shadow"]["fit"] = self._report()["model_rollout_shadow"]["fit"]
+        report["model_rollout_shadow"]["heldout"] = self._report(
+            fit_leaves=0, heldout_leaves=1
+        )["model_rollout_shadow"]["heldout"]
+        aggregated = engine_search.aggregate_model_rollout_shadow([report])
+        self.assertEqual(aggregated["terminal_leaf_rows"], 3)
+        self.assertEqual(aggregated["excluded_nonterminal_leaf_rows"], 1)
+        self.assertAlmostEqual(aggregated["excluded_nonterminal_leaf_fraction"], 0.25)
+
+    def test_aggregate_preserves_an_all_nonterminal_decision_as_coverage(self) -> None:
+        report = self._report(fit_leaves=0, heldout_leaves=0)
+        report["leaves_priced"] = 3
+        report["rollout_terminal_hits"] = 0
+        report["rollout_cap_hits"] = 96
+        report["model_rollout_shadow"]["excluded_nonterminal_leaf_rows"] = 3
+        aggregated = engine_search.aggregate_model_rollout_shadow([report])
+        self.assertFalse(aggregated["terminal_label_available"])
+        self.assertEqual(aggregated["terminal_leaf_rows"], 0)
+        self.assertEqual(aggregated["excluded_nonterminal_leaf_rows"], 3)
 
 
 # ---------------------------------------------------------------------------

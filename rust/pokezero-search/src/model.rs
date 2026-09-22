@@ -928,6 +928,8 @@ impl LeafShadowMoments {
 struct ModelRolloutShadowStats {
     fit: LeafShadowMoments,
     heldout: LeafShadowMoments,
+    terminal_leaf_rows: u64,
+    excluded_nonterminal_leaf_rows: u64,
 }
 
 impl ModelRolloutShadowStats {
@@ -944,7 +946,7 @@ impl ModelRolloutShadowStats {
         search_seed: u64,
         ordinals: &[u64],
         model_values: &[f32],
-        rollout_values: &[f32],
+        rollout_values: &[Option<f32>],
     ) -> Result<(), PyErr> {
         if ordinals.len() != model_values.len() || model_values.len() != rollout_values.len() {
             return Err(PyValueError::new_err(format!(
@@ -955,18 +957,30 @@ impl ModelRolloutShadowStats {
             )));
         }
         for ((ordinal, model), rollout) in ordinals.iter().zip(model_values).zip(rollout_values) {
+            let Some(rollout) = rollout else {
+                // The ordinary tree still receives `model_values`; this is
+                // strictly an observation of it.  A cap/dead-end fallback is
+                // useful coverage evidence, never a terminal calibration
+                // label, so preserve the fact of exclusion and continue.
+                self.excluded_nonterminal_leaf_rows += 1;
+                continue;
+            };
             let moments = if Self::is_heldout(search_seed, *ordinal) {
                 &mut self.heldout
             } else {
                 &mut self.fit
             };
             moments.observe(*model, *rollout);
+            self.terminal_leaf_rows += 1;
         }
         // This is a local same-pricing-round ranking statistic, not a root
         // action-ranking claim.  Comparing leaves across unrelated rounds
         // would turn different branch contexts into a false comparison.
         for first in 0..model_values.len() {
             for second in (first + 1)..model_values.len() {
+                if rollout_values[first].is_none() || rollout_values[second].is_none() {
+                    continue;
+                }
                 let first_heldout = Self::is_heldout(search_seed, ordinals[first]);
                 if first_heldout == Self::is_heldout(search_seed, ordinals[second]) {
                     let moments = if first_heldout {
@@ -976,9 +990,9 @@ impl ModelRolloutShadowStats {
                     };
                     moments.observe_pair(
                         model_values[first],
-                        rollout_values[first],
+                        rollout_values[first].expect("terminal check above"),
                         model_values[second],
-                        rollout_values[second],
+                        rollout_values[second].expect("terminal check above"),
                     );
                 }
             }
@@ -988,7 +1002,9 @@ impl ModelRolloutShadowStats {
 
     fn json_fields(&self) -> String {
         format!(
-            "\"model_rollout_shadow\":{{\"value_frame\":\"side_one_absolute\",\"partition\":\"seed_ordinal_parity_v1\",\"fit\":{},\"heldout\":{}}}",
+            "\"model_rollout_shadow\":{{\"value_frame\":\"side_one_absolute\",\"partition\":\"seed_ordinal_parity_v1\",\"terminal_leaf_rows\":{},\"excluded_nonterminal_leaf_rows\":{},\"fit\":{},\"heldout\":{}}}",
+            self.terminal_leaf_rows,
+            self.excluded_nonterminal_leaf_rows,
             self.fit.json_fields(),
             self.heldout.json_fields(),
         )
@@ -1254,29 +1270,29 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     let clone_started = Instant::now();
                     let (mut fold, mut turn, parent_order, parent_opponent_order, parent_meta) =
                         match seam.parent {
-                        None => (
-                            root_fold.clone(),
-                            root_turn,
-                            leaf_ctx.root_self_order().to_vec(),
-                            leaf_ctx.root_opponent_order().map(<[String]>::to_vec),
-                            leaf_ctx.root_meta().clone(),
-                        ),
-                        Some(key) => match fold_by_branch.get(&key) {
-                            Some(rec) => (
-                                rec.fold.clone(),
-                                rec.turn,
-                                rec.self_order.clone(),
-                                rec.opponent_order.clone(),
-                                rec.meta.clone(),
+                            None => (
+                                root_fold.clone(),
+                                root_turn,
+                                leaf_ctx.root_self_order().to_vec(),
+                                leaf_ctx.root_opponent_order().map(<[String]>::to_vec),
+                                leaf_ctx.root_meta().clone(),
                             ),
-                            None => {
-                                leaf_error = Some(PyValueError::new_err(
-                                    "parent branch fold missing (traversal order violated)",
-                                ));
-                                return LeafPrice::Ready(0.5);
-                            }
-                        },
-                    };
+                            Some(key) => match fold_by_branch.get(&key) {
+                                Some(rec) => (
+                                    rec.fold.clone(),
+                                    rec.turn,
+                                    rec.self_order.clone(),
+                                    rec.opponent_order.clone(),
+                                    rec.meta.clone(),
+                                ),
+                                None => {
+                                    leaf_error = Some(PyValueError::new_err(
+                                        "parent branch fold missing (traversal order violated)",
+                                    ));
+                                    return LeafPrice::Ready(0.5);
+                                }
+                            },
+                        };
                     fold_clone_nanos += clone_started.elapsed().as_nanos();
                     // The mapper wants the PRE-branch state: rewind a clone.
                     let mut pre = leaf.clone();
@@ -1601,7 +1617,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 .as_ref()
                 .expect("shadow_rollout implies the seam is present");
             let (rollout_values, round_stats) =
-                crate::rollout::price_rows(&rollout_rows, &rollout_ordinals, seam.cfg)?;
+                crate::rollout::price_terminal_rows(&rollout_rows, &rollout_ordinals, seam.cfg)?;
             // The shadow never supplies `row_values`: its only purpose is to
             // audit model values for the exact leaves the production tree
             // already reached.  Keeping this before `finalize` avoids a second

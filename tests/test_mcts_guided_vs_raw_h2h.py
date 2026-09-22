@@ -168,6 +168,8 @@ def _terminal_model_rollout_shadow() -> dict[str, object]:
         "value_frame": "side_one_absolute",
         "partition": "seed_ordinal_parity_v1",
         "native_invocations": 1,
+        "terminal_leaf_rows": 3,
+        "excluded_nonterminal_leaf_rows": 0,
         "fit": dict(moments),
         "heldout": {**moments, "leaves": 1},
         "rollouts_run": 3,
@@ -1088,7 +1090,7 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             self.assertTrue(sidecar.is_file())
             self.assertEqual(RUNNER._validate_public_decision_evidence(root, game), (record,))
 
-    def test_shadow_writer_refuses_nonterminal_leaf_labels(self) -> None:
+    def test_shadow_writer_preserves_but_excludes_nonterminal_leaf_rows(self) -> None:
         candidate = SimpleNamespace(
             provenance_sha256="guided-provenance", config={"rollout_leaf_shadow": True}
         )
@@ -1098,16 +1100,25 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         shadow = guided.latest_decision_metadata["engine_mcts"]["model_rollout_shadow"]
         shadow["rollout_terminal_hits"] = 2
         shadow["rollout_cap_hits"] = 1
+        shadow["terminal_leaf_rows"] = 2
+        shadow["excluded_nonterminal_leaf_rows"] = 1
+        shadow["fit"]["leaves"] = 1
+        shadow["heldout"]["leaves"] = 1
         with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(Exception, "nonterminal"):
-                RUNNER._public_decision_writer(
-                    Path(directory),
-                    candidate=candidate,
-                    incumbent=incumbent,
-                    seed=record.seed,
-                    candidate_seat="p1",
-                    guided_policy=guided,
-                )(record)
+            root = Path(directory)
+            RUNNER._public_decision_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+            )(record)
+            sidecar = RUNNER._model_rollout_shadow_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            )
+            written = json.loads(sidecar.read_text(encoding="utf-8"))["model_rollout_shadow"]
+            self.assertEqual(written["excluded_nonterminal_leaf_rows"], 1)
 
     def test_validator_refuses_incomplete_guided_decision_evidence(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
