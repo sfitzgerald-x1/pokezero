@@ -104,12 +104,15 @@ are durable coverage exclusions, not labels.
 | learned-value mean | 0.44777 |
 | terminal-outcome mean | 0.51684 |
 
-This is a weak ranking signal on the states the tree actually reaches, plus a
-large calibration offset. It explains how a value head can be competitive with
-Foul Play or another one-step chooser yet still fail to improve MCTS: direct
-choice needs the correct ordering near the live root; MCTS repeatedly ranks
-deep, off-policy leaves and compounds small ordering errors through selection
-and backup.
+This is **consistent with** a weak ranking signal on the states the tree
+actually reaches, plus a large calibration offset. It does not by itself prove
+that the learned head is misranking its intended target: the labels are one
+uniform-continuation draw per leaf, include continuation randomness, and come
+from eight correlated games. It nevertheless supplies a concrete mechanism
+worth testing: a head can be competitive with Foul Play or another one-step
+chooser yet fail to improve MCTS because direct choice needs the correct
+ordering near the live root, while MCTS repeatedly ranks deep, off-policy
+leaves and compounds errors through selection and backup.
 
 The R4 result is source-bound to `a60da9eb`, not the later `195a89c5` source
 used by the failed opponent-prior R3 attempt. It is strong evidence about the
@@ -229,14 +232,24 @@ separately accurate leaf evaluator.
 
 The result has a sharp interpretation:
 
-1. Expand the shared seed denominator before estimating strength. The current
-   eight-pair replication preserves the full terminal/cap/dead-end partition
-   per game and rejects a malformed counter before it can be read out. If the
-   positive direction persists with a healthy terminal fraction, prioritize a
-   source-bound value-target/calibration study: compare policy-continuation
-   and uniform-terminal targets on matched, held-out frontier states before
-   choosing retraining data.
-2. Any promoted search or value correction still needs a separately
+1. Complete the predeclared root-action recovery audit, treating its sixteen
+   saved roots—not its 256 continuation trials—as the independent units. It
+   measures target sensitivity (sampled-policy versus uniform-own
+   continuation), not a causal diagnosis of the leaf head.
+2. On a small prespecified mix of beneficial and harmful overrides, reproduce
+   the original search with worlds, priors, opponent assumptions, budget, and
+   random streams held fixed. Substitute independently estimated continuation
+   values only at the recorded frontier, then rerun allocation with that
+   evaluator. The second step is essential: deployed selection aggregates
+   normalized **visit** share, so repricing a frozen tree cannot show that the
+   chosen move would change.
+3. Validate any newly selected moves on separate continuation draws. If
+   corrected leaf values improve both backed-up rankings and selected moves,
+   prioritize a source-bound value-target study. If Q values improve but visit
+   selection does not, investigate exploration/visit aggregation; if the
+   difference appears only under hidden-state or opponent changes, prioritize
+   beliefs/opponent modeling.
+4. Any promoted search or value correction still needs a separately
    registered, durable paired GPU strength study with a
    zero-unexpected-fallback contract. Partial seed output is never evidence
    for either conclusion.
