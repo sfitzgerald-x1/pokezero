@@ -1,9 +1,9 @@
 # Guided MCTS diagnosis: branch-prior and override evidence
 
-**Status: updated, 2026-09-22.** This records terminal-only model-leaf
-evidence and the completed branch-prior/override audits. It is not a strength
-claim. The leaf evidence supports prioritizing a policy-consistent value-head
-measurement before assuming that deeper search will improve play.
+**Status: updated, 2026-09-23.** This records model-leaf evidence and the
+completed branch-prior/override audits. It is not a strength claim. The leaf
+evidence supports prioritizing a policy-consistent value-head measurement
+before assuming that deeper search will improve play.
 
 ## What the large branch-prior count means
 
@@ -176,29 +176,51 @@ opponent-order status remain terminal. Its separate applicability contract can
 report whether all retained fallbacks meet that exact condition; it cannot be
 used as a strength promotion.
 
-## Current causal intervention and decisive next evidence
+## Completed source-matched rollout-leaf diagnostic
 
 The source-matched own-prior control is complete: it has four terminal,
-zero-restart paired seeds under source commit `195a89c5`.  Its counterpart is
-currently running with the same source, checkpoint, seeds, raw incumbent and
-own-prior configuration.  It changes only the leaf evaluation path: instead
-of trusting the learned leaf at the frontier, it runs bounded terminal
-continuations (`rollout_leaf_eval=true`, 12 rollout workers).  It is therefore
-a mechanism diagnostic, **not** a game-strength claim and not a Foul Play
-comparison.
+zero-restart paired seeds under source commit `195a89c5`. Its rollout-leaf
+counterpart is also terminal and zero-restart. The complete, independently
+hash-linked readout is at
+`/shared/scott-experiment/mcts-source-matched-leaf-readout-195a89c5-20260923-r3`.
+
+It uses the same source, checkpoint, seeds, raw incumbent, own-prior MCTS
+settings, search depth, simulation count, and one-second decision limit. The
+rollout arm enables `rollout_leaf_eval=true` and its required twelve rollout
+workers; the control trusts the learned model leaf. Across the four mirrored
+pairs, model-leaf MCTS scored 25% (`0.5, 0, 0, 0.5`) and rollout-leaf MCTS
+scored 75% (`0.5, 0.5, 1, 1`). The paired rollout-minus-model estimate is
+**+50 percentage points**, with the registered four-pair bootstrap interval
+**+12.5 to +87.5 points**.
+
+This is causal evidence that changing the leaf-evaluation path materially
+changed these matched outcomes; it is **not** a strength claim, a Foul Play
+comparison, or enough evidence to approve value-head retraining. In
+particular, the `195a89c5` runner predates transport of the realized rollout
+terminal/cap/dead-end partition. The artifact proves the configured rollout
+arm and its score, but does not prove what fraction of its backed-up leaf
+values came from terminal outcomes rather than bounded fallbacks. The updated
+transport must be used for the next experiment before calling this a pure
+terminal-leaf result.
+
+The result is nevertheless incompatible with the claim that a policy that
+matches a strong one-turn chooser must automatically support effective MCTS.
+One-turn policy quality ranks the live root. MCTS repeatedly ranks off-policy
+frontier states and backs those rankings up through the tree; that requires a
+separately accurate leaf evaluator.
+
+## Decisive next evidence
 
 The result has a sharp interpretation:
 
-1. If the terminal-continuation leaf improves the complete matched pairs, it
-   supports and prioritizes the learned-leaf mechanism for these matched
-   seeds. The next correction is a value-target selection/calibration study:
-   compare policy-continuation and uniform-terminal labels before choosing a
-   retraining target, then run a larger fresh durable paired strength
-   evaluation before any general conclusion.
-2. If it is neutral or worse, the current evidence does not support blaming
-   the value head alone. The next causal arms must isolate backup,
-   exploration, and opponent modeling while preserving the source-matched
-   control.
+1. Re-run the matched control and rollout-leaf arm on the source that records
+   the actual terminal/cap/dead-end partition. Require that evidence in every
+   paired game and reject a run with missing or malformed counters.
+2. Expand the shared seed denominator before estimating strength. If the
+   positive direction persists with a healthy terminal fraction, prioritize a
+   source-bound value-target/calibration study: compare policy-continuation
+   and uniform-terminal targets on matched, held-out frontier states before
+   choosing retraining data.
 3. Any promoted search or value correction still needs a separately
    registered, durable paired GPU strength study with a
    zero-unexpected-fallback contract. Partial seed output is never evidence
