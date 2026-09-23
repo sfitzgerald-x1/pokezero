@@ -480,7 +480,17 @@ def _sealed_root_action_audit_config(
         raise HeadToHeadError("manifest.sealed_root_action_audit has unsupported fields.")
     if audit.get("schema_version") != SEALED_ROOT_ACTION_AUDIT_EVIDENCE_SCHEMA_VERSION:
         raise HeadToHeadError("manifest.sealed_root_action_audit has an unsupported schema version.")
-    if audit.get("continuation_targets") != {
+    continuation_targets = _mapping(
+        audit.get("continuation_targets"), label="root action audit continuation targets"
+    )
+    if type(_mapping(continuation_targets.get("deployed_raw"), label="deployed raw target").get("rng_trials")) is not int:
+        raise HeadToHeadError("root action audit deployed-raw rng_trials must be an integer.")
+    if continuation_targets != {
+        "deployed_raw": {
+            "subject": "deterministic_raw_transformer",
+            "opponent": "deterministic_raw_transformer",
+            "rng_trials": 1,
+        },
         "policy_consistent": {
             "subject": "sampled_raw_transformer",
             "opponent": "sampled_raw_transformer",
@@ -1887,7 +1897,11 @@ def _sealed_root_action_audit_writer(
                 continuation_policy_factory_builder=lambda histories: continuation_policy_factory_builder(
                     candidate_seat, histories
                 ),
-                continuation_rng_seeds=config.continuation_rng_seeds,
+                continuation_rng_seeds={
+                    "deployed_raw": config.continuation_rng_seeds[:1],
+                    "policy_consistent": config.continuation_rng_seeds,
+                    "uniform_own": config.continuation_rng_seeds,
+                },
                 rollout_config=continuation_rollout_config,
                 max_continuation_decision_rounds=config.max_continuation_decision_rounds,
             )
@@ -2435,15 +2449,21 @@ def _validate_sealed_root_action_audit_evidence(
         if audit.get("search_evidence") != expected_evidence:
             raise HeadToHeadError("root action audit search evidence disagrees with source ledger.")
         target_rows = audit.get("continuation_targets")
+        expected_trial_seeds = {
+            "deployed_raw": list(config.continuation_rng_seeds[:1]),
+            "policy_consistent": list(config.continuation_rng_seeds),
+            "uniform_own": list(config.continuation_rng_seeds),
+        }
         if not isinstance(target_rows, list) or [row.get("target") for row in target_rows if isinstance(row, Mapping)] != [
-            "policy_consistent", "uniform_own"
-        ] or len(target_rows) != 2:
+            "deployed_raw", "policy_consistent", "uniform_own"
+        ] or len(target_rows) != 3:
             raise HeadToHeadError("root action audit continuation targets are incomplete or reordered.")
         for row in target_rows:
             row = _mapping(row, label="root action continuation target")
             if set(row) != {"target", "trials"} or not isinstance(row["trials"], list):
                 raise HeadToHeadError("root action audit target has an invalid trial ledger.")
-            if len(row["trials"]) != len(config.continuation_rng_seeds):
+            expected_seeds = expected_trial_seeds[row["target"]]
+            if len(row["trials"]) != len(expected_seeds):
                 raise HeadToHeadError("root action audit target has a partial trial ledger.")
             trial_seeds: list[int] = []
             for trial in row["trials"]:
@@ -2481,7 +2501,7 @@ def _validate_sealed_root_action_audit_evidence(
                         or terminal.get("capped") is not False
                     ):
                         raise HeadToHeadError("root action audit contains an invalid or capped continuation.")
-            if trial_seeds != list(config.continuation_rng_seeds):
+            if trial_seeds != expected_seeds:
                 raise HeadToHeadError("root action audit trial seeds do not match the manifest schedule.")
     if observed_rounds != expected_rounds:
         raise HeadToHeadError("root action audit omitted a manifest-selected source root.")
@@ -2638,11 +2658,13 @@ def main(argv: list[str] | None = None) -> int:
     ) -> Mapping[str, Any]:
         """Fresh target policies for the action-ranking intervention.
 
-        Both targets retain the same sampled raw-policy opponent.  They differ
-        only in the acting seat *after* the fixed source joint action, which
-        prevents an own-target contrast from accidentally becoming a second
-        opponent-model ablation.  Sampling is intentional: paired RNG trials
-        estimate a continuation value rather than repeating one argmax suffix.
+        The two stochastic targets retain the same sampled raw-policy opponent
+        and differ only in the acting seat *after* the fixed source joint
+        action. This prevents an own-target contrast from accidentally becoming
+        a second opponent-model ablation. The deterministic deployed-raw
+        target is a one-trial anchor, not a repeated-outcome estimator:
+        repeating it under a restored identical RNG path would add compute
+        without adding independent information.
         """
 
         if subject_seat not in {"p1", "p2"}:
@@ -2658,7 +2680,9 @@ def main(argv: list[str] | None = None) -> int:
         # are immutable in evaluation mode; only the policy's history buffer
         # is mutable, so one source-bound model with a FRESH adapter per suffix
         # gives isolation without 96 redundant model loads per root.
-        def sampled_raw_policy(player_id: str) -> DeterministicRawPolicyAdapter:
+        def transformer_policy(
+            player_id: str, *, deterministic: bool
+        ) -> DeterministicRawPolicyAdapter:
             if player_id not in {"p1", "p2"}:
                 raise HeadToHeadError("root action continuation policy has an invalid player.")
             return DeterministicRawPolicyAdapter(
@@ -2666,14 +2690,29 @@ def main(argv: list[str] | None = None) -> int:
                     model=continuation_model,
                     result=continuation_result,
                     device=args.device,
-                    deterministic=False,
+                    deterministic=deterministic,
                     exploration_epsilon=0.0,
                     sampling_temperature=1.0,
                     family_gated_selection=False,
                     _history_by_player={player_id: list(observation_histories[player_id])},
                 ),
-                policy_id=f"sampled-raw-transformer-{player_id}",
+                policy_id=(
+                    f"deterministic-raw-transformer-{player_id}"
+                    if deterministic
+                    else f"sampled-raw-transformer-{player_id}"
+                ),
             )
+
+        def deployed_raw() -> Mapping[str, Any]:
+            """Exact history-preserving deterministic raw-policy anchor."""
+
+            return {
+                "p1": transformer_policy("p1", deterministic=True),
+                "p2": transformer_policy("p2", deterministic=True),
+            }
+
+        def sampled_raw_policy(player_id: str) -> DeterministicRawPolicyAdapter:
+            return transformer_policy(player_id, deterministic=False)
 
         def policy_consistent() -> Mapping[str, Any]:
             return {"p1": sampled_raw_policy("p1"), "p2": sampled_raw_policy("p2")}
@@ -2687,6 +2726,7 @@ def main(argv: list[str] | None = None) -> int:
             }
 
         return {
+            "deployed_raw": deployed_raw,
             "policy_consistent": policy_consistent,
             "uniform_own": uniform_own,
         }

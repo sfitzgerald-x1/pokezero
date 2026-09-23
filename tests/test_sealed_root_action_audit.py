@@ -98,9 +98,17 @@ class SealedRootActionAuditTest(unittest.TestCase):
                 env_factory=lambda: object(),
                 continuation_policy_factory_builder=lambda histories: (
                     received_histories.append(histories)
-                    or {"policy_consistent": lambda: {"p1": object(), "p2": object()}}
+                    or {
+                        "deployed_raw": lambda: {"p1": object(), "p2": object()},
+                        "policy_consistent": lambda: {"p1": object(), "p2": object()},
+                        "uniform_own": lambda: {"p1": object(), "p2": object()},
+                    }
                 ),
-                continuation_rng_seeds=[101, 102],
+                continuation_rng_seeds={
+                    "deployed_raw": [101],
+                    "policy_consistent": [101, 102],
+                    "uniform_own": [101, 102],
+                },
                 rollout_config=object(),
                 max_continuation_decision_rounds=20,
             )
@@ -109,7 +117,14 @@ class SealedRootActionAuditTest(unittest.TestCase):
         self.assertIs(kwargs["snapshot"], boundary.snapshot)
         self.assertEqual(kwargs["actions"], {"raw_policy": 2, "mcts_selected": 4, "visit_alternative": 7})
         self.assertEqual(kwargs["opponent_action"], 1)
-        self.assertEqual(kwargs["continuation_rng_seeds"], [101, 102])
+        self.assertEqual(
+            kwargs["continuation_rng_seeds"],
+            {
+                "deployed_raw": [101],
+                "policy_consistent": [101, 102],
+                "uniform_own": [101, 102],
+            },
+        )
         self.assertEqual(received_histories, [boundary.policy_observation_histories])
         self.assertEqual(readout["audit"], grid)
         self.assertNotIn("snapshot", readout)

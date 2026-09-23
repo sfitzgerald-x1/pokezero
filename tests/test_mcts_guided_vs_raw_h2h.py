@@ -406,6 +406,11 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
                 "continuation_rng_seeds": list(range(100, 116)),
                 "max_continuation_decision_rounds": 400,
                 "continuation_targets": {
+                    "deployed_raw": {
+                        "subject": "deterministic_raw_transformer",
+                        "opponent": "deterministic_raw_transformer",
+                        "rng_trials": 1,
+                    },
                     "policy_consistent": {
                         "subject": "sampled_raw_transformer",
                         "opponent": "sampled_raw_transformer",
@@ -420,6 +425,18 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
         config = RUNNER._sealed_root_action_audit_config(manifest, seeds=(19,))
         self.assertEqual(config.continuation_rng_seeds, tuple(range(100, 116)))
         self.assertEqual(config.targets[0].decision_round_index, 7)
+        manifest["sealed_root_action_audit"]["continuation_targets"].pop("deployed_raw")
+        with self.assertRaisesRegex(Exception, "deployed raw target"):
+            RUNNER._sealed_root_action_audit_config(manifest, seeds=(19,))
+        manifest["sealed_root_action_audit"]["continuation_targets"]["deployed_raw"] = {
+            "subject": "deterministic_raw_transformer",
+            "opponent": "deterministic_raw_transformer",
+            "rng_trials": 1,
+        }
+        manifest["sealed_root_action_audit"]["continuation_targets"]["deployed_raw"]["rng_trials"] = True
+        with self.assertRaisesRegex(Exception, "must be an integer"):
+            RUNNER._sealed_root_action_audit_config(manifest, seeds=(19,))
+        manifest["sealed_root_action_audit"]["continuation_targets"]["deployed_raw"]["rng_trials"] = 1
         manifest["sealed_root_action_audit"]["continuation_rng_seeds"] = list(range(100, 115))
         with self.assertRaisesRegex(Exception, "exactly sixteen"):
             RUNNER._sealed_root_action_audit_config(manifest, seeds=(19,))
