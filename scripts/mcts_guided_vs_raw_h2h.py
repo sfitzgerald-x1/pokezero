@@ -84,6 +84,7 @@ REGISTERED_ENGINE_CONFIG = {
     # rather than rejecting every non-selective source-bound replay before it
     # can score a game.
     "allow_lost_active_permutation_opponent_root_fallback": False,
+    "allow_lost_active_permutation_opponent_prior_omission": False,
     "approximate_hidden_duration_volatiles": True,
     "approximate_partial_trap_turns": True,
     "approximate_sleep_turns": True,
@@ -151,13 +152,15 @@ REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG = {
     "use_opponent_priors": True,
 }
 # The selective public-order replay is the same fixed-work opponent-prior
-# protocol, except for its narrowly-scoped recovery of a root prior when the
-# public trajectory has lost the active opponent permutation.  This is a
-# distinct semantic arm: the flag must be registered explicitly, rather than
-# smuggled into the ordinary opponent-prior result.
+# protocol, except for its narrowly-scoped acknowledgement that a lost public
+# opponent permutation is harmless at a root where native proves that opponent
+# has no decision to seed. Native emits that same witnessed condition either
+# as a zero-fallback omission or a single unclassified root fallback, so both
+# forms are registered explicitly rather than smuggled into an ordinary result.
 REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG = {
     **REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
     "allow_lost_active_permutation_opponent_root_fallback": True,
+    "allow_lost_active_permutation_opponent_prior_omission": True,
 }
 # This is the matched leaf-value ablation of the fixed-work CUDA protocol.
 # Every search knob, own prior, world count, and source-bound input is shared

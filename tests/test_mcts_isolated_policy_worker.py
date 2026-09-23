@@ -105,6 +105,7 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
             opponent_prior_arm_decisions=0,
             opponent_request_order_statuses={"lost_active_permutation": 1},
             opponent_request_order_root_fallback_statuses={"lost_active_permutation": 1},
+            opponent_request_order_root_omission_statuses={},
             override_measured_decisions=1,
             model_override_decisions=1,
             decision_wall_seconds=0.25,
@@ -116,6 +117,10 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
         self.assertEqual(
             stats_payload(stats)["opponent_request_order_root_fallback_statuses"],
             {"lost_active_permutation": 1},
+        )
+        self.assertEqual(
+            stats_payload(stats)["opponent_request_order_root_omission_statuses"],
+            {},
         )
 
     def test_stats_payload_completes_the_native_sparse_counter_reason_ledger(self) -> None:
@@ -137,6 +142,7 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
                 model_override_decisions=1,
                 opponent_request_order_statuses={},
                 opponent_request_order_root_fallback_statuses={},
+                opponent_request_order_root_omission_statuses={},
                 decision_wall_seconds=0.25,
             )
 
@@ -172,6 +178,7 @@ class IsolatedPolicyWorkerResetTest(unittest.TestCase):
             model_override_decisions=1,
             opponent_request_order_statuses={},
             opponent_request_order_root_fallback_statuses={},
+            opponent_request_order_root_omission_statuses={},
             decision_wall_seconds=0.25,
         )
 

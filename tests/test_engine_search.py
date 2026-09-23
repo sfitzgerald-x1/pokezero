@@ -4956,6 +4956,8 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             "lossy_renders": 0,
             "attribution_unsafe_renders": 0,
             "prior_fallbacks": 0,
+            "opponent_prior_root_eligible": False,
+            "opponent_prior_root_assessment": "no_choice",
             "root_priors": root_priors,
             "side_one": entries(arms),
             "side_two": entries(opponent),
@@ -4980,6 +4982,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         worlds: int = 2,
         strict: bool = False,
         allow_lost_active_permutation_opponent_root_fallback: bool = False,
+        allow_lost_active_permutation_opponent_prior_omission: bool = False,
         model_decision_time_ms: int | None = None,
         model_native_batch_guard_ms: int = 0,
     ):
@@ -4999,6 +5002,9 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             strict_fallbacks=strict,
             allow_lost_active_permutation_opponent_root_fallback=(
                 allow_lost_active_permutation_opponent_root_fallback
+            ),
+            allow_lost_active_permutation_opponent_prior_omission=(
+                allow_lost_active_permutation_opponent_prior_omission
             ),
             model_decision_time_ms=model_decision_time_ms,
             model_native_batch_guard_ms=model_native_batch_guard_ms,
@@ -5133,6 +5139,145 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             policy.stats.opponent_request_order_root_fallback_statuses,
             {"lost_active_permutation": 1},
         )
+
+    def test_lost_order_root_fallback_refuses_when_opponent_prior_was_eligible(self) -> None:
+        """The narrow exception cannot hide a failed eligible opponent prior."""
+        policy = self._policy(
+            opponent_priors=True,
+            worlds=1,
+            strict=True,
+            allow_lost_active_permutation_opponent_root_fallback=True,
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "root_prior_fallback_reason": None,
+                "opponent_request_order_status": "lost_active_permutation",
+                "opponent_prior_root_eligible": True,
+                "opponent_prior_root_assessment": "eligible",
+            }
+        )
+        with (
+            patch(
+                "pokezero.engine_search.opponent_request_order_resolution",
+                return_value=OpponentRequestOrderResolution(
+                    None, "lost_active_permutation"
+                ),
+            ),
+            self.assertRaisesRegex(
+                EngineSearchFallbackError,
+                r"root-prior fallback: .*reason=opponent_order_lost_active_permutation count=1",
+            ),
+        ):
+            self._run(policy, [report])
+
+    def test_lost_order_root_fallback_refuses_unassessed_or_missing_head(self) -> None:
+        """Only native's explicit no-choice state can enter the recovery arm."""
+        for assessment in ("unassessed", "missing_opponent_head"):
+            with self.subTest(assessment=assessment):
+                policy = self._policy(
+                    opponent_priors=True,
+                    worlds=1,
+                    strict=True,
+                    allow_lost_active_permutation_opponent_root_fallback=True,
+                )
+                report = self._report(
+                    [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                    root_priors=[0.2, 0.8],
+                )
+                report.update(
+                    {
+                        "prior_fallbacks": 1,
+                        "root_prior_fallbacks": 1,
+                        "branch_prior_fallbacks": 0,
+                        "root_prior_fallback_reason": None,
+                        "opponent_request_order_status": "lost_active_permutation",
+                        "opponent_prior_root_eligible": False,
+                        "opponent_prior_root_assessment": assessment,
+                    }
+                )
+                with (
+                    patch(
+                        "pokezero.engine_search.opponent_request_order_resolution",
+                        return_value=OpponentRequestOrderResolution(
+                            None, "lost_active_permutation"
+                        ),
+                    ),
+                    self.assertRaisesRegex(
+                        EngineSearchFallbackError,
+                        r"root-prior fallback: .*reason=opponent_order_lost_active_permutation count=1",
+                    ),
+                ):
+                    self._run(policy, [report])
+
+    def test_strict_opponent_prior_run_allows_lost_order_only_when_no_root_choice(self) -> None:
+        """A lost order is harmless only when native proves no opponent prior applies."""
+        policy = self._policy(
+            opponent_priors=True,
+            worlds=1,
+            strict=True,
+            allow_lost_active_permutation_opponent_prior_omission=True,
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "opponent_request_order_status": "lost_active_permutation",
+                "opponent_prior_root_eligible": False,
+            }
+        )
+        with patch(
+            "pokezero.engine_search.opponent_request_order_resolution",
+            return_value=OpponentRequestOrderResolution(
+                None, "lost_active_permutation"
+            ),
+        ):
+            _decision, _native = self._run(policy, [report])
+        self.assertEqual(policy.stats.root_prior_fallbacks, 0)
+        self.assertEqual(
+            policy.stats.opponent_request_order_statuses,
+            {"lost_active_permutation": 1},
+        )
+
+    def test_lost_order_no_fallback_refuses_when_opponent_prior_was_eligible(self) -> None:
+        policy = self._policy(
+            opponent_priors=True,
+            worlds=1,
+            strict=True,
+            allow_lost_active_permutation_opponent_prior_omission=True,
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "opponent_request_order_status": "lost_active_permutation",
+                "opponent_prior_root_eligible": True,
+                "opponent_prior_root_assessment": "eligible",
+            }
+        )
+        with (
+            patch(
+                "pokezero.engine_search.opponent_request_order_resolution",
+                return_value=OpponentRequestOrderResolution(
+                    None, "lost_active_permutation"
+                ),
+            ),
+            self.assertRaisesRegex(
+                EngineSearchWitnessError,
+                "native_opponent_request_order_refusal_not_counted_at_root",
+            ),
+        ):
+            self._run(policy, [report])
 
     def test_selective_opponent_exception_rejects_an_acting_root_fallback(self) -> None:
         policy = self._policy(
