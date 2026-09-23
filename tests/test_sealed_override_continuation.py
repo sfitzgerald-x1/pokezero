@@ -233,7 +233,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
             )
 
     def test_root_action_grid_pairs_every_action_within_each_target_and_trial(self) -> None:
-        environments = [_FakeEnv() for _ in range(12)]
+        environments = [_FakeEnv() for _ in range(18)]
         factories: list[str] = []
 
         def env_factory() -> _FakeEnv:
@@ -269,23 +269,32 @@ class SealedOverrideContinuationTest(unittest.TestCase):
                 opponent_player="p2",
                 opponent_action=1,
                 continuation_policy_factories={
+                    "deployed_raw": policy_factory("deployed_raw"),
                     "policy_consistent": policy_factory("policy_consistent"),
                     "uniform_own": policy_factory("uniform_own"),
                 },
-                continuation_rng_seeds=[101, 102],
+                continuation_rng_seeds={
+                    "deployed_raw": [101],
+                    "policy_consistent": [101, 102],
+                    "uniform_own": [101, 102],
+                },
                 search_evidence={"root_q_gap": 0.125},
                 env_factory=env_factory,
                 rollout_config=RolloutConfig(max_decision_rounds=100),
             )
 
         self.assertEqual(readout["schema_version"], "pokezero.sealed-root-action-grid.v1")
-        self.assertEqual(len(factories), 12)
+        self.assertEqual(len(factories), 15)
         self.assertEqual(
             [target["target"] for target in readout["continuation_targets"]],
-            ["policy_consistent", "uniform_own"],
+            ["deployed_raw", "policy_consistent", "uniform_own"],
         )
         for target in readout["continuation_targets"]:
-            self.assertEqual([trial["continuation_rng_seed"] for trial in target["trials"]], [101, 102])
+            expected_seeds = [101] if target["target"] == "deployed_raw" else [101, 102]
+            self.assertEqual(
+                [trial["continuation_rng_seed"] for trial in target["trials"]],
+                expected_seeds,
+            )
             for trial in target["trials"]:
                 self.assertEqual(
                     [outcome["action_index"] for outcome in trial["outcomes"]], [2, 4, 7]
@@ -308,6 +317,24 @@ class SealedOverrideContinuationTest(unittest.TestCase):
                 opponent_action=1,
                 continuation_policy_factories={"policy_consistent": lambda: {}},
                 continuation_rng_seeds=[1],
+                search_evidence={},
+                env_factory=lambda: self.fail("must not allocate environment"),
+                rollout_config=RolloutConfig(),
+            )
+
+    def test_root_action_grid_rejects_a_target_schedule_that_does_not_match_factories(self) -> None:
+        with self.assertRaisesRegex(SealedOverrideContinuationError, "schedules do not match"):
+            evaluate_sealed_root_action_grid(
+                snapshot=self._snapshot(),
+                source_battle_id="bad-schedule",
+                source_seed=1,
+                source_decision_round=1,
+                subject_player="p1",
+                actions={"raw_policy": 2, "mcts_selected": 4},
+                opponent_player="p2",
+                opponent_action=1,
+                continuation_policy_factories={"deployed_raw": lambda: {}},
+                continuation_rng_seeds={"wrong-target": [1]},
                 search_evidence={},
                 env_factory=lambda: self.fail("must not allocate environment"),
                 rollout_config=RolloutConfig(),

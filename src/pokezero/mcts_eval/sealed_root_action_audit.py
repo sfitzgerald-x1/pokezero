@@ -114,7 +114,7 @@ def evaluate_root_action_boundary(
         [Mapping[PlayerId, tuple[Any, ...]]],
         Mapping[str, Callable[[], Mapping[PlayerId, Policy]]],
     ],
-    continuation_rng_seeds: Sequence[int],
+    continuation_rng_seeds: Mapping[str, Sequence[int]] | Sequence[int],
     rollout_config: RolloutConfig,
     max_continuation_decision_rounds: int | None = None,
 ) -> dict[str, Any] | None:

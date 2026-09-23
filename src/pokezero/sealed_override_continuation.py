@@ -311,7 +311,7 @@ def evaluate_sealed_root_action_grid(
     opponent_player: PlayerId,
     opponent_action: int,
     continuation_policy_factories: Mapping[str, Callable[[], Mapping[PlayerId, Policy]]],
-    continuation_rng_seeds: Sequence[int],
+    continuation_rng_seeds: Mapping[str, Sequence[int]] | Sequence[int],
     search_evidence: Mapping[str, Any],
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
@@ -361,21 +361,38 @@ def evaluate_sealed_root_action_grid(
         normalized_modes.append((mode, factory))
     if len({mode for mode, _ in normalized_modes}) != len(normalized_modes):
         raise SealedOverrideContinuationError("root action grid repeats a continuation target")
-    normalized_seeds = list(continuation_rng_seeds)
-    if not normalized_seeds:
-        raise SealedOverrideContinuationError("root action grid requires at least one continuation RNG seed")
-    if any(
-        isinstance(seed, bool) or not isinstance(seed, int) or seed < 0
-        for seed in normalized_seeds
-    ) or len(set(normalized_seeds)) != len(normalized_seeds):
-        raise SealedOverrideContinuationError(
-            "continuation RNG seeds must be unique non-negative integers"
-        )
+    if isinstance(continuation_rng_seeds, Mapping):
+        if set(continuation_rng_seeds) != {target for target, _ in normalized_modes}:
+            raise SealedOverrideContinuationError(
+                "root action grid target RNG schedules do not match continuation targets"
+            )
+        normalized_seeds_by_target = {
+            target: list(continuation_rng_seeds[target])
+            for target, _ in normalized_modes
+        }
+    else:
+        shared_seeds = list(continuation_rng_seeds)
+        normalized_seeds_by_target = {
+            target: list(shared_seeds)
+            for target, _ in normalized_modes
+        }
+    for target, normalized_seeds in normalized_seeds_by_target.items():
+        if not normalized_seeds:
+            raise SealedOverrideContinuationError(
+                f"root action grid target {target!r} requires at least one continuation RNG seed"
+            )
+        if any(
+            isinstance(seed, bool) or not isinstance(seed, int) or seed < 0
+            for seed in normalized_seeds
+        ) or len(set(normalized_seeds)) != len(normalized_seeds):
+            raise SealedOverrideContinuationError(
+                f"root action grid target {target!r} RNG seeds must be unique non-negative integers"
+            )
 
     target_rows: list[dict[str, Any]] = []
     for target, policy_factory in normalized_modes:
         trials: list[dict[str, Any]] = []
-        for rng_seed in normalized_seeds:
+        for rng_seed in normalized_seeds_by_target[target]:
             outcomes: list[dict[str, Any]] = []
             for action_label, action_index in normalized_actions:
                 outcome = run_sealed_override_continuation(
