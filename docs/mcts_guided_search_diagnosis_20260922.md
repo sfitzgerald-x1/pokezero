@@ -150,9 +150,10 @@ The result has a sharp interpretation:
 
 1. If the terminal-continuation leaf improves the complete matched pairs, it
    supports and prioritizes the learned-leaf mechanism for these matched
-   seeds. The next correction is a policy-consistent value target/calibration
-   study, followed by a larger fresh durable paired strength evaluation before
-   any general conclusion.
+   seeds. The next correction is a value-target selection/calibration study:
+   compare policy-continuation and uniform-terminal labels before choosing a
+   retraining target, then run a larger fresh durable paired strength
+   evaluation before any general conclusion.
 2. If it is neutral or worse, the current evidence does not support blaming
    the value head alone. The next causal arms must isolate backup,
    exploration, and opponent modeling while preserving the source-matched
