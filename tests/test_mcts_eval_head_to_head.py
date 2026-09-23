@@ -870,6 +870,7 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
             incumbent_raw=incumbent,
             candidate_config=replace(
                 _OpponentPriorConfig(),
+                allow_lost_active_permutation_opponent_root_fallback=True,
                 allow_lost_active_permutation_opponent_prior_omission=True,
             ),
             incumbent_config=replace(_OpponentPriorConfig(), use_opponent_priors=False),
@@ -944,6 +945,31 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
         self.assertEqual(rejected["status"], "NONPASS")
         self.assertFalse(
             rejected["checks"]["candidate_root_fallbacks_only_allowed_status"]
+        )
+
+        root_fallback = module._opponent_prior_applicability_readout(
+            contract=contract,
+            summary={
+                "candidate_opponent_prior_arm_decisions": 7,
+                "incumbent_opponent_prior_arm_decisions": 0,
+                "candidate_root_prior_fallbacks": 1,
+                "incumbent_root_prior_fallbacks": 0,
+                "candidate_opponent_request_order_statuses": {
+                    "lost_active_permutation": 1,
+                    "resolved": 6,
+                },
+                "incumbent_opponent_request_order_statuses": {},
+                "candidate_opponent_request_order_root_fallback_statuses": {
+                    "lost_active_permutation": 1,
+                },
+                "candidate_opponent_request_order_root_omission_statuses": {},
+                "incumbent_opponent_request_order_root_fallback_statuses": {},
+                "incumbent_opponent_request_order_root_omission_statuses": {},
+            },
+        )
+        self.assertEqual(root_fallback["status"], "PASS")
+        self.assertTrue(
+            root_fallback["checks"]["candidate_root_fallbacks_only_allowed_status"]
         )
 
 

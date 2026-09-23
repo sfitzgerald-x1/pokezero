@@ -131,11 +131,12 @@ OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_CONTRACT = {
     "minimum_candidate_opponent_prior_arm_decisions": 1,
     "maximum_incumbent_opponent_prior_arm_decisions": 0,
     # Public history can prove that an opponent active permutation cannot be
-    # reconstructed at a root where the opponent has no real choice. That is a
-    # witnessed prior omission, not a fallback; any actual root fallback stays
-    # terminal.
+    # reconstructed at a root where native proves the opponent has no choice.
+    # Native can represent this witnessed omission either as zero fallbacks or
+    # as one unclassified root fallback. Any other status remains terminal.
+    "candidate_allowed_root_fallback_status": "lost_active_permutation",
     "candidate_allowed_root_omission_status": "lost_active_permutation",
-    "maximum_candidate_root_prior_fallbacks": 0,
+    "minimum_candidate_no_choice_roots": 1,
     "maximum_incumbent_root_prior_fallbacks": 0,
 }
 
@@ -1998,6 +1999,7 @@ def _opponent_prior_applicability_contract(
     expected_changed_fields = (
         {
             "use_opponent_priors",
+            "allow_lost_active_permutation_opponent_root_fallback",
             "allow_lost_active_permutation_opponent_prior_omission",
         }
         if selective_contract
@@ -2025,6 +2027,14 @@ def _opponent_prior_applicability_contract(
     if selective_contract:
         if (
             candidate_values.get(
+                "allow_lost_active_permutation_opponent_root_fallback"
+            )
+            is not True
+            or incumbent_values.get(
+                "allow_lost_active_permutation_opponent_root_fallback"
+            )
+            is not False
+            or candidate_values.get(
                 "allow_lost_active_permutation_opponent_prior_omission"
             )
             is not True
@@ -2035,7 +2045,7 @@ def _opponent_prior_applicability_contract(
         ):
             raise HeadToHeadError(
                 "selective opponent-prior applicability requires the exact "
-                "candidate-only lost-active-permutation omission exception."
+                "candidate-only witnessed lost-active-permutation no-choice exception."
             )
     # The native tree has always applied these priors independently of whether
     # the report exposes its arms.  The application witness, however, is
@@ -2164,16 +2174,28 @@ def _opponent_prior_applicability_readout(
         <= int(contract["maximum_incumbent_opponent_prior_arm_decisions"])
     )
     if selective_contract:
-        allowed_status = contract["candidate_allowed_root_omission_status"]
+        allowed_root_fallback_status = contract[
+            "candidate_allowed_root_fallback_status"
+        ]
+        allowed_root_omission_status = contract["candidate_allowed_root_omission_status"]
+        candidate_root_fallbacks_are_allowed = all(
+            status == allowed_root_fallback_status
+            for status, count in candidate_root_fallback_statuses.items()
+            if count
+        )
         candidate_root_omissions_are_allowed = all(
-            status == allowed_status
+            status == allowed_root_omission_status
             for status, count in candidate_root_omission_statuses.items()
             if count
         )
+        candidate_no_choice_roots = sum(candidate_root_fallback_statuses.values()) + sum(
+            candidate_root_omission_statuses.values()
+        )
         live_roots_clean = (
-            candidate_root_prior_fallbacks
-            <= int(contract["maximum_candidate_root_prior_fallbacks"])
+            candidate_root_fallbacks_are_allowed
             and candidate_root_omissions_are_allowed
+            and candidate_no_choice_roots
+            >= int(contract["minimum_candidate_no_choice_roots"])
             and not incumbent_root_omission_statuses
             and incumbent_root_prior_fallbacks
             <= int(contract["maximum_incumbent_root_prior_fallbacks"])
@@ -2222,7 +2244,8 @@ def _opponent_prior_applicability_readout(
             "incumbent_remained_flag_off": incumbent_remained_off,
             "live_root_priors_remained_clean": live_roots_clean,
             "candidate_root_fallbacks_only_allowed_status": (
-                candidate_root_omissions_are_allowed
+                candidate_root_fallbacks_are_allowed
+                and candidate_root_omissions_are_allowed
                 if selective_contract
                 else candidate_root_fallbacks_are_allowed
             ),

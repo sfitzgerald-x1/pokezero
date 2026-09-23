@@ -754,7 +754,10 @@ class GuidedConfigTest(unittest.TestCase):
                 for key, value in config.items()
                 if baseline.get(key) != value
             },
-            {"allow_lost_active_permutation_opponent_prior_omission": True},
+            {
+                "allow_lost_active_permutation_opponent_root_fallback": True,
+                "allow_lost_active_permutation_opponent_prior_omission": True,
+            },
             "the selective-order replay may differ from the strict opponent-prior arm only on its named recovery rule",
         )
         self.assertEqual(set(config), set(baseline))

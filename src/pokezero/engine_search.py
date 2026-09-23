@@ -6607,16 +6607,20 @@ class EngineMctsPolicy:
                     ] += root_prior_fallbacks
                 # An unresolvable public active permutation is not evidence
                 # that the model's acting policy, the action map, or a
-                # resolved opponent order failed. The native report exposes
-                # acting-seat failures in ``root_prior_fallback_reason``;
-                # requiring it to be null, a single root fallback, and the
-                # exact source/native status leaves no broad strict-mode hole.
-                # All other statuses -- including a parser/walk error -- stay
-                # terminal for a registered experiment.
+                # resolved opponent order failed *only when native proves the
+                # opponent had no root choice to price*.  In that case native
+                # has historically represented the same harmless omission in
+                # two ledgers: either zero root fallbacks, or one unclassified
+                # root fallback.  The latter is the concrete seed-2026092006
+                # form, so silently accepting it without the eligibility
+                # witness would reopen the strict-mode hole this exception is
+                # meant to avoid.  All other statuses -- including a parser or
+                # walk error -- stay terminal for a registered experiment.
                 allowed_lost_active_permutation_root_fallback = (
                     config.allow_lost_active_permutation_opponent_root_fallback
                     and expected_order_status == "lost_active_permutation"
                     and reported_order_status == "lost_active_permutation"
+                    and not opponent_prior_root_eligible
                     and root_prior_fallbacks == 1
                     and report.get("root_prior_fallback_reason") is None
                 )
