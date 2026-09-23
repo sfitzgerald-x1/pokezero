@@ -106,8 +106,28 @@ class RootActionAuditReadoutTest(unittest.TestCase):
                         seed=source_seed, seat=seat, round_index=round_index, capped=capped
                     )), encoding="utf-8")
             seed_root = root / "seeds" / f"seed-{source_seed}"
+            input_root = seed_root / "input"
+            input_root.mkdir(parents=True, exist_ok=True)
+            (input_root / "MANIFEST.json").write_text(json.dumps({
+                "seeds": [source_seed],
+                "sealed_root_action_audit": {
+                    "schema_version": "pokezero.mcts-guided-vs-raw-sealed-root-action-audit.v2",
+                    "targets": [
+                        {"seed": source_seed, "candidate_seat": seat, "decision_round_index": round_index}
+                        for seat in ("p1", "p2") for round_index in (3, 7)
+                    ],
+                    "continuation_rng_seeds": list(range(16)),
+                    "max_continuation_decision_rounds": 250,
+                    "expanded_max_continuation_decision_rounds": 1024,
+                    "continuation_targets": {
+                        "policy_consistent": {"subject": "sampled_raw_transformer", "opponent": "sampled_raw_transformer"},
+                        "uniform_own": {"subject": "uniform_legal", "opponent": "sampled_raw_transformer"},
+                    },
+                },
+            }), encoding="utf-8")
             (seed_root / "COMPLETE.json").write_text(json.dumps({
                 "schema_version": "test-seed", "status": "COMPLETE", "pairs": 1, "games": 2,
+                "candidate_provenance_sha256": "a" * 64, "raw_provenance_sha256": "b" * 64,
             }), encoding="utf-8")
         (root / "COMPLETE.json").write_text(json.dumps({
             "schema_version": READOUT.ROOT_COMPLETE_SCHEMA,
@@ -147,6 +167,44 @@ class RootActionAuditReadoutTest(unittest.TestCase):
             self._write_complete_root(root)
             (root / "COMPLETE.json").unlink()
             with self.assertRaisesRegex(READOUT.ReadoutError, "root COMPLETE receipt"):
+                READOUT.summarize(root, expected_roots=16)
+
+    def test_summarize_refuses_sidecar_provenance_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_complete_root(root)
+            path = root / "seeds" / "seed-0" / "sealed-root-action-audits" / "seed-0-p1" / "round-3.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload["candidate_provenance_sha256"] = "c" * 64
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(READOUT.ReadoutError, "provenance"):
+                READOUT.summarize(root, expected_roots=16)
+
+    def test_summarize_refuses_unregistered_root_substitution(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_complete_root(root)
+            old = root / "seeds" / "seed-0" / "sealed-root-action-audits" / "seed-0-p1" / "round-3.json"
+            new = old.with_name("round-999.json")
+            payload = json.loads(old.read_text(encoding="utf-8"))
+            payload["readout"]["decision_round_index"] = 999
+            payload["readout"]["audit"]["source_decision_round"] = 999
+            old.unlink()
+            new.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(READOUT.ReadoutError, "registered root roster"):
+                READOUT.summarize(root, expected_roots=16)
+
+    def test_summarize_refuses_impossible_cap_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_complete_root(root)
+            path = root / "seeds" / "seed-0" / "sealed-root-action-audits" / "seed-0-p1" / "round-3.json"
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            continuation = payload["readout"]["audit"]["continuation_targets"][0]["trials"][0]["outcomes"][0]["continuation"]
+            continuation["cap_retry"] = True
+            continuation["effective_max_continuation_decision_rounds"] = 1024
+            with self.assertRaisesRegex(READOUT.ReadoutError, "incomplete or capped continuation"):
+                path.write_text(json.dumps(payload), encoding="utf-8")
                 READOUT.summarize(root, expected_roots=16)
 
     def test_create_only_writer_refuses_overwrite(self) -> None:

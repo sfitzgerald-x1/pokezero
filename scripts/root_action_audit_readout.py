@@ -240,6 +240,7 @@ def _read_root(path: Path) -> dict[str, Any]:
         trial_seeds: set[int] = set()
         values = {label: [] for label in labels}
         paired_deltas: list[float] = []
+        continuation_envelopes: set[tuple[int, int, bool]] = set()
         for trial in trials:
             trial = _mapping(trial, f"{path}: trial")
             trial_seed = trial.get("continuation_rng_seed")
@@ -272,21 +273,28 @@ def _read_root(path: Path) -> dict[str, Any]:
                     or continuation["terminal_after_fixed_joint_step"] is not (count == 0)
                     or not isinstance(continuation["cap_retry"], bool)
                     or continuation["cap_retry"] is not (effective > initial)
+                    or (continuation["cap_retry"] and count <= initial)
                     or count > effective or terminal.get("capped") is not False
                     or isinstance(terminal.get("turn_count"), bool) or not isinstance(terminal.get("turn_count"), int) or terminal["turn_count"] < 0
                 ):
                     raise ReadoutError(f"{path}: incomplete or capped continuation")
                 value = _subject_value(terminal.get("winner"), subject)
+                continuation_envelopes.add((initial, effective, continuation["cap_retry"]))
                 values[action["action_label"]].append(value)
                 trial_values[action["action_label"]] = value
             paired_deltas.append(trial_values["mcts_selected"] - trial_values["raw_policy"])
         target_summary[target_row["target"]] = {
             "trials": len(trials),
             "continuation_rng_seeds": sorted(trial_seeds),
+            "continuation_envelopes": sorted(continuation_envelopes),
             "action_mean_subject_win": {label: _mean(values[label]) for label in labels},
             "mcts_minus_raw_trial_mean": _mean(paired_deltas),
         }
     return {
+        "provenance": {
+            "candidate": wrapper["candidate_provenance_sha256"],
+            "raw": wrapper["raw_provenance_sha256"],
+        },
         "source": {
             "seed": seed, "battle_id": readout["battle_id"], "candidate_seat": subject,
             "decision_round_index": round_index,
@@ -295,6 +303,61 @@ def _read_root(path: Path) -> dict[str, Any]:
         "root_q_gap": q_gap,
         "root_visit_gap": visit_gap,
         "targets": target_summary,
+    }
+
+
+def _manifest_contract(root: Path, seed: int) -> dict[str, Any]:
+    """Read the immutable per-seed registration that names its audit roots."""
+
+    manifest_path = root / "seeds" / f"seed-{seed}" / "input" / "MANIFEST.json"
+    manifest = _load_json(manifest_path, f"seed {seed} manifest")
+    if manifest.get("seeds") != [seed]:
+        raise ReadoutError(f"seed {seed}: manifest seed binding drift")
+    audit = _mapping(manifest.get("sealed_root_action_audit"), f"seed {seed}: audit registration")
+    if audit.get("schema_version") != "pokezero.mcts-guided-vs-raw-sealed-root-action-audit.v2":
+        raise ReadoutError(f"seed {seed}: unsupported audit registration")
+    rows = audit.get("targets")
+    if not isinstance(rows, list) or not rows:
+        raise ReadoutError(f"seed {seed}: missing registered roots")
+    addresses: set[tuple[int, str, int]] = set()
+    for row in rows:
+        row = _mapping(row, f"seed {seed}: registered root")
+        if set(row) != {"seed", "candidate_seat", "decision_round_index"}:
+            raise ReadoutError(f"seed {seed}: malformed registered root")
+        row_seed, seat, round_index = row.get("seed"), row.get("candidate_seat"), row.get("decision_round_index")
+        if (
+            isinstance(row_seed, bool) or not isinstance(row_seed, int) or row_seed != seed
+            or seat not in {"p1", "p2"}
+            or isinstance(round_index, bool) or not isinstance(round_index, int) or round_index < 0
+        ):
+            raise ReadoutError(f"seed {seed}: invalid registered root")
+        address = (row_seed, seat, round_index)
+        if address in addresses:
+            raise ReadoutError(f"seed {seed}: duplicate registered root")
+        addresses.add(address)
+    rng_seeds = audit.get("continuation_rng_seeds")
+    if (
+        not isinstance(rng_seeds, list) or len(rng_seeds) != 16
+        or any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in rng_seeds)
+        or len(set(rng_seeds)) != len(rng_seeds)
+    ):
+        raise ReadoutError(f"seed {seed}: invalid registered continuation RNG schedule")
+    targets = _mapping(audit.get("continuation_targets"), f"seed {seed}: continuation targets")
+    if set(targets) != set(TARGETS) or any(not isinstance(targets[name], Mapping) for name in TARGETS):
+        raise ReadoutError(f"seed {seed}: continuation target registration drift")
+    initial, expanded = audit.get("max_continuation_decision_rounds"), audit.get(
+        "expanded_max_continuation_decision_rounds"
+    )
+    if (
+        isinstance(initial, bool) or not isinstance(initial, int) or initial <= 0
+        or isinstance(expanded, bool) or not isinstance(expanded, int) or expanded <= initial
+    ):
+        raise ReadoutError(f"seed {seed}: invalid continuation ceilings")
+    return {
+        "addresses": addresses,
+        "rng_seeds": tuple(sorted(rng_seeds)),
+        "initial_ceiling": initial,
+        "expanded_ceiling": expanded,
     }
 
 
@@ -307,6 +370,29 @@ def summarize(root: Path, *, expected_roots: int) -> dict[str, Any]:
     if len(addresses) != len(roots):
         raise ReadoutError("duplicate source root")
     source_seeds = sorted({row["source"]["seed"] for row in roots})
+    contracts = {seed: _manifest_contract(root, seed) for seed in source_seeds}
+    expected_addresses = set().union(*(contract["addresses"] for contract in contracts.values()))
+    if len(expected_addresses) != expected_roots or addresses != expected_addresses:
+        raise ReadoutError("sidecars do not match the registered root roster")
+    for path, row in zip(paths, roots):
+        source = row["source"]
+        expected_path = (
+            root / "seeds" / f"seed-{source['seed']}" / "sealed-root-action-audits"
+            / f"seed-{source['seed']}-{source['candidate_seat']}"
+            / f"round-{source['decision_round_index']}.json"
+        )
+        if path != expected_path:
+            raise ReadoutError(f"{path}: sidecar path/source address drift")
+        contract = contracts[source["seed"]]
+        for target in TARGETS:
+            if tuple(row["targets"][target]["continuation_rng_seeds"]) != contract["rng_seeds"]:
+                raise ReadoutError(f"{path}: {target} continuation RNG schedule disagrees with manifest")
+            permitted_envelopes = {
+                (contract["initial_ceiling"], contract["initial_ceiling"], False),
+                (contract["initial_ceiling"], contract["expanded_ceiling"], True),
+            }
+            if not set(row["targets"][target]["continuation_envelopes"]).issubset(permitted_envelopes):
+                raise ReadoutError(f"{path}: {target} continuation ceilings disagree with manifest")
     expected_complete = {
         "schema_version": ROOT_COMPLETE_SCHEMA,
         "status": "COMPLETE",
@@ -319,6 +405,9 @@ def summarize(root: Path, *, expected_roots: int) -> dict[str, Any]:
     complete = _load_json(complete_path, "root COMPLETE receipt")
     if dict(complete) != expected_complete:
         raise ReadoutError("root COMPLETE receipt is not the declared complete audit")
+    all_provenance = {(row["provenance"]["candidate"], row["provenance"]["raw"]) for row in roots}
+    if len(all_provenance) != 1:
+        raise ReadoutError("candidate/raw provenance drifts across root sidecars")
     for source_seed in source_seeds:
         seed_complete = _load_json(
             root / "seeds" / f"seed-{source_seed}" / "COMPLETE.json",
@@ -326,6 +415,13 @@ def summarize(root: Path, *, expected_roots: int) -> dict[str, Any]:
         )
         if seed_complete.get("status") != "COMPLETE" or seed_complete.get("pairs") != 1 or seed_complete.get("games") != 2:
             raise ReadoutError(f"seed {source_seed} is not a complete paired game")
+        expected_provenance = next(iter(all_provenance))
+        actual_provenance = (
+            _sha256(seed_complete.get("candidate_provenance_sha256"), f"seed {source_seed}: candidate provenance"),
+            _sha256(seed_complete.get("raw_provenance_sha256"), f"seed {source_seed}: raw provenance"),
+        )
+        if actual_provenance != expected_provenance:
+            raise ReadoutError(f"seed {source_seed}: completion provenance disagrees with sidecars")
     aggregate: dict[str, dict[str, Any]] = {}
     for target in TARGETS:
         schedules = {tuple(row["targets"][target]["continuation_rng_seeds"]) for row in roots}
