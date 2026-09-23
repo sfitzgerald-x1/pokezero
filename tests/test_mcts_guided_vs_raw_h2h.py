@@ -748,6 +748,11 @@ class GuidedConfigTest(unittest.TestCase):
     def test_deep_opponent_prior_manifest_inherits_cuda_without_overriding_it(self) -> None:
         manifest_config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
         manifest_config.pop("model_device")
+        # The durable manifest correctly does not carry this runtime-only
+        # default.  Reproduce the source-bound rollout-leaf failure path:
+        # runtime materialization must restore False and registration must
+        # accept the resulting exact, fail-closed configuration.
+        manifest_config.pop("allow_lost_active_permutation_opponent_root_fallback")
         raw = {
             "config_id": "guided-mcts-own-priors-fullwork-deep-d6-s4096-opponent-priors",
             "policy_id": "guided-mcts-own-priors-fullwork-deep-d6-s4096",
@@ -770,7 +775,15 @@ class GuidedConfigTest(unittest.TestCase):
             device="cuda",
         )
         self.assertEqual(policy.config["model_device"], "cuda")
+        self.assertIs(
+            policy.config["allow_lost_active_permutation_opponent_root_fallback"],
+            False,
+        )
         self.assertNotIn("model_device", manifest_config)
+        self.assertNotIn(
+            "allow_lost_active_permutation_opponent_root_fallback",
+            manifest_config,
+        )
         RUNNER._require_registered_candidate_config(policy.config)
 
     def test_registered_deep_rollout_leaf_ablation_is_accepted_exactly(self) -> None:

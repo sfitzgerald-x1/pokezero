@@ -79,6 +79,11 @@ RAW_SELECTOR = {
     "search": False,
 }
 REGISTERED_ENGINE_CONFIG = {
+    # ``EngineMctsConfig`` materializes this fail-closed default even when a
+    # source-bound manifest correctly omits it.  Register the realized value,
+    # rather than rejecting every non-selective source-bound replay before it
+    # can score a game.
+    "allow_lost_active_permutation_opponent_root_fallback": False,
     "approximate_hidden_duration_volatiles": True,
     "approximate_partial_trap_turns": True,
     "approximate_sleep_turns": True,
