@@ -243,6 +243,26 @@ class RolloutDriverTest(unittest.TestCase):
         )
         with self.assertRaises(TypeError):
             boundary.decisions["p1"] = boundary.decisions["p1"]
+        self.assertEqual(boundary.policy_observation_histories["p1"], (env.default_observation,))
+        self.assertEqual(boundary.policy_observation_histories["p2"], (env.default_observation,))
+
+    def test_sealed_boundary_keeps_each_policy_prefix_through_current_request(self) -> None:
+        env = ScriptedEnv(
+            requested_sequence=[("p1", "p2"), ("p1", "p2")], terminal_after_steps=2
+        )
+        boundaries = []
+        RolloutDriver(
+            env=env,
+            policies={"p1": RandomLegalPolicy(), "p2": RandomLegalPolicy()},
+            config=RolloutConfig(sealed_pre_step_sink=boundaries.append),
+        ).run(seed=79)
+
+        self.assertEqual(len(boundaries), 2)
+        for player_id in ("p1", "p2"):
+            self.assertEqual(
+                boundaries[1].policy_observation_histories[player_id],
+                (env.default_observation, env.default_observation),
+            )
 
     def test_rollout_refuses_sealed_capture_without_actionable_snapshot(self) -> None:
         class NoSnapshotEnv(ScriptedEnv):

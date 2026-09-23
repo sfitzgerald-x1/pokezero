@@ -106,6 +106,14 @@ class RolloutSealedPreStepBoundary:
     requested_players: tuple[PlayerId, ...]
     snapshot: object
     decisions: Mapping[PlayerId, PolicyDecision]
+    # Private controller-only observation histories ending at the current
+    # pre-step request. A source-bound continuation that resumes a
+    # history-aware policy must receive these exact prefix observations; a
+    # fresh suffix policy would otherwise measure a cold-start model while
+    # claiming to continue the source policy. Never serialize this field.
+    policy_observation_histories: Mapping[PlayerId, tuple[PokeZeroObservationV0, ...]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
 
 RolloutSealedPreStepSink = Callable[[RolloutSealedPreStepBoundary], None]
@@ -348,6 +356,8 @@ def continue_rollout_from_current_state(
             decision_round_index=decision_round_index,
             requested_players=requested_players,
             decisions=decisions,
+            trajectory=trajectory,
+            observations=observations,
         )
 
         step_started = perf_counter()
@@ -491,6 +501,8 @@ def _emit_sealed_pre_step_boundary(
     decision_round_index: int,
     requested_players: Sequence[PlayerId],
     decisions: Mapping[PlayerId, PolicyDecision],
+    trajectory: BattleTrajectory,
+    observations: Mapping[PlayerId, PokeZeroObservationV0],
 ) -> None:
     """Give a trusted audit controller one private snapshot before ``env.step``.
 
@@ -511,6 +523,20 @@ def _emit_sealed_pre_step_boundary(
             "snapshot_actionable_boundary()"
         )
     snapshot = snapshotter()
+    # The normal rollout trajectory has every prior decision observation for
+    # a player. The current request has been selected but not yet appended, so
+    # add it explicitly. This is exactly the history a TransformerSoftmaxPolicy
+    # would hold immediately after selecting the source action.
+    histories = {
+        player_id: (
+            *(
+                step.observation for step in trajectory.steps
+                if step.player_id == player_id
+            ),
+            observations[player_id],
+        )
+        for player_id in decisions
+    }
     sink(
         RolloutSealedPreStepBoundary(
             seed=seed,
@@ -519,6 +545,7 @@ def _emit_sealed_pre_step_boundary(
             requested_players=tuple(requested_players),
             snapshot=snapshot,
             decisions=MappingProxyType(dict(decisions)),
+            policy_observation_histories=MappingProxyType(histories),
         )
     )
 
