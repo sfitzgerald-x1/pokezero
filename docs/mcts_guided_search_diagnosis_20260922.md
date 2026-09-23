@@ -300,3 +300,51 @@ The result has a sharp interpretation:
    registered, durable paired GPU strength study with a
    zero-unexpected-fallback contract. Partial seed output is never evidence
    for either conclusion.
+
+### Protocol for the next actual-search intervention
+
+The next probe is deliberately a **search intervention**, not another audit.
+After the R4 readout, its root-selection rule, root count, confirmation source
+seeds, continuation policy, and success criterion must be fixed before work
+begins.  It will then replay a small mix of MCTS-better, raw-better, and tied
+override roots selected by that rule into the same source-bound engine
+configuration twice:
+into the same source-bound engine configuration twice:
+
+* a model-leaf control that must reproduce the original root allocation,
+  backed-up Q values, and selected action; and
+* a rollout-leaf arm using the already-shipped leaf-evaluation seam, with the
+  source root, checkpoint, worlds, own/opponent priors, depth, and simulation
+  cap unchanged.
+
+The registration must name three separate seed families: simulator/world-search
+seeds, rollout-evaluator seeds, and held-out continuation seeds.  The two
+search arms share only the simulator/world-search family.  In particular, an
+evaluator must never consume the generator that drives tree expansion or belief
+world construction; equal top-level seed values do not prove an equal search
+when one evaluator makes extra random draws.
+
+Every replayed root must write an independent, create-only terminal unit as
+soon as its control and intervention are complete.  A later source-game failure
+cannot erase an already completed root.  The terminal unit must bind the
+replayed public-prefix witness, both exact engine configurations, all three
+seed schedules, the model-control reproduction check, allocation/Q/action
+outputs, and the separately drawn continuation outcomes.  The final root set
+will reserve fresh source seeds for confirmation; the R4 roots are diagnostic
+case studies rather than an independent strength sample.
+
+The R4 sampled-policy and uniform-own continuations remain useful diagnostic
+targets, but neither is deployed raw argmax or continued MCTS.  Their results
+therefore cannot by themselves select the intervention's continuation policy
+or a training target.
+
+The decision rule is explicit.  If rollout leaf changes an action and that
+action is better on the held-out continuations, prioritize a source-bound
+value-target study.  If it improves Q rankings against independent
+continuation estimates but does not improve action selection, investigate
+exploration or visit aggregation.  If the effect only appears under particular
+hidden-state or opponent assumptions, investigate belief or opponent
+modelling.  Frozen-tree repricing is justified only if that controlled
+intervention leaves a specific evaluation-versus-allocation ambiguity; a
+value-head retrain separately requires positive evidence for a suitable value
+target.
