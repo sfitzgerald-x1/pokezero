@@ -103,6 +103,7 @@ class SealedRootActionAuditTest(unittest.TestCase):
                 continuation_rng_seeds=[101, 102],
                 rollout_config=object(),
                 max_continuation_decision_rounds=20,
+                expanded_max_continuation_decision_rounds=40,
             )
 
         kwargs = evaluate.call_args.kwargs
@@ -110,6 +111,7 @@ class SealedRootActionAuditTest(unittest.TestCase):
         self.assertEqual(kwargs["actions"], {"raw_policy": 2, "mcts_selected": 4, "visit_alternative": 7})
         self.assertEqual(kwargs["opponent_action"], 1)
         self.assertEqual(kwargs["continuation_rng_seeds"], [101, 102])
+        self.assertEqual(kwargs["expanded_max_continuation_decision_rounds"], 40)
         self.assertEqual(received_histories, [boundary.policy_observation_histories])
         self.assertEqual(readout["audit"], grid)
         self.assertNotIn("snapshot", readout)

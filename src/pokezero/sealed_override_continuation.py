@@ -30,6 +30,15 @@ class SealedOverrideContinuationError(RuntimeError):
     """The source boundary cannot support a valid independent continuation."""
 
 
+class SealedOverrideContinuationCapError(SealedOverrideContinuationError):
+    """A fresh continuation reached its declared suffix-round ceiling.
+
+    This is intentionally distinct from a capped fixed source joint step.
+    Only a cap reached after that fixed step can be retried from the same
+    sealed boundary under a registered, larger continuation budget.
+    """
+
+
 def _validate_action(action: int, *, label: str) -> None:
     if isinstance(action, bool) or not isinstance(action, int) or not 0 <= action < ACTION_COUNT:
         raise SealedOverrideContinuationError(
@@ -198,7 +207,7 @@ def run_sealed_override_continuation(
             reset_policies=False,
         )
         if continuation.terminal.capped:
-            raise SealedOverrideContinuationError(
+            raise SealedOverrideContinuationCapError(
                 "independent continuation capped before a terminal result"
             )
         return {
@@ -316,6 +325,7 @@ def evaluate_sealed_root_action_grid(
     env_factory: Callable[[], PokeZeroEnv],
     rollout_config: RolloutConfig,
     max_continuation_decision_rounds: int | None = None,
+    expanded_max_continuation_decision_rounds: int | None = None,
 ) -> dict[str, Any]:
     """Evaluate selected root actions under matched continuation targets.
 
@@ -371,6 +381,23 @@ def evaluate_sealed_root_action_grid(
         raise SealedOverrideContinuationError(
             "continuation RNG seeds must be unique non-negative integers"
         )
+    if expanded_max_continuation_decision_rounds is not None:
+        if (
+            isinstance(expanded_max_continuation_decision_rounds, bool)
+            or not isinstance(expanded_max_continuation_decision_rounds, int)
+            or expanded_max_continuation_decision_rounds <= 0
+        ):
+            raise SealedOverrideContinuationError(
+                "expanded continuation decision rounds must be a positive integer when set"
+            )
+        if max_continuation_decision_rounds is None:
+            raise SealedOverrideContinuationError(
+                "expanded continuation decision rounds require an initial round ceiling"
+            )
+        if expanded_max_continuation_decision_rounds <= max_continuation_decision_rounds:
+            raise SealedOverrideContinuationError(
+                "expanded continuation decision rounds must exceed the initial ceiling"
+            )
 
     target_rows: list[dict[str, Any]] = []
     for target, policy_factory in normalized_modes:
@@ -378,33 +405,80 @@ def evaluate_sealed_root_action_grid(
         for rng_seed in normalized_seeds:
             outcomes: list[dict[str, Any]] = []
             for action_label, action_index in normalized_actions:
-                outcome = run_sealed_override_continuation(
-                    snapshot=snapshot,
-                    source_battle_id=source_battle_id,
-                    source_seed=source_seed,
-                    source_decision_round=source_decision_round,
-                    subject_player=subject_player,
-                    subject_action=action_index,
-                    opponent_player=opponent_player,
-                    opponent_action=opponent_action,
-                    action_label=action_label,
-                    env_factory=env_factory,
-                    continuation_policy_factory=policy_factory,
-                    rollout_config=rollout_config,
-                    max_continuation_decision_rounds=max_continuation_decision_rounds,
-                    continuation_rng_seed=rng_seed,
-                )
+                run_kwargs = {
+                    "snapshot": snapshot,
+                    "source_battle_id": source_battle_id,
+                    "source_seed": source_seed,
+                    "source_decision_round": source_decision_round,
+                    "subject_player": subject_player,
+                    "subject_action": action_index,
+                    "opponent_player": opponent_player,
+                    "opponent_action": opponent_action,
+                    "action_label": action_label,
+                    "env_factory": env_factory,
+                    "continuation_policy_factory": policy_factory,
+                    "rollout_config": rollout_config,
+                    "continuation_rng_seed": rng_seed,
+                }
+                try:
+                    outcome = run_sealed_override_continuation(
+                        **run_kwargs,
+                        max_continuation_decision_rounds=max_continuation_decision_rounds,
+                    )
+                    cap_retry = False
+                    effective_round_ceiling = max_continuation_decision_rounds
+                except SealedOverrideContinuationCapError:
+                    if expanded_max_continuation_decision_rounds is None:
+                        raise
+                    # The source snapshot, source seed, and paired RNG stay
+                    # fixed; only this capped branch is re-run from scratch.
+                    outcome = run_sealed_override_continuation(
+                        **run_kwargs,
+                        max_continuation_decision_rounds=expanded_max_continuation_decision_rounds,
+                    )
+                    cap_retry = True
+                    effective_round_ceiling = expanded_max_continuation_decision_rounds
+                continuation = {
+                    **outcome["continuation"],
+                    "initial_max_continuation_decision_rounds": max_continuation_decision_rounds,
+                    "effective_max_continuation_decision_rounds": effective_round_ceiling,
+                    "cap_retry": cap_retry,
+                }
+                decision_round_count = continuation.get("decision_round_count")
+                if (
+                    isinstance(decision_round_count, bool)
+                    or not isinstance(decision_round_count, int)
+                    or decision_round_count < 0
+                ):
+                    raise SealedOverrideContinuationError(
+                        "independent continuation returned an invalid decision round count"
+                    )
+                if (
+                    effective_round_ceiling is not None
+                    and decision_round_count > effective_round_ceiling
+                ):
+                    raise SealedOverrideContinuationError(
+                        "independent continuation exceeded its effective round ceiling"
+                    )
+                if (
+                    cap_retry
+                    and max_continuation_decision_rounds is not None
+                    and decision_round_count <= max_continuation_decision_rounds
+                ):
+                    raise SealedOverrideContinuationError(
+                        "expanded continuation retry did not run beyond the initial round ceiling"
+                    )
                 outcomes.append(
                     {
                         "action_label": action_label,
                         "action_index": action_index,
-                        "continuation": outcome["continuation"],
+                        "continuation": continuation,
                     }
                 )
             trials.append({"continuation_rng_seed": rng_seed, "outcomes": outcomes})
         target_rows.append({"target": target, "trials": trials})
     return {
-        "schema_version": "pokezero.sealed-root-action-grid.v1",
+        "schema_version": "pokezero.sealed-root-action-grid.v2",
         "source_battle_id": source_battle_id,
         "source_seed": source_seed,
         "source_decision_round": source_decision_round,

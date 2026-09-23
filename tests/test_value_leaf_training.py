@@ -9,6 +9,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 
+import torch
+
 from pokezero.actions import ACTION_COUNT
 from pokezero.dataset import (
     TrajectoryDatasetConfig,
@@ -233,6 +235,217 @@ class ValueLeafTrainingTest(unittest.TestCase):
                         )
                     )
             self.assertFalse(output.exists())
+
+    def test_candidate_receipts_survive_failure_but_do_not_contaminate_retry(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            checkpoint = root / "checkpoint.pt"
+            checkpoint.write_bytes(b"source-checkpoint")
+            binding = _binding()
+            binding["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=root / "showdown",
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                games=1,
+            )
+            output = root / "value-leaves"
+
+            async def interrupted_benchmark(*_args: object, **kwargs: object) -> object:
+                callback = kwargs["live_continuation_oracle_successor_capture_callback"]
+                capture = _capture()
+                capture.pop("source_binding")
+                callback(capture)  # type: ignore[operator]
+                raise RuntimeError("source game interrupted")
+
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_benchmark",
+                new=AsyncMock(side_effect=interrupted_benchmark),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "source game interrupted"):
+                    asyncio.run(
+                        capture_live_foulplay_value_leaf_training_cache(
+                            config=config,
+                            output_path=output,
+                            source_binding=binding,
+                        )
+                    )
+            self.assertFalse(output.exists())
+            receipt_root = root / ".value-leaves.candidate-receipts"
+            self.assertTrue((receipt_root / "BINDING.json").is_file())
+            failed_receipts = sorted(path for path in receipt_root.glob("*.json") if path.name != "BINDING.json")
+            self.assertEqual(len(failed_receipts), 1)
+            failed_document = json.loads(failed_receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(failed_document["source_binding"], binding)
+            self.assertEqual(failed_document["kind"], "candidate")
+
+            async def recovered_benchmark(*args: object, **kwargs: object) -> object:
+                callback = kwargs["live_continuation_oracle_successor_capture_callback"]
+                capture = _capture()
+                capture["source_decision_round"] = 5
+                capture["continuation"]["terminal"]["winner"] = "p2"  # type: ignore[index]
+                capture.pop("source_binding")
+                callback(capture)  # type: ignore[operator]
+                return ControlledFoulPlayBenchmarkResult(
+                    config=args[0],
+                    policy_id="test-policy",
+                    games=(),
+                    checkpoint_sha256=binding["checkpoint_sha256"],
+                )
+
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_benchmark",
+                new=AsyncMock(side_effect=recovered_benchmark),
+            ):
+                result = asyncio.run(
+                    capture_live_foulplay_value_leaf_training_cache(
+                        config=config,
+                        output_path=output,
+                        source_binding=binding,
+                    )
+            )
+            self.assertEqual(result.cache.capture_count, 1)
+            self.assertTrue((output / "metadata.json").is_file())
+            batch = next(iter_training_cache_batches(output, batch_size=1))
+            self.assertEqual(batch.returns, (-1.0,))
+
+    def test_terminal_or_capped_candidate_is_not_written_to_partial_journal(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            checkpoint = root / "checkpoint.pt"
+            checkpoint.write_bytes(b"source-checkpoint")
+            binding = _binding()
+            binding["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=root / "showdown",
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                games=1,
+            )
+            output = root / "value-leaves"
+
+            async def invalid_candidate_benchmark(*_args: object, **kwargs: object) -> object:
+                callback = kwargs["live_continuation_oracle_successor_capture_callback"]
+                capture = _capture(terminal_fixed_step=True)
+                capture.pop("source_binding")
+                callback(capture)  # type: ignore[operator]
+                raise AssertionError("terminal candidate should have been rejected")
+
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_benchmark",
+                new=AsyncMock(side_effect=invalid_candidate_benchmark),
+            ):
+                with self.assertRaisesRegex(ValueError, "non-terminal fixed joint step"):
+                    asyncio.run(
+                        capture_live_foulplay_value_leaf_training_cache(
+                            config=config,
+                            output_path=output,
+                            source_binding=binding,
+                        )
+                    )
+            receipt_root = root / ".value-leaves.candidate-receipts"
+            self.assertEqual(list(receipt_root.glob("*.json")), [receipt_root / "BINDING.json"])
+
+    def test_torn_temporary_receipt_is_ignored_on_retry(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            checkpoint = root / "checkpoint.pt"
+            checkpoint.write_bytes(b"source-checkpoint")
+            binding = _binding()
+            binding["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=root / "showdown",
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                games=1,
+            )
+            output = root / "value-leaves"
+            receipt_root = root / ".value-leaves.candidate-receipts"
+            receipt_root.mkdir()
+            (receipt_root / ".candidate-torn.tmp").write_text('{"not":"complete"', encoding="utf-8")
+
+            async def complete_benchmark(*args: object, **kwargs: object) -> object:
+                callback = kwargs["live_continuation_oracle_successor_capture_callback"]
+                capture = _capture()
+                capture.pop("source_binding")
+                callback(capture)  # type: ignore[operator]
+                return ControlledFoulPlayBenchmarkResult(
+                    config=args[0],
+                    policy_id="test-policy",
+                    games=(),
+                    checkpoint_sha256=binding["checkpoint_sha256"],
+                )
+
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_benchmark",
+                new=AsyncMock(side_effect=complete_benchmark),
+            ):
+                result = asyncio.run(
+                    capture_live_foulplay_value_leaf_training_cache(
+                        config=config,
+                        output_path=output,
+                        source_binding=binding,
+                    )
+                )
+            self.assertEqual(result.cache.capture_count, 1)
+
+    def test_candidate_receipt_round_trips_tensor_observation(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            checkpoint = root / "checkpoint.pt"
+            checkpoint.write_bytes(b"source-checkpoint")
+            binding = _binding()
+            binding["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=root / "showdown",
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                games=1,
+            )
+            output = root / "value-leaves"
+
+            async def tensor_benchmark(*args: object, **kwargs: object) -> object:
+                callback = kwargs["live_continuation_oracle_successor_capture_callback"]
+                capture = _capture()
+                capture["successor_observation"] = PokeZeroObservationV0(
+                    categorical_ids=torch.tensor([[0]], dtype=torch.long),
+                    numeric_features=torch.tensor([[0.0]], dtype=torch.float32),
+                    token_type_ids=torch.tensor([0], dtype=torch.long),
+                    attention_mask=torch.tensor([True]),
+                    legal_action_mask=torch.tensor(
+                        [index in {2, 7} for index in range(ACTION_COUNT)], dtype=torch.bool
+                    ),
+                )
+                capture.pop("source_binding")
+                callback(capture)  # type: ignore[operator]
+                return ControlledFoulPlayBenchmarkResult(
+                    config=args[0],
+                    policy_id="test-policy",
+                    games=(),
+                    checkpoint_sha256=binding["checkpoint_sha256"],
+                )
+
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_benchmark",
+                new=AsyncMock(side_effect=tensor_benchmark),
+            ):
+                result = asyncio.run(
+                    capture_live_foulplay_value_leaf_training_cache(
+                        config=config,
+                        output_path=output,
+                        source_binding=binding,
+                    )
+                )
+            self.assertEqual(result.cache.capture_count, 1)
+            batch = next(iter_training_cache_batches(output, batch_size=1))
+            self.assertEqual(
+                batch.legal_action_mask.tolist(),
+                [[index in {2, 7} for index in range(ACTION_COUNT)]],
+            )
 
     def test_refuses_cache_when_bridge_used_a_different_checkpoint(self) -> None:
         with TemporaryDirectory() as temp_dir:

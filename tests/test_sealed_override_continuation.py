@@ -8,6 +8,7 @@ from pokezero.env import StepResult, TerminalState
 from pokezero.rollout import RolloutConfig
 from pokezero.sealed_override_continuation import (
     SEALED_OVERRIDE_CONTINUATION_SCHEMA_VERSION,
+    SealedOverrideContinuationCapError,
     SealedOverrideContinuationError,
     evaluate_sealed_override_pair,
     evaluate_sealed_root_action_grid,
@@ -278,7 +279,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
                 rollout_config=RolloutConfig(max_decision_rounds=100),
             )
 
-        self.assertEqual(readout["schema_version"], "pokezero.sealed-root-action-grid.v1")
+        self.assertEqual(readout["schema_version"], "pokezero.sealed-root-action-grid.v2")
         self.assertEqual(len(factories), 12)
         self.assertEqual(
             [target["target"] for target in readout["continuation_targets"]],
@@ -294,6 +295,153 @@ class SealedOverrideContinuationTest(unittest.TestCase):
                 self.assertNotIn("snapshot", trial)
         self.assertNotIn("opponent_action", readout)
         self.assertNotIn("snapshot", readout)
+
+    def test_root_action_grid_retries_only_a_capped_suffix_with_registered_bound(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def fake_run(**kwargs: object) -> dict[str, object]:
+            calls.append(dict(kwargs))
+            if len(calls) == 1:
+                raise SealedOverrideContinuationCapError("independent continuation capped before a terminal result")
+            decision_round_count = 4 if len(calls) == 2 else 3
+            return {
+                "continuation": {
+                    "decision_round_count": decision_round_count,
+                    "terminal_after_fixed_joint_step": False,
+                    "terminal": {"winner": "p1", "turn_count": 10, "capped": False},
+                }
+            }
+
+        with patch(
+            "pokezero.sealed_override_continuation.run_sealed_override_continuation",
+            fake_run,
+        ):
+            readout = evaluate_sealed_root_action_grid(
+                snapshot=self._snapshot(),
+                source_battle_id="source-grid-retry",
+                source_seed=20_260_923,
+                source_decision_round=6,
+                subject_player="p1",
+                actions={"raw_policy": 2, "mcts_selected": 4},
+                opponent_player="p2",
+                opponent_action=1,
+                continuation_policy_factories={"policy_consistent": lambda: {}},
+                continuation_rng_seeds=[101],
+                search_evidence={},
+                env_factory=lambda: self.fail("patched runner must not allocate an environment"),
+                rollout_config=RolloutConfig(max_decision_rounds=100),
+                max_continuation_decision_rounds=3,
+                expanded_max_continuation_decision_rounds=11,
+            )
+
+        self.assertEqual(
+            [call["max_continuation_decision_rounds"] for call in calls], [3, 11, 3]
+        )
+        self.assertTrue(all(call["source_seed"] == 20_260_923 for call in calls))
+        self.assertTrue(all(call["continuation_rng_seed"] == 101 for call in calls))
+        outcomes = readout["continuation_targets"][0]["trials"][0]["outcomes"]
+        self.assertEqual(outcomes[0]["continuation"]["cap_retry"], True)
+        self.assertEqual(
+            outcomes[0]["continuation"]["effective_max_continuation_decision_rounds"], 11
+        )
+        self.assertEqual(outcomes[1]["continuation"]["cap_retry"], False)
+        self.assertEqual(
+            outcomes[1]["continuation"]["effective_max_continuation_decision_rounds"], 3
+        )
+
+    def test_root_action_grid_refuses_non_increasing_retry_bound(self) -> None:
+        with self.assertRaisesRegex(SealedOverrideContinuationError, "must exceed"):
+            evaluate_sealed_root_action_grid(
+                snapshot=self._snapshot(),
+                source_battle_id="bad-grid-retry",
+                source_seed=1,
+                source_decision_round=1,
+                subject_player="p1",
+                actions={"raw_policy": 2, "mcts_selected": 4},
+                opponent_player="p2",
+                opponent_action=1,
+                continuation_policy_factories={"policy_consistent": lambda: {}},
+                continuation_rng_seeds=[1],
+                search_evidence={},
+                env_factory=lambda: self.fail("must not allocate environment"),
+                rollout_config=RolloutConfig(),
+                max_continuation_decision_rounds=10,
+                expanded_max_continuation_decision_rounds=10,
+            )
+
+    def test_root_action_grid_fails_closed_when_expanded_retry_also_caps(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def always_cap(**kwargs: object) -> object:
+            calls.append(dict(kwargs))
+            raise SealedOverrideContinuationCapError("independent continuation capped before a terminal result")
+
+        with patch(
+            "pokezero.sealed_override_continuation.run_sealed_override_continuation",
+            always_cap,
+        ), self.assertRaisesRegex(SealedOverrideContinuationCapError, "capped before a terminal"):
+            evaluate_sealed_root_action_grid(
+                snapshot=self._snapshot(),
+                source_battle_id="double-cap-grid",
+                source_seed=1,
+                source_decision_round=1,
+                subject_player="p1",
+                actions={"raw_policy": 2, "mcts_selected": 4},
+                opponent_player="p2",
+                opponent_action=1,
+                continuation_policy_factories={"policy_consistent": lambda: {}},
+                continuation_rng_seeds=[1],
+                search_evidence={},
+                env_factory=lambda: self.fail("patched runner must not allocate an environment"),
+                rollout_config=RolloutConfig(),
+                max_continuation_decision_rounds=3,
+                expanded_max_continuation_decision_rounds=11,
+            )
+
+        self.assertEqual(
+            [call["max_continuation_decision_rounds"] for call in calls], [3, 11]
+        )
+
+    def test_root_action_grid_rejects_a_retry_that_does_not_pass_the_original_ceiling(self) -> None:
+        calls: list[dict[str, object]] = []
+
+        def cap_then_inconsistent_terminal(**kwargs: object) -> dict[str, object]:
+            calls.append(dict(kwargs))
+            if len(calls) == 1:
+                raise SealedOverrideContinuationCapError("independent continuation capped before a terminal result")
+            return {
+                "continuation": {
+                    "decision_round_count": 3,
+                    "terminal_after_fixed_joint_step": False,
+                    "terminal": {"winner": "p1", "turn_count": 10, "capped": False},
+                }
+            }
+
+        with patch(
+            "pokezero.sealed_override_continuation.run_sealed_override_continuation",
+            cap_then_inconsistent_terminal,
+        ), self.assertRaisesRegex(SealedOverrideContinuationError, "did not run beyond"):
+            evaluate_sealed_root_action_grid(
+                snapshot=self._snapshot(),
+                source_battle_id="inconsistent-retry-grid",
+                source_seed=1,
+                source_decision_round=1,
+                subject_player="p1",
+                actions={"raw_policy": 2, "mcts_selected": 4},
+                opponent_player="p2",
+                opponent_action=1,
+                continuation_policy_factories={"policy_consistent": lambda: {}},
+                continuation_rng_seeds=[1],
+                search_evidence={},
+                env_factory=lambda: self.fail("patched runner must not allocate an environment"),
+                rollout_config=RolloutConfig(),
+                max_continuation_decision_rounds=3,
+                expanded_max_continuation_decision_rounds=11,
+            )
+
+        self.assertEqual(
+            [call["max_continuation_decision_rounds"] for call in calls], [3, 11]
+        )
 
     def test_root_action_grid_rejects_repeated_actions_before_allocating(self) -> None:
         with self.assertRaisesRegex(SealedOverrideContinuationError, "repeats an action"):

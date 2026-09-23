@@ -68,7 +68,7 @@ SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-sealed-override-audit.v2"
 )
 SEALED_ROOT_ACTION_AUDIT_EVIDENCE_SCHEMA_VERSION = (
-    "pokezero.mcts-guided-vs-raw-sealed-root-action-audit.v1"
+    "pokezero.mcts-guided-vs-raw-sealed-root-action-audit.v2"
 )
 MODEL_ROLLOUT_SHADOW_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-model-rollout-shadow.v1"
@@ -363,6 +363,7 @@ class SealedRootActionAuditConfig:
     targets: tuple[SealedRootActionAuditTarget, ...]
     continuation_rng_seeds: tuple[int, ...]
     max_continuation_decision_rounds: int
+    expanded_max_continuation_decision_rounds: int
 
 
 class DeterministicRawPolicyAdapter:
@@ -474,6 +475,7 @@ def _sealed_root_action_audit_config(
         "targets",
         "continuation_rng_seeds",
         "max_continuation_decision_rounds",
+        "expanded_max_continuation_decision_rounds",
         "continuation_targets",
     }
     if set(audit) != expected:
@@ -533,10 +535,20 @@ def _sealed_root_action_audit_config(
         raise HeadToHeadError(
             "root action audit max_continuation_decision_rounds must be a positive integer."
         )
+    expanded_maximum = audit.get("expanded_max_continuation_decision_rounds")
+    if (
+        isinstance(expanded_maximum, bool)
+        or not isinstance(expanded_maximum, int)
+        or expanded_maximum <= maximum
+    ):
+        raise HeadToHeadError(
+            "root action audit expanded_max_continuation_decision_rounds must exceed the initial ceiling."
+        )
     return SealedRootActionAuditConfig(
         targets=tuple(targets),
         continuation_rng_seeds=tuple(raw_rng_seeds),
         max_continuation_decision_rounds=maximum,
+        expanded_max_continuation_decision_rounds=expanded_maximum,
     )
 
 
@@ -1890,6 +1902,9 @@ def _sealed_root_action_audit_writer(
                 continuation_rng_seeds=config.continuation_rng_seeds,
                 rollout_config=continuation_rollout_config,
                 max_continuation_decision_rounds=config.max_continuation_decision_rounds,
+                expanded_max_continuation_decision_rounds=(
+                    config.expanded_max_continuation_decision_rounds
+                ),
             )
         except SealedRootActionAuditError as exc:
             raise HeadToHeadError(f"sealed root action audit failed: {exc}") from exc
@@ -2354,7 +2369,7 @@ def _validate_sealed_root_action_audit_evidence(
         if set(readout) != {
             "schema_version", "seed", "battle_id", "candidate_seat", "decision_round_index",
             "audit_status", "audit",
-        } or readout.get("schema_version") != "pokezero.sealed-root-action-audit.v1":
+        } or readout.get("schema_version") != "pokezero.sealed-root-action-audit.v2":
             raise HeadToHeadError("root action audit readout has an unsupported shape.")
         round_index = readout.get("decision_round_index")
         if (
@@ -2380,7 +2395,7 @@ def _validate_sealed_root_action_audit_evidence(
             "subject_player", "opponent_player", "opponent_action_held_fixed", "actions",
             "search_evidence", "continuation_targets",
         }
-        if set(audit) != required or audit.get("schema_version") != "pokezero.sealed-root-action-grid.v1":
+        if set(audit) != required or audit.get("schema_version") != "pokezero.sealed-root-action-grid.v2":
             raise HeadToHeadError("root action audit grid has an unsupported shape.")
         if (
             audit.get("source_battle_id") != readout["battle_id"]
@@ -2464,12 +2479,33 @@ def _validate_sealed_root_action_audit_evidence(
                         or outcome.get("action_label") != label
                         or outcome.get("action_index") != action
                         or set(continuation) != {
-                            "decision_round_count", "terminal_after_fixed_joint_step", "terminal"
+                            "decision_round_count", "terminal_after_fixed_joint_step", "terminal",
+                            "initial_max_continuation_decision_rounds",
+                            "effective_max_continuation_decision_rounds", "cap_retry",
                         }
                         or isinstance(continuation["decision_round_count"], bool)
                         or not isinstance(continuation["decision_round_count"], int)
                         or continuation["decision_round_count"] < 0
                         or continuation["terminal_after_fixed_joint_step"] is not (continuation["decision_round_count"] == 0)
+                        or continuation.get("initial_max_continuation_decision_rounds")
+                        != config.max_continuation_decision_rounds
+                        or continuation.get("effective_max_continuation_decision_rounds")
+                        not in {
+                            config.max_continuation_decision_rounds,
+                            config.expanded_max_continuation_decision_rounds,
+                        }
+                        or not isinstance(continuation.get("cap_retry"), bool)
+                        or continuation["cap_retry"] is not (
+                            continuation["effective_max_continuation_decision_rounds"]
+                            == config.expanded_max_continuation_decision_rounds
+                        )
+                        or continuation["decision_round_count"]
+                        > continuation["effective_max_continuation_decision_rounds"]
+                        or (
+                            continuation["cap_retry"]
+                            and continuation["decision_round_count"]
+                            <= continuation["initial_max_continuation_decision_rounds"]
+                        )
                         or set(terminal) != {"winner", "turn_count", "capped"}
                         # An uncapped draw has no winner.  It remains a
                         # complete terminal outcome, rather than a partial
