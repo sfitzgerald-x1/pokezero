@@ -78,6 +78,33 @@ def _pearson(xs: list[float], ys: list[float]) -> float | None:
     return numerator / math.sqrt(x_sum * y_sum)
 
 
+def _cluster_effects(
+    roots: list[dict[str, Any]], target: str, *, key: str
+) -> list[dict[str, Any]]:
+    """Report correlated root groups without manufacturing a confidence interval."""
+
+    grouped: dict[object, list[float]] = {}
+    for row in roots:
+        source = row["source"]
+        cluster: object
+        if key == "source_seed":
+            cluster = source["seed"]
+        elif key == "source_game":
+            cluster = (source["seed"], source["candidate_seat"])
+        else:  # pragma: no cover - fixed internal call sites
+            raise AssertionError(f"unsupported cluster key {key}")
+        grouped.setdefault(cluster, []).append(row["targets"][target]["mcts_minus_raw_trial_mean"])
+    result: list[dict[str, Any]] = []
+    for cluster, effects in sorted(grouped.items()):
+        label = (
+            {"seed": cluster}
+            if key == "source_seed"
+            else {"seed": cluster[0], "candidate_seat": cluster[1]}
+        )
+        result.append({**label, "root_count": len(effects), "mcts_minus_raw_root_mean": _mean(effects)})
+    return result
+
+
 def _load_json(path: Path, label: str) -> Mapping[str, Any]:
     try:
         return _mapping(json.loads(path.read_text(encoding="utf-8")), label)
@@ -318,6 +345,8 @@ def summarize(root: Path, *, expected_roots: int) -> dict[str, Any]:
             "tied_roots": sum(effect == 0.0 for effect in effects),
             "pearson_root_q_gap_vs_effect": _pearson(q_gaps, effects),
             "pearson_root_visit_gap_vs_effect": _pearson(visit_gaps, effects),
+            "by_source_seed": _cluster_effects(roots, target, key="source_seed"),
+            "by_source_game": _cluster_effects(roots, target, key="source_game"),
         }
     return {
         "schema_version": OUTPUT_SCHEMA,

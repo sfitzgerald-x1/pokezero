@@ -125,6 +125,14 @@ class RootActionAuditReadoutTest(unittest.TestCase):
                 "source_seed_count": 4, "source_game_count": 8,
             })
             self.assertEqual(summary["targets"]["policy_consistent"]["mcts_better_roots"], 16)
+            self.assertEqual(
+                [row["root_count"] for row in summary["targets"]["policy_consistent"]["by_source_seed"]],
+                [4, 4, 4, 4],
+            )
+            self.assertEqual(
+                [row["root_count"] for row in summary["targets"]["policy_consistent"]["by_source_game"]],
+                [2] * 8,
+            )
 
     def test_summarize_refuses_capped_continuations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
