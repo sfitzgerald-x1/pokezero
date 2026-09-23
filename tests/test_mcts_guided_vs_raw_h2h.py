@@ -745,6 +745,24 @@ class GuidedConfigTest(unittest.TestCase):
                 with self.assertRaisesRegex(Exception, "must be a boolean"):
                     RUNNER._require_registered_candidate_config(config)
 
+    def test_registered_selective_order_opponent_prior_protocol_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {"allow_lost_active_permutation_opponent_root_fallback": True},
+            "the selective-order replay may differ from the strict opponent-prior arm only on its named recovery rule",
+        )
+        self.assertEqual(set(config), set(baseline))
+        RUNNER._require_registered_candidate_config(config)
+        config["allow_lost_active_permutation_opponent_root_fallback"] = "only-this-status"
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
     def test_deep_opponent_prior_manifest_inherits_cuda_without_overriding_it(self) -> None:
         manifest_config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
         manifest_config.pop("model_device")
