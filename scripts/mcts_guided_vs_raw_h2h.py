@@ -18,7 +18,7 @@ import math
 from pathlib import Path
 import sys
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -1049,6 +1049,11 @@ def _candidate_uses_model_rollout_shadow(candidate: MctsPolicySpec) -> bool:
     return isinstance(config, Mapping) and config.get("rollout_leaf_shadow") is True
 
 
+def _candidate_uses_rollout_leaf_eval(candidate: MctsPolicySpec) -> bool:
+    config = getattr(candidate, "config", {})
+    return isinstance(config, Mapping) and config.get("rollout_leaf_eval") is True
+
+
 def _validated_model_rollout_shadow(value: object) -> dict[str, Any]:
     """Accept an honest terminal-only uniform-rollout leaf diagnostic.
 
@@ -1955,6 +1960,24 @@ def _validate_completed_game(game: Any) -> None:
         or raw.worlds_searched
     ):
         raise HeadToHeadError("raw-policy baseline recorded search work.")
+    raw_rollout_work = (
+        int(getattr(raw, "rollout_leaf_worlds", 0))
+        + int(getattr(raw, "rollout_leaves_priced", 0))
+        + int(getattr(raw, "rollouts_run", 0))
+        + int(getattr(raw, "rollout_plies", 0))
+        + int(getattr(raw, "rollout_terminal_hits", 0))
+        + int(getattr(raw, "rollout_cap_hits", 0))
+        + int(getattr(raw, "rollout_dead_ends", 0))
+        + int(getattr(raw, "rollout_encode_skipped", 0))
+    )
+    if getattr(raw, "rollout_leaf_modes", {}) or raw_rollout_work:
+        raise HeadToHeadError("raw-policy baseline recorded rollout-leaf work.")
+    if _candidate_uses_rollout_leaf_eval(getattr(game, "candidate", None)) and not getattr(
+        candidate, "rollout_leaf_modes", {}
+    ):
+        raise HeadToHeadError(
+            "rollout-leaf candidate completed a game without its realized rollout witness."
+        )
 
 
 def _validate_summary_evidence(summary: Mapping[str, Any]) -> None:
@@ -1972,6 +1995,44 @@ def _validate_summary_evidence(summary: Mapping[str, Any]) -> None:
         )
     if summary.get("incumbent_model_evals") != 0 or summary.get("incumbent_iterations") != 0:
         raise HeadToHeadError("raw baseline summary contains search work.")
+    candidate_raw = summary.get("candidate")
+    if candidate_raw is None:
+        # This helper also services minimal unit fixtures. Durable runner
+        # summaries always carry the candidate receipt and take the strict path.
+        return
+    candidate = _mapping(candidate_raw, label="summary candidate")
+    config = _mapping(candidate.get("config"), label="summary candidate config")
+    if config.get("rollout_leaf_eval") is True:
+        modes = summary.get("candidate_rollout_leaf_modes")
+        if not isinstance(modes, Mapping) or not modes:
+            raise HeadToHeadError(
+                "rollout-leaf summary has no realized rollout witness; a config receipt is not evidence."
+            )
+        try:
+            partition = {
+                key: summary[key]
+                for key in (
+                    "candidate_rollouts_run",
+                    "candidate_rollout_terminal_hits",
+                    "candidate_rollout_cap_hits",
+                    "candidate_rollout_dead_ends",
+                )
+            }
+        except KeyError as error:
+            raise HeadToHeadError("rollout-leaf summary has malformed terminal partition telemetry.") from error
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in partition.values()
+        ):
+            raise HeadToHeadError("rollout-leaf summary has malformed terminal partition telemetry.")
+        rollouts = partition["candidate_rollouts_run"]
+        terminal = partition["candidate_rollout_terminal_hits"]
+        cap = partition["candidate_rollout_cap_hits"]
+        dead = partition["candidate_rollout_dead_ends"]
+        if rollouts <= 0 or terminal + cap + dead != rollouts:
+            raise HeadToHeadError(
+                "rollout-leaf summary terminal, cap, and dead-end counts do not partition rollouts."
+            )
 
 
 def _progress_writer(out_root: Path, *, candidate: MctsPolicySpec, incumbent: MctsPolicySpec):

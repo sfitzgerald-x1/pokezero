@@ -1309,6 +1309,26 @@ class CompletedGameEvidenceTest(unittest.TestCase):
                 SimpleNamespace(candidate_telemetry=clean, incumbent_telemetry=raw_with_search)
             )
 
+    def test_rollout_leaf_candidate_requires_realized_witness(self) -> None:
+        clean = SimpleNamespace(
+            fallback_decisions=0,
+            root_prior_fallbacks=0,
+            searched_decisions=0,
+            model_evals=0,
+            total_iterations=0,
+            worlds_constructed=0,
+            worlds_searched=0,
+        )
+        rollout_candidate = SimpleNamespace(config={"rollout_leaf_eval": True})
+        with self.assertRaisesRegex(Exception, "realized rollout witness"):
+            RUNNER._validate_completed_game(
+                SimpleNamespace(
+                    candidate=rollout_candidate,
+                    candidate_telemetry=clean,
+                    incumbent_telemetry=clean,
+                )
+            )
+
     def test_summary_requires_a_live_guided_root_witness(self) -> None:
         summary = {
             "candidate_root_prior_fallbacks": 0,
@@ -1321,6 +1341,31 @@ class CompletedGameEvidenceTest(unittest.TestCase):
         summary["candidate_override_measured_decisions"] = 0
         with self.assertRaisesRegex(Exception, "live root model-action"):
             RUNNER._validate_summary_evidence(summary)
+
+    def test_rollout_leaf_summary_requires_terminal_partition(self) -> None:
+        summary = {
+            "candidate_root_prior_fallbacks": 0,
+            "incumbent_root_prior_fallbacks": 0,
+            "candidate_override_measured_decisions": 2,
+            "incumbent_model_evals": 0,
+            "incumbent_iterations": 0,
+            "candidate": {"config": {"rollout_leaf_eval": True}},
+            "candidate_rollout_leaf_modes": {"rollout": 8},
+            "candidate_rollouts_run": 32,
+            "candidate_rollout_terminal_hits": 31,
+            "candidate_rollout_cap_hits": 1,
+            "candidate_rollout_dead_ends": 0,
+        }
+        RUNNER._validate_summary_evidence(summary)
+        summary["candidate_rollout_terminal_hits"] = 30
+        with self.assertRaisesRegex(Exception, "do not partition"):
+            RUNNER._validate_summary_evidence(summary)
+
+        summary["candidate_rollout_terminal_hits"] = 31
+        for malformed in (32.5, True):
+            summary["candidate_rollouts_run"] = malformed
+            with self.assertRaisesRegex(Exception, "malformed terminal partition"):
+                RUNNER._validate_summary_evidence(summary)
 
 
 if __name__ == "__main__":

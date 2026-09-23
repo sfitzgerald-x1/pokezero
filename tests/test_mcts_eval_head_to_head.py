@@ -145,6 +145,45 @@ class OpponentOrderTelemetryTest(unittest.TestCase):
         with self.assertRaisesRegex(HeadToHeadError, "status telemetry regressed"):
             before.delta(after)
 
+    def test_rollout_leaf_partition_survives_capture_and_delta(self) -> None:
+        policy = _Policy("candidate")
+        policy.stats.rollout_leaf_modes = Counter({"rollout": 4})
+        policy.stats.rollout_leaf_worlds = 4
+        policy.stats.rollout_leaves_priced = 160
+        policy.stats.rollouts_run = 128
+        policy.stats.rollout_plies = 4096
+        policy.stats.rollout_terminal_hits = 120
+        policy.stats.rollout_cap_hits = 8
+        policy.stats.rollout_dead_ends = 0
+        policy.stats.rollout_encode_skipped = 12
+
+        telemetry = PolicyTelemetry.capture(policy)
+
+        self.assertEqual(telemetry.rollout_leaf_modes, {"rollout": 4})
+        self.assertEqual(telemetry.rollout_terminal_hits, 120)
+        self.assertEqual(telemetry.rollout_cap_hits, 8)
+        self.assertEqual(telemetry.delta(PolicyTelemetry()).rollouts_run, 128)
+
+    def test_rollout_leaf_work_without_mode_witness_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "without a rollout leaf mode witness"):
+            PolicyTelemetry(rollouts_run=1)
+
+    def test_capture_refuses_lossy_rollout_counter_types(self) -> None:
+        policy = _Policy("candidate")
+        policy.stats.rollout_leaf_modes = Counter({"rollout": 1})
+        policy.stats.rollout_leaf_worlds = 1
+        policy.stats.rollout_leaves_priced = 1
+        policy.stats.rollout_plies = 1
+        policy.stats.rollout_terminal_hits = 1
+        policy.stats.rollout_cap_hits = 0
+        policy.stats.rollout_dead_ends = 0
+        policy.stats.rollout_encode_skipped = 0
+
+        for malformed in (1.5, True):
+            policy.stats.rollouts_run = malformed
+            with self.assertRaisesRegex(ValueError, "non-negative integers"):
+                PolicyTelemetry.capture(policy)
+
 
 class IsolatedRunnerCliTest(unittest.TestCase):
     def test_default_response_deadline_covers_observed_search_tail_budget(self) -> None:
