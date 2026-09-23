@@ -119,10 +119,10 @@ off-policy leaves and compounds errors through selection and backup—but does
 not establish that route as the cause.
 
 The R4 result is source-bound to `a60da9eb`, not the later `195a89c5` source
-used by the failed opponent-prior R3 attempt. It is strong evidence about the
-mechanism but not a replacement for a source-matched strength experiment. It
-also uses uniform continuations, not Foul Play; it therefore does **not** prove
-that the head disagrees with Foul Play on the same leaves.
+used by the failed opponent-prior R3 attempt. It is useful diagnostic evidence,
+not a replacement for a source-matched strength experiment or proof of the
+mechanism. It also uses uniform continuations, not Foul Play; it therefore does
+**not** prove that the head disagrees with Foul Play on the same leaves.
 
 ## Why the B2a continuation bank is not yet a value-head training corpus
 
