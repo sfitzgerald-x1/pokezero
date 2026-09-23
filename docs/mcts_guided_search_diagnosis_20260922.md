@@ -194,30 +194,30 @@ exists.
 
 ## Completed source-matched rollout-leaf diagnostic
 
-The source-matched own-prior control is complete: it has four terminal,
-zero-restart paired seeds under source commit `195a89c5`. Its rollout-leaf
-counterpart is also terminal and zero-restart. The complete, independently
-hash-linked readout is at
-`/shared/scott-experiment/mcts-source-matched-leaf-readout-195a89c5-20260923-r3`.
+The first `195a89c5` four-pair readout established the direction but did not
+transport the realized rollout partition. A fresh, terminal, zero-restart
+replication under commit `9a21e1b0fdb1aa52d41a056be26a1abeed63cd76` fixed
+that evidence gap. Its complete, hash-linked readout is
+`/shared/scott-experiment/mcts-source-matched-leaf-readout-9a21e1b0-20260923-r2`.
 
-It uses the same source, checkpoint, seeds, raw incumbent, own-prior MCTS
-settings, search depth, simulation count, and one-second decision limit. The
-rollout arm enables `rollout_leaf_eval=true` and its required twelve rollout
-workers; the control trusts the learned model leaf. Across the four mirrored
-pairs, model-leaf MCTS scored 25% (`0.5, 0, 0, 0.5`) and rollout-leaf MCTS
-scored 75% (`0.5, 0.5, 1, 1`). The paired rollout-minus-model estimate is
-**+50 percentage points**, with the registered four-pair bootstrap interval
-**+12.5 to +87.5 points**.
+It uses the same checkpoint, seeds, raw incumbent, own-prior MCTS settings,
+search depth, simulation count, and one-second decision limit. The rollout
+arm enables `rollout_leaf_eval=true` and its required twelve rollout workers;
+the control trusts the learned model leaf. Across the four mirrored pairs,
+model-leaf MCTS scored 25% (`0.5, 0, 0, 0.5`) and rollout-leaf MCTS scored 75%
+(`0.5, 0.5, 1, 1`). The paired rollout-minus-model estimate is **+50 percentage
+points**, with the registered four-pair bootstrap interval **+12.5 to +87.5
+points**.
 
-This is causal evidence that changing the leaf-evaluation path materially
-changed these matched outcomes; it is **not** a strength claim, a Foul Play
-comparison, or enough evidence to approve value-head retraining. In
-particular, the `195a89c5` runner predates transport of the realized rollout
-terminal/cap/dead-end partition. The artifact proves the configured rollout
-arm and its score, but does not prove what fraction of its backed-up leaf
-values came from terminal outcomes rather than bounded fallbacks. The updated
-transport must be used for the next experiment before calling this a pure
-terminal-leaf result.
+The fresh rollout arm recorded **280,045,024** actual rollout rows: 254,552,650
+terminal (90.90%), 25,492,374 ply-cap fallback (9.10%), and zero dead ends. The
+model control recorded zero rollout rows. Thus the intervention and its
+terminal/cap/dead-end denominator are now explicit rather than inferred. It is
+still not a pure-terminal-leaf correction: about one in eleven backed-up
+rollouts used the registered capped fallback. This is causal evidence that
+changing the leaf-evaluation path materially changed these matched outcomes;
+it is **not** a strength claim, a Foul Play comparison, or enough evidence to
+approve value-head retraining.
 
 The result is nevertheless incompatible with the claim that a policy that
 matches a strong one-turn chooser must automatically support effective MCTS.
@@ -229,15 +229,14 @@ separately accurate leaf evaluator.
 
 The result has a sharp interpretation:
 
-1. Re-run the matched control and rollout-leaf arm on the source that records
-   the actual terminal/cap/dead-end partition. Require that evidence in every
-   paired game and reject a run with missing or malformed counters.
-2. Expand the shared seed denominator before estimating strength. If the
+1. Expand the shared seed denominator before estimating strength. The current
+   eight-pair replication preserves the full terminal/cap/dead-end partition
+   per game and rejects a malformed counter before it can be read out. If the
    positive direction persists with a healthy terminal fraction, prioritize a
    source-bound value-target/calibration study: compare policy-continuation
    and uniform-terminal targets on matched, held-out frontier states before
    choosing retraining data.
-3. Any promoted search or value correction still needs a separately
+2. Any promoted search or value correction still needs a separately
    registered, durable paired GPU strength study with a
    zero-unexpected-fallback contract. Partial seed output is never evidence
    for either conclusion.
