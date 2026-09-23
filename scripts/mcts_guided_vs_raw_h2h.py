@@ -150,6 +150,15 @@ REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG = {
     **REGISTERED_DEEP_ENGINE_CONFIG,
     "use_opponent_priors": True,
 }
+# The selective public-order replay is the same fixed-work opponent-prior
+# protocol, except for its narrowly-scoped recovery of a root prior when the
+# public trajectory has lost the active opponent permutation.  This is a
+# distinct semantic arm: the flag must be registered explicitly, rather than
+# smuggled into the ordinary opponent-prior result.
+REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG = {
+    **REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
+    "allow_lost_active_permutation_opponent_root_fallback": True,
+}
 # This is the matched leaf-value ablation of the fixed-work CUDA protocol.
 # Every search knob, own prior, world count, and source-bound input is shared
 # with REGISTERED_DEEP_ENGINE_CONFIG.  Only the native model leaf is replaced
@@ -178,6 +187,7 @@ REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
+    REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG,
     REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG,
     REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG,
 )
