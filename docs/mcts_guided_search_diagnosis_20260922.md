@@ -179,6 +179,19 @@ other opponent-order status remains terminal. Its immutable applicability
 contract requires a witnessed no-choice root; it cannot be used as a strength
 promotion.
 
+R8 reached the same `2026092006` / round-28 boundary with both narrowly
+scoped flags enabled and still wrote a durable terminal refusal with exactly
+one `opponent_order_lost_active_permutation` fallback. Given the source-bound
+flags, matching status, null fallback reason, and count one, this proves the
+native assessment at that root was **not** `no_choice`; otherwise the guarded
+exception would have admitted it. The refusal is therefore correct rather
+than a missed use of the exception. R8's partial siblings remain preserved but
+the strength result is nonbankable. Do not widen this exception: that would
+invent opponent-prior ordering at a root where the opponent actually has a
+decision. The supported outcome is to leave opponent priors unavailable for
+this public-history state until a separately proven reconstruction mechanism
+exists.
+
 ## Completed source-matched rollout-leaf diagnostic
 
 The source-matched own-prior control is complete: it has four terminal,
