@@ -145,8 +145,8 @@ head on unidentifiable states and would not answer the leaf question.
 
 The source-matched champion receipt carries no value-calibration transform.
 That matters because the current MCTS crate maps its raw tanh output directly
-to tree probability `(v + 1) / 2`; the Python search boundary explicitly
-refuses a checkpoint carrying any non-identity
+to tree probability `(v + 1) / 2`; the Python **model-leaf** search boundary
+explicitly refuses a checkpoint carrying any non-identity
 `value_calibration_transform`. This is a protective fence against evaluating
 the checkpoint on one value axis in Python and a different one in the native
 tree.
