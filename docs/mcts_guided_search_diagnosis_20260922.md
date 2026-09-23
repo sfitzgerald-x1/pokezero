@@ -24,6 +24,23 @@ All 1,414 are `unmapped_action` interior fallbacks:
 | root-prior fallbacks | 0 |
 | other fallback reasons | 0 |
 
+The event count is highly concentrated rather than spread over those five
+choices:
+
+| round | repeated interior fallback events |
+| ---: | ---: |
+| 118 | 5 |
+| 119 | 275 |
+| 124 | 626 |
+| 126 | 504 |
+| 127 | 4 |
+
+Thus 1,405 of 1,414 events (99.4%) were produced while exploring only three
+late-game roots (rounds 119, 124, and 126). Each ledger records four native
+belief-world invocations; the round-124 ledger coalesced two equivalent
+belief records for one invocation. These are tree-internal occurrences, not
+additional public choices.
+
 The root was valid at every affected decision (`prior_authority=true`, no
 missing root action indices), and the MCTS action equalled the raw policy
 argmax at all five.  Thus the number is repeated simulated-node fallback
