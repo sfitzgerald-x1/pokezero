@@ -405,6 +405,7 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
                 "targets": [{"seed": 19, "candidate_seat": "p1", "decision_round_index": 7}],
                 "continuation_rng_seeds": list(range(100, 116)),
                 "max_continuation_decision_rounds": 400,
+                "expanded_max_continuation_decision_rounds": 1024,
                 "continuation_targets": {
                     "policy_consistent": {
                         "subject": "sampled_raw_transformer",
@@ -420,6 +421,7 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
         config = RUNNER._sealed_root_action_audit_config(manifest, seeds=(19,))
         self.assertEqual(config.continuation_rng_seeds, tuple(range(100, 116)))
         self.assertEqual(config.targets[0].decision_round_index, 7)
+        self.assertEqual(config.expanded_max_continuation_decision_rounds, 1024)
         manifest["sealed_root_action_audit"]["continuation_rng_seeds"] = list(range(100, 115))
         with self.assertRaisesRegex(Exception, "exactly sixteen"):
             RUNNER._sealed_root_action_audit_config(manifest, seeds=(19,))
@@ -1444,11 +1446,12 @@ class SealedRootActionAuditWriterTest(unittest.TestCase):
             targets=(RUNNER.SealedRootActionAuditTarget(19, "p1", 7),),
             continuation_rng_seeds=tuple(range(100, 116)),
             max_continuation_decision_rounds=400,
+            expanded_max_continuation_decision_rounds=1024,
         )
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
         readout = {
-            "schema_version": "pokezero.sealed-root-action-audit.v1",
+            "schema_version": "pokezero.sealed-root-action-audit.v2",
             "seed": 19,
             "battle_id": "mcts-h2h-19-p1",
             "candidate_seat": "p1",

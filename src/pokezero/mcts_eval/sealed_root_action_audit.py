@@ -117,6 +117,7 @@ def evaluate_root_action_boundary(
     continuation_rng_seeds: Sequence[int],
     rollout_config: RolloutConfig,
     max_continuation_decision_rounds: int | None = None,
+    expanded_max_continuation_decision_rounds: int | None = None,
 ) -> dict[str, Any] | None:
     """Evaluate an actual MCTS override under paired continuation targets.
 
@@ -157,7 +158,7 @@ def evaluate_root_action_boundary(
         }:
             raise SealedRootActionAuditError("one-sided root action boundary is malformed")
         return {
-            "schema_version": "pokezero.sealed-root-action-audit.v1",
+            "schema_version": "pokezero.sealed-root-action-audit.v2",
             "seed": boundary.seed,
             "battle_id": boundary.battle_id,
             "candidate_seat": candidate_seat,
@@ -189,11 +190,12 @@ def evaluate_root_action_boundary(
             env_factory=env_factory,
             rollout_config=rollout_config,
             max_continuation_decision_rounds=max_continuation_decision_rounds,
+            expanded_max_continuation_decision_rounds=expanded_max_continuation_decision_rounds,
         )
     except SealedOverrideContinuationError as exc:
         raise SealedRootActionAuditError(f"root action continuation failed: {exc}") from exc
     return {
-        "schema_version": "pokezero.sealed-root-action-audit.v1",
+        "schema_version": "pokezero.sealed-root-action-audit.v2",
         "seed": boundary.seed,
         "battle_id": boundary.battle_id,
         "candidate_seat": candidate_seat,
