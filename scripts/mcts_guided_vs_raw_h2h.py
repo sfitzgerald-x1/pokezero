@@ -67,6 +67,9 @@ BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
 SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-sealed-override-audit.v2"
 )
+SEALED_ROOT_ACTION_AUDIT_EVIDENCE_SCHEMA_VERSION = (
+    "pokezero.mcts-guided-vs-raw-sealed-root-action-audit.v1"
+)
 MODEL_ROLLOUT_SHADOW_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-model-rollout-shadow.v1"
 )
@@ -344,6 +347,24 @@ class SealedOverrideAuditConfig:
     max_continuation_decision_rounds: int
 
 
+@dataclass(frozen=True)
+class SealedRootActionAuditTarget:
+    """One source boundary selected before any continuation outcome exists."""
+
+    seed: int
+    candidate_seat: str
+    decision_round_index: int
+
+
+@dataclass(frozen=True)
+class SealedRootActionAuditConfig:
+    """Bounded, paired target-quality audit over predeclared MCTS roots."""
+
+    targets: tuple[SealedRootActionAuditTarget, ...]
+    continuation_rng_seeds: tuple[int, ...]
+    max_continuation_decision_rounds: int
+
+
 class DeterministicRawPolicyAdapter:
     """Give the raw policy a safe context entry point and honest telemetry."""
 
@@ -430,6 +451,93 @@ def _sealed_override_audit_config(
             "sealed override audit max_continuation_decision_rounds must be a positive integer."
         )
     return SealedOverrideAuditConfig(max_continuation_decision_rounds=maximum)
+
+
+def _sealed_root_action_audit_config(
+    manifest: Mapping[str, Any], *, seeds: tuple[int, ...]
+) -> SealedRootActionAuditConfig | None:
+    """Parse the predeclared source-root sample for target-quality evidence.
+
+    The runner refuses an open-ended "audit every override" switch: each
+    source address is selected in the manifest before continuation results
+    exist, and the fixed 16 paired RNG trials are shared across all candidate
+    actions within a root.  This keeps both the population and the compute
+    budget auditable.
+    """
+
+    raw = manifest.get("sealed_root_action_audit")
+    if raw is None:
+        return None
+    audit = _mapping(raw, label="manifest.sealed_root_action_audit")
+    expected = {
+        "schema_version",
+        "targets",
+        "continuation_rng_seeds",
+        "max_continuation_decision_rounds",
+        "continuation_targets",
+    }
+    if set(audit) != expected:
+        raise HeadToHeadError("manifest.sealed_root_action_audit has unsupported fields.")
+    if audit.get("schema_version") != SEALED_ROOT_ACTION_AUDIT_EVIDENCE_SCHEMA_VERSION:
+        raise HeadToHeadError("manifest.sealed_root_action_audit has an unsupported schema version.")
+    if audit.get("continuation_targets") != {
+        "policy_consistent": {
+            "subject": "sampled_raw_transformer",
+            "opponent": "sampled_raw_transformer",
+        },
+        "uniform_own": {
+            "subject": "uniform_legal",
+            "opponent": "sampled_raw_transformer",
+        },
+    }:
+        raise HeadToHeadError(
+            "root action audit continuation targets must be the registered own-policy contrast."
+        )
+    raw_targets = audit.get("targets")
+    if not isinstance(raw_targets, list) or not raw_targets:
+        raise HeadToHeadError("root action audit targets must be a non-empty JSON list.")
+    targets: list[SealedRootActionAuditTarget] = []
+    for item in raw_targets:
+        target = _mapping(item, label="root action audit target")
+        if set(target) != {"seed", "candidate_seat", "decision_round_index"}:
+            raise HeadToHeadError("root action audit target has unsupported fields.")
+        seed = target.get("seed")
+        seat = target.get("candidate_seat")
+        round_index = target.get("decision_round_index")
+        if (
+            isinstance(seed, bool)
+            or not isinstance(seed, int)
+            or seed not in seeds
+            or seat not in {"p1", "p2"}
+            or isinstance(round_index, bool)
+            or not isinstance(round_index, int)
+            or round_index < 0
+        ):
+            raise HeadToHeadError("root action audit target is malformed or outside manifest seeds.")
+        targets.append(SealedRootActionAuditTarget(seed, seat, round_index))
+    addresses = {(target.seed, target.candidate_seat, target.decision_round_index) for target in targets}
+    if len(addresses) != len(targets):
+        raise HeadToHeadError("root action audit targets contain a duplicate source address.")
+    raw_rng_seeds = audit.get("continuation_rng_seeds")
+    if (
+        not isinstance(raw_rng_seeds, list)
+        or len(raw_rng_seeds) != 16
+        or any(isinstance(seed, bool) or not isinstance(seed, int) or seed < 0 for seed in raw_rng_seeds)
+        or len(set(raw_rng_seeds)) != len(raw_rng_seeds)
+    ):
+        raise HeadToHeadError(
+            "root action audit requires exactly sixteen unique non-negative continuation RNG seeds."
+        )
+    maximum = audit.get("max_continuation_decision_rounds")
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum <= 0:
+        raise HeadToHeadError(
+            "root action audit max_continuation_decision_rounds must be a positive integer."
+        )
+    return SealedRootActionAuditConfig(
+        targets=tuple(targets),
+        continuation_rng_seeds=tuple(raw_rng_seeds),
+        max_continuation_decision_rounds=maximum,
+    )
 
 
 def _require_registered_candidate_config(config: Mapping[str, Any]) -> None:
@@ -1588,7 +1696,7 @@ def _sealed_override_audit_writer(
     incumbent: MctsPolicySpec,
     candidate_seat: str,
     env_factory: Any,
-    continuation_policy_factory: Any,
+    continuation_policy_factory_builder: Any,
     continuation_rollout_config: Any,
     max_continuation_decision_rounds: int,
 ):
@@ -1659,7 +1767,7 @@ def _sealed_override_audit_writer(
             boundary=boundary,
             candidate_seat=candidate_seat,
             env_factory=env_factory,
-            continuation_policy_factory=continuation_policy_factory,
+            continuation_policy_factory_builder=continuation_policy_factory_builder,
             rollout_config=continuation_rollout_config,
             max_continuation_decision_rounds=max_continuation_decision_rounds,
         )
@@ -1691,6 +1799,128 @@ def _sealed_override_audit_writer(
         _write_immutable_json(
             path,
             _sealed_override_audit_payload(
+                candidate=candidate,
+                incumbent=incumbent,
+                candidate_seat=candidate_seat,
+                readout=readout,
+            ),
+        )
+
+    return pre_step_write, public_decision_write
+
+
+def _sealed_root_action_audit_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    decision_round_index: int,
+) -> Path:
+    if candidate_seat not in {"p1", "p2"} or seed < 0 or decision_round_index < 0:
+        raise HeadToHeadError("root action audit path has an invalid source address.")
+    return (
+        out_root
+        / "sealed-root-action-audits"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"round-{decision_round_index:04d}.json"
+    )
+
+
+def _sealed_root_action_audit_payload(
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    readout: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind a private-source continuation result to public run identity only."""
+
+    return {
+        "schema_version": SEALED_ROOT_ACTION_AUDIT_EVIDENCE_SCHEMA_VERSION,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "candidate_seat": candidate_seat,
+        "readout": dict(readout),
+    }
+
+
+def _sealed_root_action_audit_writer(
+    out_root: Path,
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    config: SealedRootActionAuditConfig,
+    env_factory: Any,
+    continuation_policy_factory_builder: Any,
+    continuation_rollout_config: Any,
+):
+    """Create a sealed sink for exactly the manifest-selected source roots.
+
+    The selected address is checked before any continuation environment is
+    created.  A selected root that is no longer a measured override is a hard
+    failure: silently replacing it with a later convenient root would destroy
+    the predeclared sample.
+    """
+
+    from pokezero.mcts_eval.sealed_root_action_audit import (  # noqa: PLC0415
+        SealedRootActionAuditError,
+        evaluate_root_action_boundary,
+    )
+
+    selected = {
+        (target.seed, target.candidate_seat, target.decision_round_index)
+        for target in config.targets
+        if target.candidate_seat == candidate_seat
+    }
+    pending: dict[tuple[int, int], Mapping[str, Any]] = {}
+
+    def pre_step_write(boundary: Any) -> None:
+        key = (getattr(boundary, "seed", None), getattr(boundary, "decision_round_index", None))
+        if (key[0], candidate_seat, key[1]) not in selected:
+            return
+        try:
+            readout = evaluate_root_action_boundary(
+                boundary=boundary,
+                candidate_seat=candidate_seat,
+                env_factory=env_factory,
+                continuation_policy_factory_builder=lambda histories: continuation_policy_factory_builder(
+                    candidate_seat, histories
+                ),
+                continuation_rng_seeds=config.continuation_rng_seeds,
+                rollout_config=continuation_rollout_config,
+                max_continuation_decision_rounds=config.max_continuation_decision_rounds,
+            )
+        except SealedRootActionAuditError as exc:
+            raise HeadToHeadError(f"sealed root action audit failed: {exc}") from exc
+        if readout is None:
+            raise HeadToHeadError(
+                "a manifest-selected root action audit address was not a measured MCTS override."
+            )
+        if readout.get("audit_status") != "PAIRED":
+            raise HeadToHeadError(
+                "a manifest-selected root action audit address was not a simultaneous paired boundary."
+            )
+        if key in pending:
+            raise HeadToHeadError("root action audit repeats a pending source round.")
+        pending[key] = readout
+
+    def public_decision_write(record: PublicDecisionRecord) -> None:
+        if record.acting_player != candidate_seat:
+            return
+        key = (record.seed, record.turn_index)
+        readout = pending.pop(key, None)
+        if readout is None:
+            return
+        path = _sealed_root_action_audit_path(
+            out_root,
+            seed=record.seed,
+            candidate_seat=candidate_seat,
+            decision_round_index=record.turn_index,
+        )
+        _write_immutable_json(
+            path,
+            _sealed_root_action_audit_payload(
                 candidate=candidate,
                 incumbent=incumbent,
                 candidate_seat=candidate_seat,
@@ -2084,6 +2314,179 @@ def _progress_writer(out_root: Path, *, candidate: MctsPolicySpec, incumbent: Mc
     return write
 
 
+def _validate_sealed_root_action_audit_evidence(
+    out_root: Path, game: Any, config: SealedRootActionAuditConfig
+) -> None:
+    """Fail closed unless every selected source root has a complete paired grid."""
+
+    targets = [
+        target for target in config.targets
+        if target.seed == game.seed and target.candidate_seat == game.candidate_seat
+    ]
+    if not targets:
+        return
+    records = _validate_public_decision_evidence(out_root, game)
+    by_round = {record.turn_index: record for record in records}
+    root = out_root / "sealed-root-action-audits" / f"seed-{game.seed}-{game.candidate_seat}"
+    paths = sorted(root.glob("round-*.json")) if root.is_dir() else []
+    if len(paths) != len(targets):
+        raise HeadToHeadError("root action audit sidecar count does not match selected source roots.")
+    expected_rounds = {target.decision_round_index for target in targets}
+    observed_rounds: set[int] = set()
+    for path in paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read root action audit {path}: {error}") from error
+        if not isinstance(payload, Mapping) or set(payload) != {
+            "schema_version", "candidate_provenance_sha256", "raw_provenance_sha256",
+            "candidate_seat", "readout",
+        }:
+            raise HeadToHeadError("root action audit has an unsupported wrapper shape.")
+        if (
+            payload.get("schema_version") != SEALED_ROOT_ACTION_AUDIT_EVIDENCE_SCHEMA_VERSION
+            or payload.get("candidate_provenance_sha256") != game.candidate.provenance_sha256
+            or payload.get("raw_provenance_sha256") != game.incumbent.provenance_sha256
+            or payload.get("candidate_seat") != game.candidate_seat
+        ):
+            raise HeadToHeadError("root action audit does not bind the completed game.")
+        readout = _mapping(payload.get("readout"), label="root action audit readout")
+        if set(readout) != {
+            "schema_version", "seed", "battle_id", "candidate_seat", "decision_round_index",
+            "audit_status", "audit",
+        } or readout.get("schema_version") != "pokezero.sealed-root-action-audit.v1":
+            raise HeadToHeadError("root action audit readout has an unsupported shape.")
+        round_index = readout.get("decision_round_index")
+        if (
+            readout.get("seed") != game.seed
+            or readout.get("candidate_seat") != game.candidate_seat
+            or readout.get("battle_id") != f"mcts-h2h-{game.seed}-{game.candidate_seat}"
+            or isinstance(round_index, bool)
+            or not isinstance(round_index, int)
+            or round_index not in expected_rounds
+            or round_index in observed_rounds
+            or path != _sealed_root_action_audit_path(
+                out_root, seed=game.seed, candidate_seat=game.candidate_seat,
+                decision_round_index=round_index,
+            )
+        ):
+            raise HeadToHeadError("root action audit has an invalid source binding.")
+        observed_rounds.add(round_index)
+        if readout.get("audit_status") != "PAIRED" or round_index not in by_round:
+            raise HeadToHeadError("selected root action audit is not a paired public source boundary.")
+        audit = _mapping(readout.get("audit"), label="root action audit grid")
+        required = {
+            "schema_version", "source_battle_id", "source_seed", "source_decision_round",
+            "subject_player", "opponent_player", "opponent_action_held_fixed", "actions",
+            "search_evidence", "continuation_targets",
+        }
+        if set(audit) != required or audit.get("schema_version") != "pokezero.sealed-root-action-grid.v1":
+            raise HeadToHeadError("root action audit grid has an unsupported shape.")
+        if (
+            audit.get("source_battle_id") != readout["battle_id"]
+            or audit.get("source_seed") != game.seed
+            or audit.get("source_decision_round") != round_index
+            or audit.get("subject_player") != game.candidate_seat
+            or audit.get("opponent_player") not in {"p1", "p2"}
+            or audit["opponent_player"] == game.candidate_seat
+            or audit.get("opponent_action_held_fixed") is not True
+        ):
+            raise HeadToHeadError("root action audit grid does not bind its source boundary.")
+        record = by_round[round_index]
+        ledger_path = _branch_prior_ledger_path(
+            out_root, seed=game.seed, candidate_seat=game.candidate_seat, record=record
+        )
+        try:
+            ledger = _mapping(json.loads(ledger_path.read_text(encoding="utf-8")), label="root action ledger")
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read root action source ledger: {error}") from error
+        selection = _validated_selection_evidence(
+            _mapping(ledger.get("selection"), label="root action source selection"), record=record
+        )
+        if selection["model_override"] is not True:
+            raise HeadToHeadError("selected root action audit did not source a measured override.")
+        expected_actions = {
+            "raw_policy": selection["model_argmax"],
+            "mcts_selected": selection["search_argmax"],
+        }
+        for arm in sorted(
+            selection["root_allocation"]["arms"],
+            key=lambda arm: (-arm["visit_share"], arm["action_index"]),
+        ):
+            if (
+                arm["visit_share"] > 0.0
+                and arm["action_index"] not in set(expected_actions.values())
+            ):
+                expected_actions["visit_alternative"] = arm["action_index"]
+                break
+        action_rows = audit.get("actions")
+        if action_rows != [
+            {"action_label": label, "action_index": action}
+            for label, action in expected_actions.items()
+        ]:
+            raise HeadToHeadError("root action audit candidate actions disagree with source allocation.")
+        expected_evidence = {
+            key: selection[key]
+            for key in (
+                "model_argmax", "search_argmax", "model_override", "root_q_gap",
+                "root_visit_gap", "root_gap_action_indices", "root_allocation",
+            )
+        }
+        if audit.get("search_evidence") != expected_evidence:
+            raise HeadToHeadError("root action audit search evidence disagrees with source ledger.")
+        target_rows = audit.get("continuation_targets")
+        if not isinstance(target_rows, list) or [row.get("target") for row in target_rows if isinstance(row, Mapping)] != [
+            "policy_consistent", "uniform_own"
+        ] or len(target_rows) != 2:
+            raise HeadToHeadError("root action audit continuation targets are incomplete or reordered.")
+        for row in target_rows:
+            row = _mapping(row, label="root action continuation target")
+            if set(row) != {"target", "trials"} or not isinstance(row["trials"], list):
+                raise HeadToHeadError("root action audit target has an invalid trial ledger.")
+            if len(row["trials"]) != len(config.continuation_rng_seeds):
+                raise HeadToHeadError("root action audit target has a partial trial ledger.")
+            trial_seeds: list[int] = []
+            for trial in row["trials"]:
+                trial = _mapping(trial, label="root action continuation trial")
+                if set(trial) != {"continuation_rng_seed", "outcomes"} or not isinstance(trial["outcomes"], list):
+                    raise HeadToHeadError("root action audit trial has an invalid shape.")
+                trial_seeds.append(trial["continuation_rng_seed"])
+                if [outcome.get("action_label") for outcome in trial["outcomes"] if isinstance(outcome, Mapping)] != list(expected_actions):
+                    raise HeadToHeadError("root action audit trial omits or reorders candidate actions.")
+                if len(trial["outcomes"]) != len(expected_actions):
+                    raise HeadToHeadError("root action audit trial has a partial candidate-action set.")
+                for outcome, (label, action) in zip(trial["outcomes"], expected_actions.items()):
+                    outcome = _mapping(outcome, label="root action continuation outcome")
+                    continuation = _mapping(outcome.get("continuation"), label="root action terminal continuation")
+                    terminal = _mapping(continuation.get("terminal"), label="root action terminal result")
+                    if (
+                        set(outcome) != {"action_label", "action_index", "continuation"}
+                        or outcome.get("action_label") != label
+                        or outcome.get("action_index") != action
+                        or set(continuation) != {
+                            "decision_round_count", "terminal_after_fixed_joint_step", "terminal"
+                        }
+                        or isinstance(continuation["decision_round_count"], bool)
+                        or not isinstance(continuation["decision_round_count"], int)
+                        or continuation["decision_round_count"] < 0
+                        or continuation["terminal_after_fixed_joint_step"] is not (continuation["decision_round_count"] == 0)
+                        or set(terminal) != {"winner", "turn_count", "capped"}
+                        # An uncapped draw has no winner.  It remains a
+                        # complete terminal outcome, rather than a partial
+                        # continuation that should be discarded.
+                        or terminal.get("winner") not in {"p1", "p2", None}
+                        or isinstance(terminal.get("turn_count"), bool)
+                        or not isinstance(terminal.get("turn_count"), int)
+                        or terminal.get("turn_count") < 0
+                        or terminal.get("capped") is not False
+                    ):
+                        raise HeadToHeadError("root action audit contains an invalid or capped continuation.")
+            if trial_seeds != list(config.continuation_rng_seeds):
+                raise HeadToHeadError("root action audit trial seeds do not match the manifest schedule.")
+    if observed_rounds != expected_rounds:
+        raise HeadToHeadError("root action audit omitted a manifest-selected source root.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--checkpoint", required=True)
@@ -2102,6 +2505,7 @@ def main(argv: list[str] | None = None) -> int:
     seeds = _seeds(manifest)
     study = _validated_study(manifest, seeds=seeds)
     sealed_override_audit = _sealed_override_audit_config(manifest)
+    sealed_root_action_audit = _sealed_root_action_audit_config(manifest, seeds=seeds)
     resamples, bootstrap_seed, confidence_level = _bootstrap(manifest)
     max_decision_rounds = manifest.get("max_decision_rounds")
     if isinstance(max_decision_rounds, bool) or not isinstance(max_decision_rounds, int) or max_decision_rounds <= 0:
@@ -2120,10 +2524,13 @@ def main(argv: list[str] | None = None) -> int:
     from pokezero.neural_policy import (  # noqa: PLC0415
         category_vocab_from_model_config,
         feature_masks_from_model_config,
+        load_transformer_checkpoint,
         load_transformer_model_config,
         load_transformer_policy,
         observation_spec_from_model_config,
+        TransformerSoftmaxPolicy,
     )
+    from pokezero.policy import RandomLegalPolicy  # noqa: PLC0415
     from pokezero.randbat import load_gen3_randbat_source_cached  # noqa: PLC0415
     from pokezero.rollout import RolloutConfig, RolloutDriver  # noqa: PLC0415
 
@@ -2191,30 +2598,105 @@ def main(argv: list[str] | None = None) -> int:
     set_source = load_gen3_randbat_source_cached(args.showdown_root)
     write_progress = _progress_writer(out_root, candidate=candidate, incumbent=incumbent)
 
-    def continuation_policy_factory() -> Mapping[str, Any]:
+    def continuation_policy_factory(
+        observation_histories: Mapping[str, tuple[Any, ...]],
+    ) -> Mapping[str, Any]:
         """Allocate two clean raw policies after a fixed source action.
 
         Both continuation arms use this factory, so the only variable between
-        them is the source MCTS-versus-raw action under audit.  Loading fresh
-        policies is intentional: policy state, timing, and cached request data
-        from either arm must not flow into the other one.
+        them is the source MCTS-versus-raw action under audit. Each adapter has
+        its own mutable history buffer, initialized with the trusted source
+        prefix. A fresh empty policy would be a cold-start suffix and could not
+        honestly be called a raw-policy continuation.
         """
 
-        def raw_policy() -> PublicOnlyMctsPolicy:
-            adapter = DeterministicRawPolicyAdapter(
-                load_transformer_policy(
-                    args.checkpoint,
+        if set(observation_histories) != {"p1", "p2"} or any(
+            not history for history in observation_histories.values()
+        ):
+            raise HeadToHeadError("sealed override continuation requires both source histories.")
+
+        def raw_policy(player_id: str) -> DeterministicRawPolicyAdapter:
+            return DeterministicRawPolicyAdapter(
+                TransformerSoftmaxPolicy(
+                    model=continuation_model,
+                    result=continuation_result,
                     device=args.device,
                     deterministic=True,
                     exploration_epsilon=0.0,
                     sampling_temperature=1.0,
                     family_gated_selection=False,
+                    _history_by_player={player_id: list(observation_histories[player_id])},
                 ),
                 policy_id=incumbent.policy_id,
             )
-            return PublicOnlyMctsPolicy(adapter)
 
-        return {"p1": raw_policy(), "p2": raw_policy()}
+        return {"p1": raw_policy("p1"), "p2": raw_policy("p2")}
+
+    def root_action_continuation_policy_factories(
+        subject_seat: str,
+        observation_histories: Mapping[str, tuple[Any, ...]],
+    ) -> Mapping[str, Any]:
+        """Fresh target policies for the action-ranking intervention.
+
+        Both targets retain the same sampled raw-policy opponent.  They differ
+        only in the acting seat *after* the fixed source joint action, which
+        prevents an own-target contrast from accidentally becoming a second
+        opponent-model ablation.  Sampling is intentional: paired RNG trials
+        estimate a continuation value rather than repeating one argmax suffix.
+        """
+
+        if subject_seat not in {"p1", "p2"}:
+            raise HeadToHeadError("root action continuation factory has an invalid subject seat.")
+        if set(observation_histories) != {"p1", "p2"} or any(
+            not history for history in observation_histories.values()
+        ):
+            raise HeadToHeadError("root action continuation factory requires both non-empty source histories.")
+        opponent_seat = "p2" if subject_seat == "p1" else "p1"
+
+        # Loading a checkpoint per action × target × RNG trial would dominate
+        # the study and create a new GPU allocation surface. The model weights
+        # are immutable in evaluation mode; only the policy's history buffer
+        # is mutable, so one source-bound model with a FRESH adapter per suffix
+        # gives isolation without 96 redundant model loads per root.
+        def sampled_raw_policy(player_id: str) -> DeterministicRawPolicyAdapter:
+            if player_id not in {"p1", "p2"}:
+                raise HeadToHeadError("root action continuation policy has an invalid player.")
+            return DeterministicRawPolicyAdapter(
+                TransformerSoftmaxPolicy(
+                    model=continuation_model,
+                    result=continuation_result,
+                    device=args.device,
+                    deterministic=False,
+                    exploration_epsilon=0.0,
+                    sampling_temperature=1.0,
+                    family_gated_selection=False,
+                    _history_by_player={player_id: list(observation_histories[player_id])},
+                ),
+                policy_id=f"sampled-raw-transformer-{player_id}",
+            )
+
+        def policy_consistent() -> Mapping[str, Any]:
+            return {"p1": sampled_raw_policy("p1"), "p2": sampled_raw_policy("p2")}
+
+        def uniform_own() -> Mapping[str, Any]:
+            return {
+                subject_seat: DeterministicRawPolicyAdapter(
+                    RandomLegalPolicy(), policy_id=f"uniform-legal-{subject_seat}"
+                ),
+                opponent_seat: sampled_raw_policy(opponent_seat),
+            }
+
+        return {
+            "policy_consistent": policy_consistent,
+            "uniform_own": uniform_own,
+        }
+
+    continuation_model = None
+    continuation_result = None
+    if sealed_override_audit is not None or sealed_root_action_audit is not None:
+        continuation_model, continuation_result = load_transformer_checkpoint(
+            args.checkpoint, map_location=args.device
+        )
 
     continuation_rollout_config = RolloutConfig(
         max_decision_rounds=max_decision_rounds,
@@ -2278,6 +2760,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         public_sink = public_decision_writer
         sealed_sink = None
+        sealed_sinks: list[Any] = []
+        sealed_public_sinks: list[Any] = []
         if sealed_override_audit is not None:
             sealed_sink, sealed_public_sink = _sealed_override_audit_writer(
                 out_root,
@@ -2285,19 +2769,42 @@ def main(argv: list[str] | None = None) -> int:
                 incumbent=incumbent,
                 candidate_seat=candidate_seat,
                 env_factory=lambda: LocalShowdownEnv(env_config),
-                continuation_policy_factory=continuation_policy_factory,
+                continuation_policy_factory_builder=continuation_policy_factory,
                 continuation_rollout_config=continuation_rollout_config,
                 max_continuation_decision_rounds=(
                     sealed_override_audit.max_continuation_decision_rounds
                 ),
             )
 
+            sealed_sinks.append(sealed_sink)
+            sealed_public_sinks.append(sealed_public_sink)
+        if sealed_root_action_audit is not None:
+            root_sealed_sink, root_sealed_public_sink = _sealed_root_action_audit_writer(
+                out_root,
+                candidate=candidate,
+                incumbent=incumbent,
+                candidate_seat=candidate_seat,
+                config=sealed_root_action_audit,
+                env_factory=lambda: LocalShowdownEnv(env_config),
+                continuation_policy_factory_builder=root_action_continuation_policy_factories,
+                continuation_rollout_config=continuation_rollout_config,
+            )
+            sealed_sinks.append(root_sealed_sink)
+            sealed_public_sinks.append(root_sealed_public_sink)
+
+        if sealed_public_sinks:
             def public_sink(record: PublicDecisionRecord) -> None:
-                # The public ledger must commit before the sealed readout is
-                # materialized: the sealed pre-step hook has no legal-action
-                # record from which to derive root coverage itself.
+                # The public ledger must commit before a sealed readout is
+                # materialized: sealed controllers have no legal-action record
+                # from which to derive root coverage themselves.
                 public_decision_writer(record)
-                sealed_public_sink(record)
+                for sink in sealed_public_sinks:
+                    sink(record)
+
+        if sealed_sinks:
+            def sealed_sink(boundary: Any) -> None:
+                for sink in sealed_sinks:
+                    sink(boundary)
 
         driver = RolloutDriver(
             env=env,
@@ -2325,12 +2832,20 @@ def main(argv: list[str] | None = None) -> int:
             _validate_public_decision_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
+            if sealed_root_action_audit is not None:
+                _validate_sealed_root_action_audit_evidence(
+                    out_root, game, sealed_root_action_audit
+                )
 
         def on_game(game: Any) -> None:
             _validate_completed_game(game)
             _validate_public_decision_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
+            if sealed_root_action_audit is not None:
+                _validate_sealed_root_action_audit_evidence(
+                    out_root, game, sealed_root_action_audit
+                )
             raw_adapter = raw_adapters.pop((game.seed, game.candidate_seat), None)
             if raw_adapter is None:
                 raise HeadToHeadError("completed game has no retained raw-policy selector witness.")
@@ -2363,6 +2878,10 @@ def main(argv: list[str] | None = None) -> int:
             _validate_public_decision_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
+            if sealed_root_action_audit is not None:
+                _validate_sealed_root_action_audit_evidence(
+                    out_root, game, sealed_root_action_audit
+                )
         all_games.extend(games)
         write_progress("pair_completed", seed=seed, candidate_seat="both")
         print(f"completed guided-vs-raw mirrored pair seed={seed}", flush=True)

@@ -397,6 +397,33 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered deterministic raw selector"):
             RUNNER._sealed_override_audit_config(manifest)
 
+    def test_root_action_audit_contract_requires_fixed_trials_and_predeclared_roots(self) -> None:
+        self.assertIsNone(RUNNER._sealed_root_action_audit_config({}, seeds=(19,)))
+        manifest = {
+            "sealed_root_action_audit": {
+                "schema_version": RUNNER.SEALED_ROOT_ACTION_AUDIT_EVIDENCE_SCHEMA_VERSION,
+                "targets": [{"seed": 19, "candidate_seat": "p1", "decision_round_index": 7}],
+                "continuation_rng_seeds": list(range(100, 116)),
+                "max_continuation_decision_rounds": 400,
+                "continuation_targets": {
+                    "policy_consistent": {
+                        "subject": "sampled_raw_transformer",
+                        "opponent": "sampled_raw_transformer",
+                    },
+                    "uniform_own": {
+                        "subject": "uniform_legal",
+                        "opponent": "sampled_raw_transformer",
+                    },
+                },
+            }
+        }
+        config = RUNNER._sealed_root_action_audit_config(manifest, seeds=(19,))
+        self.assertEqual(config.continuation_rng_seeds, tuple(range(100, 116)))
+        self.assertEqual(config.targets[0].decision_round_index, 7)
+        manifest["sealed_root_action_audit"]["continuation_rng_seeds"] = list(range(100, 115))
+        with self.assertRaisesRegex(Exception, "exactly sixteen"):
+            RUNNER._sealed_root_action_audit_config(manifest, seeds=(19,))
+
     def test_writer_persists_only_the_controller_readout(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
@@ -419,7 +446,7 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
                     incumbent=incumbent,
                     candidate_seat="p1",
                     env_factory=object(),
-                    continuation_policy_factory=object(),
+                    continuation_policy_factory_builder=object(),
                     continuation_rollout_config=object(),
                     max_continuation_decision_rounds=400,
                 )
@@ -467,7 +494,7 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
             ):
                 pre_step_writer, public_writer = RUNNER._sealed_override_audit_writer(
                     root, candidate=candidate, incumbent=incumbent, candidate_seat="p1",
-                    env_factory=object(), continuation_policy_factory=object(),
+                    env_factory=object(), continuation_policy_factory_builder=object(),
                     continuation_rollout_config=object(), max_continuation_decision_rounds=400,
                 )
                 pre_step_writer(boundary)
@@ -1409,6 +1436,62 @@ class CompletedGameEvidenceTest(unittest.TestCase):
             summary["candidate_rollouts_run"] = malformed
             with self.assertRaisesRegex(Exception, "malformed terminal partition"):
                 RUNNER._validate_summary_evidence(summary)
+
+
+class SealedRootActionAuditWriterTest(unittest.TestCase):
+    def test_writer_runs_only_manifest_selected_boundary_and_persists_no_private_state(self) -> None:
+        config = RUNNER.SealedRootActionAuditConfig(
+            targets=(RUNNER.SealedRootActionAuditTarget(19, "p1", 7),),
+            continuation_rng_seeds=tuple(range(100, 116)),
+            max_continuation_decision_rounds=400,
+        )
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        readout = {
+            "schema_version": "pokezero.sealed-root-action-audit.v1",
+            "seed": 19,
+            "battle_id": "mcts-h2h-19-p1",
+            "candidate_seat": "p1",
+            "decision_round_index": 7,
+            "audit_status": "PAIRED",
+            "audit": {"complete": "grid"},
+        }
+        boundary = SimpleNamespace(seed=19, decision_round_index=7, snapshot=object())
+        record = _public_record(
+            seed=19,
+            turn_index=7,
+            recorded_action_index=4,
+            legal_action_mask=(False, True, True, False, True, False, False, True, False),
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "pokezero.mcts_eval.sealed_root_action_audit.evaluate_root_action_boundary",
+            return_value=readout,
+        ) as evaluate:
+            root = Path(directory)
+            pre_step_writer, public_writer = RUNNER._sealed_root_action_audit_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                candidate_seat="p1",
+                config=config,
+                env_factory=object(),
+                continuation_policy_factory_builder=lambda _, __: {"policy_consistent": object()},
+                continuation_rollout_config=object(),
+            )
+            pre_step_writer(SimpleNamespace(seed=19, decision_round_index=6))
+            evaluate.assert_not_called()
+            pre_step_writer(boundary)
+            public_writer(record)
+            path = RUNNER._sealed_root_action_audit_path(
+                root, seed=19, candidate_seat="p1", decision_round_index=7
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+
+        self.assertEqual(evaluate.call_count, 1)
+        self.assertEqual(payload["candidate_provenance_sha256"], "guided-provenance")
+        self.assertEqual(payload["readout"], readout)
+        self.assertNotIn("snapshot", payload)
+        self.assertNotIn("opponent_action", payload)
 
 
 if __name__ == "__main__":

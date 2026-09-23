@@ -11,7 +11,7 @@ outcomes.  The snapshot is never returned or serialized.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .env import PlayerId, PokeZeroEnv
@@ -52,6 +52,7 @@ def run_sealed_override_continuation(
     continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
     rollout_config: RolloutConfig,
     max_continuation_decision_rounds: int | None = None,
+    continuation_rng_seed: int | None = None,
 ) -> dict[str, Any]:
     """Evaluate one fixed source action to an uncapped terminal outcome.
 
@@ -60,7 +61,12 @@ def run_sealed_override_continuation(
     fixed joint action is evidence, not an error: a forced win or loss is the
     strongest possible continuation outcome.  Any capped continuation,
     missing restore capability, mismatched simultaneous boundary, or malformed
-    policy factory fails closed.
+    policy factory fails closed. ``continuation_rng_seed`` controls only the
+    post-branch policy RNG.  The source snapshot is *always* restored from
+    ``source_seed``.  Separating those two identities is necessary for paired
+    action studies: every candidate action in a trial must receive the same
+    continuation randomness without pretending that it came from a different
+    source battle.
     """
 
     if not isinstance(snapshot, LocalShowdownSnapshot):
@@ -85,6 +91,16 @@ def run_sealed_override_continuation(
     ):
         raise SealedOverrideContinuationError(
             "maximum continuation decision rounds must be a positive integer when set"
+        )
+    if continuation_rng_seed is None:
+        continuation_rng_seed = source_seed
+    if (
+        isinstance(continuation_rng_seed, bool)
+        or not isinstance(continuation_rng_seed, int)
+        or continuation_rng_seed < 0
+    ):
+        raise SealedOverrideContinuationError(
+            "continuation RNG seed must be a non-negative integer when set"
         )
 
     env = env_factory()
@@ -120,6 +136,7 @@ def run_sealed_override_continuation(
             "source_battle_id": source_battle_id,
             "source_seed": source_seed,
             "source_decision_round": source_decision_round,
+            "continuation_rng_seed": continuation_rng_seed,
             "subject_player": subject_player,
             "opponent_player": opponent_player,
             "action_label": action_label,
@@ -170,11 +187,15 @@ def run_sealed_override_continuation(
             env=env,
             policies=policies,
             config=config,
-            seed=source_seed,
+            seed=continuation_rng_seed,
             battle_id=f"{snapshot.battle_id}-sealed-override-continuation",
             starting_decision_round_index=source_decision_round + 1,
             available_observations=first_step.observations,
-            reset_policies=True,
+            # Factories supply fresh policies, but a source-bound controller
+            # may deliberately seed their private history to the exact prefix
+            # before this branch. Resetting here would silently turn that
+            # suffix into a cold-start policy evaluation.
+            reset_policies=False,
         )
         if continuation.terminal.capped:
             raise SealedOverrideContinuationError(
@@ -276,4 +297,124 @@ def evaluate_sealed_override_pair(
         "search_evidence": dict(search_evidence),
         "mcts": mcts["continuation"],
         "raw": raw["continuation"],
+    }
+
+
+def evaluate_sealed_root_action_grid(
+    *,
+    snapshot: LocalShowdownSnapshot,
+    source_battle_id: str,
+    source_seed: int,
+    source_decision_round: int,
+    subject_player: PlayerId,
+    actions: Mapping[str, int],
+    opponent_player: PlayerId,
+    opponent_action: int,
+    continuation_policy_factories: Mapping[str, Callable[[], Mapping[PlayerId, Policy]]],
+    continuation_rng_seeds: Sequence[int],
+    search_evidence: Mapping[str, Any],
+    env_factory: Callable[[], PokeZeroEnv],
+    rollout_config: RolloutConfig,
+    max_continuation_decision_rounds: int | None = None,
+) -> dict[str, Any]:
+    """Evaluate selected root actions under matched continuation targets.
+
+    This is intentionally a controller-only primitive for the root-action
+    target-quality audit.  Every row restores the exact same sealed source
+    snapshot, holds the already-selected opponent action fixed, and changes
+    only the subject's root action plus the declared continuation target.  A
+    continuation target (for example ``policy_consistent`` or
+    ``uniform_own``) owns a *fresh* policy factory for every action/trial.
+
+    A trial's RNG seed is shared across every action in a target.  This is the
+    common-random-numbers contract; callers must not assign a separate seed to
+    each action and then report the result as paired.  The returned durable
+    object never includes the snapshot or opponent action.
+    """
+
+    if not isinstance(search_evidence, Mapping):
+        raise SealedOverrideContinuationError("search evidence must be a mapping")
+    if not isinstance(actions, Mapping) or not 2 <= len(actions) <= 3:
+        raise SealedOverrideContinuationError(
+            "root action grid requires two or three labelled candidate actions"
+        )
+    normalized_actions: list[tuple[str, int]] = []
+    for label, action in actions.items():
+        if not isinstance(label, str) or not label.strip():
+            raise SealedOverrideContinuationError("root action label must be a non-empty string")
+        _validate_action(action, label=f"root action {label!r}")
+        normalized_actions.append((label, action))
+    if len({label for label, _ in normalized_actions}) != len(normalized_actions):
+        raise SealedOverrideContinuationError("root action grid repeats a label")
+    if len({action for _, action in normalized_actions}) != len(normalized_actions):
+        raise SealedOverrideContinuationError("root action grid repeats an action")
+    if not isinstance(continuation_policy_factories, Mapping) or not continuation_policy_factories:
+        raise SealedOverrideContinuationError("root action grid requires continuation target factories")
+    normalized_modes: list[tuple[str, Callable[[], Mapping[PlayerId, Policy]]]] = []
+    for mode, factory in continuation_policy_factories.items():
+        if not isinstance(mode, str) or not mode.strip():
+            raise SealedOverrideContinuationError("continuation target name must be a non-empty string")
+        if not callable(factory):
+            raise SealedOverrideContinuationError(
+                f"continuation target {mode!r} factory must be callable"
+            )
+        normalized_modes.append((mode, factory))
+    if len({mode for mode, _ in normalized_modes}) != len(normalized_modes):
+        raise SealedOverrideContinuationError("root action grid repeats a continuation target")
+    normalized_seeds = list(continuation_rng_seeds)
+    if not normalized_seeds:
+        raise SealedOverrideContinuationError("root action grid requires at least one continuation RNG seed")
+    if any(
+        isinstance(seed, bool) or not isinstance(seed, int) or seed < 0
+        for seed in normalized_seeds
+    ) or len(set(normalized_seeds)) != len(normalized_seeds):
+        raise SealedOverrideContinuationError(
+            "continuation RNG seeds must be unique non-negative integers"
+        )
+
+    target_rows: list[dict[str, Any]] = []
+    for target, policy_factory in normalized_modes:
+        trials: list[dict[str, Any]] = []
+        for rng_seed in normalized_seeds:
+            outcomes: list[dict[str, Any]] = []
+            for action_label, action_index in normalized_actions:
+                outcome = run_sealed_override_continuation(
+                    snapshot=snapshot,
+                    source_battle_id=source_battle_id,
+                    source_seed=source_seed,
+                    source_decision_round=source_decision_round,
+                    subject_player=subject_player,
+                    subject_action=action_index,
+                    opponent_player=opponent_player,
+                    opponent_action=opponent_action,
+                    action_label=action_label,
+                    env_factory=env_factory,
+                    continuation_policy_factory=policy_factory,
+                    rollout_config=rollout_config,
+                    max_continuation_decision_rounds=max_continuation_decision_rounds,
+                    continuation_rng_seed=rng_seed,
+                )
+                outcomes.append(
+                    {
+                        "action_label": action_label,
+                        "action_index": action_index,
+                        "continuation": outcome["continuation"],
+                    }
+                )
+            trials.append({"continuation_rng_seed": rng_seed, "outcomes": outcomes})
+        target_rows.append({"target": target, "trials": trials})
+    return {
+        "schema_version": "pokezero.sealed-root-action-grid.v1",
+        "source_battle_id": source_battle_id,
+        "source_seed": source_seed,
+        "source_decision_round": source_decision_round,
+        "subject_player": subject_player,
+        "opponent_player": opponent_player,
+        "opponent_action_held_fixed": True,
+        "actions": [
+            {"action_label": label, "action_index": action}
+            for label, action in normalized_actions
+        ],
+        "search_evidence": dict(search_evidence),
+        "continuation_targets": target_rows,
     }

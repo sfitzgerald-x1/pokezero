@@ -145,12 +145,36 @@ def _safe_action_list(value: object, *, label: str) -> list[int]:
     return [_action(item, label=label) for item in value]
 
 
+def _source_observation_histories(
+    boundary: RolloutSealedPreStepBoundary,
+) -> Mapping[PlayerId, tuple[Any, ...]]:
+    """Read trusted source histories without allowing them into a durable readout."""
+
+    raw = getattr(boundary, "policy_observation_histories", None)
+    if not isinstance(raw, Mapping) or set(raw) != {"p1", "p2"}:
+        raise SealedOverrideAuditError(
+            "sealed override continuation requires both source policy observation histories"
+        )
+    histories: dict[PlayerId, tuple[Any, ...]] = {}
+    for player_id in ("p1", "p2"):
+        history = raw.get(player_id)
+        if not isinstance(history, tuple) or not history:
+            raise SealedOverrideAuditError(
+                "sealed override continuation source policy history is missing or empty"
+            )
+        histories[player_id] = history
+    return histories
+
+
 def evaluate_measured_override_boundary(
     *,
     boundary: RolloutSealedPreStepBoundary,
     candidate_seat: PlayerId,
     env_factory: Callable[[], PokeZeroEnv],
-    continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
+    continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]] | None = None,
+    continuation_policy_factory_builder: Callable[
+        [Mapping[PlayerId, tuple[Any, ...]]], Callable[[], Mapping[PlayerId, Policy]]
+    ] | None = None,
     rollout_config: RolloutConfig,
     max_continuation_decision_rounds: int | None = None,
 ) -> dict[str, Any] | None:
@@ -164,6 +188,10 @@ def evaluate_measured_override_boundary(
 
     if candidate_seat not in {"p1", "p2"}:
         raise SealedOverrideAuditError("candidate seat must be p1 or p2")
+    if (continuation_policy_factory is None) == (continuation_policy_factory_builder is None):
+        raise SealedOverrideAuditError(
+            "sealed override audit requires exactly one continuation policy factory surface"
+        )
     if candidate_seat not in boundary.decisions:
         opponent_seat: PlayerId = "p2" if candidate_seat == "p1" else "p1"
         # The hook is installed for the full rollout.  A normal forced phase
@@ -224,6 +252,13 @@ def evaluate_measured_override_boundary(
         boundary.decisions[opponent_seat].action_index, label="committed opponent action"
     )
     try:
+        policies = (
+            continuation_policy_factory_builder(_source_observation_histories(boundary))
+            if continuation_policy_factory_builder is not None
+            else continuation_policy_factory
+        )
+        if policies is None:
+            raise SealedOverrideAuditError("sealed override continuation policy factory is missing")
         readout = evaluate_sealed_override_pair(
             snapshot=boundary.snapshot,
             source_battle_id=boundary.battle_id,
@@ -236,7 +271,7 @@ def evaluate_measured_override_boundary(
             opponent_action=opponent_action,
             search_evidence=evidence,
             env_factory=env_factory,
-            continuation_policy_factory=continuation_policy_factory,
+            continuation_policy_factory=policies,
             rollout_config=rollout_config,
             max_continuation_decision_rounds=max_continuation_decision_rounds,
         )

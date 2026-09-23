@@ -10,6 +10,7 @@ from pokezero.sealed_override_continuation import (
     SEALED_OVERRIDE_CONTINUATION_SCHEMA_VERSION,
     SealedOverrideContinuationError,
     evaluate_sealed_override_pair,
+    evaluate_sealed_root_action_grid,
     run_sealed_override_continuation,
 )
 
@@ -52,7 +53,8 @@ class SealedOverrideContinuationTest(unittest.TestCase):
     def test_restores_fixed_joint_action_then_returns_only_terminal_summary(self) -> None:
         env = _FakeEnv()
         continuation_calls: list[dict[str, object]] = []
-        source_sink = lambda _: None
+        def source_sink(_: object) -> None:
+            return None
 
         def fake_continue(**kwargs: object) -> object:
             continuation_calls.append(kwargs)
@@ -106,7 +108,7 @@ class SealedOverrideContinuationTest(unittest.TestCase):
         self.assertEqual(readout["continuation"]["terminal"]["winner"], "p1")
         self.assertFalse(readout["continuation"]["terminal_after_fixed_joint_step"])
         self.assertEqual(continuation_calls[0]["starting_decision_round_index"], 5)
-        self.assertTrue(continuation_calls[0]["reset_policies"])
+        self.assertFalse(continuation_calls[0]["reset_policies"])
         self.assertEqual(continuation_calls[0]["config"].max_decision_rounds, 30)
         self.assertIsNone(continuation_calls[0]["config"].decision_sink)
         self.assertIsNone(continuation_calls[0]["config"].public_decision_sink)
@@ -160,7 +162,6 @@ class SealedOverrideContinuationTest(unittest.TestCase):
 
     def test_pair_uses_fresh_environment_and_policies_for_both_actions(self) -> None:
         environments = [_FakeEnv(), _FakeEnv()]
-        factory_calls = 0
         policy_factory_calls = 0
 
         def env_factory() -> _FakeEnv:
@@ -228,5 +229,86 @@ class SealedOverrideContinuationTest(unittest.TestCase):
                 search_evidence={},
                 env_factory=lambda: self.fail("must not allocate environment"),
                 continuation_policy_factory=lambda: self.fail("must not allocate policies"),
+                rollout_config=RolloutConfig(),
+            )
+
+    def test_root_action_grid_pairs_every_action_within_each_target_and_trial(self) -> None:
+        environments = [_FakeEnv() for _ in range(12)]
+        factories: list[str] = []
+
+        def env_factory() -> _FakeEnv:
+            return environments.pop(0)
+
+        def policy_factory(mode: str):
+            def factory() -> dict[str, object]:
+                factories.append(mode)
+                return {"p1": object(), "p2": object()}
+            return factory
+
+        def fake_continue(**kwargs: object) -> object:
+            action = kwargs["env"].calls[-1][1]["p1"]
+            return SimpleNamespace(
+                decision_round_count=action,
+                terminal=TerminalState(winner="p1", turn_count=10 + action, capped=False),
+            )
+
+        with patch(
+            "pokezero.sealed_override_continuation.LocalShowdownSnapshot",
+            SimpleNamespace,
+        ), patch(
+            "pokezero.sealed_override_continuation.continue_rollout_from_current_state",
+            fake_continue,
+        ):
+            readout = evaluate_sealed_root_action_grid(
+                snapshot=self._snapshot(),
+                source_battle_id="source-grid",
+                source_seed=20_260_923,
+                source_decision_round=6,
+                subject_player="p1",
+                actions={"raw_policy": 2, "mcts_selected": 4, "visit_alternative": 7},
+                opponent_player="p2",
+                opponent_action=1,
+                continuation_policy_factories={
+                    "policy_consistent": policy_factory("policy_consistent"),
+                    "uniform_own": policy_factory("uniform_own"),
+                },
+                continuation_rng_seeds=[101, 102],
+                search_evidence={"root_q_gap": 0.125},
+                env_factory=env_factory,
+                rollout_config=RolloutConfig(max_decision_rounds=100),
+            )
+
+        self.assertEqual(readout["schema_version"], "pokezero.sealed-root-action-grid.v1")
+        self.assertEqual(len(factories), 12)
+        self.assertEqual(
+            [target["target"] for target in readout["continuation_targets"]],
+            ["policy_consistent", "uniform_own"],
+        )
+        for target in readout["continuation_targets"]:
+            self.assertEqual([trial["continuation_rng_seed"] for trial in target["trials"]], [101, 102])
+            for trial in target["trials"]:
+                self.assertEqual(
+                    [outcome["action_index"] for outcome in trial["outcomes"]], [2, 4, 7]
+                )
+                self.assertNotIn("opponent_action", trial)
+                self.assertNotIn("snapshot", trial)
+        self.assertNotIn("opponent_action", readout)
+        self.assertNotIn("snapshot", readout)
+
+    def test_root_action_grid_rejects_repeated_actions_before_allocating(self) -> None:
+        with self.assertRaisesRegex(SealedOverrideContinuationError, "repeats an action"):
+            evaluate_sealed_root_action_grid(
+                snapshot=self._snapshot(),
+                source_battle_id="bad-grid",
+                source_seed=1,
+                source_decision_round=1,
+                subject_player="p1",
+                actions={"raw_policy": 2, "mcts_selected": 2},
+                opponent_player="p2",
+                opponent_action=1,
+                continuation_policy_factories={"policy_consistent": lambda: {}},
+                continuation_rng_seeds=[1],
+                search_evidence={},
+                env_factory=lambda: self.fail("must not allocate environment"),
                 rollout_config=RolloutConfig(),
             )
