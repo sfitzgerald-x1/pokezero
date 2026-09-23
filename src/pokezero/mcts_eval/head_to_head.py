@@ -363,6 +363,18 @@ class PolicyTelemetry:
     opponent_request_order_root_fallback_statuses: Mapping[str, int] = field(
         default_factory=dict
     )
+    # The rollout-leaf arm must carry its realized terminal/fallback partition
+    # through the paired-game record.  The candidate config says only what was
+    # requested; these counters say what the native search actually backed up.
+    rollout_leaf_modes: Mapping[str, int] = field(default_factory=dict)
+    rollout_leaf_worlds: int = 0
+    rollout_leaves_priced: int = 0
+    rollouts_run: int = 0
+    rollout_plies: int = 0
+    rollout_terminal_hits: int = 0
+    rollout_cap_hits: int = 0
+    rollout_dead_ends: int = 0
+    rollout_encode_skipped: int = 0
     decision_wall_seconds: float = 0.0
 
     def __post_init__(self) -> None:
@@ -447,6 +459,41 @@ class PolicyTelemetry:
             root_fallback_statuses,
         )
         object.__setattr__(self, "branch_prior_fallback_reasons", branch_reasons)
+        if not isinstance(self.rollout_leaf_modes, Mapping):
+            raise ValueError("rollout leaf modes must be a mapping.")
+        rollout_modes: dict[str, int] = {}
+        for mode, count in self.rollout_leaf_modes.items():
+            if mode != "rollout":
+                raise ValueError(f"unknown rollout leaf mode {mode!r}.")
+            if not isinstance(count, int) or isinstance(count, bool) or count <= 0:
+                raise ValueError(f"rollout leaf mode {mode!r} has invalid count {count!r}.")
+            rollout_modes[mode] = count
+        rollout_counters = (
+            self.rollout_leaf_worlds,
+            self.rollout_leaves_priced,
+            self.rollouts_run,
+            self.rollout_plies,
+            self.rollout_terminal_hits,
+            self.rollout_cap_hits,
+            self.rollout_dead_ends,
+            self.rollout_encode_skipped,
+        )
+        if any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+               for value in rollout_counters):
+            raise ValueError("rollout leaf telemetry counters must be non-negative integers.")
+        if not rollout_modes:
+            if any(rollout_counters):
+                raise ValueError("rollout leaf work is present without a rollout leaf mode witness.")
+        else:
+            if sum(rollout_modes.values()) != self.rollout_leaf_worlds:
+                raise ValueError("rollout leaf mode total must equal rollout leaf worlds.")
+            if self.rollout_leaves_priced <= 0 or self.rollouts_run <= 0:
+                raise ValueError("rollout leaf mode witness must report priced leaves and rollouts.")
+            if self.rollout_terminal_hits + self.rollout_cap_hits + self.rollout_dead_ends != self.rollouts_run:
+                raise ValueError("rollout terminal, cap, and dead-end hits must partition rollouts.")
+            if self.rollout_encode_skipped > self.rollout_leaves_priced:
+                raise ValueError("rollout encode skips cannot exceed priced leaves.")
+        object.__setattr__(self, "rollout_leaf_modes", rollout_modes)
         if not math.isfinite(self.decision_wall_seconds) or self.decision_wall_seconds < 0:
             raise ValueError("policy decision wall time must be finite and non-negative.")
 
@@ -522,6 +569,15 @@ class PolicyTelemetry:
             opponent_request_order_root_fallback_statuses=dict(
                 getattr(stats, "opponent_request_order_root_fallback_statuses", {})
             ),
+            rollout_leaf_modes=dict(getattr(stats, "rollout_leaf_modes", {})),
+            rollout_leaf_worlds=int(getattr(stats, "rollout_leaf_worlds", 0)),
+            rollout_leaves_priced=int(getattr(stats, "rollout_leaves_priced", 0)),
+            rollouts_run=int(getattr(stats, "rollouts_run", 0)),
+            rollout_plies=int(getattr(stats, "rollout_plies", 0)),
+            rollout_terminal_hits=int(getattr(stats, "rollout_terminal_hits", 0)),
+            rollout_cap_hits=int(getattr(stats, "rollout_cap_hits", 0)),
+            rollout_dead_ends=int(getattr(stats, "rollout_dead_ends", 0)),
+            rollout_encode_skipped=int(getattr(stats, "rollout_encode_skipped", 0)),
             decision_wall_seconds=float(getattr(stats, "decision_wall_seconds", 0.0)),
         )
 
@@ -532,6 +588,7 @@ class PolicyTelemetry:
                 "branch_prior_fallback_reasons",
                 "opponent_request_order_statuses",
                 "opponent_request_order_root_fallback_statuses",
+                "rollout_leaf_modes",
             }:
                 current = getattr(self, field_name)
                 previous = getattr(before, field_name)
@@ -560,6 +617,7 @@ class PolicyTelemetry:
                 "branch_prior_fallback_reasons",
                 "opponent_request_order_statuses",
                 "opponent_request_order_root_fallback_statuses",
+                "rollout_leaf_modes",
             }
         ):
             raise HeadToHeadError(
@@ -1081,6 +1139,7 @@ def summarize_complete_pairs(
     incumbent_order_statuses: Counter[str] = Counter()
     candidate_root_fallback_statuses: Counter[str] = Counter()
     incumbent_root_fallback_statuses: Counter[str] = Counter()
+    candidate_rollout_leaf_modes: Counter[str] = Counter()
     for game in required:
         candidate_order_statuses.update(game.candidate_telemetry.opponent_request_order_statuses)
         incumbent_order_statuses.update(game.incumbent_telemetry.opponent_request_order_statuses)
@@ -1090,6 +1149,7 @@ def summarize_complete_pairs(
         incumbent_root_fallback_statuses.update(
             game.incumbent_telemetry.opponent_request_order_root_fallback_statuses
         )
+        candidate_rollout_leaf_modes.update(game.candidate_telemetry.rollout_leaf_modes)
     return {
         "schema_version": "pokezero.mcts-h2h-summary.v1",
         "candidate": candidate.to_payload(),
@@ -1175,5 +1235,33 @@ def summarize_complete_pairs(
         ),
         "incumbent_opponent_request_order_root_fallback_statuses": dict(
             sorted(incumbent_root_fallback_statuses.items())
+        ),
+        # This is the actual leaf-value provenance, not the candidate config
+        # receipt.  A rollout arm can only be interpreted as terminal rollout
+        # evidence when its observed partition travels with the paired score.
+        "candidate_rollout_leaf_modes": dict(sorted(candidate_rollout_leaf_modes.items())),
+        "candidate_rollout_leaf_worlds": sum(
+            game.candidate_telemetry.rollout_leaf_worlds for game in required
+        ),
+        "candidate_rollout_leaves_priced": sum(
+            game.candidate_telemetry.rollout_leaves_priced for game in required
+        ),
+        "candidate_rollouts_run": sum(
+            game.candidate_telemetry.rollouts_run for game in required
+        ),
+        "candidate_rollout_plies": sum(
+            game.candidate_telemetry.rollout_plies for game in required
+        ),
+        "candidate_rollout_terminal_hits": sum(
+            game.candidate_telemetry.rollout_terminal_hits for game in required
+        ),
+        "candidate_rollout_cap_hits": sum(
+            game.candidate_telemetry.rollout_cap_hits for game in required
+        ),
+        "candidate_rollout_dead_ends": sum(
+            game.candidate_telemetry.rollout_dead_ends for game in required
+        ),
+        "candidate_rollout_encode_skipped": sum(
+            game.candidate_telemetry.rollout_encode_skipped for game in required
         ),
     }
