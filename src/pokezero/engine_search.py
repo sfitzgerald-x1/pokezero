@@ -6600,6 +6600,25 @@ class EngineMctsPolicy:
                     raise EngineSearchWitnessError(
                         "native_opponent_prior_root_eligible_missing_or_invalid"
                     )
+                opponent_prior_root_assessment = report.get(
+                    "opponent_prior_root_assessment"
+                )
+                if opponent_prior_root_assessment not in {
+                    "unassessed",
+                    "disabled",
+                    "no_choice",
+                    "missing_opponent_head",
+                    "eligible",
+                }:
+                    raise EngineSearchWitnessError(
+                        "native_opponent_prior_root_assessment_missing_or_invalid"
+                    )
+                if opponent_prior_root_eligible != (
+                    opponent_prior_root_assessment == "eligible"
+                ):
+                    raise EngineSearchWitnessError(
+                        "native_opponent_prior_root_assessment_eligibility_mismatch"
+                    )
                 self.stats.opponent_request_order_statuses[reported_order_status] += 1
                 if root_prior_fallbacks:
                     self.stats.opponent_request_order_root_fallback_statuses[
@@ -6611,16 +6630,16 @@ class EngineMctsPolicy:
                 # opponent had no root choice to price*.  In that case native
                 # has historically represented the same harmless omission in
                 # two ledgers: either zero root fallbacks, or one unclassified
-                # root fallback.  The latter is the concrete seed-2026092006
-                # form, so silently accepting it without the eligibility
-                # witness would reopen the strict-mode hole this exception is
-                # meant to avoid.  All other statuses -- including a parser or
-                # walk error -- stay terminal for a registered experiment.
+                # root fallback. The latter is seed-2026092006's concrete
+                # form. A boolean eligibility bit is not enough here: false
+                # also used to mean unassessed or a missing opponent head.
+                # All other statuses -- including a parser/walk error -- stay
+                # terminal for a registered experiment.
                 allowed_lost_active_permutation_root_fallback = (
                     config.allow_lost_active_permutation_opponent_root_fallback
                     and expected_order_status == "lost_active_permutation"
                     and reported_order_status == "lost_active_permutation"
-                    and not opponent_prior_root_eligible
+                    and opponent_prior_root_assessment == "no_choice"
                     and root_prior_fallbacks == 1
                     and report.get("root_prior_fallback_reason") is None
                 )
@@ -6634,7 +6653,7 @@ class EngineMctsPolicy:
                     config.allow_lost_active_permutation_opponent_prior_omission
                     and expected_order_status == "lost_active_permutation"
                     and reported_order_status == "lost_active_permutation"
-                    and not opponent_prior_root_eligible
+                    and opponent_prior_root_assessment == "no_choice"
                     and root_prior_fallbacks == 0
                     and report.get("root_prior_fallback_reason") is None
                 )

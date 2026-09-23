@@ -1175,11 +1175,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // aggregate for callers that only need the historical counter.
     let mut prior_branches = 0usize;
     let mut root_prior_fallbacks = 0usize;
-    // Whether this root actually has an opponent decision to seed. A missing
-    // public opponent order is harmless when there is no opponent choice;
-    // export this fact so the Python strict boundary never has to infer it
-    // from a fallback counter.
+    // Whether this root actually has an opponent decision to seed.  This is
+    // deliberately a state machine, not a bool: `false` used to conflate a
+    // genuine no-choice root with a root that never reached model evaluation
+    // (or whose opponent head was absent).  Python's strict boundary can only
+    // permit the former.
     let mut opponent_prior_root_eligible = false;
+    let mut opponent_prior_root_assessment = "unassessed";
     let mut branch_prior_fallbacks = 0usize;
     let mut branch_prior_fallback_reasons = PriorFallbackReasonCounts::default();
     let mut branch_unmapped_action_witness = BranchUnmappedActionWitness::default();
@@ -1257,9 +1259,16 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             // seat routing itself is `resolve_root_priors`' job -- this scope
             // only decides WHETHER there is an opponent map to resolve.
             let opponent_options = seats.opponent_options;
-            opponent_prior_root_eligible = cfg.use_opponent_priors
-                && !output.opponent_priors.is_empty()
-                && !is_single_none(&opponent_options);
+            opponent_prior_root_assessment = if !cfg.use_opponent_priors {
+                "disabled"
+            } else if is_single_none(&opponent_options) {
+                "no_choice"
+            } else if output.opponent_priors.is_empty() {
+                "missing_opponent_head"
+            } else {
+                "eligible"
+            };
+            opponent_prior_root_eligible = opponent_prior_root_assessment == "eligible";
             let opponent_map = if opponent_prior_root_eligible {
                 // Root: no branch lines yet, so the unevolved party order is
                 // correct here by construction.
@@ -1793,7 +1802,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"branch_prior_fallback_reasons\":{},\"branch_prior_unmapped_action_witness\":{},\"root_prior_fallback_reason\":{},\"opponent_prior_root_eligible\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
+         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"branch_prior_fallback_reasons\":{},\"branch_prior_unmapped_action_witness\":{},\"root_prior_fallback_reason\":{},\"opponent_prior_root_eligible\":{},\"opponent_prior_root_assessment\":\"{}\",\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1824,6 +1833,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         serde_json::to_string(&root_prior_fallback_reason)
             .expect("optional static string JSON serialization cannot fail"),
         opponent_prior_root_eligible,
+        opponent_prior_root_assessment,
         encode_nanos as f64 / 1e9,
         model_nanos as f64 / 1e9,
         tree_nanos as f64 / 1e9,
