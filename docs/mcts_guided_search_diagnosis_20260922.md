@@ -1,9 +1,10 @@
 # Guided MCTS diagnosis: branch-prior and override evidence
 
-**Status: updated, 2026-09-23.** This records model-leaf evidence and the
-completed branch-prior/override audits. It is not a strength claim. The leaf
-evidence supports prioritizing a policy-consistent value-head measurement
-before assuming that deeper search will improve play.
+**Status: working diagnosis, 2026-09-23.** This records model-leaf evidence
+and completed branch-prior/override audits. It is neither a strength claim nor
+a demonstrated causal explanation. The next source-bound measurements are
+designed to distinguish a leaf-target problem from a search-mechanics problem
+before choosing a correction.
 
 ## What the large branch-prior count means
 
@@ -38,22 +39,22 @@ remain intact.  This can make those late-game trees less efficient, but it
 cannot explain a global strength result on its own.
 
 The prior artifact predates the topology witness, so it cannot distinguish a
-missing move arm, switch arm, or `None` engine-option shape.  A fresh replay
-on the later, witness-instrumented source did **not** reproduce the fallback,
-so the old ledger cannot be retroactively assigned a concrete topology.  The
-current source-matched leaf experiment uses commit `195a89c5`, including that
-witness, but its purpose is the independent leaf-value intervention rather
-than a fabricated reproduction claim.  A mapping repair is not justified
-until a source-bound witness identifies a repairable category and a controlled
+missing move arm, switch arm, or `None` engine-option shape. A fresh
+source-matched GPU replay did **not** reproduce the fallback (zero root and
+branch fallbacks for the affected seed), so the old ledger cannot be
+retroactively assigned a concrete topology. Keep the witness telemetry, but
+do not treat this count as the central explanation for search strength unless
+it recurs with an action-level effect. A mapping repair is not justified until
+a source-bound witness identifies a repairable category and a controlled
 comparison shows an effect on root actions or outcomes.
 
 ## Fixed-opponent override audit
 
 The same sealed artifact recorded every guided-MCTS override and replayed the
 fixed public joint step with the opponent held fixed, then continued each arm
-with the deterministic raw policy.  This is a useful local counterfactual,
-not an independent game-strength estimate: many records arise from the same
-four games.
+with the deterministic raw policy. This is a descriptive local
+counterfactual, not an independent game-strength estimate: many records arise
+from the same four games.
 
 | Result | Count |
 | --- | ---: |
@@ -67,11 +68,13 @@ four games.
 | net MCTS-minus-raw wins | -2 |
 | immediate fixed-step terminal resolutions | 0 |
 
-All 62 comparable records retained valid root-prior authority.  Their median
+All 62 comparable records retained valid root-prior authority. Their median
 root Q gap was `0.0306275`, and median root visit-share gap was `0.151459`.
 There is no supported claim that either gap identifies a beneficial override:
-the 62 records are too small and correlated, and the local continuation
-policy intentionally differs from an independent Foul Play evaluation.
+the records are too small and correlated, their continuation policy differs
+from an independent Foul Play evaluation, and the older construction was later
+found to reset policy histories. That history caveat makes its quantitative
+rankings unsuitable as a proxy for the deployed raw-policy suffix.
 
 Reading the 62 immutable `sealed-override-audits/*/round-*.json` records
 directly gives a more specific negative result: the point-biserial correlation
@@ -83,7 +86,10 @@ effect-size claim, but it rejects the simpler account that larger native
 root-Q or visit separations were consistently identifying better overrides.
 The fallback-heavy `2026092006` contributes 43 of those paired records and is
 near neutral (MCTS 21 wins, raw 22); it is a stress case, not a proof that all
-of its overrides are losing.
+of its overrides are losing. The history-preserving root-action audit added
+in source PR #1450 supersedes this audit for the action-level question: it
+records the live root ledger, preserves exact policy histories, freezes target
+selection before outcomes, and declares the continuation target.
 
 ## Completed terminal-only model-leaf shadow
 
@@ -104,12 +110,13 @@ are durable coverage exclusions, not labels.
 | learned-value mean | 0.44777 |
 | terminal-outcome mean | 0.51684 |
 
-This is a weak ranking signal on the states the tree actually reaches, plus a
-large calibration offset. It explains how a value head can be competitive with
-Foul Play or another one-step chooser yet still fail to improve MCTS: direct
-choice needs the correct ordering near the live root; MCTS repeatedly ranks
-deep, off-policy leaves and compounds small ordering errors through selection
-and backup.
+This is a weak ranking signal against one uniform-continuation target on the
+states the tree actually reaches. It is suggestive, not a calibration finding:
+the leaves are correlated tree observations and uniform continuation may not
+be the value head's intended target. It supplies a plausible route by which a
+one-step policy can be strong while MCTS is weak—MCTS repeatedly ranks deep,
+off-policy leaves and compounds errors through selection and backup—but does
+not establish that route as the cause.
 
 The R4 result is source-bound to `a60da9eb`, not the later `195a89c5` source
 used by the failed opponent-prior R3 attempt. It is strong evidence about the
@@ -214,29 +221,42 @@ terminal (90.90%), 25,492,374 ply-cap fallback (9.10%), and zero dead ends. The
 model control recorded zero rollout rows. Thus the intervention and its
 terminal/cap/dead-end denominator are now explicit rather than inferred. It is
 still not a pure-terminal-leaf correction: about one in eleven backed-up
-rollouts used the registered capped fallback. This is causal evidence that
-changing the leaf-evaluation path materially changed these matched outcomes;
-it is **not** a strength claim, a Foul Play comparison, or enough evidence to
-approve value-head retraining.
+rollouts used the registered capped fallback. Four paired games, however, are
+not enough to establish a repeatable leaf advantage or attribute the effect to
+the value head rather than the changed rollout target and backup behavior. The
+result establishes only that this leaf-path intervention can change outcomes
+in this small matched sample; it is **not** a strength claim, a Foul Play
+comparison, or enough evidence to approve value-head retraining.
 
-The result is nevertheless incompatible with the claim that a policy that
-matches a strong one-turn chooser must automatically support effective MCTS.
-One-turn policy quality ranks the live root. MCTS repeatedly ranks off-policy
-frontier states and backs those rankings up through the tree; that requires a
-separately accurate leaf evaluator.
+The result is nevertheless a warning against assuming that a policy matching a
+strong one-turn chooser automatically supports effective MCTS. One-turn policy
+quality ranks the live root. MCTS repeatedly ranks off-policy frontier states
+and backs those rankings up through the tree, which can require a separately
+accurate leaf evaluator—but the current data has not separated that possibility
+from opponent modelling, exploration, and backup effects.
 
 ## Decisive next evidence
 
-The result has a sharp interpretation:
+The next evidence is deliberately bounded:
 
-1. Expand the shared seed denominator before estimating strength. The current
-   eight-pair replication preserves the full terminal/cap/dead-end partition
-   per game and rejects a malformed counter before it can be read out. If the
-   positive direction persists with a healthy terminal fraction, prioritize a
-   source-bound value-target/calibration study: compare policy-continuation
-   and uniform-terminal targets on matched, held-out frontier states before
-   choosing retraining data.
-2. Any promoted search or value correction still needs a separately
-   registered, durable paired GPU strength study with a
-   zero-unexpected-fallback contract. Partial seed output is never evidence
-   for either conclusion.
+1. Run a source-bound, seed-balanced root-action inventory, then a small
+   predeclared action audit. At each selected root, compare raw policy,
+   MCTS's actual choice, and the leading visited alternative under the same
+   fixed immediate opponent step. Measure a policy-consistent suffix and a
+   uniform-own-side suffix separately. This asks whether continuation policy
+   materially changes the relevant action ranking; it is not a direct value
+   test or strength estimate.
+2. Add a deterministic, history-preserving raw-policy anchor before using a
+   policy-consistent result as a deployed-baseline claim. Repeated suffix RNG
+   seeds vary suffix randomness, not independent opponent moves or chance
+   worlds; report that limitation and root-level uncertainty explicitly.
+3. The decisive attribution measurement is then a bounded frontier-state
+   calibration study: compare learned V with repeated outcomes from identical
+   search-frontier states, with player perspective and policy histories
+   preserved, under both policy-matched and uniform targets. Poor agreement
+   with policy-matched outcomes supports value work. Good agreement with poor
+   root choices shifts the next intervention to opponent modelling,
+   exploration, or backup.
+4. Promote only a selected correction to a separately registered, durable
+   paired GPU strength study with a zero-unexpected-fallback contract. Partial
+   seed output is never evidence for either conclusion.
