@@ -27,6 +27,7 @@ MISSING_ACTION_INDEX = -1
 # v2: cache arrays carry observation-spec-v2 tensors. Bumped with the observation break so a
 # pre-break cache refuses at the metadata guard instead of failing shape-wise mid-training.
 TRAINING_CACHE_SCHEMA_VERSION = "pokezero.training_cache.v2"
+TRAINING_CACHE_OBJECTIVE_CONTRACT_SCHEMA_VERSION = "pokezero.training_cache_objective_contract.v1"
 MAX_ACTIVE_TRAINING_CACHE_GB = 50.0
 MAX_ACTIVE_TRAINING_CACHE_BYTES = int(MAX_ACTIVE_TRAINING_CACHE_GB * 1024 * 1024 * 1024)
 
@@ -623,6 +624,7 @@ class TrainingCacheBuilder:
         max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
         cache_root: PathInput | None = None,
         root_byte_budget: "CacheRootByteBudget | None" = None,
+        metadata_overrides: Mapping[str, Any] | None = None,
     ) -> TrainingCacheSummary:
         if self.example_count == 0:
             raise ValueError("training cache cannot be written with zero examples.")
@@ -716,6 +718,15 @@ class TrainingCacheBuilder:
                     "semantic": "summed category embeddings are identical to dense zero-padded rows",
                 },
             }
+            if metadata_overrides is not None:
+                extra = dict(metadata_overrides)
+                collisions = sorted(set(extra) & set(metadata))
+                if collisions:
+                    raise ValueError(
+                        "training cache metadata overrides cannot replace reserved fields: "
+                        + ", ".join(collisions)
+                    )
+                metadata.update(extra)
             (temp_path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             if output_path.exists():
                 if output_path.is_dir():
@@ -880,6 +891,12 @@ def concat_training_caches(
             "categorical_storage", {}
         ).get("original_feature_count"):
             raise ValueError(f"cache {path} is not concatenable: categorical original_feature_count mismatch.")
+        _require_special_training_metadata_compatible(
+            base=base,
+            candidate=meta,
+            base_path=normalized[0],
+            candidate_path=path,
+        )
 
     array_names = sorted(p.stem for p in (normalized[0]).glob("*.npy"))
     for path in normalized[1:]:
@@ -953,6 +970,7 @@ def concat_training_caches(
     metadata[COLLECTION_ENV_KEY] = _normalized_collection_env(base)
     fidelities = {_normalized_belief_fidelity(meta) for meta in metadatas}
     metadata[BELIEF_FIDELITY_KEY] = next(iter(fidelities)) if len(fidelities) == 1 else None
+    _merge_special_training_metadata(metadata=metadata, parts=metadatas)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.tmp-", dir=output_path.parent))
@@ -977,6 +995,85 @@ def concat_training_caches(
         example_count=int(metadata["example_count"]),
         byte_size=_directory_byte_size(output_path),
     )
+
+
+def _require_special_training_metadata_compatible(
+    *,
+    base: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+    base_path: Path,
+    candidate_path: Path,
+) -> None:
+    """Keep special-target caches from losing their contract during fan-in."""
+
+    for field in ("training_objective_contract", "value_leaf_training"):
+        base_value = base.get(field)
+        candidate_value = candidate.get(field)
+        if (base_value is None) != (candidate_value is None):
+            raise ValueError(
+                f"cache {candidate_path} is not concatenable with {base_path}: {field} is present on only one input."
+            )
+    base_contract = base.get("training_objective_contract")
+    candidate_contract = candidate.get("training_objective_contract")
+    if base_contract is not None and candidate_contract != base_contract:
+        raise ValueError(
+            f"cache {candidate_path} is not concatenable with {base_path}: training objective contract mismatch."
+        )
+    base_leaf = base.get("value_leaf_training")
+    candidate_leaf = candidate.get("value_leaf_training")
+    if base_leaf is None:
+        return
+    if not isinstance(base_leaf, Mapping) or not isinstance(candidate_leaf, Mapping):
+        raise ValueError("value-leaf training metadata must be mappings to concatenate.")
+    stable_fields = (
+        "schema_version",
+        "target_mode",
+        "compatible_objectives",
+        "required_window_size",
+        "source_binding",
+    )
+    for field in stable_fields:
+        if candidate_leaf.get(field) != base_leaf.get(field):
+            raise ValueError(
+                f"cache {candidate_path} is not concatenable with {base_path}: "
+                f"value-leaf {field} mismatch."
+            )
+
+
+def _merge_special_training_metadata(
+    *, metadata: dict[str, Any], parts: Sequence[Mapping[str, Any]]
+) -> None:
+    """Aggregate only count fields after special-contract compatibility passes."""
+
+    leaf = metadata.get("value_leaf_training")
+    if leaf is None:
+        return
+    if not isinstance(leaf, Mapping):
+        raise ValueError("value-leaf training metadata must be a mapping to concatenate.")
+    captures = 0
+    counts = {"win": 0, "tie": 0, "loss": 0}
+    for part in parts:
+        payload = part.get("value_leaf_training")
+        if not isinstance(payload, Mapping):
+            raise ValueError("value-leaf training metadata missing during concatenation.")
+        capture_count = payload.get("capture_count")
+        target_counts = payload.get("value_target_counts")
+        if isinstance(capture_count, bool) or not isinstance(capture_count, int) or capture_count <= 0:
+            raise ValueError("value-leaf training capture_count must be a positive integer to concatenate.")
+        if not isinstance(target_counts, Mapping) or set(target_counts) != set(counts):
+            raise ValueError("value-leaf training value_target_counts are invalid to concatenate.")
+        captures += capture_count
+        for key in counts:
+            value = target_counts[key]
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError("value-leaf training value_target_counts must be non-negative integers.")
+            counts[key] += value
+    if sum(counts.values()) != captures:
+        raise ValueError("value-leaf training counts do not sum to captures during concatenation.")
+    merged_leaf = dict(leaf)
+    merged_leaf["capture_count"] = captures
+    merged_leaf["value_target_counts"] = counts
+    metadata["value_leaf_training"] = merged_leaf
 
 
 def iter_training_examples(
@@ -1059,6 +1156,7 @@ def iter_training_batches(
     config: TrajectoryDatasetConfig | None = None,
     consumed_cache_callback: Callable[[Path], None] | None = None,
     defer_cache_window_expansion: bool = False,
+    objective: str | None = None,
 ) -> Iterator[TrainingBatch]:
     normalized_paths = _normalize_paths(paths)
     cache_flags = tuple(is_training_cache_path(path) for path in normalized_paths)
@@ -1071,6 +1169,7 @@ def iter_training_batches(
             config=config,
             consumed_cache_callback=consumed_cache_callback,
             defer_window_expansion=defer_cache_window_expansion,
+            objective=objective,
         )
         return
     if consumed_cache_callback is not None:
@@ -1090,6 +1189,7 @@ def iter_training_batches_with_capped_auxiliary(
     config: TrajectoryDatasetConfig | None = None,
     consumed_cache_callback: Callable[[Path], None] | None = None,
     defer_cache_window_expansion: bool = False,
+    objective: str | None = None,
 ) -> Iterator[TrainingBatch]:
     """Stream primary batches plus a capped auxiliary-example mix.
 
@@ -1110,6 +1210,7 @@ def iter_training_batches_with_capped_auxiliary(
         config=config,
         consumed_cache_callback=None,
         defer_cache_window_expansion=defer_cache_window_expansion,
+        objective=objective,
     )
     pending_auxiliary: TrainingBatch | None = None
     auxiliary_exhausted = False
@@ -1120,6 +1221,7 @@ def iter_training_batches_with_capped_auxiliary(
         config=config,
         consumed_cache_callback=consumed_cache_callback,
         defer_cache_window_expansion=defer_cache_window_expansion,
+        objective=objective,
     ):
         yield primary_batch
         primary_seen += primary_batch.batch_size
@@ -1426,6 +1528,7 @@ def write_training_cache_from_examples(
     overwrite: bool = False,
     max_cache_root_bytes: int | None = MAX_ACTIVE_TRAINING_CACHE_BYTES,
     cache_root: PathInput | None = None,
+    metadata_overrides: Mapping[str, Any] | None = None,
 ) -> TrainingCacheSummary:
     builder = TrainingCacheBuilder(config=config)
     for example in examples:
@@ -1435,6 +1538,7 @@ def write_training_cache_from_examples(
         overwrite=overwrite,
         max_cache_root_bytes=max_cache_root_bytes,
         cache_root=cache_root,
+        metadata_overrides=metadata_overrides,
     )
 
 
@@ -1445,6 +1549,7 @@ def _iter_coalesced_training_cache_batches(
     config: TrajectoryDatasetConfig | None,
     consumed_cache_callback: Callable[[Path], None] | None,
     defer_window_expansion: bool,
+    objective: str | None,
 ) -> Iterator[TrainingBatch]:
     pending: list[TrainingBatch] = []
     pending_size = 0
@@ -1454,6 +1559,7 @@ def _iter_coalesced_training_cache_batches(
             batch_size=batch_size,
             config=config,
             defer_window_expansion=defer_window_expansion,
+            objective=objective,
         ):
             remainder: TrainingBatch | None = batch
             while remainder is not None:
@@ -1746,12 +1852,14 @@ def iter_training_cache_batches(
     batch_size: int,
     config: TrajectoryDatasetConfig | None = None,
     defer_window_expansion: bool = False,
+    objective: str | None = None,
 ) -> Iterator[TrainingBatch]:
     if batch_size <= 0:
         raise ValueError("batch_size must be positive.")
     numpy = _require_numpy()
     cache_path = Path(path)
     metadata = _read_training_cache_metadata(cache_path)
+    _require_training_cache_objective_compatible(metadata, objective=objective, path=cache_path)
     cache_config = TrajectoryDatasetConfig.from_dict(_mapping(metadata["dataset_config"]))
     if config is not None and cache_config.to_dict() != config.to_dict():
         raise ValueError("training cache dataset config does not match requested training config.")
@@ -2185,6 +2293,39 @@ def _read_training_cache_metadata(path: Path) -> Mapping[str, Any]:
     if payload.get("schema_version") != TRAINING_CACHE_SCHEMA_VERSION:
         raise ValueError(f"Unsupported training cache schema: {payload.get('schema_version')!r}.")
     return payload
+
+
+def _require_training_cache_objective_compatible(
+    metadata: Mapping[str, Any], *, objective: str | None, path: Path
+) -> None:
+    """Reject a cache whose sealed targets are incompatible with this trainer.
+
+    Generic rollout caches predate objective contracts and remain usable for
+    every objective.  Special caches that fabricate required generic-format
+    fields (such as an action index for value-only data) must seal and enforce
+    their allowed objectives at the cache reader used by the trainer.
+    """
+
+    contract = metadata.get("training_objective_contract")
+    if contract is None:
+        return
+    if not isinstance(contract, Mapping):
+        raise ValueError(f"training cache {path} has invalid training_objective_contract metadata.")
+    if contract.get("schema_version") != TRAINING_CACHE_OBJECTIVE_CONTRACT_SCHEMA_VERSION:
+        raise ValueError(f"training cache {path} has unsupported objective-contract schema.")
+    compatible = contract.get("compatible_objectives")
+    if (
+        not isinstance(compatible, list)
+        or not compatible
+        or any(not isinstance(item, str) or not item for item in compatible)
+        or len(set(compatible)) != len(compatible)
+    ):
+        raise ValueError(f"training cache {path} has invalid compatible_objectives metadata.")
+    if objective is not None and objective not in compatible:
+        raise ValueError(
+            f"training cache {path} is compatible only with {', '.join(compatible)}, "
+            f"not training objective {objective!r}."
+        )
 
 
 def _load_training_cache_arrays(path: Path, numpy: Any) -> dict[str, Any]:

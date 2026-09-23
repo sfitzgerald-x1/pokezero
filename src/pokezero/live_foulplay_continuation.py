@@ -39,6 +39,9 @@ class LiveFoulPlayContinuationBoundExceeded(LiveFoulPlayContinuationError):
 LIVE_FOULPLAY_CONTINUATION_ORACLE_SCHEMA_VERSION = (
     "pokezero.live-foulplay-continuation-oracle.v3"
 )
+LIVE_FOULPLAY_SUCCESSOR_CAPTURE_SCHEMA_VERSION = (
+    "pokezero.live-foulplay-successor-capture.v1"
+)
 
 
 @dataclass(frozen=True)
@@ -232,6 +235,7 @@ def run_live_foulplay_continuation(
     continuation_policy_factory: Callable[[], Mapping[PlayerId, Policy]],
     rollout_config: RolloutConfig,
     max_continuation_decision_rounds: int | None = None,
+    successor_capture_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Execute one fixed live joint action then a fresh local continuation.
 
@@ -240,7 +244,13 @@ def run_live_foulplay_continuation(
     capped terminal, capped continuation, or missing terminal result fails the
     source battle before its choices can be submitted.  Callers that explicitly
     opt in may record an uncapped terminal reached by the fixed joint step as a
-    zero-decision direct outcome.
+    zero-decision direct outcome.  ``successor_capture_callback`` is a separate,
+    explicit training-data path: it receives only the PokeZero-player's exact
+    post-step observation after a non-terminal fixed joint step and an uncapped
+    continuation terminal.  It is deliberately never called for a terminal
+    fixed step because that branch has no successor leaf to supervise.  A
+    callback failure propagates and rejects the candidate rather than leaving a
+    partial or silently unproven collection record.
     """
 
     if source_decision_round < 0:
@@ -339,7 +349,7 @@ def run_live_foulplay_continuation(
                     f"{max_continuation_decision_rounds}-decision eligibility bound"
                 )
             raise LiveFoulPlayContinuationError("live continuation smoke capped before a terminal result")
-        return {
+        proof = {
             "source_battle_id": boundary.snapshot.battle_id,
             "source_seed": source_seed,
             "source_decision_round": source_decision_round,
@@ -358,6 +368,32 @@ def run_live_foulplay_continuation(
                 },
             },
         }
+        if successor_capture_callback is not None:
+            try:
+                successor_observation = first_step.observations[pokezero_player]
+            except (KeyError, TypeError) as error:
+                raise LiveFoulPlayContinuationError(
+                    "live continuation successor capture lacks the PokeZero-player observation"
+                ) from error
+            successor_capture_callback(
+                {
+                    "schema_version": LIVE_FOULPLAY_SUCCESSOR_CAPTURE_SCHEMA_VERSION,
+                    "source_battle_id": boundary.snapshot.battle_id,
+                    "format_id": boundary.snapshot.format_id,
+                    "source_seed": source_seed,
+                    "source_decision_round": source_decision_round,
+                    "source_request_sha256": dict(boundary.source_request_sha256),
+                    "snapshot_request_sha256": dict(boundary.snapshot_request_sha256),
+                    "pokezero_player": pokezero_player,
+                    "foulplay_player": foulplay_player,
+                    "actual_foulplay_choice": foulplay_choice,
+                    "decoded_actual_foulplay_action": foulplay_action,
+                    "first_restored_joint_step": first_restored_joint_step,
+                    "successor_observation": successor_observation,
+                    "continuation": dict(proof["continuation"]),
+                }
+            )
+        return proof
     finally:
         close = getattr(env, "close", None)
         if callable(close):
@@ -383,6 +419,7 @@ def select_live_foulplay_continuation_oracle_action(
     max_continuation_decision_rounds: int | None = None,
     expanded_continuation_decision_rounds: int | None = None,
     progress_callback: Callable[[Mapping[str, Any]], None] | None = None,
+    successor_capture_callback: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> LiveFoulPlayContinuationOracleDecision:
     """Choose a live action by evaluating every legal candidate to terminal.
 
@@ -460,10 +497,15 @@ def select_live_foulplay_continuation_oracle_action(
                 "max_continuation_decision_rounds": max_continuation_decision_rounds,
             }
         )
-    def score_candidate(action: int) -> tuple[dict[str, Any], int, bool]:
+    def score_candidate(action: int) -> tuple[dict[str, Any], int, bool, Mapping[str, Any] | None]:
         candidate_started = perf_counter()
         effective_bound = max_continuation_decision_rounds
         expanded = False
+        captures: list[Mapping[str, Any]] = []
+
+        def collect_successor(capture: Mapping[str, Any]) -> None:
+            captures.append(capture)
+
         try:
             proof = run_live_foulplay_continuation(
                 boundary=boundary,
@@ -480,6 +522,9 @@ def select_live_foulplay_continuation_oracle_action(
                 env_factory=env_factory,
                 continuation_policy_factory=continuation_policy_factory,
                 rollout_config=rollout_config,
+                successor_capture_callback=(
+                    collect_successor if successor_capture_callback is not None else None
+                ),
             )
         except LiveFoulPlayContinuationBoundExceeded:
             if expanded_continuation_decision_rounds is None:
@@ -501,6 +546,13 @@ def select_live_foulplay_continuation_oracle_action(
                 env_factory=env_factory,
                 continuation_policy_factory=continuation_policy_factory,
                 rollout_config=rollout_config,
+                successor_capture_callback=(
+                    collect_successor if successor_capture_callback is not None else None
+                ),
+            )
+        if len(captures) > 1:
+            raise LiveFoulPlayContinuationError(
+                "live continuation oracle candidate emitted multiple successor captures"
             )
         continuation = proof.get("continuation")
         if not isinstance(continuation, Mapping):
@@ -569,6 +621,7 @@ def select_live_foulplay_continuation_oracle_action(
             scored_candidate,
             max(0, int((perf_counter() - candidate_started) * 1000)),
             expanded,
+            captures[0] if captures else None,
         )
 
     def emit_candidate_started(candidate_index: int, action: int) -> None:
@@ -643,13 +696,19 @@ def select_live_foulplay_continuation_oracle_action(
         )
 
     scored: list[dict[str, Any]] = []
+    pending_successor_captures: list[Mapping[str, Any]] = []
     decision_started = perf_counter()
     indexed_candidates = tuple(enumerate(candidates))
     if candidate_parallelism == 1 or len(indexed_candidates) == 1:
         for candidate_index, action in indexed_candidates:
             emit_candidate_started(candidate_index, action)
-            scored_candidate, elapsed_milliseconds, expanded = score_candidate(action)
+            scored_candidate, elapsed_milliseconds, expanded, successor_capture = score_candidate(action)
             scored.append(scored_candidate)
+            if successor_capture is not None:
+                # Defer external collection until every candidate passed its
+                # oracle checks.  This preserves legal-action order and avoids
+                # a partially persisted collection when a later candidate fails.
+                pending_successor_captures.append(successor_capture)
             emit_candidate_result(
                 candidate_index,
                 action,
@@ -673,8 +732,17 @@ def select_live_foulplay_continuation_oracle_action(
                 (candidate_index, action, *future.result())
                 for candidate_index, action, future in futures
             ]
-        for candidate_index, action, scored_candidate, elapsed_milliseconds, expanded in evaluations:
+        for (
+            candidate_index,
+            action,
+            scored_candidate,
+            elapsed_milliseconds,
+            expanded,
+            successor_capture,
+        ) in evaluations:
             scored.append(scored_candidate)
+            if successor_capture is not None:
+                pending_successor_captures.append(successor_capture)
             emit_candidate_result(
                 candidate_index,
                 action,
@@ -682,6 +750,10 @@ def select_live_foulplay_continuation_oracle_action(
                 elapsed_milliseconds,
                 expanded,
             )
+
+    if successor_capture_callback is not None:
+        for capture in pending_successor_captures:
+            successor_capture_callback(capture)
 
     selected = _select_scored_candidate(
         scored=scored, raw_action=raw_action, foulplay_player=foulplay_player,
