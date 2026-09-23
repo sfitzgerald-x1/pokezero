@@ -24,6 +24,23 @@ All 1,414 are `unmapped_action` interior fallbacks:
 | root-prior fallbacks | 0 |
 | other fallback reasons | 0 |
 
+The event count is highly concentrated rather than spread over those five
+choices:
+
+| round | repeated interior fallback events |
+| ---: | ---: |
+| 118 | 5 |
+| 119 | 275 |
+| 124 | 626 |
+| 126 | 504 |
+| 127 | 4 |
+
+Thus 1,405 of 1,414 events (99.4%) were produced while exploring only three
+late-game roots (rounds 119, 124, and 126). Each ledger records four native
+belief-world invocations; the round-124 ledger coalesced two equivalent
+belief records for one invocation. These are tree-internal occurrences, not
+additional public choices.
+
 The root was valid at every affected decision (`prior_authority=true`, no
 missing root action indices), and the MCTS action equalled the raw policy
 argmax at all five.  Thus the number is repeated simulated-node fallback
@@ -228,21 +245,51 @@ One-turn policy quality ranks the live root. MCTS repeatedly ranks off-policy
 frontier states and backs those rankings up through the tree; that requires a
 separately accurate leaf evaluator.
 
+### Realized search-work audit
+
+The configured `search_time_ms=1000` is not an end-to-end one-second decision
+wall in this diagnostic.  A direct read of the complete per-seed summaries
+under `/shared/scott-experiment/mcts-source-{model,leaf}-telemetry-9a21e1b0-r1`
+shows that every candidate decision in **both** arms reached exactly 16,384
+native iterations (four worlds times the 4,096 simulation cap) and exactly four
+searched worlds.  Therefore the comparison did not give the rollout arm more
+native search visits per decision.
+
+The arms contain different numbers of decisions because their games have
+different lengths (428 model-leaf decisions versus 322 rollout-leaf decisions),
+so totals must not be compared as an equal game-work denominator.  On a
+per-candidate-decision basis, model leaf recorded 26,615 model evaluations and
+a 15.86 s median end-to-end wall (p95 23.66 s); rollout leaf recorded 25,539
+model evaluations, 27,178 priced leaves / 869,705 rollout trials, and a 23.73 s
+median wall (p95 45.27 s).  The latter used the registered twelve rollout
+workers and still had the 9.10% capped-rollout fallback fraction above.
+
+So the four-pair result is evidence about the **whole rollout leaf-evaluation
+path at matched native search effort**, not an isolated numerical replacement
+of the learned value.  It neither proves a value-head target nor licenses a
+latency claim.  The next causal probe must hold the exact source roots, worlds,
+priors, simulation cap, and random streams fixed; it should use the existing
+rollout seam before building frozen-frontier machinery.
+
 ## Decisive next evidence
 
 The result has a sharp interpretation:
 
-1. Complete the predeclared root-action recovery audit, treating its sixteen
-   saved roots—not its 256 continuation trials—as the independent units. It
-   measures target sensitivity (sampled-policy versus uniform-own
-   continuation), not a causal diagnosis of the leaf head.
+1. Complete the predeclared root-action recovery audit. Its sixteen saved
+   roots are measurement units, not sixteen independent observations: they
+   cluster into four source seeds and eight games. It measures local target
+   sensitivity under sampled-policy and uniform-own continuations with the
+   opponent's committed action held fixed. Neither target is deployed raw
+   argmax or continued MCTS, so it cannot choose a training target by itself.
 2. On a small prespecified mix of beneficial and harmful overrides, reproduce
-   the original search with worlds, priors, opponent assumptions, budget, and
-   random streams held fixed. Substitute independently estimated continuation
-   values only at the recorded frontier, then rerun allocation with that
-   evaluator. The second step is essential: deployed selection aggregates
-   normalized **visit** share, so repricing a frozen tree cannot show that the
-   chosen move would change.
+   the original search with worlds, priors, opponent assumptions, the fixed
+   simulation cap, and random streams held fixed. Use the existing rollout
+   seam first and measure backed-up Q, visit allocation, and selected move.
+   Then validate any changed choice on separate continuation draws. Only build
+   frozen-frontier repricing if this leaves a consequential ambiguity between
+   evaluation ranking and allocation. Deployed selection aggregates normalized
+   **visit** share, so repricing a frozen tree alone cannot show that the chosen
+   move would change.
 3. Validate any newly selected moves on separate continuation draws. If
    corrected leaf values improve both backed-up rankings and selected moves,
    prioritize a source-bound value-target study. If Q values improve but visit
