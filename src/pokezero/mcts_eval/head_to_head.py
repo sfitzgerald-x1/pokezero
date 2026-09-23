@@ -363,6 +363,11 @@ class PolicyTelemetry:
     opponent_request_order_root_fallback_statuses: Mapping[str, int] = field(
         default_factory=dict
     )
+    # Distinct from a fallback: source-native proof that this root had no
+    # opponent choice to price while its public active order was unavailable.
+    opponent_request_order_root_omission_statuses: Mapping[str, int] = field(
+        default_factory=dict
+    )
     # The rollout-leaf arm must carry its realized terminal/fallback partition
     # through the paired-game record.  The candidate config says only what was
     # requested; these counters say what the native search actually backed up.
@@ -450,6 +455,10 @@ class PolicyTelemetry:
             self.opponent_request_order_root_fallback_statuses,
             label="opponent request-order root-fallback statuses",
         )
+        root_omission_statuses = status_mapping(
+            self.opponent_request_order_root_omission_statuses,
+            label="opponent request-order root-omission statuses",
+        )
         # A frozen dataclass does not freeze a mutable mapping.  Copy the
         # receipt payload so a caller cannot alter a validated game afterward.
         object.__setattr__(self, "opponent_request_order_statuses", statuses)
@@ -457,6 +466,11 @@ class PolicyTelemetry:
             self,
             "opponent_request_order_root_fallback_statuses",
             root_fallback_statuses,
+        )
+        object.__setattr__(
+            self,
+            "opponent_request_order_root_omission_statuses",
+            root_omission_statuses,
         )
         object.__setattr__(self, "branch_prior_fallback_reasons", branch_reasons)
         if not isinstance(self.rollout_leaf_modes, Mapping):
@@ -569,6 +583,9 @@ class PolicyTelemetry:
             opponent_request_order_root_fallback_statuses=dict(
                 getattr(stats, "opponent_request_order_root_fallback_statuses", {})
             ),
+            opponent_request_order_root_omission_statuses=dict(
+                getattr(stats, "opponent_request_order_root_omission_statuses", {})
+            ),
             rollout_leaf_modes=dict(getattr(stats, "rollout_leaf_modes", {})),
             # Preserve the native values here.  PolicyTelemetry's constructor
             # deliberately rejects floats and booleans for counters; coercing
@@ -591,6 +608,7 @@ class PolicyTelemetry:
                 "branch_prior_fallback_reasons",
                 "opponent_request_order_statuses",
                 "opponent_request_order_root_fallback_statuses",
+                "opponent_request_order_root_omission_statuses",
                 "rollout_leaf_modes",
             }:
                 current = getattr(self, field_name)
@@ -620,6 +638,7 @@ class PolicyTelemetry:
                 "branch_prior_fallback_reasons",
                 "opponent_request_order_statuses",
                 "opponent_request_order_root_fallback_statuses",
+                "opponent_request_order_root_omission_statuses",
                 "rollout_leaf_modes",
             }
         ):
@@ -1142,6 +1161,8 @@ def summarize_complete_pairs(
     incumbent_order_statuses: Counter[str] = Counter()
     candidate_root_fallback_statuses: Counter[str] = Counter()
     incumbent_root_fallback_statuses: Counter[str] = Counter()
+    candidate_root_omission_statuses: Counter[str] = Counter()
+    incumbent_root_omission_statuses: Counter[str] = Counter()
     candidate_rollout_leaf_modes: Counter[str] = Counter()
     for game in required:
         candidate_order_statuses.update(game.candidate_telemetry.opponent_request_order_statuses)
@@ -1151,6 +1172,12 @@ def summarize_complete_pairs(
         )
         incumbent_root_fallback_statuses.update(
             game.incumbent_telemetry.opponent_request_order_root_fallback_statuses
+        )
+        candidate_root_omission_statuses.update(
+            game.candidate_telemetry.opponent_request_order_root_omission_statuses
+        )
+        incumbent_root_omission_statuses.update(
+            game.incumbent_telemetry.opponent_request_order_root_omission_statuses
         )
         candidate_rollout_leaf_modes.update(game.candidate_telemetry.rollout_leaf_modes)
     return {
@@ -1238,6 +1265,12 @@ def summarize_complete_pairs(
         ),
         "incumbent_opponent_request_order_root_fallback_statuses": dict(
             sorted(incumbent_root_fallback_statuses.items())
+        ),
+        "candidate_opponent_request_order_root_omission_statuses": dict(
+            sorted(candidate_root_omission_statuses.items())
+        ),
+        "incumbent_opponent_request_order_root_omission_statuses": dict(
+            sorted(incumbent_root_omission_statuses.items())
         ),
         # This is the actual leaf-value provenance, not the candidate config
         # receipt.  A rollout arm can only be interpreted as terminal rollout

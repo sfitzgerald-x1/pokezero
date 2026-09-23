@@ -58,6 +58,7 @@ STATS_FIELDS = (
     "model_override_decisions",
     "opponent_request_order_statuses",
     "opponent_request_order_root_fallback_statuses",
+    "opponent_request_order_root_omission_statuses",
     "decision_wall_seconds",
 )
 
@@ -418,6 +419,7 @@ def _stats_payload(stats: Any) -> dict[str, Any]:
             "branch_prior_fallback_reasons",
             "opponent_request_order_statuses",
             "opponent_request_order_root_fallback_statuses",
+            "opponent_request_order_root_omission_statuses",
         }:
             if not isinstance(value, Mapping):
                 raise WorkerError(

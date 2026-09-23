@@ -754,12 +754,15 @@ class GuidedConfigTest(unittest.TestCase):
                 for key, value in config.items()
                 if baseline.get(key) != value
             },
-            {"allow_lost_active_permutation_opponent_root_fallback": True},
+            {
+                "allow_lost_active_permutation_opponent_root_fallback": True,
+                "allow_lost_active_permutation_opponent_prior_omission": True,
+            },
             "the selective-order replay may differ from the strict opponent-prior arm only on its named recovery rule",
         )
         self.assertEqual(set(config), set(baseline))
         RUNNER._require_registered_candidate_config(config)
-        config["allow_lost_active_permutation_opponent_root_fallback"] = "only-this-status"
+        config["allow_lost_active_permutation_opponent_prior_omission"] = "only-this-status"
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
@@ -771,6 +774,7 @@ class GuidedConfigTest(unittest.TestCase):
         # runtime materialization must restore False and registration must
         # accept the resulting exact, fail-closed configuration.
         manifest_config.pop("allow_lost_active_permutation_opponent_root_fallback")
+        manifest_config.pop("allow_lost_active_permutation_opponent_prior_omission")
         raw = {
             "config_id": "guided-mcts-own-priors-fullwork-deep-d6-s4096-opponent-priors",
             "policy_id": "guided-mcts-own-priors-fullwork-deep-d6-s4096",
@@ -797,9 +801,17 @@ class GuidedConfigTest(unittest.TestCase):
             policy.config["allow_lost_active_permutation_opponent_root_fallback"],
             False,
         )
+        self.assertIs(
+            policy.config["allow_lost_active_permutation_opponent_prior_omission"],
+            False,
+        )
         self.assertNotIn("model_device", manifest_config)
         self.assertNotIn(
             "allow_lost_active_permutation_opponent_root_fallback",
+            manifest_config,
+        )
+        self.assertNotIn(
+            "allow_lost_active_permutation_opponent_prior_omission",
             manifest_config,
         )
         RUNNER._require_registered_candidate_config(policy.config)
