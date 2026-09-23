@@ -600,6 +600,11 @@ class EngineMctsConfig:
     # escape hatch: it does not permit self-prior, mapping, or any other
     # opponent-order fallback in a strict run.
     allow_lost_active_permutation_opponent_root_fallback: bool = False
+    # A separate, narrower source-audited case: the public trajectory proves
+    # that the active permutation was lost *and this root has no real opponent
+    # choice to seed*. Native search therefore correctly leaves that seat
+    # uniform without creating a prior fallback.
+    allow_lost_active_permutation_opponent_prior_omission: bool = False
     # --- full in-crate pipeline (plan v3 "Integration endgame") ---
     # "hp_fraction": poke-engine's native MCTS + handcrafted eval (the POC
     # path; stays the default until the paired read). "model": per belief
@@ -1816,6 +1821,12 @@ class EngineMctsStats:
     opponent_request_order_root_fallback_statuses: Counter = field(
         default_factory=Counter
     )
+    # A distinct, source-witnessed zero-fallback event: an unresolved public
+    # opponent order at a root with no opponent choice to seed. It is not a
+    # fallback, so never add it to the fallback ledger.
+    opponent_request_order_root_omission_statuses: Counter = field(
+        default_factory=Counter
+    )
     # Within-batch selection collisions, PER SEAT (model mode only; the crate
     # reports these from `multiply_batched_encoded_core` and nowhere else,
     # because a collision is a property of a batch and the sequential core
@@ -2315,6 +2326,10 @@ class EngineMctsStats:
         if self.opponent_request_order_root_fallback_statuses:
             payload["opponent_request_order_root_fallback_statuses"] = dict(
                 self.opponent_request_order_root_fallback_statuses
+            )
+        if self.opponent_request_order_root_omission_statuses:
+            payload["opponent_request_order_root_omission_statuses"] = dict(
+                self.opponent_request_order_root_omission_statuses
             )
         if self.rollout_leaf_modes:
             # ADDITIVE AND CONDITIONAL, exactly like the crate's own seam columns:
@@ -6565,6 +6580,7 @@ class EngineMctsPolicy:
                     )
                 report["branch_prior_unmapped_action_witness"] = branch_unmapped_action_witness
             allowed_lost_active_permutation_root_fallback = False
+            allowed_lost_active_permutation_opponent_prior_omission = False
             if config.use_opponent_priors:
                 expected_order_status = record.get("_opponent_request_order_status")
                 if expected_order_status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
@@ -6577,13 +6593,12 @@ class EngineMctsPolicy:
                         "native_opponent_request_order_status_mismatch: "
                         f"expected {expected_order_status!r}, got {reported_order_status!r}"
                     )
-                if (
-                    reported_order_status != "resolved"
-                    and root_prior_fallbacks < 1
-                ):
+                opponent_prior_root_eligible = report.get(
+                    "opponent_prior_root_eligible"
+                )
+                if type(opponent_prior_root_eligible) is not bool:
                     raise EngineSearchWitnessError(
-                        "native_opponent_request_order_refusal_not_counted_at_root: "
-                        f"status={reported_order_status!r}"
+                        "native_opponent_prior_root_eligible_missing_or_invalid"
                     )
                 self.stats.opponent_request_order_statuses[reported_order_status] += 1
                 if root_prior_fallbacks:
@@ -6605,6 +6620,33 @@ class EngineMctsPolicy:
                     and root_prior_fallbacks == 1
                     and report.get("root_prior_fallback_reason") is None
                 )
+                # A lost active permutation does not always mean native search
+                # attempted and failed to gather opponent priors. When the
+                # opponent has no real root choice, it has no prior to apply;
+                # zero root fallbacks is then the correct ledger. The native
+                # eligibility witness keeps this from hiding a failed gather or
+                # any acting-seat failure.
+                allowed_lost_active_permutation_opponent_prior_omission = (
+                    config.allow_lost_active_permutation_opponent_prior_omission
+                    and expected_order_status == "lost_active_permutation"
+                    and reported_order_status == "lost_active_permutation"
+                    and not opponent_prior_root_eligible
+                    and root_prior_fallbacks == 0
+                    and report.get("root_prior_fallback_reason") is None
+                )
+                if allowed_lost_active_permutation_opponent_prior_omission:
+                    self.stats.opponent_request_order_root_omission_statuses[
+                        reported_order_status
+                    ] += 1
+                if (
+                    reported_order_status != "resolved"
+                    and root_prior_fallbacks < 1
+                    and not allowed_lost_active_permutation_opponent_prior_omission
+                ):
+                    raise EngineSearchWitnessError(
+                        "native_opponent_request_order_refusal_not_counted_at_root: "
+                        f"status={reported_order_status!r}"
+                    )
             if (
                 config.strict_fallbacks
                 and root_prior_fallbacks

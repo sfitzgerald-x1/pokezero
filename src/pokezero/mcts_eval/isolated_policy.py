@@ -52,6 +52,7 @@ _STATS_FIELDS = (
     "model_override_decisions",
     "opponent_request_order_statuses",
     "opponent_request_order_root_fallback_statuses",
+    "opponent_request_order_root_omission_statuses",
     "decision_wall_seconds",
 )
 
@@ -316,6 +317,9 @@ class IsolatedPolicyStats:
     opponent_request_order_root_fallback_statuses: Counter = field(
         default_factory=Counter
     )
+    opponent_request_order_root_omission_statuses: Counter = field(
+        default_factory=Counter
+    )
     decision_wall_seconds: float = 0.0
 
     def update(self, payload: Mapping[str, Any]) -> None:
@@ -329,6 +333,7 @@ class IsolatedPolicyStats:
                 "branch_prior_fallback_reasons",
                 "opponent_request_order_statuses",
                 "opponent_request_order_root_fallback_statuses",
+                "opponent_request_order_root_omission_statuses",
             }:
                 if not isinstance(value, Mapping):
                     raise IsolatedPolicyError(
@@ -360,6 +365,8 @@ class IsolatedPolicyStats:
                     previous = self.branch_prior_fallback_reasons
                 elif field_name == "opponent_request_order_root_fallback_statuses":
                     previous = self.opponent_request_order_root_fallback_statuses
+                elif field_name == "opponent_request_order_root_omission_statuses":
+                    previous = self.opponent_request_order_root_omission_statuses
                 if any(observed[status] < count for status, count in previous.items()):
                     raise IsolatedPolicyError(
                         "isolated policy opponent request-order status telemetry regressed."
@@ -422,6 +429,14 @@ class IsolatedPolicyStats:
         ):
             raise IsolatedPolicyError(
                 "isolated policy opponent request-order root-fallback status telemetry "
+                "exceeds its status denominator."
+            )
+        if any(
+            count > self.opponent_request_order_statuses.get(status, 0)
+            for status, count in self.opponent_request_order_root_omission_statuses.items()
+        ):
+            raise IsolatedPolicyError(
+                "isolated policy opponent request-order root-omission status telemetry "
                 "exceeds its status denominator."
             )
 

@@ -183,7 +183,7 @@ while True:
         write(stdout, {{"type": "error", "message": "annotation snapshot changed"}})
         continue
     action = 1 if mode == "illegal" else 0
-    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "branch_prior_fallback_reasons": {{"empty_action_map": 0, "unmapped_action": 0, "action_index_out_of_range": 0, "invalid_mapped_mass": 0, "missing_model_head_row": 0, "decision_arm_count_mismatch": 0}}, "opponent_prior_arm_decisions": 1, "override_measured_decisions": 1, "model_override_decisions": 1, "opponent_request_order_statuses": {{"resolved": 1}}, "opponent_request_order_root_fallback_statuses": {{}}, "decision_wall_seconds": 0.25}}
+    stats = {{"decisions": 1, "searched_decisions": 1, "fallback_decisions": 0, "model_evals": 4, "total_iterations": 8, "worlds_constructed": 1, "worlds_searched": 1, "prior_fallbacks": 0, "root_prior_fallbacks": 0, "branch_prior_fallbacks": 0, "branch_prior_fallback_reasons": {{"empty_action_map": 0, "unmapped_action": 0, "action_index_out_of_range": 0, "invalid_mapped_mass": 0, "missing_model_head_row": 0, "decision_arm_count_mismatch": 0}}, "opponent_prior_arm_decisions": 1, "override_measured_decisions": 1, "model_override_decisions": 1, "opponent_request_order_statuses": {{"resolved": 1}}, "opponent_request_order_root_fallback_statuses": {{}}, "opponent_request_order_root_omission_statuses": {{}}, "decision_wall_seconds": 0.25}}
     if mode == "legacy-stats":
         del stats["root_prior_fallbacks"]
         del stats["branch_prior_fallbacks"]
@@ -398,6 +398,7 @@ class StatsTest(unittest.TestCase):
             "model_override_decisions": 1,
             "opponent_request_order_statuses": {"resolved": 3},
             "opponent_request_order_root_fallback_statuses": {},
+            "opponent_request_order_root_omission_statuses": {},
             "decision_wall_seconds": 0.3,
         }
 
@@ -445,6 +446,7 @@ class StatsTest(unittest.TestCase):
         stats.update(payload)
         self.assertEqual(stats.opponent_request_order_statuses, {"resolved": 3})
         self.assertEqual(stats.opponent_request_order_root_fallback_statuses, {})
+        self.assertEqual(stats.opponent_request_order_root_omission_statuses, {})
         missing = self._payload()
         del missing["opponent_request_order_statuses"]
         with self.assertRaisesRegex(IsolatedPolicyError, "opponent_request_order_statuses"):
@@ -478,6 +480,34 @@ class StatsTest(unittest.TestCase):
         unclassified["opponent_request_order_root_fallback_statuses"] = {}
         with self.assertRaisesRegex(IsolatedPolicyError, "must equal root_prior_fallbacks"):
             IsolatedPolicyStats().update(unclassified)
+
+    def test_root_omission_statuses_are_required_and_bounded_by_order_statuses(self) -> None:
+        payload = self._payload()
+        payload.update(
+            {
+                "opponent_request_order_statuses": {
+                    "resolved": 2,
+                    "lost_active_permutation": 1,
+                },
+                "opponent_request_order_root_omission_statuses": {
+                    "lost_active_permutation": 1,
+                },
+            }
+        )
+        stats = IsolatedPolicyStats()
+        stats.update(payload)
+        self.assertEqual(
+            stats.opponent_request_order_root_omission_statuses,
+            {"lost_active_permutation": 1},
+        )
+        missing = self._payload()
+        del missing["opponent_request_order_root_omission_statuses"]
+        with self.assertRaisesRegex(IsolatedPolicyError, "root_omission_statuses"):
+            IsolatedPolicyStats().update(missing)
+        invalid = dict(payload)
+        invalid["opponent_request_order_root_omission_statuses"] = {"resolved": 3}
+        with self.assertRaisesRegex(IsolatedPolicyError, "exceeds its status denominator"):
+            IsolatedPolicyStats().update(invalid)
 
     def test_self_prior_root_fallback_needs_no_opponent_order_classification(self) -> None:
         """The own-prior study disables opponent priors but still audits root fallback."""

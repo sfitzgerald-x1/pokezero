@@ -145,6 +145,24 @@ class OpponentOrderTelemetryTest(unittest.TestCase):
         with self.assertRaisesRegex(HeadToHeadError, "status telemetry regressed"):
             before.delta(after)
 
+    def test_root_omission_status_deltas_are_preserved_and_must_be_monotonic(self) -> None:
+        before = PolicyTelemetry(
+            opponent_request_order_statuses={"lost_active_permutation": 2},
+            opponent_request_order_root_omission_statuses={
+                "lost_active_permutation": 1
+            },
+        )
+        after = PolicyTelemetry(
+            opponent_request_order_statuses={"lost_active_permutation": 3},
+            opponent_request_order_root_omission_statuses={
+                "lost_active_permutation": 2
+            },
+        )
+        self.assertEqual(
+            after.delta(before).opponent_request_order_root_omission_statuses,
+            {"lost_active_permutation": 1},
+        )
+
     def test_rollout_leaf_partition_survives_capture_and_delta(self) -> None:
         policy = _Policy("candidate")
         policy.stats.rollout_leaf_modes = Counter({"rollout": 4})
@@ -211,6 +229,7 @@ class _OpponentPriorConfig:
     model_priors: bool = True
     use_opponent_priors: bool = True
     allow_lost_active_permutation_opponent_root_fallback: bool = False
+    allow_lost_active_permutation_opponent_prior_omission: bool = False
     override_telemetry: bool = True
     search_sims: int = 256
     search_batch: int = 16
@@ -455,6 +474,39 @@ class MirroredPairTest(unittest.TestCase):
 
         self.assertEqual(summary["candidate_opponent_prior_arm_decisions"], 10)
         self.assertEqual(summary["incumbent_opponent_prior_arm_decisions"], 4)
+
+    def test_summary_preserves_root_omission_evidence_for_both_arms(self) -> None:
+        candidate = _spec("candidate")
+        incumbent = _spec("incumbent", policy_id="incumbent")
+        games = [
+            replace(
+                game,
+                candidate_telemetry=replace(
+                    game.candidate_telemetry,
+                    opponent_request_order_statuses={"lost_active_permutation": 1},
+                    opponent_request_order_root_omission_statuses={
+                        "lost_active_permutation": 1
+                    },
+                ),
+            )
+            for game in _pair()
+        ]
+        summary = summarize_complete_pairs(
+            games,
+            seeds=[101],
+            candidate=candidate,
+            incumbent=incumbent,
+            bootstrap_resamples=20,
+            bootstrap_seed=7,
+        )
+        self.assertEqual(
+            summary["candidate_opponent_request_order_root_omission_statuses"],
+            {"lost_active_permutation": 2},
+        )
+        self.assertEqual(
+            summary["incumbent_opponent_request_order_root_omission_statuses"],
+            {},
+        )
 
     def test_any_mcts_fallback_invalidates_the_game(self) -> None:
         with self.assertRaisesRegex(HeadToHeadError, "fallback"):
@@ -807,7 +859,7 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
                 },
             )
 
-    def test_selective_contract_only_accepts_lost_active_permutation_root_fallbacks(self) -> None:
+    def test_selective_contract_only_accepts_lost_active_permutation_root_omissions(self) -> None:
         module, manifest, candidate, incumbent = self._inputs()
         manifest["opponent_prior_applicability"] = dict(
             module.OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_CONTRACT
@@ -818,7 +870,7 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
             incumbent_raw=incumbent,
             candidate_config=replace(
                 _OpponentPriorConfig(),
-                allow_lost_active_permutation_opponent_root_fallback=True,
+                allow_lost_active_permutation_opponent_prior_omission=True,
             ),
             incumbent_config=replace(_OpponentPriorConfig(), use_opponent_priors=False),
             execution_mode="isolated_build",
@@ -828,17 +880,19 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
             summary={
                 "candidate_opponent_prior_arm_decisions": 7,
                 "incumbent_opponent_prior_arm_decisions": 0,
-                "candidate_root_prior_fallbacks": 2,
+                "candidate_root_prior_fallbacks": 0,
                 "incumbent_root_prior_fallbacks": 0,
                 "candidate_opponent_request_order_statuses": {
                     "lost_active_permutation": 2,
                     "resolved": 5,
                 },
                 "incumbent_opponent_request_order_statuses": {},
-                "candidate_opponent_request_order_root_fallback_statuses": {
+                "candidate_opponent_request_order_root_fallback_statuses": {},
+                "incumbent_opponent_request_order_root_fallback_statuses": {},
+                "candidate_opponent_request_order_root_omission_statuses": {
                     "lost_active_permutation": 2,
                 },
-                "incumbent_opponent_request_order_root_fallback_statuses": {},
+                "incumbent_opponent_request_order_root_omission_statuses": {},
             },
         )
         self.assertEqual(passed["status"], "PASS")
@@ -849,21 +903,42 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
             passed["checks"]["candidate_root_fallbacks_only_allowed_status"]
         )
 
+        missing_omission_witness = {
+            "candidate_opponent_prior_arm_decisions": 7,
+            "incumbent_opponent_prior_arm_decisions": 0,
+            "candidate_root_prior_fallbacks": 0,
+            "incumbent_root_prior_fallbacks": 0,
+            "candidate_opponent_request_order_statuses": {
+                "lost_active_permutation": 1,
+            },
+            "incumbent_opponent_request_order_statuses": {},
+            "candidate_opponent_request_order_root_fallback_statuses": {},
+            "incumbent_opponent_request_order_root_fallback_statuses": {},
+            "incumbent_opponent_request_order_root_omission_statuses": {},
+        }
+        with self.assertRaisesRegex(HeadToHeadError, "root_omission_statuses"):
+            module._opponent_prior_applicability_readout(
+                contract=contract,
+                summary=missing_omission_witness,
+            )
+
         rejected = module._opponent_prior_applicability_readout(
             contract=contract,
             summary={
                 "candidate_opponent_prior_arm_decisions": 7,
                 "incumbent_opponent_prior_arm_decisions": 0,
-                "candidate_root_prior_fallbacks": 1,
+                "candidate_root_prior_fallbacks": 0,
                 "incumbent_root_prior_fallbacks": 0,
                 "candidate_opponent_request_order_statuses": {
                     "public_order_walk_error": 1,
                 },
                 "incumbent_opponent_request_order_statuses": {},
-                "candidate_opponent_request_order_root_fallback_statuses": {
+                "candidate_opponent_request_order_root_fallback_statuses": {},
+                "candidate_opponent_request_order_root_omission_statuses": {
                     "public_order_walk_error": 1,
                 },
                 "incumbent_opponent_request_order_root_fallback_statuses": {},
+                "incumbent_opponent_request_order_root_omission_statuses": {},
             },
         )
         self.assertEqual(rejected["status"], "NONPASS")
