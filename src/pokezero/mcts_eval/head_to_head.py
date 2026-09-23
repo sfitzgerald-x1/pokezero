@@ -570,14 +570,17 @@ class PolicyTelemetry:
                 getattr(stats, "opponent_request_order_root_fallback_statuses", {})
             ),
             rollout_leaf_modes=dict(getattr(stats, "rollout_leaf_modes", {})),
-            rollout_leaf_worlds=int(getattr(stats, "rollout_leaf_worlds", 0)),
-            rollout_leaves_priced=int(getattr(stats, "rollout_leaves_priced", 0)),
-            rollouts_run=int(getattr(stats, "rollouts_run", 0)),
-            rollout_plies=int(getattr(stats, "rollout_plies", 0)),
-            rollout_terminal_hits=int(getattr(stats, "rollout_terminal_hits", 0)),
-            rollout_cap_hits=int(getattr(stats, "rollout_cap_hits", 0)),
-            rollout_dead_ends=int(getattr(stats, "rollout_dead_ends", 0)),
-            rollout_encode_skipped=int(getattr(stats, "rollout_encode_skipped", 0)),
+            # Preserve the native values here.  PolicyTelemetry's constructor
+            # deliberately rejects floats and booleans for counters; coercing
+            # them at this transport boundary would silently alter evidence.
+            rollout_leaf_worlds=getattr(stats, "rollout_leaf_worlds", 0),
+            rollout_leaves_priced=getattr(stats, "rollout_leaves_priced", 0),
+            rollouts_run=getattr(stats, "rollouts_run", 0),
+            rollout_plies=getattr(stats, "rollout_plies", 0),
+            rollout_terminal_hits=getattr(stats, "rollout_terminal_hits", 0),
+            rollout_cap_hits=getattr(stats, "rollout_cap_hits", 0),
+            rollout_dead_ends=getattr(stats, "rollout_dead_ends", 0),
+            rollout_encode_skipped=getattr(stats, "rollout_encode_skipped", 0),
             decision_wall_seconds=float(getattr(stats, "decision_wall_seconds", 0.0)),
         )
 

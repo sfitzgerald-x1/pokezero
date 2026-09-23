@@ -2009,12 +2009,26 @@ def _validate_summary_evidence(summary: Mapping[str, Any]) -> None:
                 "rollout-leaf summary has no realized rollout witness; a config receipt is not evidence."
             )
         try:
-            rollouts = int(summary["candidate_rollouts_run"])
-            terminal = int(summary["candidate_rollout_terminal_hits"])
-            cap = int(summary["candidate_rollout_cap_hits"])
-            dead = int(summary["candidate_rollout_dead_ends"])
-        except (KeyError, TypeError, ValueError) as error:
+            partition = {
+                key: summary[key]
+                for key in (
+                    "candidate_rollouts_run",
+                    "candidate_rollout_terminal_hits",
+                    "candidate_rollout_cap_hits",
+                    "candidate_rollout_dead_ends",
+                )
+            }
+        except KeyError as error:
             raise HeadToHeadError("rollout-leaf summary has malformed terminal partition telemetry.") from error
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in partition.values()
+        ):
+            raise HeadToHeadError("rollout-leaf summary has malformed terminal partition telemetry.")
+        rollouts = partition["candidate_rollouts_run"]
+        terminal = partition["candidate_rollout_terminal_hits"]
+        cap = partition["candidate_rollout_cap_hits"]
+        dead = partition["candidate_rollout_dead_ends"]
         if rollouts <= 0 or terminal + cap + dead != rollouts:
             raise HeadToHeadError(
                 "rollout-leaf summary terminal, cap, and dead-end counts do not partition rollouts."

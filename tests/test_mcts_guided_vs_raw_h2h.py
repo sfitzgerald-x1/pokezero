@@ -1361,6 +1361,12 @@ class CompletedGameEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "do not partition"):
             RUNNER._validate_summary_evidence(summary)
 
+        summary["candidate_rollout_terminal_hits"] = 31
+        for malformed in (32.5, True):
+            summary["candidate_rollouts_run"] = malformed
+            with self.assertRaisesRegex(Exception, "malformed terminal partition"):
+                RUNNER._validate_summary_evidence(summary)
+
 
 if __name__ == "__main__":
     unittest.main()

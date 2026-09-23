@@ -168,6 +168,22 @@ class OpponentOrderTelemetryTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "without a rollout leaf mode witness"):
             PolicyTelemetry(rollouts_run=1)
 
+    def test_capture_refuses_lossy_rollout_counter_types(self) -> None:
+        policy = _Policy("candidate")
+        policy.stats.rollout_leaf_modes = Counter({"rollout": 1})
+        policy.stats.rollout_leaf_worlds = 1
+        policy.stats.rollout_leaves_priced = 1
+        policy.stats.rollout_plies = 1
+        policy.stats.rollout_terminal_hits = 1
+        policy.stats.rollout_cap_hits = 0
+        policy.stats.rollout_dead_ends = 0
+        policy.stats.rollout_encode_skipped = 0
+
+        for malformed in (1.5, True):
+            policy.stats.rollouts_run = malformed
+            with self.assertRaisesRegex(ValueError, "non-negative integers"):
+                PolicyTelemetry.capture(policy)
+
 
 class IsolatedRunnerCliTest(unittest.TestCase):
     def test_default_response_deadline_covers_observed_search_tail_budget(self) -> None:
