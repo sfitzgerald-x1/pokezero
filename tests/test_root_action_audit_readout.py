@@ -133,6 +133,14 @@ class RootActionAuditReadoutTest(unittest.TestCase):
             with self.assertRaisesRegex(READOUT.ReadoutError, "capped continuation"):
                 READOUT.summarize(root, expected_roots=16)
 
+    def test_summarize_refuses_a_complete_sidecar_set_without_root_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_complete_root(root)
+            (root / "COMPLETE.json").unlink()
+            with self.assertRaisesRegex(READOUT.ReadoutError, "root COMPLETE receipt"):
+                READOUT.summarize(root, expected_roots=16)
+
     def test_create_only_writer_refuses_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "readout.json"
