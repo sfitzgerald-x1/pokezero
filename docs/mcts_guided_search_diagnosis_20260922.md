@@ -141,6 +141,23 @@ keep held-out source seeds separate, and compare that policy-continuation
 target with uniform-terminal labels. A bank-only conversion would train the
 head on unidentifiable states and would not answer the leaf question.
 
+## Calibration is not a metadata-only correction on the current engine path
+
+The source-matched champion receipt carries no value-calibration transform.
+That matters because the current MCTS crate maps its raw tanh output directly
+to tree probability `(v + 1) / 2`; the Python **model-leaf** search boundary
+explicitly refuses a checkpoint carrying any non-identity
+`value_calibration_transform`. This is a protective fence against evaluating
+the checkpoint on one value axis in Python and a different one in the native
+tree.
+
+Consequently, a measured calibration offset would not authorize attaching an
+affine or isotonic metadata transform to the current champion. The corrective
+paths are either (a) train and export a source-bound value head whose output
+is already on the required tree axis, or (b) add a native calibration seam
+with parity and source-binding tests before using it. This is a deployment
+constraint, not evidence that calibration is the current causal mechanism.
+
 ## Opponent-prior applicability correction
 
 The source-matched R3 opponent-prior job was terminally failed and is not
