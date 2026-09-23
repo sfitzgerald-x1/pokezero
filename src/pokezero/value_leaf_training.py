@@ -14,9 +14,11 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterable, Mapping
+from uuid import uuid4
 
 from .actions import ACTION_COUNT
 from .dataset import (
@@ -32,6 +34,7 @@ from .observation import PokeZeroObservationV0
 
 VALUE_LEAF_TRAINING_CACHE_SCHEMA_VERSION = "pokezero.value_leaf_training_cache.v1"
 VALUE_LEAF_TRAINING_COMPATIBLE_OBJECTIVES = ("value-only",)
+VALUE_LEAF_CANDIDATE_RECEIPT_SCHEMA_VERSION = "pokezero.value_leaf_candidate_receipt.v1"
 _REQUIRED_SOURCE_BINDING_FIELDS = frozenset(
     {
         "checkpoint_sha256",
@@ -43,6 +46,10 @@ _REQUIRED_SOURCE_BINDING_FIELDS = frozenset(
         "collection_manifest_sha256",
     }
 )
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
 
 
 @dataclass(frozen=True)
@@ -192,11 +199,12 @@ async def capture_live_foulplay_value_leaf_training_cache(
 ) -> ValueLeafCollectionResult:
     """Atomically materialize leaves from exactly one completed live source game.
 
-    Oracle candidate captures stay in memory until the whole source game returns
-    successfully.  A source failure therefore leaves no cache that could be
-    mistaken for a complete collection.  Production collection should run this
-    one-game unit in indexed shards: completed shards are independently durable
-    and an interrupted shard can be retried without touching its peers.
+    The final cache is atomically materialized only after the whole source game
+    returns successfully.  Each individually validated continuation candidate
+    is nevertheless appended and fsynced to an adjacent, explicitly partial
+    receipt journal as soon as it is observed.  A source failure therefore
+    leaves no cache that could be mistaken for a complete collection, while a
+    retry retains completed oracle work from the interrupted source game.
     """
 
     if getattr(config, "games", None) != 1:
@@ -223,10 +231,22 @@ async def capture_live_foulplay_value_leaf_training_cache(
                     "checkpoint bytes do not match the sealed source binding"
                 )
             snapshot_config = replace(config, checkpoint=snapshot)
-            captures: list[Mapping[str, Any]] = []
+            receipts = _ValueLeafCandidateReceipts(
+                output_path=output_path,
+                source_binding=binding,
+                attempt_id=uuid4().hex,
+            )
+
+            def persist_capture(capture: Mapping[str, Any]) -> None:
+                # Validate before making a durable claim. In particular, this
+                # refuses terminal fixed steps and capped continuations, which
+                # are useful oracle facts but cannot supervise a value leaf.
+                value_leaf_training_example(capture)
+                receipts.append(capture)
+
             callback = source_bound_successor_capture_callback(
                 source_binding=binding,
-                sink=captures.append,
+                sink=persist_capture,
             )
             # Import here so foulplay_bridge remains independent of the optional
             # trainable-cache layer and collection tools can import either module alone.
@@ -245,7 +265,7 @@ async def capture_live_foulplay_value_leaf_training_cache(
             # the stable source path in the returned report instead.
             benchmark = replace(benchmark, config=config)
             cache = write_value_leaf_training_cache(
-                captures=captures,
+                captures=receipts.captures_for_current_attempt(),
                 output_path=output_path,
                 source_binding=binding,
                 dataset_config=dataset_config,
@@ -274,6 +294,170 @@ def _exclusive_value_leaf_output_lock(output_path: Path) -> Iterable[None]:
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+class _ValueLeafCandidateReceipts:
+    """Immutable, individually atomic candidate receipts for one output shard.
+
+    Receipts are intentionally outside the final cache directory, and each
+    carries its source-game attempt ID. A failed attempt can retain valid
+    evidence, but only candidates observed again in a fully successful attempt
+    become part of that attempt's trainable cache.
+    """
+
+    def __init__(
+        self, *, output_path: Path, source_binding: Mapping[str, Any], attempt_id: str
+    ) -> None:
+        self._binding = _validated_source_binding(source_binding)
+        self._attempt_id = _nonempty_text(attempt_id, label="value-leaf receipt attempt_id")
+        self.path = output_path.parent / f".{output_path.name}.candidate-receipts"
+        self.path.mkdir(parents=True, exist_ok=True)
+        self._ensure_binding()
+
+    def append(self, capture: Mapping[str, Any]) -> None:
+        encoded = _encode_candidate_capture(capture)
+        identity = _capture_identity(encoded)
+        document = {
+            "schema_version": VALUE_LEAF_CANDIDATE_RECEIPT_SCHEMA_VERSION,
+            "kind": "candidate",
+            "attempt_id": self._attempt_id,
+            "source_binding": self._binding,
+            "capture": encoded,
+        }
+        target = self.path / f"{_sha256_text(_canonical_json({'attempt_id': self._attempt_id, 'identity': identity}))}.json"
+        if target.exists():
+            existing = _read_candidate_receipt(target)
+            if _canonical_json(existing) != _canonical_json(document):
+                raise ValueError("value-leaf candidate receipt identity conflicts with existing receipt")
+            return
+        _atomic_write_json(target, document)
+
+    def captures_for_current_attempt(self) -> tuple[Mapping[str, Any], ...]:
+        captures: dict[str, Mapping[str, Any]] = {}
+        for path in sorted(self.path.glob("*.json")):
+            if path.name == "BINDING.json":
+                continue
+            document = _read_candidate_receipt(path)
+            if document.get("kind") != "candidate":
+                raise ValueError("value-leaf candidate receipt has invalid kind")
+            if document.get("attempt_id") != self._attempt_id:
+                continue
+            if _validated_source_binding(
+                _mapping(document.get("source_binding"), label="candidate receipt.source_binding")
+            ) != self._binding:
+                raise ValueError("value-leaf candidate receipt source binding does not match collection")
+            capture = _mapping(document.get("capture"), label="candidate receipt.capture")
+            decoded = _decode_candidate_capture(capture)
+            value_leaf_training_example(decoded)
+            identity = _capture_identity(capture)
+            existing = captures.get(identity)
+            if existing is not None and _canonical_json(existing) != _canonical_json(capture):
+                raise ValueError("value-leaf candidate receipt identity conflicts within attempt")
+            captures[identity] = decoded
+        return tuple(captures[identity] for identity in sorted(captures))
+
+    def _ensure_binding(self) -> None:
+        target = self.path / "BINDING.json"
+        document = {
+            "schema_version": VALUE_LEAF_CANDIDATE_RECEIPT_SCHEMA_VERSION,
+            "kind": "binding",
+            "source_binding": self._binding,
+        }
+        if target.exists():
+            existing = _read_candidate_receipt(target)
+            if _canonical_json(existing) != _canonical_json(document):
+                raise ValueError("value-leaf candidate receipt binding does not match collection")
+            return
+        _atomic_write_json(target, document)
+
+
+def _read_candidate_receipt(path: Path) -> Mapping[str, Any]:
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read complete value-leaf candidate receipt {path}") from error
+    if not isinstance(document, Mapping):
+        raise ValueError("value-leaf candidate receipt must be an object")
+    if document.get("schema_version") != VALUE_LEAF_CANDIDATE_RECEIPT_SCHEMA_VERSION:
+        raise ValueError("value-leaf candidate receipt has unsupported schema")
+    return document
+
+
+def _atomic_write_json(path: Path, document: Mapping[str, Any]) -> None:
+    """Publish a receipt only after its file contents are durable and complete."""
+
+    temporary = path.parent / f".{path.name}.{uuid4().hex}.tmp"
+    try:
+        with temporary.open("x", encoding="utf-8") as handle:
+            handle.write(_canonical_json(document) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as error:
+        raise ValueError(f"cannot atomically publish value-leaf candidate receipt {path}: {error}") from error
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _encode_candidate_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
+    """Serialize only the capture facts needed to rebuild a value example."""
+
+    encoded = dict(capture)
+    observation = cast_observation(encoded.get("successor_observation"))
+    encoded["successor_observation"] = {
+        "categorical_ids": _json_value(observation.categorical_ids),
+        "numeric_features": _json_value(observation.numeric_features),
+        "token_type_ids": _json_value(observation.token_type_ids),
+        "attention_mask": _json_value(observation.attention_mask),
+        "legal_action_mask": _json_value(observation.legal_action_mask),
+        "schema_version": observation.schema_version,
+    }
+    try:
+        json.dumps(encoded, sort_keys=True)
+    except (TypeError, ValueError) as error:
+        raise ValueError("value-leaf candidate capture is not JSON-serializable") from error
+    return encoded
+
+
+def _decode_candidate_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
+    decoded = dict(capture)
+    observation = _mapping(decoded.get("successor_observation"), label="candidate receipt.successor_observation")
+    decoded["successor_observation"] = PokeZeroObservationV0(
+        categorical_ids=observation.get("categorical_ids"),
+        numeric_features=observation.get("numeric_features"),
+        token_type_ids=observation.get("token_type_ids"),
+        attention_mask=observation.get("attention_mask"),
+        legal_action_mask=observation.get("legal_action_mask"),
+        schema_version=_nonempty_text(
+            observation.get("schema_version"), label="candidate receipt.successor_observation.schema_version"
+        ),
+    )
+    return decoded
+
+
+def _json_value(value: Any) -> Any:
+    """Convert nested tensor/array-like observation fields to JSON values."""
+
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        return _json_value(tolist())
+    if isinstance(value, Mapping):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    raise ValueError("value-leaf observation contains a non-JSON-serializable field")
 
 
 def _copy_and_hash(source: Path, destination: Path) -> str:

@@ -9,7 +9,7 @@ primitive, not a policy-input or evaluation result.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -696,7 +696,6 @@ def select_live_foulplay_continuation_oracle_action(
         )
 
     scored: list[dict[str, Any]] = []
-    pending_successor_captures: list[Mapping[str, Any]] = []
     decision_started = perf_counter()
     indexed_candidates = tuple(enumerate(candidates))
     if candidate_parallelism == 1 or len(indexed_candidates) == 1:
@@ -704,11 +703,11 @@ def select_live_foulplay_continuation_oracle_action(
             emit_candidate_started(candidate_index, action)
             scored_candidate, elapsed_milliseconds, expanded, successor_capture = score_candidate(action)
             scored.append(scored_candidate)
-            if successor_capture is not None:
-                # Defer external collection until every candidate passed its
-                # oracle checks.  This preserves legal-action order and avoids
-                # a partially persisted collection when a later candidate fails.
-                pending_successor_captures.append(successor_capture)
+            if successor_capture is not None and successor_capture_callback is not None:
+                # This candidate has independently passed every continuation
+                # check. Publish its optional successor receipt now so a later
+                # candidate failure cannot erase already-completed oracle work.
+                successor_capture_callback(successor_capture)
             emit_candidate_result(
                 candidate_index,
                 action,
@@ -724,25 +723,39 @@ def select_live_foulplay_continuation_oracle_action(
             max_workers=min(candidate_parallelism, len(indexed_candidates)),
             thread_name_prefix="live-continuation-candidate",
         ) as executor:
-            futures = []
+            futures: dict[object, tuple[int, int]] = {}
             for candidate_index, action in indexed_candidates:
                 emit_candidate_started(candidate_index, action)
-                futures.append((candidate_index, action, executor.submit(score_candidate, action)))
-            evaluations = [
-                (candidate_index, action, *future.result())
-                for candidate_index, action, future in futures
-            ]
-        for (
-            candidate_index,
-            action,
-            scored_candidate,
-            elapsed_milliseconds,
-            expanded,
-            successor_capture,
-        ) in evaluations:
+                futures[executor.submit(score_candidate, action)] = (candidate_index, action)
+            evaluations: dict[int, tuple[int, dict[str, Any], int, bool, Mapping[str, Any] | None]] = {}
+            errors: list[Exception] = []
+            for future in as_completed(futures):
+                candidate_index, action = futures[future]
+                try:
+                    scored_candidate, elapsed_milliseconds, expanded, successor_capture = future.result()
+                except Exception as error:
+                    # Other candidates may already have completed valid
+                    # continuations. Consume every future before failing so
+                    # their immutable receipts are not discarded merely because
+                    # this one happened to surface first.
+                    errors.append(error)
+                    continue
+                if successor_capture is not None and successor_capture_callback is not None:
+                    # Completion order does not affect selection: receipts are
+                    # immutable and the scored list below remains legal-order.
+                    successor_capture_callback(successor_capture)
+                evaluations[candidate_index] = (
+                    action,
+                    scored_candidate,
+                    elapsed_milliseconds,
+                    expanded,
+                    successor_capture,
+                )
+            if errors:
+                raise errors[0]
+        for candidate_index, _action in indexed_candidates:
+            action, scored_candidate, elapsed_milliseconds, expanded, _successor_capture = evaluations[candidate_index]
             scored.append(scored_candidate)
-            if successor_capture is not None:
-                pending_successor_captures.append(successor_capture)
             emit_candidate_result(
                 candidate_index,
                 action,
@@ -750,10 +763,6 @@ def select_live_foulplay_continuation_oracle_action(
                 elapsed_milliseconds,
                 expanded,
             )
-
-    if successor_capture_callback is not None:
-        for capture in pending_successor_captures:
-            successor_capture_callback(capture)
 
     selected = _select_scored_candidate(
         scored=scored, raw_action=raw_action, foulplay_player=foulplay_player,

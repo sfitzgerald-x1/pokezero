@@ -568,7 +568,7 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
         )
         self.assertEqual(captures, [])
 
-    def test_oracle_defers_successor_capture_until_all_candidates_validate(self) -> None:
+    def test_oracle_publishes_valid_successor_capture_before_later_candidate_fails(self) -> None:
         boundary = LiveFoulPlayBoundary(
             snapshot=SimpleNamespace(battle_id="deferred-capture", format_id="gen3randombattle"),
             source_request_sha256={"p1": "a", "p2": "b"},
@@ -604,12 +604,13 @@ class LiveFoulPlayContinuationTest(unittest.TestCase):
                     pokezero_player="p1",
                     foulplay_player="p2",
                     candidate_cap=2,
+                    candidate_parallelism=2,
                     env_factory=lambda: self.fail("runner is patched"),
                     continuation_policy_factory=lambda: self.fail("runner is patched"),
                     rollout_config=RolloutConfig(max_decision_rounds=10),
                     successor_capture_callback=delivered.append,
                 )
-        self.assertEqual(delivered, [])
+        self.assertEqual(delivered, [{"candidate": 0}])
 
     def test_oracle_scores_all_legal_candidates_without_storing_a_snapshot(self) -> None:
         boundary = LiveFoulPlayBoundary(
