@@ -102,7 +102,7 @@ class RootActionAuditReadoutTest(unittest.TestCase):
                 for round_index in (3, 7):
                     directory = root / "seeds" / f"seed-{source_seed}" / "sealed-root-action-audits" / f"seed-{source_seed}-{seat}"
                     directory.mkdir(parents=True, exist_ok=True)
-                    (directory / f"round-{round_index}.json").write_text(json.dumps(_sidecar(
+                    (directory / f"round-{round_index:04d}.json").write_text(json.dumps(_sidecar(
                         seed=source_seed, seat=seat, round_index=round_index, capped=capped
                     )), encoding="utf-8")
             seed_root = root / "seeds" / f"seed-{source_seed}"
@@ -173,7 +173,7 @@ class RootActionAuditReadoutTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self._write_complete_root(root)
-            path = root / "seeds" / "seed-0" / "sealed-root-action-audits" / "seed-0-p1" / "round-3.json"
+            path = root / "seeds" / "seed-0" / "sealed-root-action-audits" / "seed-0-p1" / "round-0003.json"
             payload = json.loads(path.read_text(encoding="utf-8"))
             payload["candidate_provenance_sha256"] = "c" * 64
             path.write_text(json.dumps(payload), encoding="utf-8")
@@ -184,8 +184,8 @@ class RootActionAuditReadoutTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self._write_complete_root(root)
-            old = root / "seeds" / "seed-0" / "sealed-root-action-audits" / "seed-0-p1" / "round-3.json"
-            new = old.with_name("round-999.json")
+            old = root / "seeds" / "seed-0" / "sealed-root-action-audits" / "seed-0-p1" / "round-0003.json"
+            new = old.with_name("round-0999.json")
             payload = json.loads(old.read_text(encoding="utf-8"))
             payload["readout"]["decision_round_index"] = 999
             payload["readout"]["audit"]["source_decision_round"] = 999
@@ -198,13 +198,24 @@ class RootActionAuditReadoutTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self._write_complete_root(root)
-            path = root / "seeds" / "seed-0" / "sealed-root-action-audits" / "seed-0-p1" / "round-3.json"
+            path = root / "seeds" / "seed-0" / "sealed-root-action-audits" / "seed-0-p1" / "round-0003.json"
             payload = json.loads(path.read_text(encoding="utf-8"))
             continuation = payload["readout"]["audit"]["continuation_targets"][0]["trials"][0]["outcomes"][0]["continuation"]
             continuation["cap_retry"] = True
             continuation["effective_max_continuation_decision_rounds"] = 1024
             with self.assertRaisesRegex(READOUT.ReadoutError, "incomplete or capped continuation"):
                 path.write_text(json.dumps(payload), encoding="utf-8")
+                READOUT.summarize(root, expected_roots=16)
+
+    def test_summarize_refuses_target_policy_registration_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_complete_root(root)
+            manifest = root / "seeds" / "seed-0" / "input" / "MANIFEST.json"
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            payload["sealed_root_action_audit"]["continuation_targets"]["uniform_own"] = {}
+            manifest.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(READOUT.ReadoutError, "continuation target registration drift"):
                 READOUT.summarize(root, expected_roots=16)
 
     def test_create_only_writer_refuses_overwrite(self) -> None:

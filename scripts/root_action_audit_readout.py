@@ -23,6 +23,16 @@ READOUT_SCHEMA = "pokezero.sealed-root-action-audit.v2"
 GRID_SCHEMA = "pokezero.sealed-root-action-grid.v2"
 OUTPUT_SCHEMA = "pokezero.root-action-audit-readout.v1"
 TARGETS = ("policy_consistent", "uniform_own")
+TARGET_POLICIES = {
+    "policy_consistent": {
+        "subject": "sampled_raw_transformer",
+        "opponent": "sampled_raw_transformer",
+    },
+    "uniform_own": {
+        "subject": "uniform_legal",
+        "opponent": "sampled_raw_transformer",
+    },
+}
 ROOT_COMPLETE_SCHEMA = "pokezero.root-action-audit-recovery-complete.v1"
 
 
@@ -343,7 +353,10 @@ def _manifest_contract(root: Path, seed: int) -> dict[str, Any]:
     ):
         raise ReadoutError(f"seed {seed}: invalid registered continuation RNG schedule")
     targets = _mapping(audit.get("continuation_targets"), f"seed {seed}: continuation targets")
-    if set(targets) != set(TARGETS) or any(not isinstance(targets[name], Mapping) for name in TARGETS):
+    if set(targets) != set(TARGETS) or any(
+        not isinstance(targets[name], Mapping) or dict(targets[name]) != TARGET_POLICIES[name]
+        for name in TARGETS
+    ):
         raise ReadoutError(f"seed {seed}: continuation target registration drift")
     initial, expanded = audit.get("max_continuation_decision_rounds"), audit.get(
         "expanded_max_continuation_decision_rounds"
@@ -379,7 +392,7 @@ def summarize(root: Path, *, expected_roots: int) -> dict[str, Any]:
         expected_path = (
             root / "seeds" / f"seed-{source['seed']}" / "sealed-root-action-audits"
             / f"seed-{source['seed']}-{source['candidate_seat']}"
-            / f"round-{source['decision_round_index']}.json"
+            / f"round-{source['decision_round_index']:04d}.json"
         )
         if path != expected_path:
             raise ReadoutError(f"{path}: sidecar path/source address drift")
