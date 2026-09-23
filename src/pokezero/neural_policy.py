@@ -2199,6 +2199,7 @@ def train_transformer_policy(
                 config=dataset_config,
                 consumed_cache_callback=replay_consumed_paths.append,
                 defer_cache_window_expansion=True,
+                objective=resolved_training_config.objective,
             )
         elif auxiliary_paths is None:
             training_batches = iter_training_batches(
@@ -2207,6 +2208,7 @@ def train_transformer_policy(
                 config=dataset_config,
                 consumed_cache_callback=cache_callback_for_epoch,
                 defer_cache_window_expansion=True,
+                objective=resolved_training_config.objective,
             )
         else:
             training_batches = iter_training_batches_with_capped_auxiliary(
@@ -2217,6 +2219,7 @@ def train_transformer_policy(
                 config=dataset_config,
                 consumed_cache_callback=cache_callback_for_epoch,
                 defer_cache_window_expansion=True,
+                objective=resolved_training_config.objective,
             )
         for batch_index, batch in enumerate(training_batches, start=1):
             batch_count = batch_index
