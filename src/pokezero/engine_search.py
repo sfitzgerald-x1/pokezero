@@ -594,6 +594,12 @@ class EngineMctsConfig:
     # For sweeps/CI that require zero fallbacks; production keeps the safe
     # uniform-legal fallback (a crash mid-collection is worse than a miss).
     strict_fallbacks: bool = False
+    # A source-audited opponent-prior diagnostic may retain the uniform
+    # opponent prior only when the public trajectory proves that the active
+    # permutation was lost. This is deliberately not a general fallback
+    # escape hatch: it does not permit self-prior, mapping, or any other
+    # opponent-order fallback in a strict run.
+    allow_lost_active_permutation_opponent_root_fallback: bool = False
     # --- full in-crate pipeline (plan v3 "Integration endgame") ---
     # "hp_fraction": poke-engine's native MCTS + handcrafted eval (the POC
     # path; stays the default until the paired read). "model": per belief
@@ -717,6 +723,12 @@ class EngineMctsConfig:
     #: field for field, and the gate reads False on the rollout pricer and on a
     #: changed batch.
     rollout_leaf_eval: bool = False
+    #: Observational companion to ``rollout_leaf_eval``: retain the production
+    #: model values in backup, while pricing the exact reached leaves with the
+    #: rollout oracle and emitting only split aggregate agreement statistics.
+    #: It is deliberately separate from the replacement arm so a calibration
+    #: probe cannot alter the tree whose frontier it claims to audit.
+    rollout_leaf_shadow: bool = False
     #: Damage-roll branching INSIDE rollouts. Independent of the search's own
     #: `branch_on_damage`: a rollout samples one outcome either way, so this only
     #: refines the sampled damage distribution.
@@ -964,6 +976,11 @@ class EngineMctsConfig:
                     "rollout_policy must be 'uniform' (the only in-crate policy "
                     f"implemented), got {self.rollout_policy!r}."
                 )
+        if self.rollout_leaf_eval and self.rollout_leaf_shadow:
+            raise ValueError(
+                "rollout_leaf_eval and rollout_leaf_shadow are mutually exclusive: "
+                "one replaces the leaf value and the other must preserve it."
+            )
         if self.rollout_leaf_eval:
             # The seam only exists on the model path. Silently ignoring the flag
             # on any other `leaf_eval` is how a cell gets banked as "oracle-leaf
@@ -1045,6 +1062,36 @@ class EngineMctsConfig:
                     "host, and its realized work is not recorded anywhere, so cores taken "
                     "here weaken the opponent in the direction that flatters this arm. Set "
                     "the ack only after checking cores against the run's shard concurrency."
+                )
+        if self.rollout_leaf_shadow:
+            if self.leaf_eval != "model":
+                raise ValueError(
+                    "rollout_leaf_shadow=True requires leaf_eval='model': it audits "
+                    "the production encoded model-leaf search, not the sequential "
+                    f"path (got leaf_eval={self.leaf_eval!r})."
+                )
+            if not self.model_priors:
+                raise ValueError(
+                    "rollout_leaf_shadow=True requires model_priors=True: the "
+                    "diagnostic must traverse the same model-prior tree as the "
+                    "production configuration it audits."
+                )
+            if self.rollout_count <= 0 or self.rollout_max_plies <= 0 or self.rollout_threads <= 0:
+                raise ValueError(
+                    "rollout_leaf_shadow=True requires positive rollout_count, "
+                    "rollout_max_plies, and rollout_threads."
+                )
+            if self.rollout_policy != "uniform":
+                raise ValueError(
+                    "rollout_leaf_shadow=True requires rollout_policy='uniform' "
+                    "(the only in-crate oracle currently implemented)."
+                )
+            if self.rollout_threads > 1 and not self.rollout_threads_cpu_budget_ack:
+                raise ValueError(
+                    f"rollout_threads={self.rollout_threads} > 1 requires "
+                    "rollout_threads_cpu_budget_ack=True for rollout_leaf_shadow: "
+                    "the paired opponent is time-budgeted and must not be silently "
+                    "weakened by shadow rollout CPU contention."
                 )
         if self.leaf_eval == "model":
             if not self.model_path or not self.checkpoint_path or not self.tables_path:
@@ -2552,6 +2599,8 @@ def native_search_args(
     # written as, and the reason it is a widening chain rather than four
     # independent `if`s.
     rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
+    rollout_leaf_shadow = bool(getattr(config, "rollout_leaf_shadow", False))
+    rollout_seam_enabled = rollout_leaf_eval or rollout_leaf_shadow
     if time_budget_ms is not None and time_budget_ms <= 0:
         raise ValueError("time_budget_ms must be positive when passed to native search.")
     if (
@@ -2559,7 +2608,7 @@ def native_search_args(
         or config.use_opponent_priors
         or fpu_reduction is not None
         or override_telemetry
-        or rollout_leaf_eval
+        or rollout_seam_enabled
         or time_budget_ms is not None
     ):
         search_args.extend([early_stop_min_sims, record["side_key"] == "side_one"])
@@ -2567,14 +2616,14 @@ def native_search_args(
         config.use_opponent_priors
         or fpu_reduction is not None
         or override_telemetry
-        or rollout_leaf_eval
+        or rollout_seam_enabled
         or time_budget_ms is not None
     ):
         search_args.append(bool(config.use_opponent_priors))
     if (
         fpu_reduction is not None
         or override_telemetry
-        or rollout_leaf_eval
+        or rollout_seam_enabled
         or time_budget_ms is not None
     ):
         # `None` is the crate's own default for this slot, so materializing it to
@@ -2582,7 +2631,7 @@ def native_search_args(
         # above, whose default is False and whose materialized value is the
         # config's.
         search_args.append(None if fpu_reduction is None else float(fpu_reduction))
-    if override_telemetry or rollout_leaf_eval or time_budget_ms is not None:
+    if override_telemetry or rollout_seam_enabled or time_budget_ms is not None:
         # `arm_priors` is pure telemetry, so materializing it to reach the slot
         # behind it must pass the config's OWN value, never an unconditional
         # True: writing True here would silently switch the arm-name column on
@@ -2607,10 +2656,16 @@ def native_search_args(
     # otherwise an integer budget would land in ``rollout_leaf_mode``. This
     # changes no rollout behavior when the seam is off (the mode remains None),
     # but keeps the native positional ABI explicit and testable.
-    if rollout_leaf_eval or time_budget_ms is not None:
+    if rollout_seam_enabled or time_budget_ms is not None:
         search_args.extend(
             [
-                "rollout" if rollout_leaf_eval else None,
+                (
+                    "rollout"
+                    if rollout_leaf_eval
+                    else "model_value_shadow_rollout"
+                    if rollout_leaf_shadow
+                    else None
+                ),
                 int(config.rollout_count),
                 int(config.rollout_max_plies),
                 str(config.rollout_policy),
@@ -2622,6 +2677,185 @@ def native_search_args(
     if time_budget_ms is not None:
         search_args.append(int(time_budget_ms))
     return search_args
+
+
+MODEL_ROLLOUT_SHADOW_MODE = "model_value_shadow_rollout"
+MODEL_ROLLOUT_SHADOW_SPLITS = ("fit", "heldout")
+MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS = (
+    "leaves",
+    "model_sum",
+    "rollout_sum",
+    "model_sq_sum",
+    "rollout_sq_sum",
+    "cross_sum",
+    "absolute_error_sum",
+    "squared_error_sum",
+    "concordant_pairs",
+    "discordant_pairs",
+    "tied_pairs",
+)
+
+
+def aggregate_model_rollout_shadow(reports: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """Validate and aggregate the native shadow without retaining leaf state.
+
+    The model still supplied every value to backup.  These are therefore
+    observational moments over the exact reached leaves, not a second search
+    and not a selectable correction.  Refuse an old/miswired wheel rather than
+    emitting a decision that merely *claims* to contain the probe.
+    """
+    if not reports:
+        raise EngineSearchWitnessError(
+            "rollout_leaf_shadow=True completed no native invocation carrying a shadow report."
+        )
+    result: dict[str, Any] = {
+        "value_frame": "side_one_absolute",
+        "partition": "seed_ordinal_parity_v1",
+        "native_invocations": len(reports),
+    }
+    for split in MODEL_ROLLOUT_SHADOW_SPLITS:
+        result[split] = {field: 0 for field in MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS}
+    result["rollouts_run"] = 0
+    result["rollout_terminal_hits"] = 0
+    result["rollout_cap_hits"] = 0
+    result["rollout_dead_ends"] = 0
+    result["rollout_leaf_rows"] = 0
+    result["terminal_leaf_rows"] = 0
+    result["excluded_nonterminal_leaf_rows"] = 0
+    for report in reports:
+        if report.get("rollout_leaf_mode") != MODEL_ROLLOUT_SHADOW_MODE:
+            raise EngineSearchWitnessError(
+                "rollout_leaf_shadow=True did not preserve the production model value: "
+                f"native mode was {report.get('rollout_leaf_mode')!r}."
+            )
+        shadow = report.get("model_rollout_shadow")
+        if not isinstance(shadow, Mapping):
+            raise EngineSearchWitnessError(
+                "rollout_leaf_shadow=True native report omitted model_rollout_shadow."
+            )
+        if (
+            shadow.get("value_frame") != "side_one_absolute"
+            or shadow.get("partition") != "seed_ordinal_parity_v1"
+        ):
+            raise EngineSearchWitnessError(
+                "model_rollout_shadow carried an unknown value frame or partition."
+            )
+        for leaf_field in ("terminal_leaf_rows", "excluded_nonterminal_leaf_rows"):
+            value = shadow.get(leaf_field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise EngineSearchWitnessError(
+                    f"model_rollout_shadow {leaf_field} is not a nonnegative integer: {value!r}."
+                )
+            result[leaf_field] += value
+        for split in MODEL_ROLLOUT_SHADOW_SPLITS:
+            moments = shadow.get(split)
+            if not isinstance(moments, Mapping):
+                raise EngineSearchWitnessError(
+                    f"model_rollout_shadow omitted {split!r} moments."
+                )
+            for moment_name in MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS:
+                value = moments.get(moment_name)
+                count = moment_name in {
+                    "leaves",
+                    "concordant_pairs",
+                    "discordant_pairs",
+                    "tied_pairs",
+                }
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(float(value))
+                    or (count and (not isinstance(value, int) or value < 0))
+                ):
+                    raise EngineSearchWitnessError(
+                        f"model_rollout_shadow {split}.{moment_name} is not numeric: {value!r}."
+                    )
+                result[split][moment_name] += value
+        for rollout_field in (
+            "rollouts_run",
+            "rollout_terminal_hits",
+            "rollout_cap_hits",
+            "rollout_dead_ends",
+        ):
+            value = report.get(rollout_field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise EngineSearchWitnessError(
+                    f"model_rollout_shadow native report omitted nonnegative {rollout_field}."
+                )
+            result[rollout_field] += value
+        leaf_rows = report.get("leaves_priced")
+        if isinstance(leaf_rows, bool) or not isinstance(leaf_rows, int) or leaf_rows < 0:
+            raise EngineSearchWitnessError(
+                "model_rollout_shadow native report omitted nonnegative leaves_priced."
+            )
+        result["rollout_leaf_rows"] += leaf_rows
+    total_rollouts = result["rollouts_run"]
+    if (
+        result["rollout_terminal_hits"]
+        + result["rollout_cap_hits"]
+        + result["rollout_dead_ends"]
+        != total_rollouts
+    ):
+        raise EngineSearchWitnessError(
+            "model_rollout_shadow rollout outcome partition does not equal rollouts_run."
+        )
+    terminal_label_rows = sum(result[split]["leaves"] for split in MODEL_ROLLOUT_SHADOW_SPLITS)
+    if terminal_label_rows != result["terminal_leaf_rows"]:
+        raise EngineSearchWitnessError(
+            "model_rollout_shadow terminal label rows do not equal its split moments."
+        )
+    if (
+        result["terminal_leaf_rows"] + result["excluded_nonterminal_leaf_rows"]
+        != result["rollout_leaf_rows"]
+    ):
+        raise EngineSearchWitnessError(
+            "model_rollout_shadow terminal/excluded row partition does not equal leaves_priced."
+        )
+    # An immediately terminal tree needs no learned-leaf price and therefore
+    # launches no shadow rollouts.  That is a valid, important observation: it
+    # says the exact terminal resolver settled the branch before the learned
+    # value could influence backup.  Do not turn it into a fabricated zero
+    # rollout *rate*, and do not crash the live game merely because this
+    # observational probe has no population at this decision.  Conversely,
+    # fail closed if a purported zero-trial report smuggles any row or moment
+    # through: there is no denominator on which such a value could be honest.
+    if total_rollouts == 0:
+        if result["rollout_leaf_rows"] != 0:
+            raise EngineSearchWitnessError(
+                "model_rollout_shadow priced leaf rows without any rollout trials."
+            )
+        for split in MODEL_ROLLOUT_SHADOW_SPLITS:
+            if any(result[split][field] != 0 for field in MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS):
+                raise EngineSearchWitnessError(
+                    "model_rollout_shadow reported moments without any rollout trials."
+                )
+        result["rollout_trials_available"] = False
+        result["terminal_label_available"] = False
+        result["rollout_fallback_fraction"] = None
+        result["excluded_nonterminal_leaf_fraction"] = None
+        return result
+
+    if result["rollout_leaf_rows"] == 0:
+        raise EngineSearchWitnessError(
+            "model_rollout_shadow ran rollout trials without any priced leaf rows."
+        )
+
+    # A zero-label *decision* remains valid observational evidence: the model
+    # tree still ran unchanged, while every attempted uniform continuation hit
+    # the safety cap or a dead end.  It must be durably visible rather than
+    # aborting the production game or quietly receiving a fallback label. The
+    # terminal study readout, not this per-decision transport seam, decides
+    # whether the aggregate terminal coverage is sufficient to answer the
+    # calibration question.
+    result["rollout_trials_available"] = True
+    result["terminal_label_available"] = terminal_label_rows > 0
+    result["rollout_fallback_fraction"] = (
+        result["rollout_cap_hits"] + result["rollout_dead_ends"]
+    ) / total_rollouts
+    result["excluded_nonterminal_leaf_fraction"] = (
+        result["excluded_nonterminal_leaf_rows"] / result["rollout_leaf_rows"]
+    )
+    return result
 
 
 #: The pricer name the Python layer is allowed to ask for. `EngineMctsConfig`
@@ -3814,6 +4048,74 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
     )
 
 
+def _validated_branch_prior_unmapped_action_witness(value: Any) -> dict[str, dict[str, int]]:
+    """Validate the public-free shape witness for an `unmapped_action` fallback.
+
+    The witness identifies only which engine option kind lacked a policy-slot
+    correspondence. It intentionally carries no private state, policy score,
+    move name, or branch identity.
+    """
+
+    if not isinstance(value, Mapping) or set(value) != {"acting", "opponent"}:
+        raise EngineSearchWitnessError(
+            "branch_prior_fallback_ledger_invalid: unmapped-action witness must name "
+            "acting and opponent seats"
+        )
+    normalized: dict[str, dict[str, int]] = {}
+    for seat in ("acting", "opponent"):
+        row = value[seat]
+        if not isinstance(row, Mapping) or set(row) != {
+            "nodes",
+            "move_arms",
+            "switch_arms",
+            "none_arms",
+        }:
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: unmapped-action witness row "
+                "has an unexpected shape"
+            )
+        normalized_row = {name: row[name] for name in sorted(row)}
+        if any(type(count) is not int or count < 0 for count in normalized_row.values()):
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: unmapped-action witness counts "
+                "must be non-negative integers"
+            )
+        missing_arms = (
+            normalized_row["move_arms"]
+            + normalized_row["switch_arms"]
+            + normalized_row["none_arms"]
+        )
+        if (normalized_row["nodes"] == 0) != (missing_arms == 0) or missing_arms < normalized_row[
+            "nodes"
+        ]:
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: unmapped-action witness does "
+                "not conserve nodes and missing arms"
+            )
+        normalized[seat] = normalized_row
+    return normalized
+
+
+def _branch_prior_unmapped_action_witness_nodes(
+    witness: Mapping[str, Mapping[str, int]],
+) -> int:
+    return sum(witness[seat]["nodes"] for seat in ("acting", "opponent"))
+
+
+def _sum_branch_prior_unmapped_action_witnesses(
+    witnesses: Sequence[Mapping[str, Mapping[str, int]]],
+) -> dict[str, dict[str, int]]:
+    total = {
+        seat: {name: 0 for name in ("nodes", "move_arms", "switch_arms", "none_arms")}
+        for seat in ("acting", "opponent")
+    }
+    for witness in witnesses:
+        for seat, row in witness.items():
+            for name, count in row.items():
+                total[seat][name] += count
+    return total
+
+
 def _decision_branch_prior_fallback_ledger(
     native_events: Sequence[Mapping[str, Any]],
     *,
@@ -3872,6 +4174,21 @@ def _decision_branch_prior_fallback_ledger(
                 )
             for reason, count in event_reasons.items():
                 reason_counts[reason] += count
+        witness = event.get("unmapped_action_witness")
+        if witness is not None:
+            witness = _validated_branch_prior_unmapped_action_witness(witness)
+            if event_reasons is None:
+                raise EngineSearchWitnessError(
+                    "branch_prior_fallback_ledger_invalid: an unmapped-action witness "
+                    "requires classified native fallback reasons"
+                )
+            if _branch_prior_unmapped_action_witness_nodes(witness) != event_reasons[
+                "unmapped_action"
+            ]:
+                raise EngineSearchWitnessError(
+                    "branch_prior_fallback_ledger_invalid: unmapped-action witness nodes "
+                    "do not equal the classified native fallback count"
+                )
         events.append(
             {
                 "native_invocation": invocation,
@@ -3879,12 +4196,19 @@ def _decision_branch_prior_fallback_ledger(
                 "collapse_multiplicity": event.get("collapse_multiplicity"),
                 "branch_prior_fallbacks": branch_fallbacks,
                 "reason_counts": event_reasons,
+                **({"unmapped_action_witness": witness} if witness is not None else {}),
             }
         )
     if len({event["native_invocation"] for event in events}) != len(events):
         raise EngineSearchWitnessError(
             "branch_prior_fallback_ledger_invalid: native invocation identity repeated"
         )
+    witnesses = [event.get("unmapped_action_witness") for event in events]
+    aggregate_witness = (
+        None
+        if any(witness is None for witness in witnesses)
+        else _sum_branch_prior_unmapped_action_witnesses(witnesses)
+    )
     return {
         "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
         "native_invocations": len(events),
@@ -3893,6 +4217,7 @@ def _decision_branch_prior_fallback_ledger(
         "reason_counts": reason_counts,
         "unclassified_branch_prior_fallbacks": unclassified,
         "reason_ledger_complete": unclassified == 0,
+        **({"unmapped_action_witness": aggregate_witness} if aggregate_witness is not None else {}),
         "events": events,
     }
 
@@ -5695,8 +6020,10 @@ class EngineMctsPolicy:
         # pricer priced the leaves" is the question the witness exists to answer and
         # the answer must survive a run that somehow mixed two.
         rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
+        rollout_leaf_shadow = bool(getattr(config, "rollout_leaf_shadow", False))
         rollout_ledger: Counter[str] = Counter()
         rollout_modes: Counter[str] = Counter()
+        model_rollout_shadow_reports: list[Mapping[str, Any]] = []
         budget_skipped_worlds = 0
         native_budget_exhausted = False
         # These are compute invocations, not belief-world rows.  A collapsed
@@ -6222,22 +6549,22 @@ class EngineMctsPolicy:
                         if count
                     }
                 )
-            if config.strict_fallbacks and root_prior_fallbacks:
-                reason = report.get("root_prior_fallback_reason")
-                if not isinstance(reason, str) or not reason:
-                    order_status = report.get("opponent_request_order_status")
-                    reason = (
-                        f"opponent_order_{order_status}"
-                        if isinstance(order_status, str) and order_status
-                        else "unclassified_root_prior_fallback"
-                    )
-                raise EngineSearchFallbackError(
-                    "engine-search root-prior fallback: "
-                    f"battle={getattr(context, 'battle_id', '?')} "
-                    f"round={getattr(context, 'decision_round_index', '?')} "
-                    f"seat={getattr(context, 'player_id', '?')} reason={reason} "
-                    f"count={root_prior_fallbacks}"
+            branch_unmapped_action_witness = report.get(
+                "branch_prior_unmapped_action_witness"
+            )
+            if branch_unmapped_action_witness is not None:
+                branch_unmapped_action_witness = _validated_branch_prior_unmapped_action_witness(
+                    branch_unmapped_action_witness
                 )
+                if branch_reason_counts is None or _branch_prior_unmapped_action_witness_nodes(
+                    branch_unmapped_action_witness
+                ) != branch_reason_counts["unmapped_action"]:
+                    raise EngineSearchWitnessError(
+                        "native_branch_prior_unmapped_action_witness_invalid: "
+                        "witness nodes must equal classified unmapped-action fallbacks"
+                    )
+                report["branch_prior_unmapped_action_witness"] = branch_unmapped_action_witness
+            allowed_lost_active_permutation_root_fallback = False
             if config.use_opponent_priors:
                 expected_order_status = record.get("_opponent_request_order_status")
                 if expected_order_status not in OPPONENT_REQUEST_ORDER_STATUS_VALUES:
@@ -6263,6 +6590,41 @@ class EngineMctsPolicy:
                     self.stats.opponent_request_order_root_fallback_statuses[
                         reported_order_status
                     ] += root_prior_fallbacks
+                # An unresolvable public active permutation is not evidence
+                # that the model's acting policy, the action map, or a
+                # resolved opponent order failed. The native report exposes
+                # acting-seat failures in ``root_prior_fallback_reason``;
+                # requiring it to be null, a single root fallback, and the
+                # exact source/native status leaves no broad strict-mode hole.
+                # All other statuses -- including a parser/walk error -- stay
+                # terminal for a registered experiment.
+                allowed_lost_active_permutation_root_fallback = (
+                    config.allow_lost_active_permutation_opponent_root_fallback
+                    and expected_order_status == "lost_active_permutation"
+                    and reported_order_status == "lost_active_permutation"
+                    and root_prior_fallbacks == 1
+                    and report.get("root_prior_fallback_reason") is None
+                )
+            if (
+                config.strict_fallbacks
+                and root_prior_fallbacks
+                and not allowed_lost_active_permutation_root_fallback
+            ):
+                reason = report.get("root_prior_fallback_reason")
+                if not isinstance(reason, str) or not reason:
+                    order_status = report.get("opponent_request_order_status")
+                    reason = (
+                        f"opponent_order_{order_status}"
+                        if isinstance(order_status, str) and order_status
+                        else "unclassified_root_prior_fallback"
+                    )
+                raise EngineSearchFallbackError(
+                    "engine-search root-prior fallback: "
+                    f"battle={getattr(context, 'battle_id', '?')} "
+                    f"round={getattr(context, 'decision_round_index', '?')} "
+                    f"seat={getattr(context, 'player_id', '?')} reason={reason} "
+                    f"count={root_prior_fallbacks}"
+                )
             # Per-INVOCATION like the phase walls above: a conservatively
             # replayed world collided that many times twice and must report it.
             # `.get(...) or 0` keeps a pre-collision-counter wheel readable.
@@ -6340,6 +6702,13 @@ class EngineMctsPolicy:
                     setattr(
                         self.stats, stat_name, getattr(self.stats, stat_name) + value
                     )
+            if rollout_leaf_shadow:
+                # Do not fold this into the rollout-arm ledger: that ledger
+                # means "these values drove backup" while shadow rollouts must
+                # never drive selection or backup.  Preserve one native report
+                # per invocation; duplicate belief weighting has already been
+                # spent in the fixed-work tree and must not duplicate labels.
+                model_rollout_shadow_reports.append(report)
             return report
 
         for world, state in worlds:
@@ -6430,6 +6799,9 @@ class EngineMctsPolicy:
                         None
                         if report.get("branch_prior_fallback_reasons") is None
                         else dict(report["branch_prior_fallback_reasons"])
+                    ),
+                    "unmapped_action_witness": report.get(
+                        "branch_prior_unmapped_action_witness"
                     ),
                 }
             )
@@ -6958,6 +7330,11 @@ class EngineMctsPolicy:
             if rollout_leaf_eval
             else None
         )
+        model_rollout_shadow = (
+            aggregate_model_rollout_shadow(model_rollout_shadow_reports)
+            if rollout_leaf_shadow
+            else None
+        )
         metadata = {
             "engine_mcts": {
                 "leaf_eval": "model",
@@ -7031,6 +7408,11 @@ class EngineMctsPolicy:
                 # never truthiness -- see the guard, which refuses an empty
                 # witness rather than letting it be omitted as falsey.
                 **({"rollout_leaf": rollout_witness} if rollout_witness is not None else {}),
+                **(
+                    {"model_rollout_shadow": model_rollout_shadow}
+                    if model_rollout_shadow is not None
+                    else {}
+                ),
             }
         }
         # AND THE RUN REFUSES IF THE TWO DISAGREE. This call is what makes a missing

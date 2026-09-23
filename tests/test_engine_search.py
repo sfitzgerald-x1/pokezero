@@ -4979,6 +4979,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         root_selector_shadow: bool = False,
         worlds: int = 2,
         strict: bool = False,
+        allow_lost_active_permutation_opponent_root_fallback: bool = False,
         model_decision_time_ms: int | None = None,
         model_native_batch_guard_ms: int = 0,
     ):
@@ -4996,6 +4997,9 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             root_selector_shadow=root_selector_shadow,
             use_opponent_priors=opponent_priors,
             strict_fallbacks=strict,
+            allow_lost_active_permutation_opponent_root_fallback=(
+                allow_lost_active_permutation_opponent_root_fallback
+            ),
             model_decision_time_ms=model_decision_time_ms,
             model_native_batch_guard_ms=model_native_batch_guard_ms,
         )
@@ -5096,6 +5100,129 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         ):
             self._run(policy, [report])
         self.assertEqual(policy.stats.root_prior_fallbacks, 1)
+
+    def test_strict_opponent_prior_run_allows_only_lost_active_permutation(self) -> None:
+        policy = self._policy(
+            opponent_priors=True,
+            worlds=1,
+            strict=True,
+            allow_lost_active_permutation_opponent_root_fallback=True,
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "root_prior_fallback_reason": None,
+                "opponent_request_order_status": "lost_active_permutation",
+            }
+        )
+        with patch(
+            "pokezero.engine_search.opponent_request_order_resolution",
+            return_value=OpponentRequestOrderResolution(
+                None, "lost_active_permutation"
+            ),
+        ):
+            _decision, _native = self._run(policy, [report])
+        self.assertEqual(policy.stats.root_prior_fallbacks, 1)
+        self.assertEqual(
+            policy.stats.opponent_request_order_root_fallback_statuses,
+            {"lost_active_permutation": 1},
+        )
+
+    def test_selective_opponent_exception_rejects_an_acting_root_fallback(self) -> None:
+        policy = self._policy(
+            opponent_priors=True,
+            worlds=1,
+            strict=True,
+            allow_lost_active_permutation_opponent_root_fallback=True,
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, None), ("beta", 40, 0.5, None)],
+            root_priors=None,
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "root_prior_fallback_reason": "unmapped_action",
+                "opponent_request_order_status": "lost_active_permutation",
+            }
+        )
+        with self.assertRaisesRegex(
+            EngineSearchFallbackError,
+            r"root-prior fallback: .*reason=unmapped_action count=1",
+        ):
+            with patch(
+                "pokezero.engine_search.opponent_request_order_resolution",
+                return_value=OpponentRequestOrderResolution(
+                    None, "lost_active_permutation"
+                ),
+            ):
+                self._run(policy, [report])
+
+    def test_selective_opponent_exception_rejects_any_other_order_refusal(self) -> None:
+        policy = self._policy(
+            opponent_priors=True,
+            worlds=1,
+            strict=True,
+            allow_lost_active_permutation_opponent_root_fallback=True,
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "root_prior_fallback_reason": None,
+                "opponent_request_order_status": "public_order_walk_error",
+            }
+        )
+        with self.assertRaisesRegex(
+            EngineSearchFallbackError,
+            r"root-prior fallback: .*reason=opponent_order_public_order_walk_error count=1",
+        ):
+            self._run(policy, [report])
+
+    def test_selective_opponent_exception_rejects_multiple_root_fallbacks(self) -> None:
+        policy = self._policy(
+            opponent_priors=True,
+            worlds=1,
+            strict=True,
+            allow_lost_active_permutation_opponent_root_fallback=True,
+        )
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 2,
+                "root_prior_fallbacks": 2,
+                "branch_prior_fallbacks": 0,
+                "root_prior_fallback_reason": None,
+                "opponent_request_order_status": "lost_active_permutation",
+            }
+        )
+        with self.assertRaisesRegex(
+            EngineSearchFallbackError,
+            r"root-prior fallback: .*reason=opponent_order_lost_active_permutation count=2",
+        ):
+            with patch(
+                "pokezero.engine_search.opponent_request_order_resolution",
+                return_value=OpponentRequestOrderResolution(
+                    None, "lost_active_permutation"
+                ),
+            ):
+                self._run(policy, [report])
 
     def test_time_budget_reaches_the_outermost_native_slot_with_a_witness(self) -> None:
         # A high budget keeps this a call-contract test rather than a race with
@@ -5601,12 +5728,17 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         )
         reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
         reasons["unmapped_action"] = 2
+        witness = {
+            "acting": {"nodes": 2, "move_arms": 1, "switch_arms": 1, "none_arms": 0},
+            "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+        }
         report.update(
             {
                 "prior_fallbacks": 2,
                 "root_prior_fallbacks": 0,
                 "branch_prior_fallbacks": 2,
                 "branch_prior_fallback_reasons": reasons,
+                "branch_prior_unmapped_action_witness": witness,
             }
         )
 
@@ -5626,6 +5758,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(ledger["belief_worlds"], 1)
         self.assertEqual(ledger["branch_prior_fallbacks"], 2)
         self.assertEqual(ledger["reason_counts"]["unmapped_action"], 2)
+        self.assertEqual(ledger["unmapped_action_witness"], witness)
         self.assertEqual(
             ledger["events"],
             [
@@ -5638,9 +5771,47 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                         name: (2 if name == "unmapped_action" else 0)
                         for name in sorted(BRANCH_PRIOR_FALLBACK_REASON_VALUES)
                     },
+                    "unmapped_action_witness": witness,
                 }
             ],
         )
+
+    def test_branch_prior_unmapped_action_witness_refuses_mismatched_nodes(self) -> None:
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["unmapped_action"] = 2
+        report.update(
+            {
+                "prior_fallbacks": 2,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 2,
+                "branch_prior_fallback_reasons": reasons,
+                "branch_prior_unmapped_action_witness": {
+                    "acting": {
+                        "nodes": 1,
+                        "move_arms": 1,
+                        "switch_arms": 0,
+                        "none_arms": 0,
+                    },
+                    "opponent": {
+                        "nodes": 0,
+                        "move_arms": 0,
+                        "switch_arms": 0,
+                        "none_arms": 0,
+                    },
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError,
+            "native_branch_prior_unmapped_action_witness_invalid",
+        ):
+            self._run(policy, [report])
 
     def test_branch_prior_fallback_ledger_deduplicates_collapsed_belief_records(
         self,

@@ -305,12 +305,13 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         use_opponent_priors: bool = True,
         row_inputs: str | None = None,
         time_budget_ms: int | None = None,
+        position: dict | None = None,
         _raw: bool = False,
     ):
         """One encoded search. `mode=None` is PRODUCTION: the seam's positionals
         are not appended at all, so the call is byte for byte the pre-seam one.
         """
-        position = self.position
+        position = self.position if position is None else position
         fold = pokezero_search.FoldState.from_payload(position["fold_state"])
         args = [
             position["state_str"],
@@ -398,6 +399,130 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         for field in ("side_one", "side_two", "root_value", "prior_branches",
                       "depth_occupancy", "expansions", "leaf_evals"):
             self.assertIn(field, production, f"{field} must be in the compared set")
+
+    def test_shadow_rollouts_preserve_the_model_tree_and_emit_split_moments(self) -> None:
+        """The diagnostic must never reprice the tree it observes.
+
+        A post-hoc model-vs-rollout comparison of two separate trees cannot
+        establish this: repricing changes which leaves are selected.  Here the
+        production fields are compared directly, while the shadow's new fields
+        prove it priced nonempty, pre-partitioned heldout leaves.
+        """
+        production = self._search(mode=None)
+        shadow = self._search(mode="model_value_shadow_rollout")
+        shadow_only = set(shadow) - set(production)
+        self.assertEqual(
+            self._differing(production, shadow, ignore=shadow_only),
+            [],
+            "shadow rollouts must not change any production search field",
+        )
+        self.assertEqual(shadow["rollout_leaf_mode"], "model_value_shadow_rollout")
+        moments = shadow["model_rollout_shadow"]
+        self.assertEqual(moments["value_frame"], "side_one_absolute")
+        self.assertEqual(moments["partition"], "seed_ordinal_parity_v1")
+        labeled_leaves = moments["fit"]["leaves"] + moments["heldout"]["leaves"]
+        if labeled_leaves:
+            # An ordinary learned-value leaf must have a real sampled label;
+            # otherwise this would merely assert that the extra JSON columns
+            # appeared, not that the observational pricer exercised them.
+            self.assertGreater(shadow["rollouts_run"], 0)
+        elif shadow["leaves_priced"] == 0:
+            # Exact terminal resolution happens before the learned evaluator is
+            # consulted.  It is a valid zero-denominator observation, not a
+            # missing rollout label or a reason to fabricate a trial count.
+            self.assertEqual(shadow["rollouts_run"], 0)
+            self.assertEqual(shadow["leaves_priced"], 0)
+            self.assertEqual(shadow["rollout_plies"], 0)
+            self.assertEqual(shadow["rollout_terminal_hits"], 0)
+            self.assertEqual(shadow["rollout_cap_hits"], 0)
+            self.assertEqual(shadow["rollout_dead_ends"], 0)
+            self.assertEqual(shadow["leaf_evals"], 0)
+            self.assertEqual(moments["terminal_leaf_rows"], 0)
+            self.assertEqual(moments["excluded_nonterminal_leaf_rows"], 0)
+            self.assertEqual(moments["fit"]["leaves"], 0)
+            self.assertEqual(moments["heldout"]["leaves"], 0)
+            for split in engine_search.MODEL_ROLLOUT_SHADOW_SPLITS:
+                self.assertEqual(
+                    moments[split],
+                    {
+                        field: 0
+                        for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+                    },
+                    "a zero-trial terminal resolution must not carry a hidden "
+                    f"{split} moment",
+                )
+        else:
+            # A real learned-leaf observation can have no calibration label
+            # when every sampled continuation reached the cap/dead-end safety
+            # path.  That is coverage evidence, not an exact-terminal tree and
+            # not a fabricated zero-denominator result.
+            self.assertGreater(shadow["rollouts_run"], 0)
+            self.assertEqual(moments["terminal_leaf_rows"], 0)
+            self.assertEqual(
+                moments["excluded_nonterminal_leaf_rows"],
+                shadow["leaves_priced"],
+            )
+            for split in engine_search.MODEL_ROLLOUT_SHADOW_SPLITS:
+                self.assertEqual(
+                    moments[split],
+                    {
+                        field: 0
+                        for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+                    },
+                    "an all-nonterminal observation must not manufacture a "
+                    f"{split} calibration moment",
+                )
+
+    def test_shadow_rollouts_price_a_nonterminal_committed_fixture(self) -> None:
+        """The native seam must still exercise its positive pricing path.
+
+        A short cap can leave every reached learned leaf without an admissible
+        terminal label.  This fixture deliberately uses the committed root,
+        one rollout per leaf, and the independently tested longer cap, for
+        which the same native path demonstrably reaches terminal outcomes.
+        """
+        production = self._search(mode=None)
+        shadow = self._search(
+            mode="model_value_shadow_rollout",
+            rollouts=1,
+            max_plies=400,
+        )
+        shadow_only = set(shadow) - set(production)
+        self.assertEqual(
+            self._differing(production, shadow, ignore=shadow_only),
+            [],
+            "the positive native-pricing fixture must preserve every production "
+            "search field too",
+        )
+        moments = shadow["model_rollout_shadow"]
+        labeled_leaves = moments["fit"]["leaves"] + moments["heldout"]["leaves"]
+        self.assertGreater(
+            shadow["leaves_priced"],
+            0,
+            "the nonterminal fixture must reach learned leaves to price",
+        )
+        self.assertGreater(
+            shadow["rollouts_run"],
+            0,
+            "a nonterminal learned leaf must launch real observational trials",
+        )
+        self.assertGreater(
+            labeled_leaves,
+            0,
+            "the committed nonterminal fixture must retain at least one terminal label",
+        )
+        self.assertEqual(
+            shadow["rollouts_run"],
+            shadow["leaves_priced"],
+            "every reached learned leaf receives every configured shadow trial",
+        )
+        self.assertEqual(
+            shadow["rollout_terminal_hits"]
+            + shadow["rollout_cap_hits"]
+            + shadow["rollout_dead_ends"],
+            shadow["rollouts_run"],
+            "the native trial outcomes must partition the positive denominator",
+        )
 
     def test_native_deadline_returns_only_finalized_root_visits(self) -> None:
         """A tiny budget may stop the tree, never a selected-but-unbacked row.
@@ -950,6 +1075,23 @@ class RolloutModelPriorsConfigTest(unittest.TestCase):
         config = self._config(rollout_leaf_eval=False, rollout_threads=4)
         self.assertFalse(config.rollout_leaf_eval)
 
+    def test_shadow_is_a_model_priors_observation_not_a_rollout_arm(self) -> None:
+        config = self._config(rollout_leaf_eval=False, rollout_leaf_shadow=True)
+        self.assertTrue(config.rollout_leaf_shadow)
+        self.assertFalse(config.rollout_leaf_eval)
+        with self.assertRaises(ValueError) as caught:
+            self._config(rollout_leaf_shadow=True)
+        self.assertIn("mutually exclusive", str(caught.exception))
+
+    def test_shadow_refuses_a_different_tree(self) -> None:
+        with self.assertRaises(ValueError) as caught:
+            self._config(
+                rollout_leaf_eval=False,
+                rollout_leaf_shadow=True,
+                model_priors=False,
+            )
+        self.assertIn("requires model_priors=True", str(caught.exception))
+
 
 class RolloutSeamCallAssemblyTest(unittest.TestCase):
     """The positional contract, which is where a silent search change hides.
@@ -1038,6 +1180,161 @@ class RolloutSeamCallAssemblyTest(unittest.TestCase):
             args[17:],
             ["rollout", 16, 250, "uniform", 99, 1, False],
         )
+
+    def test_shadow_uses_a_distinct_native_mode(self) -> None:
+        args = self._args(rollout_leaf_shadow=True)
+        self.assertEqual(args[17], "model_value_shadow_rollout")
+
+
+class ModelRolloutShadowAggregationTest(unittest.TestCase):
+    """The durable diagnostic is aggregate-only and fails closed."""
+
+    @staticmethod
+    def _report(*, fit_leaves=2, heldout_leaves=1, mode="model_value_shadow_rollout"):
+        def moments(leaves):
+            return {
+                "leaves": leaves,
+                "model_sum": float(leaves),
+                "rollout_sum": float(leaves) / 2,
+                "model_sq_sum": float(leaves),
+                "rollout_sq_sum": float(leaves) / 4,
+                "cross_sum": float(leaves) / 2,
+                "absolute_error_sum": float(leaves) / 2,
+                "squared_error_sum": float(leaves) / 4,
+                "concordant_pairs": 1,
+                "discordant_pairs": 0,
+                "tied_pairs": 0,
+            }
+
+        return {
+            "rollout_leaf_mode": mode,
+            "leaves_priced": fit_leaves + heldout_leaves,
+            "rollouts_run": 96,
+            "rollout_terminal_hits": 96,
+            "rollout_cap_hits": 0,
+            "rollout_dead_ends": 0,
+            "model_rollout_shadow": {
+                "value_frame": "side_one_absolute",
+                "partition": "seed_ordinal_parity_v1",
+                "terminal_leaf_rows": fit_leaves + heldout_leaves,
+                "excluded_nonterminal_leaf_rows": 0,
+                "fit": moments(fit_leaves),
+                "heldout": moments(heldout_leaves),
+            },
+        }
+
+    def test_aggregate_preserves_split_and_terminal_denominator(self) -> None:
+        aggregated = engine_search.aggregate_model_rollout_shadow(
+            [self._report(), self._report()]
+        )
+        self.assertEqual(aggregated["native_invocations"], 2)
+        self.assertEqual(aggregated["fit"]["leaves"], 4)
+        self.assertEqual(aggregated["heldout"]["leaves"], 2)
+        self.assertEqual(aggregated["rollouts_run"], 192)
+        self.assertAlmostEqual(aggregated["rollout_fallback_fraction"], 0.0)
+
+    def test_aggregate_refuses_a_replacement_rollout_mode(self) -> None:
+        with self.assertRaises(EngineSearchWitnessError):
+            engine_search.aggregate_model_rollout_shadow([self._report(mode="rollout")])
+
+    def test_aggregate_refuses_missing_trial_partition(self) -> None:
+        report = self._report()
+        report["rollout_terminal_hits"] = 95
+        report["rollout_dead_ends"] = 1
+        report["model_rollout_shadow"]["excluded_nonterminal_leaf_rows"] = 1
+        with self.assertRaises(EngineSearchWitnessError):
+            engine_search.aggregate_model_rollout_shadow([report])
+
+    def test_aggregate_records_but_excludes_nonterminal_fallback_rows(self) -> None:
+        report = self._report()
+        report["rollout_terminal_hits"] = 95
+        report["rollout_cap_hits"] = 1
+        report["leaves_priced"] = 4
+        report["model_rollout_shadow"]["terminal_leaf_rows"] = 3
+        report["model_rollout_shadow"]["excluded_nonterminal_leaf_rows"] = 1
+        report["model_rollout_shadow"]["fit"] = self._report()["model_rollout_shadow"]["fit"]
+        report["model_rollout_shadow"]["heldout"] = self._report(
+            fit_leaves=0, heldout_leaves=1
+        )["model_rollout_shadow"]["heldout"]
+        aggregated = engine_search.aggregate_model_rollout_shadow([report])
+        self.assertEqual(aggregated["terminal_leaf_rows"], 3)
+        self.assertEqual(aggregated["excluded_nonterminal_leaf_rows"], 1)
+        self.assertAlmostEqual(aggregated["excluded_nonterminal_leaf_fraction"], 0.25)
+
+    def test_aggregate_preserves_an_all_nonterminal_decision_as_coverage(self) -> None:
+        report = self._report(fit_leaves=0, heldout_leaves=0)
+        report["leaves_priced"] = 3
+        report["rollout_terminal_hits"] = 0
+        report["rollout_cap_hits"] = 96
+        report["model_rollout_shadow"]["excluded_nonterminal_leaf_rows"] = 3
+        aggregated = engine_search.aggregate_model_rollout_shadow([report])
+        self.assertFalse(aggregated["terminal_label_available"])
+        self.assertEqual(aggregated["terminal_leaf_rows"], 0)
+        self.assertEqual(aggregated["excluded_nonterminal_leaf_rows"], 3)
+
+    def test_aggregate_preserves_an_immediately_terminal_tree_without_trials(self) -> None:
+        """Exact terminal leaves are not missing rollout measurements.
+
+        The production tree resolves these leaves before the learned value (and
+        thus before the observational shadow) is needed.  The shadow must carry
+        that denominator-zero fact explicitly instead of aborting the game or
+        emitting a made-up zero fallback rate.
+        """
+        zero_moments = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        report = {
+            "rollout_leaf_mode": "model_value_shadow_rollout",
+            "leaves_priced": 0,
+            "rollouts_run": 0,
+            "rollout_terminal_hits": 0,
+            "rollout_cap_hits": 0,
+            "rollout_dead_ends": 0,
+            "model_rollout_shadow": {
+                "value_frame": "side_one_absolute",
+                "partition": "seed_ordinal_parity_v1",
+                "terminal_leaf_rows": 0,
+                "excluded_nonterminal_leaf_rows": 0,
+                "fit": dict(zero_moments),
+                "heldout": dict(zero_moments),
+            },
+        }
+
+        aggregated = engine_search.aggregate_model_rollout_shadow([report])
+
+        self.assertFalse(aggregated["rollout_trials_available"])
+        self.assertFalse(aggregated["terminal_label_available"])
+        self.assertIsNone(aggregated["rollout_fallback_fraction"])
+        self.assertIsNone(aggregated["excluded_nonterminal_leaf_fraction"])
+
+    def test_aggregate_refuses_a_zero_trial_report_with_moments(self) -> None:
+        report = self._report()
+        report["leaves_priced"] = 0
+        report["rollouts_run"] = 0
+        report["rollout_terminal_hits"] = 0
+        report["model_rollout_shadow"]["terminal_leaf_rows"] = 0
+        report["model_rollout_shadow"]["fit"] = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        report["model_rollout_shadow"]["heldout"] = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        report["model_rollout_shadow"]["fit"]["model_sum"] = 0.5
+        with self.assertRaisesRegex(EngineSearchWitnessError, "without any rollout trials"):
+            engine_search.aggregate_model_rollout_shadow([report])
+
+    def test_aggregate_refuses_trials_without_priced_leaf_rows(self) -> None:
+        report = self._report(fit_leaves=0, heldout_leaves=0)
+        report["leaves_priced"] = 0
+        report["model_rollout_shadow"]["terminal_leaf_rows"] = 0
+        report["model_rollout_shadow"]["fit"] = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        report["model_rollout_shadow"]["heldout"] = {
+            field: 0 for field in engine_search.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS
+        }
+        with self.assertRaisesRegex(EngineSearchWitnessError, "without any priced leaf rows"):
+            engine_search.aggregate_model_rollout_shadow([report])
 
 
 # ---------------------------------------------------------------------------

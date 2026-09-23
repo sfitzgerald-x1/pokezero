@@ -171,6 +171,7 @@ class _PilotConfig:
 class _OpponentPriorConfig:
     model_priors: bool = True
     use_opponent_priors: bool = True
+    allow_lost_active_permutation_opponent_root_fallback: bool = False
     override_telemetry: bool = True
     search_sims: int = 256
     search_batch: int = 16
@@ -766,6 +767,70 @@ class OpponentPriorApplicabilityContractTest(unittest.TestCase):
                     "incumbent_opponent_request_order_root_fallback_statuses": {},
                 },
             )
+
+    def test_selective_contract_only_accepts_lost_active_permutation_root_fallbacks(self) -> None:
+        module, manifest, candidate, incumbent = self._inputs()
+        manifest["opponent_prior_applicability"] = dict(
+            module.OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_CONTRACT
+        )
+        contract = module._opponent_prior_applicability_contract(
+            manifest,
+            candidate_raw=candidate,
+            incumbent_raw=incumbent,
+            candidate_config=replace(
+                _OpponentPriorConfig(),
+                allow_lost_active_permutation_opponent_root_fallback=True,
+            ),
+            incumbent_config=replace(_OpponentPriorConfig(), use_opponent_priors=False),
+            execution_mode="isolated_build",
+        )
+        passed = module._opponent_prior_applicability_readout(
+            contract=contract,
+            summary={
+                "candidate_opponent_prior_arm_decisions": 7,
+                "incumbent_opponent_prior_arm_decisions": 0,
+                "candidate_root_prior_fallbacks": 2,
+                "incumbent_root_prior_fallbacks": 0,
+                "candidate_opponent_request_order_statuses": {
+                    "lost_active_permutation": 2,
+                    "resolved": 5,
+                },
+                "incumbent_opponent_request_order_statuses": {},
+                "candidate_opponent_request_order_root_fallback_statuses": {
+                    "lost_active_permutation": 2,
+                },
+                "incumbent_opponent_request_order_root_fallback_statuses": {},
+            },
+        )
+        self.assertEqual(passed["status"], "PASS")
+        self.assertEqual(
+            passed["marker"], "OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_PASS"
+        )
+        self.assertTrue(
+            passed["checks"]["candidate_root_fallbacks_only_allowed_status"]
+        )
+
+        rejected = module._opponent_prior_applicability_readout(
+            contract=contract,
+            summary={
+                "candidate_opponent_prior_arm_decisions": 7,
+                "incumbent_opponent_prior_arm_decisions": 0,
+                "candidate_root_prior_fallbacks": 1,
+                "incumbent_root_prior_fallbacks": 0,
+                "candidate_opponent_request_order_statuses": {
+                    "public_order_walk_error": 1,
+                },
+                "incumbent_opponent_request_order_statuses": {},
+                "candidate_opponent_request_order_root_fallback_statuses": {
+                    "public_order_walk_error": 1,
+                },
+                "incumbent_opponent_request_order_root_fallback_statuses": {},
+            },
+        )
+        self.assertEqual(rejected["status"], "NONPASS")
+        self.assertFalse(
+            rejected["checks"]["candidate_root_fallbacks_only_allowed_status"]
+        )
 
 
 class OpponentPriorStrengthPilotReadoutTest(unittest.TestCase):

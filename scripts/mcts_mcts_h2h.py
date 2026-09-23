@@ -52,6 +52,12 @@ OPPONENT_PRIOR_APPLICABILITY_SCHEMA_VERSION = (
 OPPONENT_PRIOR_APPLICABILITY_READOUT_SCHEMA_VERSION = (
     "pokezero.mcts-h2h-opponent-prior-applicability-readout.v2"
 )
+OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_SCHEMA_VERSION = (
+    "pokezero.mcts-h2h-opponent-prior-selective-applicability.v1"
+)
+OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_READOUT_SCHEMA_VERSION = (
+    "pokezero.mcts-h2h-opponent-prior-selective-applicability-readout.v1"
+)
 OPPONENT_PRIOR_STRENGTH_PILOT_READOUT_SCHEMA_VERSION = (
     "pokezero.mcts-h2h-opponent-prior-strength-pilot-readout.v1"
 )
@@ -117,6 +123,19 @@ OPPONENT_PRIOR_APPLICABILITY_CONTRACT = {
     # played decision could not retain its model prior, so it invalidates an
     # applicability result even if another decision used the opponent head.
     "maximum_candidate_root_prior_fallbacks": 0,
+    "maximum_incumbent_root_prior_fallbacks": 0,
+}
+OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_CONTRACT = {
+    "schema_version": OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_SCHEMA_VERSION,
+    "stage": "development_selective_applicability",
+    "minimum_candidate_opponent_prior_arm_decisions": 1,
+    "maximum_incumbent_opponent_prior_arm_decisions": 0,
+    # This is deliberately not the normal root-clean strength contract. It
+    # exists only to measure applicability when public history proves that an
+    # opponent active permutation cannot be reconstructed. Any other root
+    # fallback remains terminal; a later strength study must still use the
+    # ordinary zero-root-fallback contract.
+    "candidate_allowed_root_fallback_status": "lost_active_permutation",
     "maximum_incumbent_root_prior_fallbacks": 0,
 }
 
@@ -1948,9 +1967,13 @@ def _opponent_prior_applicability_contract(
     if raw is None:
         return None
     contract = _mapping(raw, label="manifest.opponent_prior_applicability")
-    if dict(contract) != OPPONENT_PRIOR_APPLICABILITY_CONTRACT:
+    normal_contract = dict(contract) == OPPONENT_PRIOR_APPLICABILITY_CONTRACT
+    selective_contract = (
+        dict(contract) == OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_CONTRACT
+    )
+    if not normal_contract and not selective_contract:
         raise HeadToHeadError(
-            "opponent-prior applicability must use the exact declared development contract."
+            "opponent-prior applicability must use an exact declared development contract."
         )
     if execution_mode != "isolated_build":
         raise HeadToHeadError(
@@ -1972,9 +1995,23 @@ def _opponent_prior_applicability_contract(
         for field in candidate_values
         if candidate_values.get(field) != incumbent_values.get(field)
     }
-    if changed_fields != {"use_opponent_priors"}:
+    expected_changed_fields = (
+        {
+            "use_opponent_priors",
+            "allow_lost_active_permutation_opponent_root_fallback",
+        }
+        if selective_contract
+        else {"use_opponent_priors"}
+    )
+    if changed_fields != expected_changed_fields:
+        if selective_contract:
+            raise HeadToHeadError(
+                "selective opponent-prior applicability permits only its declared "
+                "opponent-prior settings to differ between arms."
+            )
         raise HeadToHeadError(
-            "opponent-prior applicability permits only use_opponent_priors to differ between arms."
+            "opponent-prior applicability permits only use_opponent_priors to differ "
+            "between arms."
         )
     if (
         candidate_values.get("model_priors") is not True
@@ -1985,6 +2022,21 @@ def _opponent_prior_applicability_contract(
         raise HeadToHeadError(
             "opponent-prior applicability requires model priors on and a true-versus-false opponent-prior contrast."
         )
+    if selective_contract:
+        if (
+            candidate_values.get(
+                "allow_lost_active_permutation_opponent_root_fallback"
+            )
+            is not True
+            or incumbent_values.get(
+                "allow_lost_active_permutation_opponent_root_fallback"
+            )
+            is not False
+        ):
+            raise HeadToHeadError(
+                "selective opponent-prior applicability requires the exact "
+                "candidate-only lost-active-permutation exception."
+            )
     # The native tree has always applied these priors independently of whether
     # the report exposes its arms.  The application witness, however, is
     # produced only by the pure `override_telemetry` report path.  Require it
@@ -2072,6 +2124,10 @@ def _opponent_prior_applicability_readout(
                 "opponent-prior applicability summary has "
                 f"{role} root-fallback statuses beyond their status denominator."
             )
+    selective_contract = (
+        contract.get("schema_version")
+        == OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_SCHEMA_VERSION
+    )
     candidate_applied = (
         candidate_count
         >= int(contract["minimum_candidate_opponent_prior_arm_decisions"])
@@ -2080,19 +2136,37 @@ def _opponent_prior_applicability_readout(
         incumbent_count
         <= int(contract["maximum_incumbent_opponent_prior_arm_decisions"])
     )
-    live_roots_clean = (
-        candidate_root_prior_fallbacks
-        <= int(contract["maximum_candidate_root_prior_fallbacks"])
-        and incumbent_root_prior_fallbacks
-        <= int(contract["maximum_incumbent_root_prior_fallbacks"])
-    )
+    if selective_contract:
+        allowed_status = contract["candidate_allowed_root_fallback_status"]
+        candidate_root_fallbacks_are_allowed = all(
+            status == allowed_status
+            for status, count in candidate_root_fallback_statuses.items()
+            if count
+        )
+        live_roots_clean = (
+            candidate_root_fallbacks_are_allowed
+            and incumbent_root_prior_fallbacks
+            <= int(contract["maximum_incumbent_root_prior_fallbacks"])
+        )
+    else:
+        candidate_root_fallbacks_are_allowed = candidate_root_prior_fallbacks == 0
+        live_roots_clean = (
+            candidate_root_prior_fallbacks
+            <= int(contract["maximum_candidate_root_prior_fallbacks"])
+            and incumbent_root_prior_fallbacks
+            <= int(contract["maximum_incumbent_root_prior_fallbacks"])
+        )
     status = (
         "PASS"
         if candidate_applied and incumbent_remained_off and live_roots_clean
         else "NONPASS"
     )
     return {
-        "schema_version": OPPONENT_PRIOR_APPLICABILITY_READOUT_SCHEMA_VERSION,
+        "schema_version": (
+            OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_READOUT_SCHEMA_VERSION
+            if selective_contract
+            else OPPONENT_PRIOR_APPLICABILITY_READOUT_SCHEMA_VERSION
+        ),
         "complete": True,
         "contract": dict(contract),
         "candidate_opponent_prior_arm_decisions": candidate_count,
@@ -2111,10 +2185,17 @@ def _opponent_prior_applicability_readout(
             "candidate_applied_model_priced_opponent_arm": candidate_applied,
             "incumbent_remained_flag_off": incumbent_remained_off,
             "live_root_priors_remained_clean": live_roots_clean,
+            "candidate_root_fallbacks_only_allowed_status": (
+                candidate_root_fallbacks_are_allowed
+            ),
             "root_fallbacks_have_source_order_statuses": True,
         },
         "status": status,
-        "marker": f"OPPONENT_PRIOR_APPLICABILITY_{status}",
+        "marker": (
+            f"OPPONENT_PRIOR_SELECTIVE_APPLICABILITY_{status}"
+            if selective_contract
+            else f"OPPONENT_PRIOR_APPLICABILITY_{status}"
+        ),
     }
 
 

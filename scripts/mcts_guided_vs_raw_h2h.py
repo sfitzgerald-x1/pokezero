@@ -39,6 +39,7 @@ from pokezero.actions import ACTION_COUNT  # noqa: E402
 from pokezero.engine_search import (  # noqa: E402
     BRANCH_PRIOR_FALLBACK_REASON_VALUES,
     OVERRIDE_UNMEASURED_CAUSE_VALUES,
+    aggregate_model_rollout_shadow,
 )
 
 # The mature MCTS-versus-MCTS runner owns the source-hash, immutable-write,
@@ -65,6 +66,9 @@ BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
 )
 SEALED_OVERRIDE_AUDIT_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-sealed-override-audit.v2"
+)
+MODEL_ROLLOUT_SHADOW_EVIDENCE_SCHEMA_VERSION = (
+    "pokezero.mcts-guided-vs-raw-model-rollout-shadow.v1"
 )
 RAW_SELECTOR = {
     "kind": "deterministic_masked_argmax",
@@ -99,6 +103,7 @@ REGISTERED_ENGINE_CONFIG = {
     "rollout_branch_on_damage": False,
     "rollout_count": 32,
     "rollout_leaf_eval": False,
+    "rollout_leaf_shadow": False,
     "rollout_max_plies": 200,
     "rollout_policy": "uniform",
     "rollout_seed": 0,
@@ -131,6 +136,15 @@ REGISTERED_DEEP_ENGINE_CONFIG = {
     "search_sims": 4096,
     "search_time_ms": 1_000,
 }
+# The opponent-model ablation keeps the fixed-work CUDA tree identical to the
+# registered deep protocol, but seeds opponent expansions from the checkpoint's
+# opponent head.  It is deliberately a separate registered arm: changing this
+# flag alters the searched game model, so it must never be smuggled into an
+# existing deep result under the same identity.
+REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG = {
+    **REGISTERED_DEEP_ENGINE_CONFIG,
+    "use_opponent_priors": True,
+}
 # This is the matched leaf-value ablation of the fixed-work CUDA protocol.
 # Every search knob, own prior, world count, and source-bound input is shared
 # with REGISTERED_DEEP_ENGINE_CONFIG.  Only the native model leaf is replaced
@@ -143,10 +157,24 @@ REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG = {
     "rollout_threads": 12,
     "rollout_threads_cpu_budget_ack": True,
 }
+# This observational protocol reaches precisely the same model-valued frontier
+# as fixed-work deep MCTS, then records one independent uniform terminal
+# continuation for each leaf.  It is not a rollout-leaf strength arm: the
+# learned value remains the one selected and backed up by the native tree.
+REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG = {
+    **REGISTERED_DEEP_ENGINE_CONFIG,
+    "rollout_count": 1,
+    "rollout_leaf_shadow": True,
+    "rollout_max_plies": 1000,
+    "rollout_threads": 12,
+    "rollout_threads_cpu_budget_ack": True,
+}
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
+    REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
     REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG,
+    REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG,
 )
 SOURCE_BOUND_ENGINE_PATHS = {"checkpoint_path", "model_path", "tables_path"}
 
@@ -389,8 +417,13 @@ def _sealed_override_audit_config(
 def _require_registered_candidate_config(config: Mapping[str, Any]) -> None:
     """Reject a look-alike MCTS configuration before any game is played."""
 
-    if config.get("model_priors") is not True or config.get("use_opponent_priors") is not False:
-        raise HeadToHeadError("candidate must enable own model priors and disable opponent priors.")
+    if config.get("model_priors") is not True:
+        raise HeadToHeadError("candidate must enable own model priors.")
+    if (
+        config.get("use_opponent_priors") is not True
+        and config.get("use_opponent_priors") is not False
+    ):
+        raise HeadToHeadError("candidate use_opponent_priors must be a boolean.")
     observed = {key: value for key, value in config.items() if key not in SOURCE_BOUND_ENGINE_PATHS}
     if observed not in REGISTERED_ENGINE_CONFIGS:
         raise HeadToHeadError(
@@ -437,6 +470,25 @@ def _branch_prior_ledger_path(
     return (
         out_root
         / "branch-prior-fallback-ledgers"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
+    )
+
+
+def _model_rollout_shadow_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+) -> Path:
+    """Return the immutable, public-safe leaf-agreement witness address."""
+
+    if record.seed != seed or record.acting_player != candidate_seat:
+        raise HeadToHeadError("model-rollout shadow does not match its public decision identity.")
+    return (
+        out_root
+        / "model-rollout-shadow-ledgers"
         / f"seed-{seed}-{candidate_seat}"
         / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
     )
@@ -763,6 +815,63 @@ def _finite_number(value: object, *, label: str) -> float:
     return float(value)
 
 
+def _validated_branch_prior_unmapped_action_witness(
+    value: object,
+) -> dict[str, dict[str, int]]:
+    """Validate the public-free action-map topology behind a fallback.
+
+    This intentionally retains only aggregate option kinds.  It must never
+    carry a private branch state, a move name, an action identity, or model
+    scores into the paired-outcome artifact.
+    """
+
+    witness = _mapping(value, label="unmapped-action witness")
+    if set(witness) != {"acting", "opponent"}:
+        raise HeadToHeadError("unmapped-action witness must name acting and opponent seats.")
+    normalized: dict[str, dict[str, int]] = {}
+    fields = {"nodes", "move_arms", "switch_arms", "none_arms"}
+    for seat in ("acting", "opponent"):
+        row = _mapping(witness.get(seat), label=f"unmapped-action {seat} witness")
+        if set(row) != fields:
+            raise HeadToHeadError("unmapped-action witness row has an unexpected schema.")
+        normalized_row = {
+            field: _nonnegative_int(row.get(field), label=f"unmapped-action {seat} {field}")
+            for field in sorted(fields)
+        }
+        missing_arms = (
+            normalized_row["move_arms"]
+            + normalized_row["switch_arms"]
+            + normalized_row["none_arms"]
+        )
+        if (
+            (normalized_row["nodes"] == 0) != (missing_arms == 0)
+            or missing_arms < normalized_row["nodes"]
+        ):
+            raise HeadToHeadError("unmapped-action witness does not conserve nodes and arms.")
+        normalized[seat] = normalized_row
+    return normalized
+
+
+def _branch_prior_unmapped_action_witness_nodes(
+    witness: Mapping[str, Mapping[str, int]],
+) -> int:
+    return sum(witness[seat]["nodes"] for seat in ("acting", "opponent"))
+
+
+def _sum_branch_prior_unmapped_action_witnesses(
+    witnesses: Sequence[Mapping[str, Mapping[str, int]]],
+) -> dict[str, dict[str, int]]:
+    total = {
+        seat: {field: 0 for field in ("nodes", "move_arms", "switch_arms", "none_arms")}
+        for seat in ("acting", "opponent")
+    }
+    for witness in witnesses:
+        for seat in ("acting", "opponent"):
+            for field, count in witness[seat].items():
+                total[seat][field] += count
+    return total
+
+
 def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
     """Validate the bounded native-tree evidence safe to retain beside a public row."""
 
@@ -777,8 +886,12 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         "reason_ledger_complete",
         "events",
     }
-    if set(ledger) != expected or ledger.get("schema_version") != (
-        "pokezero.engine-mcts.branch-prior-fallbacks.v1"
+    optional = {"unmapped_action_witness"}
+    if (
+        set(ledger) not in (expected, expected | optional)
+        or ledger.get("schema_version") != (
+            "pokezero.engine-mcts.branch-prior-fallbacks.v1"
+        )
     ):
         raise HeadToHeadError("branch prior ledger has an unexpected schema.")
     invocations = _nonnegative_int(ledger.get("native_invocations"), label="native invocations")
@@ -812,13 +925,14 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
     event_unclassified = 0
     for event in events:
         event_mapping = _mapping(event, label="branch prior native invocation")
-        if set(event_mapping) != {
+        event_expected = {
             "native_invocation",
             "belief_records",
             "collapse_multiplicity",
             "branch_prior_fallbacks",
             "reason_counts",
-        }:
+        }
+        if set(event_mapping) not in (event_expected, event_expected | optional):
             raise HeadToHeadError("branch prior native invocation has unsupported fields.")
         event_reasons = event_mapping.get("reason_counts")
         if event_reasons is not None:
@@ -839,6 +953,15 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         else:
             for reason, count in event_reasons.items():
                 event_reason_totals[reason] += count
+        witness = event_mapping.get("unmapped_action_witness")
+        if witness is not None:
+            witness = _validated_branch_prior_unmapped_action_witness(witness)
+            if event_reasons is None or _branch_prior_unmapped_action_witness_nodes(witness) != (
+                event_reasons["unmapped_action"]
+            ):
+                raise HeadToHeadError(
+                    "unmapped-action witness does not match its native invocation count."
+                )
         normalized_events.append(
             {
                 "native_invocation": _nonnegative_int(
@@ -853,6 +976,7 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
                 ),
                 "branch_prior_fallbacks": event_fallbacks,
                 "reason_counts": event_reasons,
+                **({"unmapped_action_witness": witness} if witness is not None else {}),
             }
         )
     if [event["native_invocation"] for event in normalized_events] != list(range(1, invocations + 1)):
@@ -863,6 +987,16 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         raise HeadToHeadError(
             "branch prior native invocation attribution disagrees with its ledger totals."
         )
+    top_witness = ledger.get("unmapped_action_witness")
+    if top_witness is not None:
+        top_witness = _validated_branch_prior_unmapped_action_witness(top_witness)
+        event_witnesses = [event.get("unmapped_action_witness") for event in normalized_events]
+        if any(witness is None for witness in event_witnesses) or top_witness != (
+            _sum_branch_prior_unmapped_action_witnesses(event_witnesses)
+        ):
+            raise HeadToHeadError(
+                "unmapped-action witness does not conserve across native invocations."
+            )
     return {
         "schema_version": ledger["schema_version"],
         "native_invocations": invocations,
@@ -871,6 +1005,7 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
         "reason_counts": dict(sorted(normalized_reasons.items())),
         "unclassified_branch_prior_fallbacks": unclassified,
         "reason_ledger_complete": bool(ledger["reason_ledger_complete"]),
+        **({"unmapped_action_witness": top_witness} if top_witness is not None else {}),
         "events": normalized_events,
     }
 
@@ -907,6 +1042,93 @@ def _guided_override_from_decision(
         _mapping(engine_mcts.get("override"), label="guided override telemetry"),
         requested_players,
     )
+
+
+def _candidate_uses_model_rollout_shadow(candidate: MctsPolicySpec) -> bool:
+    config = getattr(candidate, "config", {})
+    return isinstance(config, Mapping) and config.get("rollout_leaf_shadow") is True
+
+
+def _validated_model_rollout_shadow(value: object) -> dict[str, Any]:
+    """Accept an honest terminal-only uniform-rollout leaf diagnostic.
+
+    The native aggregate is intentionally aggregate-only, but it is still the
+    exact per-decision evidence unit. Capped/dead-end trials are reported as
+    excluded coverage, never placed in the terminal moments; rejecting the
+    entire production decision for one such observational miss would change
+    the study population rather than protect its estimand.
+    """
+
+    shadow = _mapping(value, label="guided model-rollout shadow")
+    aggregate = aggregate_model_rollout_shadow(
+        [
+            {
+                "rollout_leaf_mode": "model_value_shadow_rollout",
+                "leaves_priced": (
+                    shadow.get("terminal_leaf_rows", 0)
+                    + shadow.get("excluded_nonterminal_leaf_rows", 0)
+                ),
+                "rollouts_run": shadow.get("rollouts_run"),
+                "rollout_terminal_hits": shadow.get("rollout_terminal_hits"),
+                "rollout_cap_hits": shadow.get("rollout_cap_hits"),
+                "rollout_dead_ends": shadow.get("rollout_dead_ends"),
+                "model_rollout_shadow": shadow,
+            }
+        ]
+    )
+    # These rates and availability flags are DERIVED, not producer authority.
+    # Require the durable source to say exactly what the independently
+    # recomputed partition says.  In particular, a terminal-only tree has no
+    # rollout denominator; accepting ``0.0`` or ``True`` there would turn an
+    # absence of a learned-leaf observation into a false quality claim.
+    for field in (
+        "rollout_trials_available",
+        "terminal_label_available",
+        "rollout_fallback_fraction",
+        "excluded_nonterminal_leaf_fraction",
+    ):
+        if shadow.get(field) != aggregate[field]:
+            raise HeadToHeadError(
+                "model-rollout shadow derived field does not match its own "
+                f"terminal/trial partition: {field}={shadow.get(field)!r}, "
+                f"expected {aggregate[field]!r}."
+            )
+    native_invocations = shadow.get("native_invocations")
+    if isinstance(native_invocations, bool) or not isinstance(native_invocations, int) or native_invocations <= 0:
+        raise HeadToHeadError("model-rollout shadow has an invalid native-invocation denominator.")
+    # JSON round-tripping both validates the durable representation and strips
+    # mapping subclasses before an immutable artifact is written.
+    try:
+        normalized = json.loads(json.dumps(dict(shadow), sort_keys=True, allow_nan=False))
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError(f"model-rollout shadow is not JSON-safe: {error}") from error
+    if not isinstance(normalized, dict):
+        raise HeadToHeadError("model-rollout shadow did not normalize to a JSON object.")
+    return normalized
+
+
+def _model_rollout_shadow_payload(
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+    shadow: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": MODEL_ROLLOUT_SHADOW_EVIDENCE_SCHEMA_VERSION,
+        "seed": record.seed,
+        "candidate_seat": candidate_seat,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "public_decision": {
+            "decision_id": record.decision_id,
+            "battle_id": record.battle_id,
+            "turn_index": record.turn_index,
+            "recorded_action_index": record.recorded_action_index,
+        },
+        "model_rollout_shadow": dict(shadow),
+    }
 
 
 def _branch_prior_ledger_from_override(override: Mapping[str, Any]) -> dict[str, Any]:
@@ -1315,6 +1537,23 @@ def _public_decision_writer(
                 selection=_selection_evidence_from_override(override, record=record),
             ),
         )
+        if _candidate_uses_model_rollout_shadow(candidate):
+            metadata = _mapping(guided_policy.latest_decision_metadata, label="guided decision metadata")
+            engine_mcts = _mapping(metadata.get("engine_mcts"), label="guided engine MCTS metadata")
+            shadow = _validated_model_rollout_shadow(engine_mcts.get("model_rollout_shadow"))
+            shadow_path = _model_rollout_shadow_path(
+                out_root, seed=seed, candidate_seat=candidate_seat, record=record
+            )
+            _write_immutable_json(
+                shadow_path,
+                _model_rollout_shadow_payload(
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat=candidate_seat,
+                    record=record,
+                    shadow=shadow,
+                ),
+            )
 
     return write
 
@@ -1549,6 +1788,28 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
         )
         if dict(ledger_payload) != expected_ledger_payload:
             raise HeadToHeadError("branch-prior ledger evidence does not bind its public decision.")
+        if _candidate_uses_model_rollout_shadow(game.candidate):
+            shadow_path = _model_rollout_shadow_path(
+                out_root, seed=game.seed, candidate_seat=game.candidate_seat, record=record
+            )
+            try:
+                shadow_payload = json.loads(shadow_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise HeadToHeadError(
+                    f"public decision evidence is missing its readable model-rollout shadow: {error}"
+                ) from error
+            if not isinstance(shadow_payload, Mapping):
+                raise HeadToHeadError("model-rollout shadow evidence is not a JSON object.")
+            shadow = _validated_model_rollout_shadow(shadow_payload.get("model_rollout_shadow"))
+            expected_shadow_payload = _model_rollout_shadow_payload(
+                candidate=game.candidate,
+                incumbent=game.incumbent,
+                candidate_seat=game.candidate_seat,
+                record=record,
+                shadow=shadow,
+            )
+            if dict(shadow_payload) != expected_shadow_payload:
+                raise HeadToHeadError("model-rollout shadow evidence does not bind its public decision.")
         records.append(record)
     expected_count = game.candidate_telemetry.decisions
     if expected_count <= 0 or len(records) != expected_count:

@@ -27,6 +27,7 @@ sys.modules[_SPEC.name] = RUNNER
 _SPEC.loader.exec_module(RUNNER)
 
 import mcts_mcts_h2h as DURABLE  # noqa: E402
+import pokezero.engine_search as ENGINE_SEARCH  # noqa: E402
 from pokezero.observation import PokeZeroObservationV0  # noqa: E402
 from pokezero.public_decision_corpus import (  # noqa: E402
     PublicDecisionRecord,
@@ -86,10 +87,12 @@ def _public_record(
     )
 
 
-def _branch_prior_ledger(*, fallbacks: int = 0) -> dict[str, object]:
+def _branch_prior_ledger(
+    *, fallbacks: int = 0, unmapped_action_witness: dict[str, object] | None = None
+) -> dict[str, object]:
     reasons = {reason: 0 for reason in RUNNER.BRANCH_PRIOR_FALLBACK_REASON_VALUES}
     reasons["unmapped_action"] = fallbacks
-    return {
+    ledger = {
         "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
         "native_invocations": 1,
         "belief_worlds": 1,
@@ -107,6 +110,10 @@ def _branch_prior_ledger(*, fallbacks: int = 0) -> dict[str, object]:
             }
         ],
     }
+    if unmapped_action_witness is not None:
+        ledger["unmapped_action_witness"] = unmapped_action_witness
+        ledger["events"][0]["unmapped_action_witness"] = unmapped_action_witness
+    return ledger
 
 
 def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
@@ -148,6 +155,47 @@ def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
             }
         },
     )
+
+
+def _terminal_model_rollout_shadow() -> dict[str, object]:
+    moments = {
+        "leaves": 2,
+        "model_sum": 1.0,
+        "rollout_sum": 1.0,
+        "model_sq_sum": 0.6,
+        "rollout_sq_sum": 1.0,
+        "cross_sum": 0.6,
+        "absolute_error_sum": 0.4,
+        "squared_error_sum": 0.2,
+        "concordant_pairs": 1,
+        "discordant_pairs": 0,
+        "tied_pairs": 0,
+    }
+    return {
+        "value_frame": "side_one_absolute",
+        "partition": "seed_ordinal_parity_v1",
+        "native_invocations": 1,
+        "terminal_leaf_rows": 3,
+        "excluded_nonterminal_leaf_rows": 0,
+        "fit": dict(moments),
+        "heldout": {**moments, "leaves": 1},
+        "rollouts_run": 3,
+        "rollout_terminal_hits": 3,
+        "rollout_cap_hits": 0,
+        "rollout_dead_ends": 0,
+        "rollout_trials_available": True,
+        "terminal_label_available": True,
+        "rollout_fallback_fraction": 0.0,
+        "excluded_nonterminal_leaf_fraction": 0.0,
+    }
+
+
+def _guided_for_shadow_record(record: PublicDecisionRecord):
+    guided = _guided_for_record(record)
+    guided.latest_decision_metadata["engine_mcts"]["model_rollout_shadow"] = (
+        _terminal_model_rollout_shadow()
+    )
+    return guided
 
 
 def _public_selection(
@@ -673,6 +721,58 @@ class GuidedConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
+    def test_registered_deep_opponent_prior_protocol_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_DEEP_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {"use_opponent_priors": True},
+            "the opponent-model ablation may differ from fixed-work deep MCTS only on opponent priors",
+        )
+        self.assertEqual(set(config), set(baseline))
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 4095
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+        for invalid in (1, 0):
+            with self.subTest(invalid=invalid):
+                config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
+                config["use_opponent_priors"] = invalid
+                with self.assertRaisesRegex(Exception, "must be a boolean"):
+                    RUNNER._require_registered_candidate_config(config)
+
+    def test_deep_opponent_prior_manifest_inherits_cuda_without_overriding_it(self) -> None:
+        manifest_config = dict(RUNNER.REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG)
+        manifest_config.pop("model_device")
+        raw = {
+            "config_id": "guided-mcts-own-priors-fullwork-deep-d6-s4096-opponent-priors",
+            "policy_id": "guided-mcts-own-priors-fullwork-deep-d6-s4096",
+            "checkpoint_sha256": _IDENTITY["checkpoint_sha256"],
+            "source_commit": _IDENTITY["source_commit"],
+            "engine_fingerprint": _IDENTITY["engine_fingerprint"],
+            "engine_config": manifest_config,
+        }
+        policy, _ = DURABLE._runtime_spec(
+            raw,
+            role="guided candidate",
+            checkpoint="/tmp/checkpoint",
+            checkpoint_sha256=_IDENTITY["checkpoint_sha256"],
+            source_commit=_IDENTITY["source_commit"],
+            source_tree_sha256=_IDENTITY["source_tree_sha256"],
+            engine_fingerprint=_IDENTITY["engine_fingerprint"],
+            showdown_source_sha256=_IDENTITY["showdown_source_sha256"],
+            model_path="/tmp/model",
+            tables_path="/tmp/tables",
+            device="cuda",
+        )
+        self.assertEqual(policy.config["model_device"], "cuda")
+        self.assertNotIn("model_device", manifest_config)
+        RUNNER._require_registered_candidate_config(policy.config)
+
     def test_registered_deep_rollout_leaf_ablation_is_accepted_exactly(self) -> None:
         config = dict(RUNNER.REGISTERED_DEEP_ROLLOUT_LEAF_ENGINE_CONFIG)
         baseline = RUNNER.REGISTERED_DEEP_ENGINE_CONFIG
@@ -692,6 +792,28 @@ class GuidedConfigTest(unittest.TestCase):
         self.assertEqual(set(config), set(baseline))
         RUNNER._require_registered_candidate_config(config)
         config["rollout_threads"] = 11
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+    def test_registered_model_leaf_shadow_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_DEEP_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {
+                "rollout_count": 1,
+                "rollout_leaf_shadow": True,
+                "rollout_max_plies": 1000,
+                "rollout_threads": 12,
+                "rollout_threads_cpu_budget_ack": True,
+            },
+        )
+        RUNNER._require_registered_candidate_config(config)
+        config["rollout_count"] = 2
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
@@ -734,6 +856,28 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         ledger["reason_counts"] = {"forged_reason": 2}
         ledger["events"][0]["reason_counts"] = {"forged_reason": 2}
         with self.assertRaisesRegex(Exception, "complete native reason vocabulary"):
+            RUNNER._validated_branch_prior_ledger(ledger)
+
+    def test_branch_prior_ledger_retains_valid_unmapped_action_witness(self) -> None:
+        witness = {
+            "acting": {"nodes": 2, "move_arms": 1, "switch_arms": 1, "none_arms": 0},
+            "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+        }
+        ledger = _branch_prior_ledger(fallbacks=2, unmapped_action_witness=witness)
+
+        self.assertEqual(
+            RUNNER._validated_branch_prior_ledger(ledger)["unmapped_action_witness"],
+            witness,
+        )
+
+    def test_branch_prior_ledger_refuses_unmapped_witness_that_miscounts_nodes(self) -> None:
+        witness = {
+            "acting": {"nodes": 1, "move_arms": 1, "switch_arms": 0, "none_arms": 0},
+            "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+        }
+        ledger = _branch_prior_ledger(fallbacks=2, unmapped_action_witness=witness)
+
+        with self.assertRaisesRegex(Exception, "does not match its native invocation count"):
             RUNNER._validated_branch_prior_ledger(ledger)
 
     def test_selection_evidence_refuses_search_action_not_bound_to_public_record(self) -> None:
@@ -1000,6 +1144,88 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(Exception, "not bound to the public decision"):
                 writer(record)
+
+    def test_shadow_writer_requires_and_binds_terminal_leaf_evidence(self) -> None:
+        candidate = SimpleNamespace(
+            provenance_sha256="guided-provenance", config={"rollout_leaf_shadow": True}
+        )
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            RUNNER._public_decision_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=_guided_for_shadow_record(record),
+            )(record)
+            sidecar = RUNNER._model_rollout_shadow_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            )
+            self.assertTrue(sidecar.is_file())
+            self.assertEqual(RUNNER._validate_public_decision_evidence(root, game), (record,))
+
+    def test_shadow_writer_preserves_but_excludes_nonterminal_leaf_rows(self) -> None:
+        candidate = SimpleNamespace(
+            provenance_sha256="guided-provenance", config={"rollout_leaf_shadow": True}
+        )
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_shadow_record(record)
+        shadow = guided.latest_decision_metadata["engine_mcts"]["model_rollout_shadow"]
+        shadow["rollout_terminal_hits"] = 2
+        shadow["rollout_cap_hits"] = 1
+        shadow["terminal_leaf_rows"] = 2
+        shadow["excluded_nonterminal_leaf_rows"] = 1
+        shadow["fit"]["leaves"] = 1
+        shadow["heldout"]["leaves"] = 1
+        shadow["rollout_fallback_fraction"] = 1 / 3
+        shadow["excluded_nonterminal_leaf_fraction"] = 1 / 3
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            RUNNER._public_decision_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+            )(record)
+            sidecar = RUNNER._model_rollout_shadow_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            )
+            written = json.loads(sidecar.read_text(encoding="utf-8"))["model_rollout_shadow"]
+            self.assertEqual(written["excluded_nonterminal_leaf_rows"], 1)
+
+    def test_shadow_validator_refuses_forged_zero_trial_derived_fields(self) -> None:
+        shadow = {
+            "value_frame": "side_one_absolute",
+            "partition": "seed_ordinal_parity_v1",
+            "native_invocations": 1,
+            "terminal_leaf_rows": 0,
+            "excluded_nonterminal_leaf_rows": 0,
+            "fit": {field: 0 for field in ENGINE_SEARCH.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS},
+            "heldout": {field: 0 for field in ENGINE_SEARCH.MODEL_ROLLOUT_SHADOW_MOMENT_FIELDS},
+            "rollouts_run": 0,
+            "rollout_terminal_hits": 0,
+            "rollout_cap_hits": 0,
+            "rollout_dead_ends": 0,
+            "rollout_trials_available": True,
+            "terminal_label_available": False,
+            "rollout_fallback_fraction": 0.0,
+            "excluded_nonterminal_leaf_fraction": None,
+        }
+        with self.assertRaisesRegex(RUNNER.HeadToHeadError, "derived field does not match"):
+            RUNNER._validated_model_rollout_shadow(shadow)
 
     def test_validator_refuses_incomplete_guided_decision_evidence(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
