@@ -38,13 +38,14 @@ remain intact.  This can make those late-game trees less efficient, but it
 cannot explain a global strength result on its own.
 
 The prior artifact predates the topology witness, so it cannot distinguish a
-missing move arm, switch arm, or `None` engine-option shape.  The active
-leaf-shadow successor deliberately uses source commit `752b2f84`, which also
-predates that witness; it must not be used to classify the mapping hole.  A
-separate fresh, source-bound topology diagnostic is required after this
-leaf-value readout.  A mapping repair is not justified until that witness
-identifies a repairable category and a controlled comparison shows an effect
-on root actions or outcomes.
+missing move arm, switch arm, or `None` engine-option shape.  A fresh replay
+on the later, witness-instrumented source did **not** reproduce the fallback,
+so the old ledger cannot be retroactively assigned a concrete topology.  The
+current source-matched leaf experiment uses commit `195a89c5`, including that
+witness, but its purpose is the independent leaf-value intervention rather
+than a fabricated reproduction claim.  A mapping repair is not justified
+until a source-bound witness identifies a repairable category and a controlled
+comparison shows an effect on root actions or outcomes.
 
 ## Fixed-opponent override audit
 
@@ -134,14 +135,28 @@ opponent-order status remain terminal. Its separate applicability contract can
 report whether all retained fallbacks meet that exact condition; it cannot be
 used as a strength promotion.
 
-## Next decisive evidence
+## Current causal intervention and decisive next evidence
 
-1. Complete the source-matched own-prior control, then run the reviewed
-   selective opponent-prior applicability diagnostic. It establishes whether
-   opponent priors are meaningfully applicable without disguising root defects.
-2. Measure the same preserved frontier states with a policy-consistent/Foul
-   Play continuation target. If their ranking is also weak, value-head
-   calibration is the primary search bottleneck rather than opponent ordering.
-3. Only promote a revised value head or search mechanism after a durable paired
-   GPU strength study with a separately registered, zero-unexpected-fallback
-   contract.
+The source-matched own-prior control is complete: it has four terminal,
+zero-restart paired seeds under source commit `195a89c5`.  Its counterpart is
+currently running with the same source, checkpoint, seeds, raw incumbent and
+own-prior configuration.  It changes only the leaf evaluation path: instead
+of trusting the learned leaf at the frontier, it runs bounded terminal
+continuations (`rollout_leaf_eval=true`, 12 rollout workers).  It is therefore
+a mechanism diagnostic, **not** a game-strength claim and not a Foul Play
+comparison.
+
+The result has a sharp interpretation:
+
+1. If the terminal-continuation leaf improves the complete matched pairs, the
+   learned leaf is a demonstrated limiting mechanism. The next correction is
+   a policy-consistent value target/calibration study, followed by a fresh
+   durable paired strength evaluation.
+2. If it is neutral or worse, the current evidence does not support blaming
+   the value head alone. The next causal arms must isolate backup,
+   exploration, and opponent modeling while preserving the source-matched
+   control.
+3. Any promoted search or value correction still needs a separately
+   registered, durable paired GPU strength study with a
+   zero-unexpected-fallback contract. Partial seed output is never evidence
+   for either conclusion.
