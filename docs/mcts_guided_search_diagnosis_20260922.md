@@ -309,7 +309,6 @@ seeds, continuation policy, and success criterion must be fixed before work
 begins.  It will then replay a small mix of MCTS-better, raw-better, and tied
 override roots selected by that rule into the same source-bound engine
 configuration twice:
-into the same source-bound engine configuration twice:
 
 * a model-leaf control that must reproduce the original root allocation,
   backed-up Q values, and selected action; and
