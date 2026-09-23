@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
+from unittest.mock import AsyncMock, patch
 
 from pokezero.actions import ACTION_COUNT
 from pokezero.dataset import (
@@ -14,8 +18,14 @@ from pokezero.dataset import (
 )
 from pokezero.live_foulplay_continuation import LIVE_FOULPLAY_SUCCESSOR_CAPTURE_SCHEMA_VERSION
 from pokezero.observation import PokeZeroObservationV0
+from pokezero.foulplay_bridge import (
+    ControlledFoulPlayBenchmarkResult,
+    ControlledFoulPlayConfig,
+)
 from pokezero.value_leaf_training import (
     VALUE_LEAF_TRAINING_CACHE_SCHEMA_VERSION,
+    _exclusive_value_leaf_output_lock,
+    capture_live_foulplay_value_leaf_training_cache,
     source_bound_successor_capture_callback,
     value_leaf_training_example,
     write_value_leaf_training_cache,
@@ -150,6 +160,175 @@ class ValueLeafTrainingTest(unittest.TestCase):
         self.assertEqual(captured[0]["source_binding"], _binding())
         with self.assertRaisesRegex(ValueError, "already has a source binding"):
             callback(_capture())
+
+    def test_single_source_game_materializes_only_after_clean_oracle_completion(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            checkpoint = root / "checkpoint.pt"
+            checkpoint.write_bytes(b"source-checkpoint")
+            binding = _binding()
+            binding["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=root / "showdown",
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                games=1,
+            )
+            output = root / "value-leaves"
+
+            async def fake_benchmark(*_args: object, **kwargs: object) -> object:
+                callback = kwargs["live_continuation_oracle_successor_capture_callback"]
+                self.assertTrue(callable(callback))
+                capture = _capture()
+                capture.pop("source_binding")
+                callback(capture)  # type: ignore[operator]
+                return ControlledFoulPlayBenchmarkResult(
+                    config=_args[0],  # type: ignore[index]
+                    policy_id="test-policy",
+                    games=(),
+                    checkpoint_sha256=binding["checkpoint_sha256"],
+                )
+
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_benchmark",
+                new=AsyncMock(side_effect=fake_benchmark),
+            ):
+                result = asyncio.run(
+                    capture_live_foulplay_value_leaf_training_cache(
+                        config=config,
+                        output_path=output,
+                        source_binding=binding,
+                    )
+                )
+            self.assertEqual(result.cache.capture_count, 1)
+            self.assertTrue((output / "metadata.json").is_file())
+            self.assertEqual(result.benchmark.config.checkpoint, checkpoint)
+
+    def test_single_source_game_failure_leaves_no_cache(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            checkpoint = root / "checkpoint.pt"
+            checkpoint.write_bytes(b"source-checkpoint")
+            binding = _binding()
+            binding["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=root / "showdown",
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                games=1,
+            )
+            output = root / "value-leaves"
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_benchmark",
+                new=AsyncMock(side_effect=RuntimeError("source game failed")),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "source game failed"):
+                    asyncio.run(
+                        capture_live_foulplay_value_leaf_training_cache(
+                            config=config,
+                            output_path=output,
+                            source_binding=binding,
+                        )
+                    )
+            self.assertFalse(output.exists())
+
+    def test_refuses_cache_when_bridge_used_a_different_checkpoint(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            checkpoint = root / "checkpoint.pt"
+            checkpoint.write_bytes(b"source-checkpoint")
+            binding = _binding()
+            binding["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=root / "showdown",
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                games=1,
+            )
+            output = root / "value-leaves"
+
+            async def fake_benchmark(*_args: object, **kwargs: object) -> object:
+                callback = kwargs["live_continuation_oracle_successor_capture_callback"]
+                capture = _capture()
+                capture.pop("source_binding")
+                callback(capture)  # type: ignore[operator]
+                return SimpleNamespace(
+                    checkpoint_sha256="f" * 64,
+                    to_dict=lambda: {"status": "complete"},
+                )
+
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_benchmark",
+                new=AsyncMock(side_effect=fake_benchmark),
+            ):
+                with self.assertRaisesRegex(ValueError, "checkpoint SHA-256"):
+                    asyncio.run(
+                        capture_live_foulplay_value_leaf_training_cache(
+                            config=config,
+                            output_path=output,
+                            source_binding=binding,
+                        )
+                    )
+            self.assertFalse(output.exists())
+
+    def test_private_snapshot_prevents_post_snapshot_checkpoint_swap(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            checkpoint = root / "checkpoint.pt"
+            checkpoint.write_bytes(b"before")
+            binding = _binding()
+            binding["checkpoint_sha256"] = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+            config = ControlledFoulPlayConfig(
+                checkpoint=checkpoint,
+                showdown_root=root / "showdown",
+                policy_mode="raw",
+                live_continuation_oracle=True,
+                games=1,
+            )
+            output = root / "value-leaves"
+
+            async def fake_benchmark(*args: object, **kwargs: object) -> object:
+                snapshot_config = args[0]
+                self.assertNotEqual(snapshot_config.checkpoint, checkpoint)
+                self.assertEqual(snapshot_config.checkpoint.read_bytes(), b"before")
+                callback = kwargs["live_continuation_oracle_successor_capture_callback"]
+                capture = _capture()
+                capture.pop("source_binding")
+                callback(capture)  # type: ignore[operator]
+                checkpoint.write_bytes(b"after")
+                return ControlledFoulPlayBenchmarkResult(
+                    config=snapshot_config,
+                    policy_id="test-policy",
+                    games=(),
+                    checkpoint_sha256=binding["checkpoint_sha256"],
+                )
+
+            with patch(
+                "pokezero.foulplay_bridge.run_controlled_foulplay_benchmark",
+                new=AsyncMock(side_effect=fake_benchmark),
+            ):
+                result = asyncio.run(
+                    capture_live_foulplay_value_leaf_training_cache(
+                        config=config,
+                        output_path=output,
+                        source_binding=binding,
+                    )
+                )
+            self.assertEqual(result.cache.capture_count, 1)
+            self.assertTrue((output / "metadata.json").is_file())
+
+    def test_exclusive_shard_lock_rejects_concurrent_writer_and_releases(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "value-leaves"
+            with _exclusive_value_leaf_output_lock(output):
+                with self.assertRaisesRegex(FileExistsError, "another value-leaf collector"):
+                    with _exclusive_value_leaf_output_lock(output):
+                        pass
+            with _exclusive_value_leaf_output_lock(output):
+                pass
 
     def test_concat_preserves_value_only_contract_and_aggregates_same_binding(self) -> None:
         with TemporaryDirectory() as temp_dir:

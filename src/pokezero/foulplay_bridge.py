@@ -5603,6 +5603,7 @@ class _LiveFoulPlayContinuationOracleController:
     env_config: LocalShowdownConfig
     rollout_config: RolloutConfig
     policy_id: str
+    successor_capture_callback: Callable[[Mapping[str, Any]], None] | None = None
 
     def _progress_callback(
         self, *, state: _ControlledBattleState, decision_round: int
@@ -5722,6 +5723,7 @@ class _LiveFoulPlayContinuationOracleController:
             progress_callback=self._progress_callback(
                 state=state, decision_round=decision_round
             ),
+            successor_capture_callback=self.successor_capture_callback,
         )
         payload = dict(decision.metadata)
         payload["action_index"] = decision.action_index
@@ -5733,10 +5735,19 @@ async def run_controlled_foulplay_benchmark(
     *,
     progress_callback: ControlledFoulPlayProgressCallback | None = None,
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
+    live_continuation_oracle_successor_capture_callback: Callable[[Mapping[str, Any]], None]
+    | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run PokeZero vs foul-play with a known BattleStream seed and context-aware policy."""
 
     _validate_external_paths(config)
+    if (
+        live_continuation_oracle_successor_capture_callback is not None
+        and not config.live_continuation_oracle
+    ):
+        raise ValueError(
+            "live continuation successor collection requires live_continuation_oracle=True."
+        )
     if config.capture_driver == "random-legal":
         observation_spec = observation_spec_for_schema(OBSERVATION_SCHEMA_VERSION_V3)
         vocab = gen3_category_vocabulary(
@@ -5845,6 +5856,7 @@ async def run_controlled_foulplay_benchmark(
             env_config=env_config,
             rollout_config=rollout_config,
             policy_id=policy_id,
+            successor_capture_callback=live_continuation_oracle_successor_capture_callback,
         )
         if config.live_continuation_smoke
         else None
@@ -5859,6 +5871,7 @@ async def run_controlled_foulplay_benchmark(
             env_config=env_config,
             rollout_config=rollout_config,
             policy_id=policy_id,
+            successor_capture_callback=live_continuation_oracle_successor_capture_callback,
         )
         if config.live_continuation_oracle
         else None

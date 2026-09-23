@@ -10,9 +10,12 @@ and writes a cache that is explicitly incompatible with policy training.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
+import hashlib
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterable, Mapping
 
 from .actions import ACTION_COUNT
@@ -58,6 +61,20 @@ class ValueLeafTrainingSummary:
             "example_count": self.example_count,
             "value_target_counts": dict(self.value_target_counts),
             "source_binding": dict(self.source_binding),
+            "cache": self.cache.to_dict(),
+        }
+
+
+@dataclass(frozen=True)
+class ValueLeafCollectionResult:
+    """One source-game collection and its newly materialized value-only cache."""
+
+    benchmark: Any
+    cache: ValueLeafTrainingSummary
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "benchmark": self.benchmark.to_dict(),
             "cache": self.cache.to_dict(),
         }
 
@@ -164,6 +181,111 @@ def source_bound_successor_capture_callback(
         sink(enriched)
 
     return record
+
+
+async def capture_live_foulplay_value_leaf_training_cache(
+    *,
+    config: Any,
+    output_path: Path,
+    source_binding: Mapping[str, Any],
+    dataset_config: TrajectoryDatasetConfig | None = None,
+) -> ValueLeafCollectionResult:
+    """Atomically materialize leaves from exactly one completed live source game.
+
+    Oracle candidate captures stay in memory until the whole source game returns
+    successfully.  A source failure therefore leaves no cache that could be
+    mistaken for a complete collection.  Production collection should run this
+    one-game unit in indexed shards: completed shards are independently durable
+    and an interrupted shard can be retried without touching its peers.
+    """
+
+    if getattr(config, "games", None) != 1:
+        raise ValueError("value-leaf collection requires exactly one source game per cache shard")
+    if getattr(config, "live_continuation_oracle", None) is not True:
+        raise ValueError("value-leaf collection requires live_continuation_oracle=True")
+    binding = _validated_source_binding(source_binding)
+    checkpoint = getattr(config, "checkpoint", None)
+    if not isinstance(checkpoint, Path):
+        raise ValueError("value-leaf collection requires a concrete checkpoint path")
+    # The lock is held across the source game and final cache materialization.
+    # It releases automatically on process death, so an interrupted one-game
+    # shard is retryable while concurrent writers cannot erase each other.
+    with _exclusive_value_leaf_output_lock(output_path):
+        if output_path.exists():
+            raise FileExistsError(f"value-leaf cache output already exists: {output_path}")
+        # Do not hash and then separately load a mutable shared path.  The
+        # private copy is hashed while it is written, verified before launch,
+        # and is the only checkpoint path the bridge can load for this shard.
+        with TemporaryDirectory(prefix="pokezero-value-leaf-checkpoint-") as directory:
+            snapshot = Path(directory) / "checkpoint.pt"
+            if _copy_and_hash(checkpoint, snapshot) != binding["checkpoint_sha256"]:
+                raise ValueError(
+                    "checkpoint bytes do not match the sealed source binding"
+                )
+            snapshot_config = replace(config, checkpoint=snapshot)
+            captures: list[Mapping[str, Any]] = []
+            callback = source_bound_successor_capture_callback(
+                source_binding=binding,
+                sink=captures.append,
+            )
+            # Import here so foulplay_bridge remains independent of the optional
+            # trainable-cache layer and collection tools can import either module alone.
+            from .foulplay_bridge import run_controlled_foulplay_benchmark
+
+            benchmark = await run_controlled_foulplay_benchmark(
+                snapshot_config,
+                live_continuation_oracle_successor_capture_callback=callback,
+            )
+            if benchmark.checkpoint_sha256 != binding["checkpoint_sha256"]:
+                raise ValueError(
+                    "source game checkpoint SHA-256 does not match the sealed source binding"
+                )
+            # The bridge correctly records the snapshot hash, but its config
+            # path would disappear when this temporary directory closes. Keep
+            # the stable source path in the returned report instead.
+            benchmark = replace(benchmark, config=config)
+            cache = write_value_leaf_training_cache(
+                captures=captures,
+                output_path=output_path,
+                source_binding=binding,
+                dataset_config=dataset_config,
+            )
+    return ValueLeafCollectionResult(benchmark=benchmark, cache=cache)
+
+
+@contextmanager
+def _exclusive_value_leaf_output_lock(output_path: Path) -> Iterable[None]:
+    """Hold a crash-releasable, cross-process writer lock for one cache shard."""
+
+    lock_path = output_path.parent / f".{output_path.name}.writer.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a", encoding="utf-8") as handle:
+        try:
+            import fcntl
+        except ImportError as error:  # pragma: no cover - production is POSIX.
+            raise RuntimeError("value-leaf collection requires POSIX file locking") from error
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise FileExistsError(
+                f"another value-leaf collector owns output shard {output_path}"
+            ) from error
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _copy_and_hash(source: Path, destination: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with source.open("rb") as source_handle, destination.open("xb") as destination_handle:
+            for chunk in iter(lambda: source_handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+                destination_handle.write(chunk)
+    except OSError as error:
+        raise ValueError(f"cannot snapshot value-leaf checkpoint {source}: {error}") from error
+    return digest.hexdigest()
 
 
 def write_value_leaf_training_cache(
