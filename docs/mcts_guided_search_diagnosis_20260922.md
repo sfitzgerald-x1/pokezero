@@ -160,7 +160,7 @@ constraint, not evidence that calibration is the current causal mechanism.
 
 ## Opponent-prior applicability correction
 
-The source-matched R3 opponent-prior job was terminally failed and is not
+The source-matched R6 opponent-prior job was terminally failed and is not
 bankable. Its first failure was not a generic mapping error: at seed
 `2026092006`, round 28, the public determinization could no longer prove the
 opponent's active party permutation and reported
@@ -168,13 +168,16 @@ opponent's active party permutation and reported
 opponent action-head ordering, but strict mode also discarded the entire
 mirrored game.
 
-The successor experiment keeps strict mode. It permits only one audited
-exception: exactly one root fallback with a null acting-seat fallback reason
-and matching source/native status `lost_active_permutation`. Self-prior
-fallbacks, mapped-action failures, multiple root fallbacks, and every other
-opponent-order status remain terminal. Its separate applicability contract can
-report whether all retained fallbacks meet that exact condition; it cannot be
-used as a strength promotion.
+The successor R8 experiment is source-bound to `a889930d` and keeps strict
+mode. It accepts exactly the two native ledger encodings of the same harmless
+case, and only after native has explicitly assessed the opponent root as
+`no_choice`: either one root fallback with a null fallback reason, or a zero
+fallback omission. Both must carry the matching source/native status
+`lost_active_permutation`. A missing opponent head, an unassessed root,
+self-prior fallback, mapped-action failure, multiple root fallbacks, or every
+other opponent-order status remains terminal. Its immutable applicability
+contract requires a witnessed no-choice root; it cannot be used as a strength
+promotion.
 
 ## Completed source-matched rollout-leaf diagnostic
 
