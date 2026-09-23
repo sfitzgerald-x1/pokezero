@@ -117,6 +117,30 @@ mechanism but not a replacement for a source-matched strength experiment. It
 also uses uniform continuations, not Foul Play; it therefore does **not** prove
 that the head disagrees with Foul Play on the same leaves.
 
+## Why the B2a continuation bank is not yet a value-head training corpus
+
+The completed B2a final-enthalf readout is valuable action-selection evidence:
+on 400 paired source-game seeds, choosing among the policy's top-three actions
+by its fixed-opponent policy-continuation outcome improved the reported score
+from 55.875% to 67.5% (paired difference +11.625 percentage points, 95%
+normal interval +5.471 to +17.779 points). Its readout explicitly remains
+`MEASURED-NOT-A-LICENSE`.
+
+That bank cannot yet justify a value-head update. It records root candidate
+outcomes under a fixed opponent and subsequent raw-policy continuation, but
+not the model-visible successor observations or a replay-bound training-cache
+join. It also names the earlier public source commit
+`3b3593f61419ab51640607e1d0c140b2d5371668`, not the current source-matched
+MCTS commit `195a89c5`. Thus it is neither a sample of the search frontier nor
+a source-compatible supervised data set.
+
+The correct next use of B2a is as a specification for a new, separately
+validated corpus: replay each selected fixed-opponent successor under the
+pinned runtime, bind its exact encoded observation and history to the target,
+keep held-out source seeds separate, and compare that policy-continuation
+target with uniform-terminal labels. A bank-only conversion would train the
+head on unidentifiable states and would not answer the leaf question.
+
 ## Opponent-prior applicability correction
 
 The source-matched R3 opponent-prior job was terminally failed and is not
