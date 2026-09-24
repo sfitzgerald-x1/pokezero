@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -5065,6 +5066,78 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             policy.stats.opponent_request_order_root_fallback_statuses,
             {"public_order_walk_error": 1},
         )
+
+    def test_native_opponent_prior_receipt_reaches_selected_decision(self) -> None:
+        """The source-root runner must see the native treatment, not a test stub.
+
+        Two identical worlds deliberately collapse to one native tree.  The
+        compact receipt therefore counts the applied vector once, while its
+        adjacent ledger proves why it was not multiplied by belief draws.
+        """
+
+        policy = self._policy(opponent_priors=True, worlds=2)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "opponent_request_order_status": "public_order_walk_error",
+                "opponent_prior_application": {
+                    "enabled": True,
+                    "root_applied": 0,
+                    "branch_applied": 3,
+                    "total_applied": 3,
+                    "digest": "a" * 64,
+                },
+            }
+        )
+
+        decision, native = self._run(
+            policy,
+            [report],
+            worlds=[self._world("same-world"), self._world("same-world")],
+        )
+
+        self.assertEqual(len(native.calls), 1, "duplicate worlds run one native tree")
+        engine = decision.metadata["engine_mcts"]
+        self.assertEqual(
+            engine["opponent_prior_application"],
+            {
+                "enabled": True,
+                "root_applied": 0,
+                "branch_applied": 3,
+                "total_applied": 3,
+                "digest": hashlib.sha256(
+                    b'[{"digest":"' + b"a" * 64 + b'","native_invocation":1}]'
+                ).hexdigest(),
+            },
+        )
+        ledger = engine["opponent_prior_application_ledger"]
+        self.assertEqual(ledger["native_invocations"], 1)
+        self.assertEqual(ledger["events"][0]["belief_records"], 2)
+        self.assertEqual(ledger["events"][0]["collapse_multiplicity"], 2)
+
+    def test_native_opponent_prior_receipt_rejects_a_wrong_arm(self) -> None:
+        policy = self._policy(opponent_priors=False, worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report["opponent_prior_application"] = {
+            "enabled": True,
+            "root_applied": 1,
+            "branch_applied": 0,
+            "total_applied": 1,
+            "digest": "b" * 64,
+        }
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError, "enabled disagrees with request"
+        ):
+            self._run(policy, [report])
 
     def test_opponent_prior_audit_rejects_a_missing_native_status_echo(self) -> None:
         policy = self._policy(opponent_priors=True, worlds=1)
