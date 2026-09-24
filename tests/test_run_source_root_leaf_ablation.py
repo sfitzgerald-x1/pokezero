@@ -35,6 +35,10 @@ _BRANCH_REASONS = (
 
 def _live_branch_prior():
     reasons = {reason: 0 for reason in _BRANCH_REASONS}
+    zero_witness = {
+        seat: {name: 0 for name in ("nodes", "move_arms", "switch_arms", "none_arms")}
+        for seat in ("acting", "opponent")
+    }
     return {
         "prior_fallbacks": 0,
         "branch_prior_fallbacks": {
@@ -45,12 +49,14 @@ def _live_branch_prior():
             "reason_counts": reasons,
             "unclassified_branch_prior_fallbacks": 0,
             "reason_ledger_complete": True,
+            "unmapped_action_witness": zero_witness,
             "events": [{
                 "native_invocation": 1,
                 "belief_records": 1,
                 "collapse_multiplicity": 1,
                 "branch_prior_fallbacks": 0,
                 "reason_counts": dict(reasons),
+                "unmapped_action_witness": zero_witness,
             }],
         },
     }
@@ -295,6 +301,17 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             del incomplete["live_branch_prior"]["branch_prior_fallbacks"]["reason_counts"]["unmapped_action"]
             with self.assertRaisesRegex(runner.AblationError, "complete zero decomposition"):
                 runner._validate_persisted_selection(incomplete, rollout_leaf_eval=False)
+
+    def test_persisted_selection_accepts_native_shaped_zero_unmapped_action_witness(self) -> None:
+        runner = _runner()
+        with mock.patch.object(runner, "require_rollout_leaf_witness"):
+            runner._validate_persisted_selection(_selection(), rollout_leaf_eval=False)
+            corrupted = _selection()
+            corrupted["live_branch_prior"]["branch_prior_fallbacks"]["events"][0][
+                "unmapped_action_witness"
+            ]["acting"]["nodes"] = 1
+            with self.assertRaisesRegex(runner.AblationError, "not all zero"):
+                runner._validate_persisted_selection(corrupted, rollout_leaf_eval=False)
 
     def test_completed_root_refuses_control_drift(self) -> None:
         runner = _runner()

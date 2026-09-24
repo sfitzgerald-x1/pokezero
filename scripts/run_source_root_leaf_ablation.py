@@ -734,6 +734,22 @@ def _finite(value: Any, *, field: str) -> float:
     return float(value)
 
 
+def _validate_zero_unmapped_action_witness(value: Any) -> dict[str, dict[str, int]]:
+    """Validate the native all-zero shape witness retained by a healthy run."""
+
+    if not isinstance(value, Mapping) or set(value) != {"acting", "opponent"}:
+        raise AblationError("live unmapped-action witness has an unsupported schema")
+    normalized: dict[str, dict[str, int]] = {}
+    for seat in ("acting", "opponent"):
+        row = value.get(seat)
+        if not isinstance(row, Mapping) or set(row) != {
+            "nodes", "move_arms", "switch_arms", "none_arms"
+        } or any(type(count) is not int or count != 0 for count in row.values()):
+            raise AblationError("live unmapped-action witness is not all zero")
+        normalized[seat] = {name: row[name] for name in sorted(row)}
+    return normalized
+
+
 def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
     """Return the complete, zero-valued branch-prior witness or fail closed.
 
@@ -760,7 +776,8 @@ def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
         "reason_ledger_complete",
         "events",
     }
-    if set(ledger) != expected_ledger or ledger.get("schema_version") != (
+    optional_witness = {"unmapped_action_witness"}
+    if set(ledger) not in (expected_ledger, expected_ledger | optional_witness) or ledger.get("schema_version") != (
         "pokezero.engine-mcts.branch-prior-fallbacks.v1"
     ):
         raise AblationError("live branch-prior ledger has an unsupported schema")
@@ -783,6 +800,9 @@ def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
         or len(events) != invocations
     ):
         raise AblationError("live branch-prior ledger is not a complete zero decomposition")
+    aggregate_witness = ledger.get("unmapped_action_witness")
+    if aggregate_witness is not None:
+        _validate_zero_unmapped_action_witness(aggregate_witness)
     expected_event = {
         "native_invocation",
         "belief_records",
@@ -790,8 +810,11 @@ def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
         "branch_prior_fallbacks",
         "reason_counts",
     }
+    event_witnesses: list[dict[str, dict[str, int]] | None] = []
     for ordinal, event in enumerate(events, 1):
-        if not isinstance(event, Mapping) or set(event) != expected_event:
+        if not isinstance(event, Mapping) or set(event) not in (
+            expected_event, expected_event | optional_witness
+        ):
             raise AblationError("live branch-prior event has an unsupported schema")
         if (
             event.get("native_invocation") != ordinal
@@ -805,6 +828,12 @@ def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
             or any(type(count) is not int or count != 0 for count in event["reason_counts"].values())
         ):
             raise AblationError("live branch-prior event is not a complete zero decomposition")
+        event_witness = event.get("unmapped_action_witness")
+        event_witnesses.append(
+            None if event_witness is None else _validate_zero_unmapped_action_witness(event_witness)
+        )
+    if (aggregate_witness is None) != any(item is None for item in event_witnesses):
+        raise AblationError("live unmapped-action witness aggregate disagrees with native events")
     return {
         "prior_fallbacks": prior_fallbacks,
         "branch_prior_fallbacks": json.loads(_canonical_json(dict(ledger))),
