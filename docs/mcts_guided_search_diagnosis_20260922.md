@@ -101,10 +101,10 @@ however, expose a repairable member of the same class: filtering
 `Choices::NONE` compacted sparse engine move slots, so a legal M2/M3 was
 looked up at the wrong policy action slot.  The first repair preserved engine
 slot holes, but independent review found the companion encoder stopped at the
-first placeholder and again erased a later legal move.  The two-layer repair
-now preserves optional fixed slots through both the action surface and action
-tokens, with a regression that asserts sparse legal M3 identity, presence,
-activity, and legal-mask alignment.  That two-layer repair is pending in PR
+first placeholder and again erased a later legal move.  The proposed
+two-layer repair would preserve optional fixed slots through both the action
+surface and action tokens, with a regression that asserts sparse legal M3
+identity, presence, activity, and legal-mask alignment.  That repair is pending in PR
 #1464 rather than landed on `main`; it is a correctness repair, not yet a
 current-source claim.  It does
 **not** yet prove that it explains every historical fallback or the global
