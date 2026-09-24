@@ -47,13 +47,19 @@ relax non-fresh legality.
 
 ## What remains deliberately unclaimed
 
-The focused corrected replay and its source mutation battery are running at
-the time of this record.  A single completed control seed has no branch-prior
-fallbacks, and the corrected `2026092006` p1 game has completed with zero
-branch-prior fallbacks.  Neither observation establishes a repair by itself:
-the full four-seed, both-seat replay must complete cleanly and reproduce the
-sealed source/configuration before the historical concentration can be called
-removed.
+The corrected-source mutation battery has completed cleanly: all 66 scored
+mutations were applied and killed, with zero survivors, skips, or
+not-applied mutations.  Its seven controls reached their required verdicts,
+the source tree was restored, and the recorded artifact is bound to this
+source and harness.  This establishes that the relevant witness gate can
+detect the scoped failures; it is not strength evidence.
+
+The focused corrected replay is still required.  A single completed control
+seed has no branch-prior fallbacks, and the corrected `2026092006` p1 game
+has completed with zero branch-prior fallbacks.  Neither observation
+establishes a repair by itself: the full four-seed, both-seat replay must
+complete cleanly and reproduce the sealed source/configuration before the
+historical concentration can be called removed.
 
 Even a clean focused replay would prove a search implementation correction,
 not a strength gain.  The next required step is a durable, paired GPU
