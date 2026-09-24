@@ -79,9 +79,15 @@ from run_source_root_leaf_ablation import (  # noqa: E402
     _sha256,
     _validate_completed_root as _validate_leaf_completed_root,
 )
+from source_root_multireply_contract import (  # noqa: E402
+    OPPONENT_REPLY_SAMPLE_COUNT,
+    contract_projection,
+    opponent_reply_selector_seed,
+)
 
 
 SCHEMA_VERSION = "pokezero.source-root-leaf-continuation.v1"
+MULTIREPLY_SCHEMA_VERSION = "pokezero.source-root-multireply-continuation.v1"
 LEAF_ARMS = ("model_control_a", "model_control_b", "rollout_leaf")
 CONTINUATION_TARGETS = ("policy_consistent", "uniform_own")
 CONTINUATION_RNG_SEEDS = tuple(range(16))
@@ -177,6 +183,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
+    parser.add_argument(
+        "--multireply",
+        action="store_true",
+        help="compare raw/model/rollout candidates against multiple hidden opponent replies",
+    )
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--prepare-only", action="store_true")
     modes.add_argument("--finalize-only", action="store_true")
@@ -265,7 +276,10 @@ def _source_code_provenance(*, expected_commit: str) -> Mapping[str, str]:
     baked = public_repo_commit(ROOT)
     if baked != expected_commit:
         raise ContinuationError("image-baked source commit does not match the frozen contract")
-    paths = (ROOT / "scripts" / "run_source_root_leaf_continuations.py",)
+    paths = (
+        ROOT / "scripts" / "run_source_root_leaf_continuations.py",
+        ROOT / "scripts" / "source_root_multireply_contract.py",
+    )
     digest = hashlib.sha256()
     for path in paths:
         relative = path.relative_to(ROOT).as_posix()
@@ -280,7 +294,7 @@ def _manifest(
     leaf_manifest: Mapping[str, Any], leaf_manifest_sha256: str,
 ) -> Mapping[str, Any]:
     return {
-        "schema_version": SCHEMA_VERSION,
+        "schema_version": MULTIREPLY_SCHEMA_VERSION if args.multireply else SCHEMA_VERSION,
         "source_root": str(Path(args.source_root).resolve()),
         "source_complete_sha256": _sha256_file(Path(args.source_root) / "COMPLETE.json"),
         "leaf_ablation_root": str(Path(args.leaf_ablation_root).resolve()),
@@ -301,6 +315,9 @@ def _manifest(
                 "shared_across_subject_actions": True,
             },
             "scope": "changed-root-action-quality-only",
+            "multireply": args.multireply,
+            "opponent_reply_sample_count": OPPONENT_REPLY_SAMPLE_COUNT if args.multireply else 1,
+            "raw_policy_candidate": args.multireply,
         },
         "execution_plan": {
             "shard_count": args.shard_count,
@@ -416,6 +433,7 @@ class _RootPlan:
     snapshot: Any
     opponent_seat: str
     opponent_action: int
+    opponent_observation: Any
     source_battle_id: str
 
 
@@ -479,6 +497,7 @@ def _root_plan(
             snapshot=snapshot,
             opponent_seat=opponent_seat,
             opponent_action=opponent_action,
+            opponent_observation=current[opponent_seat],
             source_battle_id=record.battle_id,
         )
     finally:
@@ -537,6 +556,154 @@ def _evaluate_root(
     return grid
 
 
+def _multireply_actions(*, plan: _RootPlan, record: Any) -> tuple[Mapping[str, int], Mapping[str, Any]]:
+    """Register raw/model/rollout candidates without inventing duplicate arms."""
+    projection = contract_projection(
+        decision_id=record.decision_id,
+        choices={
+            "raw_policy": record.recorded_action_index,
+            "model_leaf": plan.model_action,
+            "rollout_leaf": plan.rollout_action,
+        },
+    )
+    actions = projection.pop("candidate_actions")
+    if not isinstance(actions, Mapping):
+        raise ContinuationError(f"{plan.root}: multireply candidate registration is invalid")
+    return dict(actions), projection
+
+
+def _multireply_opponent_action(*, plan: _RootPlan, record: Any, model: Any, result: Any, device: str, sample: int) -> int:
+    """Sample one private opponent reply for a registered public sample ordinal."""
+    selector = _new_sampled_policy(
+        model=model,
+        result=result,
+        device=device,
+        seat=plan.opponent_seat,
+        history=plan.histories[plan.opponent_seat][:-1],
+        deterministic=False,
+    )
+    return selector.select_action(
+        plan.opponent_observation,
+        rng=random.Random(opponent_reply_selector_seed(record.decision_id, sample)),
+    ).action_index
+
+
+def _evaluate_multireply_root(
+    *, plan: _RootPlan, record: Any, env_config: Any, model: Any, result: Any, device: str,
+) -> Mapping[str, Any]:
+    """Evaluate registered choices over multiple paired, hidden opponent replies."""
+    subject, opponent = plan.root.seat, plan.opponent_seat
+    actions, projection = _multireply_actions(plan=plan, record=record)
+
+    def policy_consistent() -> Mapping[str, Any]:
+        return {
+            "p1": _new_sampled_policy(model=model, result=result, device=device, seat="p1", history=plan.histories["p1"], deterministic=False),
+            "p2": _new_sampled_policy(model=model, result=result, device=device, seat="p2", history=plan.histories["p2"], deterministic=False),
+        }
+
+    samples: list[dict[str, Any]] = []
+    for sample in range(OPPONENT_REPLY_SAMPLE_COUNT):
+        opponent_action = _multireply_opponent_action(
+            plan=plan, record=record, model=model, result=result, device=device, sample=sample,
+        )
+        grid = evaluate_sealed_root_action_grid(
+            snapshot=plan.snapshot,
+            source_battle_id=plan.source_battle_id,
+            source_seed=record.seed,
+            source_decision_round=record.turn_index,
+            subject_player=subject,
+            actions=actions,
+            opponent_player=opponent,
+            opponent_action=opponent_action,
+            continuation_policy_factories={"policy_consistent": policy_consistent},
+            continuation_rng_seeds=CONTINUATION_RNG_SEEDS,
+            search_evidence={
+                "model_leaf_choice": plan.model_choice,
+                "rollout_leaf_choice": plan.rollout_choice,
+                "raw_policy_action_index": record.recorded_action_index,
+                "selection_changed": True,
+                "leaf_only_intervention": True,
+            },
+            env_factory=lambda: LocalShowdownEnv(env_config),
+            rollout_config=RolloutConfig(
+                max_decision_rounds=INITIAL_MAX_CONTINUATION_DECISION_ROUNDS,
+                format_id="gen3randombattle",
+                record_policy_timing=False,
+                hide_opponent_legal_action_masks=True,
+            ),
+            max_continuation_decision_rounds=INITIAL_MAX_CONTINUATION_DECISION_ROUNDS,
+            expanded_max_continuation_decision_rounds=EXPANDED_MAX_CONTINUATION_DECISION_ROUNDS,
+        )
+        if grid.get("opponent_action_held_fixed") is not True or "opponent_action" in grid or "snapshot" in grid:
+            raise ContinuationError(f"{plan.root}: multireply grid leaked hidden opponent state")
+        samples.append({"opponent_reply_sample": sample, "grid": grid})
+    return {
+        "schema_version": MULTIREPLY_SCHEMA_VERSION,
+        "candidate_actions": actions,
+        **projection,
+        "reply_samples": samples,
+    }
+
+
+def _validate_multireply_payload(
+    study: Any, *, record: Any, root: SourceRoot, expected_actions: Mapping[str, int], expected_projection: Mapping[str, Any] | None,
+    expected_search_evidence: Mapping[str, Any],
+) -> None:
+    """Fail closed on every durable multireply row without reading hidden replies."""
+    if not isinstance(study, Mapping) or study.get("schema_version") != MULTIREPLY_SCHEMA_VERSION:
+        raise ContinuationError(f"{root}: multireply study schema drifted")
+    if study.get("candidate_actions") != dict(expected_actions):
+        raise ContinuationError(f"{root}: multireply candidate actions drifted")
+    for key in ("candidate_aliases", "opponent_reply_samples", "opponent_selector"):
+        if expected_projection is None or study.get(key) != expected_projection.get(key):
+            raise ContinuationError(f"{root}: multireply {key} drifted")
+    samples = study.get("reply_samples")
+    if not isinstance(samples, list) or [row.get("opponent_reply_sample") for row in samples if isinstance(row, Mapping)] != list(range(OPPONENT_REPLY_SAMPLE_COUNT)):
+        raise ContinuationError(f"{root}: multireply reply schedule drifted")
+    expected_rows = [{"action_label": label, "action_index": action} for label, action in expected_actions.items()]
+    for row in samples:
+        grid = row.get("grid") if isinstance(row, Mapping) else None
+        if not isinstance(grid, Mapping) or grid.get("schema_version") != "pokezero.sealed-root-action-grid.v2":
+            raise ContinuationError(f"{root}: multireply grid is invalid")
+        if grid.get("opponent_action_held_fixed") is not True or "opponent_action" in grid or "snapshot" in grid:
+            raise ContinuationError(f"{root}: multireply grid leaks hidden opponent state")
+        if any(grid.get(key) != value for key, value in {
+            "source_battle_id": record.battle_id,
+            "source_seed": record.seed,
+            "source_decision_round": record.turn_index,
+            "subject_player": root.seat,
+            "opponent_player": "p2" if root.seat == "p1" else "p1",
+        }.items()):
+            raise ContinuationError(f"{root}: multireply source identity drifted")
+        if grid.get("actions") != expected_rows:
+            raise ContinuationError(f"{root}: multireply action rows drifted")
+        if grid.get("search_evidence") != dict(expected_search_evidence):
+            raise ContinuationError(f"{root}: multireply search evidence drifted")
+        targets = grid.get("continuation_targets")
+        if not isinstance(targets, list) or len(targets) != 1 or targets[0].get("target") != "policy_consistent":
+            raise ContinuationError(f"{root}: multireply target drifted")
+        trials = targets[0].get("trials")
+        if not isinstance(trials, list) or [trial.get("continuation_rng_seed") for trial in trials if isinstance(trial, Mapping)] != list(CONTINUATION_RNG_SEEDS):
+            raise ContinuationError(f"{root}: multireply RNG schedule drifted")
+        for trial in trials:
+            outcomes = trial.get("outcomes") if isinstance(trial, Mapping) else None
+            if not isinstance(outcomes, list) or len(outcomes) != len(expected_rows):
+                raise ContinuationError(f"{root}: multireply outcome coverage drifted")
+            for expected, outcome in zip(expected_rows, outcomes, strict=True):
+                continuation = outcome.get("continuation") if isinstance(outcome, Mapping) else None
+                terminal = continuation.get("terminal") if isinstance(continuation, Mapping) else None
+                if not isinstance(outcome, Mapping) or {"action_label": outcome.get("action_label"), "action_index": outcome.get("action_index")} != expected:
+                    raise ContinuationError(f"{root}: multireply action binding drifted")
+                if not isinstance(terminal, Mapping) or "winner" not in terminal or terminal.get("winner") not in ("p1", "p2", None) or terminal.get("capped") is not False:
+                    raise ContinuationError(f"{root}: multireply terminal drifted")
+                if isinstance(terminal.get("turn_count"), bool) or not isinstance(terminal.get("turn_count"), int) or terminal["turn_count"] < 0:
+                    raise ContinuationError(f"{root}: multireply terminal turn count drifted")
+                if isinstance(continuation.get("decision_round_count"), bool) or not isinstance(continuation.get("decision_round_count"), int) or continuation["decision_round_count"] < 0:
+                    raise ContinuationError(f"{root}: multireply decision count drifted")
+                if continuation.get("initial_max_continuation_decision_rounds") != INITIAL_MAX_CONTINUATION_DECISION_ROUNDS:
+                    raise ContinuationError(f"{root}: multireply initial ceiling drifted")
+
+
 def _validate_completed_root(
     payload: Any,
     *,
@@ -545,10 +712,13 @@ def _validate_completed_root(
     leaf_payload: Mapping[str, Any],
     expected_actions: Mapping[str, int],
     manifest_sha256: str,
+    multireply: bool = False,
+    expected_projection: Mapping[str, Any] | None = None,
 ) -> None:
     """Validate a reusable root against all frozen inputs and producer bounds."""
 
-    if not isinstance(payload, Mapping) or payload.get("schema_version") != SCHEMA_VERSION or payload.get("state") != "COMPLETE":
+    expected_schema = MULTIREPLY_SCHEMA_VERSION if multireply else SCHEMA_VERSION
+    if not isinstance(payload, Mapping) or payload.get("schema_version") != expected_schema or payload.get("state") != "COMPLETE":
         raise ContinuationError(f"{root}: completed continuation root has invalid state")
     if payload.get("source") != root.to_dict() or payload.get("manifest_sha256") != manifest_sha256:
         raise ContinuationError(f"{root}: completed continuation root binding drifted")
@@ -556,6 +726,22 @@ def _validate_completed_root(
         raise ContinuationError(f"{root}: completed continuation root source record drifted")
     if payload.get("leaf_complete_sha256") != _sha256(leaf_payload):
         raise ContinuationError(f"{root}: completed continuation root leaf selection drifted")
+    if multireply:
+        arms = leaf_payload.get("arms") if isinstance(leaf_payload, Mapping) else None
+        if not isinstance(arms, Mapping):
+            raise ContinuationError(f"{root}: multireply leaf evidence is absent")
+        _validate_multireply_payload(
+            payload.get("grid"), record=record, root=root, expected_actions=expected_actions,
+            expected_projection=expected_projection,
+            expected_search_evidence={
+                "model_leaf_choice": arms["model_control_a"]["selection"]["root_action"],
+                "rollout_leaf_choice": arms["rollout_leaf"]["selection"]["root_action"],
+                "raw_policy_action_index": record.recorded_action_index,
+                "selection_changed": True,
+                "leaf_only_intervention": True,
+            },
+        )
+        return
     grid = payload.get("grid")
     if not isinstance(grid, Mapping) or grid.get("schema_version") != "pokezero.sealed-root-action-grid.v2":
         raise ContinuationError(f"{root}: completed continuation grid is invalid")
@@ -683,12 +869,16 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
             root=root, record=record, source_records=source_by_seed[root.seed], leaf_payload=changed[root],
             env_config=env_config, model=model, result=result, device=args.device,
         )
-        expected_actions = {"model_leaf": plan.model_action, "rollout_leaf": plan.rollout_action}
+        if args.multireply:
+            expected_actions, expected_projection = _multireply_actions(plan=plan, record=record)
+        else:
+            expected_actions, expected_projection = {"model_leaf": plan.model_action, "rollout_leaf": plan.rollout_action}, None
         if complete_path.exists():
             payload = _read_json(complete_path)
             _validate_completed_root(
                 payload, root=root, record=record, leaf_payload=changed[root],
                 expected_actions=expected_actions, manifest_sha256=manifest_sha256,
+                multireply=args.multireply, expected_projection=expected_projection,
             )
         else:
             _write_progress(out_root / "progress" / "current.json", {
@@ -698,13 +888,17 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
                 "worker_shard": {"index": args.shard_index, "count": args.shard_count},
             })
             payload = {
-                "schema_version": SCHEMA_VERSION,
+                "schema_version": MULTIREPLY_SCHEMA_VERSION if args.multireply else SCHEMA_VERSION,
                 "state": "COMPLETE",
                 "manifest_sha256": manifest_sha256,
                 "source": root.to_dict(),
                 "source_record_sha256": _sha256(record.to_dict()),
                 "leaf_complete_sha256": _sha256(changed[root]),
-                "grid": _evaluate_root(plan=plan, record=record, env_config=env_config, model=model, result=result, device=args.device),
+                "grid": (
+                    _evaluate_multireply_root(plan=plan, record=record, env_config=env_config, model=model, result=result, device=args.device)
+                    if args.multireply
+                    else _evaluate_root(plan=plan, record=record, env_config=env_config, model=model, result=result, device=args.device)
+                ),
             }
             _write_create_only_json(complete_path, payload)
         completed.append(payload)
@@ -722,16 +916,26 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
             root=root, record=record, source_records=source_by_seed[root.seed], leaf_payload=changed[root],
             env_config=env_config, model=model, result=result, device=args.device,
         )
+        if args.multireply:
+            expected_actions, expected_projection = _multireply_actions(plan=plan, record=record)
+        else:
+            expected_actions, expected_projection = {"model_leaf": plan.model_action, "rollout_leaf": plan.rollout_action}, None
         payload = _read_json(_root_directory(out_root, root) / "COMPLETE.json")
         _validate_completed_root(
             payload, root=root, record=record, leaf_payload=changed[root],
-            expected_actions={"model_leaf": plan.model_action, "rollout_leaf": plan.rollout_action},
-            manifest_sha256=manifest_sha256,
+            expected_actions=expected_actions, manifest_sha256=manifest_sha256,
+            multireply=args.multireply, expected_projection=expected_projection,
         )
         all_completed.append(payload)
     summary = {
-        "schema_version": SCHEMA_VERSION, "state": "PASS", "marker": "SOURCE_ROOT_LEAF_CONTINUATION_PASS",
-        "root_count": len(all_completed), "continuation_unit_count": len(all_completed) * len(CONTINUATION_TARGETS) * len(CONTINUATION_RNG_SEEDS) * 2,
+        "schema_version": MULTIREPLY_SCHEMA_VERSION if args.multireply else SCHEMA_VERSION, "state": "PASS",
+        "marker": "SOURCE_ROOT_MULTIREPLY_CONTINUATION_PASS" if args.multireply else "SOURCE_ROOT_LEAF_CONTINUATION_PASS",
+        "root_count": len(all_completed),
+        "continuation_unit_count": sum(
+            len(item["grid"].get("candidate_actions", {})) * OPPONENT_REPLY_SAMPLE_COUNT * len(CONTINUATION_RNG_SEEDS)
+            if args.multireply else len(CONTINUATION_TARGETS) * len(CONTINUATION_RNG_SEEDS) * 2
+            for item in all_completed
+        ),
         "complete_root_sha256": _sha256(all_completed),
         "scope": "source-root action quality only; not game strength",
     }
@@ -744,13 +948,14 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     out_root = Path(args.out_root).resolve()
+    multireply = bool(getattr(args, "multireply", False))
     try:
         result = _run(args)
     except Exception as error:
         try:
             if not (out_root / "PASS.json").exists() and not (out_root / "NONPASS.json").exists():
                 _write_progress(out_root / "last_error.json", {
-                    "schema_version": SCHEMA_VERSION, "state": "RETRYABLE_ERROR",
+                    "schema_version": MULTIREPLY_SCHEMA_VERSION if multireply else SCHEMA_VERSION, "state": "RETRYABLE_ERROR",
                     "error_type": type(error).__name__, "error": str(error),
                 })
         except Exception:
@@ -766,7 +971,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         marker = "SHARD COMPLETE"
     else:
         marker = "RESULT"
-    print(f"WROTE SOURCE ROOT LEAF CONTINUATION {marker}", _canonical_json(result))
+    title = "SOURCE ROOT MULTIREPLY CONTINUATION" if multireply else "SOURCE ROOT LEAF CONTINUATION"
+    print(f"WROTE {title} {marker}", _canonical_json(result))
     return 0
 
 
