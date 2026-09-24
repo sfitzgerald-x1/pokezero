@@ -112,6 +112,10 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(SystemExit):
                 runner._parse_args([*required[:-2], "--expected-engine-fingerprint", "invalid"])
+            with self.assertRaises(SystemExit):
+                runner._parse_args([*required[:-4], "--expected-engine-fingerprint", "c" * 64])
+            with self.assertRaises(SystemExit):
+                runner._parse_args([*required[:-4], "--expected-source-commit", "b" * 40])
 
     def test_execution_runtime_requires_explicit_repaired_source_and_engine_identities(self) -> None:
         runner = _runner()
@@ -142,6 +146,14 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
         self.assertEqual(runtime["engine_identity_mode"], "source_repair")
         self.assertEqual(runtime["historical_engine_fingerprint"], historical_engine)
         self.assertEqual(runtime["expected_engine_fingerprint"], repaired_engine)
+
+        incomplete = SimpleNamespace(
+            expected_source_commit=source_commit,
+            expected_engine_fingerprint=None,
+            showdown_root="/showdown",
+        )
+        with self.assertRaisesRegex(runner.AblationError, "requires both explicitly bound"):
+            runner._execution_runtime(incomplete, historical)
 
         args.expected_source_commit = "f" * 40
         with mock.patch.object(runner, "_source_provenance", return_value={"commit": source_commit}):

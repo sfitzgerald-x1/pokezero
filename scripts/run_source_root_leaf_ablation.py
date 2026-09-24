@@ -213,6 +213,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         value = getattr(args, option)
         if value is not None and not _is_lower_hex(value, 40 if option == "expected_source_commit" else 64):
             parser.error(f"--{option.replace('_', '-')} must be lowercase hexadecimal")
+    if (args.expected_source_commit is None) != (args.expected_engine_fingerprint is None):
+        parser.error(
+            "--expected-source-commit and --expected-engine-fingerprint must be supplied together "
+            "for a source-repair measurement"
+        )
     if args.shard_count <= 0 or not 0 <= args.shard_index < args.shard_count:
         parser.error("--shard-index must be in [0, --shard-count)")
     if args.finalize_only and args.shard_index != 0:
@@ -458,6 +463,10 @@ def _execution_runtime(
     engine must nevertheless remain exactly the archived R4 versions.
     """
 
+    if (args.expected_source_commit is None) != (args.expected_engine_fingerprint is None):
+        raise AblationError(
+            "source-repair execution requires both explicitly bound source commit and engine fingerprint"
+        )
     historical = historical_baseline.get("historical_runtime")
     if not isinstance(historical, Mapping):
         raise AblationError("historical runtime identity is missing")
