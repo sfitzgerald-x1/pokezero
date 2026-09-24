@@ -1897,7 +1897,17 @@ impl LeafContext {
             match entry {
                 Some((move_id, disabled, pp)) => {
                     let legal = if fresh_switch_in {
-                        *pp > 0 && active.hp > 0
+                        // A branch switch-in deliberately widens past the
+                        // engine's stale choice-lock bits, but it must never
+                        // *narrow* an option that the engine has already
+                        // offered.  The reconstructed PP ledger is needed to
+                        // admit a move the stale world hid; it is not an
+                        // authority to reject an engine-legal move.  In
+                        // particular, a stale benched PP snapshot plus the
+                        // root ledger can infer zero while `get_all_options`
+                        // still exposes the move.  Treating that arm as
+                        // illegal made the whole node fall back to uniform.
+                        legal_moves.contains(&slot) || (*pp > 0 && active.hp > 0)
                     } else {
                         legal_moves.contains(&slot) && active.hp > 0
                     };
@@ -3477,6 +3487,45 @@ mod tests {
             vec![Some(2)],
             "M2 must retain its action-block position even when earlier engine slots are empty"
         );
+    }
+
+    #[test]
+    fn fresh_switch_in_keeps_an_engine_offered_move_when_pp_reconstruction_is_stale() {
+        // `get_all_options` is the authority for an interior node's arms.
+        // A branch replacement may have a stale request-history PP baseline:
+        // the root's public ledger can say this benched move is empty while
+        // the branch engine still offers it.  Fresh-switch widening exists to
+        // repair stale lock bits; it must not turn that PP disagreement into
+        // an unmapped engine arm and a uniform-prior fallback.
+        use poke_engine::state::{PokemonIndex, PokemonMoveIndex};
+
+        let (mut ctx, mut state) = order_context(None);
+        let bench = &mut state.side_one.pokemon[PokemonIndex::P1];
+        bench.maxhp = 200;
+        bench.hp = 200;
+        bench.replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
+        state.side_one.active_index = PokemonIndex::P1;
+
+        // The current engine world offers M0, but force the reconstructed
+        // benched baseline to zero.  This is the exact disagreement observed
+        // in the forensic run; the map must preserve the engine arm.
+        ctx.self_ledger_uses
+            .insert(("sbb".to_string(), "tackle".to_string()), 56);
+        let mut meta = LeafMeta::default();
+        meta.fresh_active[0] = true;
+        let options = vec![MoveChoice::Move(PokemonMoveIndex::M0)];
+        let (map, witness) = ctx
+            .self_action_map_with_unmapped_witness(
+                &state,
+                &options,
+                None,
+                Some(&meta),
+                false,
+            )
+            .expect("fresh-switch map");
+
+        assert_eq!(map, vec![Some(0)]);
+        assert_eq!(witness.engine_move_present_but_illegal, 0);
     }
 
     /// One move arm plus the five bench mons, in engine option order — the
