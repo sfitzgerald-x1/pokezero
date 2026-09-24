@@ -49,6 +49,28 @@ overrides.  The seven-count difference from the earlier aggregate headline is
 not attributed here; only sealed, per-decision ledgers are used for this
 action-effect statement.
 
+## Stronger leaf-versus-search evidence
+
+The terminal source-root action-quality artifact at
+`/shared/scott-experiment/mcts-source-root-multireply-raw-anchor-8a4a-20260924-r1`
+tests seven deliberately selected roots where the model-leaf and rollout-leaf
+choices disagree.  It binds the actual raw-policy action rather than a prior
+search result, samples eight hidden opponent raw-policy replies per root, and
+runs 16 uncapped policy-consistent suffixes for every reply/action cell.
+
+The raw-policy action wins 425 of 896 continuations (47.4%); the model-leaf
+MCTS action wins 314 of 896 (35.0%).  Raw policy is better at six roots and
+tied at the seventh.  At six of the seven roots the rollout-leaf selector
+aliases the raw-policy action, while the model-leaf selector chooses a
+different action; the seventh has all candidates lose.  This is deliberately
+selected, correlated root evidence under sampled raw-policy opponents, not a
+global strength estimate.  It nevertheless is materially stronger evidence
+than the fallback count: the current model-leaf search is selecting inferior
+actions on roots chosen to expose its disagreement with rollout evaluation.
+That supports investigating leaf-value/backup ranking before spending more
+effort on a generic depth increase; it does not prove a value-head retraining
+recipe or rule out a source-root selector/backup defect.
+
 ## Correction
 
 The corrected source revision is
