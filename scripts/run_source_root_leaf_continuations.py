@@ -47,6 +47,7 @@ from pokezero.local_showdown import (  # noqa: E402
     LocalShowdownEnv,
     env_config_from_checkpoint_provenance,
 )
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider  # noqa: E402
 from pokezero.mcts_eval.source_root_replay import source_bound_replay_prefix  # noqa: E402
 from pokezero.neural_policy import (  # noqa: E402
@@ -257,9 +258,13 @@ def _load_changed_leaf_roots(
 
 
 def _source_code_provenance(*, expected_commit: str) -> Mapping[str, str]:
-    stamped = os.environ.get("POKEZERO_COMMIT", "").strip().lower()
-    if stamped != expected_commit:
-        raise ContinuationError("executing source commit does not match the frozen contract")
+    # Runtime launchers must not supply this value: a job environment variable
+    # would only echo the requested commit, not prove the contents of the
+    # digest-qualified image.  ``public_repo_commit`` reads the revision baked
+    # into the image by Docker (or HEAD for a local checkout).
+    baked = public_repo_commit(ROOT)
+    if baked != expected_commit:
+        raise ContinuationError("image-baked source commit does not match the frozen contract")
     paths = (ROOT / "scripts" / "run_source_root_leaf_continuations.py",)
     digest = hashlib.sha256()
     for path in paths:
@@ -267,7 +272,7 @@ def _source_code_provenance(*, expected_commit: str) -> Mapping[str, str]:
         payload = path.read_bytes()
         digest.update(relative.encode("utf-8"))
         digest.update(payload)
-    return {"commit": stamped, "runner_sha256": digest.hexdigest()}
+    return {"commit": baked, "runner_sha256": digest.hexdigest()}
 
 
 def _manifest(

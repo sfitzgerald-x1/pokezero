@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from dataclasses import dataclass
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -157,6 +158,15 @@ class ContinuationContractTest(unittest.TestCase):
                 expected_actions=EXPECTED_ACTIONS,
                 manifest_sha256="m" * 64,
             )
+
+    def test_source_provenance_requires_image_baked_commit(self) -> None:
+        expected = "a" * 40
+        with patch.object(RUNNER, "public_repo_commit", return_value=expected):
+            provenance = RUNNER._source_code_provenance(expected_commit=expected)
+        self.assertEqual(provenance["commit"], expected)
+        with patch.object(RUNNER, "public_repo_commit", return_value="b" * 40):
+            with self.assertRaisesRegex(RUNNER.ContinuationError, "image-baked source commit"):
+                RUNNER._source_code_provenance(expected_commit=expected)
 
     def test_source_histories_keep_each_seat_order_and_append_current(self) -> None:
         replay = type(
