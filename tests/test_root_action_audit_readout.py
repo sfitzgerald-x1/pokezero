@@ -154,6 +154,51 @@ class RootActionAuditReadoutTest(unittest.TestCase):
                 [2] * 8,
             )
 
+    def test_root_accepts_native_gap_between_mcts_and_visit_alternative(self) -> None:
+        """H2 gaps describe the leading visit arms, not necessarily raw vs. MCTS.
+
+        A third candidate is deliberately the best unselected visit arm.  When
+        it outranks the raw-policy arm, native telemetry correctly reports the
+        MCTS/alternative gap; rejecting that evidence would discard a valid
+        override audit merely because the audit itself has three actions.
+        """
+
+        payload = _sidecar(seed=7, seat="p1", round_index=3)
+        audit = payload["readout"]["audit"]
+        audit["actions"].append({"action_label": "visit_alternative", "action_index": 1})
+        evidence = audit["search_evidence"]
+        evidence["root_allocation"]["arms"][0]["visit_share"] = 0.1
+        evidence["root_allocation"]["arms"].append(
+            {
+                "action_index": 1,
+                "visit_share": 0.3,
+                "q": 0.3,
+                "reported_prior": 0.1,
+                "model_prior": 0.1,
+            }
+        )
+        evidence["root_gap_action_indices"] = [4, 1]
+        evidence["root_q_gap"] = 0.1
+        evidence["root_visit_gap"] = 0.3
+        for target in audit["continuation_targets"]:
+            for trial in target["trials"]:
+                alternative = json.loads(json.dumps(trial["outcomes"][1]))
+                alternative["action_label"] = "visit_alternative"
+                alternative["action_index"] = 1
+                trial["outcomes"].append(alternative)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "round-0003.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            row = READOUT._read_root(path)
+            evidence["root_gap_action_indices"] = [4, 2]
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(READOUT.ReadoutError, "leading-arm gap witness"):
+                READOUT._read_root(path)
+        self.assertEqual(row["actions"][2]["action_label"], "visit_alternative")
+        self.assertEqual(row["root_gap_semantics"], "top_two_positive_visit_arms")
+        self.assertEqual(row["root_gap_action_indices"], [4, 1])
+        self.assertEqual(row["root_q_gap"], 0.1)
+
     def test_summarize_refuses_capped_continuations(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -242,6 +242,13 @@ class _LiveEngineTimingDecider:
         model_priors: bool = True,
         use_opponent_priors: bool = False,
         override_telemetry: bool = False,
+        rollout_leaf_eval: bool = False,
+        rollout_count: int = 32,
+        rollout_max_plies: int = 200,
+        rollout_policy: str = "uniform",
+        rollout_seed: int = 0,
+        rollout_threads: int = 1,
+        rollout_threads_cpu_budget_ack: bool = False,
     ) -> None:
         from ..collection import env_config_with_policy_spec_masks
         from ..dex import load_showdown_dex_cached
@@ -290,6 +297,17 @@ class _LiveEngineTimingDecider:
         # for the already-supported root-allocation witness without widening the
         # default replay contract.
         self._override_telemetry = override_telemetry
+        # The source-root leaf ablation uses the existing model-prior rollout
+        # seam.  Keep every knob explicit here, rather than letting a caller
+        # bolt an unregistered leaf value onto the timing adapter.  Production
+        # callers retain the exact all-default model-leaf configuration.
+        self._rollout_leaf_eval = rollout_leaf_eval
+        self._rollout_count = rollout_count
+        self._rollout_max_plies = rollout_max_plies
+        self._rollout_policy = rollout_policy
+        self._rollout_seed = rollout_seed
+        self._rollout_threads = rollout_threads
+        self._rollout_threads_cpu_budget_ack = rollout_threads_cpu_budget_ack
         self._artifacts = materialize_search_artifacts(contract, showdown_root=showdown_root)
         self._env_config = env_config_with_policy_spec_masks(
             LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=True),
@@ -344,6 +362,13 @@ class _LiveEngineTimingDecider:
                 model_decision_time_ms=self._model_decision_time_ms,
                 model_native_batch_guard_ms=self._model_native_batch_guard_ms,
                 model_world_workers=self._model_world_workers,
+                rollout_leaf_eval=self._rollout_leaf_eval,
+                rollout_count=self._rollout_count,
+                rollout_max_plies=self._rollout_max_plies,
+                rollout_policy=self._rollout_policy,
+                rollout_seed=self._rollout_seed,
+                rollout_threads=self._rollout_threads,
+                rollout_threads_cpu_budget_ack=self._rollout_threads_cpu_budget_ack,
             ),
             policy_id=f"mcts-timing-{config.config_id}",
             annotation_source=self._annotation_source,
@@ -447,7 +472,84 @@ class _LiveEngineTimingDecider:
         )
 
     def prepare(self, record: TimingDecisionRecord, config: SearchConfig) -> PreparedDecision:
-        """Replay + validate the public prefix, returning one timed decision."""
+        """Replay + validate one timing-corpus public prefix."""
+        return self._prepare_replay(
+            record,
+            config,
+            expected_event_prefix=record.event_prefix,
+            expected_public_observation=None,
+            expected_belief_view=None,
+        )
+
+    def prepare_public_decision(
+        self,
+        record: Any,
+        config: SearchConfig,
+        *,
+        public_action_rounds: Sequence[Any],
+        decision_rng_seed: int,
+    ) -> PreparedDecision:
+        """Replay one source-captured public root without inventing a corpus line.
+
+        ``PublicDecisionRecord`` deliberately omits raw protocol lines: they
+        are not sufficient to reconstruct request-local indexes in a sampled
+        world.  The direct source-root experiment instead supplies the
+        captured canonical public actions (possibly after the narrow,
+        source-owned repair) and validates the resulting current request
+        against the record's own legal mask and candidates.  It must *not*
+        manufacture an ``event_prefix`` just to call :meth:`prepare`.
+        """
+        from ..public_decision_corpus import PublicDecisionRecord
+
+        if not isinstance(record, PublicDecisionRecord):
+            raise ContractError("source-root replay requires a PublicDecisionRecord")
+        if record.format_id != self._FORMAT_ID:
+            raise ContractError(
+                f"{record.decision_id}: source-root format {record.format_id!r} is unsupported"
+            )
+        if isinstance(decision_rng_seed, bool) or not isinstance(decision_rng_seed, int):
+            raise ContractError(f"{record.decision_id}: decision RNG seed must be an integer")
+        candidates = record.observation.acting_player_state.get("action_candidates")
+        if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
+            raise ContractError(f"{record.decision_id}: source root has no action candidates")
+        if not all(isinstance(candidate, Mapping) for candidate in candidates):
+            raise ContractError(f"{record.decision_id}: source root has malformed action candidates")
+        try:
+            replay_record = TimingDecisionRecord(
+                decision_id=record.decision_id,
+                battle_id=record.battle_id,
+                seat=record.acting_player,
+                turn_index=record.turn_index,
+                team_seed=record.seed,
+                battle_seed=record.seed,
+                bot_rng_seed=decision_rng_seed,
+                event_prefix=(),
+                public_resolved_action_rounds=tuple(public_action_rounds),
+                action_candidates=tuple(dict(candidate) for candidate in candidates),
+                legal_action_mask=record.current_legal_action_mask,
+                public_belief_inputs=record.public_belief_view,
+                strata=(),
+            )
+        except (TypeError, ValueError) as error:
+            raise ContractError(f"{record.decision_id}: source root is not replayable: {error}") from error
+        return self._prepare_replay(
+            replay_record,
+            config,
+            expected_event_prefix=None,
+            expected_public_observation=record.observation,
+            expected_belief_view=record.public_belief_view,
+        )
+
+    def _prepare_replay(
+        self,
+        record: TimingDecisionRecord,
+        config: SearchConfig,
+        *,
+        expected_event_prefix: Sequence[str] | None,
+        expected_public_observation: Any | None,
+        expected_belief_view: Mapping[str, Any] | None,
+    ) -> PreparedDecision:
+        """Replay a public prefix, with an optional raw-line integrity witness."""
         from ..policy import PolicyContext
         from ..public_replay_materializer import PublicReplayError, replay_public_action_rounds
 
@@ -474,7 +576,7 @@ class _LiveEngineTimingDecider:
                 f"not acting seat {record.seat}"
             )
         warm_state = self._env.public_materialization_state(record.seat)
-        if tuple(warm_state.replay.public_lines) != record.event_prefix:
+        if expected_event_prefix is not None and tuple(warm_state.replay.public_lines) != tuple(expected_event_prefix):
             raise ContractError(
                 f"{record.decision_id}: replayed public prefix differs from corpus witness"
             )
@@ -491,16 +593,33 @@ class _LiveEngineTimingDecider:
         def timed_decision() -> dict[str, Any]:
             observation = self._env.observe(record.seat)
             legal_mask = tuple(bool(value) for value in observation.legal_action_mask)
+            if expected_public_observation is not None and not self._same_source_public_observation(
+                observation,
+                expected_public_observation,
+                expected_belief_view,
+            ):
+                raise ContractError(
+                    f"{record.decision_id}: replayed public observation or belief differs from source root"
+                )
             if legal_mask != record.legal_action_mask:
                 raise ContractError(
                     f"{record.decision_id}: replayed legal-action mask differs from corpus"
                 )
-            if self._candidate_payloads(observation) != record.action_candidates:
+            # Timing-corpus records retain the full request payload, while a
+            # source-root record deliberately persists the canonical public
+            # projection. The latter was checked above as part of
+            # ``expected_public_observation``; comparing it to the raw live
+            # request would reject its intentionally omitted slot/private
+            # fields. Keep the stronger raw witness for the timing corpus.
+            if (
+                expected_public_observation is None
+                and self._candidate_payloads(observation) != record.action_candidates
+            ):
                 raise ContractError(
                     f"{record.decision_id}: replayed action candidates differ from corpus"
                 )
             public_state = self._env.public_materialization_state(record.seat)
-            if tuple(public_state.replay.public_lines) != record.event_prefix:
+            if expected_event_prefix is not None and tuple(public_state.replay.public_lines) != tuple(expected_event_prefix):
                 raise ContractError(
                     f"{record.decision_id}: public prefix changed before timed decision"
                 )
@@ -566,6 +685,39 @@ class _LiveEngineTimingDecider:
             }
 
         return timed_decision
+
+    @staticmethod
+    def _same_source_public_observation(
+        actual: Any,
+        expected_public_observation: Any,
+        expected_belief_view: Mapping[str, Any] | None,
+    ) -> bool:
+        """Compare every public MCTS input, excluding only bridge-local objects.
+
+        Engine MCTS consumes both the encoded tensor fields and public metadata
+        such as request candidates and belief constraints.  Comparing only
+        tensors would admit a different information set that happened to have
+        the same encoder output. ``PublicObservation.from_observation`` is the
+        established filtered projection, so it includes every persisted public
+        field while excluding request-local bridge objects.  ``belief_view``
+        is intentionally checked separately because it is model metadata but
+        not an ``acting_player_state`` field.
+        """
+        from ..public_decision_corpus import PublicObservation
+
+        if expected_belief_view is None:
+            return False
+        try:
+            actual_public_observation = PublicObservation.from_observation(actual)
+        except (AttributeError, TypeError, ValueError):
+            return False
+        metadata = getattr(actual, "metadata", {})
+        actual_belief_view = metadata.get("belief_view") if isinstance(metadata, Mapping) else None
+        return (
+            actual_public_observation == expected_public_observation
+            and isinstance(actual_belief_view, Mapping)
+            and dict(actual_belief_view) == dict(expected_belief_view)
+        )
 
 
 def _default_decider(
