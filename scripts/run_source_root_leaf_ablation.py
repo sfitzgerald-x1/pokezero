@@ -668,27 +668,28 @@ def _load_source_records(
         root: _load_historical_fallback(source_root, root, selected[root][0])
         for root in FALLBACK_TARGETS
     }
-    # Retain only the source-owned earlier decision records that an explicit
-    # placeholder repair may consult.  Scanning every captured record is both
-    # unnecessary and makes recovery depend on hundreds of unrelated files.
+    # Retain only the earlier same-battle decision records that an explicit
+    # placeholder repair may consult.  A public prefix can have a placeholder
+    # for either player: the matching source actor's record is admissible only
+    # when the replayer proves the two public prefixes are compatible.  Scanning
+    # every captured record is both unnecessary and makes recovery depend on
+    # hundreds of unrelated files.
     for target, (record, _) in selected.items():
         for action_round in record.public_resolved_action_rounds:
-            identifier = action_round.actions.get(record.acting_player)
-            if (
-                identifier is None
-                or identifier.kind != "event"
-                or identifier.event_id != "unresolved-public-event"
-            ):
-                continue
-            source_root_address = SourceRoot(record.seed, record.acting_player, action_round.turn_index)
-            source_record, source_wrapper = _read_source_wrapper(
-                _source_wrapper_path(source_root, source_root_address)
-            )
-            if source_wrapper["candidate_provenance_sha256"] not in candidate_hashes or source_wrapper[
-                "raw_provenance_sha256"
-            ] not in raw_hashes:
-                raise AblationError(f"{target}: repair source record provenance drifted")
-            register_source(_source_wrapper_path(source_root, source_root_address), source_record, source_wrapper)
+            for player_id, identifier in action_round.actions.items():
+                if (
+                    identifier.kind != "event"
+                    or identifier.event_id != "unresolved-public-event"
+                ):
+                    continue
+                source_root_address = SourceRoot(record.seed, player_id, action_round.turn_index)
+                source_path = _source_wrapper_path(source_root, source_root_address)
+                source_record, source_wrapper = _read_source_wrapper(source_path)
+                if source_wrapper["candidate_provenance_sha256"] not in candidate_hashes or source_wrapper[
+                    "raw_provenance_sha256"
+                ] not in raw_hashes:
+                    raise AblationError(f"{target}: repair source record provenance drifted")
+                register_source(source_path, source_record, source_wrapper)
     return (
         selected,
         {seed: tuple(records.values()) for seed, records in by_seed.items()},

@@ -109,16 +109,55 @@ class SourceBoundReplayPrefixTest(unittest.TestCase):
 
         self.assertEqual(repaired.public_action_rounds[0].actions["p1"], PublicActionIdentifier(kind="switch", switched_species="Gengar"))
 
-    def test_refuses_unresolved_opponent_action(self) -> None:
+    def test_repairs_cross_seat_placeholder_from_matching_actor_record(self) -> None:
         target = _record(
             turn_index=1,
             recorded_action_index=1,
             candidates=[{"action_index": 1, "kind": "move", "move_id": "tackle", "legal": True}],
             rounds=(_round(0, PublicActionIdentifier(kind="move", move_id="tackle"), PublicActionIdentifier(kind="event", event_id="unresolved-public-event")),),
+            player="p1",
         )
 
-        with self.assertRaisesRegex(SourceRootReplayError, "unresolved_public_event_for_non_source_player"):
-            source_bound_replay_prefix(target, source_records=())
+        # The target is p1 and p2's earlier public action is a placeholder.
+        # A same-battle p2 record at that exact turn is the only admissible
+        # repair source; records from a different player remain insufficient.
+        p2_prior = _record(
+            turn_index=0,
+            recorded_action_index=4,
+            candidates=[{"action_index": 4, "kind": "move", "move_id": "spore", "legal": True}],
+            rounds=(),
+            player="p2",
+        )
+
+        repaired = source_bound_replay_prefix(target, source_records=(p2_prior,))
+
+        self.assertEqual(
+            repaired.public_action_rounds[0].actions["p2"],
+            PublicActionIdentifier(kind="move", move_id="spore"),
+        )
+        self.assertEqual(repaired.repairs[0].source_decision_id, p2_prior.decision_id)
+
+    def test_refuses_cross_seat_repair_with_conflicting_public_prefix(self) -> None:
+        p1_prior = _record(
+            turn_index=1,
+            recorded_action_index=4,
+            candidates=[{"action_index": 4, "kind": "move", "move_id": "spore", "legal": True}],
+            rounds=(_round(0, PublicActionIdentifier(kind="move", move_id="tackle"), PublicActionIdentifier(kind="move", move_id="growl")),),
+            player="p1",
+        )
+        target = _record(
+            turn_index=2,
+            recorded_action_index=1,
+            candidates=[{"action_index": 1, "kind": "move", "move_id": "tackle", "legal": True}],
+            rounds=(
+                _round(0, PublicActionIdentifier(kind="move", move_id="tackle"), PublicActionIdentifier(kind="move", move_id="scratch")),
+                _round(1, PublicActionIdentifier(kind="event", event_id="unresolved-public-event"), PublicActionIdentifier(kind="move", move_id="growl")),
+            ),
+            player="p2",
+        )
+
+        with self.assertRaisesRegex(SourceRootReplayError, "public_action_does_not_match"):
+            source_bound_replay_prefix(target, source_records=(p1_prior,))
 
     def test_refuses_missing_or_noncanonical_source_action(self) -> None:
         target = _record(
