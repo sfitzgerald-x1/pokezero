@@ -323,6 +323,7 @@ def _prepare(
     require_existing: bool,
     allow_complete_pass: bool,
 ) -> None:
+    path = out_root / "MANIFEST.json"
     terminals = [out_root / name for name in ("PASS.json", "NONPASS.json") if (out_root / name).exists()]
     if terminals:
         # A Pod can be interrupted between publishing PASS and reporting its
@@ -332,8 +333,9 @@ def _prepare(
         # Never reopen NONPASS or an ambiguous double-terminal root.
         if not (allow_complete_pass and resume and terminals == [out_root / "PASS.json"]):
             raise ContinuationError(f"out root is terminal: {', '.join(path.name for path in terminals)}")
+        if not path.is_file() or _read_json(path) != manifest:
+            raise ContinuationError("terminal PASS manifest differs from this frozen contract")
         return
-    path = out_root / "MANIFEST.json"
     if path.exists():
         if not resume:
             raise ContinuationError("out root exists; pass --resume to validate completed roots")

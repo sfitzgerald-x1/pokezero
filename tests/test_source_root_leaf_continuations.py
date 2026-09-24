@@ -193,15 +193,30 @@ class ContinuationContractTest(unittest.TestCase):
     def test_prepare_allows_only_a_lone_pass_for_resumed_final_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            manifest = {"contract": "current"}
+            (root / "MANIFEST.json").write_text(json.dumps(manifest))
             (root / "PASS.json").write_text("{}")
             RUNNER._prepare(
                 root,
-                {"contract": "current"},
+                manifest,
                 resume=True,
                 require_existing=False,
                 allow_complete_pass=True,
             )
             self.assertFalse((root / "RUNNING.json").exists())
+
+    def test_prepare_refuses_terminal_pass_without_matching_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "PASS.json").write_text("{}")
+            with self.assertRaisesRegex(RUNNER.ContinuationError, "manifest differs"):
+                RUNNER._prepare(
+                    root,
+                    {"contract": "current"},
+                    resume=True,
+                    require_existing=False,
+                    allow_complete_pass=True,
+                )
 
     def test_prepare_refuses_nonpass_or_nonfinalizer_terminal_reentry(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
