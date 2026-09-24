@@ -25,6 +25,7 @@ import json
 import math
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import time
@@ -214,6 +215,144 @@ def _historical_config_projection(candidate_config: Any) -> dict[str, Any]:
     return projected
 
 
+def _is_lower_hex(value: Any, length: int) -> bool:
+    return isinstance(value, str) and len(value) == length and all(
+        character in "0123456789abcdef" for character in value
+    )
+
+
+def _hash_source_files(repo_root: Path, paths: Sequence[Path]) -> str:
+    """Hash executable source with names as well as bytes."""
+
+    digest = hashlib.sha256()
+    for path in sorted(paths, key=lambda item: item.relative_to(repo_root).as_posix()):
+        relative = path.relative_to(repo_root).as_posix()
+        payload = path.read_bytes()
+        digest.update(len(relative).to_bytes(4, "big"))
+        digest.update(relative.encode("utf-8"))
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+def _source_provenance() -> dict[str, str]:
+    """Bind the executing Python/bridge source to a clean checkout or image receipt."""
+
+    stamped = os.environ.get("POKEZERO_COMMIT", "").strip().lower()
+    if (ROOT / ".git").exists():
+        try:
+            commit = subprocess.run(
+                ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip().lower()
+            dirty = subprocess.run(
+                ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=all"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            tracked = subprocess.run(
+                ["git", "-C", str(ROOT), "ls-files", "-z"],
+                check=True,
+                capture_output=True,
+            ).stdout.split(b"\0")
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise AblationError("cannot bind the executing source checkout") from error
+        if not _is_lower_hex(commit, 40):
+            raise AblationError("executing source HEAD is not a full lowercase Git commit")
+        if stamped and stamped != commit:
+            raise AblationError("POKEZERO_COMMIT does not match the executing checkout")
+        if dirty:
+            raise AblationError("refusing to run against a dirty executing source checkout")
+        paths = [
+            ROOT / value.decode("utf-8")
+            for value in tracked
+            if value and (ROOT / value.decode("utf-8")).is_file()
+        ]
+        return {
+            "commit": commit,
+            "tree_sha256": _hash_source_files(ROOT, paths),
+            "tree_status": "clean_tracked_checkout",
+        }
+
+    if not _is_lower_hex(stamped, 40):
+        raise AblationError("an image without .git must set POKEZERO_COMMIT to its full lowercase commit")
+    roots = (ROOT / "src" / "pokezero", ROOT / "scripts")
+    paths = [
+        path
+        for root in roots
+        if root.is_dir()
+        for path in root.rglob("*.py")
+        if path.is_file() and "__pycache__" not in path.parts
+    ]
+    paths.extend(path for path in (ROOT / "scripts").glob("*.mjs") if path.is_file())
+    if (ROOT / "pyproject.toml").is_file():
+        paths.append(ROOT / "pyproject.toml")
+    if not paths:
+        raise AblationError("cannot hash executable source in image without .git")
+    return {
+        "commit": stamped,
+        "tree_sha256": _hash_source_files(ROOT, paths),
+        "tree_status": "explicit_hash_without_git_python_and_bridge",
+    }
+
+
+def _showdown_dependency_paths(root: Path) -> list[Path]:
+    """Return every Showdown byte the Gen 3 battle oracle can load."""
+
+    required = (
+        root / "dist" / "sim" / "index.js", root / "dist" / "sim" / "dex.js",
+        root / "dist" / "sim" / "dex-data.js", root / "dist" / "data" / "moves.js",
+        root / "dist" / "data" / "pokedex.js", root / "dist" / "data" / "typechart.js",
+        root / "dist" / "data" / "abilities.js", root / "dist" / "data" / "items.js",
+        root / "dist" / "data" / "mods" / "gen3" / "moves.js",
+        root / "dist" / "data" / "mods" / "gen3" / "scripts.js",
+        root / "dist" / "data" / "mods" / "gen3" / "abilities.js",
+        root / "dist" / "data" / "mods" / "gen3" / "items.js",
+        root / "data" / "random-battles" / "gen3" / "sets.json",
+        root / "dist" / "data" / "random-battles" / "gen3" / "teams.js",
+    )
+    missing = [path for path in required if not path.is_file()]
+    if missing:
+        raise AblationError(
+            f"cannot bind Showdown runtime; required input is missing: {missing[0].relative_to(root)}"
+        )
+    paths = set(required)
+    paths.update((root / "dist").rglob("*.js"))
+    paths.update((root / "dist").rglob("*.json"))
+    return sorted(path for path in paths if path.is_file())
+
+
+def _showdown_source_provenance(showdown_root: str | Path) -> dict[str, Any]:
+    root = Path(showdown_root).expanduser().resolve()
+    try:
+        top_level = Path(
+            subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"], cwd=root, check=True,
+                capture_output=True, text=True,
+            ).stdout.strip()
+        ).resolve()
+        commit = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"], cwd=root, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip().lower()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"], cwd=root, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise AblationError(f"cannot bind Showdown runtime identity from {root}") from error
+    if top_level != root or not _is_lower_hex(commit, 40) or dirty:
+        raise AblationError("Showdown must be a clean root Git checkout with a full lowercase commit")
+    digest = hashlib.sha256()
+    for path in _showdown_dependency_paths(root):
+        digest.update(str(path.relative_to(root)).encode("utf-8"))
+        digest.update(bytes.fromhex(sha256_file(path)))
+    return {"content_sha256": digest.hexdigest(), "git_commit": commit, "git_clean": True}
+
+
 def _validate_historical_baseline(source_root: Path) -> dict[str, Any]:
     """Bind the new deterministic control to the archived R4 search contract.
 
@@ -243,6 +382,9 @@ def _validate_historical_baseline(source_root: Path) -> dict[str, Any]:
             "config_sha256": _sha256(config),
             "checkpoint_sha256": checkpoint_sha256,
             "manifest_sha256": sha256_file(path),
+            "active_source": payload.get("active_source"),
+            "active_engine_fingerprint": payload.get("active_engine_fingerprint"),
+            "active_showdown_source": payload.get("active_showdown_source"),
         })
     if len(rows) != 4 or {row["seed"] for row in rows} != {2026092004, 2026092005, 2026092006, 2026092007}:
         raise AblationError("source historical baseline manifests are incomplete")
@@ -250,6 +392,30 @@ def _validate_historical_baseline(source_root: Path) -> dict[str, Any]:
         raise AblationError("source historical baseline config differs across seeds")
     if len({row["checkpoint_sha256"] for row in rows}) != 1:
         raise AblationError("source historical baseline checkpoint differs across seeds")
+    runtime_rows: list[dict[str, Any]] = []
+    for row in rows:
+        source = row["active_source"]
+        engine = row["active_engine_fingerprint"]
+        showdown = row["active_showdown_source"]
+        if (
+            not isinstance(source, Mapping)
+            or not _is_lower_hex(source.get("commit"), 40)
+            or not _is_lower_hex(source.get("tree_sha256"), 64)
+            or not isinstance(source.get("tree_status"), str)
+            or not _is_lower_hex(engine, 64)
+            or not isinstance(showdown, Mapping)
+            or not _is_lower_hex(showdown.get("content_sha256"), 64)
+            or not _is_lower_hex(showdown.get("git_commit"), 40)
+            or showdown.get("git_clean") is not True
+        ):
+            raise AblationError(f"source historical baseline has malformed runtime identity for seed {row['seed']}")
+        runtime_rows.append({
+            "source": dict(source),
+            "engine_fingerprint": engine,
+            "showdown_source": dict(showdown),
+        })
+    if len({_canonical_json(runtime) for runtime in runtime_rows}) != 1:
+        raise AblationError("source historical baseline runtime differs across seeds")
     return {
         "historical_config": dict(HISTORICAL_MODEL_CONFIG),
         "historical_config_sha256": rows[0]["config_sha256"],
@@ -257,8 +423,54 @@ def _validate_historical_baseline(source_root: Path) -> dict[str, Any]:
         "source_manifest_sha256_by_seed": {
             str(row["seed"]): row["manifest_sha256"] for row in sorted(rows, key=lambda row: row["seed"])
         },
+        "historical_runtime": runtime_rows[0],
         "historical_reproduction": False,
         "historical_reproduction_reason": "public-source replay uses a newly pinned decision RNG",
+    }
+
+
+def _execution_runtime(
+    args: argparse.Namespace, historical_baseline: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Bind the actual engine stack and reject a different battle oracle.
+
+    The source-replay repair deliberately runs newer, source-bound Python code,
+    so it is preserved as a distinct execution identity rather than pretending
+    to reproduce the archived R4 source tree.  The battle oracle and native
+    engine must nevertheless remain exactly the archived R4 versions.
+    """
+
+    historical = historical_baseline.get("historical_runtime")
+    if not isinstance(historical, Mapping):
+        raise AblationError("historical runtime identity is missing")
+    expected_showdown = historical.get("showdown_source")
+    expected_engine = historical.get("engine_fingerprint")
+    if (
+        not isinstance(expected_showdown, Mapping)
+        or not _is_lower_hex(expected_showdown.get("content_sha256"), 64)
+        or not _is_lower_hex(expected_engine, 64)
+    ):
+        raise AblationError("historical runtime identity is malformed")
+    source = _source_provenance()
+    showdown = _showdown_source_provenance(args.showdown_root)
+    if showdown["content_sha256"] != expected_showdown["content_sha256"]:
+        raise AblationError("active Showdown runtime differs from the archived R4 battle oracle")
+    sys.path.insert(0, str(ROOT / "scripts"))
+    try:
+        from engine_build_fingerprint import assert_fresh, compute_fingerprint  # noqa: PLC0415
+
+        assert_fresh()
+        engine = compute_fingerprint()
+    except BaseException as error:  # assert_fresh may raise SystemExit for stale artifacts.
+        raise AblationError("installed native engine failed its freshness check") from error
+    fingerprint = engine.get("fingerprint")
+    if fingerprint != expected_engine:
+        raise AblationError("active native engine differs from the archived R4 engine fingerprint")
+    return {
+        "source": source,
+        "engine_build": dict(engine),
+        "engine_fingerprint": fingerprint,
+        "showdown_source": showdown,
     }
 
 
@@ -586,6 +798,7 @@ def _manifest(
     *, args: argparse.Namespace, contract: Any,
     selected: Mapping[SourceRoot, tuple[PublicDecisionRecord, Mapping[str, Any]]],
     historical_baseline: Mapping[str, Any],
+    execution_runtime: Mapping[str, Any],
     source_inventory: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     wrappers = [wrapper for _, wrapper in selected.values()]
@@ -598,6 +811,7 @@ def _manifest(
             "candidate": wrappers[0]["candidate_provenance_sha256"],
             "raw": wrappers[0]["raw_provenance_sha256"],
         },
+        "execution_runtime": dict(execution_runtime),
         "checkpoint": contract.to_manifest(),
         "historical_baseline": dict(historical_baseline),
         "targets": [root.to_dict() for root in TARGETS],
@@ -667,12 +881,15 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     out_root = Path(args.out_root).resolve()
     selected, by_seed, source_inventory = _load_source_records(source_root)
     historical_baseline = _validate_historical_baseline(source_root)
+    execution_runtime = _execution_runtime(args, historical_baseline)
     try:
         contract = resolve_checkpoint_contract(
             args.checkpoint,
             expected_sha256=args.expected_checkpoint_sha256,
             model_device=args.model_device,
             showdown_root=args.showdown_root,
+            showdown_source_sha256=execution_runtime["showdown_source"]["content_sha256"],
+            expected_showdown_source_sha256=historical_baseline["historical_runtime"]["showdown_source"]["content_sha256"],
         )
     except ContractError as error:
         raise AblationError(f"checkpoint contract failed: {error}") from error
@@ -683,6 +900,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         contract=contract,
         selected=selected,
         historical_baseline=historical_baseline,
+        execution_runtime=execution_runtime,
         source_inventory=source_inventory,
     )
     manifest_sha256 = _sha256(manifest)
