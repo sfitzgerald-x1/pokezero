@@ -5874,8 +5874,8 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
         reasons["unmapped_action"] = 2
         witness = {
-            "acting": {"nodes": 2, "move_arms": 1, "switch_arms": 1, "none_arms": 0},
-            "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+            "acting": {"nodes": 2, "move_arms": 1, "move_arms_engine_missing": 1, "move_arms_present_but_illegal": 0, "move_arms_order_unavailable": 0, "move_arms_unexplained": 0, "switch_arms": 1, "none_arms": 0},
+            "opponent": {"nodes": 0, "move_arms": 0, "move_arms_engine_missing": 0, "move_arms_present_but_illegal": 0, "move_arms_order_unavailable": 0, "move_arms_unexplained": 0, "switch_arms": 0, "none_arms": 0},
         }
         report.update(
             {
@@ -5939,12 +5939,20 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                     "acting": {
                         "nodes": 1,
                         "move_arms": 1,
+                        "move_arms_engine_missing": 1,
+                        "move_arms_present_but_illegal": 0,
+                        "move_arms_order_unavailable": 0,
+                        "move_arms_unexplained": 0,
                         "switch_arms": 0,
                         "none_arms": 0,
                     },
                     "opponent": {
                         "nodes": 0,
                         "move_arms": 0,
+                        "move_arms_engine_missing": 0,
+                        "move_arms_present_but_illegal": 0,
+                        "move_arms_order_unavailable": 0,
+                        "move_arms_unexplained": 0,
                         "switch_arms": 0,
                         "none_arms": 0,
                     },

@@ -742,9 +742,18 @@ def _validate_zero_unmapped_action_witness(value: Any) -> dict[str, dict[str, in
     normalized: dict[str, dict[str, int]] = {}
     for seat in ("acting", "opponent"):
         row = value.get(seat)
-        if not isinstance(row, Mapping) or set(row) != {
-            "nodes", "move_arms", "switch_arms", "none_arms"
-        } or any(type(count) is not int or count != 0 for count in row.values()):
+        base_fields = {"nodes", "move_arms", "switch_arms", "none_arms"}
+        move_surface_fields = {
+            "move_arms_engine_missing",
+            "move_arms_present_but_illegal",
+            "move_arms_order_unavailable",
+            "move_arms_unexplained",
+        }
+        if (
+            not isinstance(row, Mapping)
+            or set(row) not in (base_fields, base_fields | move_surface_fields)
+            or any(type(count) is not int or count != 0 for count in row.values())
+        ):
             raise AblationError("live unmapped-action witness is not all zero")
         normalized[seat] = {name: row[name] for name in sorted(row)}
     return normalized

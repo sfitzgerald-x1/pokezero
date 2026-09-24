@@ -967,14 +967,20 @@ def _validated_branch_prior_unmapped_action_witness(
     if set(witness) != {"acting", "opponent"}:
         raise HeadToHeadError("unmapped-action witness must name acting and opponent seats.")
     normalized: dict[str, dict[str, int]] = {}
-    fields = {"nodes", "move_arms", "switch_arms", "none_arms"}
+    base_fields = {"nodes", "move_arms", "switch_arms", "none_arms"}
+    move_surface_fields = {
+        "move_arms_engine_missing",
+        "move_arms_present_but_illegal",
+        "move_arms_order_unavailable",
+        "move_arms_unexplained",
+    }
     for seat in ("acting", "opponent"):
         row = _mapping(witness.get(seat), label=f"unmapped-action {seat} witness")
-        if set(row) != fields:
+        if set(row) not in (base_fields, base_fields | move_surface_fields):
             raise HeadToHeadError("unmapped-action witness row has an unexpected schema.")
         normalized_row = {
             field: _nonnegative_int(row.get(field), label=f"unmapped-action {seat} {field}")
-            for field in sorted(fields)
+            for field in sorted(row)
         }
         missing_arms = (
             normalized_row["move_arms"]
@@ -986,6 +992,10 @@ def _validated_branch_prior_unmapped_action_witness(
             or missing_arms < normalized_row["nodes"]
         ):
             raise HeadToHeadError("unmapped-action witness does not conserve nodes and arms.")
+        if move_surface_fields <= normalized_row.keys() and normalized_row["move_arms"] != sum(
+            normalized_row[field] for field in move_surface_fields
+        ):
+            raise HeadToHeadError("unmapped-action witness does not conserve unmapped move arms.")
         normalized[seat] = normalized_row
     return normalized
 
@@ -999,8 +1009,30 @@ def _branch_prior_unmapped_action_witness_nodes(
 def _sum_branch_prior_unmapped_action_witnesses(
     witnesses: Sequence[Mapping[str, Mapping[str, int]]],
 ) -> dict[str, dict[str, int]]:
+    move_surface_fields = {
+        "move_arms_engine_missing",
+        "move_arms_present_but_illegal",
+        "move_arms_order_unavailable",
+        "move_arms_unexplained",
+    }
+    detailed = [
+        move_surface_fields <= witness[seat].keys()
+        for witness in witnesses
+        for seat in ("acting", "opponent")
+    ]
+    if any(detailed) and not all(detailed):
+        raise HeadToHeadError(
+            "unmapped-action witness detail schema differs across native invocations."
+        )
+    fields = (
+        "nodes",
+        "move_arms",
+        *(tuple(sorted(move_surface_fields)) if all(detailed) else ()),
+        "switch_arms",
+        "none_arms",
+    )
     total = {
-        seat: {field: 0 for field in ("nodes", "move_arms", "switch_arms", "none_arms")}
+        seat: {field: 0 for field in fields}
         for seat in ("acting", "opponent")
     }
     for witness in witnesses:
