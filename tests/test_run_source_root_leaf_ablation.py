@@ -88,9 +88,11 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 runner._parse_args([*required, "--shard-count", "4", "--shard-index", "4"])
             with self.assertRaises(SystemExit):
-                runner._parse_args([*required, "--finalize-only", "--shard-count", "4"])
+                runner._parse_args([*required, "--finalize-only", "--shard-count", "4", "--shard-index", "1"])
         sharded = runner._parse_args([*required, "--shard-count", "4", "--shard-index", "3"])
         self.assertEqual((sharded.shard_index, sharded.shard_count), (3, 4))
+        finalizer = runner._parse_args([*required, "--finalize-only", "--shard-count", "4"])
+        self.assertEqual((finalizer.shard_index, finalizer.shard_count), (0, 4))
 
     def test_decision_seed_is_stable_and_root_specific(self) -> None:
         runner = _runner()
@@ -116,6 +118,7 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
         payload = {
             "schema_version": runner.SCHEMA_VERSION,
             "state": "COMPLETE",
+            "manifest_sha256": "m" * 64,
             "source": root.to_dict(),
             "record_sha256": runner._sha256(record.to_dict()),
             "arms": {
@@ -125,7 +128,9 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             },
         }
         with mock.patch.object(runner, "require_rollout_leaf_witness") as witness:
-            runner._validate_completed_root(payload, root=root, record=record)
+            runner._validate_completed_root(
+                payload, root=root, record=record, manifest_sha256="m" * 64
+            )
             self.assertEqual(witness.call_count, 3)
             self.assertEqual(
                 [call.kwargs["rollout_leaf_eval"] for call in witness.call_args_list],
@@ -133,7 +138,31 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             )
             payload["arms"]["model_control_b"]["selection"]["root_action"] = "move 2"
             with self.assertRaisesRegex(runner.AblationError, "controls disagree"):
-                runner._validate_completed_root(payload, root=root, record=record)
+                runner._validate_completed_root(
+                    payload, root=root, record=record, manifest_sha256="m" * 64
+                )
+
+    def test_completed_root_refuses_a_foreign_manifest(self) -> None:
+        runner = _runner()
+        root = runner.SourceRoot(2026092004, "p1", 19)
+        record = SimpleNamespace(to_dict=lambda: {"record": "bound"})
+        payload = {
+            "schema_version": runner.SCHEMA_VERSION,
+            "state": "COMPLETE",
+            "manifest_sha256": "old" * 21 + "x",
+            "source": root.to_dict(),
+            "record_sha256": runner._sha256(record.to_dict()),
+            "arms": {
+                "model_control_a": {"selection": _selection()},
+                "model_control_b": {"selection": _selection()},
+                "rollout_leaf": {"selection": _selection(rollout_witness={"priced": 1})},
+            },
+        }
+        with mock.patch.object(runner, "require_rollout_leaf_witness"):
+            with self.assertRaisesRegex(runner.AblationError, "does not bind this run manifest"):
+                runner._validate_completed_root(
+                    payload, root=root, record=record, manifest_sha256="new" * 21 + "x"
+                )
 
     def test_contract_freezes_leaf_and_search_axes(self) -> None:
         runner = _runner()
@@ -168,3 +197,18 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
                     self.assertEqual(runner.main(required), 1)
             self.assertFalse((out_root / "NONPASS.json").exists())
             self.assertTrue((out_root / "last_error.json").exists())
+
+    def test_sharded_worker_requires_serial_prepare(self) -> None:
+        runner = _runner()
+        with tempfile.TemporaryDirectory() as temporary:
+            out_root = Path(temporary) / "out"
+            with self.assertRaisesRegex(runner.AblationError, "prepare-only"):
+                runner._prepare_root(
+                    out_root, {"schema_version": "test"}, resume=True, require_existing_manifest=True
+                )
+            runner._prepare_root(
+                out_root, {"schema_version": "test"}, resume=False, require_existing_manifest=False
+            )
+            runner._prepare_root(
+                out_root, {"schema_version": "test"}, resume=True, require_existing_manifest=True
+            )

@@ -123,9 +123,22 @@ def _sha256(payload: Any) -> str:
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _create_terminal(path: Path, payload: Mapping[str, Any]) -> None:
@@ -183,8 +196,8 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--expected-checkpoint-sha256 must be lowercase SHA-256")
     if args.shard_count <= 0 or not 0 <= args.shard_index < args.shard_count:
         parser.error("--shard-index must be in [0, --shard-count)")
-    if args.finalize_only and (args.shard_index != 0 or args.shard_count != 1):
-        parser.error("--finalize-only requires the default single finalizer shard")
+    if args.finalize_only and args.shard_index != 0:
+        parser.error("--finalize-only requires shard index zero")
     return args
 
 
@@ -219,17 +232,31 @@ def _validate_historical_baseline(source_root: Path) -> dict[str, Any]:
         if not isinstance(candidate, Mapping):
             raise AblationError(f"source manifest has no candidate: {path}")
         config = _historical_config_projection(candidate.get("config"))
+        checkpoint_sha256 = candidate.get("checkpoint_sha256")
+        if not isinstance(checkpoint_sha256, str) or len(checkpoint_sha256) != 64:
+            raise AblationError(f"source manifest has no valid candidate checkpoint: {path}")
         seed = payload.get("study", {}).get("seed") if isinstance(payload.get("study"), Mapping) else None
         if seed not in {2026092004, 2026092005, 2026092006, 2026092007}:
             raise AblationError(f"source manifest has an unexpected seed: {path}")
-        rows.append({"seed": seed, "config_sha256": _sha256(config)})
+        rows.append({
+            "seed": seed,
+            "config_sha256": _sha256(config),
+            "checkpoint_sha256": checkpoint_sha256,
+            "manifest_sha256": sha256_file(path),
+        })
     if len(rows) != 4 or {row["seed"] for row in rows} != {2026092004, 2026092005, 2026092006, 2026092007}:
         raise AblationError("source historical baseline manifests are incomplete")
     if len({row["config_sha256"] for row in rows}) != 1:
         raise AblationError("source historical baseline config differs across seeds")
+    if len({row["checkpoint_sha256"] for row in rows}) != 1:
+        raise AblationError("source historical baseline checkpoint differs across seeds")
     return {
         "historical_config": dict(HISTORICAL_MODEL_CONFIG),
         "historical_config_sha256": rows[0]["config_sha256"],
+        "historical_candidate_checkpoint_sha256": rows[0]["checkpoint_sha256"],
+        "source_manifest_sha256_by_seed": {
+            str(row["seed"]): row["manifest_sha256"] for row in sorted(rows, key=lambda row: row["seed"])
+        },
         "historical_reproduction": False,
         "historical_reproduction_reason": "public-source replay uses a newly pinned decision RNG",
     }
@@ -268,7 +295,13 @@ def _source_wrapper_path(source_root: Path, root: SourceRoot) -> Path:
     return matches[0]
 
 
-def _load_source_records(source_root: Path) -> tuple[dict[SourceRoot, tuple[PublicDecisionRecord, Mapping[str, Any]]], dict[int, tuple[PublicDecisionRecord, ...]]]:
+def _load_source_records(
+    source_root: Path,
+) -> tuple[
+    dict[SourceRoot, tuple[PublicDecisionRecord, Mapping[str, Any]]],
+    dict[int, tuple[PublicDecisionRecord, ...]],
+    list[dict[str, Any]],
+]:
     complete = _read_json(source_root / "COMPLETE.json")
     if complete != {
         "games": 8,
@@ -291,8 +324,24 @@ def _load_source_records(source_root: Path) -> tuple[dict[SourceRoot, tuple[Publ
     if len(candidate_hashes) != 1 or len(raw_hashes) != 1:
         raise AblationError("source records disagree on R4 policy provenance")
     by_seed: dict[int, dict[str, PublicDecisionRecord]] = {}
-    for record, _ in selected.values():
+    source_inventory: dict[str, dict[str, Any]] = {}
+
+    def register_source(path: Path, record: PublicDecisionRecord, wrapper: Mapping[str, Any]) -> None:
         by_seed.setdefault(record.seed, {})[record.decision_id] = record
+        identity = {
+            "seed": record.seed,
+            "seat": record.acting_player,
+            "turn_index": record.turn_index,
+            "decision_id": record.decision_id,
+            "record_sha256": _sha256(record.to_dict()),
+            "wrapper_sha256": sha256_file(path),
+        }
+        prior = source_inventory.setdefault(record.decision_id, identity)
+        if prior != identity:
+            raise AblationError(f"source record identity is inconsistent: {record.decision_id}")
+
+    for root, (record, wrapper) in selected.items():
+        register_source(_source_wrapper_path(source_root, root), record, wrapper)
     # Retain only the source-owned earlier decision records that an explicit
     # placeholder repair may consult.  Scanning every captured record is both
     # unnecessary and makes recovery depend on hundreds of unrelated files.
@@ -313,8 +362,12 @@ def _load_source_records(source_root: Path) -> tuple[dict[SourceRoot, tuple[Publ
                 "raw_provenance_sha256"
             ] not in raw_hashes:
                 raise AblationError(f"{target}: repair source record provenance drifted")
-            by_seed.setdefault(record.seed, {})[source_record.decision_id] = source_record
-    return selected, {seed: tuple(records.values()) for seed, records in by_seed.items()}
+            register_source(_source_wrapper_path(source_root, source_root_address), source_record, source_wrapper)
+    return (
+        selected,
+        {seed: tuple(records.values()) for seed, records in by_seed.items()},
+        [source_inventory[key] for key in sorted(source_inventory)],
+    )
 
 
 def _decision_seed(record: PublicDecisionRecord) -> int:
@@ -478,7 +531,8 @@ def _validate_persisted_selection(selection: Any, *, rollout_leaf_eval: bool) ->
 
 
 def _run_root(
-    *, root: SourceRoot, record: PublicDecisionRecord, source_records: Sequence[PublicDecisionRecord], contract: Any, args: argparse.Namespace
+    *, root: SourceRoot, record: PublicDecisionRecord, source_records: Sequence[PublicDecisionRecord],
+    contract: Any, args: argparse.Namespace, manifest_sha256: str,
 ) -> dict[str, Any]:
     try:
         prefix = source_bound_replay_prefix(record, source_records=source_records)
@@ -517,6 +571,7 @@ def _run_root(
     return {
         "schema_version": SCHEMA_VERSION,
         "state": "COMPLETE",
+        "manifest_sha256": manifest_sha256,
         "source": root.to_dict(),
         "record_sha256": _sha256(record.to_dict()),
         "decision_id": record.decision_id,
@@ -531,12 +586,14 @@ def _manifest(
     *, args: argparse.Namespace, contract: Any,
     selected: Mapping[SourceRoot, tuple[PublicDecisionRecord, Mapping[str, Any]]],
     historical_baseline: Mapping[str, Any],
+    source_inventory: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     wrappers = [wrapper for _, wrapper in selected.values()]
     return {
         "schema_version": SCHEMA_VERSION,
         "source_root": str(Path(args.source_root).resolve()),
         "source_complete_sha256": sha256_file(Path(args.source_root) / "COMPLETE.json"),
+        "source_record_inventory": [dict(item) for item in source_inventory],
         "source_policy_provenance": {
             "candidate": wrappers[0]["candidate_provenance_sha256"],
             "raw": wrappers[0]["raw_provenance_sha256"],
@@ -548,10 +605,19 @@ def _manifest(
         "model_policy": {"model_priors": True, "use_opponent_priors": False, "override_telemetry": True},
         "rollout": dict(ROLLOUT),
         "arms": list(ARMS),
+        "execution_plan": {
+            "shard_count": args.shard_count,
+            "root_assignment": {
+                str(index): [root.to_dict() for root_index, root in enumerate(TARGETS) if root_index % args.shard_count == index]
+                for index in range(args.shard_count)
+            },
+        },
     }
 
 
-def _prepare_root(out_root: Path, manifest: Mapping[str, Any], *, resume: bool) -> None:
+def _prepare_root(
+    out_root: Path, manifest: Mapping[str, Any], *, resume: bool, require_existing_manifest: bool
+) -> None:
     terminals = [out_root / name for name in ("PASS.json", "NONPASS.json") if (out_root / name).exists()]
     if terminals:
         raise AblationError(f"out root is terminal: {', '.join(path.name for path in terminals)}")
@@ -563,16 +629,22 @@ def _prepare_root(out_root: Path, manifest: Mapping[str, Any], *, resume: bool) 
             raise AblationError("out root manifest differs from this frozen contract")
     elif out_root.exists() and any(out_root.iterdir()):
         raise AblationError("nonempty out root has no manifest")
+    elif require_existing_manifest:
+        raise AblationError("sharded workers require a prior single --prepare-only initialization")
     else:
         _atomic_json(path, manifest)
     _atomic_json(out_root / "RUNNING.json", {"schema_version": SCHEMA_VERSION, "state": "RUNNING"})
 
 
-def _validate_completed_root(payload: Any, *, root: SourceRoot, record: PublicDecisionRecord) -> None:
+def _validate_completed_root(
+    payload: Any, *, root: SourceRoot, record: PublicDecisionRecord, manifest_sha256: str
+) -> None:
     if not isinstance(payload, Mapping) or payload.get("schema_version") != SCHEMA_VERSION or payload.get("state") != "COMPLETE":
         raise AblationError(f"{root}: durable root has invalid state")
     if payload.get("source") != root.to_dict() or payload.get("record_sha256") != _sha256(record.to_dict()):
         raise AblationError(f"{root}: durable root does not bind its source record")
+    if payload.get("manifest_sha256") != manifest_sha256:
+        raise AblationError(f"{root}: durable root does not bind this run manifest")
     arms = payload.get("arms")
     if not isinstance(arms, Mapping) or set(arms) != set(ARMS):
         raise AblationError(f"{root}: durable root has malformed arm coverage")
@@ -593,7 +665,7 @@ def _validate_completed_root(payload: Any, *, root: SourceRoot, record: PublicDe
 def _run(args: argparse.Namespace) -> dict[str, Any]:
     source_root = Path(args.source_root).resolve()
     out_root = Path(args.out_root).resolve()
-    selected, by_seed = _load_source_records(source_root)
+    selected, by_seed, source_inventory = _load_source_records(source_root)
     historical_baseline = _validate_historical_baseline(source_root)
     try:
         contract = resolve_checkpoint_contract(
@@ -604,13 +676,22 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         )
     except ContractError as error:
         raise AblationError(f"checkpoint contract failed: {error}") from error
+    if contract.checkpoint_sha256 != historical_baseline["historical_candidate_checkpoint_sha256"]:
+        raise AblationError("live checkpoint does not match the archived R4 candidate checkpoint")
     manifest = _manifest(
         args=args,
         contract=contract,
         selected=selected,
         historical_baseline=historical_baseline,
+        source_inventory=source_inventory,
     )
-    _prepare_root(out_root, manifest, resume=args.resume)
+    manifest_sha256 = _sha256(manifest)
+    _prepare_root(
+        out_root,
+        manifest,
+        resume=args.resume,
+        require_existing_manifest=args.shard_count > 1 and not args.prepare_only,
+    )
     if args.prepare_only:
         return {
             "schema_version": SCHEMA_VERSION,
@@ -629,7 +710,9 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         complete_path = root_dir / "COMPLETE.json"
         if complete_path.exists():
             payload = _read_json(complete_path)
-            _validate_completed_root(payload, root=root, record=record)
+            _validate_completed_root(
+                payload, root=root, record=record, manifest_sha256=manifest_sha256
+            )
         else:
             _atomic_json(out_root / "progress" / "current.json", {
                 "schema_version": SCHEMA_VERSION,
@@ -643,16 +726,18 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "worker_shard": {"index": args.shard_index, "count": args.shard_count},
             })
             payload = _run_root(
-                root=root, record=record, source_records=by_seed[root.seed], contract=contract, args=args
+                root=root, record=record, source_records=by_seed[root.seed], contract=contract,
+                args=args, manifest_sha256=manifest_sha256,
             )
             _create_terminal(complete_path, payload)
         completed.append(dict(payload))
-    if args.shard_count > 1:
+    if args.shard_count > 1 and not args.finalize_only:
         _atomic_json(out_root / "shards" / f"shard-{args.shard_index}.json", {
             "schema_version": SCHEMA_VERSION,
             "state": "COMPLETE",
             "shard_index": args.shard_index,
             "shard_count": args.shard_count,
+            "manifest_sha256": manifest_sha256,
             "roots": [root.to_dict() for root in owned_targets],
         })
         return {
@@ -663,13 +748,32 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "root_count": len(completed),
         }
     all_completed: list[dict[str, Any]] = []
+    if args.shard_count > 1:
+        for shard_index in range(args.shard_count):
+            receipt_path = out_root / "shards" / f"shard-{shard_index}.json"
+            receipt = _read_json(receipt_path)
+            expected_roots = [
+                root.to_dict() for root_index, root in enumerate(TARGETS)
+                if root_index % args.shard_count == shard_index
+            ]
+            if receipt != {
+                "schema_version": SCHEMA_VERSION,
+                "state": "COMPLETE",
+                "shard_index": shard_index,
+                "shard_count": args.shard_count,
+                "manifest_sha256": manifest_sha256,
+                "roots": expected_roots,
+            }:
+                raise AblationError(f"shard {shard_index}: receipt differs from frozen execution plan")
     for root in TARGETS:
         record, _ = selected[root]
         complete_path = _root_directory(out_root, root) / "COMPLETE.json"
         if not complete_path.exists():
             raise AblationError(f"{root}: finalization is missing a completed durable root")
         payload = _read_json(complete_path)
-        _validate_completed_root(payload, root=root, record=record)
+        _validate_completed_root(
+            payload, root=root, record=record, manifest_sha256=manifest_sha256
+        )
         all_completed.append(dict(payload))
     summary = {
         "schema_version": SCHEMA_VERSION,
