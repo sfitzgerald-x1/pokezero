@@ -30,6 +30,10 @@ class _Record:
     seed: int = 1
     battle_id: str = "battle-1"
     turn_index: int = 2
+    acting_player: str = "p1"
+    decision_id: str = "decision-1"
+    recorded_action_index: int = 3
+    current_legal_action_mask: tuple[bool, ...] = (True, True, True, True)
 
     def to_dict(self) -> dict[str, object]:
         return {"seed": self.seed, "battle_id": self.battle_id, "turn_index": self.turn_index}
@@ -225,6 +229,88 @@ class ContinuationContractTest(unittest.TestCase):
         study = {"schema_version": RUNNER.MULTIREPLY_SCHEMA_VERSION, "candidate_actions": {"raw_policy": 1, "rollout_leaf": 2}, **projection, "reply_samples": [{"opponent_reply_sample": sample, "grid": grid} for sample in range(RUNNER.OPPONENT_REPLY_SAMPLE_COUNT)]}
         with self.assertRaisesRegex(RUNNER.ContinuationError, "effective ceiling"):
             RUNNER._validate_multireply_payload(study, root=RUNNER.SourceRoot(1, "p1", 2), record=RECORD, expected_actions={"raw_policy": 1, "rollout_leaf": 2}, expected_projection=projection, expected_search_evidence=grid["search_evidence"])
+
+    def test_raw_policy_anchor_uses_ledger_argmax_not_recorded_mcts_action(self) -> None:
+        root = RUNNER.SourceRoot(RECORD.seed, RECORD.acting_player, RECORD.turn_index)
+        wrapper = {
+            "candidate_provenance_sha256": "c" * 64,
+            "raw_provenance_sha256": "r" * 64,
+        }
+        ledger = {
+            "schema_version": "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v5",
+            "seed": RECORD.seed,
+            "candidate_seat": RECORD.acting_player,
+            **wrapper,
+            "public_decision": {
+                "decision_id": RECORD.decision_id,
+                "battle_id": RECORD.battle_id,
+                "acting_player": RECORD.acting_player,
+                "turn_index": RECORD.turn_index,
+                "recorded_action_index": RECORD.recorded_action_index,
+            },
+            "selection": {
+                "model_argmax": 0,
+                "search_argmax": RECORD.recorded_action_index,
+                "model_override": True,
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = (
+                Path(temporary)
+                / "seeds"
+                / f"seed-{RECORD.seed}"
+                / "branch-prior-fallback-ledgers"
+                / f"seed-{RECORD.seed}-{RECORD.acting_player}"
+            )
+            directory.mkdir(parents=True)
+            (directory / f"turn-{RECORD.turn_index:03d}-{RECORD.decision_id}.json").write_text(
+                json.dumps(ledger), encoding="utf-8"
+            )
+            anchor = RUNNER._raw_policy_anchor(
+                source_root=Path(temporary), root=root, record=RECORD, wrapper=wrapper
+            )
+        self.assertEqual(anchor.action_index, 0)
+        self.assertNotEqual(anchor.action_index, RECORD.recorded_action_index)
+        self.assertEqual(anchor.selection_ledger_sha256, RUNNER._sha256(ledger))
+
+    def test_multireply_registers_the_ledger_bound_raw_action(self) -> None:
+        plan = RUNNER._RootPlan(
+            root=RUNNER.SourceRoot(RECORD.seed, RECORD.acting_player, RECORD.turn_index),
+            model_choice="move 2",
+            rollout_choice="move 3",
+            model_action=1,
+            rollout_action=2,
+            raw_policy_action=0,
+            raw_policy_selection_sha256="a" * 64,
+            histories={},
+            snapshot=None,
+            opponent_seat="p2",
+            opponent_action=0,
+            opponent_observation=None,
+            source_battle_id=RECORD.battle_id,
+        )
+        actions, projection = RUNNER._multireply_actions(plan=plan, record=RECORD)
+        self.assertEqual(actions, {"raw_policy": 0, "model_leaf": 1, "rollout_leaf": 2})
+        self.assertEqual(projection["raw_policy_selection_sha256"], "a" * 64)
+
+    def test_multireply_refuses_a_missing_raw_policy_anchor(self) -> None:
+        plan = RUNNER._RootPlan(
+            root=RUNNER.SourceRoot(RECORD.seed, RECORD.acting_player, RECORD.turn_index),
+            model_choice="move 2",
+            rollout_choice="move 3",
+            model_action=1,
+            rollout_action=2,
+            raw_policy_action=None,
+            raw_policy_selection_sha256=None,
+            histories={},
+            snapshot=None,
+            opponent_seat="p2",
+            opponent_action=0,
+            opponent_observation=None,
+            source_battle_id=RECORD.battle_id,
+        )
+        with self.assertRaisesRegex(RUNNER.ContinuationError, "anchor is absent"):
+            RUNNER._multireply_actions(plan=plan, record=RECORD)
 
     def test_source_provenance_requires_image_baked_commit(self) -> None:
         expected = "a" * 40

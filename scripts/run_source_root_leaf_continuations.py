@@ -99,6 +99,14 @@ class ContinuationError(RuntimeError):
     """The continuation experiment cannot safely produce a result."""
 
 
+@dataclass(frozen=True)
+class _RawPolicyAnchor:
+    """The raw-policy action bound by the immutable source selection ledger."""
+
+    action_index: int
+    selection_ledger_sha256: str
+
+
 def _sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -292,8 +300,9 @@ def _source_code_provenance(*, expected_commit: str) -> Mapping[str, str]:
 def _manifest(
     *, args: argparse.Namespace, changed: Mapping[SourceRoot, Mapping[str, Any]],
     leaf_manifest: Mapping[str, Any], leaf_manifest_sha256: str,
+    raw_policy_anchors: Mapping[SourceRoot, _RawPolicyAnchor] | None = None,
 ) -> Mapping[str, Any]:
-    return {
+    manifest: dict[str, Any] = {
         "schema_version": MULTIREPLY_SCHEMA_VERSION if args.multireply else SCHEMA_VERSION,
         "source_root": str(Path(args.source_root).resolve()),
         "source_complete_sha256": _sha256_file(Path(args.source_root) / "COMPLETE.json"),
@@ -335,6 +344,18 @@ def _manifest(
             "rollout": leaf_manifest.get("rollout"),
         },
     }
+    if args.multireply:
+        if raw_policy_anchors is None or set(raw_policy_anchors) != set(changed):
+            raise ContinuationError("multireply manifest has incomplete raw-policy anchors")
+        manifest["raw_policy_anchors"] = [
+            {
+                "source": root.to_dict(),
+                "action_index": raw_policy_anchors[root].action_index,
+                "selection_ledger_sha256": raw_policy_anchors[root].selection_ledger_sha256,
+            }
+            for root in changed
+        ]
+    return manifest
 
 
 def _prepare(
@@ -408,6 +429,71 @@ def _source_histories(replay: Any, current: Mapping[str, Any]) -> Mapping[str, t
     return {seat: tuple(history) for seat, history in histories.items()}
 
 
+def _source_selection_ledger_path(source_root: Path, root: SourceRoot, record: Any) -> Path:
+    """Locate the one immutable selection ledger for a selected source root."""
+
+    directory = (
+        source_root
+        / "seeds"
+        / f"seed-{root.seed}"
+        / "branch-prior-fallback-ledgers"
+        / f"seed-{root.seed}-{root.seat}"
+    )
+    matches = sorted(directory.glob(f"turn-{root.turn_index:03d}-{record.decision_id}.json"))
+    if len(matches) != 1:
+        raise ContinuationError(f"{root}: source selection ledger count is {len(matches)}, expected one")
+    return matches[0]
+
+
+def _raw_policy_anchor(
+    *, source_root: Path, root: SourceRoot, record: Any, wrapper: Mapping[str, Any],
+) -> _RawPolicyAnchor:
+    """Recover the baseline action from its producer-validated source ledger.
+
+    ``record.recorded_action_index`` is the guided actor's selected MCTS
+    action, not the raw-policy baseline.  The producer binds the baseline
+    deterministic masked argmax as ``selection.model_argmax``.  Reading it
+    here keeps the continuation contract source-bound and prevents a label
+    from silently becoming an action identity.
+    """
+
+    path = _source_selection_ledger_path(source_root, root, record)
+    ledger = _read_json(path)
+    if not isinstance(ledger, Mapping):
+        raise ContinuationError(f"{root}: source selection ledger is not an object")
+    if ledger.get("schema_version") != "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v5":
+        raise ContinuationError(f"{root}: source selection ledger schema drifted")
+    if ledger.get("seed") != record.seed or ledger.get("candidate_seat") != root.seat:
+        raise ContinuationError(f"{root}: source selection ledger identity drifted")
+    if (
+        ledger.get("candidate_provenance_sha256") != wrapper.get("candidate_provenance_sha256")
+        or ledger.get("raw_provenance_sha256") != wrapper.get("raw_provenance_sha256")
+    ):
+        raise ContinuationError(f"{root}: source selection ledger provenance drifted")
+    if ledger.get("public_decision") != {
+        "decision_id": record.decision_id,
+        "battle_id": record.battle_id,
+        "acting_player": record.acting_player,
+        "turn_index": record.turn_index,
+        "recorded_action_index": record.recorded_action_index,
+    }:
+        raise ContinuationError(f"{root}: source selection ledger public decision drifted")
+    selection = ledger.get("selection")
+    if not isinstance(selection, Mapping):
+        raise ContinuationError(f"{root}: source selection ledger has no selection")
+    raw_action = selection.get("model_argmax")
+    if isinstance(raw_action, bool) or not isinstance(raw_action, int):
+        raise ContinuationError(f"{root}: source raw policy action is not an integer")
+    legal_mask = record.current_legal_action_mask
+    if not 0 <= raw_action < len(legal_mask) or not legal_mask[raw_action]:
+        raise ContinuationError(f"{root}: source raw policy action is not legal")
+    if selection.get("search_argmax") != record.recorded_action_index:
+        raise ContinuationError(f"{root}: source selection does not bind the recorded MCTS action")
+    if selection.get("model_override") != (raw_action != record.recorded_action_index):
+        raise ContinuationError(f"{root}: source selection override relation drifted")
+    return _RawPolicyAnchor(action_index=raw_action, selection_ledger_sha256=_sha256(ledger))
+
+
 def _new_sampled_policy(
     *, model: Any, result: Any, device: str, seat: str, history: Sequence[Any], deterministic: bool,
 ) -> TransformerSoftmaxPolicy:
@@ -430,6 +516,8 @@ class _RootPlan:
     rollout_choice: str
     model_action: int
     rollout_action: int
+    raw_policy_action: int | None
+    raw_policy_selection_sha256: str | None
     histories: Mapping[str, tuple[Any, ...]]
     snapshot: Any
     opponent_seat: str
@@ -440,7 +528,7 @@ class _RootPlan:
 
 def _root_plan(
     *, root: SourceRoot, record: Any, source_records: Sequence[Any], leaf_payload: Mapping[str, Any],
-    env_config: Any, model: Any, result: Any, device: str,
+    env_config: Any, model: Any, result: Any, device: str, raw_policy_anchor: _RawPolicyAnchor | None,
 ) -> _RootPlan:
     prefix = source_bound_replay_prefix(record, source_records=source_records)
     env = LocalShowdownEnv(env_config)
@@ -462,6 +550,21 @@ def _root_plan(
         ):
             raise ContinuationError(f"{root}: replayed source observation or belief drifted")
         histories = _source_histories(replay, current)
+        if raw_policy_anchor is not None:
+            # Re-execute the registered baseline selector at the restored
+            # boundary.  The immutable ledger names the raw argmax; this
+            # second binding catches a stale or incorrectly interpreted
+            # ledger without exposing any private action details.
+            raw_selector = _new_sampled_policy(
+                model=model,
+                result=result,
+                device=device,
+                seat=root.seat,
+                history=histories[root.seat][:-1],
+                deterministic=True,
+            )
+            if raw_selector.select_action(current[root.seat]).action_index != raw_policy_anchor.action_index:
+                raise ContinuationError(f"{root}: source raw policy selector disagrees with its ledger")
         arms = leaf_payload["arms"]
         model_choice = arms["model_control_a"]["selection"]["root_action"]
         rollout_choice = arms["rollout_leaf"]["selection"]["root_action"]
@@ -494,6 +597,10 @@ def _root_plan(
             rollout_choice=rollout_choice,
             model_action=model_action,
             rollout_action=rollout_action,
+            raw_policy_action=None if raw_policy_anchor is None else raw_policy_anchor.action_index,
+            raw_policy_selection_sha256=(
+                None if raw_policy_anchor is None else raw_policy_anchor.selection_ledger_sha256
+            ),
             histories=histories,
             snapshot=snapshot,
             opponent_seat=opponent_seat,
@@ -559,10 +666,12 @@ def _evaluate_root(
 
 def _multireply_actions(*, plan: _RootPlan, record: Any) -> tuple[Mapping[str, int], Mapping[str, Any]]:
     """Register raw/model/rollout candidates without inventing duplicate arms."""
+    if plan.raw_policy_action is None or plan.raw_policy_selection_sha256 is None:
+        raise ContinuationError(f"{plan.root}: multireply raw-policy anchor is absent")
     projection = contract_projection(
         decision_id=record.decision_id,
         choices={
-            "raw_policy": record.recorded_action_index,
+            "raw_policy": plan.raw_policy_action,
             "model_leaf": plan.model_action,
             "rollout_leaf": plan.rollout_action,
         },
@@ -570,6 +679,7 @@ def _multireply_actions(*, plan: _RootPlan, record: Any) -> tuple[Mapping[str, i
     actions = projection.pop("candidate_actions")
     if not isinstance(actions, Mapping):
         raise ContinuationError(f"{plan.root}: multireply candidate registration is invalid")
+    projection["raw_policy_selection_sha256"] = plan.raw_policy_selection_sha256
     return dict(actions), projection
 
 
@@ -595,6 +705,8 @@ def _evaluate_multireply_root(
     """Evaluate registered choices over multiple paired, hidden opponent replies."""
     subject, opponent = plan.root.seat, plan.opponent_seat
     actions, projection = _multireply_actions(plan=plan, record=record)
+    if plan.raw_policy_action is None or plan.raw_policy_selection_sha256 is None:
+        raise ContinuationError(f"{plan.root}: multireply raw-policy anchor is absent")
 
     def policy_consistent() -> Mapping[str, Any]:
         return {
@@ -621,7 +733,8 @@ def _evaluate_multireply_root(
             search_evidence={
                 "model_leaf_choice": plan.model_choice,
                 "rollout_leaf_choice": plan.rollout_choice,
-                "raw_policy_action_index": record.recorded_action_index,
+                "raw_policy_action_index": plan.raw_policy_action,
+                "raw_policy_selection_sha256": plan.raw_policy_selection_sha256,
                 "selection_changed": True,
                 "leaf_only_intervention": True,
             },
@@ -655,7 +768,12 @@ def _validate_multireply_payload(
         raise ContinuationError(f"{root}: multireply study schema drifted")
     if study.get("candidate_actions") != dict(expected_actions):
         raise ContinuationError(f"{root}: multireply candidate actions drifted")
-    for key in ("candidate_aliases", "opponent_reply_samples", "opponent_selector"):
+    for key in (
+        "candidate_aliases",
+        "opponent_reply_samples",
+        "opponent_selector",
+        "raw_policy_selection_sha256",
+    ):
         if expected_projection is None or study.get(key) != expected_projection.get(key):
             raise ContinuationError(f"{root}: multireply {key} drifted")
     samples = study.get("reply_samples")
@@ -748,7 +866,12 @@ def _validate_completed_root(
             expected_search_evidence={
                 "model_leaf_choice": arms["model_control_a"]["selection"]["root_action"],
                 "rollout_leaf_choice": arms["rollout_leaf"]["selection"]["root_action"],
-                "raw_policy_action_index": record.recorded_action_index,
+                "raw_policy_action_index": expected_actions["raw_policy"],
+                "raw_policy_selection_sha256": (
+                    expected_projection.get("raw_policy_selection_sha256")
+                    if expected_projection is not None
+                    else None
+                ),
                 "selection_changed": True,
                 "leaf_only_intervention": True,
             },
@@ -839,11 +962,29 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         raise ContinuationError("checkpoint SHA-256 does not match the frozen contract")
     source_selected, source_by_seed, _ = _load_source_records(source_root)
     changed, leaf_manifest, leaf_manifest_sha256 = _load_changed_leaf_roots(leaf_root, source_selected)
+    raw_policy_anchors = (
+        {
+            root: _raw_policy_anchor(
+                source_root=source_root,
+                root=root,
+                record=record,
+                wrapper=wrapper,
+            )
+            for root, (record, wrapper) in source_selected.items()
+            if root in changed
+        }
+        if args.multireply
+        else {}
+    )
     leaf_checkpoint = leaf_manifest.get("checkpoint")
     if not isinstance(leaf_checkpoint, Mapping) or leaf_checkpoint.get("checkpoint_sha256") != args.expected_checkpoint_sha256:
         raise ContinuationError("continuation checkpoint does not match the source-root leaf-ablation checkpoint")
     manifest = _manifest(
-        args=args, changed=changed, leaf_manifest=leaf_manifest, leaf_manifest_sha256=leaf_manifest_sha256,
+        args=args,
+        changed=changed,
+        leaf_manifest=leaf_manifest,
+        leaf_manifest_sha256=leaf_manifest_sha256,
+        raw_policy_anchors=raw_policy_anchors if args.multireply else None,
     )
     manifest_sha256 = _sha256(manifest)
     _prepare(
@@ -880,7 +1021,11 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         # than trusting labels copied from a prior process.
         plan = _root_plan(
             root=root, record=record, source_records=source_by_seed[root.seed], leaf_payload=changed[root],
-            env_config=env_config, model=model, result=result, device=args.device,
+            env_config=env_config,
+            model=model,
+            result=result,
+            device=args.device,
+            raw_policy_anchor=raw_policy_anchors.get(root),
         )
         if args.multireply:
             expected_actions, expected_projection = _multireply_actions(plan=plan, record=record)
@@ -928,7 +1073,11 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         record, _ = source_selected[root]
         plan = _root_plan(
             root=root, record=record, source_records=source_by_seed[root.seed], leaf_payload=changed[root],
-            env_config=env_config, model=model, result=result, device=args.device,
+            env_config=env_config,
+            model=model,
+            result=result,
+            device=args.device,
+            raw_policy_anchor=raw_policy_anchors.get(root),
         )
         if args.multireply:
             expected_actions, expected_projection = _multireply_actions(plan=plan, record=record)
