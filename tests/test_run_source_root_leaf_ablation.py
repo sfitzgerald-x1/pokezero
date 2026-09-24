@@ -23,6 +23,39 @@ def _runner():
     return module
 
 
+_BRANCH_REASONS = (
+    "empty_action_map",
+    "unmapped_action",
+    "action_index_out_of_range",
+    "invalid_mapped_mass",
+    "missing_model_head_row",
+    "decision_arm_count_mismatch",
+)
+
+
+def _live_branch_prior():
+    reasons = {reason: 0 for reason in _BRANCH_REASONS}
+    return {
+        "prior_fallbacks": 0,
+        "branch_prior_fallbacks": {
+            "schema_version": "pokezero.engine-mcts.branch-prior-fallbacks.v1",
+            "native_invocations": 1,
+            "belief_worlds": 4,
+            "branch_prior_fallbacks": 0,
+            "reason_counts": reasons,
+            "unclassified_branch_prior_fallbacks": 0,
+            "reason_ledger_complete": True,
+            "events": [{
+                "native_invocation": 1,
+                "belief_records": 1,
+                "collapse_multiplicity": 1,
+                "branch_prior_fallbacks": 0,
+                "reason_counts": dict(reasons),
+            }],
+        },
+    }
+
+
 def _selection(*, rollout_witness=None):
     return {
         "root_action": "move 1",
@@ -37,6 +70,7 @@ def _selection(*, rollout_witness=None):
             ],
         },
         "rollout_leaf": rollout_witness,
+        "live_branch_prior": _live_branch_prior(),
     }
 
 
@@ -246,6 +280,21 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             out_of_range["root_allocation"]["arms"][1]["action_index"] = runner.ACTION_COUNT
             with self.assertRaisesRegex(runner.AblationError, "action indices"):
                 runner._validate_persisted_selection(out_of_range, rollout_leaf_eval=False)
+
+    def test_persisted_selection_refuses_nonzero_or_incomplete_live_branch_prior_ledger(self) -> None:
+        runner = _runner()
+        with mock.patch.object(runner, "require_rollout_leaf_witness"):
+            nonzero = _selection()
+            nonzero["live_branch_prior"]["branch_prior_fallbacks"]["branch_prior_fallbacks"] = 1
+            nonzero["live_branch_prior"]["branch_prior_fallbacks"]["reason_counts"]["unmapped_action"] = 1
+            nonzero["live_branch_prior"]["branch_prior_fallbacks"]["events"][0]["branch_prior_fallbacks"] = 1
+            nonzero["live_branch_prior"]["branch_prior_fallbacks"]["events"][0]["reason_counts"]["unmapped_action"] = 1
+            with self.assertRaisesRegex(runner.AblationError, "reports a fallback|zero decomposition"):
+                runner._validate_persisted_selection(nonzero, rollout_leaf_eval=False)
+            incomplete = _selection()
+            del incomplete["live_branch_prior"]["branch_prior_fallbacks"]["reason_counts"]["unmapped_action"]
+            with self.assertRaisesRegex(runner.AblationError, "complete zero decomposition"):
+                runner._validate_persisted_selection(incomplete, rollout_leaf_eval=False)
 
     def test_completed_root_refuses_control_drift(self) -> None:
         runner = _runner()

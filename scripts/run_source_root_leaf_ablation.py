@@ -39,7 +39,10 @@ if SRC.is_dir():
     sys.path.insert(0, str(SRC))
 
 from pokezero.actions import ACTION_COUNT  # noqa: E402
-from pokezero.engine_search import require_rollout_leaf_witness  # noqa: E402
+from pokezero.engine_search import (  # noqa: E402
+    BRANCH_PRIOR_FALLBACK_REASON_VALUES,
+    require_rollout_leaf_witness,
+)
 from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider  # noqa: E402
 from pokezero.mcts_eval.manifest import SearchConfig  # noqa: E402
 from pokezero.mcts_eval.resolver import (  # noqa: E402
@@ -54,7 +57,7 @@ from pokezero.mcts_eval.source_root_replay import (  # noqa: E402
 from pokezero.public_decision_corpus import PublicDecisionRecord  # noqa: E402
 
 
-SCHEMA_VERSION = "pokezero.source-root-leaf-ablation.v3"
+SCHEMA_VERSION = "pokezero.source-root-leaf-ablation.v4"
 SOURCE_WRAPPER_SCHEMA = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 ARMS = ("model_control_a", "model_control_b", "rollout_leaf")
 SEARCH = {"depth": 6, "sims": 4096, "batch": 16, "worlds": 4}
@@ -731,6 +734,83 @@ def _finite(value: Any, *, field: str) -> float:
     return float(value)
 
 
+def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
+    """Return the complete, zero-valued branch-prior witness or fail closed.
+
+    The repaired replay must preserve this source-native ledger in every
+    durable arm.  A transient ``prior_fallbacks == 0`` check cannot prove a
+    later reader saw the same complete reason decomposition.
+    """
+
+    if not isinstance(witness, Mapping) or set(witness) != {
+        "prior_fallbacks", "branch_prior_fallbacks"
+    }:
+        raise AblationError("live branch-prior witness is malformed")
+    prior_fallbacks = witness.get("prior_fallbacks")
+    ledger = witness.get("branch_prior_fallbacks")
+    if type(prior_fallbacks) is not int or prior_fallbacks != 0 or not isinstance(ledger, Mapping):
+        raise AblationError("live branch-prior witness reports a fallback")
+    expected_ledger = {
+        "schema_version",
+        "native_invocations",
+        "belief_worlds",
+        "branch_prior_fallbacks",
+        "reason_counts",
+        "unclassified_branch_prior_fallbacks",
+        "reason_ledger_complete",
+        "events",
+    }
+    if set(ledger) != expected_ledger or ledger.get("schema_version") != (
+        "pokezero.engine-mcts.branch-prior-fallbacks.v1"
+    ):
+        raise AblationError("live branch-prior ledger has an unsupported schema")
+    invocations = ledger.get("native_invocations")
+    worlds = ledger.get("belief_worlds")
+    reasons = ledger.get("reason_counts")
+    events = ledger.get("events")
+    if (
+        type(invocations) is not int
+        or invocations <= 0
+        or type(worlds) is not int
+        or worlds != SEARCH["worlds"]
+        or ledger.get("branch_prior_fallbacks") != 0
+        or ledger.get("unclassified_branch_prior_fallbacks") != 0
+        or ledger.get("reason_ledger_complete") is not True
+        or not isinstance(reasons, Mapping)
+        or set(reasons) != BRANCH_PRIOR_FALLBACK_REASON_VALUES
+        or any(type(count) is not int or count != 0 for count in reasons.values())
+        or not isinstance(events, list)
+        or len(events) != invocations
+    ):
+        raise AblationError("live branch-prior ledger is not a complete zero decomposition")
+    expected_event = {
+        "native_invocation",
+        "belief_records",
+        "collapse_multiplicity",
+        "branch_prior_fallbacks",
+        "reason_counts",
+    }
+    for ordinal, event in enumerate(events, 1):
+        if not isinstance(event, Mapping) or set(event) != expected_event:
+            raise AblationError("live branch-prior event has an unsupported schema")
+        if (
+            event.get("native_invocation") != ordinal
+            or type(event.get("belief_records")) is not int
+            or event["belief_records"] <= 0
+            or type(event.get("collapse_multiplicity")) is not int
+            or event["collapse_multiplicity"] <= 0
+            or event.get("branch_prior_fallbacks") != 0
+            or not isinstance(event.get("reason_counts"), Mapping)
+            or set(event["reason_counts"]) != BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            or any(type(count) is not int or count != 0 for count in event["reason_counts"].values())
+        ):
+            raise AblationError("live branch-prior event is not a complete zero decomposition")
+    return {
+        "prior_fallbacks": prior_fallbacks,
+        "branch_prior_fallbacks": json.loads(_canonical_json(dict(ledger))),
+    }
+
+
 def _selection_witness(telemetry: Mapping[str, Any], *, rollout_leaf_eval: bool) -> dict[str, Any]:
     if telemetry.get("invalid_actions") != 0 or telemetry.get("fallbacks") != 0 or telemetry.get("prior_fallbacks") != 0:
         raise AblationError("source root action or prior fallback occurred")
@@ -746,6 +826,10 @@ def _selection_witness(telemetry: Mapping[str, Any], *, rollout_leaf_eval: bool)
     override = engine.get("override")
     if not isinstance(override, Mapping):
         raise AblationError("source root has no override telemetry")
+    live_branch_prior = _validate_live_branch_prior({
+        "prior_fallbacks": telemetry.get("prior_fallbacks"),
+        "branch_prior_fallbacks": override.get("branch_prior_fallbacks"),
+    })
     allocation = override.get("root_allocation")
     if not isinstance(allocation, Mapping) or set(allocation) != {"worlds", "prior_authority", "prior_cause", "arms"}:
         raise AblationError("source root has malformed root allocation")
@@ -801,6 +885,7 @@ def _selection_witness(telemetry: Mapping[str, Any], *, rollout_leaf_eval: bool)
         "max_depth_reached": telemetry.get("max_depth_reached"),
         "root_allocation": {"worlds": allocation["worlds"], "arms": normalized_arms},
         "rollout_leaf": engine.get("rollout_leaf"),
+        "live_branch_prior": live_branch_prior,
     }
 
 
@@ -814,6 +899,7 @@ def _control_projection(witness: Mapping[str, Any]) -> dict[str, Any]:
         "max_depth_reached": witness["max_depth_reached"],
         "root_allocation": witness["root_allocation"],
         "rollout_leaf": witness["rollout_leaf"],
+        "live_branch_prior": witness["live_branch_prior"],
     }
 
 
@@ -825,6 +911,7 @@ def _validate_persisted_selection(selection: Any, *, rollout_leaf_eval: bool) ->
     root_action = selection.get("root_action")
     if not isinstance(root_action, str) or not root_action:
         raise AblationError("durable selection has no root action")
+    _validate_live_branch_prior(selection.get("live_branch_prior"))
     for field in ("total_iterations", "model_evals", "max_depth_reached"):
         value = selection.get(field)
         if not isinstance(value, int) or value <= 0:
