@@ -61,6 +61,17 @@ establishes a repair by itself: the full four-seed, both-seat replay must
 complete cleanly and reproduce the sealed source/configuration before the
 historical concentration can be called removed.
 
+One completed corrected replay arm does isolate a separate, smaller residual:
+`2026092003` p2 has 36 `unmapped_action` fallbacks (27 at turn 14, one at
+turn 20, and eight at turn 22), all classified as acting-side
+`move_arms_unexplained`.  These are not the historical stale-PP class:
+none is engine-missing, order-unavailable, or present-but-illegal.  In all
+three affected public decision records the root search choice remains the raw
+model argmax (zero overrides), so this evidence does not show a changed root
+action in that replay.  It does show that the residual needs more
+private-free mapping-surface instrumentation before proposing another fix;
+it must not be folded into the fresh-switch repair claim.
+
 Even a clean focused replay would prove a search implementation correction,
 not a strength gain.  The next required step is a durable, paired GPU
 guided-MCTS-versus-raw-policy study using the corrected source, exact raw
