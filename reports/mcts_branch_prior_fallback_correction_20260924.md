@@ -96,12 +96,15 @@ the source tree was restored, and the recorded artifact is bound to this
 source and harness.  This establishes that the relevant witness gate can
 detect the scoped failures; it is not strength evidence.
 
-The focused corrected replay is still required.  A single completed control
-seed has no branch-prior fallbacks, and the corrected `2026092006` p1 game
-has completed with zero branch-prior fallbacks.  Neither observation
-establishes a repair by itself: the full four-seed, both-seat replay must
-complete cleanly and reproduce the sealed source/configuration before the
-historical concentration can be called removed.
+The focused corrected replay completed cleanly with eight terminal games,
+four mirrored pairs, and zero Pod restarts.  Its immutable root receipt is
+`/shared/scott-experiment/mcts-unmapped-action-forensics-8353511-20260924-r3/COMPLETE.json`.
+All five historical `2026092006` p2 concentration turns (118, 119, 124, 126,
+and 127) now report zero branch-prior fallbacks; the entire corrected
+`2026092006` pair has zero fallback events.  This is the direct source-bound
+evidence that the 1,414-event stale-PP concentration is removed, while the
+separate 36-event residual below remains intentionally out of scope for this
+repair.
 
 One completed corrected replay arm does isolate a separate, smaller residual:
 `2026092003` p2 has 36 `unmapped_action` fallbacks (27 at turn 14, one at
