@@ -344,6 +344,7 @@ def _prepare(
     resume: bool,
     require_existing: bool,
     allow_complete_pass: bool,
+    schema_version: str = SCHEMA_VERSION,
 ) -> None:
     path = out_root / "MANIFEST.json"
     terminals = [out_root / name for name in ("PASS.json", "NONPASS.json") if (out_root / name).exists()]
@@ -369,7 +370,7 @@ def _prepare(
         raise ContinuationError("sharded workers require a prior --prepare-only initialization")
     else:
         _write_create_only_json(path, manifest)
-    _write_progress(out_root / "RUNNING.json", {"schema_version": SCHEMA_VERSION, "state": "RUNNING"})
+    _write_progress(out_root / "RUNNING.json", {"schema_version": schema_version, "state": "RUNNING"})
 
 
 def _choice_index(env: LocalShowdownEnv, seat: str, choice: str) -> int:
@@ -702,6 +703,17 @@ def _validate_multireply_payload(
                     raise ContinuationError(f"{root}: multireply decision count drifted")
                 if continuation.get("initial_max_continuation_decision_rounds") != INITIAL_MAX_CONTINUATION_DECISION_ROUNDS:
                     raise ContinuationError(f"{root}: multireply initial ceiling drifted")
+                cap_retry = continuation.get("cap_retry")
+                fixed_step_terminal = continuation.get("terminal_after_fixed_joint_step")
+                if not isinstance(cap_retry, bool) or not isinstance(fixed_step_terminal, bool):
+                    raise ContinuationError(f"{root}: multireply terminal metadata drifted")
+                expected_ceiling = EXPANDED_MAX_CONTINUATION_DECISION_ROUNDS if cap_retry else INITIAL_MAX_CONTINUATION_DECISION_ROUNDS
+                if continuation.get("effective_max_continuation_decision_rounds") != expected_ceiling or continuation["decision_round_count"] > expected_ceiling:
+                    raise ContinuationError(f"{root}: multireply effective ceiling drifted")
+                if cap_retry and continuation["decision_round_count"] <= INITIAL_MAX_CONTINUATION_DECISION_ROUNDS:
+                    raise ContinuationError(f"{root}: multireply empty cap retry")
+                if fixed_step_terminal and (continuation["decision_round_count"] != 0 or cap_retry):
+                    raise ContinuationError(f"{root}: multireply fixed-step terminal drifted")
 
 
 def _validate_completed_root(
@@ -840,9 +852,10 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         resume=args.resume,
         require_existing=args.shard_count > 1 and not args.prepare_only,
         allow_complete_pass=args.resume and args.finalize_only,
+        schema_version=MULTIREPLY_SCHEMA_VERSION if args.multireply else SCHEMA_VERSION,
     )
     if args.prepare_only:
-        return {"schema_version": SCHEMA_VERSION, "state": "PREPARED", "root_count": len(changed)}
+        return {"schema_version": MULTIREPLY_SCHEMA_VERSION if args.multireply else SCHEMA_VERSION, "state": "PREPARED", "root_count": len(changed)}
     if args.finalize_only:
         owned = ()
     else:
@@ -909,7 +922,7 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
             "shard_count": args.shard_count, "manifest_sha256": manifest_sha256,
             "roots": [root.to_dict() for root in owned],
         })
-        return {"schema_version": SCHEMA_VERSION, "state": "SHARD_COMPLETE", "root_count": len(completed)}
+        return {"schema_version": MULTIREPLY_SCHEMA_VERSION if args.multireply else SCHEMA_VERSION, "state": "SHARD_COMPLETE", "root_count": len(completed)}
     all_completed: list[Mapping[str, Any]] = []
     for root in changed:
         record, _ = source_selected[root]

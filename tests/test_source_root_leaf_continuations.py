@@ -212,6 +212,20 @@ class ContinuationContractTest(unittest.TestCase):
                 expected_search_evidence=grid["search_evidence"],
             )
 
+    def test_multireply_readback_refuses_an_empty_cap_retry(self) -> None:
+        grid = _payload()["grid"]
+        grid["actions"] = [{"action_label": "raw_policy", "action_index": 1}, {"action_label": "rollout_leaf", "action_index": 2}]
+        grid["search_evidence"] = {"model_leaf_choice": "move 1", "rollout_leaf_choice": "move 2", "raw_policy_action_index": 1, "selection_changed": True, "leaf_only_intervention": True}
+        grid["continuation_targets"] = [grid["continuation_targets"][0]]
+        for trial in grid["continuation_targets"][0]["trials"]:
+            for outcome, label in zip(trial["outcomes"], ("raw_policy", "rollout_leaf"), strict=True):
+                outcome["action_label"] = label
+        grid["continuation_targets"][0]["trials"][0]["outcomes"][0]["continuation"]["cap_retry"] = True
+        projection = {"candidate_aliases": {"raw_policy": "raw_policy", "model_leaf": "raw_policy", "rollout_leaf": "rollout_leaf"}, "opponent_reply_samples": list(range(RUNNER.OPPONENT_REPLY_SAMPLE_COUNT)), "opponent_selector": {"action_hidden": True}}
+        study = {"schema_version": RUNNER.MULTIREPLY_SCHEMA_VERSION, "candidate_actions": {"raw_policy": 1, "rollout_leaf": 2}, **projection, "reply_samples": [{"opponent_reply_sample": sample, "grid": grid} for sample in range(RUNNER.OPPONENT_REPLY_SAMPLE_COUNT)]}
+        with self.assertRaisesRegex(RUNNER.ContinuationError, "effective ceiling"):
+            RUNNER._validate_multireply_payload(study, root=RUNNER.SourceRoot(1, "p1", 2), record=RECORD, expected_actions={"raw_policy": 1, "rollout_leaf": 2}, expected_projection=projection, expected_search_evidence=grid["search_evidence"])
+
     def test_source_provenance_requires_image_baked_commit(self) -> None:
         expected = "a" * 40
         with patch.object(RUNNER, "public_repo_commit", return_value=expected):
