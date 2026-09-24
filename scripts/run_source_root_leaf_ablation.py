@@ -646,6 +646,7 @@ def _selection_witness(telemetry: Mapping[str, Any], *, rollout_leaf_eval: bool)
         raise AblationError("source root has fewer than two allocated actions")
     normalized_arms: list[dict[str, Any]] = []
     seen: set[str] = set()
+    seen_action_indices: set[int] = set()
     for arm in arms:
         if not isinstance(arm, Mapping):
             raise AblationError("source root allocation arm is malformed")
@@ -653,12 +654,19 @@ def _selection_witness(telemetry: Mapping[str, Any], *, rollout_leaf_eval: bool)
         if not isinstance(move, str) or not move or move in seen:
             raise AblationError("source root allocation moves are malformed")
         seen.add(move)
+        action_index = arm.get("action_index")
+        if isinstance(action_index, bool) or not isinstance(action_index, int) or action_index < 0:
+            raise AblationError("source root allocation action indices are malformed")
+        if action_index in seen_action_indices:
+            raise AblationError("source root allocation action indices are not unique")
+        seen_action_indices.add(action_index)
         visit_share = _finite(arm.get("visit_share"), field="root visit share")
         reported_prior = _finite(arm.get("reported_prior"), field="root reported prior")
         model_prior = _finite(arm.get("model_prior"), field="root model prior")
         q = arm.get("q")
         normalized_arms.append({
             "move": move,
+            "action_index": action_index,
             "visit_share": visit_share,
             "reported_prior": reported_prior,
             "model_prior": model_prior,
@@ -714,6 +722,7 @@ def _validate_persisted_selection(selection: Any, *, rollout_leaf_eval: bool) ->
     if not isinstance(arms, list) or len(arms) < 2:
         raise AblationError("durable selection has fewer than two allocated actions")
     seen: set[str] = set()
+    seen_action_indices: set[int] = set()
     normalized: list[dict[str, float | str | None]] = []
     for arm in arms:
         if not isinstance(arm, Mapping):
@@ -722,8 +731,15 @@ def _validate_persisted_selection(selection: Any, *, rollout_leaf_eval: bool) ->
         if not isinstance(move, str) or not move or move in seen:
             raise AblationError("durable selection allocation moves are malformed")
         seen.add(move)
+        action_index = arm.get("action_index")
+        if isinstance(action_index, bool) or not isinstance(action_index, int) or action_index < 0:
+            raise AblationError("durable selection allocation action indices are malformed")
+        if action_index in seen_action_indices:
+            raise AblationError("durable selection allocation action indices are not unique")
+        seen_action_indices.add(action_index)
         normalized.append({
             "move": move,
+            "action_index": action_index,
             "visit_share": _finite(arm.get("visit_share"), field="durable root visit share"),
             "reported_prior": _finite(arm.get("reported_prior"), field="durable reported prior"),
             "model_prior": _finite(arm.get("model_prior"), field="durable model prior"),
