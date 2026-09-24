@@ -3271,26 +3271,42 @@ struct RequestMove {
     pp_fraction: Option<f64>,
 }
 
-fn request_moves(md: &Value, pm: &Value) -> Vec<RequestMove> {
+fn request_moves(md: &Value, pm: &Value) -> Vec<Option<RequestMove>> {
     let payload_moves = as_array(get(pm, "selfActiveMoves"));
     let mut move_candidates: Vec<&Value> = as_array(get(md, "action_candidates"))
         .iter()
         .filter(|c| get(c, "kind").as_str() == Some("move"))
         .collect();
     move_candidates.sort_by_key(|c| as_i64(get(c, "action_index")));
-    let mut moves = Vec::new();
+    // The engine action surface is indexed by its fixed move slots.  Request
+    // payload moves omit absent slots, so a sparse M3 must remain at index 2
+    // rather than being compacted behind M1/M2.  Otherwise the action token
+    // for a legal later slot is synthesized as a disabled placeholder.
+    let slot_count = move_candidates
+        .iter()
+        .map(|candidate| as_i64(get(candidate, "move_slot")).max(0) as usize)
+        .max()
+        .unwrap_or(0);
+    let mut moves: Vec<Option<RequestMove>> = (0..slot_count).map(|_| None).collect();
     let mut cursor = 0usize;
     for candidate in move_candidates {
         let slot = as_i64(get(candidate, "move_slot"));
+        if slot <= 0 {
+            continue;
+        }
+        let slot_index = (slot - 1) as usize;
         let move_name = str_or_empty(get(candidate, "move_name"));
         if move_name == format!("slot:{slot}") {
-            break; // absent request slot — request move lists are dense prefixes
+            // An absent slot has no request payload entry.  Do not consume a
+            // later real move, and do not stop: the engine may legally expose
+            // M3/M4 after an empty M1/M2.
+            continue;
         }
         let move_id = str_or_empty(get(candidate, "move_id"));
         let payload = payload_moves
             .get(cursor)
             .filter(|entry| get(entry, "id").as_str() == Some(move_id.as_str()));
-        match payload {
+        let request_move = match payload {
             Some(entry) => {
                 cursor += 1;
                 let pp = get(entry, "pp");
@@ -3300,22 +3316,124 @@ fn request_moves(md: &Value, pm: &Value) -> Vec<RequestMove> {
                 } else {
                     None
                 };
-                moves.push(RequestMove {
+                RequestMove {
                     name: str_or_empty(get(entry, "id")),
                     display: as_str(get(entry, "move")).map(str::to_string),
                     disabled: as_bool(get(entry, "disabled")),
                     pp_fraction,
-                });
+                }
             }
-            None => moves.push(RequestMove {
+            None => RequestMove {
                 name: move_name,
                 display: None,
                 disabled: as_bool(get(candidate, "disabled")),
                 pp_fraction: None,
-            }),
-        }
+            },
+        };
+        moves[slot_index] = Some(request_move);
     }
     moves
+}
+
+#[cfg(test)]
+mod request_move_slot_tests {
+    use super::{encode_action_tokens, request_moves, Grid, Tables};
+    use serde_json::json;
+
+    // The action-token fields this test inspects are deliberately all present;
+    // the production encoder is allowed to have many more columns, but this
+    // compact layout keeps the regression at the candidate-to-token boundary.
+    const ACTION_TABLES: &str = r#"{
+        "schema_version": "pokezero.encoder-tables.v1",
+        "vocab": {"index": {"<pad>": 0}, "oov_buckets": 1, "oov_offset": 1},
+        "layout": {
+            "schema_version": "pokezero.observation.v3",
+            "token_count": 4,
+            "categorical_feature_count": 8,
+            "numeric_feature_count": 9,
+            "action_count": 4,
+            "move_action_count": 4,
+            "categorical_columns": {
+                "CATEGORY_PRIMARY": 0, "CATEGORY_SECONDARY": 1, "CATEGORY_ROLE": 2,
+                "CATEGORY_SLOT": 3, "CATEGORY_TYPE_1": 4, "CATEGORY_MOVE_CATEGORY": 5,
+                "CATEGORY_MOVE_PRIORITY": 6, "CATEGORY_MOVE_EFFECT": 7
+            },
+            "numeric_columns": {
+                "NUMERIC_MOVE_PP_FRACTION": 0, "NUMERIC_LEGAL": 1,
+                "NUMERIC_PRESENT": 2, "NUMERIC_ACTIVE": 3, "NUMERIC_BASE_POWER": 4,
+                "NUMERIC_PRIORITY": 5, "NUMERIC_ACCURACY": 6,
+                "NUMERIC_EFFECT_CHANCE": 7, "NUMERIC_SELF_HP_COST": 8
+            }
+        },
+        "dex": {
+            "species": {"aa": {"types": ["normal"], "base_stats": {}}},
+            "moves": {"tackle": {"type": "normal", "gen3_category": "physical", "base_power": 35, "accuracy": 100, "priority": 0, "effect_label": "", "effect_chance": 0, "self_hp_cost": 0, "max_pp": 35}}
+        }
+    }"#;
+
+    #[test]
+    fn sparse_request_moves_keep_their_engine_slots() {
+        let md = json!({"action_candidates": [
+            {"kind": "move", "action_index": 0, "move_slot": 1, "move_id": "slot1", "move_name": "slot:1", "disabled": true},
+            {"kind": "move", "action_index": 1, "move_slot": 2, "move_id": "slot2", "move_name": "slot:2", "disabled": true},
+            {"kind": "move", "action_index": 2, "move_slot": 3, "move_id": "tackle", "move_name": "tackle", "disabled": false},
+            {"kind": "move", "action_index": 3, "move_slot": 4, "move_id": "slot4", "move_name": "slot:4", "disabled": true}
+        ]});
+        let pm = json!({"selfActiveMoves": [
+            {"id": "tackle", "pp": 35, "maxpp": 35, "disabled": false}
+        ]});
+
+        let moves = request_moves(&md, &pm);
+        assert_eq!(moves.len(), 4);
+        assert!(moves[0].is_none());
+        assert!(moves[1].is_none());
+        let tackle = moves[2].as_ref().expect("M3 must remain present");
+        assert_eq!(tackle.name, "tackle");
+        assert!(!tackle.disabled);
+        assert_eq!(tackle.pp_fraction, Some(1.0));
+        assert!(moves[3].is_none());
+    }
+
+    #[test]
+    fn sparse_legal_m3_keeps_its_identity_presence_and_activity_in_action_tokens() {
+        let md = json!({"action_candidates": [
+            {"kind": "move", "action_index": 0, "move_slot": 1, "move_id": "slot1", "move_name": "slot:1", "disabled": true},
+            {"kind": "move", "action_index": 1, "move_slot": 2, "move_id": "slot2", "move_name": "slot:2", "disabled": true},
+            {"kind": "move", "action_index": 2, "move_slot": 3, "move_id": "tackle", "move_name": "tackle", "disabled": false, "legal": true},
+            {"kind": "move", "action_index": 3, "move_slot": 4, "move_id": "slot4", "move_name": "slot:4", "disabled": true}
+        ]});
+        let pm = json!({"selfActiveMoves": [
+            {"id": "tackle", "pp": 35, "maxpp": 35, "disabled": false}
+        ]});
+        let tables = Tables::from_json(ACTION_TABLES).expect("minimal action tables");
+        let mut grid = Grid::new(&tables);
+        encode_action_tokens(&tables, &mut grid, &md, &pm, &[], 0, &[0, 0, 1, 0])
+            .expect("sparse action surface encodes");
+
+        let layout = &tables.layout;
+        let m3 = 2 * layout.categorical_width;
+        assert_eq!(
+            grid.categorical[m3 + layout.cols.cat_primary.expect("primary column")],
+            "move:tackle",
+            "the engine M2 candidate must encode at the third action token"
+        );
+        let m3_num = 2 * layout.numeric_width;
+        assert_eq!(
+            grid.numeric[m3_num + layout.cols.num_present.expect("present column")],
+            1.0,
+            "the sparse legal candidate is present"
+        );
+        assert_eq!(
+            grid.numeric[m3_num + layout.cols.num_active.expect("active column")],
+            1.0,
+            "the sparse legal candidate is not disabled"
+        );
+        assert_eq!(
+            grid.numeric[m3_num + layout.cols.num_legal.expect("legal column")],
+            1.0,
+            "the action mask remains aligned with M2"
+        );
+    }
 }
 
 /// `dex.resolve_move_base_power`.
@@ -3548,7 +3666,7 @@ fn encode_action_tokens(
 
     for move_index in 0..layout.move_action_count {
         let token = action_offset + move_index;
-        let entry = moves.get(move_index);
+        let entry = moves.get(move_index).and_then(|entry| entry.as_ref());
         let move_name = entry
             .map(|m| m.name.clone())
             .unwrap_or_else(|| format!("slot:{}", move_index + 1));
