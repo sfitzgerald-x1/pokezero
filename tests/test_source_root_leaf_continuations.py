@@ -105,6 +105,16 @@ def _payload(*, leaked_opponent: bool = False, capped: bool = False, source_hash
 
 
 class ContinuationContractTest(unittest.TestCase):
+    def test_multireply_manifest_registers_only_its_executed_target(self) -> None:
+        self.assertEqual(
+            RUNNER.registered_continuation_targets(multireply=True),
+            ("policy_consistent",),
+        )
+        self.assertEqual(
+            RUNNER.registered_continuation_targets(multireply=False),
+            RUNNER.CONTINUATION_TARGETS,
+        )
+
     def test_completed_root_accepts_complete_paired_grid(self) -> None:
         RUNNER._validate_completed_root(
             _payload(),
