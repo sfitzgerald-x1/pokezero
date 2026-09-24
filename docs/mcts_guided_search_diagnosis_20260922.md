@@ -41,8 +41,9 @@ retraining.
 The persisted leaf-ablation witness had also discarded each allocation arm's
 request action index after native search exported it.  That made the old Q and
 visit rows impossible to join reliably to the selected raw/MCTS actions.  New
-artifacts now retain unique `action_index` values and fail closed if they are
-missing or duplicated.  No claim about a selector/backup defect should be
+artifacts now retain unique in-range `action_index` values and fail closed if
+they are missing, duplicated, or outside the nine-action policy surface.  No
+claim about a selector/backup defect should be
 made from an allocation table without that join.
 
 ## What the large branch-prior count means
@@ -103,7 +104,9 @@ slot holes, but independent review found the companion encoder stopped at the
 first placeholder and again erased a later legal move.  The two-layer repair
 now preserves optional fixed slots through both the action surface and action
 tokens, with a regression that asserts sparse legal M3 identity, presence,
-activity, and legal-mask alignment.  It is a correctness repair; it does
+activity, and legal-mask alignment.  That two-layer repair is pending in PR
+#1464 rather than landed on `main`; it is a correctness repair, not yet a
+current-source claim.  It does
 **not** yet prove that it explains every historical fallback or the global
 strength plateau.  A fresh source-bound witness is still required to measure
 its root-level effect.

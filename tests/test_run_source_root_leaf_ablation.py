@@ -111,7 +111,7 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
         second["root_allocation"]["arms"][0]["visit_share"] = .5
         self.assertNotEqual(runner._control_projection(first), runner._control_projection(second))
 
-    def test_selection_rejects_missing_or_duplicate_action_identity(self) -> None:
+    def test_selection_rejects_missing_duplicate_or_out_of_range_action_identity(self) -> None:
         runner = _runner()
         with mock.patch.object(runner, "require_rollout_leaf_witness"):
             missing = _selection()
@@ -122,6 +122,10 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             duplicate["root_allocation"]["arms"][1]["action_index"] = 0
             with self.assertRaisesRegex(runner.AblationError, "not unique"):
                 runner._validate_persisted_selection(duplicate, rollout_leaf_eval=False)
+            out_of_range = _selection()
+            out_of_range["root_allocation"]["arms"][1]["action_index"] = runner.ACTION_COUNT
+            with self.assertRaisesRegex(runner.AblationError, "action indices"):
+                runner._validate_persisted_selection(out_of_range, rollout_leaf_eval=False)
 
     def test_completed_root_refuses_control_drift(self) -> None:
         runner = _runner()

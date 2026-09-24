@@ -37,6 +37,7 @@ SRC = ROOT / "src"
 if SRC.is_dir():
     sys.path.insert(0, str(SRC))
 
+from pokezero.actions import ACTION_COUNT  # noqa: E402
 from pokezero.engine_search import require_rollout_leaf_witness  # noqa: E402
 from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider  # noqa: E402
 from pokezero.mcts_eval.manifest import SearchConfig  # noqa: E402
@@ -655,7 +656,11 @@ def _selection_witness(telemetry: Mapping[str, Any], *, rollout_leaf_eval: bool)
             raise AblationError("source root allocation moves are malformed")
         seen.add(move)
         action_index = arm.get("action_index")
-        if isinstance(action_index, bool) or not isinstance(action_index, int) or action_index < 0:
+        if (
+            isinstance(action_index, bool)
+            or not isinstance(action_index, int)
+            or not 0 <= action_index < ACTION_COUNT
+        ):
             raise AblationError("source root allocation action indices are malformed")
         if action_index in seen_action_indices:
             raise AblationError("source root allocation action indices are not unique")
@@ -732,7 +737,11 @@ def _validate_persisted_selection(selection: Any, *, rollout_leaf_eval: bool) ->
             raise AblationError("durable selection allocation moves are malformed")
         seen.add(move)
         action_index = arm.get("action_index")
-        if isinstance(action_index, bool) or not isinstance(action_index, int) or action_index < 0:
+        if (
+            isinstance(action_index, bool)
+            or not isinstance(action_index, int)
+            or not 0 <= action_index < ACTION_COUNT
+        ):
             raise AblationError("durable selection allocation action indices are malformed")
         if action_index in seen_action_indices:
             raise AblationError("durable selection allocation action indices are not unique")
