@@ -98,6 +98,8 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
         second = SimpleNamespace(decision_id="b")
         self.assertEqual(runner._decision_seed(first), runner._decision_seed(first))
         self.assertNotEqual(runner._decision_seed(first), runner._decision_seed(second))
+        self.assertNotEqual(runner._decision_seed(first), runner._rollout_seed(first))
+        self.assertEqual(runner._rollout_seed(first), runner._rollout_seed(first))
 
     def test_control_projection_covers_selection_allocation_and_work(self) -> None:
         runner = _runner()

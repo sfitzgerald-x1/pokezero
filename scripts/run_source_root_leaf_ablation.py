@@ -323,7 +323,17 @@ def _decision_seed(record: PublicDecisionRecord) -> int:
     return int.from_bytes(hashlib.sha256(record.decision_id.encode("utf-8")).digest()[:8], "big")
 
 
-def _new_decider(contract: Any, args: argparse.Namespace, *, rollout_leaf_eval: bool, decision_seed: int) -> _LiveEngineTimingDecider:
+def _rollout_seed(record: PublicDecisionRecord) -> int:
+    """A separate, pinned leaf-pricing RNG root for the same public decision."""
+
+    return int.from_bytes(
+        hashlib.sha256(f"rollout-leaf:{record.decision_id}".encode("utf-8")).digest()[:8], "big"
+    )
+
+
+def _new_decider(
+    contract: Any, args: argparse.Namespace, *, rollout_leaf_eval: bool, rollout_seed: int
+) -> _LiveEngineTimingDecider:
     return _LiveEngineTimingDecider(
         contract,
         args.showdown_root,
@@ -333,7 +343,7 @@ def _new_decider(contract: Any, args: argparse.Namespace, *, rollout_leaf_eval: 
         use_opponent_priors=False,
         override_telemetry=True,
         rollout_leaf_eval=rollout_leaf_eval,
-        rollout_seed=decision_seed,
+        rollout_seed=rollout_seed,
         **ROLLOUT,
     )
 
@@ -475,12 +485,13 @@ def _run_root(
     except SourceRootReplayError as error:
         raise AblationError(f"{record.decision_id}: source-bound replay repair failed: {error}") from error
     decision_seed = _decision_seed(record)
+    rollout_seed = _rollout_seed(record)
     config = SearchConfig(**SEARCH)
     arm_rows: dict[str, dict[str, Any]] = {}
     for arm in ARMS:
         rollout_leaf_eval = arm == "rollout_leaf"
         decider = _new_decider(
-            contract, args, rollout_leaf_eval=rollout_leaf_eval, decision_seed=decision_seed
+            contract, args, rollout_leaf_eval=rollout_leaf_eval, rollout_seed=rollout_seed
         )
         try:
             started = time.perf_counter()
@@ -498,6 +509,11 @@ def _run_root(
         arm_rows["model_control_b"]["selection"]
     ):
         raise AblationError(f"{record.decision_id}: model controls are not deterministic")
+    if (
+        arm_rows["rollout_leaf"]["selection"]["total_iterations"]
+        != arm_rows["model_control_a"]["selection"]["total_iterations"]
+    ):
+        raise AblationError(f"{record.decision_id}: rollout arm changed fixed native search work")
     return {
         "schema_version": SCHEMA_VERSION,
         "state": "COMPLETE",
@@ -505,6 +521,7 @@ def _run_root(
         "record_sha256": _sha256(record.to_dict()),
         "decision_id": record.decision_id,
         "decision_rng_seed": decision_seed,
+        "rollout_rng_seed": rollout_seed,
         "repairs": [repair.to_dict() for repair in prefix.repairs],
         "arms": arm_rows,
     }
