@@ -305,13 +305,34 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
     def test_persisted_selection_accepts_native_shaped_zero_unmapped_action_witness(self) -> None:
         runner = _runner()
         with mock.patch.object(runner, "require_rollout_leaf_witness"):
-            runner._validate_persisted_selection(_selection(), rollout_leaf_eval=False)
+            zero_diagnostic = {
+                "schema_version": "pokezero.engine-mcts.acting-fresh-switch-pp.v1",
+                "pp_zero_unmapped_move_arms": 0,
+                "other_unmapped_move_arms": 0,
+            }
+            healthy = _selection()
+            healthy["live_branch_prior"]["branch_prior_fallbacks"]["events"][0][
+                "pp_diagnostic"
+            ] = zero_diagnostic
+            runner._validate_persisted_selection(healthy, rollout_leaf_eval=False)
             corrupted = _selection()
             corrupted["live_branch_prior"]["branch_prior_fallbacks"]["events"][0][
                 "unmapped_action_witness"
             ]["acting"]["nodes"] = 1
             with self.assertRaisesRegex(runner.AblationError, "not all zero"):
                 runner._validate_persisted_selection(corrupted, rollout_leaf_eval=False)
+            pp_corrupted = _selection()
+            pp_corrupted["live_branch_prior"]["branch_prior_fallbacks"]["events"][0][
+                "pp_diagnostic"
+            ] = {**zero_diagnostic, "pp_zero_unmapped_move_arms": 1}
+            with self.assertRaisesRegex(runner.AblationError, "PP diagnostic reports"):
+                runner._validate_persisted_selection(pp_corrupted, rollout_leaf_eval=False)
+            pp_noninteger = _selection()
+            pp_noninteger["live_branch_prior"]["branch_prior_fallbacks"]["events"][0][
+                "pp_diagnostic"
+            ] = {**zero_diagnostic, "pp_zero_unmapped_move_arms": False}
+            with self.assertRaisesRegex(runner.AblationError, "PP diagnostic reports"):
+                runner._validate_persisted_selection(pp_noninteger, rollout_leaf_eval=False)
 
     def test_completed_root_refuses_control_drift(self) -> None:
         runner = _runner()

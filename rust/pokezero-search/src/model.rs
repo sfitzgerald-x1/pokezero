@@ -103,7 +103,11 @@ struct UnmappedActionMapWitness {
 }
 
 impl UnmappedActionMapWitness {
-    fn record(&mut self, options: &[MoveChoice], map: &[Option<usize>]) {
+    fn record(
+        &mut self,
+        options: &[MoveChoice],
+        map: &[Option<usize>],
+    ) {
         debug_assert_eq!(
             options.len(),
             map.len(),
@@ -127,7 +131,33 @@ impl UnmappedActionMapWitness {
     fn render_json(&self) -> String {
         format!(
             "{{\"nodes\":{},\"move_arms\":{},\"switch_arms\":{},\"none_arms\":{}}}",
-            self.nodes, self.move_arms, self.switch_arms, self.none_arms
+            self.nodes,
+            self.move_arms,
+            self.switch_arms,
+            self.none_arms,
+        )
+    }
+}
+
+/// Acting-seat-only provenance for a narrow class of interior unmapped moves.
+/// This is deliberately separate from the long-lived topology witness so
+/// existing source-bound consumers retain their exact four-counter schema.
+#[derive(Default)]
+struct FreshSwitchPpUnmappedDiagnostic {
+    pp_zero_unmapped_move_arms: usize,
+    other_unmapped_move_arms: usize,
+}
+
+impl FreshSwitchPpUnmappedDiagnostic {
+    fn record(&mut self, diagnostic: crate::leaf::ActionMapDiagnostics) {
+        self.pp_zero_unmapped_move_arms += diagnostic.fresh_switch_pp_zero_unmapped_move_arms;
+        self.other_unmapped_move_arms += diagnostic.fresh_switch_other_unmapped_move_arms;
+    }
+
+    fn render_json(&self) -> String {
+        format!(
+            "{{\"schema_version\":\"pokezero.engine-mcts.acting-fresh-switch-pp.v1\",\"pp_zero_unmapped_move_arms\":{},\"other_unmapped_move_arms\":{}}}",
+            self.pp_zero_unmapped_move_arms, self.other_unmapped_move_arms
         )
     }
 }
@@ -136,6 +166,7 @@ impl UnmappedActionMapWitness {
 struct BranchUnmappedActionWitness {
     acting: UnmappedActionMapWitness,
     opponent: UnmappedActionMapWitness,
+    acting_fresh_switch_pp: FreshSwitchPpUnmappedDiagnostic,
 }
 
 impl BranchUnmappedActionWitness {
@@ -149,6 +180,10 @@ impl BranchUnmappedActionWitness {
             self.acting.render_json(),
             self.opponent.render_json()
         )
+    }
+
+    fn render_fresh_switch_pp_json(&self) -> String {
+        self.acting_fresh_switch_pp.render_json()
     }
 }
 
@@ -1515,7 +1550,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         let options = seats.acting_options;
                         if !is_single_none(&options) {
                             let map_started = Instant::now();
-                            let map_result = leaf_ctx.self_action_map(
+                            let map_result = leaf_ctx.self_action_map_with_diagnostics(
                                 leaf,
                                 &options,
                                 Some(&self_order),
@@ -1524,8 +1559,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             );
                             action_map_nanos += map_started.elapsed().as_nanos();
                             match map_result {
-                                Ok(map) => {
-                                    branch_unmapped_action_witness.acting.record(&options, &map);
+                                Ok((map, diagnostics)) => {
+                                    branch_unmapped_action_witness
+                                        .acting
+                                        .record(&options, &map);
+                                    branch_unmapped_action_witness
+                                        .acting_fresh_switch_pp
+                                        .record(diagnostics);
                                     pending_maps.push(((seam.chance, seam.branch_index), row, map))
                                 }
                                 Err(error) => {
@@ -1802,7 +1842,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"branch_prior_fallback_reasons\":{},\"branch_prior_unmapped_action_witness\":{},\"root_prior_fallback_reason\":{},\"opponent_prior_root_eligible\":{},\"opponent_prior_root_assessment\":\"{}\",\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
+         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"branch_prior_fallback_reasons\":{},\"branch_prior_unmapped_action_witness\":{},\"branch_prior_pp_diagnostic\":{},\"root_prior_fallback_reason\":{},\"opponent_prior_root_eligible\":{},\"opponent_prior_root_assessment\":\"{}\",\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1830,6 +1870,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         branch_prior_fallbacks,
         branch_prior_fallback_reasons.render_json(),
         branch_unmapped_action_witness.render_json(),
+        branch_unmapped_action_witness.render_fresh_switch_pp_json(),
         serde_json::to_string(&root_prior_fallback_reason)
             .expect("optional static string JSON serialization cannot fail"),
         opponent_prior_root_eligible,

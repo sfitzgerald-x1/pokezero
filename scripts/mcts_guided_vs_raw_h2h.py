@@ -990,6 +990,47 @@ def _validated_branch_prior_unmapped_action_witness(
     return normalized
 
 
+def _validated_branch_prior_pp_diagnostic(
+    value: object,
+    *,
+    unmapped_action_witness: Mapping[str, Mapping[str, int]],
+) -> dict[str, Any]:
+    """Validate the optional acting-seat fresh-switch PP attribution.
+
+    It deliberately does not fabricate opponent measurements: this field is
+    limited to acting-seat engine-offered unmapped move arms.
+    """
+
+    diagnostic = _mapping(value, label="branch prior PP diagnostic")
+    expected = {
+        "schema_version",
+        "pp_zero_unmapped_move_arms",
+        "other_unmapped_move_arms",
+    }
+    if set(diagnostic) != expected or diagnostic.get("schema_version") != (
+        "pokezero.engine-mcts.acting-fresh-switch-pp.v1"
+    ):
+        raise HeadToHeadError("branch prior PP diagnostic has an unexpected schema.")
+    normalized = {
+        "schema_version": diagnostic["schema_version"],
+        "pp_zero_unmapped_move_arms": _nonnegative_int(
+            diagnostic.get("pp_zero_unmapped_move_arms"),
+            label="PP-zero unmapped move arms",
+        ),
+        "other_unmapped_move_arms": _nonnegative_int(
+            diagnostic.get("other_unmapped_move_arms"),
+            label="other unmapped move arms",
+        ),
+    }
+    if (
+        normalized["pp_zero_unmapped_move_arms"]
+        + normalized["other_unmapped_move_arms"]
+        > unmapped_action_witness["acting"]["move_arms"]
+    ):
+        raise HeadToHeadError("branch prior PP diagnostic exceeds acting unmapped move arms.")
+    return normalized
+
+
 def _branch_prior_unmapped_action_witness_nodes(
     witness: Mapping[str, Mapping[str, int]],
 ) -> int:
@@ -1070,7 +1111,12 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
             "branch_prior_fallbacks",
             "reason_counts",
         }
-        if set(event_mapping) not in (event_expected, event_expected | optional):
+        event_optional_shapes = (
+            event_expected,
+            event_expected | {"unmapped_action_witness"},
+            event_expected | {"unmapped_action_witness", "pp_diagnostic"},
+        )
+        if set(event_mapping) not in event_optional_shapes:
             raise HeadToHeadError("branch prior native invocation has unsupported fields.")
         event_reasons = event_mapping.get("reason_counts")
         if event_reasons is not None:
@@ -1100,6 +1146,16 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
                 raise HeadToHeadError(
                     "unmapped-action witness does not match its native invocation count."
                 )
+        pp_diagnostic = None
+        if "pp_diagnostic" in event_mapping:
+            pp_diagnostic = event_mapping["pp_diagnostic"]
+            if witness is None:
+                raise HeadToHeadError(
+                    "branch prior PP diagnostic requires an unmapped-action witness."
+                )
+            pp_diagnostic = _validated_branch_prior_pp_diagnostic(
+                pp_diagnostic, unmapped_action_witness=witness
+            )
         normalized_events.append(
             {
                 "native_invocation": _nonnegative_int(
@@ -1115,6 +1171,7 @@ def _validated_branch_prior_ledger(value: object) -> dict[str, Any]:
                 "branch_prior_fallbacks": event_fallbacks,
                 "reason_counts": event_reasons,
                 **({"unmapped_action_witness": witness} if witness is not None else {}),
+                **({"pp_diagnostic": pp_diagnostic} if pp_diagnostic is not None else {}),
             }
         )
     if [event["native_invocation"] for event in normalized_events] != list(range(1, invocations + 1)):

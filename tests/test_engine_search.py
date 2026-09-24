@@ -5877,6 +5877,11 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             "acting": {"nodes": 2, "move_arms": 1, "switch_arms": 1, "none_arms": 0},
             "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
         }
+        pp_diagnostic = {
+            "schema_version": "pokezero.engine-mcts.acting-fresh-switch-pp.v1",
+            "pp_zero_unmapped_move_arms": 1,
+            "other_unmapped_move_arms": 0,
+        }
         report.update(
             {
                 "prior_fallbacks": 2,
@@ -5884,6 +5889,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                 "branch_prior_fallbacks": 2,
                 "branch_prior_fallback_reasons": reasons,
                 "branch_prior_unmapped_action_witness": witness,
+                "branch_prior_pp_diagnostic": pp_diagnostic,
             }
         )
 
@@ -5904,6 +5910,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(ledger["branch_prior_fallbacks"], 2)
         self.assertEqual(ledger["reason_counts"]["unmapped_action"], 2)
         self.assertEqual(ledger["unmapped_action_witness"], witness)
+        self.assertEqual(ledger["events"][0]["pp_diagnostic"], pp_diagnostic)
         self.assertEqual(
             ledger["events"],
             [
@@ -5917,6 +5924,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                         for name in sorted(BRANCH_PRIOR_FALLBACK_REASON_VALUES)
                     },
                     "unmapped_action_witness": witness,
+                    "pp_diagnostic": pp_diagnostic,
                 }
             ],
         )
@@ -5956,6 +5964,63 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             EngineSearchWitnessError,
             "native_branch_prior_unmapped_action_witness_invalid",
         ):
+            self._run(policy, [report])
+
+    def test_branch_prior_pp_diagnostic_refuses_more_arms_than_the_witness(self) -> None:
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["unmapped_action"] = 1
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 1,
+                "branch_prior_fallback_reasons": reasons,
+                "branch_prior_unmapped_action_witness": {
+                    "acting": {"nodes": 1, "move_arms": 1, "switch_arms": 0, "none_arms": 0},
+                    "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+                },
+                "branch_prior_pp_diagnostic": {
+                    "schema_version": "pokezero.engine-mcts.acting-fresh-switch-pp.v1",
+                    "pp_zero_unmapped_move_arms": 1,
+                    "other_unmapped_move_arms": 1,
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError,
+            "native_branch_prior_pp_diagnostic_invalid|exceeds acting unmapped move arms",
+        ):
+            self._run(policy, [report])
+
+    def test_branch_prior_pp_diagnostic_refuses_present_null(self) -> None:
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["unmapped_action"] = 1
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 1,
+                "branch_prior_fallback_reasons": reasons,
+                "branch_prior_unmapped_action_witness": {
+                    "acting": {"nodes": 1, "move_arms": 1, "switch_arms": 0, "none_arms": 0},
+                    "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+                },
+                "branch_prior_pp_diagnostic": None,
+            }
+        )
+
+        with self.assertRaisesRegex(EngineSearchWitnessError, "PP diagnostic has an unexpected schema"):
             self._run(policy, [report])
 
     def test_branch_prior_fallback_ledger_deduplicates_collapsed_belief_records(

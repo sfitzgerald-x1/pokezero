@@ -4111,6 +4111,50 @@ def _validated_branch_prior_unmapped_action_witness(value: Any) -> dict[str, dic
     return normalized
 
 
+def _validated_branch_prior_pp_diagnostic(
+    value: Any,
+    *,
+    unmapped_action_witness: Mapping[str, Mapping[str, int]],
+) -> dict[str, Any]:
+    """Validate optional acting-seat PP provenance without changing v1 topology.
+
+    This diagnostic measures only fresh-switch, constructed-world, engine-offered
+    move arms on the acting seat.  It intentionally makes no assertion about
+    opponent arms: absence there means unmeasured, never zero.
+    """
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version",
+        "pp_zero_unmapped_move_arms",
+        "other_unmapped_move_arms",
+    } or value.get("schema_version") != "pokezero.engine-mcts.acting-fresh-switch-pp.v1":
+        raise EngineSearchWitnessError(
+            "branch_prior_fallback_ledger_invalid: PP diagnostic has an unexpected schema"
+        )
+    normalized = {
+        "schema_version": value["schema_version"],
+        "pp_zero_unmapped_move_arms": value["pp_zero_unmapped_move_arms"],
+        "other_unmapped_move_arms": value["other_unmapped_move_arms"],
+    }
+    if any(
+        type(count) is not int or count < 0
+        for name, count in normalized.items()
+        if name != "schema_version"
+    ):
+        raise EngineSearchWitnessError(
+            "branch_prior_fallback_ledger_invalid: PP diagnostic counts must be non-negative integers"
+        )
+    if (
+        normalized["pp_zero_unmapped_move_arms"]
+        + normalized["other_unmapped_move_arms"]
+        > unmapped_action_witness["acting"]["move_arms"]
+    ):
+        raise EngineSearchWitnessError(
+            "branch_prior_fallback_ledger_invalid: PP diagnostic exceeds acting unmapped move arms"
+        )
+    return normalized
+
+
 def _branch_prior_unmapped_action_witness_nodes(
     witness: Mapping[str, Mapping[str, int]],
 ) -> int:
@@ -4204,6 +4248,16 @@ def _decision_branch_prior_fallback_ledger(
                     "branch_prior_fallback_ledger_invalid: unmapped-action witness nodes "
                     "do not equal the classified native fallback count"
                 )
+        pp_diagnostic = None
+        if "pp_diagnostic" in event:
+            pp_diagnostic = event["pp_diagnostic"]
+            if witness is None:
+                raise EngineSearchWitnessError(
+                    "branch_prior_fallback_ledger_invalid: PP diagnostic requires an unmapped-action witness"
+                )
+            pp_diagnostic = _validated_branch_prior_pp_diagnostic(
+                pp_diagnostic, unmapped_action_witness=witness
+            )
         events.append(
             {
                 "native_invocation": invocation,
@@ -4212,6 +4266,7 @@ def _decision_branch_prior_fallback_ledger(
                 "branch_prior_fallbacks": branch_fallbacks,
                 "reason_counts": event_reasons,
                 **({"unmapped_action_witness": witness} if witness is not None else {}),
+                **({"pp_diagnostic": pp_diagnostic} if pp_diagnostic is not None else {}),
             }
         )
     if len({event["native_invocation"] for event in events}) != len(events):
@@ -6579,6 +6634,17 @@ class EngineMctsPolicy:
                         "witness nodes must equal classified unmapped-action fallbacks"
                     )
                 report["branch_prior_unmapped_action_witness"] = branch_unmapped_action_witness
+            branch_prior_pp_diagnostic = None
+            if "branch_prior_pp_diagnostic" in report:
+                branch_prior_pp_diagnostic = report["branch_prior_pp_diagnostic"]
+                if branch_unmapped_action_witness is None:
+                    raise EngineSearchWitnessError(
+                        "native_branch_prior_pp_diagnostic_invalid: diagnostic requires an unmapped-action witness"
+                    )
+                report["branch_prior_pp_diagnostic"] = _validated_branch_prior_pp_diagnostic(
+                    branch_prior_pp_diagnostic,
+                    unmapped_action_witness=branch_unmapped_action_witness,
+                )
             allowed_lost_active_permutation_root_fallback = False
             allowed_lost_active_permutation_opponent_prior_omission = False
             if config.use_opponent_priors:
@@ -6867,6 +6933,11 @@ class EngineMctsPolicy:
                     ),
                     "unmapped_action_witness": report.get(
                         "branch_prior_unmapped_action_witness"
+                    ),
+                    **(
+                        {"pp_diagnostic": report["branch_prior_pp_diagnostic"]}
+                        if "branch_prior_pp_diagnostic" in report
+                        else {}
                     ),
                 }
             )
