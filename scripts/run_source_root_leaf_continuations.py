@@ -95,6 +95,17 @@ INITIAL_MAX_CONTINUATION_DECISION_ROUNDS = 250
 EXPANDED_MAX_CONTINUATION_DECISION_ROUNDS = 1024
 
 
+def registered_continuation_targets(*, multireply: bool) -> tuple[str, ...]:
+    """Return exactly the continuation targets the selected runner executes.
+
+    The ordinary leaf study compares both own-policy targets.  Multireply fixes
+    sampled opponent replies and deliberately runs only the policy-consistent
+    suffix; registering ``uniform_own`` there would make the immutable
+    manifest promise evidence that no durable root can contain.
+    """
+    return ("policy_consistent",) if multireply else CONTINUATION_TARGETS
+
+
 class ContinuationError(RuntimeError):
     """The continuation experiment cannot safely produce a result."""
 
@@ -304,7 +315,7 @@ def _manifest(
         "source_code": dict(_source_code_provenance(expected_commit=args.expected_source_commit)),
         "changed_targets": [root.to_dict() for root in changed],
         "continuation": {
-            "targets": list(CONTINUATION_TARGETS),
+            "targets": list(registered_continuation_targets(multireply=args.multireply)),
             "rng_seeds": list(CONTINUATION_RNG_SEEDS),
             "initial_max_decision_rounds": INITIAL_MAX_CONTINUATION_DECISION_ROUNDS,
             "expanded_max_decision_rounds": EXPANDED_MAX_CONTINUATION_DECISION_ROUNDS,

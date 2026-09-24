@@ -30,8 +30,8 @@ def _selection(*, rollout_witness=None):
         "root_allocation": {
             "worlds": 4,
             "arms": [
-                {"move": "move 1", "visit_share": .6, "reported_prior": .7, "model_prior": .7, "q": .1},
-                {"move": "move 2", "visit_share": .4, "reported_prior": .3, "model_prior": .3, "q": .0},
+                {"move": "move 1", "action_index": 0, "visit_share": .6, "reported_prior": .7, "model_prior": .7, "q": .1},
+                {"move": "move 2", "action_index": 1, "visit_share": .4, "reported_prior": .3, "model_prior": .3, "q": .0},
             ],
         },
         "rollout_leaf": rollout_witness,
@@ -110,6 +110,22 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
         self.assertEqual(runner._control_projection(first), runner._control_projection(second))
         second["root_allocation"]["arms"][0]["visit_share"] = .5
         self.assertNotEqual(runner._control_projection(first), runner._control_projection(second))
+
+    def test_selection_rejects_missing_duplicate_or_out_of_range_action_identity(self) -> None:
+        runner = _runner()
+        with mock.patch.object(runner, "require_rollout_leaf_witness"):
+            missing = _selection()
+            del missing["root_allocation"]["arms"][0]["action_index"]
+            with self.assertRaisesRegex(runner.AblationError, "action indices"):
+                runner._validate_persisted_selection(missing, rollout_leaf_eval=False)
+            duplicate = _selection()
+            duplicate["root_allocation"]["arms"][1]["action_index"] = 0
+            with self.assertRaisesRegex(runner.AblationError, "not unique"):
+                runner._validate_persisted_selection(duplicate, rollout_leaf_eval=False)
+            out_of_range = _selection()
+            out_of_range["root_allocation"]["arms"][1]["action_index"] = runner.ACTION_COUNT
+            with self.assertRaisesRegex(runner.AblationError, "action indices"):
+                runner._validate_persisted_selection(out_of_range, rollout_leaf_eval=False)
 
     def test_completed_root_refuses_control_drift(self) -> None:
         runner = _runner()
