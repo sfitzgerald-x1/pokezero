@@ -4349,7 +4349,7 @@ def _validated_opponent_prior_application(value: Any) -> dict[str, Any]:
 
 def _decision_opponent_prior_application_ledger(
     native_events: Sequence[Mapping[str, Any]],
-) -> tuple[dict[str, Any], dict[str, Any]]:
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
     """Aggregate one receipt per completed native tree without double-counting draws.
 
     A collapsed group has one tree and several belief records; a full-budget
@@ -4358,7 +4358,7 @@ def _decision_opponent_prior_application_ledger(
     boundary consumed by source-root runners.
     """
 
-    events: list[dict[str, Any]] = []
+    raw_events: list[tuple[int, int | None, int | None, Any]] = []
     for event in native_events:
         invocation = event.get("native_invocation")
         if type(invocation) is not int or invocation < 1:
@@ -4366,22 +4366,43 @@ def _decision_opponent_prior_application_ledger(
                 "opponent_prior_application_invocation_missing: completed native invocation "
                 "has no decision-ledger identity"
             )
-        receipt = _validated_opponent_prior_application(event.get("receipt"))
-        events.append(
-            {
-                "native_invocation": invocation,
-                "belief_records": event.get("belief_records"),
-                "collapse_multiplicity": event.get("collapse_multiplicity"),
-                **receipt,
-            }
+        raw_events.append(
+            (
+                invocation,
+                event.get("belief_records"),
+                event.get("collapse_multiplicity"),
+                event.get("receipt"),
+            )
         )
-    if not events:
+    if not raw_events:
         raise EngineSearchWitnessError(
             "opponent_prior_application_ledger_invalid: no completed native receipt"
         )
-    if len({event["native_invocation"] for event in events}) != len(events):
+    if len({event[0] for event in raw_events}) != len(raw_events):
         raise EngineSearchWitnessError(
             "opponent_prior_application_ledger_invalid: native invocation identity repeated"
+        )
+    receipt_presence = [receipt is not None for _, _, _, receipt in raw_events]
+    if not any(receipt_presence):
+        # Older native wheels produced no receipt at all. Preserve that
+        # compatible shape, but never let a newer wheel's partial omission be
+        # mistaken for a complete decision-level treatment witness.
+        return None
+    if not all(receipt_presence):
+        raise EngineSearchWitnessError(
+            "opponent_prior_application_ledger_invalid: receipt coverage is incomplete "
+            "across completed native invocations"
+        )
+    events: list[dict[str, Any]] = []
+    for invocation, belief_records, collapse_multiplicity, raw_receipt in raw_events:
+        receipt = _validated_opponent_prior_application(raw_receipt)
+        events.append(
+            {
+                "native_invocation": invocation,
+                "belief_records": belief_records,
+                "collapse_multiplicity": collapse_multiplicity,
+                **receipt,
+            }
         )
     enabled = events[0]["enabled"]
     if any(event["enabled"] is not enabled for event in events):
@@ -7090,15 +7111,12 @@ class EngineMctsPolicy:
             report: Mapping[str, Any], *, belief_records: int, collapse_multiplicity: int
         ) -> None:
             """Store one validated native application receipt before any replay."""
-            application = report.get("opponent_prior_application")
-            if application is None:
-                return
             opponent_prior_application_events.append(
                 {
                     "native_invocation": native_invocation_serial,
                     "belief_records": belief_records,
                     "collapse_multiplicity": collapse_multiplicity,
-                    "receipt": application,
+                    "receipt": report.get("opponent_prior_application"),
                 }
             )
         # Parallel dispatch gives each task both an independent native evaluator
@@ -7641,10 +7659,8 @@ class EngineMctsPolicy:
             if rollout_leaf_shadow
             else None
         )
-        opponent_prior_application = (
-            _decision_opponent_prior_application_ledger(opponent_prior_application_events)
-            if opponent_prior_application_events
-            else None
+        opponent_prior_application = _decision_opponent_prior_application_ledger(
+            opponent_prior_application_events
         )
         metadata = {
             "engine_mcts": {

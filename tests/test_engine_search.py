@@ -1077,6 +1077,37 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
         self.assertEqual(policy.stats.total_iterations, 320)
         self.assertEqual(policy.stats.early_stop_full_budget_replays, 2)
 
+    def test_opponent_prior_receipt_coverage_requires_each_replay(self) -> None:
+        """A receipt from stopped prefixes cannot stand in for their replays."""
+
+        def with_disabled_receipt(report: dict) -> dict:
+            report["opponent_prior_application"] = {
+                "enabled": False,
+                "root_applied": 0,
+                "branch_applied": 0,
+                "total_applied": 0,
+                "digest": None,
+            }
+            return report
+
+        native = self._Native(
+            [
+                with_disabled_receipt(self._report(56, 4, stopped=True)),
+                with_disabled_receipt(self._report(4, 56, stopped=True)),
+                self._report(60, 40, stopped=False),
+                self._report(55, 45, stopped=False),
+            ]
+        )
+        policy = self._policy(early_stop=True)
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError, "receipt coverage is incomplete"
+        ):
+            self._run(
+                policy,
+                native,
+                [self._world("world-a"), self._world("world-b")],
+            )
+
     def test_branch_prior_ledger_retains_a_collapsed_prefix_and_each_replay(self) -> None:
         """A replayed decision retains every completed native fallback event.
 
@@ -5138,6 +5169,48 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             EngineSearchWitnessError, "enabled disagrees with request"
         ):
             self._run(policy, [report])
+
+    def test_opponent_prior_receipt_coverage_rejects_a_missing_normal_world(self) -> None:
+        policy = self._policy(opponent_priors=True, worlds=2)
+        report_with_receipt = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report_with_receipt.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "opponent_request_order_status": "public_order_walk_error",
+                "opponent_prior_application": {
+                    "enabled": True,
+                    "root_applied": 1,
+                    "branch_applied": 0,
+                    "total_applied": 1,
+                    "digest": "c" * 64,
+                },
+            }
+        )
+        report_without_receipt = self._report(
+            [("alpha", 55, 0.5, 0.2), ("beta", 45, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report_without_receipt.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "opponent_request_order_status": "public_order_walk_error",
+            }
+        )
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError, "receipt coverage is incomplete"
+        ):
+            self._run(
+                policy,
+                [report_with_receipt, report_without_receipt],
+                worlds=[self._world("world-a"), self._world("world-b")],
+            )
 
     def test_opponent_prior_audit_rejects_a_missing_native_status_echo(self) -> None:
         policy = self._policy(opponent_priors=True, worlds=1)
