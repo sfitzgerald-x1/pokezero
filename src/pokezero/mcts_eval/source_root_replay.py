@@ -39,6 +39,7 @@ class SourceRootReplayRepair:
     turn_index: int
     player_id: str
     original_event_id: str
+    source_decision_id: str
     source_action: PublicActionIdentifier
 
     def to_dict(self) -> dict[str, object]:
@@ -46,6 +47,7 @@ class SourceRootReplayRepair:
             "turn_index": self.turn_index,
             "player_id": self.player_id,
             "original_event_id": self.original_event_id,
+            "source_decision_id": self.source_decision_id,
             "source_action": self.source_action.to_dict(),
         }
 
@@ -83,6 +85,7 @@ def source_bound_replay_prefix(
 
     repaired_rounds: list[PublicResolvedActionRound] = []
     repairs: list[SourceRootReplayRepair] = []
+    target_history = {entry.turn_index: entry.observation for entry in record.history}
     for action_round in record.public_resolved_action_rounds:
         actions = dict(action_round.actions)
         for player_id, identifier in action_round.actions.items():
@@ -93,6 +96,7 @@ def source_bound_replay_prefix(
             source_record = by_turn.get(action_round.turn_index)
             if source_record is None:
                 raise SourceRootReplayError("missing_source_record_for_unresolved_public_event")
+            _validate_source_witness(source_record, record, target_history=target_history)
             source_action = _source_recorded_action(source_record)
             actions[player_id] = source_action
             repairs.append(
@@ -100,6 +104,7 @@ def source_bound_replay_prefix(
                     turn_index=action_round.turn_index,
                     player_id=player_id,
                     original_event_id=_UNRESOLVED_EVENT_ID,
+                    source_decision_id=source_record.decision_id,
                     source_action=source_action,
                 )
             )
@@ -114,6 +119,23 @@ def _same_source(candidate: PublicDecisionRecord, record: PublicDecisionRecord) 
         and candidate.format_id == record.format_id
         and candidate.acting_player == record.acting_player
     )
+
+
+def _validate_source_witness(
+    source_record: PublicDecisionRecord,
+    target_record: PublicDecisionRecord,
+    *,
+    target_history: Mapping[int, Any],
+) -> None:
+    """Require an exact retained target prefix, not merely reused labels."""
+
+    if target_history.get(source_record.turn_index) != source_record.observation:
+        raise SourceRootReplayError("source_record_observation_does_not_match_target_history")
+    for entry in source_record.history:
+        if target_history.get(entry.turn_index) != entry.observation:
+            raise SourceRootReplayError("source_record_history_does_not_match_target_history")
+    if source_record.public_resolved_action_rounds != target_record.public_resolved_action_rounds[: source_record.turn_index]:
+        raise SourceRootReplayError("source_record_public_prefix_does_not_match_target_prefix")
 
 
 def _source_recorded_action(record: PublicDecisionRecord) -> PublicActionIdentifier:

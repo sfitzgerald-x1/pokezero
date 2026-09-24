@@ -5,6 +5,7 @@ from pokezero.actions import ACTION_COUNT
 from pokezero.mcts_eval.source_root_replay import SourceRootReplayError, source_bound_replay_prefix
 from pokezero.public_decision_corpus import (
     PublicActionIdentifier,
+    PublicActorObservation,
     PublicDecisionRecord,
     PublicObservation,
     PublicResolvedActionRound,
@@ -22,6 +23,7 @@ def _record(
     recorded_action_index: int,
     candidates: list[dict[str, object]],
     rounds: tuple[PublicResolvedActionRound, ...],
+    history: tuple[PublicActorObservation, ...] = (),
     seed: int = 9,
     player: str = "p1",
 ) -> PublicDecisionRecord:
@@ -43,7 +45,7 @@ def _record(
         turn_index=turn_index,
         recorded_action_index=recorded_action_index,
         observation=observation,
-        history=(),
+        history=history,
         current_legal_action_mask=_mask(recorded_action_index),
         public_resolved_action_rounds=rounds,
         public_belief_view={},
@@ -74,6 +76,7 @@ class SourceBoundReplayPrefixTest(unittest.TestCase):
                     PublicActionIdentifier(kind="move", move_id="tackle"),
                 ),
             ),
+            history=(PublicActorObservation(turn_index=0, observation=prior.observation),),
         )
 
         repaired = source_bound_replay_prefix(target, source_records=(prior, target))
@@ -83,6 +86,7 @@ class SourceBoundReplayPrefixTest(unittest.TestCase):
             "turn_index": 0,
             "player_id": "p1",
             "original_event_id": "unresolved-public-event",
+            "source_decision_id": prior.decision_id,
             "source_action": {"kind": "move", "move_id": "spore"},
         }])
 
@@ -98,6 +102,7 @@ class SourceBoundReplayPrefixTest(unittest.TestCase):
             recorded_action_index=1,
             candidates=[{"action_index": 1, "kind": "move", "move_id": "tackle", "legal": True}],
             rounds=(_round(0, PublicActionIdentifier(kind="event", event_id="unresolved-public-event"), PublicActionIdentifier(kind="move", move_id="tackle")),),
+            history=(PublicActorObservation(turn_index=0, observation=prior.observation),),
         )
 
         repaired = source_bound_replay_prefix(target, source_records=(prior,))
@@ -131,8 +136,21 @@ class SourceBoundReplayPrefixTest(unittest.TestCase):
             candidates=[{"action_index": 3, "kind": "tera", "legal": True}],
             rounds=(),
         )
+        target_with_matching_witness = _record(
+            turn_index=1,
+            recorded_action_index=1,
+            candidates=[{"action_index": 1, "kind": "move", "move_id": "tackle", "legal": True}],
+            rounds=(
+                _round(
+                    0,
+                    PublicActionIdentifier(kind="event", event_id="unresolved-public-event"),
+                    PublicActionIdentifier(kind="move", move_id="tackle"),
+                ),
+            ),
+            history=(PublicActorObservation(turn_index=0, observation=noncanonical.observation),),
+        )
         with self.assertRaisesRegex(SourceRootReplayError, "not_canonical_move_or_switch"):
-            source_bound_replay_prefix(target, source_records=(noncanonical,))
+            source_bound_replay_prefix(target_with_matching_witness, source_records=(noncanonical,))
 
     def test_refuses_ambiguous_same_turn_source_record(self) -> None:
         target = _record(
@@ -146,3 +164,27 @@ class SourceBoundReplayPrefixTest(unittest.TestCase):
 
         with self.assertRaisesRegex(SourceRootReplayError, "ambiguous_source_record_for_turn"):
             source_bound_replay_prefix(target, source_records=(first, second))
+
+    def test_refuses_same_label_record_from_a_different_retained_trajectory(self) -> None:
+        original = _record(
+            turn_index=0,
+            recorded_action_index=2,
+            candidates=[{"action_index": 2, "kind": "move", "move_id": "spore", "legal": True}],
+            rounds=(),
+        )
+        target = _record(
+            turn_index=1,
+            recorded_action_index=1,
+            candidates=[{"action_index": 1, "kind": "move", "move_id": "tackle", "legal": True}],
+            rounds=(_round(0, PublicActionIdentifier(kind="event", event_id="unresolved-public-event"), PublicActionIdentifier(kind="move", move_id="tackle")),),
+            history=(PublicActorObservation(turn_index=0, observation=original.observation),),
+        )
+        foreign = _record(
+            turn_index=0,
+            recorded_action_index=2,
+            candidates=[{"action_index": 2, "kind": "move", "move_id": "tackle", "legal": True}],
+            rounds=(),
+        )
+
+        with self.assertRaisesRegex(SourceRootReplayError, "observation_does_not_match_target_history"):
+            source_bound_replay_prefix(target, source_records=(foreign,))
