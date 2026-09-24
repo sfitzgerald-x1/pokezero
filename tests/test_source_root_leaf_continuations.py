@@ -190,6 +190,43 @@ class ContinuationContractTest(unittest.TestCase):
             with self.assertRaisesRegex(RUNNER.ContinuationError, "differs"):
                 RUNNER._write_or_require_identical_json(path, {"two": 2})
 
+    def test_prepare_allows_only_a_lone_pass_for_resumed_final_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "PASS.json").write_text("{}")
+            RUNNER._prepare(
+                root,
+                {"contract": "current"},
+                resume=True,
+                require_existing=False,
+                allow_complete_pass=True,
+            )
+            self.assertFalse((root / "RUNNING.json").exists())
+
+    def test_prepare_refuses_nonpass_or_nonfinalizer_terminal_reentry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "NONPASS.json").write_text("{}")
+            with self.assertRaisesRegex(RUNNER.ContinuationError, "terminal"):
+                RUNNER._prepare(
+                    root,
+                    {"contract": "current"},
+                    resume=True,
+                    require_existing=False,
+                    allow_complete_pass=True,
+                )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "PASS.json").write_text("{}")
+            with self.assertRaisesRegex(RUNNER.ContinuationError, "terminal"):
+                RUNNER._prepare(
+                    root,
+                    {"contract": "current"},
+                    resume=True,
+                    require_existing=False,
+                    allow_complete_pass=False,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

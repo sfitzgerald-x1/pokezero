@@ -315,10 +315,24 @@ def _manifest(
     }
 
 
-def _prepare(out_root: Path, manifest: Mapping[str, Any], *, resume: bool, require_existing: bool) -> None:
+def _prepare(
+    out_root: Path,
+    manifest: Mapping[str, Any],
+    *,
+    resume: bool,
+    require_existing: bool,
+    allow_complete_pass: bool,
+) -> None:
     terminals = [out_root / name for name in ("PASS.json", "NONPASS.json") if (out_root / name).exists()]
     if terminals:
-        raise ContinuationError(f"out root is terminal: {', '.join(path.name for path in terminals)}")
+        # A Pod can be interrupted between publishing PASS and reporting its
+        # successful exit to Kubernetes.  The finalizer may re-enter only a
+        # lone PASS, and must subsequently rebuild every source boundary and
+        # validate every complete root before it accepts that publication.
+        # Never reopen NONPASS or an ambiguous double-terminal root.
+        if not (allow_complete_pass and resume and terminals == [out_root / "PASS.json"]):
+            raise ContinuationError(f"out root is terminal: {', '.join(path.name for path in terminals)}")
+        return
     path = out_root / "MANIFEST.json"
     if path.exists():
         if not resume:
@@ -627,7 +641,13 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         args=args, changed=changed, leaf_manifest=leaf_manifest, leaf_manifest_sha256=leaf_manifest_sha256,
     )
     manifest_sha256 = _sha256(manifest)
-    _prepare(out_root, manifest, resume=args.resume, require_existing=args.shard_count > 1 and not args.prepare_only)
+    _prepare(
+        out_root,
+        manifest,
+        resume=args.resume,
+        require_existing=args.shard_count > 1 and not args.prepare_only,
+        allow_complete_pass=args.resume and args.finalize_only,
+    )
     if args.prepare_only:
         return {"schema_version": SCHEMA_VERSION, "state": "PREPARED", "root_count": len(changed)}
     if args.finalize_only:
