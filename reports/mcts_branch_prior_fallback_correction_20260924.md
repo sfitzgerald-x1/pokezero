@@ -14,9 +14,17 @@ contains a complete, matched audit of every override in its four-seed panel:
 * 65 overrides were observed.  Three are correctly classified as
   non-simultaneous and therefore cannot support a matched continuation claim.
 * Of the 62 matched overrides, the MCTS choice wins 30 independent
-  continuations and the raw-policy choice wins 32; 37 continuation pairs end
-  in the same terminal result.  None is terminal immediately after the fixed
-  joint step.
+  continuations and the raw-policy choice wins 32.  Thirty-eight pairs have
+  the same subject win/loss outcome (six have the exact same winner and turn
+  count); none is terminal immediately after the fixed joint step.
+* Looking only at the 24 pairs with different subject outcomes, MCTS wins 11
+  and raw wins 13.  The recorded root-Q gap does not rank those outcomes in
+  the right direction: its rank correlation with MCTS's relative outcome is
+  -0.091, and its mean is 0.03694 for MCTS-winning pairs versus 0.04266 for
+  raw-winning pairs.  The corresponding visit-share gaps are nearly the same
+  (0.21271 versus 0.20963).  This is small-sample evidence, not a calibrated
+  estimate, but it directly fails to support the claim that a larger reported
+  root advantage identifies the better action under this protocol.
 * The audit's branch-prior ledger attributes all 1,414 fallbacks in seed
   `2026092006` to its historical `unmapped_action` bucket.  This is a
   material distortion of an interior search branch, not a cosmetic telemetry
