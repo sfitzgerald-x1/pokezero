@@ -125,6 +125,22 @@ def _write_create_only_json(path: Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _write_or_require_identical_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Create a terminal artifact once, or safely reuse an identical one.
+
+    A process can be interrupted after publishing one terminal witness but
+    before its sibling witness.  Retrying must complete that publication
+    window without replacing the first witness or silently adopting a drifted
+    one.
+    """
+
+    if path.exists():
+        if _read_json(path) != payload:
+            raise ContinuationError(f"existing terminal artifact differs from frozen result: {path}")
+        return
+    _write_create_only_json(path, payload)
+
+
 def _write_progress(path: Path, payload: Mapping[str, Any]) -> None:
     """Atomically replace only the explicitly nonterminal liveness pointer."""
 
@@ -500,18 +516,56 @@ def _evaluate_root(
     return grid
 
 
-def _validate_completed_root(payload: Any, *, root: SourceRoot, manifest_sha256: str) -> None:
+def _validate_completed_root(
+    payload: Any,
+    *,
+    root: SourceRoot,
+    record: Any,
+    leaf_payload: Mapping[str, Any],
+    expected_actions: Mapping[str, int],
+    manifest_sha256: str,
+) -> None:
+    """Validate a reusable root against all frozen inputs and producer bounds."""
+
     if not isinstance(payload, Mapping) or payload.get("schema_version") != SCHEMA_VERSION or payload.get("state") != "COMPLETE":
         raise ContinuationError(f"{root}: completed continuation root has invalid state")
     if payload.get("source") != root.to_dict() or payload.get("manifest_sha256") != manifest_sha256:
         raise ContinuationError(f"{root}: completed continuation root binding drifted")
+    if payload.get("source_record_sha256") != _sha256(record.to_dict()):
+        raise ContinuationError(f"{root}: completed continuation root source record drifted")
+    if payload.get("leaf_complete_sha256") != _sha256(leaf_payload):
+        raise ContinuationError(f"{root}: completed continuation root leaf selection drifted")
     grid = payload.get("grid")
     if not isinstance(grid, Mapping) or grid.get("schema_version") != "pokezero.sealed-root-action-grid.v2":
         raise ContinuationError(f"{root}: completed continuation grid is invalid")
     if grid.get("opponent_action_held_fixed") is not True or "opponent_action" in grid or "snapshot" in grid:
         raise ContinuationError(f"{root}: completed grid leaks or omits fixed-opponent evidence")
+    expected_grid_identity = {
+        "source_battle_id": record.battle_id,
+        "source_seed": record.seed,
+        "source_decision_round": record.turn_index,
+        "subject_player": root.seat,
+        "opponent_player": "p2" if root.seat == "p1" else "p1",
+    }
+    if any(grid.get(key) != value for key, value in expected_grid_identity.items()):
+        raise ContinuationError(f"{root}: completed grid source identity drifted")
+    arms = leaf_payload.get("arms")
+    if not isinstance(arms, Mapping):
+        raise ContinuationError(f"{root}: changed leaf payload lacks arm evidence")
+    expected_evidence = {
+        "model_leaf_choice": arms["model_control_a"]["selection"]["root_action"],
+        "rollout_leaf_choice": arms["rollout_leaf"]["selection"]["root_action"],
+        "selection_changed": True,
+        "leaf_only_intervention": True,
+    }
+    if grid.get("search_evidence") != expected_evidence:
+        raise ContinuationError(f"{root}: completed grid search evidence drifted")
     actions = grid.get("actions")
-    if not isinstance(actions, list) or [entry.get("action_label") for entry in actions if isinstance(entry, Mapping)] != ["model_leaf", "rollout_leaf"]:
+    expected_action_rows = [
+        {"action_label": label, "action_index": expected_actions[label]}
+        for label in ("model_leaf", "rollout_leaf")
+    ]
+    if actions != expected_action_rows:
         raise ContinuationError(f"{root}: completed grid action registration drifted")
     targets = grid.get("continuation_targets")
     if not isinstance(targets, list) or [entry.get("target") for entry in targets if isinstance(entry, Mapping)] != list(CONTINUATION_TARGETS):
@@ -519,19 +573,43 @@ def _validate_completed_root(payload: Any, *, root: SourceRoot, manifest_sha256:
     for target in targets:
         if not isinstance(target, Mapping) or not isinstance(target.get("trials"), list):
             raise ContinuationError(f"{root}: completed target has invalid trials")
-        if [trial.get("continuation_rng_seed") for trial in target["trials"] if isinstance(trial, Mapping)] != list(CONTINUATION_RNG_SEEDS):
+        if len(target["trials"]) != len(CONTINUATION_RNG_SEEDS) or [trial.get("continuation_rng_seed") for trial in target["trials"] if isinstance(trial, Mapping)] != list(CONTINUATION_RNG_SEEDS):
             raise ContinuationError(f"{root}: continuation RNG schedule drifted")
         for trial in target["trials"]:
             if not isinstance(trial, Mapping) or not isinstance(trial.get("outcomes"), list):
                 raise ContinuationError(f"{root}: continuation trial is malformed")
             outcomes = trial["outcomes"]
-            if [outcome.get("action_label") for outcome in outcomes if isinstance(outcome, Mapping)] != ["model_leaf", "rollout_leaf"]:
+            if len(outcomes) != 2 or [outcome.get("action_label") for outcome in outcomes if isinstance(outcome, Mapping)] != ["model_leaf", "rollout_leaf"]:
                 raise ContinuationError(f"{root}: continuation paired actions drifted")
-            for outcome in outcomes:
+            for action_label, outcome in zip(("model_leaf", "rollout_leaf"), outcomes, strict=True):
+                if not isinstance(outcome, Mapping) or outcome.get("action_index") != expected_actions[action_label]:
+                    raise ContinuationError(f"{root}: continuation action index drifted")
                 continuation = outcome.get("continuation") if isinstance(outcome, Mapping) else None
                 terminal = continuation.get("terminal") if isinstance(continuation, Mapping) else None
                 if not isinstance(terminal, Mapping) or terminal.get("capped") is not False:
                     raise ContinuationError(f"{root}: continuation is incomplete or capped")
+                if terminal.get("winner") not in ("p1", "p2", None):
+                    raise ContinuationError(f"{root}: continuation terminal winner is invalid")
+                if isinstance(terminal.get("turn_count"), bool) or not isinstance(terminal.get("turn_count"), int) or terminal["turn_count"] < 0:
+                    raise ContinuationError(f"{root}: continuation terminal turn count is invalid")
+                decision_count = continuation.get("decision_round_count")
+                fixed_step_terminal = continuation.get("terminal_after_fixed_joint_step")
+                cap_retry = continuation.get("cap_retry")
+                initial_ceiling = continuation.get("initial_max_continuation_decision_rounds")
+                effective_ceiling = continuation.get("effective_max_continuation_decision_rounds")
+                if isinstance(decision_count, bool) or not isinstance(decision_count, int) or decision_count < 0:
+                    raise ContinuationError(f"{root}: continuation decision count is invalid")
+                if not isinstance(fixed_step_terminal, bool) or not isinstance(cap_retry, bool):
+                    raise ContinuationError(f"{root}: continuation terminal metadata is invalid")
+                if initial_ceiling != INITIAL_MAX_CONTINUATION_DECISION_ROUNDS:
+                    raise ContinuationError(f"{root}: continuation initial cap drifted")
+                expected_ceiling = EXPANDED_MAX_CONTINUATION_DECISION_ROUNDS if cap_retry else INITIAL_MAX_CONTINUATION_DECISION_ROUNDS
+                if effective_ceiling != expected_ceiling or decision_count > expected_ceiling:
+                    raise ContinuationError(f"{root}: continuation effective cap drifted")
+                if cap_retry and decision_count <= INITIAL_MAX_CONTINUATION_DECISION_ROUNDS:
+                    raise ContinuationError(f"{root}: continuation cap retry has no expanded work")
+                if fixed_step_terminal and (decision_count != 0 or cap_retry):
+                    raise ContinuationError(f"{root}: fixed-step terminal metadata drifted")
 
 
 def _run(args: argparse.Namespace) -> Mapping[str, Any]:
@@ -542,6 +620,9 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         raise ContinuationError("checkpoint SHA-256 does not match the frozen contract")
     source_selected, source_by_seed, _ = _load_source_records(source_root)
     changed, leaf_manifest, leaf_manifest_sha256 = _load_changed_leaf_roots(leaf_root, source_selected)
+    leaf_checkpoint = leaf_manifest.get("checkpoint")
+    if not isinstance(leaf_checkpoint, Mapping) or leaf_checkpoint.get("checkpoint_sha256") != args.expected_checkpoint_sha256:
+        raise ContinuationError("continuation checkpoint does not match the source-root leaf-ablation checkpoint")
     manifest = _manifest(
         args=args, changed=changed, leaf_manifest=leaf_manifest, leaf_manifest_sha256=leaf_manifest_sha256,
     )
@@ -568,9 +649,20 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
     for root in owned:
         record, _ = source_selected[root]
         complete_path = _root_directory(out_root, root) / "COMPLETE.json"
+        # Rebuild the source boundary even while resuming.  This validates the
+        # durable action indexes against the live, source-bound replay rather
+        # than trusting labels copied from a prior process.
+        plan = _root_plan(
+            root=root, record=record, source_records=source_by_seed[root.seed], leaf_payload=changed[root],
+            env_config=env_config, model=model, result=result, device=args.device,
+        )
+        expected_actions = {"model_leaf": plan.model_action, "rollout_leaf": plan.rollout_action}
         if complete_path.exists():
             payload = _read_json(complete_path)
-            _validate_completed_root(payload, root=root, manifest_sha256=manifest_sha256)
+            _validate_completed_root(
+                payload, root=root, record=record, leaf_payload=changed[root],
+                expected_actions=expected_actions, manifest_sha256=manifest_sha256,
+            )
         else:
             _write_progress(out_root / "progress" / "current.json", {
                 "schema_version": SCHEMA_VERSION, "state": "RUNNING",
@@ -578,10 +670,6 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
                 "total_roots": len(changed), "current": root.to_dict(),
                 "worker_shard": {"index": args.shard_index, "count": args.shard_count},
             })
-            plan = _root_plan(
-                root=root, record=record, source_records=source_by_seed[root.seed], leaf_payload=changed[root],
-                env_config=env_config, model=model, result=result, device=args.device,
-            )
             payload = {
                 "schema_version": SCHEMA_VERSION,
                 "state": "COMPLETE",
@@ -594,7 +682,7 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
             _write_create_only_json(complete_path, payload)
         completed.append(payload)
     if args.shard_count > 1 and not args.finalize_only:
-        _write_create_only_json(out_root / "shards" / f"shard-{args.shard_index}.json", {
+        _write_or_require_identical_json(out_root / "shards" / f"shard-{args.shard_index}.json", {
             "schema_version": SCHEMA_VERSION, "state": "COMPLETE", "shard_index": args.shard_index,
             "shard_count": args.shard_count, "manifest_sha256": manifest_sha256,
             "roots": [root.to_dict() for root in owned],
@@ -602,8 +690,17 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         return {"schema_version": SCHEMA_VERSION, "state": "SHARD_COMPLETE", "root_count": len(completed)}
     all_completed: list[Mapping[str, Any]] = []
     for root in changed:
+        record, _ = source_selected[root]
+        plan = _root_plan(
+            root=root, record=record, source_records=source_by_seed[root.seed], leaf_payload=changed[root],
+            env_config=env_config, model=model, result=result, device=args.device,
+        )
         payload = _read_json(_root_directory(out_root, root) / "COMPLETE.json")
-        _validate_completed_root(payload, root=root, manifest_sha256=manifest_sha256)
+        _validate_completed_root(
+            payload, root=root, record=record, leaf_payload=changed[root],
+            expected_actions={"model_leaf": plan.model_action, "rollout_leaf": plan.rollout_action},
+            manifest_sha256=manifest_sha256,
+        )
         all_completed.append(payload)
     summary = {
         "schema_version": SCHEMA_VERSION, "state": "PASS", "marker": "SOURCE_ROOT_LEAF_CONTINUATION_PASS",
@@ -611,8 +708,8 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         "complete_root_sha256": _sha256(all_completed),
         "scope": "source-root action quality only; not game strength",
     }
-    _write_create_only_json(out_root / "SUMMARY.json", summary)
-    _write_create_only_json(out_root / "PASS.json", summary)
+    _write_or_require_identical_json(out_root / "SUMMARY.json", summary)
+    _write_or_require_identical_json(out_root / "PASS.json", summary)
     (out_root / "RUNNING.json").unlink(missing_ok=True)
     return summary
 
