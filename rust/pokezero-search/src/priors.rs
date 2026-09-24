@@ -505,6 +505,23 @@ pub(crate) struct PriorResolution {
     pub fallback_reasons: PriorFallbackReasonCounts,
 }
 
+/// One model-prior vector that reached an existing decision node, retained only
+/// long enough for the caller to commit it into durable audit telemetry. A
+/// scalar application count cannot prove an opponent-prior treatment ran: a
+/// mutation can preserve that count while changing the seat, order, or values.
+/// Parked vectors are deliberately excluded; they may be consumed by a later
+/// expansion, but have not yet reached actual decision-node statistics.
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+#[derive(Clone, Debug)]
+pub(crate) struct PriorApplication {
+    pub seat: PriorSeat,
+    pub at_root: bool,
+    pub chance: usize,
+    pub branch: usize,
+    pub row: usize,
+    pub priors: Vec<f32>,
+}
+
 /// Resolve one batch round's pending prior maps against the batch's own prior
 /// rows: gather per branch, apply onto a child decision node that already
 /// exists, and store on the branch for the child that does not exist yet.
@@ -525,6 +542,25 @@ fn resolve_pending_priors(
     heads: &HeadPair<'_>,
     self_side_one: bool,
     seat: PriorSeat,
+) -> PriorResolution {
+    let mut applications = Vec::new();
+    resolve_pending_priors_with_applications(
+        tree,
+        pending,
+        heads,
+        self_side_one,
+        seat,
+        &mut applications,
+    )
+}
+
+fn resolve_pending_priors_with_applications(
+    tree: &mut Tree,
+    pending: &[((usize, usize), usize, Vec<Option<usize>>) ],
+    heads: &HeadPair<'_>,
+    self_side_one: bool,
+    seat: PriorSeat,
+    applications: &mut Vec<PriorApplication>,
 ) -> PriorResolution {
     let side_one = seat.owning_side_one(self_side_one);
     let mut resolution = PriorResolution::default();
@@ -558,6 +594,21 @@ fn resolve_pending_priors(
         *slot = Some((side_one, priors));
         if applied {
             resolution.applied += 1;
+            if child.is_some() {
+                let stored = match seat {
+                    PriorSeat::Acting => branch.child_self_priors.as_ref(),
+                    PriorSeat::Opponent => branch.child_opponent_priors.as_ref(),
+                }
+                .expect("the just-stored prior vector must remain present");
+                applications.push(PriorApplication {
+                    seat,
+                    at_root: false,
+                    chance: key.0,
+                    branch: key.1,
+                    row: *row,
+                    priors: stored.1.clone(),
+                });
+            }
         } else {
             resolution.fallbacks += 1;
             resolution.fallback_reasons.record_arm_count_mismatch();
@@ -581,30 +632,58 @@ pub(crate) fn resolve_round_priors(
     heads: &HeadPair<'_>,
     seat_source: &dyn SearchingSeat,
 ) -> PriorResolution {
+    resolve_round_priors_with_applications(
+        tree,
+        acting_pending,
+        opponent_pending,
+        heads,
+        seat_source,
+    )
+    .0
+}
+
+/// As [`resolve_round_priors`], but also returns the exact ordered vectors
+/// that landed. Production immediately hashes these transient records; the
+/// count-only API remains for callers and unit tests that do not need audit
+/// telemetry.
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+pub(crate) fn resolve_round_priors_with_applications(
+    tree: &mut Tree,
+    acting_pending: &[((usize, usize), usize, Vec<Option<usize>>) ],
+    opponent_pending: &[((usize, usize), usize, Vec<Option<usize>>) ],
+    heads: &HeadPair<'_>,
+    seat_source: &dyn SearchingSeat,
+) -> (PriorResolution, Vec<PriorApplication>) {
     let self_side_one = seat_source.searching_side_one();
-    let acting = resolve_pending_priors(
+    let mut applications = Vec::new();
+    let acting = resolve_pending_priors_with_applications(
         tree,
         acting_pending,
         heads,
         self_side_one,
         PriorSeat::Acting,
+        &mut applications,
     );
-    let opponent = resolve_pending_priors(
+    let opponent = resolve_pending_priors_with_applications(
         tree,
         opponent_pending,
         heads,
         self_side_one,
         PriorSeat::Opponent,
+        &mut applications,
     );
-    PriorResolution {
-        applied: acting.applied + opponent.applied,
-        fallbacks: acting.fallbacks + opponent.fallbacks,
-        fallback_reasons: {
-            let mut counts = acting.fallback_reasons;
-            counts.add_assign(opponent.fallback_reasons);
-            counts
+    (
+        PriorResolution {
+            applied: acting.applied + opponent.applied,
+            fallbacks: acting.fallbacks + opponent.fallbacks,
+            fallback_reasons: {
+                let mut counts = acting.fallback_reasons;
+                counts.add_assign(opponent.fallback_reasons);
+                counts
+            },
         },
-    }
+        applications,
+    )
 }
 
 /// The root decision node's two option lists, selected by the side the
@@ -731,8 +810,24 @@ pub(crate) fn resolve_root_priors(
     acting_map: &[Option<usize>],
     opponent_map: Option<&[Option<usize>]>,
 ) -> RootPriorResolution {
+    resolve_root_priors_with_applications(root, heads, seat_source, acting_map, opponent_map).0
+}
+
+/// As [`resolve_root_priors`], with transient applied-vector records for the
+/// native source-audit telemetry. The root must be included: otherwise a
+/// treatment could claim it seeded the opponent while that seat stayed
+/// uniform at the decision boundary.
+#[cfg_attr(not(feature = "model"), allow(dead_code))]
+pub(crate) fn resolve_root_priors_with_applications(
+    root: &mut DecisionNode,
+    heads: &HeadPair<'_>,
+    seat_source: &dyn SearchingSeat,
+    acting_map: &[Option<usize>],
+    opponent_map: Option<&[Option<usize>]>,
+) -> (RootPriorResolution, Vec<PriorApplication>) {
     let self_side_one = seat_source.searching_side_one();
     let mut resolution = RootPriorResolution::default();
+    let mut applications = Vec::new();
     for (seat, map) in [
         (PriorSeat::Acting, Some(acting_map)),
         (PriorSeat::Opponent, opponent_map),
@@ -746,8 +841,16 @@ pub(crate) fn resolve_root_priors(
         match gathered {
             Ok(priors) if apply_self_priors(root, side_one, &priors) => {
                 if seat == PriorSeat::Acting {
-                    resolution.acting = Some(priors);
+                    resolution.acting = Some(priors.clone());
                 }
+                applications.push(PriorApplication {
+                    seat,
+                    at_root: true,
+                    chance: 0,
+                    branch: 0,
+                    row: 0,
+                    priors,
+                });
             }
             outcome => {
                 resolution.fallbacks += 1;
@@ -760,7 +863,7 @@ pub(crate) fn resolve_root_priors(
             }
         }
     }
-    resolution
+    (resolution, applications)
 }
 
 #[cfg(test)]
@@ -1364,6 +1467,60 @@ mod tests {
             &branch.child_opponent_priors.as_ref().unwrap().1,
             &[0.125, 0.875],
         );
+    }
+
+    /// The audit path must retain the real opponent vector, not merely a
+    /// combined applied-count. A seat swap or an inert treatment can preserve
+    /// that scalar while changing (or omitting) the opponent application.
+    #[test]
+    fn audited_round_resolution_records_only_vectors_that_landed() {
+        let mut tree = tree_with_child(2, 2);
+        let heads = HeadPair::new(
+            &[0.9f32, 0.1, 0.1, 0.9],
+            &[0.1f32, 0.9, 0.8, 0.2],
+            4,
+            true,
+        )
+        .expect("same width");
+        let pending = vec![((0usize, 0usize), 0usize, vec![Some(0), Some(1)])];
+        let opponent = vec![((0usize, 0usize), 0usize, vec![Some(2), Some(3)])];
+        let (resolution, applications) = resolve_round_priors_with_applications(
+            &mut tree,
+            &pending,
+            &opponent,
+            &heads,
+            &Seat(true),
+        );
+        assert_eq!(resolution.applied, 2);
+        assert_eq!(applications.len(), 2);
+        let opponent = applications
+            .iter()
+            .find(|application| application.seat == PriorSeat::Opponent)
+            .expect("opponent vector that landed");
+        assert!(!opponent.at_root);
+        assert_eq!((opponent.chance, opponent.branch, opponent.row), (0, 0, 0));
+        approx(&opponent.priors, &[0.8, 0.2]);
+    }
+
+    #[test]
+    fn audited_round_resolution_does_not_count_a_parked_vector_as_landed() {
+        let mut tree = Tree {
+            decisions: vec![decision(2, 2)],
+            chances: vec![ChanceNode {
+                branches: vec![branch(None)],
+            }],
+        };
+        let heads = opponent_only_heads(&ROW);
+        let pending = vec![((0usize, 0usize), 0usize, vec![Some(0), Some(5)])];
+        let (resolution, applications) = resolve_round_priors_with_applications(
+            &mut tree,
+            &[],
+            &pending,
+            &heads,
+            &Seat(true),
+        );
+        assert_eq!(resolution.applied, 1, "the vector remains parked for a future child");
+        assert!(applications.is_empty(), "a parked vector has not reached node statistics");
     }
 
     /// Each pending entry reads ITS OWN batch row. Two branches in one round,

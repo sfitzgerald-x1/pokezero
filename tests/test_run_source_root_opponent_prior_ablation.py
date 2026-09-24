@@ -38,22 +38,42 @@ def _selection() -> dict[str, object]:
     }
 
 
+def _telemetry(*, enabled: bool) -> dict[str, object]:
+    return {
+        "engine_mcts": {
+            "opponent_prior_application": {
+                "enabled": enabled,
+                "root_applied": 1 if enabled else 0,
+                "branch_applied": 2 if enabled else 0,
+                "total_applied": 3 if enabled else 0,
+                "digest": "a" * 64 if enabled else None,
+            },
+        },
+    }
+
+
 class OpponentPriorAblationRunnerTest(unittest.TestCase):
-    def test_roster_is_the_exact_clean_override_panel(self) -> None:
+    def test_roster_is_the_exact_source_replayable_override_panel(self) -> None:
         runner = _runner()
-        self.assertEqual(len(runner.TARGETS), 16)
-        self.assertEqual(len(set(runner.TARGETS)), 16)
+        self.assertEqual(len(runner.TARGETS), 11)
+        self.assertEqual(len(set(runner.TARGETS)), 11)
         self.assertEqual(
             [(item.seed, item.seat, item.turn_index) for item in runner.TARGETS],
             [
                 (2026092004, "p1", 19), (2026092004, "p1", 20),
-                (2026092004, "p2", 6), (2026092004, "p2", 10),
                 (2026092005, "p1", 21), (2026092005, "p1", 25),
                 (2026092005, "p2", 1), (2026092005, "p2", 6),
                 (2026092006, "p1", 2), (2026092006, "p1", 3),
-                (2026092006, "p2", 10), (2026092006, "p2", 29),
                 (2026092007, "p1", 9), (2026092007, "p1", 19),
-                (2026092007, "p2", 9), (2026092007, "p2", 19),
+                (2026092007, "p2", 9),
+            ],
+        )
+        self.assertEqual(
+            [(item.seed, item.seat, item.turn_index) for item, _ in runner.EXCLUDED_UNREPLAYABLE_ROOTS],
+            [
+                (2026092004, "p2", 6), (2026092004, "p2", 10),
+                (2026092006, "p2", 10), (2026092006, "p2", 29),
+                (2026092007, "p2", 19),
             ],
         )
 
@@ -62,8 +82,11 @@ class OpponentPriorAblationRunnerTest(unittest.TestCase):
         calls: list[bool] = []
 
         class _Decider:
+            def __init__(self, enabled: bool) -> None:
+                self.enabled = enabled
+
             def prepare_public_decision(self, *args, **kwargs):
-                return lambda: {"telemetry": "ignored"}
+                return lambda: _telemetry(enabled=self.enabled)
 
             def close(self) -> None:
                 return None
@@ -78,7 +101,7 @@ class OpponentPriorAblationRunnerTest(unittest.TestCase):
                 runner,
                 "_new_decider",
                 side_effect=lambda *args, use_opponent_priors: (
-                    calls.append(use_opponent_priors) or _Decider()
+                    calls.append(use_opponent_priors) or _Decider(use_opponent_priors)
                 ),
             ),
             mock.patch.object(runner.base, "source_bound_replay_prefix", return_value=prefix),
@@ -96,6 +119,68 @@ class OpponentPriorAblationRunnerTest(unittest.TestCase):
         self.assertEqual(calls, [False, False, True])
         self.assertEqual(tuple(result["arms"]), runner.ARMS)
         self.assertEqual(result["schema_version"], runner.SCHEMA_VERSION)
+        self.assertEqual(
+            result["arms"]["opponent_priors"]["selection"]["opponent_prior_application"]["total_applied"],
+            3,
+        )
+
+    def test_treatment_without_an_applied_native_vector_is_rejected(self) -> None:
+        runner = _runner()
+        with self.assertRaisesRegex(runner.base.AblationError, "not applicable"):
+            runner._validate_opponent_prior_application(
+                {
+                    "enabled": True,
+                    "root_applied": 0,
+                    "branch_applied": 0,
+                    "total_applied": 0,
+                    "digest": None,
+                },
+                enabled=True,
+            )
+
+    def test_control_with_an_applied_native_vector_is_rejected(self) -> None:
+        runner = _runner()
+        with self.assertRaisesRegex(runner.base.AblationError, "unexpectedly applied"):
+            runner._validate_opponent_prior_application(
+                {
+                    "enabled": False,
+                    "root_applied": 1,
+                    "branch_applied": 0,
+                    "total_applied": 1,
+                    "digest": "a" * 64,
+                },
+                enabled=False,
+            )
+
+    def test_resume_rejects_a_treatment_with_different_fixed_work(self) -> None:
+        runner = _runner()
+        control = _selection()
+        control["opponent_prior_application"] = runner._validate_opponent_prior_application(
+            _telemetry(enabled=False)["engine_mcts"]["opponent_prior_application"], enabled=False
+        )
+        treatment = _selection()
+        treatment["total_iterations"] = 1
+        treatment["opponent_prior_application"] = runner._validate_opponent_prior_application(
+            _telemetry(enabled=True)["engine_mcts"]["opponent_prior_application"], enabled=True
+        )
+        payload = {
+            "arms": {
+                "model_control_a": {"selection": control},
+                "model_control_b": {"selection": dict(control)},
+                "opponent_priors": {"selection": treatment},
+            },
+        }
+        with (
+            mock.patch.object(runner, "_BASE_VALIDATE_COMPLETED_ROOT"),
+            self.assertRaisesRegex(runner.base.AblationError, "fixed native search work"),
+        ):
+            runner._validate_completed_root(
+                payload,
+                root=runner.TARGETS[0],
+                record=object(),
+                historical_fallback=None,
+                manifest_sha256="a" * 64,
+            )
 
 
 if __name__ == "__main__":
