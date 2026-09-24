@@ -36,7 +36,19 @@ _BRANCH_REASONS = (
 def _live_branch_prior():
     reasons = {reason: 0 for reason in _BRANCH_REASONS}
     zero_witness = {
-        seat: {name: 0 for name in ("nodes", "move_arms", "switch_arms", "none_arms")}
+        seat: {
+            name: 0
+            for name in (
+                "nodes",
+                "move_arms",
+                "move_arms_engine_missing",
+                "move_arms_present_but_illegal",
+                "move_arms_order_unavailable",
+                "move_arms_unexplained",
+                "switch_arms",
+                "none_arms",
+            )
+        }
         for seat in ("acting", "opponent")
     }
     return {

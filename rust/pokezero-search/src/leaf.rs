@@ -835,6 +835,17 @@ pub(crate) struct LeafContext {
     root_weather_remaining: i64,
 }
 
+/// Public-free decomposition of unmapped move arms in one reconstructed
+/// action surface. The categories are exhaustive for a move option
+/// that reached `seat_action_map_with_unmapped_witness`.
+#[derive(Default)]
+pub(crate) struct UnmappedMoveSurfaceWitness {
+    pub(crate) engine_move_missing: usize,
+    pub(crate) engine_move_present_but_illegal: usize,
+    pub(crate) order_unavailable: usize,
+    pub(crate) unexplained: usize,
+}
+
 impl LeafContext {
     pub(crate) fn new(
         tables_json: &str,
@@ -2020,7 +2031,26 @@ impl LeafContext {
         meta: Option<&LeafMeta>,
         engine_authoritative: bool,
     ) -> PyResult<Vec<Option<usize>>> {
-        self.seat_action_map(state, options, self_order, meta, engine_authoritative, true)
+        self.self_action_map_with_unmapped_witness(
+            state, options, self_order, meta, engine_authoritative,
+        ).map(|(map, _)| map)
+    }
+
+    /// The acting-seat action map plus a public-free decomposition of every
+    /// missing move arm. Interior-tree diagnostics use this to distinguish a
+    /// genuinely absent engine move from a present move marked illegal by the
+    /// reconstructed action surface.
+    pub(crate) fn self_action_map_with_unmapped_witness(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        self_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
+    ) -> PyResult<(Vec<Option<usize>>, UnmappedMoveSurfaceWitness)> {
+        self.seat_action_map_with_unmapped_witness(
+            state, options, self_order, meta, engine_authoritative, true,
+        )
     }
 
     /// The OPPONENT seat's option list mapped onto action-block slots.
@@ -2063,13 +2093,22 @@ impl LeafContext {
         meta: Option<&LeafMeta>,
         engine_authoritative: bool,
     ) -> PyResult<Vec<Option<usize>>> {
-        self.seat_action_map(
-            state,
-            options,
-            opponent_order,
-            meta,
-            engine_authoritative,
-            false,
+        self.opponent_action_map_with_unmapped_witness(
+            state, options, opponent_order, meta, engine_authoritative,
+        ).map(|(map, _)| map)
+    }
+
+    /// Opponent-seat equivalent of `self_action_map_with_unmapped_witness`.
+    pub(crate) fn opponent_action_map_with_unmapped_witness(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        opponent_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
+    ) -> PyResult<(Vec<Option<usize>>, UnmappedMoveSurfaceWitness)> {
+        self.seat_action_map_with_unmapped_witness(
+            state, options, opponent_order, meta, engine_authoritative, false,
         )
     }
 
@@ -2131,7 +2170,7 @@ impl LeafContext {
     /// side, engine index, party order and snapshot are read; every lookup
     /// below is already indexed by engine side, so the two seats differ only in
     /// that index and in the display-order convention documented above.
-    fn seat_action_map(
+    fn seat_action_map_with_unmapped_witness(
         &self,
         state: &State,
         options: &[MoveChoice],
@@ -2139,7 +2178,7 @@ impl LeafContext {
         meta: Option<&LeafMeta>,
         engine_authoritative: bool,
         slot_is_self: bool,
-    ) -> PyResult<Vec<Option<usize>>> {
+    ) -> PyResult<(Vec<Option<usize>>, UnmappedMoveSurfaceWitness)> {
         let meta = meta.unwrap_or(&self.root_meta);
         let side_is_p1 = if slot_is_self { self.self_is_p1 } else { !self.self_is_p1 };
         let self_side = side_ref_for(state, side_is_p1);
@@ -2192,7 +2231,11 @@ impl LeafContext {
             // distinction this change exists to defend.
             match resolve_opponent_order(self_order, self.root_opponent_order()) {
                 Some(order) => order,
-                None => return Ok(vec![None; options.len()]),
+                None => {
+                    let mut witness = UnmappedMoveSurfaceWitness::default();
+                    witness.order_unavailable = options.iter().filter(|option| matches!(option, MoveChoice::Move(_))).count();
+                    return Ok((vec![None; options.len()], witness));
+                }
             }
         };
         let active_party = active_index_usize(self_side);
@@ -2229,6 +2272,7 @@ impl LeafContext {
             })
         };
         let mut map: Vec<Option<usize>> = Vec::with_capacity(options.len());
+        let mut unmapped_move_surface = UnmappedMoveSurfaceWitness::default();
         for option in options {
             let index = match option {
                 MoveChoice::Move(engine_index) => {
@@ -2270,9 +2314,32 @@ impl LeafContext {
                     }
                 }
             };
+            if index.is_none() {
+                if let MoveChoice::Move(engine_index) = option {
+                    let slot = engine_index.serialize().parse::<usize>().unwrap_or(usize::MAX);
+                    let candidate = candidates.iter().find_map(|candidate| {
+                        let obj = candidate.as_object()?;
+                        (obj.get("kind").and_then(Value::as_str) == Some("move")
+                            && obj.get("move_slot").and_then(Value::as_u64) == Some(slot as u64 + 1))
+                            .then_some(obj)
+                    });
+                    let placeholder_name = format!("slot:{}", slot + 1);
+                    match candidate {
+                        None => unmapped_move_surface.unexplained += 1,
+                        Some(candidate) if candidate.get("move_name").and_then(Value::as_str)
+                            == Some(placeholder_name.as_str()) => {
+                            unmapped_move_surface.engine_move_missing += 1;
+                        }
+                        Some(candidate) if !candidate.get("legal").and_then(Value::as_bool).unwrap_or(false) => {
+                            unmapped_move_surface.engine_move_present_but_illegal += 1;
+                        }
+                        Some(_) => unmapped_move_surface.unexplained += 1,
+                    }
+                }
+            }
             map.push(index);
         }
-        Ok(map)
+        Ok((map, unmapped_move_surface))
     }
 }
 
@@ -3436,8 +3503,8 @@ mod tests {
     fn absent_opponent_request_order_refuses_the_whole_node_including_move_arms() {
         let (ctx, state) = order_context(None);
         let options = mixed_options();
-        let map = ctx
-            .opponent_action_map(&state, &options, None, None, false)
+        let (map, witness) = ctx
+            .opponent_action_map_with_unmapped_witness(&state, &options, None, None, false)
             .expect("opponent action map");
         assert_eq!(
             map,
@@ -3456,6 +3523,10 @@ mod tests {
             map[0], None,
             "the move arm must be refused with the rest of the node"
         );
+        assert_eq!(witness.engine_move_missing, 0);
+        assert_eq!(witness.engine_move_present_but_illegal, 0);
+        assert_eq!(witness.order_unavailable, 1, "the unknown-order refusal is not an action-surface discrepancy");
+        assert_eq!(witness.unexplained, 0);
     }
 
     #[test]

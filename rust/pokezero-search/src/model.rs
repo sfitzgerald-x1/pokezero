@@ -98,36 +98,64 @@ fn parse_device(device: &str) -> PyResult<Device> {
 struct UnmappedActionMapWitness {
     nodes: usize,
     move_arms: usize,
+    move_arms_engine_missing: usize,
+    move_arms_present_but_illegal: usize,
+    move_arms_order_unavailable: usize,
+    move_arms_unexplained: usize,
     switch_arms: usize,
     none_arms: usize,
 }
 
 impl UnmappedActionMapWitness {
-    fn record(&mut self, options: &[MoveChoice], map: &[Option<usize>]) {
+    fn record(
+        &mut self,
+        options: &[MoveChoice],
+        map: &[Option<usize>],
+        move_surface: &crate::leaf::UnmappedMoveSurfaceWitness,
+    ) {
         debug_assert_eq!(
             options.len(),
             map.len(),
             "action-map witness must remain aligned with the engine option list"
         );
         let mut unmapped = false;
+        let mut move_arms_added = 0usize;
         for (option, action_index) in options.iter().zip(map) {
             if action_index.is_some() {
                 continue;
             }
             unmapped = true;
             match option {
-                MoveChoice::Move(_) => self.move_arms += 1,
+                MoveChoice::Move(_) => {
+                    self.move_arms += 1;
+                    move_arms_added += 1;
+                }
                 MoveChoice::Switch(_) => self.switch_arms += 1,
                 MoveChoice::None => self.none_arms += 1,
             }
         }
+        debug_assert_eq!(
+            move_arms_added,
+            move_surface.engine_move_missing
+                + move_surface.engine_move_present_but_illegal
+                + move_surface.order_unavailable
+                + move_surface.unexplained,
+            "this map's surface witness must conserve missing move arms"
+        );
+        self.move_arms_engine_missing += move_surface.engine_move_missing;
+        self.move_arms_present_but_illegal += move_surface.engine_move_present_but_illegal;
+        self.move_arms_order_unavailable += move_surface.order_unavailable;
+        self.move_arms_unexplained += move_surface.unexplained;
         self.nodes += usize::from(unmapped);
     }
 
     fn render_json(&self) -> String {
         format!(
-            "{{\"nodes\":{},\"move_arms\":{},\"switch_arms\":{},\"none_arms\":{}}}",
-            self.nodes, self.move_arms, self.switch_arms, self.none_arms
+            "{{\"nodes\":{},\"move_arms\":{},\"move_arms_engine_missing\":{},\"move_arms_present_but_illegal\":{},\"move_arms_order_unavailable\":{},\"move_arms_unexplained\":{},\"switch_arms\":{},\"none_arms\":{}}}",
+            self.nodes, self.move_arms, self.move_arms_engine_missing,
+            self.move_arms_present_but_illegal, self.move_arms_order_unavailable,
+            self.move_arms_unexplained,
+            self.switch_arms, self.none_arms
         )
     }
 }
@@ -1515,7 +1543,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         let options = seats.acting_options;
                         if !is_single_none(&options) {
                             let map_started = Instant::now();
-                            let map_result = leaf_ctx.self_action_map(
+                            let map_result = leaf_ctx.self_action_map_with_unmapped_witness(
                                 leaf,
                                 &options,
                                 Some(&self_order),
@@ -1524,8 +1552,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             );
                             action_map_nanos += map_started.elapsed().as_nanos();
                             match map_result {
-                                Ok(map) => {
-                                    branch_unmapped_action_witness.acting.record(&options, &map);
+                                Ok((map, move_surface)) => {
+                                    branch_unmapped_action_witness
+                                        .acting
+                                        .record(&options, &map, &move_surface);
                                     pending_maps.push(((seam.chance, seam.branch_index), row, map))
                                 }
                                 Err(error) => {
@@ -1542,7 +1572,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             let opponent_options = seats.opponent_options;
                             if !is_single_none(&opponent_options) {
                                 let map_started = Instant::now();
-                                let map_result = leaf_ctx.opponent_action_map(
+                                let map_result = leaf_ctx.opponent_action_map_with_unmapped_witness(
                                     leaf,
                                     &opponent_options,
                                     opponent_order.as_deref(),
@@ -1551,10 +1581,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                 );
                                 action_map_nanos += map_started.elapsed().as_nanos();
                                 match map_result {
-                                    Ok(map) => {
+                                    Ok((map, move_surface)) => {
                                         branch_unmapped_action_witness
                                             .opponent
-                                            .record(&opponent_options, &map);
+                                            .record(&opponent_options, &map, &move_surface);
                                         pending_opponent_maps.push((
                                             (seam.chance, seam.branch_index),
                                             row,

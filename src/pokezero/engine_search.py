@@ -4079,12 +4079,22 @@ def _validated_branch_prior_unmapped_action_witness(value: Any) -> dict[str, dic
     normalized: dict[str, dict[str, int]] = {}
     for seat in ("acting", "opponent"):
         row = value[seat]
-        if not isinstance(row, Mapping) or set(row) != {
+        base_fields = {
             "nodes",
             "move_arms",
             "switch_arms",
             "none_arms",
-        }:
+        }
+        move_surface_fields = {
+            "move_arms_engine_missing",
+            "move_arms_present_but_illegal",
+            "move_arms_order_unavailable",
+            "move_arms_unexplained",
+        }
+        if not isinstance(row, Mapping) or set(row) not in (
+            base_fields,
+            base_fields | move_surface_fields,
+        ):
             raise EngineSearchWitnessError(
                 "branch_prior_fallback_ledger_invalid: unmapped-action witness row "
                 "has an unexpected shape"
@@ -4107,6 +4117,13 @@ def _validated_branch_prior_unmapped_action_witness(value: Any) -> dict[str, dic
                 "branch_prior_fallback_ledger_invalid: unmapped-action witness does "
                 "not conserve nodes and missing arms"
             )
+        if move_surface_fields <= normalized_row.keys() and normalized_row["move_arms"] != sum(
+            normalized_row[name] for name in move_surface_fields
+        ):
+            raise EngineSearchWitnessError(
+                "branch_prior_fallback_ledger_invalid: move-surface witness does not "
+                "conserve unmapped move arms"
+            )
         normalized[seat] = normalized_row
     return normalized
 
@@ -4120,8 +4137,31 @@ def _branch_prior_unmapped_action_witness_nodes(
 def _sum_branch_prior_unmapped_action_witnesses(
     witnesses: Sequence[Mapping[str, Mapping[str, int]]],
 ) -> dict[str, dict[str, int]]:
+    move_surface_fields = {
+        "move_arms_engine_missing",
+        "move_arms_present_but_illegal",
+        "move_arms_order_unavailable",
+        "move_arms_unexplained",
+    }
+    detailed = [
+        move_surface_fields <= witness[seat].keys()
+        for witness in witnesses
+        for seat in ("acting", "opponent")
+    ]
+    if any(detailed) and not all(detailed):
+        raise EngineSearchWitnessError(
+            "branch_prior_fallback_ledger_invalid: unmapped-action witness detail "
+            "schema differs across native invocations"
+        )
+    fields = (
+        "nodes",
+        "move_arms",
+        *(tuple(sorted(move_surface_fields)) if all(detailed) else ()),
+        "switch_arms",
+        "none_arms",
+    )
     total = {
-        seat: {name: 0 for name in ("nodes", "move_arms", "switch_arms", "none_arms")}
+        seat: {name: 0 for name in fields}
         for seat in ("acting", "opponent")
     }
     for witness in witnesses:
