@@ -1,9 +1,49 @@
 # Guided MCTS diagnosis: branch-prior and override evidence
 
-**Status: updated, 2026-09-23.** This records model-leaf evidence and the
-completed branch-prior/override audits. It is not a strength claim. The leaf
-evidence supports prioritizing a policy-consistent value-head measurement
-before assuming that deeper search will improve play.
+**Status: updated, 2026-09-24.** This records model-leaf evidence and the
+completed branch-prior/override audits. It is not a strength claim. The newer
+source-root results below supersede the earlier small-sample conclusion that
+the value head is the leading explanation.
+
+## September 24 correction: actual raw-policy anchor and current decision
+
+The previous multireply result was not a raw-policy-versus-search comparison:
+its `raw` candidate reused the historical `search_argmax`.  The corrected
+runner binds `raw_policy` to the sealed policy `model_argmax`, replays that
+choice at the public boundary, and records aliases when two arms select the
+same action.  The old artifact must not be used to decide whether MCTS beats
+the raw policy.
+
+The corrected terminal artifact is
+`/shared/scott-experiment/mcts-source-root-multireply-raw-anchor-8a4a-20260924-r1`.
+It completed seven deliberately selected model-leaf/rollout-leaf disagreement
+roots, eight sampled raw-policy opponent replies per root, and 16 seeded
+suffixes per reply, all terminal and uncapped.  The executed target is
+`policy_consistent`; its manifest accidentally listed `uniform_own` as well,
+which a follow-up contract repair prevents for future runs.  The completed
+root evidence itself contains only the target that the runner actually
+executes, so it is usable **only** as that single-target diagnostic.
+
+| Candidate | Subject wins | Trials | Rate |
+| --- | ---: | ---: | ---: |
+| actual raw policy | 425 | 896 | 47.4% |
+| model-leaf MCTS choice | 314 | 896 | 35.0% |
+
+The paired cells are 201 raw-only wins, 90 MCTS-only wins, 224 both wins, and
+381 both losses.  Raw policy was better at six roots and tied at the seventh.
+These are repeated continuations from seven source positions, not 896
+independent games; the opponent policy is sampled raw policy rather than Foul
+Play.  They therefore do not quantify global strength.  They *do* rule out
+promoting the current model-leaf choice at these changed roots and shift the
+next diagnostic toward exact root-action/Q/visit accounting before value-head
+retraining.
+
+The persisted leaf-ablation witness had also discarded each allocation arm's
+request action index after native search exported it.  That made the old Q and
+visit rows impossible to join reliably to the selected raw/MCTS actions.  New
+artifacts now retain unique `action_index` values and fail closed if they are
+missing or duplicated.  No claim about a selector/backup defect should be
+made from an allocation table without that join.
 
 ## What the large branch-prior count means
 
@@ -54,15 +94,19 @@ partial, silently wrong prior vector.  Its value backup and the live root
 remain intact.  This can make those late-game trees less efficient, but it
 cannot explain a global strength result on its own.
 
-The prior artifact predates the topology witness, so it cannot distinguish a
-missing move arm, switch arm, or `None` engine-option shape.  A fresh replay
-on the later, witness-instrumented source did **not** reproduce the fallback,
-so the old ledger cannot be retroactively assigned a concrete topology.  The
-current source-matched leaf experiment uses commit `195a89c5`, including that
-witness, but its purpose is the independent leaf-value intervention rather
-than a fabricated reproduction claim.  A mapping repair is not justified
-until a source-bound witness identifies a repairable category and a controlled
-comparison shows an effect on root actions or outcomes.
+The prior artifact predates the topology witness, so it cannot assign every
+one of the 1,414 occurrences to a concrete shape.  A later source trace did,
+however, expose a repairable member of the same class: filtering
+`Choices::NONE` compacted sparse engine move slots, so a legal M2/M3 was
+looked up at the wrong policy action slot.  The first repair preserved engine
+slot holes, but independent review found the companion encoder stopped at the
+first placeholder and again erased a later legal move.  The two-layer repair
+now preserves optional fixed slots through both the action surface and action
+tokens, with a regression that asserts sparse legal M3 identity, presence,
+activity, and legal-mask alignment.  It is a correctness repair; it does
+**not** yet prove that it explains every historical fallback or the global
+strength plateau.  A fresh source-bound witness is still required to measure
+its root-level effect.
 
 ## Fixed-opponent override audit
 
@@ -213,6 +257,12 @@ this public-history state until a separately proven reconstruction mechanism
 exists.
 
 ## Completed source-matched rollout-leaf diagnostic
+
+This is historical diagnostic evidence, not the current intervention choice.
+Its four pairs are too few, and the corrected raw-anchor multireply comparison
+above does not reproduce a general rollout/model advantage.  Retain it as a
+reason to inspect leaf behavior, not as authorization to retrain the value
+head or replace the deployed search leaf.
 
 The first `195a89c5` four-pair readout established the direction but did not
 transport the realized rollout partition. A fresh, terminal, zero-restart
