@@ -3413,23 +3413,39 @@ mod request_move_slot_tests {
         let layout = &tables.layout;
         let m3 = 2 * layout.categorical_width;
         assert_eq!(
-            grid.categorical[m3 + layout.cols.cat_primary.expect("primary column")],
+            grid.categorical[m3
+                + layout
+                    .cols
+                    .cat_primary
+                    .expect("layout missing CATEGORY_PRIMARY")],
             "move:tackle",
             "the engine M2 candidate must encode at the third action token"
         );
         let m3_num = 2 * layout.numeric_width;
         assert_eq!(
-            grid.numeric[m3_num + layout.cols.num_present.expect("present column")],
+            grid.numeric[m3_num
+                + layout
+                    .cols
+                    .num_present
+                    .expect("layout missing NUMERIC_PRESENT")],
             1.0,
             "the sparse legal candidate is present"
         );
         assert_eq!(
-            grid.numeric[m3_num + layout.cols.num_active.expect("active column")],
+            grid.numeric[m3_num
+                + layout
+                    .cols
+                    .num_active
+                    .expect("layout missing NUMERIC_ACTIVE")],
             1.0,
             "the sparse legal candidate is not disabled"
         );
         assert_eq!(
-            grid.numeric[m3_num + layout.cols.num_legal.expect("legal column")],
+            grid.numeric[m3_num
+                + layout
+                    .cols
+                    .num_legal
+                    .expect("layout missing NUMERIC_LEGAL")],
             1.0,
             "the action mask remains aligned with M2"
         );
