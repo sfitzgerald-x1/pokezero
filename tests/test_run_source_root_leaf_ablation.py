@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -42,8 +43,8 @@ def _selection(*, rollout_witness=None):
 class SourceRootLeafAblationRunnerTest(unittest.TestCase):
     def test_target_roster_is_exact_and_has_no_duplicate_address(self) -> None:
         runner = _runner()
-        self.assertEqual(len(runner.TARGETS), 11)
-        self.assertEqual(len(set(runner.TARGETS)), 11)
+        self.assertEqual(len(runner.TARGETS), 16)
+        self.assertEqual(len(set(runner.TARGETS)), 16)
         self.assertEqual(
             [(target.seed, target.seat, target.turn_index) for target in runner.TARGETS],
             [
@@ -53,7 +54,14 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
                 (2026092006, "p1", 2), (2026092006, "p1", 3),
                 (2026092007, "p1", 9), (2026092007, "p1", 19),
                 (2026092007, "p2", 9),
+                (2026092006, "p2", 118), (2026092006, "p2", 119),
+                (2026092006, "p2", 124), (2026092006, "p2", 126),
+                (2026092006, "p2", 127),
             ],
+        )
+        self.assertEqual(
+            runner.FALLBACK_TARGETS,
+            frozenset(runner.TARGETS[-5:]),
         )
 
     def test_source_paths_are_targeted_not_a_full_corpus_glob(self) -> None:
@@ -72,6 +80,52 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             (target / "turn-006-b.json").write_text("{}", encoding="utf-8")
             with self.assertRaisesRegex(runner.AblationError, "2 records"):
                 runner._source_wrapper_path(source_root, root)
+
+    def test_historical_fallback_witness_is_bound_to_the_exact_raw_selection(self) -> None:
+        runner = _runner()
+        root = runner.SourceRoot(2026092006, "p2", 119)
+        record = SimpleNamespace(
+            decision_id="d" * 64,
+            acting_player="p2",
+            turn_index=119,
+            recorded_action_index=3,
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            source_root = Path(temporary)
+            directory = (
+                source_root / "seeds" / "seed-2026092006" / "branch-prior-fallback-ledgers"
+                / "seed-2026092006-p2"
+            )
+            directory.mkdir(parents=True)
+            path = directory / "turn-119-witness.json"
+            payload = {
+                "public_decision": {
+                    "decision_id": record.decision_id,
+                    "acting_player": record.acting_player,
+                    "turn_index": record.turn_index,
+                    "recorded_action_index": record.recorded_action_index,
+                },
+                "branch_prior_fallbacks": {
+                    "branch_prior_fallbacks": 7,
+                    "reason_ledger_complete": True,
+                    "unclassified_branch_prior_fallbacks": 0,
+                    "reason_counts": {"unmapped_action": 7, "empty_action_map": 0},
+                },
+                "selection": {
+                    "model_argmax": 3,
+                    "search_argmax": 3,
+                    "model_override": False,
+                    "root_allocation": {"arms": []},
+                },
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            witness = runner._load_historical_fallback(source_root, root, record)
+            self.assertEqual(witness["branch_prior_fallbacks"], 7)
+            self.assertEqual(witness["selection"], payload["selection"])
+            payload["selection"]["search_argmax"] = 6
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(runner.AblationError, "historical raw selection"):
+                runner._load_historical_fallback(source_root, root, record)
 
     def test_parser_freezes_cuda_only_model_device(self) -> None:
         runner = _runner()
@@ -203,6 +257,7 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             "manifest_sha256": "m" * 64,
             "source": root.to_dict(),
             "record_sha256": runner._sha256(record.to_dict()),
+            "historical_branch_prior_fallback": None,
             "arms": {
                 "model_control_a": {"selection": _selection()},
                 "model_control_b": {"selection": _selection()},
@@ -211,7 +266,7 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
         }
         with mock.patch.object(runner, "require_rollout_leaf_witness") as witness:
             runner._validate_completed_root(
-                payload, root=root, record=record, manifest_sha256="m" * 64
+                payload, root=root, record=record, historical_fallback=None, manifest_sha256="m" * 64
             )
             self.assertEqual(witness.call_count, 3)
             self.assertEqual(
@@ -221,7 +276,7 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             payload["arms"]["model_control_b"]["selection"]["root_action"] = "move 2"
             with self.assertRaisesRegex(runner.AblationError, "controls disagree"):
                 runner._validate_completed_root(
-                    payload, root=root, record=record, manifest_sha256="m" * 64
+                    payload, root=root, record=record, historical_fallback=None, manifest_sha256="m" * 64
                 )
 
     def test_completed_root_refuses_a_foreign_manifest(self) -> None:
@@ -234,6 +289,7 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             "manifest_sha256": "old" * 21 + "x",
             "source": root.to_dict(),
             "record_sha256": runner._sha256(record.to_dict()),
+            "historical_branch_prior_fallback": None,
             "arms": {
                 "model_control_a": {"selection": _selection()},
                 "model_control_b": {"selection": _selection()},
@@ -243,7 +299,8 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
         with mock.patch.object(runner, "require_rollout_leaf_witness"):
             with self.assertRaisesRegex(runner.AblationError, "does not bind this run manifest"):
                 runner._validate_completed_root(
-                    payload, root=root, record=record, manifest_sha256="new" * 21 + "x"
+                    payload, root=root, record=record, historical_fallback=None,
+                    manifest_sha256="new" * 21 + "x"
                 )
 
     def test_contract_freezes_leaf_and_search_axes(self) -> None:
