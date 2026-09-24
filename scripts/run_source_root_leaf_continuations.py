@@ -47,6 +47,7 @@ from pokezero.local_showdown import (  # noqa: E402
     LocalShowdownEnv,
     env_config_from_checkpoint_provenance,
 )
+from pokezero.audit_provenance import public_repo_commit  # noqa: E402
 from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider  # noqa: E402
 from pokezero.mcts_eval.source_root_replay import source_bound_replay_prefix  # noqa: E402
 from pokezero.neural_policy import (  # noqa: E402
@@ -257,9 +258,13 @@ def _load_changed_leaf_roots(
 
 
 def _source_code_provenance(*, expected_commit: str) -> Mapping[str, str]:
-    stamped = os.environ.get("POKEZERO_COMMIT", "").strip().lower()
-    if stamped != expected_commit:
-        raise ContinuationError("executing source commit does not match the frozen contract")
+    # Runtime launchers must not supply this value: a job environment variable
+    # would only echo the requested commit, not prove the contents of the
+    # digest-qualified image.  ``public_repo_commit`` reads the revision baked
+    # into the image by Docker (or HEAD for a local checkout).
+    baked = public_repo_commit(ROOT)
+    if baked != expected_commit:
+        raise ContinuationError("image-baked source commit does not match the frozen contract")
     paths = (ROOT / "scripts" / "run_source_root_leaf_continuations.py",)
     digest = hashlib.sha256()
     for path in paths:
@@ -267,7 +272,7 @@ def _source_code_provenance(*, expected_commit: str) -> Mapping[str, str]:
         payload = path.read_bytes()
         digest.update(relative.encode("utf-8"))
         digest.update(payload)
-    return {"commit": stamped, "runner_sha256": digest.hexdigest()}
+    return {"commit": baked, "runner_sha256": digest.hexdigest()}
 
 
 def _manifest(
@@ -315,11 +320,27 @@ def _manifest(
     }
 
 
-def _prepare(out_root: Path, manifest: Mapping[str, Any], *, resume: bool, require_existing: bool) -> None:
+def _prepare(
+    out_root: Path,
+    manifest: Mapping[str, Any],
+    *,
+    resume: bool,
+    require_existing: bool,
+    allow_complete_pass: bool,
+) -> None:
+    path = out_root / "MANIFEST.json"
     terminals = [out_root / name for name in ("PASS.json", "NONPASS.json") if (out_root / name).exists()]
     if terminals:
-        raise ContinuationError(f"out root is terminal: {', '.join(path.name for path in terminals)}")
-    path = out_root / "MANIFEST.json"
+        # A Pod can be interrupted between publishing PASS and reporting its
+        # successful exit to Kubernetes.  The finalizer may re-enter only a
+        # lone PASS, and must subsequently rebuild every source boundary and
+        # validate every complete root before it accepts that publication.
+        # Never reopen NONPASS or an ambiguous double-terminal root.
+        if not (allow_complete_pass and resume and terminals == [out_root / "PASS.json"]):
+            raise ContinuationError(f"out root is terminal: {', '.join(path.name for path in terminals)}")
+        if not path.is_file() or _read_json(path) != manifest:
+            raise ContinuationError("terminal PASS manifest differs from this frozen contract")
+        return
     if path.exists():
         if not resume:
             raise ContinuationError("out root exists; pass --resume to validate completed roots")
@@ -627,7 +648,13 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         args=args, changed=changed, leaf_manifest=leaf_manifest, leaf_manifest_sha256=leaf_manifest_sha256,
     )
     manifest_sha256 = _sha256(manifest)
-    _prepare(out_root, manifest, resume=args.resume, require_existing=args.shard_count > 1 and not args.prepare_only)
+    _prepare(
+        out_root,
+        manifest,
+        resume=args.resume,
+        require_existing=args.shard_count > 1 and not args.prepare_only,
+        allow_complete_pass=args.resume and args.finalize_only,
+    )
     if args.prepare_only:
         return {"schema_version": SCHEMA_VERSION, "state": "PREPARED", "root_count": len(changed)}
     if args.finalize_only:
@@ -730,7 +757,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             pass
         print(f"NONPASS: {error}", file=sys.stderr)
         return 1
-    print("WROTE SOURCE ROOT LEAF CONTINUATION PASS", _canonical_json(result))
+    state = result.get("state")
+    if state == "PASS":
+        marker = "PASS"
+    elif state == "PREPARED":
+        marker = "PREPARED"
+    elif state == "SHARD_COMPLETE":
+        marker = "SHARD COMPLETE"
+    else:
+        marker = "RESULT"
+    print(f"WROTE SOURCE ROOT LEAF CONTINUATION {marker}", _canonical_json(result))
     return 0
 
 

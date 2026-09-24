@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from dataclasses import dataclass
+from contextlib import redirect_stdout
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,6 +162,15 @@ class ContinuationContractTest(unittest.TestCase):
                 manifest_sha256="m" * 64,
             )
 
+    def test_source_provenance_requires_image_baked_commit(self) -> None:
+        expected = "a" * 40
+        with patch.object(RUNNER, "public_repo_commit", return_value=expected):
+            provenance = RUNNER._source_code_provenance(expected_commit=expected)
+        self.assertEqual(provenance["commit"], expected)
+        with patch.object(RUNNER, "public_repo_commit", return_value="b" * 40):
+            with self.assertRaisesRegex(RUNNER.ContinuationError, "image-baked source commit"):
+                RUNNER._source_code_provenance(expected_commit=expected)
+
     def test_source_histories_keep_each_seat_order_and_append_current(self) -> None:
         replay = type(
             "Replay",
@@ -189,6 +202,75 @@ class ContinuationContractTest(unittest.TestCase):
             RUNNER._write_or_require_identical_json(path, {"one": 1})
             with self.assertRaisesRegex(RUNNER.ContinuationError, "differs"):
                 RUNNER._write_or_require_identical_json(path, {"two": 2})
+
+    def test_prepare_allows_only_a_lone_pass_for_resumed_final_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest = {"contract": "current"}
+            (root / "MANIFEST.json").write_text(json.dumps(manifest))
+            (root / "PASS.json").write_text("{}")
+            RUNNER._prepare(
+                root,
+                manifest,
+                resume=True,
+                require_existing=False,
+                allow_complete_pass=True,
+            )
+            self.assertFalse((root / "RUNNING.json").exists())
+
+    def test_prepare_refuses_terminal_pass_without_matching_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "PASS.json").write_text("{}")
+            with self.assertRaisesRegex(RUNNER.ContinuationError, "manifest differs"):
+                RUNNER._prepare(
+                    root,
+                    {"contract": "current"},
+                    resume=True,
+                    require_existing=False,
+                    allow_complete_pass=True,
+                )
+
+    def test_prepare_refuses_nonpass_or_nonfinalizer_terminal_reentry(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "NONPASS.json").write_text("{}")
+            with self.assertRaisesRegex(RUNNER.ContinuationError, "terminal"):
+                RUNNER._prepare(
+                    root,
+                    {"contract": "current"},
+                    resume=True,
+                    require_existing=False,
+                    allow_complete_pass=True,
+                )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "PASS.json").write_text("{}")
+            with self.assertRaisesRegex(RUNNER.ContinuationError, "terminal"):
+                RUNNER._prepare(
+                    root,
+                    {"contract": "current"},
+                    resume=True,
+                    require_existing=False,
+                    allow_complete_pass=False,
+                )
+
+    def test_main_labels_preparation_as_nonterminal(self) -> None:
+        stream = io.StringIO()
+        with patch.object(RUNNER, "_parse_args", return_value=Namespace(out_root="/tmp")), patch.object(
+            RUNNER, "_run", return_value={"state": "PREPARED", "root_count": 7}
+        ), redirect_stdout(stream):
+            self.assertEqual(RUNNER.main([]), 0)
+        self.assertIn("WROTE SOURCE ROOT LEAF CONTINUATION PREPARED", stream.getvalue())
+        self.assertNotIn("CONTINUATION PASS", stream.getvalue())
+
+    def test_main_labels_terminal_pass_as_pass(self) -> None:
+        stream = io.StringIO()
+        with patch.object(RUNNER, "_parse_args", return_value=Namespace(out_root="/tmp")), patch.object(
+            RUNNER, "_run", return_value={"state": "PASS", "root_count": 7}
+        ), redirect_stdout(stream):
+            self.assertEqual(RUNNER.main([]), 0)
+        self.assertIn("WROTE SOURCE ROOT LEAF CONTINUATION PASS", stream.getvalue())
 
 
 if __name__ == "__main__":
