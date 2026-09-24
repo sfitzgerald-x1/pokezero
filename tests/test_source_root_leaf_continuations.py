@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from dataclasses import dataclass
+from contextlib import redirect_stdout
 from unittest.mock import patch
 
 
@@ -251,6 +254,23 @@ class ContinuationContractTest(unittest.TestCase):
                     require_existing=False,
                     allow_complete_pass=False,
                 )
+
+    def test_main_labels_preparation_as_nonterminal(self) -> None:
+        stream = io.StringIO()
+        with patch.object(RUNNER, "_parse_args", return_value=Namespace(out_root="/tmp")), patch.object(
+            RUNNER, "_run", return_value={"state": "PREPARED", "root_count": 7}
+        ), redirect_stdout(stream):
+            self.assertEqual(RUNNER.main([]), 0)
+        self.assertIn("WROTE SOURCE ROOT LEAF CONTINUATION PREPARED", stream.getvalue())
+        self.assertNotIn("CONTINUATION PASS", stream.getvalue())
+
+    def test_main_labels_terminal_pass_as_pass(self) -> None:
+        stream = io.StringIO()
+        with patch.object(RUNNER, "_parse_args", return_value=Namespace(out_root="/tmp")), patch.object(
+            RUNNER, "_run", return_value={"state": "PASS", "root_count": 7}
+        ), redirect_stdout(stream):
+            self.assertEqual(RUNNER.main([]), 0)
+        self.assertIn("WROTE SOURCE ROOT LEAF CONTINUATION PASS", stream.getvalue())
 
 
 if __name__ == "__main__":

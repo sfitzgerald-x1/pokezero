@@ -757,7 +757,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             pass
         print(f"NONPASS: {error}", file=sys.stderr)
         return 1
-    print("WROTE SOURCE ROOT LEAF CONTINUATION PASS", _canonical_json(result))
+    state = result.get("state")
+    if state == "PASS":
+        marker = "PASS"
+    elif state == "PREPARED":
+        marker = "PREPARED"
+    elif state == "SHARD_COMPLETE":
+        marker = "SHARD COMPLETE"
+    else:
+        marker = "RESULT"
+    print(f"WROTE SOURCE ROOT LEAF CONTINUATION {marker}", _canonical_json(result))
     return 0
 
 
