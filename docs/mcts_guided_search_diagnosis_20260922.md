@@ -104,9 +104,9 @@ slot holes, but independent review found the companion encoder stopped at the
 first placeholder and again erased a later legal move.  The proposed
 two-layer repair would preserve optional fixed slots through both the action
 surface and action tokens, with a regression that asserts sparse legal M3
-identity, presence, activity, and legal-mask alignment.  That repair is pending in PR
-#1464 rather than landed on `main`; it is a correctness repair, not yet a
-current-source claim.  It does
+identity, presence, activity, and legal-mask alignment.  That two-layer
+repair landed on `main` in PR #1464 (merge `7aa78fc8`) after independent
+review.  It is a correctness repair, not a demonstrated strength gain.  It does
 **not** yet prove that it explains every historical fallback or the global
 strength plateau.  A fresh source-bound witness is still required to measure
 its root-level effect.
