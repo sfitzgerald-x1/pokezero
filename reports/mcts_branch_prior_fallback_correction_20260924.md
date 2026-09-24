@@ -29,6 +29,18 @@ same replay separately preserves the sparse action-slot issue: fixed engine
 slots such as `M2` must not be compacted to `M0` before policy priors are
 attached.
 
+The effect on the recorded root choice is narrower than the raw fallback total
+suggests.  Across all eight fallback-bearing decisions in the forensic replay
+(1,450 fallbacks: the 1,414 stale-PP cases plus the 36 residual cases), search
+selected the model argmax every time: zero root overrides.  The fallback
+therefore does not explain a directly observed changed root action in this
+panel.  It remains an interior-prior correctness defect — and can change
+interior values or become decisive elsewhere — but this result rules out
+claiming those 1,450 events themselves caused the panel's root-action
+overrides.  The seven-count difference from the earlier aggregate headline is
+not attributed here; only sealed, per-decision ledgers are used for this
+action-effect statement.
+
 ## Correction
 
 The corrected source revision is
