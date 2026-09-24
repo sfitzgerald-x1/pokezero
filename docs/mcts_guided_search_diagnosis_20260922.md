@@ -38,6 +38,23 @@ promoting the current model-leaf choice at these changed roots and shift the
 next diagnostic toward exact root-action/Q/visit accounting before value-head
 retraining.
 
+The table above is deliberately a **wins-only** count. It must not be read as
+a game score because it omits draws. Recomputing every terminal outcome with a
+draw worth one half point gives:
+
+| Choice | Score | Rate |
+| --- | ---: | ---: |
+| actual raw policy | 433 / 896 | 48.3% |
+| model-leaf MCTS choice | 325 / 896 | 36.3% |
+| rollout-leaf MCTS choice | 433 / 896 | 48.3% |
+
+Raw policy therefore exceeds the model-leaf choice by **12.05 percentage
+points** on this selected panel. Rollout leaf does not establish a gain beyond
+raw policy: it selected the exact raw action at six of seven roots, and its
+different seventh action lost every measured continuation. Its supported
+effect here is recovery from damaging model-leaf overrides, not discovery of a
+better-than-policy action.
+
 The persisted leaf-ablation witness had also discarded each allocation arm's
 request action index after native search exported it.  That made the old Q and
 visit rows impossible to join reliably to the selected raw/MCTS actions.  New
