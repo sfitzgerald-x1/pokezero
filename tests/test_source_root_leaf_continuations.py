@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import random
 import sys
 import tempfile
 import unittest
@@ -311,6 +312,30 @@ class ContinuationContractTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(RUNNER.ContinuationError, "anchor is absent"):
             RUNNER._multireply_actions(plan=plan, record=RECORD)
+
+    def test_raw_anchor_boundary_replay_supplies_deterministic_rng(self) -> None:
+        class Selector:
+            received_rng: random.Random | None = None
+
+            def select_action(self, observation: object, *, rng: random.Random) -> object:
+                self.received_rng = rng
+                return type("Choice", (), {"action_index": 0})()
+
+        selector = Selector()
+        anchor = RUNNER._RawPolicyAnchor(action_index=0, selection_ledger_sha256="a" * 64)
+        with patch.object(RUNNER, "_new_sampled_policy", return_value=selector) as factory:
+            RUNNER._verify_raw_policy_anchor_at_boundary(
+                root=RUNNER.SourceRoot(1, "p1", 2),
+                current={"p1": "current"},
+                histories={"p1": ("prefix", "current")},
+                model=object(),
+                result=object(),
+                device="cuda",
+                raw_policy_anchor=anchor,
+            )
+        self.assertIsInstance(selector.received_rng, random.Random)
+        self.assertEqual(factory.call_args.kwargs["history"], ("prefix",))
+        self.assertTrue(factory.call_args.kwargs["deterministic"])
 
     def test_source_provenance_requires_image_baked_commit(self) -> None:
         expected = "a" * 40

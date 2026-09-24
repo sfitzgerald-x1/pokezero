@@ -494,6 +494,34 @@ def _raw_policy_anchor(
     return _RawPolicyAnchor(action_index=raw_action, selection_ledger_sha256=_sha256(ledger))
 
 
+def _verify_raw_policy_anchor_at_boundary(
+    *,
+    root: SourceRoot,
+    current: Mapping[str, Any],
+    histories: Mapping[str, Sequence[Any]],
+    model: Any,
+    result: Any,
+    device: str,
+    raw_policy_anchor: _RawPolicyAnchor,
+) -> None:
+    """Re-run the registered deterministic raw selector at one source root."""
+
+    raw_selector = _new_sampled_policy(
+        model=model,
+        result=result,
+        device=device,
+        seat=root.seat,
+        history=histories[root.seat][:-1],
+        deterministic=True,
+    )
+    # The selector API requires an RNG even for deterministic masked argmax.
+    # A fixed public seed keeps this binding reproducible without introducing a
+    # second sampled-action surface.
+    selected = raw_selector.select_action(current[root.seat], rng=random.Random(0)).action_index
+    if selected != raw_policy_anchor.action_index:
+        raise ContinuationError(f"{root}: source raw policy selector disagrees with its ledger")
+
+
 def _new_sampled_policy(
     *, model: Any, result: Any, device: str, seat: str, history: Sequence[Any], deterministic: bool,
 ) -> TransformerSoftmaxPolicy:
@@ -555,16 +583,15 @@ def _root_plan(
             # boundary.  The immutable ledger names the raw argmax; this
             # second binding catches a stale or incorrectly interpreted
             # ledger without exposing any private action details.
-            raw_selector = _new_sampled_policy(
+            _verify_raw_policy_anchor_at_boundary(
+                root=root,
+                current=current,
+                histories=histories,
                 model=model,
                 result=result,
                 device=device,
-                seat=root.seat,
-                history=histories[root.seat][:-1],
-                deterministic=True,
+                raw_policy_anchor=raw_policy_anchor,
             )
-            if raw_selector.select_action(current[root.seat]).action_index != raw_policy_anchor.action_index:
-                raise ContinuationError(f"{root}: source raw policy selector disagrees with its ledger")
         arms = leaf_payload["arms"]
         model_choice = arms["model_control_a"]["selection"]["root_action"]
         rollout_choice = arms["rollout_leaf"]["selection"]["root_action"]
