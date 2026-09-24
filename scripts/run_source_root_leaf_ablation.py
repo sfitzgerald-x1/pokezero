@@ -2,7 +2,8 @@
 """Run the fixed source-root model-leaf versus rollout-leaf diagnostic.
 
 This is deliberately a *root-selection* diagnostic, not a strength evaluator.
-It replays eleven predeclared public decision roots from the completed R4 audit:
+It replays sixteen predeclared public decision roots from the completed R4 audit,
+including the five exact historical branch-prior failure roots:
 
 * ``model_control_a`` and ``model_control_b`` use the exact same model leaf;
   their selection witnesses must match exactly, proving the replay boundary is
@@ -38,7 +39,10 @@ if SRC.is_dir():
     sys.path.insert(0, str(SRC))
 
 from pokezero.actions import ACTION_COUNT  # noqa: E402
-from pokezero.engine_search import require_rollout_leaf_witness  # noqa: E402
+from pokezero.engine_search import (  # noqa: E402
+    BRANCH_PRIOR_FALLBACK_REASON_VALUES,
+    require_rollout_leaf_witness,
+)
 from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider  # noqa: E402
 from pokezero.mcts_eval.manifest import SearchConfig  # noqa: E402
 from pokezero.mcts_eval.resolver import (  # noqa: E402
@@ -53,7 +57,7 @@ from pokezero.mcts_eval.source_root_replay import (  # noqa: E402
 from pokezero.public_decision_corpus import PublicDecisionRecord  # noqa: E402
 
 
-SCHEMA_VERSION = "pokezero.source-root-leaf-ablation.v1"
+SCHEMA_VERSION = "pokezero.source-root-leaf-ablation.v4"
 SOURCE_WRAPPER_SCHEMA = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 ARMS = ("model_control_a", "model_control_b", "rollout_leaf")
 SEARCH = {"depth": 6, "sims": 4096, "batch": 16, "worlds": 4}
@@ -93,9 +97,10 @@ class SourceRoot:
         return {"seed": self.seed, "seat": self.seat, "turn_index": self.turn_index}
 
 
-# Fixed before this script is ever run.  The five omitted R4 roots have an
-# unresolved opponent event and therefore cannot be repaired without crossing
-# the source actor's information boundary.
+# Fixed before this script is ever run.  The final five entries are the exact
+# late p2 roots carrying every archived branch-prior fallback.  They are kept
+# with the prior leaf-comparison panel so a source-repair run cannot report
+# clean fresh-game telemetry while avoiding the historical failure states.
 TARGETS = (
     SourceRoot(2026092004, "p1", 19),
     SourceRoot(2026092004, "p1", 20),
@@ -108,7 +113,13 @@ TARGETS = (
     SourceRoot(2026092007, "p1", 9),
     SourceRoot(2026092007, "p1", 19),
     SourceRoot(2026092007, "p2", 9),
+    SourceRoot(2026092006, "p2", 118),
+    SourceRoot(2026092006, "p2", 119),
+    SourceRoot(2026092006, "p2", 124),
+    SourceRoot(2026092006, "p2", 126),
+    SourceRoot(2026092006, "p2", 127),
 )
+FALLBACK_TARGETS = frozenset(TARGETS[-5:])
 
 
 class AblationError(RuntimeError):
@@ -184,6 +195,19 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--showdown-root", required=True)
     parser.add_argument("--source-root", required=True, help="Completed R4 durable root.")
     parser.add_argument("--out-root", required=True)
+    parser.add_argument(
+        "--expected-source-commit",
+        help=(
+            "Optional full commit that the executing image must contain. Required for a "
+            "source-repair measurement so a repaired engine cannot be mistaken for a historical replay."
+        ),
+    )
+    parser.add_argument(
+        "--expected-engine-fingerprint",
+        help=(
+            "Optional repaired native-engine fingerprint. Omit only for strict historical-engine replay."
+        ),
+    )
     parser.add_argument("--model-device", default="cuda", choices=("cuda",))
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--shard-index", type=int, default=0)
@@ -196,6 +220,15 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         char not in "0123456789abcdef" for char in args.expected_checkpoint_sha256
     ):
         parser.error("--expected-checkpoint-sha256 must be lowercase SHA-256")
+    for option in ("expected_source_commit", "expected_engine_fingerprint"):
+        value = getattr(args, option)
+        if value is not None and not _is_lower_hex(value, 40 if option == "expected_source_commit" else 64):
+            parser.error(f"--{option.replace('_', '-')} must be lowercase hexadecimal")
+    if (args.expected_source_commit is None) != (args.expected_engine_fingerprint is None):
+        parser.error(
+            "--expected-source-commit and --expected-engine-fingerprint must be supplied together "
+            "for a source-repair measurement"
+        )
     if args.shard_count <= 0 or not 0 <= args.shard_index < args.shard_count:
         parser.error("--shard-index must be in [0, --shard-count)")
     if args.finalize_only and args.shard_index != 0:
@@ -441,18 +474,24 @@ def _execution_runtime(
     engine must nevertheless remain exactly the archived R4 versions.
     """
 
+    if (args.expected_source_commit is None) != (args.expected_engine_fingerprint is None):
+        raise AblationError(
+            "source-repair execution requires both explicitly bound source commit and engine fingerprint"
+        )
     historical = historical_baseline.get("historical_runtime")
     if not isinstance(historical, Mapping):
         raise AblationError("historical runtime identity is missing")
     expected_showdown = historical.get("showdown_source")
-    expected_engine = historical.get("engine_fingerprint")
+    historical_engine = historical.get("engine_fingerprint")
     if (
         not isinstance(expected_showdown, Mapping)
         or not _is_lower_hex(expected_showdown.get("content_sha256"), 64)
-        or not _is_lower_hex(expected_engine, 64)
+        or not _is_lower_hex(historical_engine, 64)
     ):
         raise AblationError("historical runtime identity is malformed")
     source = _source_provenance()
+    if args.expected_source_commit is not None and source["commit"] != args.expected_source_commit:
+        raise AblationError("executing source commit differs from the explicitly bound source-repair commit")
     showdown = _showdown_source_provenance(args.showdown_root)
     if showdown["content_sha256"] != expected_showdown["content_sha256"]:
         raise AblationError("active Showdown runtime differs from the archived R4 battle oracle")
@@ -465,12 +504,18 @@ def _execution_runtime(
     except BaseException as error:  # assert_fresh may raise SystemExit for stale artifacts.
         raise AblationError("installed native engine failed its freshness check") from error
     fingerprint = engine.get("fingerprint")
+    expected_engine = args.expected_engine_fingerprint or historical_engine
     if fingerprint != expected_engine:
-        raise AblationError("active native engine differs from the archived R4 engine fingerprint")
+        if args.expected_engine_fingerprint is None:
+            raise AblationError("active native engine differs from the archived R4 engine fingerprint")
+        raise AblationError("active native engine differs from the explicitly bound source-repair fingerprint")
     return {
         "source": source,
         "engine_build": dict(engine),
         "engine_fingerprint": fingerprint,
+        "historical_engine_fingerprint": historical_engine,
+        "expected_engine_fingerprint": expected_engine,
+        "engine_identity_mode": "historical_replay" if args.expected_engine_fingerprint is None else "source_repair",
         "showdown_source": showdown,
     }
 
@@ -508,12 +553,76 @@ def _source_wrapper_path(source_root: Path, root: SourceRoot) -> Path:
     return matches[0]
 
 
+def _fallback_ledger_path(source_root: Path, root: SourceRoot) -> Path:
+    matches = sorted(
+        source_root.glob(
+            "seeds/seed-"
+            f"{root.seed}/branch-prior-fallback-ledgers/seed-{root.seed}-{root.seat}/"
+            f"turn-{root.turn_index:03d}-*.json"
+        )
+    )
+    if len(matches) != 1:
+        raise AblationError(f"source root has {len(matches)} fallback ledgers at declared address {root}")
+    return matches[0]
+
+
+def _load_historical_fallback(
+    source_root: Path, root: SourceRoot, record: PublicDecisionRecord
+) -> dict[str, Any]:
+    """Freeze the archived witness beside the repaired replay of a failure root."""
+
+    path = _fallback_ledger_path(source_root, root)
+    payload = _read_json(path)
+    if not isinstance(payload, Mapping):
+        raise AblationError(f"{root}: fallback ledger is not a mapping")
+    public_decision = payload.get("public_decision")
+    fallbacks = payload.get("branch_prior_fallbacks")
+    selection = payload.get("selection")
+    if (
+        not isinstance(public_decision, Mapping)
+        or public_decision.get("decision_id") != record.decision_id
+        or public_decision.get("acting_player") != record.acting_player
+        or public_decision.get("turn_index") != record.turn_index
+        or public_decision.get("recorded_action_index") != record.recorded_action_index
+        or not isinstance(fallbacks, Mapping)
+        or not isinstance(selection, Mapping)
+    ):
+        raise AblationError(f"{root}: fallback ledger does not bind the declared public decision")
+    count = fallbacks.get("branch_prior_fallbacks")
+    reasons = fallbacks.get("reason_counts")
+    if (
+        isinstance(count, bool)
+        or not isinstance(count, int)
+        or count <= 0
+        or fallbacks.get("reason_ledger_complete") is not True
+        or fallbacks.get("unclassified_branch_prior_fallbacks") != 0
+        or not isinstance(reasons, Mapping)
+        or reasons.get("unmapped_action") != count
+        or any(value != 0 for key, value in reasons.items() if key != "unmapped_action")
+    ):
+        raise AblationError(f"{root}: fallback ledger is not the archived unmapped-action witness")
+    if (
+        selection.get("model_argmax") != record.recorded_action_index
+        or selection.get("search_argmax") != record.recorded_action_index
+        or selection.get("model_override") is not False
+        or not isinstance(selection.get("root_allocation"), Mapping)
+    ):
+        raise AblationError(f"{root}: fallback ledger does not preserve the historical raw selection")
+    return {
+        "source_ledger_sha256": sha256_file(path),
+        "branch_prior_fallbacks": count,
+        "reason_counts": dict(reasons),
+        "selection": dict(selection),
+    }
+
+
 def _load_source_records(
     source_root: Path,
 ) -> tuple[
     dict[SourceRoot, tuple[PublicDecisionRecord, Mapping[str, Any]]],
     dict[int, tuple[PublicDecisionRecord, ...]],
     list[dict[str, Any]],
+    dict[SourceRoot, dict[str, Any]],
 ]:
     complete = _read_json(source_root / "COMPLETE.json")
     if complete != {
@@ -555,6 +664,10 @@ def _load_source_records(
 
     for root, (record, wrapper) in selected.items():
         register_source(_source_wrapper_path(source_root, root), record, wrapper)
+    historical_fallbacks = {
+        root: _load_historical_fallback(source_root, root, selected[root][0])
+        for root in FALLBACK_TARGETS
+    }
     # Retain only the source-owned earlier decision records that an explicit
     # placeholder repair may consult.  Scanning every captured record is both
     # unnecessary and makes recovery depend on hundreds of unrelated files.
@@ -580,6 +693,7 @@ def _load_source_records(
         selected,
         {seed: tuple(records.values()) for seed, records in by_seed.items()},
         [source_inventory[key] for key in sorted(source_inventory)],
+        historical_fallbacks,
     )
 
 
@@ -620,6 +734,112 @@ def _finite(value: Any, *, field: str) -> float:
     return float(value)
 
 
+def _validate_zero_unmapped_action_witness(value: Any) -> dict[str, dict[str, int]]:
+    """Validate the native all-zero shape witness retained by a healthy run."""
+
+    if not isinstance(value, Mapping) or set(value) != {"acting", "opponent"}:
+        raise AblationError("live unmapped-action witness has an unsupported schema")
+    normalized: dict[str, dict[str, int]] = {}
+    for seat in ("acting", "opponent"):
+        row = value.get(seat)
+        if not isinstance(row, Mapping) or set(row) != {
+            "nodes", "move_arms", "switch_arms", "none_arms"
+        } or any(type(count) is not int or count != 0 for count in row.values()):
+            raise AblationError("live unmapped-action witness is not all zero")
+        normalized[seat] = {name: row[name] for name in sorted(row)}
+    return normalized
+
+
+def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
+    """Return the complete, zero-valued branch-prior witness or fail closed.
+
+    The repaired replay must preserve this source-native ledger in every
+    durable arm.  A transient ``prior_fallbacks == 0`` check cannot prove a
+    later reader saw the same complete reason decomposition.
+    """
+
+    if not isinstance(witness, Mapping) or set(witness) != {
+        "prior_fallbacks", "branch_prior_fallbacks"
+    }:
+        raise AblationError("live branch-prior witness is malformed")
+    prior_fallbacks = witness.get("prior_fallbacks")
+    ledger = witness.get("branch_prior_fallbacks")
+    if type(prior_fallbacks) is not int or prior_fallbacks != 0 or not isinstance(ledger, Mapping):
+        raise AblationError("live branch-prior witness reports a fallback")
+    expected_ledger = {
+        "schema_version",
+        "native_invocations",
+        "belief_worlds",
+        "branch_prior_fallbacks",
+        "reason_counts",
+        "unclassified_branch_prior_fallbacks",
+        "reason_ledger_complete",
+        "events",
+    }
+    optional_witness = {"unmapped_action_witness"}
+    if set(ledger) not in (expected_ledger, expected_ledger | optional_witness) or ledger.get("schema_version") != (
+        "pokezero.engine-mcts.branch-prior-fallbacks.v1"
+    ):
+        raise AblationError("live branch-prior ledger has an unsupported schema")
+    invocations = ledger.get("native_invocations")
+    worlds = ledger.get("belief_worlds")
+    reasons = ledger.get("reason_counts")
+    events = ledger.get("events")
+    if (
+        type(invocations) is not int
+        or invocations <= 0
+        or type(worlds) is not int
+        or worlds != SEARCH["worlds"]
+        or ledger.get("branch_prior_fallbacks") != 0
+        or ledger.get("unclassified_branch_prior_fallbacks") != 0
+        or ledger.get("reason_ledger_complete") is not True
+        or not isinstance(reasons, Mapping)
+        or set(reasons) != BRANCH_PRIOR_FALLBACK_REASON_VALUES
+        or any(type(count) is not int or count != 0 for count in reasons.values())
+        or not isinstance(events, list)
+        or len(events) != invocations
+    ):
+        raise AblationError("live branch-prior ledger is not a complete zero decomposition")
+    aggregate_witness = ledger.get("unmapped_action_witness")
+    if aggregate_witness is not None:
+        _validate_zero_unmapped_action_witness(aggregate_witness)
+    expected_event = {
+        "native_invocation",
+        "belief_records",
+        "collapse_multiplicity",
+        "branch_prior_fallbacks",
+        "reason_counts",
+    }
+    event_witnesses: list[dict[str, dict[str, int]] | None] = []
+    for ordinal, event in enumerate(events, 1):
+        if not isinstance(event, Mapping) or set(event) not in (
+            expected_event, expected_event | optional_witness
+        ):
+            raise AblationError("live branch-prior event has an unsupported schema")
+        if (
+            event.get("native_invocation") != ordinal
+            or type(event.get("belief_records")) is not int
+            or event["belief_records"] <= 0
+            or type(event.get("collapse_multiplicity")) is not int
+            or event["collapse_multiplicity"] <= 0
+            or event.get("branch_prior_fallbacks") != 0
+            or not isinstance(event.get("reason_counts"), Mapping)
+            or set(event["reason_counts"]) != BRANCH_PRIOR_FALLBACK_REASON_VALUES
+            or any(type(count) is not int or count != 0 for count in event["reason_counts"].values())
+        ):
+            raise AblationError("live branch-prior event is not a complete zero decomposition")
+        event_witness = event.get("unmapped_action_witness")
+        event_witnesses.append(
+            None if event_witness is None else _validate_zero_unmapped_action_witness(event_witness)
+        )
+    if (aggregate_witness is None) != any(item is None for item in event_witnesses):
+        raise AblationError("live unmapped-action witness aggregate disagrees with native events")
+    return {
+        "prior_fallbacks": prior_fallbacks,
+        "branch_prior_fallbacks": json.loads(_canonical_json(dict(ledger))),
+    }
+
+
 def _selection_witness(telemetry: Mapping[str, Any], *, rollout_leaf_eval: bool) -> dict[str, Any]:
     if telemetry.get("invalid_actions") != 0 or telemetry.get("fallbacks") != 0 or telemetry.get("prior_fallbacks") != 0:
         raise AblationError("source root action or prior fallback occurred")
@@ -635,6 +855,10 @@ def _selection_witness(telemetry: Mapping[str, Any], *, rollout_leaf_eval: bool)
     override = engine.get("override")
     if not isinstance(override, Mapping):
         raise AblationError("source root has no override telemetry")
+    live_branch_prior = _validate_live_branch_prior({
+        "prior_fallbacks": telemetry.get("prior_fallbacks"),
+        "branch_prior_fallbacks": override.get("branch_prior_fallbacks"),
+    })
     allocation = override.get("root_allocation")
     if not isinstance(allocation, Mapping) or set(allocation) != {"worlds", "prior_authority", "prior_cause", "arms"}:
         raise AblationError("source root has malformed root allocation")
@@ -690,6 +914,7 @@ def _selection_witness(telemetry: Mapping[str, Any], *, rollout_leaf_eval: bool)
         "max_depth_reached": telemetry.get("max_depth_reached"),
         "root_allocation": {"worlds": allocation["worlds"], "arms": normalized_arms},
         "rollout_leaf": engine.get("rollout_leaf"),
+        "live_branch_prior": live_branch_prior,
     }
 
 
@@ -703,6 +928,7 @@ def _control_projection(witness: Mapping[str, Any]) -> dict[str, Any]:
         "max_depth_reached": witness["max_depth_reached"],
         "root_allocation": witness["root_allocation"],
         "rollout_leaf": witness["rollout_leaf"],
+        "live_branch_prior": witness["live_branch_prior"],
     }
 
 
@@ -714,6 +940,7 @@ def _validate_persisted_selection(selection: Any, *, rollout_leaf_eval: bool) ->
     root_action = selection.get("root_action")
     if not isinstance(root_action, str) or not root_action:
         raise AblationError("durable selection has no root action")
+    _validate_live_branch_prior(selection.get("live_branch_prior"))
     for field in ("total_iterations", "model_evals", "max_depth_reached"):
         value = selection.get(field)
         if not isinstance(value, int) or value <= 0:
@@ -769,7 +996,8 @@ def _validate_persisted_selection(selection: Any, *, rollout_leaf_eval: bool) ->
 
 def _run_root(
     *, root: SourceRoot, record: PublicDecisionRecord, source_records: Sequence[PublicDecisionRecord],
-    contract: Any, args: argparse.Namespace, manifest_sha256: str,
+    historical_fallback: Mapping[str, Any] | None, contract: Any, args: argparse.Namespace,
+    manifest_sha256: str,
 ) -> dict[str, Any]:
     try:
         prefix = source_bound_replay_prefix(record, source_records=source_records)
@@ -815,6 +1043,9 @@ def _run_root(
         "decision_rng_seed": decision_seed,
         "rollout_rng_seed": rollout_seed,
         "repairs": [repair.to_dict() for repair in prefix.repairs],
+        "historical_branch_prior_fallback": (
+            None if historical_fallback is None else dict(historical_fallback)
+        ),
         "arms": arm_rows,
     }
 
@@ -825,6 +1056,7 @@ def _manifest(
     historical_baseline: Mapping[str, Any],
     execution_runtime: Mapping[str, Any],
     source_inventory: Sequence[Mapping[str, Any]],
+    historical_fallbacks: Mapping[SourceRoot, Mapping[str, Any]],
 ) -> dict[str, Any]:
     wrappers = [wrapper for _, wrapper in selected.values()]
     return {
@@ -840,6 +1072,10 @@ def _manifest(
         "checkpoint": contract.to_manifest(),
         "historical_baseline": dict(historical_baseline),
         "targets": [root.to_dict() for root in TARGETS],
+        "historical_fallback_ledgers": [
+            {"source": root.to_dict(), **dict(historical_fallbacks[root])}
+            for root in sorted(historical_fallbacks)
+        ],
         "search": dict(SEARCH),
         "model_policy": {"model_priors": True, "use_opponent_priors": False, "override_telemetry": True},
         "rollout": dict(ROLLOUT),
@@ -876,7 +1112,8 @@ def _prepare_root(
 
 
 def _validate_completed_root(
-    payload: Any, *, root: SourceRoot, record: PublicDecisionRecord, manifest_sha256: str
+    payload: Any, *, root: SourceRoot, record: PublicDecisionRecord,
+    historical_fallback: Mapping[str, Any] | None, manifest_sha256: str
 ) -> None:
     if not isinstance(payload, Mapping) or payload.get("schema_version") != SCHEMA_VERSION or payload.get("state") != "COMPLETE":
         raise AblationError(f"{root}: durable root has invalid state")
@@ -884,6 +1121,8 @@ def _validate_completed_root(
         raise AblationError(f"{root}: durable root does not bind its source record")
     if payload.get("manifest_sha256") != manifest_sha256:
         raise AblationError(f"{root}: durable root does not bind this run manifest")
+    if payload.get("historical_branch_prior_fallback") != historical_fallback:
+        raise AblationError(f"{root}: durable root does not bind the expected historical fallback witness")
     arms = payload.get("arms")
     if not isinstance(arms, Mapping) or set(arms) != set(ARMS):
         raise AblationError(f"{root}: durable root has malformed arm coverage")
@@ -904,7 +1143,7 @@ def _validate_completed_root(
 def _run(args: argparse.Namespace) -> dict[str, Any]:
     source_root = Path(args.source_root).resolve()
     out_root = Path(args.out_root).resolve()
-    selected, by_seed, source_inventory = _load_source_records(source_root)
+    selected, by_seed, source_inventory, historical_fallbacks = _load_source_records(source_root)
     historical_baseline = _validate_historical_baseline(source_root)
     execution_runtime = _execution_runtime(args, historical_baseline)
     try:
@@ -927,6 +1166,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         historical_baseline=historical_baseline,
         execution_runtime=execution_runtime,
         source_inventory=source_inventory,
+        historical_fallbacks=historical_fallbacks,
     )
     manifest_sha256 = _sha256(manifest)
     _prepare_root(
@@ -954,7 +1194,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         if complete_path.exists():
             payload = _read_json(complete_path)
             _validate_completed_root(
-                payload, root=root, record=record, manifest_sha256=manifest_sha256
+                payload, root=root, record=record,
+                historical_fallback=historical_fallbacks.get(root), manifest_sha256=manifest_sha256
             )
         else:
             _atomic_json(out_root / "progress" / "current.json", {
@@ -970,7 +1211,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             })
             payload = _run_root(
                 root=root, record=record, source_records=by_seed[root.seed], contract=contract,
-                args=args, manifest_sha256=manifest_sha256,
+                historical_fallback=historical_fallbacks.get(root), args=args,
+                manifest_sha256=manifest_sha256,
             )
             _create_terminal(complete_path, payload)
         completed.append(dict(payload))
@@ -1015,7 +1257,8 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             raise AblationError(f"{root}: finalization is missing a completed durable root")
         payload = _read_json(complete_path)
         _validate_completed_root(
-            payload, root=root, record=record, manifest_sha256=manifest_sha256
+            payload, root=root, record=record,
+            historical_fallback=historical_fallbacks.get(root), manifest_sha256=manifest_sha256
         )
         all_completed.append(dict(payload))
     summary = {

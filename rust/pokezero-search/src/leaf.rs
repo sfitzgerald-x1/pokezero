@@ -1745,11 +1745,20 @@ impl LeafContext {
             .cloned()
             .unwrap_or_default();
         let root_pp = self.root_snapshot[self_engine].mons.get(active_party);
-        let mut engine_moves: Vec<(String, bool, i64)> = Vec::new(); // (showdown id, disabled, pp)
+        // Keep this indexed by the engine's *fixed* move slots.  Filtering
+        // `Choices::NONE` out of the vector compacts a sparse moveset: an
+        // engine-legal M2 then looks for an action candidate at slot 3 while
+        // its surviving move was placed at slot 1 (or not represented at all).
+        // That makes `self_action_map` refuse the whole node even though the
+        // engine offered a legal move.  Empty slots are therefore explicit
+        // placeholders, not entries to discard.
+        let mut engine_moves: Vec<Option<(String, bool, i64)>> = Vec::new();
+        // Entries are (Showdown id, disabled, PP).
         if !recharging {
             for mv in active.moves.into_iter() {
                 let engine_id = format!("{:?}", mv.id).to_lowercase();
                 if engine_id == "none" {
+                    engine_moves.push(None);
                     continue;
                 }
                 let disabled = if fresh_switch_in { false } else { mv.disabled };
@@ -1799,7 +1808,7 @@ impl LeafContext {
                     Some(base) => (base - charged).max(0),
                     None => (mv.pp as i64).max(0),
                 };
-                engine_moves.push((sd_id, disabled, pp));
+                engine_moves.push(Some((sd_id, disabled, pp)));
             }
         }
 
@@ -1869,7 +1878,11 @@ impl LeafContext {
         }
         let moves_present = !force_switch_shape;
         for slot in 0..move_action_count {
-            let entry = if moves_present { engine_moves.get(slot) } else { None };
+            let entry = if moves_present {
+                engine_moves.get(slot).and_then(|entry| entry.as_ref())
+            } else {
+                None
+            };
             match entry {
                 Some((move_id, disabled, pp)) => {
                     let legal = if fresh_switch_in {
@@ -3360,6 +3373,43 @@ mod tests {
         )
         .expect("fail-closed fixture context");
         (ctx, state)
+    }
+
+    #[test]
+    fn sparse_engine_moves_keep_their_original_action_slots() {
+        // A constructed world can retain an engine move in M2 while M0/M1
+        // are empty.  M2 is still an engine-legal option and must map to the
+        // third action-block move slot; compacting the `Choices::NONE` holes
+        // used to make this `None` and force uniform branch priors.
+        let mut state = State::default();
+        for side in [&mut state.side_one, &mut state.side_two] {
+            let active = side.get_active();
+            active.maxhp = 200;
+            active.hp = 200;
+        }
+        let self_active = state.side_one.get_active();
+        self_active.replace_move(PokemonMoveIndex::M0, Choices::NONE);
+        self_active.replace_move(PokemonMoveIndex::M1, Choices::NONE);
+        self_active.replace_move(PokemonMoveIndex::M2, Choices::TACKLE);
+        self_active.replace_move(PokemonMoveIndex::M3, Choices::NONE);
+        state
+            .side_two
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
+        let ctx = LeafContext::new(
+            ORDER_TABLES_JSON,
+            &order_root_inputs(&SELF_PARTY),
+            &order_ctx_json(&SELF_PARTY, None),
+            &state,
+        )
+        .expect("sparse-slot context");
+        let options = vec![MoveChoice::Move(PokemonMoveIndex::M2)];
+        assert_eq!(
+            ctx.self_action_map(&state, &options, None, None, false)
+                .expect("sparse move map"),
+            vec![Some(2)],
+            "M2 must retain its action-block position even when earlier engine slots are empty"
+        );
     }
 
     /// One move arm plus the five bench mons, in engine option order — the
