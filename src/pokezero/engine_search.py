@@ -37,6 +37,7 @@ import json
 import logging
 import math
 import random
+import re
 import time
 import warnings
 from collections import Counter
@@ -4111,6 +4112,50 @@ def _validated_branch_prior_unmapped_action_witness(value: Any) -> dict[str, dic
     return normalized
 
 
+def _validated_branch_prior_pp_diagnostic(
+    value: Any,
+    *,
+    unmapped_action_witness: Mapping[str, Mapping[str, int]],
+) -> dict[str, Any]:
+    """Validate optional acting-seat PP provenance without changing v1 topology.
+
+    This diagnostic measures only fresh-switch, constructed-world, engine-offered
+    move arms on the acting seat.  It intentionally makes no assertion about
+    opponent arms: absence there means unmeasured, never zero.
+    """
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version",
+        "pp_zero_unmapped_move_arms",
+        "other_unmapped_move_arms",
+    } or value.get("schema_version") != "pokezero.engine-mcts.acting-fresh-switch-pp.v1":
+        raise EngineSearchWitnessError(
+            "branch_prior_fallback_ledger_invalid: PP diagnostic has an unexpected schema"
+        )
+    normalized = {
+        "schema_version": value["schema_version"],
+        "pp_zero_unmapped_move_arms": value["pp_zero_unmapped_move_arms"],
+        "other_unmapped_move_arms": value["other_unmapped_move_arms"],
+    }
+    if any(
+        type(count) is not int or count < 0
+        for name, count in normalized.items()
+        if name != "schema_version"
+    ):
+        raise EngineSearchWitnessError(
+            "branch_prior_fallback_ledger_invalid: PP diagnostic counts must be non-negative integers"
+        )
+    if (
+        normalized["pp_zero_unmapped_move_arms"]
+        + normalized["other_unmapped_move_arms"]
+        > unmapped_action_witness["acting"]["move_arms"]
+    ):
+        raise EngineSearchWitnessError(
+            "branch_prior_fallback_ledger_invalid: PP diagnostic exceeds acting unmapped move arms"
+        )
+    return normalized
+
+
 def _branch_prior_unmapped_action_witness_nodes(
     witness: Mapping[str, Mapping[str, int]],
 ) -> int:
@@ -4204,6 +4249,16 @@ def _decision_branch_prior_fallback_ledger(
                     "branch_prior_fallback_ledger_invalid: unmapped-action witness nodes "
                     "do not equal the classified native fallback count"
                 )
+        pp_diagnostic = None
+        if "pp_diagnostic" in event:
+            pp_diagnostic = event["pp_diagnostic"]
+            if witness is None:
+                raise EngineSearchWitnessError(
+                    "branch_prior_fallback_ledger_invalid: PP diagnostic requires an unmapped-action witness"
+                )
+            pp_diagnostic = _validated_branch_prior_pp_diagnostic(
+                pp_diagnostic, unmapped_action_witness=witness
+            )
         events.append(
             {
                 "native_invocation": invocation,
@@ -4212,6 +4267,7 @@ def _decision_branch_prior_fallback_ledger(
                 "branch_prior_fallbacks": branch_fallbacks,
                 "reason_counts": event_reasons,
                 **({"unmapped_action_witness": witness} if witness is not None else {}),
+                **({"pp_diagnostic": pp_diagnostic} if pp_diagnostic is not None else {}),
             }
         )
     if len({event["native_invocation"] for event in events}) != len(events):
@@ -4233,6 +4289,156 @@ def _decision_branch_prior_fallback_ledger(
         "unclassified_branch_prior_fallbacks": unclassified,
         "reason_ledger_complete": unclassified == 0,
         **({"unmapped_action_witness": aggregate_witness} if aggregate_witness is not None else {}),
+        "events": events,
+    }
+
+
+def _validated_opponent_prior_application(value: Any) -> dict[str, Any]:
+    """Validate one native tree's opponent-prior write receipt.
+
+    The native digest covers vectors that were actually written into an
+    existing decision-node statistic.  It intentionally excludes a vector
+    parked for a later tree expansion, so these counters are a lower bound on
+    resolution-time writes, not a claim that no later consumption occurred.
+    """
+
+    expected_fields = {
+        "enabled",
+        "root_applied",
+        "branch_applied",
+        "total_applied",
+        "digest",
+    }
+    if not isinstance(value, Mapping) or set(value) != expected_fields:
+        raise EngineSearchWitnessError(
+            "native_opponent_prior_application_invalid: unexpected receipt schema"
+        )
+    enabled = value.get("enabled")
+    if type(enabled) is not bool:
+        raise EngineSearchWitnessError(
+            "native_opponent_prior_application_invalid: enabled must be boolean"
+        )
+    counts: dict[str, int] = {}
+    for field_name in ("root_applied", "branch_applied", "total_applied"):
+        count = value.get(field_name)
+        if type(count) is not int or count < 0:
+            raise EngineSearchWitnessError(
+                "native_opponent_prior_application_invalid: counts must be non-negative integers"
+            )
+        counts[field_name] = count
+    if counts["total_applied"] != counts["root_applied"] + counts["branch_applied"]:
+        raise EngineSearchWitnessError(
+            "native_opponent_prior_application_invalid: counts do not conserve"
+        )
+    digest = value.get("digest")
+    if enabled and counts["total_applied"]:
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise EngineSearchWitnessError(
+                "native_opponent_prior_application_invalid: applied vectors require a digest"
+            )
+    elif digest is not None:
+        raise EngineSearchWitnessError(
+            "native_opponent_prior_application_invalid: unapplied vectors must not carry a digest"
+        )
+    if not enabled and any(counts.values()):
+        raise EngineSearchWitnessError(
+            "native_opponent_prior_application_invalid: disabled opponent priors wrote a vector"
+        )
+    return {"enabled": enabled, **counts, "digest": digest}
+
+
+def _decision_opponent_prior_application_ledger(
+    native_events: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Aggregate one receipt per completed native tree without double-counting draws.
+
+    A collapsed group has one tree and several belief records; a full-budget
+    replay has a new tree.  Retaining the invocation serial makes that
+    difference auditable while the compact receipt is the stable five-field
+    boundary consumed by source-root runners.
+    """
+
+    raw_events: list[tuple[int, int | None, int | None, Any]] = []
+    for event in native_events:
+        invocation = event.get("native_invocation")
+        if type(invocation) is not int or invocation < 1:
+            raise EngineSearchWitnessError(
+                "opponent_prior_application_invocation_missing: completed native invocation "
+                "has no decision-ledger identity"
+            )
+        raw_events.append(
+            (
+                invocation,
+                event.get("belief_records"),
+                event.get("collapse_multiplicity"),
+                event.get("receipt"),
+            )
+        )
+    if not raw_events:
+        raise EngineSearchWitnessError(
+            "opponent_prior_application_ledger_invalid: no completed native receipt"
+        )
+    if len({event[0] for event in raw_events}) != len(raw_events):
+        raise EngineSearchWitnessError(
+            "opponent_prior_application_ledger_invalid: native invocation identity repeated"
+        )
+    receipt_presence = [receipt is not None for _, _, _, receipt in raw_events]
+    if not any(receipt_presence):
+        # Older native wheels produced no receipt at all. Preserve that
+        # compatible shape, but never let a newer wheel's partial omission be
+        # mistaken for a complete decision-level treatment witness.
+        return None
+    if not all(receipt_presence):
+        raise EngineSearchWitnessError(
+            "opponent_prior_application_ledger_invalid: receipt coverage is incomplete "
+            "across completed native invocations"
+        )
+    events: list[dict[str, Any]] = []
+    for invocation, belief_records, collapse_multiplicity, raw_receipt in raw_events:
+        receipt = _validated_opponent_prior_application(raw_receipt)
+        events.append(
+            {
+                "native_invocation": invocation,
+                "belief_records": belief_records,
+                "collapse_multiplicity": collapse_multiplicity,
+                **receipt,
+            }
+        )
+    enabled = events[0]["enabled"]
+    if any(event["enabled"] is not enabled for event in events):
+        raise EngineSearchWitnessError(
+            "opponent_prior_application_ledger_invalid: native invocations disagree on enabled"
+        )
+    root_applied = sum(event["root_applied"] for event in events)
+    branch_applied = sum(event["branch_applied"] for event in events)
+    total_applied = root_applied + branch_applied
+    # Native digests bind individual vectors.  The decision digest binds their
+    # ordered, invocation-identified receipts so a collapsed belief record
+    # cannot be accidentally counted once per draw.
+    digest = None
+    if total_applied:
+        digest_payload = [
+            {"native_invocation": event["native_invocation"], "digest": event["digest"]}
+            for event in events
+            if event["digest"] is not None
+        ]
+        if not digest_payload:
+            raise EngineSearchWitnessError(
+                "opponent_prior_application_ledger_invalid: applied total has no invocation digest"
+            )
+        digest = hashlib.sha256(
+            json.dumps(digest_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    receipt = {
+        "enabled": enabled,
+        "root_applied": root_applied,
+        "branch_applied": branch_applied,
+        "total_applied": total_applied,
+        "digest": digest,
+    }
+    return receipt, {
+        "schema_version": "pokezero.engine-mcts.opponent-prior-application.v1",
+        "native_invocations": len(events),
         "events": events,
     }
 
@@ -6024,6 +6230,11 @@ class EngineMctsPolicy:
         # a final belief record but does not erase the already-completed native
         # prefix or its fallback count.
         branch_prior_fallback_events: list[dict[str, Any]] = []
+        # One receipt per completed native tree.  This stays separate from
+        # belief records because a collapsed group is one application event,
+        # while a conservative replay is a second native tree and must remain
+        # visible to the durable source-root diagnostic.
+        opponent_prior_application_events: list[dict[str, Any]] = []
         # Duplicate belief completions, grouped per DECISION by search-problem
         # identity. Never shared across turns.
         duplicates: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
@@ -6536,6 +6747,15 @@ class EngineMctsPolicy:
             # an explicit scoped zero rather than forcing the ledger to guess.
             report["root_prior_fallbacks"] = root_prior_fallbacks
             report["branch_prior_fallbacks"] = branch_prior_fallbacks
+            if "opponent_prior_application" in report:
+                application = _validated_opponent_prior_application(
+                    report["opponent_prior_application"]
+                )
+                if application["enabled"] is not config.use_opponent_priors:
+                    raise EngineSearchWitnessError(
+                        "native_opponent_prior_application_invalid: enabled disagrees with request"
+                    )
+                report["opponent_prior_application"] = application
             branch_reason_counts = report.get("branch_prior_fallback_reasons")
             if branch_reason_counts is not None:
                 if not isinstance(branch_reason_counts, Mapping) or set(
@@ -6579,6 +6799,17 @@ class EngineMctsPolicy:
                         "witness nodes must equal classified unmapped-action fallbacks"
                     )
                 report["branch_prior_unmapped_action_witness"] = branch_unmapped_action_witness
+            branch_prior_pp_diagnostic = None
+            if "branch_prior_pp_diagnostic" in report:
+                branch_prior_pp_diagnostic = report["branch_prior_pp_diagnostic"]
+                if branch_unmapped_action_witness is None:
+                    raise EngineSearchWitnessError(
+                        "native_branch_prior_pp_diagnostic_invalid: diagnostic requires an unmapped-action witness"
+                    )
+                report["branch_prior_pp_diagnostic"] = _validated_branch_prior_pp_diagnostic(
+                    branch_prior_pp_diagnostic,
+                    unmapped_action_witness=branch_unmapped_action_witness,
+                )
             allowed_lost_active_permutation_root_fallback = False
             allowed_lost_active_permutation_opponent_prior_omission = False
             if config.use_opponent_priors:
@@ -6868,6 +7099,24 @@ class EngineMctsPolicy:
                     "unmapped_action_witness": report.get(
                         "branch_prior_unmapped_action_witness"
                     ),
+                    **(
+                        {"pp_diagnostic": report["branch_prior_pp_diagnostic"]}
+                        if "branch_prior_pp_diagnostic" in report
+                        else {}
+                    ),
+                }
+            )
+
+        def record_opponent_prior_application_event(
+            report: Mapping[str, Any], *, belief_records: int, collapse_multiplicity: int
+        ) -> None:
+            """Store one validated native application receipt before any replay."""
+            opponent_prior_application_events.append(
+                {
+                    "native_invocation": native_invocation_serial,
+                    "belief_records": belief_records,
+                    "collapse_multiplicity": collapse_multiplicity,
+                    "receipt": report.get("opponent_prior_application"),
                 }
             )
         # Parallel dispatch gives each task both an independent native evaluator
@@ -7124,6 +7373,11 @@ class EngineMctsPolicy:
                 belief_records=multiplicity,
                 collapse_multiplicity=multiplicity,
             )
+            record_opponent_prior_application_event(
+                report,
+                belief_records=multiplicity,
+                collapse_multiplicity=multiplicity,
+            )
             # Both counters move ONLY on a search that returned a report, and
             # only together. Incrementing `worlds_collapsed` before the call --
             # where the sim scaling is decided -- broke the invariant below the
@@ -7240,6 +7494,11 @@ class EngineMctsPolicy:
                         break
                     native_invocation_serial += 1
                     record_branch_prior_fallback_event(
+                        report,
+                        belief_records=1,
+                        collapse_multiplicity=1,
+                    )
+                    record_opponent_prior_application_event(
                         report,
                         belief_records=1,
                         collapse_multiplicity=1,
@@ -7400,6 +7659,9 @@ class EngineMctsPolicy:
             if rollout_leaf_shadow
             else None
         )
+        opponent_prior_application = _decision_opponent_prior_application_ledger(
+            opponent_prior_application_events
+        )
         metadata = {
             "engine_mcts": {
                 "leaf_eval": "model",
@@ -7476,6 +7738,14 @@ class EngineMctsPolicy:
                 **(
                     {"model_rollout_shadow": model_rollout_shadow}
                     if model_rollout_shadow is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "opponent_prior_application": opponent_prior_application[0],
+                        "opponent_prior_application_ledger": opponent_prior_application[1],
+                    }
+                    if opponent_prior_application is not None
                     else {}
                 ),
             }

@@ -750,6 +750,23 @@ def _validate_zero_unmapped_action_witness(value: Any) -> dict[str, dict[str, in
     return normalized
 
 
+def _validate_zero_branch_prior_pp_diagnostic(value: Any) -> dict[str, Any]:
+    """Accept the optional acting-seat PP provenance only when it is zero."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version",
+        "pp_zero_unmapped_move_arms",
+        "other_unmapped_move_arms",
+    } or value.get("schema_version") != "pokezero.engine-mcts.acting-fresh-switch-pp.v1":
+        raise AblationError("live branch-prior PP diagnostic has an unsupported schema")
+    if any(
+        type(value.get(field)) is not int or value[field] != 0
+        for field in ("pp_zero_unmapped_move_arms", "other_unmapped_move_arms")
+    ):
+        raise AblationError("live branch-prior PP diagnostic reports an unmapped move")
+    return dict(value)
+
+
 def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
     """Return the complete, zero-valued branch-prior witness or fail closed.
 
@@ -813,7 +830,9 @@ def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
     event_witnesses: list[dict[str, dict[str, int]] | None] = []
     for ordinal, event in enumerate(events, 1):
         if not isinstance(event, Mapping) or set(event) not in (
-            expected_event, expected_event | optional_witness
+            expected_event,
+            expected_event | optional_witness,
+            expected_event | optional_witness | {"pp_diagnostic"},
         ):
             raise AblationError("live branch-prior event has an unsupported schema")
         if (
@@ -832,6 +851,12 @@ def _validate_live_branch_prior(witness: Any) -> dict[str, Any]:
         event_witnesses.append(
             None if event_witness is None else _validate_zero_unmapped_action_witness(event_witness)
         )
+        event_pp_diagnostic = None
+        if "pp_diagnostic" in event:
+            event_pp_diagnostic = event["pp_diagnostic"]
+            if event_witness is None:
+                raise AblationError("live branch-prior PP diagnostic lacks an unmapped witness")
+            _validate_zero_branch_prior_pp_diagnostic(event_pp_diagnostic)
     if (aggregate_witness is None) != any(item is None for item in event_witnesses):
         raise AblationError("live unmapped-action witness aggregate disagrees with native events")
     return {

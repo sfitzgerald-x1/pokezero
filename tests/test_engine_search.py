@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -1075,6 +1076,37 @@ class EarlyStopPolicyIntegrationTests(unittest.TestCase):
         self.assertEqual(stop["full_budget_replays"], 2)
         self.assertEqual(policy.stats.total_iterations, 320)
         self.assertEqual(policy.stats.early_stop_full_budget_replays, 2)
+
+    def test_opponent_prior_receipt_coverage_requires_each_replay(self) -> None:
+        """A receipt from stopped prefixes cannot stand in for their replays."""
+
+        def with_disabled_receipt(report: dict) -> dict:
+            report["opponent_prior_application"] = {
+                "enabled": False,
+                "root_applied": 0,
+                "branch_applied": 0,
+                "total_applied": 0,
+                "digest": None,
+            }
+            return report
+
+        native = self._Native(
+            [
+                with_disabled_receipt(self._report(56, 4, stopped=True)),
+                with_disabled_receipt(self._report(4, 56, stopped=True)),
+                self._report(60, 40, stopped=False),
+                self._report(55, 45, stopped=False),
+            ]
+        )
+        policy = self._policy(early_stop=True)
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError, "receipt coverage is incomplete"
+        ):
+            self._run(
+                policy,
+                native,
+                [self._world("world-a"), self._world("world-b")],
+            )
 
     def test_branch_prior_ledger_retains_a_collapsed_prefix_and_each_replay(self) -> None:
         """A replayed decision retains every completed native fallback event.
@@ -5066,6 +5098,120 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             {"public_order_walk_error": 1},
         )
 
+    def test_native_opponent_prior_receipt_reaches_selected_decision(self) -> None:
+        """The source-root runner must see the native treatment, not a test stub.
+
+        Two identical worlds deliberately collapse to one native tree.  The
+        compact receipt therefore counts the applied vector once, while its
+        adjacent ledger proves why it was not multiplied by belief draws.
+        """
+
+        policy = self._policy(opponent_priors=True, worlds=2)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "opponent_request_order_status": "public_order_walk_error",
+                "opponent_prior_application": {
+                    "enabled": True,
+                    "root_applied": 0,
+                    "branch_applied": 3,
+                    "total_applied": 3,
+                    "digest": "a" * 64,
+                },
+            }
+        )
+
+        decision, native = self._run(
+            policy,
+            [report],
+            worlds=[self._world("same-world"), self._world("same-world")],
+        )
+
+        self.assertEqual(len(native.calls), 1, "duplicate worlds run one native tree")
+        engine = decision.metadata["engine_mcts"]
+        self.assertEqual(
+            engine["opponent_prior_application"],
+            {
+                "enabled": True,
+                "root_applied": 0,
+                "branch_applied": 3,
+                "total_applied": 3,
+                "digest": hashlib.sha256(
+                    b'[{"digest":"' + b"a" * 64 + b'","native_invocation":1}]'
+                ).hexdigest(),
+            },
+        )
+        ledger = engine["opponent_prior_application_ledger"]
+        self.assertEqual(ledger["native_invocations"], 1)
+        self.assertEqual(ledger["events"][0]["belief_records"], 2)
+        self.assertEqual(ledger["events"][0]["collapse_multiplicity"], 2)
+
+    def test_native_opponent_prior_receipt_rejects_a_wrong_arm(self) -> None:
+        policy = self._policy(opponent_priors=False, worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report["opponent_prior_application"] = {
+            "enabled": True,
+            "root_applied": 1,
+            "branch_applied": 0,
+            "total_applied": 1,
+            "digest": "b" * 64,
+        }
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError, "enabled disagrees with request"
+        ):
+            self._run(policy, [report])
+
+    def test_opponent_prior_receipt_coverage_rejects_a_missing_normal_world(self) -> None:
+        policy = self._policy(opponent_priors=True, worlds=2)
+        report_with_receipt = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report_with_receipt.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "opponent_request_order_status": "public_order_walk_error",
+                "opponent_prior_application": {
+                    "enabled": True,
+                    "root_applied": 1,
+                    "branch_applied": 0,
+                    "total_applied": 1,
+                    "digest": "c" * 64,
+                },
+            }
+        )
+        report_without_receipt = self._report(
+            [("alpha", 55, 0.5, 0.2), ("beta", 45, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        report_without_receipt.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 1,
+                "branch_prior_fallbacks": 0,
+                "opponent_request_order_status": "public_order_walk_error",
+            }
+        )
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError, "receipt coverage is incomplete"
+        ):
+            self._run(
+                policy,
+                [report_with_receipt, report_without_receipt],
+                worlds=[self._world("world-a"), self._world("world-b")],
+            )
+
     def test_opponent_prior_audit_rejects_a_missing_native_status_echo(self) -> None:
         policy = self._policy(opponent_priors=True, worlds=1)
         report = self._report(
@@ -5877,6 +6023,11 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             "acting": {"nodes": 2, "move_arms": 1, "switch_arms": 1, "none_arms": 0},
             "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
         }
+        pp_diagnostic = {
+            "schema_version": "pokezero.engine-mcts.acting-fresh-switch-pp.v1",
+            "pp_zero_unmapped_move_arms": 1,
+            "other_unmapped_move_arms": 0,
+        }
         report.update(
             {
                 "prior_fallbacks": 2,
@@ -5884,6 +6035,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                 "branch_prior_fallbacks": 2,
                 "branch_prior_fallback_reasons": reasons,
                 "branch_prior_unmapped_action_witness": witness,
+                "branch_prior_pp_diagnostic": pp_diagnostic,
             }
         )
 
@@ -5904,6 +6056,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(ledger["branch_prior_fallbacks"], 2)
         self.assertEqual(ledger["reason_counts"]["unmapped_action"], 2)
         self.assertEqual(ledger["unmapped_action_witness"], witness)
+        self.assertEqual(ledger["events"][0]["pp_diagnostic"], pp_diagnostic)
         self.assertEqual(
             ledger["events"],
             [
@@ -5917,6 +6070,7 @@ class RootDecisionTelemetryTest(unittest.TestCase):
                         for name in sorted(BRANCH_PRIOR_FALLBACK_REASON_VALUES)
                     },
                     "unmapped_action_witness": witness,
+                    "pp_diagnostic": pp_diagnostic,
                 }
             ],
         )
@@ -5956,6 +6110,63 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             EngineSearchWitnessError,
             "native_branch_prior_unmapped_action_witness_invalid",
         ):
+            self._run(policy, [report])
+
+    def test_branch_prior_pp_diagnostic_refuses_more_arms_than_the_witness(self) -> None:
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["unmapped_action"] = 1
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 1,
+                "branch_prior_fallback_reasons": reasons,
+                "branch_prior_unmapped_action_witness": {
+                    "acting": {"nodes": 1, "move_arms": 1, "switch_arms": 0, "none_arms": 0},
+                    "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+                },
+                "branch_prior_pp_diagnostic": {
+                    "schema_version": "pokezero.engine-mcts.acting-fresh-switch-pp.v1",
+                    "pp_zero_unmapped_move_arms": 1,
+                    "other_unmapped_move_arms": 1,
+                },
+            }
+        )
+
+        with self.assertRaisesRegex(
+            EngineSearchWitnessError,
+            "native_branch_prior_pp_diagnostic_invalid|exceeds acting unmapped move arms",
+        ):
+            self._run(policy, [report])
+
+    def test_branch_prior_pp_diagnostic_refuses_present_null(self) -> None:
+        policy = self._policy(worlds=1)
+        report = self._report(
+            [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+            root_priors=[0.2, 0.8],
+        )
+        reasons = {name: 0 for name in BRANCH_PRIOR_FALLBACK_REASON_VALUES}
+        reasons["unmapped_action"] = 1
+        report.update(
+            {
+                "prior_fallbacks": 1,
+                "root_prior_fallbacks": 0,
+                "branch_prior_fallbacks": 1,
+                "branch_prior_fallback_reasons": reasons,
+                "branch_prior_unmapped_action_witness": {
+                    "acting": {"nodes": 1, "move_arms": 1, "switch_arms": 0, "none_arms": 0},
+                    "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+                },
+                "branch_prior_pp_diagnostic": None,
+            }
+        )
+
+        with self.assertRaisesRegex(EngineSearchWitnessError, "PP diagnostic has an unexpected schema"):
             self._run(policy, [report])
 
     def test_branch_prior_fallback_ledger_deduplicates_collapsed_belief_records(

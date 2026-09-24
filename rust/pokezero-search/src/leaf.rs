@@ -1634,6 +1634,7 @@ impl LeafContext {
             self_force_switch,
             meta,
             engine_authoritative,
+            None,
         )?;
         md.insert("action_candidates".into(), candidates);
 
@@ -1708,6 +1709,7 @@ impl LeafContext {
         force_switch_shape: bool,
         meta: &LeafMeta,
         engine_authoritative: bool,
+        mut diagnostic_engine_move_pp: Option<&mut Vec<Option<i64>>>,
     ) -> PyResult<(Value, Value)> {
         let action_count = self.tables.layout_action_count();
         let move_action_count = self.tables.layout_move_action_count();
@@ -1841,6 +1843,14 @@ impl LeafContext {
 
         let mut candidates: Vec<Value> = Vec::new();
         let mut payload_moves: Vec<Value> = Vec::new();
+        // Diagnostic-only and fixed-slot: request payload moves intentionally
+        // compact away empty engine slots, so it cannot be indexed by an
+        // engine `MoveChoice` slot. The encoder caller supplies no buffer, so
+        // ordinary leaf rendering performs no extra allocation or copying.
+        if let Some(engine_move_pp) = diagnostic_engine_move_pp.as_deref_mut() {
+            engine_move_pp.clear();
+            engine_move_pp.resize(move_action_count, None);
+        }
         if recharging && !force_switch_shape {
             // Production recharge request: one legal, PP-less "recharge"
             // move in slot 1; no other moves; switching disallowed.
@@ -1885,6 +1895,9 @@ impl LeafContext {
             };
             match entry {
                 Some((move_id, disabled, pp)) => {
+                    if let Some(engine_move_pp) = diagnostic_engine_move_pp.as_deref_mut() {
+                        engine_move_pp[slot] = Some(*pp);
+                    }
                     let legal = if fresh_switch_in {
                         *pp > 0 && active.hp > 0
                     } else {
@@ -2020,7 +2033,40 @@ impl LeafContext {
         meta: Option<&LeafMeta>,
         engine_authoritative: bool,
     ) -> PyResult<Vec<Option<usize>>> {
-        self.seat_action_map(state, options, self_order, meta, engine_authoritative, true)
+        self.seat_action_map(
+            state,
+            options,
+            self_order,
+            meta,
+            engine_authoritative,
+            true,
+            None,
+        )
+    }
+
+    /// The acting-seat map together with read-only provenance for an interior
+    /// unmapped move.  This is diagnostic-only: it shares the map construction
+    /// itself and never participates in encoding, model evaluation, or tree
+    /// selection.
+    pub(crate) fn self_action_map_with_diagnostics(
+        &self,
+        state: &State,
+        options: &[MoveChoice],
+        self_order: Option<&[String]>,
+        meta: Option<&LeafMeta>,
+        engine_authoritative: bool,
+    ) -> PyResult<(Vec<Option<usize>>, ActionMapDiagnostics)> {
+        let mut diagnostics = ActionMapDiagnostics::default();
+        let map = self.seat_action_map(
+            state,
+            options,
+            self_order,
+            meta,
+            engine_authoritative,
+            true,
+            Some(&mut diagnostics),
+        )?;
+        Ok((map, diagnostics))
     }
 
     /// The OPPONENT seat's option list mapped onto action-block slots.
@@ -2070,6 +2116,7 @@ impl LeafContext {
             meta,
             engine_authoritative,
             false,
+            None,
         )
     }
 
@@ -2139,6 +2186,7 @@ impl LeafContext {
         meta: Option<&LeafMeta>,
         engine_authoritative: bool,
         slot_is_self: bool,
+        mut diagnostics: Option<&mut ActionMapDiagnostics>,
     ) -> PyResult<Vec<Option<usize>>> {
         let meta = meta.unwrap_or(&self.root_meta);
         let side_is_p1 = if slot_is_self { self.self_is_p1 } else { !self.self_is_p1 };
@@ -2205,6 +2253,7 @@ impl LeafContext {
                 )
             })
             .collect();
+        let mut engine_move_pp = Vec::new();
         let (candidates, _) = self.action_surface(
             self_side,
             self_engine,
@@ -2213,6 +2262,7 @@ impl LeafContext {
             force_switch_shape,
             meta,
             engine_authoritative,
+            Some(&mut engine_move_pp),
         )?;
         let candidates = candidates.as_array().expect("action_surface returns an array");
         let legal_action_index = |predicate: &dyn Fn(&Map<String, Value>) -> bool| {
@@ -2272,8 +2322,39 @@ impl LeafContext {
             };
             map.push(index);
         }
+        // Attribute only a move that the ENGINE offered but this exact
+        // action-surface construction refused.  The count is a diagnostic
+        // witness; it must not alter the returned map or selection behavior.
+        if let Some(diagnostics) = diagnostics.as_deref_mut() {
+            let fresh_switch_in = meta.fresh_active[self_engine] && !engine_authoritative;
+            if fresh_switch_in {
+                for (option, action_index) in options.iter().zip(&map) {
+                    let MoveChoice::Move(engine_index) = option else {
+                        continue;
+                    };
+                    if action_index.is_some() {
+                        continue;
+                    }
+                    let slot = engine_index.serialize().parse::<usize>().ok();
+                    let pp = slot.and_then(|slot| engine_move_pp.get(slot).copied().flatten());
+                    if pp == Some(0) {
+                        diagnostics.fresh_switch_pp_zero_unmapped_move_arms += 1;
+                    } else {
+                        diagnostics.fresh_switch_other_unmapped_move_arms += 1;
+                    }
+                }
+            }
+        }
         Ok(map)
     }
+}
+
+/// Diagnostic-only provenance for interior action maps.  These counters are
+/// intentionally aggregate: they retain no hidden world, move, or team data.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ActionMapDiagnostics {
+    pub(crate) fresh_switch_pp_zero_unmapped_move_arms: usize,
+    pub(crate) fresh_switch_other_unmapped_move_arms: usize,
 }
 
 /// Fail-CLOSED resolution of the OPPONENT seat's display order.
@@ -3409,6 +3490,114 @@ mod tests {
                 .expect("sparse move map"),
             vec![Some(2)],
             "M2 must retain its action-block position even when earlier engine slots are empty"
+        );
+    }
+
+    #[test]
+    fn fresh_switch_pp_reconstruction_can_refuse_an_engine_offered_move() {
+        // This is a deliberately narrow diagnostic, not a claim that the
+        // reconstructed PP is wrong.  It pins the only suspected alternate
+        // route behind the observed interior `unmapped_action` fallbacks: a
+        // freshly active self mon is legal according to the engine option
+        // list, while its public move-use ledger reconstructs zero remaining
+        // PP.  The constructed-world map must then refuse the move rather
+        // than attach a prior to an action surface that says it is illegal.
+        use poke_engine::state::{PokemonIndex, PokemonMoveIndex};
+        let mut root = State::default();
+        for side in [&mut root.side_one, &mut root.side_two] {
+            let active = side.get_active();
+            active.maxhp = 200;
+            active.hp = 200;
+            active.replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
+        }
+        let bench = &mut root.side_one.pokemon[PokemonIndex::P1];
+        bench.maxhp = 200;
+        bench.hp = 200;
+        // Deliberately use sparse engine slot M2.  The fixed-slot provenance
+        // must not read compact request payload position 2 (which would be
+        // a different move, or absent after M0/M1 holes).
+        bench.replace_move(PokemonMoveIndex::M2, Choices::TACKLE);
+        let root_inputs = json!({
+            "observation_metadata": {
+                "showdown_slot": "p1",
+                "self_team": SELF_PARTY
+                    .iter()
+                    .map(|species| json!({"species": species}))
+                    .collect::<Vec<Value>>(),
+                "belief_view": {
+                    "self_pokemon": [{
+                        "species": "sbb",
+                        "move_uses": [["tackle", 56]],
+                    }],
+                },
+            },
+        })
+        .to_string();
+        let ctx = LeafContext::new(
+            ORDER_TABLES_JSON,
+            &root_inputs,
+            &order_ctx_json(&SELF_PARTY, None),
+            &root,
+        )
+        .expect("PP-reconstruction diagnostic context");
+
+        let mut leaf = root.clone();
+        leaf.side_one.active_index = PokemonIndex::P1;
+        let options = vec![MoveChoice::Move(PokemonMoveIndex::M2)];
+        let fresh = LeafMeta {
+            fresh_active: [true, false],
+            ..Default::default()
+        };
+        let (fresh_map, fresh_diagnostics) = ctx
+            .self_action_map_with_diagnostics(&leaf, &options, None, Some(&fresh), false)
+            .expect("fresh map");
+        assert_eq!(
+            fresh_map,
+            vec![None],
+            "the PP-zero reconstructed action must fail closed despite the engine option"
+        );
+        assert_eq!(
+            ctx.self_action_map(&leaf, &options, None, Some(&fresh), false)
+                .expect("map without diagnostics"),
+            fresh_map,
+            "instrumentation must not alter action-map construction"
+        );
+        assert_eq!(
+            fresh_diagnostics.fresh_switch_pp_zero_unmapped_move_arms,
+            1,
+            "the diagnostic must identify the PP-zero fresh-switch refusal"
+        );
+        assert_eq!(
+            fresh_diagnostics.fresh_switch_other_unmapped_move_arms,
+            0,
+        );
+        let (nonfresh_map, nonfresh_diagnostics) = ctx
+            .self_action_map_with_diagnostics(
+                &leaf,
+                &options,
+                None,
+                Some(&LeafMeta::default()),
+                false,
+            )
+            .expect("non-fresh control map");
+        assert_eq!(
+            nonfresh_map,
+            vec![Some(2)],
+            "without fresh-switch reconstruction the same engine option maps normally"
+        );
+        assert_eq!(nonfresh_diagnostics.fresh_switch_pp_zero_unmapped_move_arms, 0);
+        assert_eq!(nonfresh_diagnostics.fresh_switch_other_unmapped_move_arms, 0);
+        let (authoritative_map, authoritative_diagnostics) = ctx
+            .self_action_map_with_diagnostics(&leaf, &options, None, Some(&fresh), true)
+            .expect("engine-authoritative control map");
+        assert_eq!(authoritative_map, nonfresh_map);
+        assert_eq!(
+            authoritative_diagnostics.fresh_switch_pp_zero_unmapped_move_arms,
+            0
+        );
+        assert_eq!(
+            authoritative_diagnostics.fresh_switch_other_unmapped_move_arms,
+            0
         );
     }
 

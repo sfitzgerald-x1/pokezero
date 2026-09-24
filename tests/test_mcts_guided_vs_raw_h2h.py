@@ -88,7 +88,10 @@ def _public_record(
 
 
 def _branch_prior_ledger(
-    *, fallbacks: int = 0, unmapped_action_witness: dict[str, object] | None = None
+    *,
+    fallbacks: int = 0,
+    unmapped_action_witness: dict[str, object] | None = None,
+    pp_diagnostic: dict[str, object] | None = None,
 ) -> dict[str, object]:
     reasons = {reason: 0 for reason in RUNNER.BRANCH_PRIOR_FALLBACK_REASON_VALUES}
     reasons["unmapped_action"] = fallbacks
@@ -113,6 +116,9 @@ def _branch_prior_ledger(
     if unmapped_action_witness is not None:
         ledger["unmapped_action_witness"] = unmapped_action_witness
         ledger["events"][0]["unmapped_action_witness"] = unmapped_action_witness
+    if pp_diagnostic is not None:
+        assert unmapped_action_witness is not None
+        ledger["events"][0]["pp_diagnostic"] = pp_diagnostic
     return ledger
 
 
@@ -941,6 +947,38 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             RUNNER._validated_branch_prior_ledger(ledger)["unmapped_action_witness"],
             witness,
         )
+
+    def test_branch_prior_ledger_retains_valid_pp_diagnostic_per_invocation(self) -> None:
+        witness = {
+            "acting": {"nodes": 2, "move_arms": 2, "switch_arms": 0, "none_arms": 0},
+            "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+        }
+        pp_diagnostic = {
+            "schema_version": "pokezero.engine-mcts.acting-fresh-switch-pp.v1",
+            "pp_zero_unmapped_move_arms": 1,
+            "other_unmapped_move_arms": 1,
+        }
+        ledger = _branch_prior_ledger(
+            fallbacks=2,
+            unmapped_action_witness=witness,
+            pp_diagnostic=pp_diagnostic,
+        )
+
+        self.assertEqual(
+            RUNNER._validated_branch_prior_ledger(ledger)["events"][0]["pp_diagnostic"],
+            pp_diagnostic,
+        )
+
+    def test_branch_prior_ledger_refuses_present_null_pp_diagnostic(self) -> None:
+        witness = {
+            "acting": {"nodes": 1, "move_arms": 1, "switch_arms": 0, "none_arms": 0},
+            "opponent": {"nodes": 0, "move_arms": 0, "switch_arms": 0, "none_arms": 0},
+        }
+        ledger = _branch_prior_ledger(fallbacks=1, unmapped_action_witness=witness)
+        ledger["events"][0]["pp_diagnostic"] = None
+
+        with self.assertRaisesRegex(Exception, "PP diagnostic"):
+            RUNNER._validated_branch_prior_ledger(ledger)
 
     def test_branch_prior_ledger_refuses_unmapped_witness_that_miscounts_nodes(self) -> None:
         witness = {

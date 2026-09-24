@@ -30,6 +30,8 @@
 
 use std::time::Instant;
 
+use blake2::digest::{Update, VariableOutput};
+use blake2::Blake2bVar;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rand::rngs::StdRng;
@@ -42,8 +44,9 @@ use poke_engine::instruction::Instruction;
 use poke_engine::state::State;
 
 use crate::priors::{
-    branch_seats, is_single_none, resolve_root_priors, resolve_round_priors, root_seats, HeadPair,
-    HeadSource, PriorFallbackReasonCounts,
+    branch_seats, is_single_none, resolve_root_priors_with_applications,
+    resolve_round_priors_with_applications, root_seats, HeadPair, HeadSource, PriorApplication,
+    PriorFallbackReasonCounts, PriorSeat,
 };
 use crate::tree::{
     finalize, multiply_report_json, root_visit_lock, traverse, BranchSeam, LeafPrice,
@@ -88,6 +91,47 @@ fn parse_device(device: &str) -> PyResult<Device> {
     }
 }
 
+/// Digest only the vectors that actually landed on the opponent's statistics.
+/// The framing makes the result sensitive to resolution order, seat, scope,
+/// branch identity, row, vector length, and every IEEE-754 prior bit.  It is
+/// deliberately not a count: a count can remain unchanged under a frozen or
+/// permuted opponent action order and would let a disabled treatment look
+/// successful.
+fn record_opponent_prior_applications(
+    applications: &[PriorApplication],
+    digest: &mut Blake2bVar,
+    root_applied: &mut usize,
+    branch_applied: &mut usize,
+) {
+    for application in applications {
+        if application.seat != PriorSeat::Opponent {
+            continue;
+        }
+        digest.update(b"pokezero-opponent-prior-application-v1\0");
+        digest.update(&[u8::from(application.at_root)]);
+        digest.update(&(application.chance as u64).to_be_bytes());
+        digest.update(&(application.branch as u64).to_be_bytes());
+        digest.update(&(application.row as u64).to_be_bytes());
+        digest.update(&(application.priors.len() as u64).to_be_bytes());
+        for prior in &application.priors {
+            digest.update(&prior.to_bits().to_be_bytes());
+        }
+        if application.at_root {
+            *root_applied += 1;
+        } else {
+            *branch_applied += 1;
+        }
+    }
+}
+
+fn finalize_opponent_prior_digest(digest: Blake2bVar) -> String {
+    let mut bytes = [0u8; 32];
+    digest
+        .finalize_variable(&mut bytes)
+        .expect("blake2b-32 output");
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 /// Action-surface holes behind interior `unmapped_action` prior fallbacks.
 ///
 /// A fallback count alone establishes that a simulated node went uniform, but
@@ -103,7 +147,11 @@ struct UnmappedActionMapWitness {
 }
 
 impl UnmappedActionMapWitness {
-    fn record(&mut self, options: &[MoveChoice], map: &[Option<usize>]) {
+    fn record(
+        &mut self,
+        options: &[MoveChoice],
+        map: &[Option<usize>],
+    ) {
         debug_assert_eq!(
             options.len(),
             map.len(),
@@ -127,7 +175,33 @@ impl UnmappedActionMapWitness {
     fn render_json(&self) -> String {
         format!(
             "{{\"nodes\":{},\"move_arms\":{},\"switch_arms\":{},\"none_arms\":{}}}",
-            self.nodes, self.move_arms, self.switch_arms, self.none_arms
+            self.nodes,
+            self.move_arms,
+            self.switch_arms,
+            self.none_arms,
+        )
+    }
+}
+
+/// Acting-seat-only provenance for a narrow class of interior unmapped moves.
+/// This is deliberately separate from the long-lived topology witness so
+/// existing source-bound consumers retain their exact four-counter schema.
+#[derive(Default)]
+struct FreshSwitchPpUnmappedDiagnostic {
+    pp_zero_unmapped_move_arms: usize,
+    other_unmapped_move_arms: usize,
+}
+
+impl FreshSwitchPpUnmappedDiagnostic {
+    fn record(&mut self, diagnostic: crate::leaf::ActionMapDiagnostics) {
+        self.pp_zero_unmapped_move_arms += diagnostic.fresh_switch_pp_zero_unmapped_move_arms;
+        self.other_unmapped_move_arms += diagnostic.fresh_switch_other_unmapped_move_arms;
+    }
+
+    fn render_json(&self) -> String {
+        format!(
+            "{{\"schema_version\":\"pokezero.engine-mcts.acting-fresh-switch-pp.v1\",\"pp_zero_unmapped_move_arms\":{},\"other_unmapped_move_arms\":{}}}",
+            self.pp_zero_unmapped_move_arms, self.other_unmapped_move_arms
         )
     }
 }
@@ -136,6 +210,7 @@ impl UnmappedActionMapWitness {
 struct BranchUnmappedActionWitness {
     acting: UnmappedActionMapWitness,
     opponent: UnmappedActionMapWitness,
+    acting_fresh_switch_pp: FreshSwitchPpUnmappedDiagnostic,
 }
 
 impl BranchUnmappedActionWitness {
@@ -149,6 +224,10 @@ impl BranchUnmappedActionWitness {
             self.acting.render_json(),
             self.opponent.render_json()
         )
+    }
+
+    fn render_fresh_switch_pp_json(&self) -> String {
+        self.acting_fresh_switch_pp.render_json()
     }
 }
 
@@ -1182,6 +1261,12 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // permit the former.
     let mut opponent_prior_root_eligible = false;
     let mut opponent_prior_root_assessment = "unassessed";
+    // The treatment's durable oracle.  This is populated only from vectors
+    // that actually landed on opponent-owned statistics, never from a flag,
+    // a requested map, or a scalar branch count.
+    let mut opponent_prior_digest = Blake2bVar::new(32).expect("blake2b-32");
+    let mut opponent_prior_root_applied = 0usize;
+    let mut opponent_prior_branch_applied = 0usize;
     let mut branch_prior_fallbacks = 0usize;
     let mut branch_prior_fallback_reasons = PriorFallbackReasonCounts::default();
     let mut branch_unmapped_action_witness = BranchUnmappedActionWitness::default();
@@ -1276,12 +1361,18 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             } else {
                 None
             };
-            let resolved = resolve_root_priors(
+            let (resolved, applications) = resolve_root_priors_with_applications(
                 &mut tree.decisions[0],
                 &heads,
                 leaf_ctx,
                 &map,
                 opponent_map.as_deref(),
+            );
+            record_opponent_prior_applications(
+                &applications,
+                &mut opponent_prior_digest,
+                &mut opponent_prior_root_applied,
+                &mut opponent_prior_branch_applied,
             );
             root_priors = resolved.acting;
             root_prior_fallbacks += resolved.fallbacks;
@@ -1515,7 +1606,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         let options = seats.acting_options;
                         if !is_single_none(&options) {
                             let map_started = Instant::now();
-                            let map_result = leaf_ctx.self_action_map(
+                            let map_result = leaf_ctx.self_action_map_with_diagnostics(
                                 leaf,
                                 &options,
                                 Some(&self_order),
@@ -1524,8 +1615,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             );
                             action_map_nanos += map_started.elapsed().as_nanos();
                             match map_result {
-                                Ok(map) => {
-                                    branch_unmapped_action_witness.acting.record(&options, &map);
+                                Ok((map, diagnostics)) => {
+                                    branch_unmapped_action_witness
+                                        .acting
+                                        .record(&options, &map);
+                                    branch_unmapped_action_witness
+                                        .acting_fresh_switch_pp
+                                        .record(diagnostics);
                                     pending_maps.push(((seam.chance, seam.branch_index), row, map))
                                 }
                                 Err(error) => {
@@ -1646,12 +1742,18 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             // `resolve_round_priors` -- this call site names no seat's side,
             // head, or slot, because behind the `model` feature a swap in any
             // of the three is a swap no test on a libtorch-less host can see.
-            let resolved = resolve_round_priors(
+            let (resolved, applications) = resolve_round_priors_with_applications(
                 &mut tree,
                 &pending_maps,
                 &pending_opponent_maps,
                 &heads,
                 leaf_ctx,
+            );
+            record_opponent_prior_applications(
+                &applications,
+                &mut opponent_prior_digest,
+                &mut opponent_prior_root_applied,
+                &mut opponent_prior_branch_applied,
             );
             prior_branches += resolved.applied;
             branch_prior_fallbacks += resolved.fallbacks;
@@ -1799,10 +1901,28 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             )
         })
         .unwrap_or_default();
+    let opponent_prior_total_applied =
+        opponent_prior_root_applied + opponent_prior_branch_applied;
+    let opponent_prior_application_json = if cfg.use_opponent_priors {
+        let digest = if opponent_prior_total_applied == 0 {
+            "null".to_string()
+        } else {
+            format!("\"{}\"", finalize_opponent_prior_digest(opponent_prior_digest))
+        };
+        format!(
+            "{{\"enabled\":true,\"root_applied\":{},\"branch_applied\":{},\"total_applied\":{},\"digest\":{}}}",
+            opponent_prior_root_applied,
+            opponent_prior_branch_applied,
+            opponent_prior_total_applied,
+            digest,
+        )
+    } else {
+        "{\"enabled\":false,\"root_applied\":0,\"branch_applied\":0,\"total_applied\":0,\"digest\":null}".to_string()
+    };
     let extra = format!(
         "\"batch_size\":{},\"rounds\":{},\"model_evals\":{},\"encoder\":\"native_leaf\",\
          \"lossy_renders\":{},\"lossy_subcases\":{},\"attribution_unsafe_renders\":{},\"branch_folds\":{},\"model_priors\":{},\"prior_branches\":{},\
-         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"branch_prior_fallback_reasons\":{},\"branch_prior_unmapped_action_witness\":{},\"root_prior_fallback_reason\":{},\"opponent_prior_root_eligible\":{},\"opponent_prior_root_assessment\":\"{}\",\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
+         \"prior_fallbacks\":{},\"root_prior_fallbacks\":{},\"branch_prior_fallbacks\":{},\"branch_prior_fallback_reasons\":{},\"branch_prior_unmapped_action_witness\":{},\"branch_prior_pp_diagnostic\":{},\"root_prior_fallback_reason\":{},\"opponent_prior_root_eligible\":{},\"opponent_prior_root_assessment\":\"{}\",\"opponent_prior_application\":{},\"encode_s\":{:.6},\"model_s\":{:.6},\"tree_s\":{:.6},\"fold_clone_s\":{:.6},\"render_s\":{:.6},\"fold_advance_s\":{:.6},\"tensor_s\":{:.6},\"action_map_s\":{:.6},\"row_input_s\":{:.6},\"products_s\":{:.6},\"row_write_s\":{:.6},\
          \"root_priors\":{},\"requested_iterations\":{},\
          \"remaining_iterations\":{},\"early_stop_enabled\":{},\"early_stopped\":{},\
          \"early_stop_min_sims\":{},\"early_stop_side\":\"{}\",\
@@ -1830,10 +1950,12 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         branch_prior_fallbacks,
         branch_prior_fallback_reasons.render_json(),
         branch_unmapped_action_witness.render_json(),
+        branch_unmapped_action_witness.render_fresh_switch_pp_json(),
         serde_json::to_string(&root_prior_fallback_reason)
             .expect("optional static string JSON serialization cannot fail"),
         opponent_prior_root_eligible,
         opponent_prior_root_assessment,
+        opponent_prior_application_json,
         encode_nanos as f64 / 1e9,
         model_nanos as f64 / 1e9,
         tree_nanos as f64 / 1e9,
