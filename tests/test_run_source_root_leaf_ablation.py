@@ -6,6 +6,7 @@ import io
 from pathlib import Path
 import sys
 import tempfile
+from types import ModuleType
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -93,6 +94,59 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
         self.assertEqual((sharded.shard_index, sharded.shard_count), (3, 4))
         finalizer = runner._parse_args([*required, "--finalize-only", "--shard-count", "4"])
         self.assertEqual((finalizer.shard_index, finalizer.shard_count), (0, 4))
+
+    def test_parser_binds_optional_source_repair_identities_exactly(self) -> None:
+        runner = _runner()
+        required = [
+            "--checkpoint", "checkpoint.pt",
+            "--expected-checkpoint-sha256", "a" * 64,
+            "--showdown-root", "/showdown",
+            "--source-root", "/r4",
+            "--out-root", "/out",
+            "--expected-source-commit", "b" * 40,
+            "--expected-engine-fingerprint", "c" * 64,
+        ]
+        args = runner._parse_args(required)
+        self.assertEqual(args.expected_source_commit, "b" * 40)
+        self.assertEqual(args.expected_engine_fingerprint, "c" * 64)
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                runner._parse_args([*required[:-2], "--expected-engine-fingerprint", "invalid"])
+
+    def test_execution_runtime_requires_explicit_repaired_source_and_engine_identities(self) -> None:
+        runner = _runner()
+        source_commit = "b" * 40
+        repaired_engine = "c" * 64
+        historical_engine = "d" * 64
+        showdown = "e" * 64
+        fake_engine = ModuleType("engine_build_fingerprint")
+        fake_engine.assert_fresh = lambda: None
+        fake_engine.compute_fingerprint = lambda: {"fingerprint": repaired_engine}
+        args = SimpleNamespace(
+            expected_source_commit=source_commit,
+            expected_engine_fingerprint=repaired_engine,
+            showdown_root="/showdown",
+        )
+        historical = {
+            "historical_runtime": {
+                "showdown_source": {"content_sha256": showdown},
+                "engine_fingerprint": historical_engine,
+            }
+        }
+        with (
+            mock.patch.object(runner, "_source_provenance", return_value={"commit": source_commit}),
+            mock.patch.object(runner, "_showdown_source_provenance", return_value={"content_sha256": showdown}),
+            mock.patch.dict(sys.modules, {"engine_build_fingerprint": fake_engine}),
+        ):
+            runtime = runner._execution_runtime(args, historical)
+        self.assertEqual(runtime["engine_identity_mode"], "source_repair")
+        self.assertEqual(runtime["historical_engine_fingerprint"], historical_engine)
+        self.assertEqual(runtime["expected_engine_fingerprint"], repaired_engine)
+
+        args.expected_source_commit = "f" * 40
+        with mock.patch.object(runner, "_source_provenance", return_value={"commit": source_commit}):
+            with self.assertRaisesRegex(runner.AblationError, "explicitly bound source-repair commit"):
+                runner._execution_runtime(args, historical)
 
     def test_decision_seed_is_stable_and_root_specific(self) -> None:
         runner = _runner()

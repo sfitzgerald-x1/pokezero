@@ -53,7 +53,7 @@ from pokezero.mcts_eval.source_root_replay import (  # noqa: E402
 from pokezero.public_decision_corpus import PublicDecisionRecord  # noqa: E402
 
 
-SCHEMA_VERSION = "pokezero.source-root-leaf-ablation.v1"
+SCHEMA_VERSION = "pokezero.source-root-leaf-ablation.v2"
 SOURCE_WRAPPER_SCHEMA = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 ARMS = ("model_control_a", "model_control_b", "rollout_leaf")
 SEARCH = {"depth": 6, "sims": 4096, "batch": 16, "worlds": 4}
@@ -184,6 +184,19 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--showdown-root", required=True)
     parser.add_argument("--source-root", required=True, help="Completed R4 durable root.")
     parser.add_argument("--out-root", required=True)
+    parser.add_argument(
+        "--expected-source-commit",
+        help=(
+            "Optional full commit that the executing image must contain. Required for a "
+            "source-repair measurement so a repaired engine cannot be mistaken for a historical replay."
+        ),
+    )
+    parser.add_argument(
+        "--expected-engine-fingerprint",
+        help=(
+            "Optional repaired native-engine fingerprint. Omit only for strict historical-engine replay."
+        ),
+    )
     parser.add_argument("--model-device", default="cuda", choices=("cuda",))
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--shard-index", type=int, default=0)
@@ -196,6 +209,10 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         char not in "0123456789abcdef" for char in args.expected_checkpoint_sha256
     ):
         parser.error("--expected-checkpoint-sha256 must be lowercase SHA-256")
+    for option in ("expected_source_commit", "expected_engine_fingerprint"):
+        value = getattr(args, option)
+        if value is not None and not _is_lower_hex(value, 40 if option == "expected_source_commit" else 64):
+            parser.error(f"--{option.replace('_', '-')} must be lowercase hexadecimal")
     if args.shard_count <= 0 or not 0 <= args.shard_index < args.shard_count:
         parser.error("--shard-index must be in [0, --shard-count)")
     if args.finalize_only and args.shard_index != 0:
@@ -445,14 +462,16 @@ def _execution_runtime(
     if not isinstance(historical, Mapping):
         raise AblationError("historical runtime identity is missing")
     expected_showdown = historical.get("showdown_source")
-    expected_engine = historical.get("engine_fingerprint")
+    historical_engine = historical.get("engine_fingerprint")
     if (
         not isinstance(expected_showdown, Mapping)
         or not _is_lower_hex(expected_showdown.get("content_sha256"), 64)
-        or not _is_lower_hex(expected_engine, 64)
+        or not _is_lower_hex(historical_engine, 64)
     ):
         raise AblationError("historical runtime identity is malformed")
     source = _source_provenance()
+    if args.expected_source_commit is not None and source["commit"] != args.expected_source_commit:
+        raise AblationError("executing source commit differs from the explicitly bound source-repair commit")
     showdown = _showdown_source_provenance(args.showdown_root)
     if showdown["content_sha256"] != expected_showdown["content_sha256"]:
         raise AblationError("active Showdown runtime differs from the archived R4 battle oracle")
@@ -465,12 +484,18 @@ def _execution_runtime(
     except BaseException as error:  # assert_fresh may raise SystemExit for stale artifacts.
         raise AblationError("installed native engine failed its freshness check") from error
     fingerprint = engine.get("fingerprint")
+    expected_engine = args.expected_engine_fingerprint or historical_engine
     if fingerprint != expected_engine:
-        raise AblationError("active native engine differs from the archived R4 engine fingerprint")
+        if args.expected_engine_fingerprint is None:
+            raise AblationError("active native engine differs from the archived R4 engine fingerprint")
+        raise AblationError("active native engine differs from the explicitly bound source-repair fingerprint")
     return {
         "source": source,
         "engine_build": dict(engine),
         "engine_fingerprint": fingerprint,
+        "historical_engine_fingerprint": historical_engine,
+        "expected_engine_fingerprint": expected_engine,
+        "engine_identity_mode": "historical_replay" if args.expected_engine_fingerprint is None else "source_repair",
         "showdown_source": showdown,
     }
 
