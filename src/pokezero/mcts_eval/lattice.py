@@ -477,7 +477,8 @@ class _LiveEngineTimingDecider:
             record,
             config,
             expected_event_prefix=record.event_prefix,
-            expected_observation=None,
+            expected_public_observation=None,
+            expected_belief_view=None,
         )
 
     def prepare_public_decision(
@@ -535,9 +536,8 @@ class _LiveEngineTimingDecider:
             replay_record,
             config,
             expected_event_prefix=None,
-            expected_observation=record.observation.to_observation(
-                belief_view=record.public_belief_view
-            ),
+            expected_public_observation=record.observation,
+            expected_belief_view=record.public_belief_view,
         )
 
     def _prepare_replay(
@@ -546,7 +546,8 @@ class _LiveEngineTimingDecider:
         config: SearchConfig,
         *,
         expected_event_prefix: Sequence[str] | None,
-        expected_observation: Any | None,
+        expected_public_observation: Any | None,
+        expected_belief_view: Mapping[str, Any] | None,
     ) -> PreparedDecision:
         """Replay a public prefix, with an optional raw-line integrity witness."""
         from ..policy import PolicyContext
@@ -592,17 +593,28 @@ class _LiveEngineTimingDecider:
         def timed_decision() -> dict[str, Any]:
             observation = self._env.observe(record.seat)
             legal_mask = tuple(bool(value) for value in observation.legal_action_mask)
-            if expected_observation is not None and not self._same_model_observation(
-                observation, expected_observation
+            if expected_public_observation is not None and not self._same_source_public_observation(
+                observation,
+                expected_public_observation,
+                expected_belief_view,
             ):
                 raise ContractError(
-                    f"{record.decision_id}: replayed public model observation differs from source root"
+                    f"{record.decision_id}: replayed public observation or belief differs from source root"
                 )
             if legal_mask != record.legal_action_mask:
                 raise ContractError(
                     f"{record.decision_id}: replayed legal-action mask differs from corpus"
                 )
-            if self._candidate_payloads(observation) != record.action_candidates:
+            # Timing-corpus records retain the full request payload, while a
+            # source-root record deliberately persists the canonical public
+            # projection. The latter was checked above as part of
+            # ``expected_public_observation``; comparing it to the raw live
+            # request would reject its intentionally omitted slot/private
+            # fields. Keep the stronger raw witness for the timing corpus.
+            if (
+                expected_public_observation is None
+                and self._candidate_payloads(observation) != record.action_candidates
+            ):
                 raise ContractError(
                     f"{record.decision_id}: replayed action candidates differ from corpus"
                 )
@@ -675,23 +687,37 @@ class _LiveEngineTimingDecider:
         return timed_decision
 
     @staticmethod
-    def _same_model_observation(actual: Any, expected: Any) -> bool:
-        """Compare the model-visible portion of a replayed public observation.
+    def _same_source_public_observation(
+        actual: Any,
+        expected_public_observation: Any,
+        expected_belief_view: Mapping[str, Any] | None,
+    ) -> bool:
+        """Compare every public MCTS input, excluding only bridge-local objects.
 
-        Metadata contains request-local bridge objects, so comparing it would
-        turn an implementation detail into a false rejection.  These six
-        fields are exactly the model input and legal surface carried by a
-        ``PublicObservation`` source witness.
+        Engine MCTS consumes both the encoded tensor fields and public metadata
+        such as request candidates and belief constraints.  Comparing only
+        tensors would admit a different information set that happened to have
+        the same encoder output. ``PublicObservation.from_observation`` is the
+        established filtered projection, so it includes every persisted public
+        field while excluding request-local bridge objects.  ``belief_view``
+        is intentionally checked separately because it is model metadata but
+        not an ``acting_player_state`` field.
         """
-        fields = (
-            "schema_version",
-            "categorical_ids",
-            "numeric_features",
-            "token_type_ids",
-            "attention_mask",
-            "legal_action_mask",
+        from ..public_decision_corpus import PublicObservation
+
+        if expected_belief_view is None:
+            return False
+        try:
+            actual_public_observation = PublicObservation.from_observation(actual)
+        except (AttributeError, TypeError, ValueError):
+            return False
+        metadata = getattr(actual, "metadata", {})
+        actual_belief_view = metadata.get("belief_view") if isinstance(metadata, Mapping) else None
+        return (
+            actual_public_observation == expected_public_observation
+            and isinstance(actual_belief_view, Mapping)
+            and dict(actual_belief_view) == dict(expected_belief_view)
         )
-        return all(getattr(actual, field, None) == getattr(expected, field, None) for field in fields)
 
 
 def _default_decider(

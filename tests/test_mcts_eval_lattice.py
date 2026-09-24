@@ -292,7 +292,20 @@ class T(unittest.TestCase):
         """A repaired source root validates its actual request without a fake corpus line."""
 
         mask = (False, False, False, False, True, False, False, False, False)
-        candidate = {"action_index": 4, "kind": "switch", "switched_species": "Pikachu"}
+        candidate = {
+            "action_index": 4,
+            "kind": "switch",
+            "legal": True,
+            "switched_species": "Pikachu",
+        }
+        live_candidate = {
+            "action_index": 4,
+            "kind": "switch",
+            "legal": True,
+            "switch_slot": 2,
+            "team_index": 1,
+            "pokemon": {"species": "Pikachu", "hp": 100},
+        }
         source_record = PublicDecisionRecord(
             decision_id="source-root",
             battle_id="source-battle",
@@ -330,7 +343,7 @@ class T(unittest.TestCase):
             token_type_ids=(),
             attention_mask=(),
             legal_action_mask=mask,
-            metadata={"action_candidates": (candidate,)},
+            metadata={"action_candidates": (live_candidate,), "belief_view": {}},
         )
         replayed = SimpleNamespace(
             terminal=None,
@@ -389,6 +402,76 @@ class T(unittest.TestCase):
                 decision_rng_seed=73,
             )()
         self.assertEqual(telemetry["root_action"], "switch 2")
+
+    def test_source_root_rejects_metadata_only_observation_drift(self):
+        """Public metadata is a native-search input, not incidental decoration."""
+
+        fields = {
+            "schema_version": "pokezero.observation.v3",
+            "categorical_ids": (),
+            "numeric_features": (),
+            "token_type_ids": (),
+            "attention_mask": (),
+            "legal_action_mask": (True,) + (False,) * 8,
+        }
+        belief_view = {"self_slot": "p1", "opponent_slot": "p2"}
+        source = SimpleNamespace(
+            **fields,
+            metadata={
+                "action_candidates": ({"action_index": 0, "kind": "move", "legal": True, "move_id": "surf"},),
+                "opponent_active": {"species": "Gengar"},
+                "belief_view": belief_view,
+            },
+        )
+        expected = PublicObservation.from_observation(source)
+        drifted = SimpleNamespace(
+            **fields,
+            metadata={
+                "action_candidates": ({"action_index": 0, "kind": "move", "legal": True, "move_id": "surf"},),
+                "opponent_active": {"species": "Alakazam"},
+                "belief_view": belief_view,
+            },
+        )
+
+        self.assertFalse(
+            _LiveEngineTimingDecider._same_source_public_observation(
+                drifted, expected, belief_view
+            )
+        )
+
+    def test_source_root_rejects_belief_only_drift(self):
+        """A matching tensor/public snapshot still cannot substitute a new belief view."""
+
+        fields = {
+            "schema_version": "pokezero.observation.v3",
+            "categorical_ids": (),
+            "numeric_features": (),
+            "token_type_ids": (),
+            "attention_mask": (),
+            "legal_action_mask": (True,) + (False,) * 8,
+        }
+        source_belief = {"self_slot": "p1", "opponent_slot": "p2"}
+        source = SimpleNamespace(
+            **fields,
+            metadata={
+                "action_candidates": ({"action_index": 0, "kind": "move", "legal": True, "move_id": "surf"},),
+                "belief_view": source_belief,
+            },
+        )
+        expected = PublicObservation.from_observation(source)
+        drifted = SimpleNamespace(
+            **fields,
+            metadata={
+                "action_candidates": ({"action_index": 0, "kind": "move", "legal": True, "move_id": "surf"},),
+                "belief_view": {"self_slot": "p2", "opponent_slot": "p1"},
+            },
+        )
+
+        self.assertFalse(
+            _LiveEngineTimingDecider._same_source_public_observation(
+                drifted, expected, source_belief
+            )
+        )
 
     def test_rollout_leaf_seam_is_forwarded_without_changing_default_adapter_shape(self):
         """The direct-root runner can select only the existing registered seam."""
