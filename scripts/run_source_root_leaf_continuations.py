@@ -904,7 +904,8 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
         completed.append(payload)
     if args.shard_count > 1 and not args.finalize_only:
         _write_or_require_identical_json(out_root / "shards" / f"shard-{args.shard_index}.json", {
-            "schema_version": SCHEMA_VERSION, "state": "COMPLETE", "shard_index": args.shard_index,
+            "schema_version": MULTIREPLY_SCHEMA_VERSION if args.multireply else SCHEMA_VERSION,
+            "state": "COMPLETE", "shard_index": args.shard_index,
             "shard_count": args.shard_count, "manifest_sha256": manifest_sha256,
             "roots": [root.to_dict() for root in owned],
         })
