@@ -192,8 +192,6 @@ def _read_root(path: Path) -> dict[str, Any]:
     if (
         evidence.get("model_argmax") != action_indices[0]
         or evidence.get("search_argmax") != action_indices[1]
-        or not isinstance(evidence.get("root_gap_action_indices"), list)
-        or set(evidence["root_gap_action_indices"]) != {action_indices[0], action_indices[1]}
     ):
         raise ReadoutError(f"{path}: actions disagree with search evidence")
     allocation = _mapping(evidence.get("root_allocation"), f"{path}: root allocation")
@@ -236,8 +234,42 @@ def _read_root(path: Path) -> dict[str, Any]:
         )
         if ranked_other != action_indices[2]:
             raise ReadoutError(f"{path}: visit alternative disagrees with allocation")
+    gap_actions = evidence.get("root_gap_action_indices")
+    if (
+        not isinstance(gap_actions, list)
+        or len(gap_actions) != 2
+        or any(isinstance(action, bool) or not isinstance(action, int) for action in gap_actions)
+        or len(set(gap_actions)) != 2
+        or any(action not in arm_by_index for action in gap_actions)
+    ):
+        raise ReadoutError(f"{path}: malformed leading-arm gap witness")
+    gap_arms = [arm_by_index[action] for action in gap_actions]
+    if any(arm["visit_share"] <= 0.0 for arm in gap_arms):
+        raise ReadoutError(f"{path}: leading-arm gap witness includes a zero-visit action")
+    positive_visit_shares = sorted(
+        (arm["visit_share"] for arm in arms if arm["visit_share"] > 0.0), reverse=True
+    )
+    if (
+        len(positive_visit_shares) < 2
+        or sorted((arm["visit_share"] for arm in gap_arms), reverse=True)
+        != positive_visit_shares[:2]
+        or gap_arms[0]["visit_share"] < gap_arms[1]["visit_share"]
+    ):
+        raise ReadoutError(f"{path}: leading-arm gap witness disagrees with allocation")
     q_gap = _number(evidence.get("root_q_gap"), f"{path}: root_q_gap")
     visit_gap = _number(evidence.get("root_visit_gap"), f"{path}: root_visit_gap")
+    expected_visit_gap = gap_arms[0]["visit_share"] - gap_arms[1]["visit_share"]
+    expected_q_gap = (
+        abs(gap_arms[0]["q"] - gap_arms[1]["q"])
+        if gap_arms[0]["q"] is not None and gap_arms[1]["q"] is not None
+        else None
+    )
+    if (
+        not math.isclose(visit_gap, expected_visit_gap, abs_tol=1e-5)
+        or expected_q_gap is None
+        or not math.isclose(q_gap, expected_q_gap, abs_tol=1e-5)
+    ):
+        raise ReadoutError(f"{path}: root gaps disagree with leading-arm allocation witness")
     target_rows = audit.get("continuation_targets")
     if not isinstance(target_rows, list) or [row.get("target") for row in target_rows if isinstance(row, Mapping)] != list(TARGETS):
         raise ReadoutError(f"{path}: target order drift")
@@ -310,6 +342,12 @@ def _read_root(path: Path) -> dict[str, Any]:
             "decision_round_index": round_index,
         },
         "actions": actions,
+        # These diagnostics quantify the native top-two positive-visit arms,
+        # not necessarily the raw-policy and selected-MCTS pair above. Keep
+        # the witness with every row so downstream correlation analysis cannot
+        # silently relabel it as a raw-vs-MCTS margin.
+        "root_gap_semantics": "top_two_positive_visit_arms",
+        "root_gap_action_indices": list(gap_actions),
         "root_q_gap": q_gap,
         "root_visit_gap": visit_gap,
         "targets": target_summary,
