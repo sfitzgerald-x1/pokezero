@@ -144,6 +144,20 @@ class ContinuationContractTest(unittest.TestCase):
                 manifest_sha256="m" * 64,
             )
 
+    def test_completed_root_refuses_missing_terminal_winner(self) -> None:
+        payload = _payload()
+        outcome = payload["grid"]["continuation_targets"][0]["trials"][0]["outcomes"][0]
+        del outcome["continuation"]["terminal"]["winner"]
+        with self.assertRaisesRegex(RUNNER.ContinuationError, "winner is invalid"):
+            RUNNER._validate_completed_root(
+                payload,
+                root=RUNNER.SourceRoot(1, "p1", 2),
+                record=RECORD,
+                leaf_payload=LEAF,
+                expected_actions=EXPECTED_ACTIONS,
+                manifest_sha256="m" * 64,
+            )
+
     def test_source_histories_keep_each_seat_order_and_append_current(self) -> None:
         replay = type(
             "Replay",

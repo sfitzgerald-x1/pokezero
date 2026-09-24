@@ -588,7 +588,7 @@ def _validate_completed_root(
                 terminal = continuation.get("terminal") if isinstance(continuation, Mapping) else None
                 if not isinstance(terminal, Mapping) or terminal.get("capped") is not False:
                     raise ContinuationError(f"{root}: continuation is incomplete or capped")
-                if terminal.get("winner") not in ("p1", "p2", None):
+                if "winner" not in terminal or terminal.get("winner") not in ("p1", "p2", None):
                     raise ContinuationError(f"{root}: continuation terminal winner is invalid")
                 if isinstance(terminal.get("turn_count"), bool) or not isinstance(terminal.get("turn_count"), int) or terminal["turn_count"] < 0:
                     raise ContinuationError(f"{root}: continuation terminal turn count is invalid")
