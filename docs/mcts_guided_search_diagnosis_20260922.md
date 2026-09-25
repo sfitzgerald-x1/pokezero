@@ -111,6 +111,38 @@ review.  It is a correctness repair, not a demonstrated strength gain.  It does
 strength plateau.  A fresh source-bound witness is still required to measure
 its root-level effect.
 
+### September 25 recovery evidence: unmappable native root arms
+
+The later R2 strength runner exposed a separate, narrow telemetry-boundary
+failure. Four independent seeds (`2026092632`, `2026092650`, `2026092763`,
+and `2026092765`) each stopped while `_emit_public_decision_records` projected
+the native root allocation into its public sidecar. Each durable
+`runner-terminal.json` records exit code `1`, and each matching attempt log
+ends with the identical strict rejection:
+`guided root allocation arm is not a public legal action`.
+
+This was not evidence that the public **selected** action was illegal. The old
+projector rejected the entire sidecar when *any* native allocation arm could
+not be represented on the public decision surface. The corrected boundary
+(PR #1471, merge `d79ae141`) makes the safe boundary explicit: it retains a
+selected action only when it exactly matches the public record, then records
+an unprojectable native allocation arm as `root_allocation_unmapped_arm` and
+excludes that decision from measured override scoring. It does not claim that
+the omitted native arm itself was non-selected. A malformed model action, a
+mismatched selected action, or an invalid public action index remains a hard
+error.
+
+The focused regression constructs the former shape and asserts the explicit
+unmeasured classification, while a paired negative test proves that the same
+classification cannot hide a bad selected action. The full focused runner test
+file passed `51` tests and `8` subtests at `d79ae141`. The failed R2 cohort
+remains nonbankable: it was designed to fail the lane at the first seed error.
+The replacement launcher records a failed seed durably but continues the
+remaining seeds on that GPU lane, then withholds the cohort-level PASS if any
+seed failed. The prepared paired cohort will use a disjoint seed interval, so
+these four operational failures cannot silently disappear from its denominator.
+They remain pending a separately source-bound replay of this telemetry path.
+
 ## Fixed-opponent override audit
 
 The same sealed artifact recorded every guided-MCTS override and replayed the
