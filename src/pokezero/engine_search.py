@@ -1504,7 +1504,6 @@ _OVERRIDE_UNMEASURED_ARMS_ABSENT = "prior_arms_absent"
 _OVERRIDE_UNMEASURED_ARMS_MISALIGNED = "prior_arms_misaligned"
 _OVERRIDE_UNMEASURED_PARTIAL_WORLDS = "priors_missing_in_some_worlds"
 _OVERRIDE_UNMEASURED_UNMAPPED = "model_choice_unmapped"
-_OVERRIDE_UNMEASURED_ROOT_ALLOCATION_UNMAPPED = "root_allocation_unmapped_arm"
 _OVERRIDE_UNMEASURED_CAUSES = (
     # The crate priced no root priors for this decision: `model_priors` off, or a
     # root the prior path refused (an option list the action map could not
@@ -1534,13 +1533,6 @@ _OVERRIDE_UNMEASURED_CAUSES = (
     # liked most -- and it is NOT counted in `unmapped_choices`, by design: this
     # probe must not move a counter a stop condition reads.
     _OVERRIDE_UNMEASURED_UNMAPPED,
-    # A completed belief-world search exported at least one root arm that has
-    # no counterpart in the public request vocabulary.  The selected public
-    # action remains usable for play, but a public allocation cannot safely be
-    # reconstructed by dropping or renormalising hidden-world mass.  The H2H
-    # writer therefore records the decision as explicitly unmeasured instead
-    # of turning a telemetry seam into a failed game.
-    _OVERRIDE_UNMEASURED_ROOT_ALLOCATION_UNMAPPED,
 )
 
 # Public durable-evidence vocabulary.  The guided-vs-raw sidecar consumes this

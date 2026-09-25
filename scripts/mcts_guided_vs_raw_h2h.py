@@ -42,6 +42,16 @@ from pokezero.engine_search import (  # noqa: E402
     aggregate_model_rollout_shadow,
 )
 
+# This is a public-evidence projection seam, not an engine-native override
+# cause: the engine completed its search, but at least one belief-world root
+# arm had no legal request counterpart.  Keep it separate from the engine's
+# source causes so an evidence-writer change does not invalidate an unrelated
+# rollout-leaf mutation witness over ``engine_search.py``.
+_ROOT_ALLOCATION_UNMAPPED_CAUSE = "root_allocation_unmapped_arm"
+_H2H_UNMEASURED_CAUSE_VALUES = OVERRIDE_UNMEASURED_CAUSE_VALUES | frozenset(
+    {_ROOT_ALLOCATION_UNMAPPED_CAUSE}
+)
+
 # The mature MCTS-versus-MCTS runner owns the source-hash, immutable-write,
 # Showdown-binding and durable-launcher primitives.  This runner intentionally
 # reuses those primitives rather than carrying a second, subtly weaker version.
@@ -1389,7 +1399,7 @@ def _validated_selection_evidence(
                 "measured guided selection must include a model action and override verdict."
             )
     elif (
-        unmeasured_cause not in OVERRIDE_UNMEASURED_CAUSE_VALUES
+        unmeasured_cause not in _H2H_UNMEASURED_CAUSE_VALUES
         or model_action is not None
         or model_override is not None
     ):
@@ -1645,14 +1655,14 @@ def _selection_evidence_from_override(
                 "model_argmax": None,
                 "search_argmax": override["search_argmax"],
                 "model_override": None,
-                "unmeasured_cause": "root_allocation_unmapped_arm",
+                "unmeasured_cause": _ROOT_ALLOCATION_UNMAPPED_CAUSE,
                 "root_q_gap": None,
                 "root_visit_gap": None,
                 "root_gap_action_indices": [override["search_argmax"]],
                 "root_allocation": {
                     "worlds": raw_root["worlds"],
                     "prior_authority": False,
-                    "prior_cause": "root_allocation_unmapped_arm",
+                    "prior_cause": _ROOT_ALLOCATION_UNMAPPED_CAUSE,
                     "arms": [
                         {
                             "action_index": override["search_argmax"],
