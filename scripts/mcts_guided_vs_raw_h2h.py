@@ -1618,7 +1618,11 @@ def _selection_evidence_from_override(
     unmapped_root_arms = []
     for arm in raw_arms:
         action_index = arm.get("action_index")
-        if isinstance(action_index, bool) or not isinstance(action_index, int):
+        if (
+            isinstance(action_index, bool)
+            or not isinstance(action_index, int)
+            or not 0 <= action_index < ACTION_COUNT
+        ):
             # Missing/coercible IDs are malformed telemetry, not evidence of a
             # belief-world vocabulary seam.  Recovering from them would hide a
             # producer bug that the old strict projection correctly surfaced.

@@ -27,6 +27,7 @@ sys.modules[_SPEC.name] = RUNNER
 _SPEC.loader.exec_module(RUNNER)
 
 import mcts_mcts_h2h as DURABLE  # noqa: E402
+from pokezero.actions import ACTION_COUNT  # noqa: E402
 import pokezero.engine_search as ENGINE_SEARCH  # noqa: E402
 from pokezero.observation import PokeZeroObservationV0  # noqa: E402
 from pokezero.public_decision_corpus import (  # noqa: E402
@@ -1082,7 +1083,7 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
 
     def test_selection_evidence_refuses_malformed_engine_root_action_indices(self) -> None:
         record = _public_record()
-        for malformed in (None, "8", 8.0, True):
+        for malformed in (None, "8", 8.0, True, -1, ACTION_COUNT):
             with self.subTest(action_index=malformed):
                 override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
                 override = {**override, "root_allocation": {**override["root_allocation"]}}
