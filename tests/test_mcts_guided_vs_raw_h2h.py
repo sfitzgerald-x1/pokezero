@@ -1027,15 +1027,70 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "does not match its root allocation cause"):
             RUNNER._validated_selection_evidence(selection, record=record)
 
-    def test_selection_evidence_refuses_an_arm_outside_public_legal_actions(self) -> None:
+    def test_selection_evidence_classifies_an_unmapped_root_arm_without_losing_the_game(self) -> None:
         record = _public_record()
         override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
         override = {**override, "root_allocation": {**override["root_allocation"]}}
         override["root_allocation"]["arms"] = [
             {**override["root_allocation"]["arms"][0], "action_index": 8}
         ]
-        with self.assertRaisesRegex(Exception, "not a public legal action"):
+        evidence = RUNNER._selection_evidence_from_override(override, record=record)
+        self.assertEqual(evidence["unmeasured_cause"], "root_allocation_unmapped_arm")
+        self.assertIsNone(evidence["model_argmax"])
+        self.assertIsNone(evidence["model_override"])
+        self.assertEqual(evidence["root_allocation"]["prior_cause"], "root_allocation_unmapped_arm")
+        self.assertEqual(
+            evidence["root_allocation"]["arms"],
+            [
+                {
+                    "action_index": record.recorded_action_index,
+                    "visit_share": 1.0,
+                    "q": None,
+                    "reported_prior": None,
+                    "model_prior": None,
+                }
+            ],
+        )
+
+    def test_selection_evidence_does_not_hide_an_unmapped_root_arm_with_a_bad_selected_action(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {
+            **override,
+            "search_argmax": record.recorded_action_index + 1,
+            "root_allocation": {**override["root_allocation"]},
+        }
+        override["root_allocation"]["arms"] = [
+            {**override["root_allocation"]["arms"][0], "action_index": 8}
+        ]
+        with self.assertRaisesRegex(Exception, "does not match its public decision"):
             RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_selection_evidence_does_not_relabel_an_invalid_model_action_as_an_allocation_seam(self) -> None:
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {
+            **override,
+            "model_argmax": 8,
+            "root_allocation": {**override["root_allocation"]},
+        }
+        override["root_allocation"]["arms"] = [
+            {**override["root_allocation"]["arms"][0], "action_index": 8}
+        ]
+        with self.assertRaisesRegex(Exception, "model action is not a public legal action"):
+            RUNNER._selection_evidence_from_override(override, record=record)
+
+    def test_selection_evidence_refuses_malformed_engine_root_action_indices(self) -> None:
+        record = _public_record()
+        for malformed in (None, "8", 8.0, True):
+            with self.subTest(action_index=malformed):
+                override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+                override = {**override, "root_allocation": {**override["root_allocation"]}}
+                override["root_allocation"]["arms"] = [
+                    {**override["root_allocation"]["arms"][0], "action_index": malformed}
+                ]
+                with self.assertRaisesRegex(Exception, "engine root allocation arm has an invalid action index"):
+                    RUNNER._selection_evidence_from_override(override, record=record)
 
     def test_forced_singleton_projects_no_choice_without_hiding_real_choice_mismatch(self) -> None:
         """A one-action request cannot carry a meaningful MCTS override claim.

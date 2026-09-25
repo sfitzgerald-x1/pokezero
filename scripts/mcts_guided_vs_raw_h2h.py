@@ -1574,8 +1574,7 @@ def _selection_evidence_from_override(
         # cause while projecting the only legal public action as a canonical,
         # no-choice allocation.  A claimed measured singleton stays strict --
         # it must explain its real public root below. This branch is therefore
-        # limited to a singleton *and* an engine-declared unmeasured cause; a
-        # non-public arm on any genuine choice remains a hard failure.
+        # limited to a singleton *and* an engine-declared unmeasured cause.
         forced_action = legal_action_indices[0]
         return _validated_selection_evidence(
             {
@@ -1593,6 +1592,66 @@ def _selection_evidence_from_override(
                     "arms": [
                         {
                             "action_index": forced_action,
+                            "visit_share": 1.0,
+                            "q": None,
+                            "reported_prior": None,
+                            "model_prior": None,
+                        }
+                    ],
+                },
+            },
+            record=record,
+        )
+
+    legal_action_set = set(legal_action_indices)
+    raw_model_action = override["model_argmax"]
+    if raw_model_action is not None and (
+        isinstance(raw_model_action, bool)
+        or not isinstance(raw_model_action, int)
+        or raw_model_action not in legal_action_set
+    ):
+        # Do not let an unrelated engine-only allocation arm relabel a broken
+        # model-choice mapping as a harmless allocation seam.  The engine's
+        # native `model_choice_unmapped` path emits a null model action; any
+        # non-null value here claims a public action identity and must prove it.
+        raise HeadToHeadError("guided model action is not a public legal action.")
+    unmapped_root_arms = []
+    for arm in raw_arms:
+        action_index = arm.get("action_index")
+        if isinstance(action_index, bool) or not isinstance(action_index, int):
+            # Missing/coercible IDs are malformed telemetry, not evidence of a
+            # belief-world vocabulary seam.  Recovering from them would hide a
+            # producer bug that the old strict projection correctly surfaced.
+            raise HeadToHeadError("guided engine root allocation arm has an invalid action index.")
+        if action_index not in legal_action_set:
+            unmapped_root_arms.append(action_index)
+    if unmapped_root_arms:
+        # A belief world can contain an engine-only root arm even though the
+        # recorded request has several public actions.  Its visit/prior mass is
+        # real search telemetry, so filtering and renormalising it would invent
+        # a different root allocation.  Keep the played, public action bound
+        # and make the decision explicitly unmeasured instead.  In particular,
+        # do not silently discard a bad selected action: the validator below
+        # still requires `search_argmax` to equal the recorded public action.
+        # This cause is intentionally distinct from `model_choice_unmapped`:
+        # here the model choice can map while the *allocation* cannot be made
+        # public without losing hidden-world mass.
+        return _validated_selection_evidence(
+            {
+                "model_argmax": None,
+                "search_argmax": override["search_argmax"],
+                "model_override": None,
+                "unmeasured_cause": "root_allocation_unmapped_arm",
+                "root_q_gap": None,
+                "root_visit_gap": None,
+                "root_gap_action_indices": [override["search_argmax"]],
+                "root_allocation": {
+                    "worlds": raw_root["worlds"],
+                    "prior_authority": False,
+                    "prior_cause": "root_allocation_unmapped_arm",
+                    "arms": [
+                        {
+                            "action_index": override["search_argmax"],
                             "visit_share": 1.0,
                             "q": None,
                             "reported_prior": None,
