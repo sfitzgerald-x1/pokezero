@@ -909,6 +909,20 @@ class EngineMctsConfig:
                 "model_world_workers must be <= worlds: one worker cannot improve a "
                 "single belief world."
             )
+        # This composition has a stronger contract than the generic leaf-mode
+        # registry: when the rollout leaf seam is requested, every non-model
+        # mode is invalid, including an unregistered spelling. Check it first so
+        # a configuration cannot obscure that safety refusal behind a registry
+        # error.
+        if self.rollout_leaf_eval and self.leaf_eval != "model":
+            raise ValueError(
+                "rollout_leaf_eval=True requires leaf_eval='model': the rollout "
+                "seam with MODEL PRIORS lives on the encoded search path "
+                "(_search_ladder -> search_batched_multi_encoded), and the "
+                f"campaign's surviving config is priors ON. Got leaf_eval="
+                f"{self.leaf_eval!r}. For the uniform-priors sequential arm use "
+                "leaf_eval='rollout_crate' instead."
+            )
         # AGAINST THE REGISTRY, not against a second copy of the same literals. A
         # leaf-eval mode is selectable if and only if it is registered in
         # `LEAF_EVAL_SEARCH_METHODS`, which is what lets the instrumentation guard
@@ -987,20 +1001,9 @@ class EngineMctsConfig:
                 "one replaces the leaf value and the other must preserve it."
             )
         if self.rollout_leaf_eval:
-            # The seam only exists on the model path. Silently ignoring the flag
-            # on any other `leaf_eval` is how a cell gets banked as "oracle-leaf
-            # with model priors" having actually run the handcrafted leaf -- the
-            # exact class of failure this program lost two artifacts to, where an
-            # input was ABSENT rather than wrong. Refuse.
-            if self.leaf_eval != "model":
-                raise ValueError(
-                    "rollout_leaf_eval=True requires leaf_eval='model': the rollout "
-                    "seam with MODEL PRIORS lives on the encoded search path "
-                    "(_search_ladder -> search_batched_multi_encoded), and the "
-                    f"campaign's surviving config is priors ON. Got leaf_eval="
-                    f"{self.leaf_eval!r}. For the uniform-priors sequential arm use "
-                    "leaf_eval='rollout_crate' instead."
-                )
+            # The model-path requirement was checked before generic leaf-mode
+            # validation above; the remaining contract is that the model priors
+            # are actually present on that path.
             if not self.model_priors:
                 # The WHOLE REASON this composition exists. The sequential
                 # `leaf_eval="rollout_crate"` seam already prices rollout leaves
