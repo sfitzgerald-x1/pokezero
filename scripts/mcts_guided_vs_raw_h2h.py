@@ -1628,6 +1628,18 @@ def _selection_evidence_from_override(
     unmapped_root_arms = []
     for arm in raw_arms:
         action_index = arm.get("action_index")
+        # ``EngineMctsPolicy`` deliberately exports ``None`` when a rendered
+        # engine choice has no counterpart in this public request vocabulary.
+        # That is a belief-world allocation seam, not malformed telemetry: the
+        # engine label still identifies a real native arm, but there is no
+        # public action slot to attach it to.  Keep the decision and classify
+        # it as explicitly unmeasured below.  Do *not* extend this escape hatch
+        # to a missing/empty label; without a real engine choice there is no
+        # evidence that this was an intentional vocabulary miss rather than a
+        # broken producer.
+        if action_index is None and isinstance(arm.get("move"), str) and arm["move"]:
+            unmapped_root_arms.append(action_index)
+            continue
         if (
             isinstance(action_index, bool)
             or not isinstance(action_index, int)
