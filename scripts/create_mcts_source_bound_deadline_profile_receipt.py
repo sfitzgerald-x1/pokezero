@@ -19,6 +19,8 @@ import create_mcts_deadline_source_receipt as deadline_receipt
 
 PROFILE_RUNNER = "scripts/run_mcts_source_bound_deadline_profile.py"
 FIXED_WORK_PARITY_RUNNER = "scripts/run_mcts_source_bound_fixed_work_parity.py"
+LEAF_ABLATION_RUNNER = "scripts/run_source_root_leaf_ablation.py"
+LEAF_CONTINUATION_RUNNER = "scripts/run_source_root_leaf_continuations.py"
 LEGACY_RUNNER = "scripts/run_mcts_deadline_qualification.py"
 
 
@@ -44,6 +46,8 @@ def build_receipt(*, source_root: Path, b2_receipt_path: Path) -> dict[str, Any]
         *legacy_pins["REQUIRED_RECEIPT_FILES"],
         PROFILE_RUNNER,
         FIXED_WORK_PARITY_RUNNER,
+        LEAF_ABLATION_RUNNER,
+        LEAF_CONTINUATION_RUNNER,
     )
     source_files: dict[str, str] = {}
     for relative in required_files:
