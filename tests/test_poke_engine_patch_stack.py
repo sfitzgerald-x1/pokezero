@@ -40,7 +40,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # tree on disk -- the build rewrites that tree, so pinning it can pin a stale
 # preimage (which it once did, and shipped a red gate).
 #
-# 75 -> 76 (`poke-engine-gen3-seeded-mcts.patch`). The three control digests
+# 77 -> 78 (`poke-engine-gen3-deferred-recharge-option.patch`). The three control digests
 # remain unchanged across that bump, measured on the replay and not asserted
 # from the diff. The patch must update the root Python package source that
 # Maturin actually packages.
@@ -127,7 +127,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-20:]],
+                [entry.name for entry in applied[-21:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -159,6 +159,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-sleep-clock-bound.patch",
                     "poke-engine-gen3-seeded-mcts.patch",
                     "poke-engine-gen3-empty-move-option.patch",
+                    "poke-engine-gen3-deferred-recharge-option.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.

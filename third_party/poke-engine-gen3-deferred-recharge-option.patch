@@ -1,0 +1,129 @@
+diff --git a/src/gen3/state.rs b/src/gen3/state.rs
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -636,7 +636,9 @@
+         // asked to choose while the other seat replaces.
+         if self.side_one.force_switch {
+             self.side_one.add_switches(&mut side_one_options);
+-            if self.side_two.switch_out_move_second_saved_move == Choices::NONE {
++            if self.side_two.volatile_statuses.contains(&PokemonVolatileStatus::MUSTRECHARGE)
++                || self.side_two.switch_out_move_second_saved_move == Choices::NONE
++            {
+                 side_two_options.push(MoveChoice::None);
+             } else {
+                 self.side_two.get_active_immutable().add_move_from_choice(
+@@ -653,6 +655,8 @@
+         if self.side_two.force_switch {
+             self.side_two.add_switches(&mut side_two_options);
+-            if self.side_one.switch_out_move_second_saved_move == Choices::NONE {
++            if self.side_one.volatile_statuses.contains(&PokemonVolatileStatus::MUSTRECHARGE)
++                || self.side_one.switch_out_move_second_saved_move == Choices::NONE
++            {
+                 side_one_options.push(MoveChoice::None);
+             } else {
+                 self.side_one.get_active_immutable().add_move_from_choice(
+diff --git a/tests/test_gen3.rs b/tests/test_gen3.rs
+--- a/tests/test_gen3.rs
++++ b/tests/test_gen3.rs
+@@ -58,2 +58,101 @@
++#[test]
++fn forced_replacement_defers_a_saved_recharging_move() {
++    // A forced replacement is its own boundary.  If the waiting side owes a
++    // recharge, its saved second-move commitment must not turn into an attack
++    // at that boundary; it remains a no-choice action until the next turn.
++    let mut state = State::default();
++    state
++        .side_one
++        .get_active()
++        .replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
++    // PP deduction becomes observable below ten PP.  This makes the
++    // replacement-boundary assertion prove that the saved Tackle did not run.
++    state.side_one.get_active().moves[&PokemonMoveIndex::M0].pp = 5;
++    state
++        .side_two
++        .get_active()
++        .replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
++    state.side_two.pokemon[PokemonIndex::P1] = state.side_two.pokemon[PokemonIndex::P0].clone();
++    // Without recharge, a valid saved continuation remains an indexed move.
++    // This is the control for the narrow MUSTRECHARGE guard below.
++    let mut without_recharge = state.clone();
++    without_recharge.side_two.force_switch = true;
++    without_recharge.side_one.switch_out_move_second_saved_move = Choices::TACKLE;
++    let (control_options, _) = without_recharge.get_all_options();
++    assert_eq!(control_options, vec![MoveChoice::Move(PokemonMoveIndex::M0)]);
++
++    state
++        .side_one
++        .volatile_statuses
++        .insert(PokemonVolatileStatus::MUSTRECHARGE);
++    state.side_two.force_switch = true;
++    state.side_one.switch_out_move_second_saved_move = Choices::TACKLE;
++
++    let (side_one_options, side_two_options) = state.get_all_options();
++    assert_eq!(side_one_options, vec![MoveChoice::None]);
++    assert!(side_two_options.contains(&MoveChoice::Switch(PokemonIndex::P1)));
++
++    let before = state.serialize();
++    let branches = generate_instructions_with_state_assertion(
++        &mut state,
++        &MoveChoice::None,
++        &MoveChoice::Switch(PokemonIndex::P1),
++    );
++    assert_eq!(branches.len(), 1);
++    let replacement = &branches[0].instruction_list;
++    assert!(
++        !replacement.iter().any(|instruction| matches!(
++            instruction,
++            Instruction::RemoveVolatileStatus(remove)
++                if remove.side_ref == SideReference::SideOne
++                    && remove.volatile_status == PokemonVolatileStatus::MUSTRECHARGE
++        )),
++        "the replacement boundary must not consume recharge: {:?}",
++        replacement
++    );
++    assert!(
++        !replacement.iter().any(|instruction| matches!(
++            instruction,
++            Instruction::DecrementPP(decrement)
++                if decrement.side_ref == SideReference::SideOne
++                    && decrement.move_index == PokemonMoveIndex::M0
++        )),
++        "the saved move must not spend PP at the replacement boundary: {:?}",
++        replacement
++    );
++    assert!(
++        !replacement
++            .iter()
++            .any(|instruction| matches!(instruction, Instruction::Damage(_))),
++        "the saved move must not attack at the replacement boundary: {:?}",
++        replacement
++    );
++
++    state.apply_instructions(replacement);
++    assert!(state
++        .side_one
++        .volatile_statuses
++        .contains(&PokemonVolatileStatus::MUSTRECHARGE));
++    assert!(!state.side_two.force_switch);
++    let (next_side_one_options, next_side_two_options) = state.get_all_options();
++    assert_eq!(next_side_one_options, vec![MoveChoice::None]);
++    assert!(next_side_two_options.contains(&MoveChoice::Move(PokemonMoveIndex::M0)));
++    let recharge_branches = generate_instructions_with_state_assertion(
++        &mut state,
++        &MoveChoice::None,
++        &MoveChoice::Move(PokemonMoveIndex::M0),
++    );
++    assert!(recharge_branches.iter().any(|branch| branch.instruction_list.iter().any(
++        |instruction| matches!(
++            instruction,
++            Instruction::RemoveVolatileStatus(remove)
++                if remove.side_ref == SideReference::SideOne
++                    && remove.volatile_status == PokemonVolatileStatus::MUSTRECHARGE
++        )
++    )));
++    state.reverse_instructions(replacement);
++    assert_eq!(state.serialize(), before);
++}
++
+ // to the native single-threaded MCTS. Walrein's retained ordinary-sleep count
+ // was five, which previously divided by zero in `chance_to_wake_up` and made

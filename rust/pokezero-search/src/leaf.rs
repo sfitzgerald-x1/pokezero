@@ -3552,13 +3552,12 @@ mod tests {
     }
 
     #[test]
-    fn indexed_move_at_recharge_boundary_stays_unmapped() {
-        // At an opponent forced-replacement boundary the engine exposes a
-        // saved indexed move before its ordinary MUSTRECHARGE branch.  That is
-        // not semantically a recharge: `generate_instructions_from_move_pair`
-        // clones and executes the indexed move, whereas only `MoveChoice::None`
-        // consumes MUSTRECHARGE.  Refusing the arm is safer than assigning its
-        // prior to the synthetic recharge candidate.
+    fn recharge_boundary_maps_none_and_refuses_contradictory_indexed_move() {
+        // At an opponent forced-replacement boundary, an engine-corrected
+        // recharging side exposes `None`, which maps to the forced recharge
+        // pseudo-action. A stale or fabricated indexed move would execute an
+        // attack instead, so it must remain unmapped rather than inherit that
+        // forced action's prior.
         use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus};
         use poke_engine::state::PokemonMoveIndex;
 
@@ -3570,11 +3569,26 @@ mod tests {
         state.side_two.force_switch = true;
         state.side_one.switch_out_move_second_saved_move = Choices::TACKLE;
         let (options, _) = state.get_all_options();
-        assert_eq!(options, vec![MoveChoice::Move(PokemonMoveIndex::M0)]);
+        assert_eq!(options, vec![MoveChoice::None]);
         let (map, witness) = ctx
             .self_action_map_with_unmapped_witness(&state, &options, None, None, false)
             .expect("recharge-boundary map");
 
+        assert_eq!(map, vec![Some(0)]);
+        assert_eq!(witness.engine_move_missing, 0);
+        assert_eq!(witness.engine_move_present_but_illegal, 0);
+        assert_eq!(witness.unexplained, 0);
+
+        let contradictory = vec![MoveChoice::Move(PokemonMoveIndex::M0)];
+        let (map, witness) = ctx
+            .self_action_map_with_unmapped_witness(
+                &state,
+                &contradictory,
+                None,
+                None,
+                false,
+            )
+            .expect("contradictory recharge-boundary map");
         assert_eq!(map, vec![None]);
         assert_eq!(witness.engine_move_missing, 0);
         assert_eq!(witness.engine_move_present_but_illegal, 0);
