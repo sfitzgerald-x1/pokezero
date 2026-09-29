@@ -2293,7 +2293,17 @@ impl LeafContext {
                 MoveChoice::Move(engine_index) => {
                     let slot = engine_index.serialize().parse::<usize>().unwrap_or(usize::MAX);
                     if recharging && !force_switch_shape {
-                        None // recharge shape offers no real move candidates
+                        // Normally the engine exposes forced recharge as
+                        // `MoveChoice::None`.  Constructed interior worlds can
+                        // carry the pre-recharge move index alongside the live
+                        // MUSTRECHARGE volatile, though.  Both encodings mean
+                        // the same forced, PP-less production action; mapping
+                        // the indexed form to the recharge pseudo-action keeps
+                        // the arm aligned with the encoded legal surface
+                        // without pretending that the original move is legal.
+                        legal_action_index(&|obj| {
+                            obj.get("move_id").and_then(Value::as_str) == Some("recharge")
+                        })
                     } else {
                         legal_action_index(&|obj| {
                             obj.get("kind").and_then(Value::as_str) == Some("move")
@@ -3539,6 +3549,33 @@ mod tests {
             vec![Some(2)],
             "M2 must retain its action-block position even when earlier engine slots are empty"
         );
+    }
+
+    #[test]
+    fn indexed_recharge_arm_maps_to_the_forced_recharge_pseudo_action() {
+        // The engine normally represents recharge as MoveChoice::None.  A
+        // constructed interior world can retain the consumed move's index at
+        // that boundary, while its live MUSTRECHARGE volatile correctly makes
+        // the encoded action surface the one-action "recharge" request.  The
+        // indexed representation must therefore map to that pseudo-action,
+        // rather than making branch priors fall back to uniform.
+        use poke_engine::engine::state::PokemonVolatileStatus;
+        use poke_engine::state::PokemonMoveIndex;
+
+        let (ctx, mut state) = order_context(None);
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::MUSTRECHARGE);
+        let options = vec![MoveChoice::Move(PokemonMoveIndex::M2)];
+        let (map, witness) = ctx
+            .self_action_map_with_unmapped_witness(&state, &options, None, None, false)
+            .expect("indexed recharge map");
+
+        assert_eq!(map, vec![Some(0)]);
+        assert_eq!(witness.engine_move_missing, 0);
+        assert_eq!(witness.engine_move_present_but_illegal, 0);
+        assert_eq!(witness.unexplained, 0);
     }
 
     #[test]
