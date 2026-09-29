@@ -124,6 +124,23 @@ def _write_terminal(
     _write_json(directory / "runner-terminal.json", {"status": "COMPLETE", "exit_code": 0})
 
 
+def _mark_stale_recharge_taint(root: Path, seed: int) -> None:
+    """Make the fixture match the only original pair eligible for replacement."""
+    directory = _seed_dir(root, seed, original=True)
+    summary = directory / "summary.json"
+    payload = json.loads(summary.read_text(encoding="utf-8"))
+    payload.update(
+        candidate_prior_fallbacks=12,
+        candidate_root_prior_fallbacks=0,
+        candidate_branch_prior_fallbacks=12,
+    )
+    _write_json(summary, payload)
+    complete = directory / "COMPLETE.json"
+    complete_payload = json.loads(complete.read_text(encoding="utf-8"))
+    complete_payload["summary_sha256"] = hashlib.sha256(summary.read_bytes()).hexdigest()
+    _write_json(complete, complete_payload)
+
+
 def _fake_pair_games() -> dict[str, object]:
     return {
         "p1": SimpleNamespace(
@@ -190,6 +207,7 @@ class ObserverRecoveryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             original, replay = self._roots(Path(temporary))
             seed = 2026093109
+            _mark_stale_recharge_taint(original, seed)
             replacement = Path(temporary) / "replacement"
             _write_terminal(
                 replacement,
@@ -220,6 +238,43 @@ class ObserverRecoveryTest(unittest.TestCase):
         self.assertEqual(manifest["recovery_scope"]["original_pairs_reused"], 194)
         self.assertEqual([entry["seed"] for entry in manifest["replacement_pairs"]], [seed])
         self.assertEqual(manifest["replacement_source"]["engine_fingerprint"], REPLACEMENT_ENGINE)
+        self.assertEqual(
+            manifest["superseded_original_pair"]["fallback_signature"]["candidate_branch_prior_fallbacks"],
+            12,
+        )
+
+    def test_rejects_replacement_when_completed_original_is_not_registered_taint(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            original, replay = self._roots(Path(temporary))
+            seed = 2026093109
+            replacement = Path(temporary) / "replacement"
+            _write_terminal(
+                replacement,
+                seed,
+                commit=NEW_COMMIT,
+                original=False,
+                engine=REPLACEMENT_ENGINE,
+            )
+            lane = replacement / "lanes" / "s1" / "seeds" / f"seed-{seed}"
+            target = replacement / "seeds" / f"seed-{seed}"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(lane), target)
+            games = _fake_pair_games()
+            with patch.object(MODULE, "load_pair", return_value=games), patch.object(
+                MODULE, "complete_pair", return_value=tuple(games.values())
+            ), self.assertRaisesRegex(MODULE.RecoveryError, "registered stale-recharge fallback signature"):
+                MODULE.build_recovery_manifest(
+                    original_root=original,
+                    replay_root=replay,
+                    original_commit=OLD_COMMIT,
+                    replay_commit=NEW_COMMIT,
+                    replacement_root=replacement,
+                    replacement_seed=seed,
+                    replacement_commit=NEW_COMMIT,
+                    replacement_tree_sha256="2" * 64,
+                    replacement_engine_fingerprint=REPLACEMENT_ENGINE,
+                    replacement_showdown_source_sha256=SHOWDOWN,
+                )
 
     def test_rejects_replacement_without_a_complete_source_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -255,6 +310,7 @@ class ObserverRecoveryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             original, replay = self._roots(Path(temporary))
             seed = 2026093109
+            _mark_stale_recharge_taint(original, seed)
             replacement = Path(temporary) / "replacement"
             _write_terminal(
                 replacement,

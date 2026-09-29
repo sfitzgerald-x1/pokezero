@@ -312,6 +312,83 @@ def _validate_terminal_seed(
     }
 
 
+def _validate_superseded_recharge_seed(
+    directory: Path,
+    *,
+    seed: int,
+    expected_commit: str,
+) -> dict[str, Any]:
+    """Bind the one observed stale-recharge fallback before superseding it.
+
+    A replacement is not a general escape hatch for an inconvenient outcome.
+    The retained original must be a cleanly completed pair with the exact
+    historical branch-only fallback signature observed for this bug.
+    """
+    label = f"superseded original seed {seed}"
+    manifest = _read_object(directory / "manifest.json", label=f"{label} manifest")
+    declared = manifest.get("declared_manifest")
+    if not isinstance(declared, Mapping) or declared.get("seeds") != [seed]:
+        raise RecoveryError(f"{label} does not declare exactly its target seed.")
+    source = _source_identity(manifest, label=label)
+    if source["commit"] != expected_commit:
+        raise RecoveryError(f"{label} source commit does not bind the historical receipt.")
+    candidate, incumbent = _policy_pair(manifest, label=label)
+    if candidate.source_commit != expected_commit or incumbent.source_commit != expected_commit:
+        raise RecoveryError(f"{label} policy source commits do not bind the historical receipt.")
+    if candidate.engine_fingerprint != source["engine_fingerprint"]:
+        raise RecoveryError(f"{label} candidate engine fingerprint disagrees with its receipt.")
+    if candidate.showdown_source_sha256 != source["showdown_source_sha256"]:
+        raise RecoveryError(f"{label} candidate Showdown receipt disagrees with active receipt.")
+
+    terminal = _read_object(directory / "runner-terminal.json", label=f"{label} runner terminal")
+    if terminal.get("status") != "COMPLETE" or terminal.get("exit_code") != 0:
+        raise RecoveryError(f"{label} is not a clean terminal completion.")
+    complete = _read_object(directory / "COMPLETE.json", label=f"{label} complete receipt")
+    if complete.get("status") != "COMPLETE" or complete.get("pairs") != 1 or complete.get("games") != 2:
+        raise RecoveryError(f"{label} is not exactly one complete mirrored pair.")
+    summary_path = directory / "summary.json"
+    if not summary_path.is_file() or complete.get("summary_sha256") != _sha256(summary_path):
+        raise RecoveryError(f"{label} summary is missing or disagrees with COMPLETE.json.")
+    if complete.get("candidate_provenance_sha256") != candidate.provenance_sha256:
+        raise RecoveryError(f"{label} candidate provenance is not bound by COMPLETE.json.")
+    if complete.get("raw_provenance_sha256") != incumbent.provenance_sha256:
+        raise RecoveryError(f"{label} raw provenance is not bound by COMPLETE.json.")
+
+    summary = _read_object(summary_path, label=f"{label} summary")
+    if summary.get("seeds") != [seed]:
+        raise RecoveryError(f"{label} summary does not contain exactly its target seed.")
+    expected_fallbacks = {
+        "candidate_prior_fallbacks": 12,
+        "candidate_root_prior_fallbacks": 0,
+        "candidate_branch_prior_fallbacks": 12,
+        "incumbent_prior_fallbacks": 0,
+        "incumbent_root_prior_fallbacks": 0,
+        "incumbent_branch_prior_fallbacks": 0,
+    }
+    observed_fallbacks = {key: summary.get(key) for key in expected_fallbacks}
+    if observed_fallbacks != expected_fallbacks:
+        raise RecoveryError(
+            f"{label} does not have the registered stale-recharge fallback signature."
+        )
+    for field in (
+        "candidate_opponent_request_order_root_fallback_statuses",
+        "candidate_opponent_request_order_root_omission_statuses",
+        "incumbent_opponent_request_order_root_fallback_statuses",
+        "incumbent_opponent_request_order_root_omission_statuses",
+    ):
+        if summary.get(field) != {}:
+            raise RecoveryError(f"{label} has an unexpected {field}.")
+    return {
+        "seed": seed,
+        "directory": str(directory),
+        "complete_sha256": _sha256(directory / "COMPLETE.json"),
+        "summary_sha256": _sha256(summary_path),
+        "fallback_signature": observed_fallbacks,
+        "source": source,
+        "execution": _execution_identity(manifest, label=label),
+    }
+
+
 def build_recovery_manifest(
     *,
     original_root: Path,
@@ -352,6 +429,7 @@ def build_recovery_manifest(
         raise RecoveryError("replacement source contract supplied without a replacement pair.")
 
     retained: list[dict[str, Any]] = []
+    superseded_original: dict[str, Any] | None = None
     for seed in roster:
         directory = _seed_dir(original_root, seed, original=True)
         complete = directory / "COMPLETE.json"
@@ -362,6 +440,9 @@ def build_recovery_manifest(
         if seed == replacement_seed:
             if not complete.is_file():
                 raise RecoveryError(f"replacement seed {seed} has no original COMPLETE.json to supersede.")
+            superseded_original = _validate_superseded_recharge_seed(
+                directory, seed=seed, expected_commit=original_commit
+            )
             continue
         if not complete.is_file():
             raise RecoveryError(f"retained seed {seed} has no original COMPLETE.json.")
@@ -400,6 +481,11 @@ def build_recovery_manifest(
     for entry in retained:
         if entry["source"] != original_source:
             raise RecoveryError("original retained pairs have mixed source provenance.")
+    if superseded_original is not None:
+        if superseded_original["source"] != original_source:
+            raise RecoveryError("superseded original pair has mixed source provenance.")
+        if superseded_original["execution"] != original_execution:
+            raise RecoveryError("superseded original pair changes a battle/search setting.")
     for entry in repaired:
         if entry["source"] != replay_source:
             raise RecoveryError("repaired pairs have mixed source provenance.")
@@ -467,6 +553,7 @@ def build_recovery_manifest(
         "retained_pairs": retained,
         "replayed_pairs": repaired,
         "replacement_pairs": replacements,
+        "superseded_original_pair": superseded_original,
         "pair_count": len(accepted),
         "game_count": 2 * len(accepted),
         "original_source": original_source,
