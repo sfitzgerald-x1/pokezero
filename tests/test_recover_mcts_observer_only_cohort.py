@@ -162,9 +162,11 @@ class ObserverRecoveryTest(unittest.TestCase):
             original, replay = self._roots(Path(temporary))
             seed = MODULE.DEFAULT_REPAIR_SEEDS[0]
             duplicate = replay / "lanes" / "s1" / "seeds" / f"seed-{seed}"
-            duplicate.parent.mkdir(parents=True)
+            duplicate.parent.mkdir(parents=True, exist_ok=True)
             _write_json(duplicate / "sentinel.json", {"unexpected": True})
-            with self.assertRaisesRegex(MODULE.RecoveryError, "exactly one durable lane"):
+            with patch.object(MODULE, "load_pair", return_value={"p1": object(), "p2": object()}), patch.object(
+                MODULE, "complete_pair", return_value=(object(), object())
+            ), self.assertRaisesRegex(MODULE.RecoveryError, "exactly one durable lane"):
                 MODULE.build_recovery_manifest(
                     original_root=original,
                     replay_root=replay,
