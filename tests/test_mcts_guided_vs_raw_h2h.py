@@ -1053,6 +1053,25 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             ],
         )
 
+    def test_selection_evidence_classifies_a_null_indexed_engine_arm_without_losing_the_game(self) -> None:
+        """A named belief-world arm can intentionally have no public slot."""
+        record = _public_record()
+        override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
+        override = {**override, "root_allocation": {**override["root_allocation"]}}
+        override["root_allocation"]["arms"] = [
+            {
+                **override["root_allocation"]["arms"][0],
+                "move": "switch hidden-world-only-species",
+                "action_index": None,
+            }
+        ]
+
+        evidence = RUNNER._selection_evidence_from_override(override, record=record)
+
+        self.assertEqual(evidence["unmeasured_cause"], "root_allocation_unmapped_arm")
+        self.assertIsNone(evidence["model_argmax"])
+        self.assertIsNone(evidence["model_override"])
+
     def test_selection_evidence_does_not_hide_an_unmapped_root_arm_with_a_bad_selected_action(self) -> None:
         record = _public_record()
         override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
@@ -1088,7 +1107,13 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 override = _guided_for_record(record).latest_decision_metadata["engine_mcts"]["override"]
                 override = {**override, "root_allocation": {**override["root_allocation"]}}
                 override["root_allocation"]["arms"] = [
-                    {**override["root_allocation"]["arms"][0], "action_index": malformed}
+                    {
+                        **override["root_allocation"]["arms"][0],
+                        # A null index is recoverable only when the producer
+                        # retains a concrete engine-choice label.
+                        "move": "" if malformed is None else "tackle",
+                        "action_index": malformed,
+                    }
                 ]
                 with self.assertRaisesRegex(Exception, "engine root allocation arm has an invalid action index"):
                     RUNNER._selection_evidence_from_override(override, record=record)
