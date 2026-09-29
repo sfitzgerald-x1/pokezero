@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -176,6 +177,23 @@ class ObserverRecoveryTest(unittest.TestCase):
                     original_commit=OLD_COMMIT,
                     replay_commit=NEW_COMMIT,
                 )
+
+    def test_replaces_one_completed_original_pair_with_a_source_bound_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            original, replay = self._roots(Path(temporary))
+            seed = 2026093109
+            replacement = Path(temporary) / "replacement"
+            _write_terminal(replacement, seed, commit=NEW_COMMIT, original=False)
+            lane = replacement / "lanes" / "s1" / "seeds" / f"seed-{seed}"
+            target = replacement / "seeds" / f"seed-{seed}"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(lane), target)
+            games = _fake_pair_games()
+            with patch.object(MODULE, "load_pair", return_value=games), patch.object(MODULE, "complete_pair", return_value=tuple(games.values())):
+                manifest = MODULE.build_recovery_manifest(original_root=original, replay_root=replay, original_commit=OLD_COMMIT, replay_commit=NEW_COMMIT, replacement_root=replacement, replacement_seed=seed, replacement_commit=NEW_COMMIT)
+        self.assertEqual(manifest["pair_count"], 200)
+        self.assertEqual(manifest["recovery_scope"]["original_pairs_reused"], 194)
+        self.assertEqual([entry["seed"] for entry in manifest["replacement_pairs"]], [seed])
 
     def test_rejects_fallback_tainted_pair_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

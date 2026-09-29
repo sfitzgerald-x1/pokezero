@@ -282,6 +282,9 @@ def build_recovery_manifest(
     replay_root: Path,
     original_commit: str,
     replay_commit: str,
+    replacement_root: Path | None = None,
+    replacement_seed: int | None = None,
+    replacement_commit: str | None = None,
     seeds: Sequence[int] = DEFAULT_SEEDS,
     repair_seeds: Sequence[int] = DEFAULT_REPAIR_SEEDS,
 ) -> dict[str, Any]:
@@ -291,6 +294,13 @@ def build_recovery_manifest(
         raise RecoveryError("the registered roster must contain exactly 200 distinct seeds.")
     if len(repairs) != 5 or len(set(repairs)) != len(repairs) or not set(repairs) <= set(roster):
         raise RecoveryError("the repair roster must contain exactly five registered seeds.")
+    replacing = replacement_root is not None or replacement_seed is not None or replacement_commit is not None
+    if replacing and (replacement_root is None or replacement_seed is None or replacement_commit is None):
+        raise RecoveryError("replacement root, seed, and commit must be supplied together.")
+    if replacement_seed is not None and replacement_seed in repairs:
+        raise RecoveryError("replacement seed cannot also be an observer-only repair seed.")
+    if replacement_seed is not None and replacement_seed not in roster:
+        raise RecoveryError("replacement seed is outside the registered roster.")
 
     retained: list[dict[str, Any]] = []
     for seed in roster:
@@ -300,6 +310,10 @@ def build_recovery_manifest(
             if complete.exists():
                 raise RecoveryError(f"repair seed {seed} unexpectedly has an original COMPLETE.json.")
             continue
+        if seed == replacement_seed:
+            if not complete.is_file():
+                raise RecoveryError(f"replacement seed {seed} has no original COMPLETE.json to supersede.")
+            continue
         if not complete.is_file():
             raise RecoveryError(f"retained seed {seed} has no original COMPLETE.json.")
         retained.append(
@@ -307,8 +321,9 @@ def build_recovery_manifest(
                 directory, seed=seed, expected_commit=original_commit, label=f"original seed {seed}"
             )
         )
-    if len(retained) != 195:
-        raise RecoveryError("the original root did not provide exactly 195 immutable complete pairs.")
+    expected_retained = 194 if replacing else 195
+    if len(retained) != expected_retained:
+        raise RecoveryError(f"the original root did not provide exactly {expected_retained} immutable complete pairs.")
 
     repaired: list[dict[str, Any]] = []
     for seed in repairs:
@@ -319,8 +334,14 @@ def build_recovery_manifest(
             )
         )
 
+    replacements: list[dict[str, Any]] = []
+    if replacing:
+        assert replacement_root is not None and replacement_seed is not None and replacement_commit is not None
+        directory = replacement_root / "seeds" / f"seed-{replacement_seed}"
+        replacements.append(_validate_terminal_seed(directory, seed=replacement_seed, expected_commit=replacement_commit, label=f"replacement seed {replacement_seed}"))
+
     original_execution = retained[0]["execution"]
-    for entry in retained[1:] + repaired:
+    for entry in retained[1:] + repaired + replacements:
         if entry["execution"] != original_execution:
             raise RecoveryError(
                 f"seed {entry['seed']} changes a battle/search setting; observer-only recovery refused."
@@ -333,13 +354,17 @@ def build_recovery_manifest(
     for entry in repaired:
         if entry["source"] != replay_source:
             raise RecoveryError("repaired pairs have mixed source provenance.")
+    replacement_source = replacements[0]["source"] if replacements else None
     if original_source["engine_fingerprint"] != replay_source["engine_fingerprint"]:
         raise RecoveryError("replay changes the native engine fingerprint; observer-only recovery refused.")
     if original_source["showdown_source_sha256"] != replay_source["showdown_source_sha256"]:
         raise RecoveryError("replay changes the Showdown source; observer-only recovery refused.")
+    if replacement_source is not None and (original_source["engine_fingerprint"] != replacement_source["engine_fingerprint"] or original_source["showdown_source_sha256"] != replacement_source["showdown_source_sha256"]):
+        raise RecoveryError("replacement changes engine or Showdown source; recovery refused.")
 
     bootstrap = _bootstrap_contract(original_execution)
-    scores = [entry["pair_score"] for entry in retained + repaired]
+    accepted = retained + repaired + replacements
+    scores = [entry["pair_score"] for entry in accepted]
     indices = bootstrap_indices(
         sample_size=len(scores),
         resamples=int(bootstrap["resamples"]),
@@ -354,7 +379,7 @@ def build_recovery_manifest(
         key: value - 0.5 for key, value in score_interval.to_payload().items()
     }
     seat_scores = {
-        seat: [entry["seat_scores"][seat] for entry in retained + repaired]
+        seat: [entry["seat_scores"][seat] for entry in accepted]
         for seat in ("p1", "p2")
     }
     seat_intervals = {
@@ -372,7 +397,7 @@ def build_recovery_manifest(
     )
     outcomes = {outcome: 0 for outcome in ("win", "tie", "cap", "loss")}
     capped_games = 0
-    for entry in retained + repaired:
+    for entry in accepted:
         capped_games += int(entry["capped_games"])
         for outcome in entry["seat_outcomes"].values():
             outcomes[outcome] += 1
@@ -386,8 +411,9 @@ def build_recovery_manifest(
         "repair_seeds": list(repairs),
         "retained_pairs": retained,
         "replayed_pairs": repaired,
-        "pair_count": len(retained) + len(repaired),
-        "game_count": 2 * (len(retained) + len(repaired)),
+        "replacement_pairs": replacements,
+        "pair_count": len(accepted),
+        "game_count": 2 * len(accepted),
         "original_source": original_source,
         "observer_replay_source": replay_source,
         "execution_identity": original_execution,
@@ -405,9 +431,11 @@ def build_recovery_manifest(
             "candidate_outcomes": outcomes,
         },
         "recovery_scope": {
-            "original_pairs_reused": 195,
+            "original_pairs_reused": expected_retained,
             "replayed_pairs": 5,
             "replayed_games": 10,
+            "replacement_pairs": len(replacements),
+            "replacement_seed": replacement_seed,
             "rule": "no original durable game is copied, moved, or relabelled",
         },
     }
@@ -449,6 +477,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--original-commit", required=True)
     parser.add_argument("--replay-commit", required=True)
+    parser.add_argument("--replacement-root", type=Path)
+    parser.add_argument("--replacement-seed", type=int)
+    parser.add_argument("--replacement-commit")
     return parser
 
 
@@ -459,6 +490,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         replay_root=args.replay_root,
         original_commit=args.original_commit,
         replay_commit=args.replay_commit,
+        replacement_root=args.replacement_root,
+        replacement_seed=args.replacement_seed,
+        replacement_commit=args.replacement_commit,
     )
     write_immutable_json(args.out, payload)
     print(json.dumps(payload, sort_keys=True))
