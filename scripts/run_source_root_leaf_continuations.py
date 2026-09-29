@@ -238,6 +238,7 @@ def _selection_projection(value: Any) -> Mapping[str, Any]:
 def _load_changed_leaf_roots(
     leaf_root: Path,
     source_records: Mapping[SourceRoot, tuple[Any, Mapping[str, Any]]],
+    historical_fallbacks: Mapping[SourceRoot, Mapping[str, Any]],
 ) -> tuple[dict[SourceRoot, Mapping[str, Any]], Mapping[str, Any], str]:
     """Validate the finished leaf ablation and select every changed root."""
 
@@ -277,7 +278,13 @@ def _load_changed_leaf_roots(
         record, _ = source_records[root]
         complete_path = _root_directory(leaf_root, root) / "COMPLETE.json"
         payload = _read_json(complete_path)
-        _validate_leaf_completed_root(payload, root=root, record=record, manifest_sha256=manifest_sha256)
+        _validate_leaf_completed_root(
+            payload,
+            root=root,
+            record=record,
+            historical_fallback=historical_fallbacks.get(root),
+            manifest_sha256=manifest_sha256,
+        )
         if not isinstance(payload, Mapping):
             raise ContinuationError("leaf-ablation completed root is not a mapping")
         completed.append(payload)
@@ -1014,10 +1021,14 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
     out_root = Path(args.out_root).resolve()
     if _sha256_file(Path(args.checkpoint)) != args.expected_checkpoint_sha256:
         raise ContinuationError("checkpoint SHA-256 does not match the frozen contract")
-    source_selected, source_by_seed, _, _ = _load_source_records(
+    source_selected, source_by_seed, _, historical_fallbacks = _load_source_records(
         source_root, targets=TARGETS
     )
-    changed, leaf_manifest, leaf_manifest_sha256 = _load_changed_leaf_roots(leaf_root, source_selected)
+    changed, leaf_manifest, leaf_manifest_sha256 = _load_changed_leaf_roots(
+        leaf_root,
+        source_selected,
+        historical_fallbacks,
+    )
     raw_policy_anchors = (
         {
             root: _raw_policy_anchor(
