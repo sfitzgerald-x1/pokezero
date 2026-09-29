@@ -202,6 +202,31 @@ class OpponentOrderTelemetryTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "non-negative integers"):
                 PolicyTelemetry.capture(policy)
 
+    def test_capture_preserves_monotonic_engine_phase_timers(self) -> None:
+        policy = _Policy("candidate")
+        policy.stats.decision_wall_seconds = 8.0
+        policy.stats.search_wall_seconds = 7.5
+        policy.stats.model_wall_seconds = 2.0
+        policy.stats.tree_wall_seconds = 4.0
+        policy.stats.encode_wall_seconds = 1.0
+        policy.stats.fold_clone_wall_seconds = 0.5
+        policy.stats.render_wall_seconds = 0.4
+        policy.stats.fold_advance_wall_seconds = 0.3
+        policy.stats.tensor_wall_seconds = 0.2
+        policy.stats.action_map_wall_seconds = 0.1
+        policy.stats.row_input_wall_seconds = 0.05
+        policy.stats.products_wall_seconds = 0.04
+        policy.stats.row_write_wall_seconds = 0.03
+
+        telemetry = PolicyTelemetry.capture(policy)
+
+        self.assertEqual(telemetry.search_wall_seconds, 7.5)
+        self.assertEqual(telemetry.model_wall_seconds, 2.0)
+        self.assertEqual(telemetry.tree_wall_seconds, 4.0)
+        self.assertEqual(telemetry.delta(PolicyTelemetry()).fold_clone_wall_seconds, 0.5)
+        with self.assertRaisesRegex(ValueError, "wall-time telemetry"):
+            PolicyTelemetry(model_wall_seconds=float("nan"))
+
 
 class IsolatedRunnerCliTest(unittest.TestCase):
     def test_default_response_deadline_covers_observed_search_tail_budget(self) -> None:
