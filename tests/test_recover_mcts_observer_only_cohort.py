@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -114,6 +115,21 @@ def _write_terminal(root: Path, seed: int, *, commit: str, original: bool) -> No
     _write_json(directory / "runner-terminal.json", {"status": "COMPLETE", "exit_code": 0})
 
 
+def _fake_pair_games() -> dict[str, object]:
+    return {
+        "p1": SimpleNamespace(
+            candidate_seat="p1",
+            result=SimpleNamespace(score=1.0, outcome="win"),
+            terminal_capped=False,
+        ),
+        "p2": SimpleNamespace(
+            candidate_seat="p2",
+            result=SimpleNamespace(score=0.0, outcome="loss"),
+            terminal_capped=False,
+        ),
+    }
+
+
 class ObserverRecoveryTest(unittest.TestCase):
     def _roots(self, directory: Path) -> tuple[Path, Path]:
         original = directory / "original"
@@ -129,8 +145,9 @@ class ObserverRecoveryTest(unittest.TestCase):
     def test_recovers_exactly_195_original_pairs_and_five_replays(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             original, replay = self._roots(Path(temporary))
-            with patch.object(MODULE, "load_pair", return_value={"p1": object(), "p2": object()}), patch.object(
-                MODULE, "complete_pair", return_value=(object(), object())
+            games = _fake_pair_games()
+            with patch.object(MODULE, "load_pair", return_value=games), patch.object(
+                MODULE, "complete_pair", return_value=tuple(games.values())
             ):
                 manifest = MODULE.build_recovery_manifest(
                     original_root=original,
@@ -143,6 +160,8 @@ class ObserverRecoveryTest(unittest.TestCase):
         self.assertEqual(manifest["game_count"], 400)
         self.assertEqual(manifest["recovery_scope"]["replayed_games"], 10)
         self.assertEqual(manifest["candidate_margin_over_neutral_95ci"]["low"], 0.0)
+        self.assertEqual(manifest["seat_sensitivity"]["p1_minus_p2_score_95ci"]["point"], 1.0)
+        self.assertEqual(manifest["cap_sensitivity"]["capped_games"], 0)
         self.assertEqual([item["seed"] for item in manifest["replayed_pairs"]], list(MODULE.DEFAULT_REPAIR_SEEDS))
 
     def test_rejects_a_missing_retained_pair(self) -> None:
@@ -169,8 +188,9 @@ class ObserverRecoveryTest(unittest.TestCase):
             complete_payload = json.loads(complete.read_text(encoding="utf-8"))
             complete_payload["summary_sha256"] = hashlib.sha256(summary.read_bytes()).hexdigest()
             _write_json(complete, complete_payload)
-            with patch.object(MODULE, "load_pair", return_value={"p1": object(), "p2": object()}), patch.object(
-                MODULE, "complete_pair", return_value=(object(), object())
+            games = _fake_pair_games()
+            with patch.object(MODULE, "load_pair", return_value=games), patch.object(
+                MODULE, "complete_pair", return_value=tuple(games.values())
             ), self.assertRaisesRegex(MODULE.RecoveryError, "candidate_root_prior_fallbacks"):
                 MODULE.build_recovery_manifest(
                     original_root=original,
@@ -186,8 +206,9 @@ class ObserverRecoveryTest(unittest.TestCase):
             payload = json.loads(changed.read_text(encoding="utf-8"))
             payload["declared_manifest"]["candidate"]["config"]["search_sims"] = 1
             _write_json(changed, payload)
-            with patch.object(MODULE, "load_pair", return_value={"p1": object(), "p2": object()}), patch.object(
-                MODULE, "complete_pair", return_value=(object(), object())
+            games = _fake_pair_games()
+            with patch.object(MODULE, "load_pair", return_value=games), patch.object(
+                MODULE, "complete_pair", return_value=tuple(games.values())
             ), self.assertRaisesRegex(MODULE.RecoveryError, "battle/search setting"):
                 MODULE.build_recovery_manifest(
                     original_root=original,
@@ -203,8 +224,9 @@ class ObserverRecoveryTest(unittest.TestCase):
             duplicate = replay / "lanes" / "s1" / "seeds" / f"seed-{seed}"
             duplicate.parent.mkdir(parents=True, exist_ok=True)
             _write_json(duplicate / "sentinel.json", {"unexpected": True})
-            with patch.object(MODULE, "load_pair", return_value={"p1": object(), "p2": object()}), patch.object(
-                MODULE, "complete_pair", return_value=(object(), object())
+            games = _fake_pair_games()
+            with patch.object(MODULE, "load_pair", return_value=games), patch.object(
+                MODULE, "complete_pair", return_value=tuple(games.values())
             ), self.assertRaisesRegex(MODULE.RecoveryError, "exactly one durable lane"):
                 MODULE.build_recovery_manifest(
                     original_root=original,

@@ -230,16 +230,47 @@ def _validate_terminal_seed(
         raise RecoveryError(f"{label} raw provenance is not bound by COMPLETE.json.")
     try:
         games = load_pair(directory, seed=seed, candidate=candidate, incumbent=incumbent)
-        complete_pair(list(games.values()), seed=seed, candidate=candidate, incumbent=incumbent)
+        completed_games = complete_pair(
+            list(games.values()), seed=seed, candidate=candidate, incumbent=incumbent
+        )
     except HeadToHeadError as error:
         raise RecoveryError(f"{label} has no complete valid mirrored game pair: {error}") from error
+    seat_scores: dict[str, float] = {}
+    seat_outcomes: dict[str, str] = {}
+    capped_games = 0
+    for game in completed_games:
+        seat = getattr(game, "candidate_seat", None)
+        result = getattr(game, "result", None)
+        score = getattr(result, "score", None)
+        outcome = getattr(result, "outcome", None)
+        capped = getattr(game, "terminal_capped", None)
+        if (
+            seat not in {"p1", "p2"}
+            or isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not 0.0 <= float(score) <= 1.0
+            or outcome not in {"win", "tie", "cap", "loss"}
+            or not isinstance(capped, bool)
+            or seat in seat_scores
+        ):
+            raise RecoveryError(f"{label} game terminal evidence is malformed.")
+        seat_scores[seat] = float(score)
+        seat_outcomes[seat] = outcome
+        capped_games += int(capped)
+    if set(seat_scores) != {"p1", "p2"}:
+        raise RecoveryError(f"{label} does not provide both candidate seats.")
     _summary, pair_score = _summary_evidence(directory, seed=seed, label=label)
+    if pair_score != (seat_scores["p1"] + seat_scores["p2"]) / 2.0:
+        raise RecoveryError(f"{label} summary pair score disagrees with its games.")
     return {
         "seed": seed,
         "directory": str(directory),
         "complete_sha256": _sha256(directory / "COMPLETE.json"),
         "summary_sha256": _sha256(summary_path),
         "pair_score": pair_score,
+        "seat_scores": seat_scores,
+        "seat_outcomes": seat_outcomes,
+        "capped_games": capped_games,
         "source": source,
         "execution": _execution_identity(manifest, label=label),
     }
@@ -322,6 +353,29 @@ def build_recovery_manifest(
     margin_over_neutral = {
         key: value - 0.5 for key, value in score_interval.to_payload().items()
     }
+    seat_scores = {
+        seat: [entry["seat_scores"][seat] for entry in retained + repaired]
+        for seat in ("p1", "p2")
+    }
+    seat_intervals = {
+        seat: bootstrap_mean(
+            values,
+            indices,
+            confidence_level=float(bootstrap["confidence_level"]),
+        ).to_payload()
+        for seat, values in seat_scores.items()
+    }
+    seat_gap = bootstrap_mean(
+        [p1 - p2 for p1, p2 in zip(seat_scores["p1"], seat_scores["p2"], strict=True)],
+        indices,
+        confidence_level=float(bootstrap["confidence_level"]),
+    )
+    outcomes = {outcome: 0 for outcome in ("win", "tie", "cap", "loss")}
+    capped_games = 0
+    for entry in retained + repaired:
+        capped_games += int(entry["capped_games"])
+        for outcome in entry["seat_outcomes"].values():
+            outcomes[outcome] += 1
 
     roster_sha256 = hashlib.sha256(",".join(str(seed) for seed in roster).encode("utf-8")).hexdigest()
     return {
@@ -340,6 +394,16 @@ def build_recovery_manifest(
         "candidate_score_95ci": score_interval.to_payload(),
         "candidate_margin_over_neutral_95ci": margin_over_neutral,
         "meets_registered_strength_lower_bound": margin_over_neutral["low"] >= 0.05,
+        "seat_sensitivity": {
+            "candidate_score_95ci_by_seat": seat_intervals,
+            "p1_minus_p2_score_95ci": seat_gap.to_payload(),
+        },
+        "cap_sensitivity": {
+            "capped_games": capped_games,
+            "scored_games": 2 * len(scores),
+            "capped_game_fraction": capped_games / (2 * len(scores)),
+            "candidate_outcomes": outcomes,
+        },
         "recovery_scope": {
             "original_pairs_reused": 195,
             "replayed_pairs": 5,
