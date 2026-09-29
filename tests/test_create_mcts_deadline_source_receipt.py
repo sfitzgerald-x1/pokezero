@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -28,7 +29,12 @@ def _write_canonical(path: Path, value: dict[str, object]) -> None:
 
 
 class DeadlineSourceReceiptTest(unittest.TestCase):
-    def _source_fixture(self, temporary: Path) -> tuple[Path, Path, str]:
+    def _source_fixture(
+        self,
+        temporary: Path,
+        *,
+        schema_version: str = "pokezero.b2-source-image-receipt.v7",
+    ) -> tuple[Path, Path, str]:
         source = temporary / "source"
         (source / "scripts").mkdir(parents=True)
         (source / "src" / "pokezero" / "mcts_eval").mkdir(parents=True)
@@ -43,6 +49,19 @@ class DeadlineSourceReceiptTest(unittest.TestCase):
             target = source / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / relative, target)
+        # The fixture copies the current engine but exercises the historical
+        # receipt bridge.  Bind that copied runner to that copied engine so
+        # schema tests reach receipt validation rather than an unrelated pin.
+        engine_sha256 = receipt_tool._sha256(source / "src/pokezero/engine_search.py")
+        runner = source / "scripts/run_mcts_deadline_qualification.py"
+        runner.write_text(
+            re.sub(
+                r'(REVIEWED_ENGINE_SEARCH_SHA256 = ")[0-9a-f]{64}(")',
+                lambda match: f"{match.group(1)}{engine_sha256}{match.group(2)}",
+                runner.read_text(encoding="utf-8"),
+            ),
+            encoding="utf-8",
+        )
         (source / "rust" / "pokezero-search" / "Cargo.toml").write_text(
             "[package]\nname = 'fixture'\nversion = '0.0.0'\n", encoding="utf-8"
         )
@@ -57,10 +76,13 @@ class DeadlineSourceReceiptTest(unittest.TestCase):
             ["git", "-C", str(source), "rev-parse", "HEAD"], check=True, capture_output=True, text=True
         ).stdout.strip()
         receipt = temporary / "b2-receipt.json"
+        runtime_source: dict[str, str] = {"commit": commit, "tree_status": "clean_tracked_checkout"}
+        if schema_version == "pokezero.b2-source-image-receipt.v8":
+            runtime_source["tree_sha256"] = "c" * 64
         _write_canonical(
             receipt,
             {
-                "schema_version": receipt_tool.B2_SOURCE_IMAGE_RECEIPT_SCHEMA_VERSION,
+                "schema_version": schema_version,
                 "complete": True,
                 "source_commit": commit,
                 "image_digest": "sha256:" + "a" * 64,
@@ -69,7 +91,7 @@ class DeadlineSourceReceiptTest(unittest.TestCase):
                     "engine_fingerprint": receipt_tool._assignment_literals(
                         source / "scripts" / "run_mcts_deadline_qualification.py"
                     )["REVIEWED_ENGINE_FINGERPRINT"],
-                    "source": {"commit": commit, "tree_status": "clean_tracked_checkout"},
+                    "source": runtime_source,
                 },
             },
         )
@@ -104,6 +126,33 @@ class DeadlineSourceReceiptTest(unittest.TestCase):
                 ],
             )
             self.assertIn("src/pokezero/engine_search.py", result["source_files_sha256"])
+
+    def test_accepts_v8_source_image_receipts_with_the_same_identity_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            source, b2_receipt, commit = self._source_fixture(
+                Path(raw), schema_version="pokezero.b2-source-image-receipt.v8"
+            )
+            result = receipt_tool.build_receipt(source_root=source, b2_receipt_path=b2_receipt)
+            self.assertEqual(result["source_commit"], commit)
+
+    def test_rejects_an_unknown_source_image_receipt_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            source, b2_receipt, _ = self._source_fixture(
+                Path(raw), schema_version="pokezero.b2-source-image-receipt.v9"
+            )
+            with self.assertRaisesRegex(receipt_tool.ReceiptError, "schema is not supported"):
+                receipt_tool.build_receipt(source_root=source, b2_receipt_path=b2_receipt)
+
+    def test_rejects_a_v8_source_image_receipt_without_a_valid_tree_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            source, b2_receipt, _ = self._source_fixture(
+                Path(raw), schema_version="pokezero.b2-source-image-receipt.v8"
+            )
+            payload = json.loads(b2_receipt.read_text(encoding="utf-8"))
+            payload["model_runtime"]["source"].pop("tree_sha256")
+            _write_canonical(b2_receipt, payload)
+            with self.assertRaisesRegex(receipt_tool.ReceiptError, "runtime provenance"):
+                receipt_tool.build_receipt(source_root=source, b2_receipt_path=b2_receipt)
 
     def test_rejects_a_native_fingerprint_that_does_not_match_the_runner(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
