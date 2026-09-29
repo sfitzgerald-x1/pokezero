@@ -24,6 +24,7 @@ from pokezero.mcts_eval.head_to_head import (
     complete_pair,
     load_pair,
 )
+from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_mean
 
 
 SCHEMA_VERSION = "pokezero.mcts-observer-only-recovery.v1"
@@ -125,6 +126,68 @@ def _execution_identity(manifest: Mapping[str, Any], *, label: str) -> dict[str,
         "checkpoint_sha256": declared.get("checkpoint_sha256"),
         "showdown_source_sha256": declared.get("showdown_source_sha256"),
         "max_decision_rounds": declared.get("max_decision_rounds"),
+        "bootstrap": declared.get("bootstrap"),
+    }
+
+
+def _summary_evidence(
+    directory: Path,
+    *,
+    seed: int,
+    label: str,
+) -> tuple[dict[str, Any], float]:
+    """Load one terminal summary and reject fallback-tainted scoring evidence."""
+    summary = _read_object(directory / "summary.json", label=f"{label} summary")
+    if summary.get("seeds") != [seed]:
+        raise RecoveryError(f"{label} summary does not contain exactly seed {seed}.")
+    pair_scores = summary.get("pair_scores")
+    if (
+        not isinstance(pair_scores, list)
+        or len(pair_scores) != 1
+        or isinstance(pair_scores[0], bool)
+        or not isinstance(pair_scores[0], (int, float))
+        or not 0.0 <= float(pair_scores[0]) <= 1.0
+    ):
+        raise RecoveryError(f"{label} summary lacks one valid mirrored pair score.")
+
+    for prefix in ("candidate", "incumbent"):
+        for key in ("prior_fallbacks", "root_prior_fallbacks", "branch_prior_fallbacks"):
+            field = f"{prefix}_{key}"
+            if summary.get(field) != 0:
+                raise RecoveryError(f"{label} has nonzero {field}; recovery refused.")
+        for key in (
+            "opponent_request_order_root_fallback_statuses",
+            "opponent_request_order_root_omission_statuses",
+        ):
+            field = f"{prefix}_{key}"
+            if summary.get(field) != {}:
+                raise RecoveryError(f"{label} has nonempty {field}; recovery refused.")
+    return summary, float(pair_scores[0])
+
+
+def _bootstrap_contract(execution: Mapping[str, Any]) -> dict[str, float | int]:
+    bootstrap = execution.get("bootstrap")
+    if not isinstance(bootstrap, Mapping):
+        raise RecoveryError("execution identity has no bootstrap contract.")
+    resamples = bootstrap.get("resamples")
+    seed = bootstrap.get("seed")
+    confidence_level = bootstrap.get("confidence_level")
+    if (
+        isinstance(resamples, bool)
+        or not isinstance(resamples, int)
+        or resamples <= 0
+        or isinstance(seed, bool)
+        or not isinstance(seed, int)
+        or seed < 0
+        or isinstance(confidence_level, bool)
+        or not isinstance(confidence_level, (int, float))
+        or not 0.0 < float(confidence_level) < 1.0
+    ):
+        raise RecoveryError("execution identity has an invalid bootstrap contract.")
+    return {
+        "resamples": resamples,
+        "seed": seed,
+        "confidence_level": float(confidence_level),
     }
 
 
@@ -158,8 +221,8 @@ def _validate_terminal_seed(
     complete = _read_object(directory / "COMPLETE.json", label=f"{label} complete receipt")
     if complete.get("status") != "COMPLETE" or complete.get("pairs") != 1 or complete.get("games") != 2:
         raise RecoveryError(f"{label} is not exactly one complete mirrored pair.")
-    summary = directory / "summary.json"
-    if not summary.is_file() or complete.get("summary_sha256") != _sha256(summary):
+    summary_path = directory / "summary.json"
+    if not summary_path.is_file() or complete.get("summary_sha256") != _sha256(summary_path):
         raise RecoveryError(f"{label} summary is missing or disagrees with COMPLETE.json.")
     if complete.get("candidate_provenance_sha256") != candidate.provenance_sha256:
         raise RecoveryError(f"{label} candidate provenance is not bound by COMPLETE.json.")
@@ -170,11 +233,13 @@ def _validate_terminal_seed(
         complete_pair(list(games.values()), seed=seed, candidate=candidate, incumbent=incumbent)
     except HeadToHeadError as error:
         raise RecoveryError(f"{label} has no complete valid mirrored game pair: {error}") from error
+    _summary, pair_score = _summary_evidence(directory, seed=seed, label=label)
     return {
         "seed": seed,
         "directory": str(directory),
         "complete_sha256": _sha256(directory / "COMPLETE.json"),
-        "summary_sha256": _sha256(summary),
+        "summary_sha256": _sha256(summary_path),
+        "pair_score": pair_score,
         "source": source,
         "execution": _execution_identity(manifest, label=label),
     }
@@ -242,6 +307,22 @@ def build_recovery_manifest(
     if original_source["showdown_source_sha256"] != replay_source["showdown_source_sha256"]:
         raise RecoveryError("replay changes the Showdown source; observer-only recovery refused.")
 
+    bootstrap = _bootstrap_contract(original_execution)
+    scores = [entry["pair_score"] for entry in retained + repaired]
+    indices = bootstrap_indices(
+        sample_size=len(scores),
+        resamples=int(bootstrap["resamples"]),
+        seed=int(bootstrap["seed"]),
+    )
+    score_interval = bootstrap_mean(
+        scores,
+        indices,
+        confidence_level=float(bootstrap["confidence_level"]),
+    )
+    margin_over_neutral = {
+        key: value - 0.5 for key, value in score_interval.to_payload().items()
+    }
+
     roster_sha256 = hashlib.sha256(",".join(str(seed) for seed in roster).encode("utf-8")).hexdigest()
     return {
         "schema_version": SCHEMA_VERSION,
@@ -256,6 +337,9 @@ def build_recovery_manifest(
         "original_source": original_source,
         "observer_replay_source": replay_source,
         "execution_identity": original_execution,
+        "candidate_score_95ci": score_interval.to_payload(),
+        "candidate_margin_over_neutral_95ci": margin_over_neutral,
+        "meets_registered_strength_lower_bound": margin_over_neutral["low"] >= 0.05,
         "recovery_scope": {
             "original_pairs_reused": 195,
             "replayed_pairs": 5,

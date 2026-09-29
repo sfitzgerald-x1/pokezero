@@ -72,11 +72,28 @@ def _write_terminal(root: Path, seed: int, *, commit: str, original: bool) -> No
             "checkpoint_sha256": CHECKPOINT,
             "showdown_source_sha256": SHOWDOWN,
             "max_decision_rounds": 250,
+            "bootstrap": {"resamples": 100, "seed": 7, "confidence_level": 0.95},
         },
     }
     _write_json(directory / "manifest.json", manifest)
     summary = directory / "summary.json"
-    _write_json(summary, {"seed": seed})
+    _write_json(
+        summary,
+        {
+            "seeds": [seed],
+            "pair_scores": [0.5],
+            "candidate_prior_fallbacks": 0,
+            "candidate_root_prior_fallbacks": 0,
+            "candidate_branch_prior_fallbacks": 0,
+            "candidate_opponent_request_order_root_fallback_statuses": {},
+            "candidate_opponent_request_order_root_omission_statuses": {},
+            "incumbent_prior_fallbacks": 0,
+            "incumbent_root_prior_fallbacks": 0,
+            "incumbent_branch_prior_fallbacks": 0,
+            "incumbent_opponent_request_order_root_fallback_statuses": {},
+            "incumbent_opponent_request_order_root_omission_statuses": {},
+        },
+    )
     candidate_sha = hashlib.sha256(
         json.dumps(candidate, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -125,6 +142,7 @@ class ObserverRecoveryTest(unittest.TestCase):
         self.assertEqual(manifest["pair_count"], 200)
         self.assertEqual(manifest["game_count"], 400)
         self.assertEqual(manifest["recovery_scope"]["replayed_games"], 10)
+        self.assertEqual(manifest["candidate_margin_over_neutral_95ci"]["low"], 0.0)
         self.assertEqual([item["seed"] for item in manifest["replayed_pairs"]], list(MODULE.DEFAULT_REPAIR_SEEDS))
 
     def test_rejects_a_missing_retained_pair(self) -> None:
@@ -133,6 +151,27 @@ class ObserverRecoveryTest(unittest.TestCase):
             missing = _seed_dir(original, 2026093000, original=True) / "COMPLETE.json"
             missing.unlink()
             with self.assertRaisesRegex(MODULE.RecoveryError, "retained seed 2026093000"):
+                MODULE.build_recovery_manifest(
+                    original_root=original,
+                    replay_root=replay,
+                    original_commit=OLD_COMMIT,
+                    replay_commit=NEW_COMMIT,
+                )
+
+    def test_rejects_fallback_tainted_pair_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            original, replay = self._roots(Path(temporary))
+            summary = _seed_dir(replay, MODULE.DEFAULT_REPAIR_SEEDS[0], original=False) / "summary.json"
+            payload = json.loads(summary.read_text(encoding="utf-8"))
+            payload["candidate_root_prior_fallbacks"] = 1
+            _write_json(summary, payload)
+            complete = summary.with_name("COMPLETE.json")
+            complete_payload = json.loads(complete.read_text(encoding="utf-8"))
+            complete_payload["summary_sha256"] = hashlib.sha256(summary.read_bytes()).hexdigest()
+            _write_json(complete, complete_payload)
+            with patch.object(MODULE, "load_pair", return_value={"p1": object(), "p2": object()}), patch.object(
+                MODULE, "complete_pair", return_value=(object(), object())
+            ), self.assertRaisesRegex(MODULE.RecoveryError, "candidate_root_prior_fallbacks"):
                 MODULE.build_recovery_manifest(
                     original_root=original,
                     replay_root=replay,
