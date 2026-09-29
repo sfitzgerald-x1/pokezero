@@ -359,9 +359,9 @@ jobs:
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
             --no-default-features --features gen3 --test test_gen3 2>&1 \
             | tee /tmp/gen3suite.log
-          if ! grep -qE '^test result: ok\. 34 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+          if ! grep -qE '^test result: ok\. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
               /tmp/gen3suite.log; then
-            echo "::error::expected 34 gen3 engine tests to pass; the suite shrank, grew, or failed"
+            echo "::error::expected 35 gen3 engine tests to pass; the suite shrank, grew, or failed"
             exit 1
           fi
           for pin in \
