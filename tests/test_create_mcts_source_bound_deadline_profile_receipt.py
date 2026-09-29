@@ -33,6 +33,9 @@ class SourceBoundDeadlineProfileReceiptTest(unittest.TestCase):
             for relative in (
                 "scripts/run_mcts_deadline_qualification.py",
                 receipt_tool.PROFILE_RUNNER,
+                receipt_tool.FIXED_WORK_PARITY_RUNNER,
+                receipt_tool.LEAF_ABLATION_RUNNER,
+                receipt_tool.LEAF_CONTINUATION_RUNNER,
                 "scripts/engine_build_fingerprint.py",
                 "src/pokezero/mcts_eval/deadline_qualification.py",
                 "src/pokezero/mcts_eval/lattice.py",
@@ -71,6 +74,9 @@ class SourceBoundDeadlineProfileReceiptTest(unittest.TestCase):
                 receipt_tool.deadline_receipt._sha256(engine),
             )
             self.assertIn(receipt_tool.PROFILE_RUNNER, receipt["source_files_sha256"])
+            self.assertIn(receipt_tool.FIXED_WORK_PARITY_RUNNER, receipt["source_files_sha256"])
+            self.assertIn(receipt_tool.LEAF_ABLATION_RUNNER, receipt["source_files_sha256"])
+            self.assertIn(receipt_tool.LEAF_CONTINUATION_RUNNER, receipt["source_files_sha256"])
 
 
 if __name__ == "__main__":

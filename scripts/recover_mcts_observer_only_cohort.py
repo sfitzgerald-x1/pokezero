@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed fan-in for an observer-only MCTS cohort repair.
+"""Fail-closed fan-in for a narrowly repaired MCTS cohort.
 
-This is deliberately an *aggregator*, not a copier.  It keeps a terminal
-record at its original path and makes a second, explicit entry for each replay
-made with a source image that differs only in the post-action evidence writer.
-The result is therefore a transparent recovered cohort rather than a relabelled
-fresh run.
+This is deliberately an *aggregator*, not a copier.  It keeps every terminal
+record at its original path, permits the registered observer-only replays only
+when their native engine and Showdown source are unchanged, and permits either
+one explicitly supplied engine-integrity replacement or the closed registered
+set of stale-recharge replacements.  The result is therefore a transparent
+recovered cohort rather than a relabelled fresh run.
 """
 
 from __future__ import annotations
@@ -30,6 +31,27 @@ from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_mean
 SCHEMA_VERSION = "pokezero.mcts-observer-only-recovery.v1"
 DEFAULT_SEEDS = tuple(range(2026093000, 2026093200))
 DEFAULT_REPAIR_SEEDS = (2026093055, 2026093092, 2026093125, 2026093150, 2026093180)
+REGISTERED_RECHARGE_REPLACEMENTS = {
+    2026093109: {
+        "root": "/shared/scott-experiment/mcts-rootarm-recharge-map-08a21566-20260929-r2",
+        "candidate_prior_fallbacks": 12,
+        "candidate_branch_prior_fallbacks": 12,
+    },
+    2026093181: {
+        "root": "/shared/scott-experiment/mcts-rootarm-recharge-map-08a21566-20260929-r3",
+        "candidate_prior_fallbacks": 2,
+        "candidate_branch_prior_fallbacks": 2,
+    },
+    2026093193: {
+        "root": "/shared/scott-experiment/mcts-rootarm-recharge-map-08a21566-20260929-r4",
+        "candidate_prior_fallbacks": 34,
+        "candidate_branch_prior_fallbacks": 34,
+    },
+}
+REGISTERED_RECHARGE_COMMIT = "08a21566b74786112a86bfdae8412174061f6394"
+REGISTERED_RECHARGE_TREE_SHA256 = "d1414f8705babcb3445ba690879638dd1189153ab0cfa0be00e4c9d925570116"
+REGISTERED_RECHARGE_ENGINE_FINGERPRINT = "80f5093b8a6c34254e11ac662e57d8e52f057dfde5001ca36d6c612f6c2e5f43"
+REGISTERED_RECHARGE_SHOWDOWN_SHA256 = "93f81c8eae3d9f769f579a3be5e87bc0d62df39c0c0166bd47a228238188e4b3"
 
 
 class RecoveryError(RuntimeError):
@@ -110,14 +132,22 @@ def _execution_identity(manifest: Mapping[str, Any], *, label: str) -> dict[str,
     raw = declared.get("raw")
     if not isinstance(candidate, Mapping) or not isinstance(raw, Mapping):
         raise RecoveryError(f"{label} has no declared candidate/raw identity.")
-    # Source receipt fields are intentionally excluded here: they are recorded
-    # separately and must differ for the observer fix. Everything that can
-    # affect a battle/search remains byte-for-byte equal.
+    # Source receipt fields are intentionally excluded here: provenance is
+    # checked separately, including strict same-engine checks for observer
+    # replays and the exact contract for each engine-integrity replacement.
+    # Everything else that can affect a battle/search remains byte-for-byte
+    # equal.
     def without_source(value: Mapping[str, Any]) -> dict[str, Any]:
         return {
             str(key): item
             for key, item in value.items()
-            if key not in {"source_commit", "source_tree_sha256"}
+            if key
+            not in {
+                "source_commit",
+                "source_tree_sha256",
+                "engine_fingerprint",
+                "showdown_source_sha256",
+            }
         }
 
     return {
@@ -128,6 +158,33 @@ def _execution_identity(manifest: Mapping[str, Any], *, label: str) -> dict[str,
         "max_decision_rounds": declared.get("max_decision_rounds"),
         "bootstrap": declared.get("bootstrap"),
     }
+
+
+def _source_contract(
+    *,
+    commit: str | None,
+    tree_sha256: str | None,
+    engine_fingerprint: str | None,
+    showdown_source_sha256: str | None,
+) -> dict[str, str] | None:
+    """Require a complete explicit source contract for an engine replacement."""
+    values = {
+        "commit": commit,
+        "tree_sha256": tree_sha256,
+        "engine_fingerprint": engine_fingerprint,
+        "showdown_source_sha256": showdown_source_sha256,
+    }
+    supplied = [value is not None for value in values.values()]
+    if not any(supplied):
+        return None
+    if not all(supplied):
+        raise RecoveryError("explicit replacement source contract must bind commit, tree, engine, and Showdown.")
+    contract: dict[str, str] = {}
+    for key, value in values.items():
+        if not isinstance(value, str) or not value:
+            raise RecoveryError(f"replacement source contract has no non-empty {key!r}.")
+        contract[key] = value
+    return contract
 
 
 def _summary_evidence(
@@ -276,12 +333,98 @@ def _validate_terminal_seed(
     }
 
 
+def _validate_superseded_recharge_seed(
+    directory: Path,
+    *,
+    seed: int,
+    expected_commit: str,
+    expected_candidate_prior_fallbacks: int = 12,
+    expected_candidate_branch_prior_fallbacks: int = 12,
+) -> dict[str, Any]:
+    """Bind an observed stale-recharge fallback before superseding it.
+
+    A replacement is not a general escape hatch for an inconvenient outcome.
+    The retained original must be a cleanly completed pair with the exact
+    historical branch-only fallback signature observed for this bug.
+    """
+    label = f"superseded original seed {seed}"
+    manifest = _read_object(directory / "manifest.json", label=f"{label} manifest")
+    declared = manifest.get("declared_manifest")
+    if not isinstance(declared, Mapping) or declared.get("seeds") != [seed]:
+        raise RecoveryError(f"{label} does not declare exactly its target seed.")
+    source = _source_identity(manifest, label=label)
+    if source["commit"] != expected_commit:
+        raise RecoveryError(f"{label} source commit does not bind the historical receipt.")
+    candidate, incumbent = _policy_pair(manifest, label=label)
+    if candidate.source_commit != expected_commit or incumbent.source_commit != expected_commit:
+        raise RecoveryError(f"{label} policy source commits do not bind the historical receipt.")
+    if candidate.engine_fingerprint != source["engine_fingerprint"]:
+        raise RecoveryError(f"{label} candidate engine fingerprint disagrees with its receipt.")
+    if candidate.showdown_source_sha256 != source["showdown_source_sha256"]:
+        raise RecoveryError(f"{label} candidate Showdown receipt disagrees with active receipt.")
+
+    terminal = _read_object(directory / "runner-terminal.json", label=f"{label} runner terminal")
+    if terminal.get("status") != "COMPLETE" or terminal.get("exit_code") != 0:
+        raise RecoveryError(f"{label} is not a clean terminal completion.")
+    complete = _read_object(directory / "COMPLETE.json", label=f"{label} complete receipt")
+    if complete.get("status") != "COMPLETE" or complete.get("pairs") != 1 or complete.get("games") != 2:
+        raise RecoveryError(f"{label} is not exactly one complete mirrored pair.")
+    summary_path = directory / "summary.json"
+    if not summary_path.is_file() or complete.get("summary_sha256") != _sha256(summary_path):
+        raise RecoveryError(f"{label} summary is missing or disagrees with COMPLETE.json.")
+    if complete.get("candidate_provenance_sha256") != candidate.provenance_sha256:
+        raise RecoveryError(f"{label} candidate provenance is not bound by COMPLETE.json.")
+    if complete.get("raw_provenance_sha256") != incumbent.provenance_sha256:
+        raise RecoveryError(f"{label} raw provenance is not bound by COMPLETE.json.")
+
+    summary = _read_object(summary_path, label=f"{label} summary")
+    if summary.get("seeds") != [seed]:
+        raise RecoveryError(f"{label} summary does not contain exactly its target seed.")
+    expected_fallbacks = {
+        "candidate_prior_fallbacks": expected_candidate_prior_fallbacks,
+        "candidate_root_prior_fallbacks": 0,
+        "candidate_branch_prior_fallbacks": expected_candidate_branch_prior_fallbacks,
+        "incumbent_prior_fallbacks": 0,
+        "incumbent_root_prior_fallbacks": 0,
+        "incumbent_branch_prior_fallbacks": 0,
+    }
+    observed_fallbacks = {key: summary.get(key) for key in expected_fallbacks}
+    if observed_fallbacks != expected_fallbacks:
+        raise RecoveryError(
+            f"{label} does not have the registered stale-recharge fallback signature."
+        )
+    for field in (
+        "candidate_opponent_request_order_root_fallback_statuses",
+        "candidate_opponent_request_order_root_omission_statuses",
+        "incumbent_opponent_request_order_root_fallback_statuses",
+        "incumbent_opponent_request_order_root_omission_statuses",
+    ):
+        if summary.get(field) != {}:
+            raise RecoveryError(f"{label} has an unexpected {field}.")
+    return {
+        "seed": seed,
+        "directory": str(directory),
+        "complete_sha256": _sha256(directory / "COMPLETE.json"),
+        "summary_sha256": _sha256(summary_path),
+        "fallback_signature": observed_fallbacks,
+        "source": source,
+        "execution": _execution_identity(manifest, label=label),
+    }
+
+
 def build_recovery_manifest(
     *,
     original_root: Path,
     replay_root: Path,
     original_commit: str,
     replay_commit: str,
+    replacement_root: Path | None = None,
+    replacement_seed: int | None = None,
+    replacement_commit: str | None = None,
+    replacement_tree_sha256: str | None = None,
+    replacement_engine_fingerprint: str | None = None,
+    replacement_showdown_source_sha256: str | None = None,
+    use_registered_recharge_replacements: bool = False,
     seeds: Sequence[int] = DEFAULT_SEEDS,
     repair_seeds: Sequence[int] = DEFAULT_REPAIR_SEEDS,
 ) -> dict[str, Any]:
@@ -291,14 +434,60 @@ def build_recovery_manifest(
         raise RecoveryError("the registered roster must contain exactly 200 distinct seeds.")
     if len(repairs) != 5 or len(set(repairs)) != len(repairs) or not set(repairs) <= set(roster):
         raise RecoveryError("the repair roster must contain exactly five registered seeds.")
+    replacing = replacement_root is not None or replacement_seed is not None or replacement_commit is not None
+    if use_registered_recharge_replacements and replacing:
+        raise RecoveryError("registered recharge replacements cannot be combined with a generic replacement.")
+    if replacing and (replacement_root is None or replacement_seed is None or replacement_commit is None):
+        raise RecoveryError("replacement root, seed, and commit must be supplied together.")
+    if replacement_seed is not None and replacement_seed in repairs:
+        raise RecoveryError("replacement seed cannot also be an observer-only repair seed.")
+    if replacement_seed is not None and replacement_seed not in roster:
+        raise RecoveryError("replacement seed is outside the registered roster.")
+    replacement_source_contract = _source_contract(
+        commit=replacement_commit,
+        tree_sha256=replacement_tree_sha256,
+        engine_fingerprint=replacement_engine_fingerprint,
+        showdown_source_sha256=replacement_showdown_source_sha256,
+    )
+    if replacing and replacement_source_contract is None:
+        raise RecoveryError("an engine-integrity replacement requires an explicit source contract.")
+    if not replacing and replacement_source_contract is not None:
+        raise RecoveryError("replacement source contract supplied without a replacement pair.")
+    if use_registered_recharge_replacements:
+        replacement_source_contract = {
+            "commit": REGISTERED_RECHARGE_COMMIT,
+            "tree_sha256": REGISTERED_RECHARGE_TREE_SHA256,
+            "engine_fingerprint": REGISTERED_RECHARGE_ENGINE_FINGERPRINT,
+            "showdown_source_sha256": REGISTERED_RECHARGE_SHOWDOWN_SHA256,
+        }
 
+    registered_replacements = (
+        REGISTERED_RECHARGE_REPLACEMENTS if use_registered_recharge_replacements else {}
+    )
+    replacement_seeds = set(registered_replacements)
+    if replacing:
+        assert replacement_seed is not None
+        replacement_seeds.add(replacement_seed)
     retained: list[dict[str, Any]] = []
+    superseded_originals: list[dict[str, Any]] = []
     for seed in roster:
         directory = _seed_dir(original_root, seed, original=True)
         complete = directory / "COMPLETE.json"
         if seed in repairs:
             if complete.exists():
                 raise RecoveryError(f"repair seed {seed} unexpectedly has an original COMPLETE.json.")
+            continue
+        if seed in replacement_seeds:
+            if not complete.is_file():
+                raise RecoveryError(f"replacement seed {seed} has no original COMPLETE.json to supersede.")
+            registered = registered_replacements.get(seed, {})
+            superseded_originals.append(_validate_superseded_recharge_seed(
+                directory,
+                seed=seed,
+                expected_commit=original_commit,
+                expected_candidate_prior_fallbacks=int(registered.get("candidate_prior_fallbacks", 12)),
+                expected_candidate_branch_prior_fallbacks=int(registered.get("candidate_branch_prior_fallbacks", 12)),
+            ))
             continue
         if not complete.is_file():
             raise RecoveryError(f"retained seed {seed} has no original COMPLETE.json.")
@@ -307,8 +496,9 @@ def build_recovery_manifest(
                 directory, seed=seed, expected_commit=original_commit, label=f"original seed {seed}"
             )
         )
-    if len(retained) != 195:
-        raise RecoveryError("the original root did not provide exactly 195 immutable complete pairs.")
+    expected_retained = 195 - len(replacement_seeds)
+    if len(retained) != expected_retained:
+        raise RecoveryError(f"the original root did not provide exactly {expected_retained} immutable complete pairs.")
 
     repaired: list[dict[str, Any]] = []
     for seed in repairs:
@@ -319,8 +509,25 @@ def build_recovery_manifest(
             )
         )
 
+    replacements: list[dict[str, Any]] = []
+    if replacing:
+        assert replacement_root is not None and replacement_seed is not None and replacement_commit is not None
+        directory = replacement_root / "seeds" / f"seed-{replacement_seed}"
+        replacements.append(_validate_terminal_seed(directory, seed=replacement_seed, expected_commit=replacement_commit, label=f"replacement seed {replacement_seed}"))
+    if use_registered_recharge_replacements:
+        for seed, registered in REGISTERED_RECHARGE_REPLACEMENTS.items():
+            directory = Path(str(registered["root"])) / "seeds" / f"seed-{seed}"
+            replacements.append(
+                _validate_terminal_seed(
+                    directory,
+                    seed=seed,
+                    expected_commit=REGISTERED_RECHARGE_COMMIT,
+                    label=f"registered replacement seed {seed}",
+                )
+            )
+
     original_execution = retained[0]["execution"]
-    for entry in retained[1:] + repaired:
+    for entry in retained[1:] + repaired + replacements:
         if entry["execution"] != original_execution:
             raise RecoveryError(
                 f"seed {entry['seed']} changes a battle/search setting; observer-only recovery refused."
@@ -330,16 +537,34 @@ def build_recovery_manifest(
     for entry in retained:
         if entry["source"] != original_source:
             raise RecoveryError("original retained pairs have mixed source provenance.")
+    for superseded_original in superseded_originals:
+        if superseded_original["source"] != original_source:
+            raise RecoveryError("superseded original pair has mixed source provenance.")
+        if superseded_original["execution"] != original_execution:
+            raise RecoveryError("superseded original pair changes a battle/search setting.")
     for entry in repaired:
         if entry["source"] != replay_source:
             raise RecoveryError("repaired pairs have mixed source provenance.")
+    replacement_source = replacements[0]["source"] if replacements else None
     if original_source["engine_fingerprint"] != replay_source["engine_fingerprint"]:
         raise RecoveryError("replay changes the native engine fingerprint; observer-only recovery refused.")
     if original_source["showdown_source_sha256"] != replay_source["showdown_source_sha256"]:
         raise RecoveryError("replay changes the Showdown source; observer-only recovery refused.")
+    if replacement_source is not None:
+        assert replacement_source_contract is not None
+        if replacement_source != replacement_source_contract:
+            raise RecoveryError("replacement source does not match its explicit source contract.")
+        if original_source["showdown_source_sha256"] != replacement_source["showdown_source_sha256"]:
+            raise RecoveryError("replacement changes the Showdown source; recovery refused.")
+        if original_source["engine_fingerprint"] == replacement_source["engine_fingerprint"]:
+            raise RecoveryError("replacement does not establish a distinct engine-integrity repair.")
+        for entry in replacements[1:]:
+            if entry["source"] != replacement_source:
+                raise RecoveryError("registered replacements have mixed source provenance.")
 
     bootstrap = _bootstrap_contract(original_execution)
-    scores = [entry["pair_score"] for entry in retained + repaired]
+    accepted = retained + repaired + replacements
+    scores = [entry["pair_score"] for entry in accepted]
     indices = bootstrap_indices(
         sample_size=len(scores),
         resamples=int(bootstrap["resamples"]),
@@ -354,7 +579,7 @@ def build_recovery_manifest(
         key: value - 0.5 for key, value in score_interval.to_payload().items()
     }
     seat_scores = {
-        seat: [entry["seat_scores"][seat] for entry in retained + repaired]
+        seat: [entry["seat_scores"][seat] for entry in accepted]
         for seat in ("p1", "p2")
     }
     seat_intervals = {
@@ -372,7 +597,7 @@ def build_recovery_manifest(
     )
     outcomes = {outcome: 0 for outcome in ("win", "tie", "cap", "loss")}
     capped_games = 0
-    for entry in retained + repaired:
+    for entry in accepted:
         capped_games += int(entry["capped_games"])
         for outcome in entry["seat_outcomes"].values():
             outcomes[outcome] += 1
@@ -386,10 +611,14 @@ def build_recovery_manifest(
         "repair_seeds": list(repairs),
         "retained_pairs": retained,
         "replayed_pairs": repaired,
-        "pair_count": len(retained) + len(repaired),
-        "game_count": 2 * (len(retained) + len(repaired)),
+        "replacement_pairs": replacements,
+        "superseded_original_pair": superseded_originals[0] if len(superseded_originals) == 1 else None,
+        "superseded_original_pairs": superseded_originals,
+        "pair_count": len(accepted),
+        "game_count": 2 * len(accepted),
         "original_source": original_source,
         "observer_replay_source": replay_source,
+        "replacement_source": replacement_source,
         "execution_identity": original_execution,
         "candidate_score_95ci": score_interval.to_payload(),
         "candidate_margin_over_neutral_95ci": margin_over_neutral,
@@ -405,9 +634,14 @@ def build_recovery_manifest(
             "candidate_outcomes": outcomes,
         },
         "recovery_scope": {
-            "original_pairs_reused": 195,
+            "original_pairs_reused": expected_retained,
             "replayed_pairs": 5,
             "replayed_games": 10,
+            "replacement_pairs": len(replacements),
+            "replacement_seed": replacement_seed,
+            "replacement_seeds": sorted(replacement_seeds),
+            "registered_recharge_replacements": use_registered_recharge_replacements,
+            "replacement_source_contract": replacement_source_contract,
             "rule": "no original durable game is copied, moved, or relabelled",
         },
     }
@@ -449,6 +683,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--original-commit", required=True)
     parser.add_argument("--replay-commit", required=True)
+    parser.add_argument("--replacement-root", type=Path)
+    parser.add_argument("--replacement-seed", type=int)
+    parser.add_argument("--replacement-commit")
+    parser.add_argument("--replacement-tree-sha256")
+    parser.add_argument("--replacement-engine-fingerprint")
+    parser.add_argument("--replacement-showdown-source-sha256")
+    parser.add_argument("--use-registered-recharge-replacements", action="store_true")
     return parser
 
 
@@ -459,6 +700,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         replay_root=args.replay_root,
         original_commit=args.original_commit,
         replay_commit=args.replay_commit,
+        replacement_root=args.replacement_root,
+        replacement_seed=args.replacement_seed,
+        replacement_commit=args.replacement_commit,
+        replacement_tree_sha256=args.replacement_tree_sha256,
+        replacement_engine_fingerprint=args.replacement_engine_fingerprint,
+        replacement_showdown_source_sha256=args.replacement_showdown_source_sha256,
+        use_registered_recharge_replacements=args.use_registered_recharge_replacements,
     )
     write_immutable_json(args.out, payload)
     print(json.dumps(payload, sort_keys=True))

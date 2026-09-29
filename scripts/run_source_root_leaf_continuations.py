@@ -71,6 +71,7 @@ from pokezero.showdown import showdown_choice_for_action  # noqa: E402
 # source tree, target list, or source-repair rule.
 from run_source_root_leaf_ablation import (  # noqa: E402
     SCHEMA_VERSION as ABLATION_SCHEMA_VERSION,
+    REPLAYABLE_TARGETS,
     SourceRoot,
     TARGETS,
     _canonical_json,
@@ -237,6 +238,7 @@ def _selection_projection(value: Any) -> Mapping[str, Any]:
 def _load_changed_leaf_roots(
     leaf_root: Path,
     source_records: Mapping[SourceRoot, tuple[Any, Mapping[str, Any]]],
+    historical_fallbacks: Mapping[SourceRoot, Mapping[str, Any]],
 ) -> tuple[dict[SourceRoot, Mapping[str, Any]], Mapping[str, Any], str]:
     """Validate the finished leaf ablation and select every changed root."""
 
@@ -250,18 +252,39 @@ def _load_changed_leaf_roots(
         raise ContinuationError("leaf-ablation manifest has an unsupported schema")
     if not isinstance(passed, Mapping) or passed != summary:
         raise ContinuationError("leaf-ablation PASS and SUMMARY disagree")
-    if passed.get("state") != "PASS" or passed.get("root_count") != len(TARGETS):
+    declared_targets = manifest.get("targets")
+    if not isinstance(declared_targets, list):
+        raise ContinuationError("leaf-ablation manifest has no target registration")
+    try:
+        targets = tuple(
+            SourceRoot(
+                seed=item["seed"], seat=item["seat"], turn_index=item["turn_index"]
+            )
+            for item in declared_targets
+            if isinstance(item, Mapping) and set(item) == {"seed", "seat", "turn_index"}
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ContinuationError("leaf-ablation target registration is malformed") from error
+    if len(targets) != len(declared_targets) or targets not in (TARGETS, REPLAYABLE_TARGETS):
+        raise ContinuationError("leaf-ablation target registration is unsupported")
+    if passed.get("state") != "PASS" or passed.get("root_count") != len(targets):
         raise ContinuationError("leaf-ablation root is not a complete PASS")
-    if passed.get("targets") != [root.to_dict() for root in TARGETS]:
+    if passed.get("targets") != [root.to_dict() for root in targets]:
         raise ContinuationError("leaf-ablation PASS target registration drifted")
     manifest_sha256 = _sha256(manifest)
     completed: list[Mapping[str, Any]] = []
     changed: dict[SourceRoot, Mapping[str, Any]] = {}
-    for root in TARGETS:
+    for root in targets:
         record, _ = source_records[root]
         complete_path = _root_directory(leaf_root, root) / "COMPLETE.json"
         payload = _read_json(complete_path)
-        _validate_leaf_completed_root(payload, root=root, record=record, manifest_sha256=manifest_sha256)
+        _validate_leaf_completed_root(
+            payload,
+            root=root,
+            record=record,
+            historical_fallback=historical_fallbacks.get(root),
+            manifest_sha256=manifest_sha256,
+        )
         if not isinstance(payload, Mapping):
             raise ContinuationError("leaf-ablation completed root is not a mapping")
         completed.append(payload)
@@ -998,8 +1021,14 @@ def _run(args: argparse.Namespace) -> Mapping[str, Any]:
     out_root = Path(args.out_root).resolve()
     if _sha256_file(Path(args.checkpoint)) != args.expected_checkpoint_sha256:
         raise ContinuationError("checkpoint SHA-256 does not match the frozen contract")
-    source_selected, source_by_seed, _ = _load_source_records(source_root)
-    changed, leaf_manifest, leaf_manifest_sha256 = _load_changed_leaf_roots(leaf_root, source_selected)
+    source_selected, source_by_seed, _, historical_fallbacks = _load_source_records(
+        source_root, targets=TARGETS
+    )
+    changed, leaf_manifest, leaf_manifest_sha256 = _load_changed_leaf_roots(
+        leaf_root,
+        source_selected,
+        historical_fallbacks,
+    )
     raw_policy_anchors = (
         {
             root: _raw_policy_anchor(
