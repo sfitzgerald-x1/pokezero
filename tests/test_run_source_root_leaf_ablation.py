@@ -115,6 +115,22 @@ class SourceRootLeafAblationRunnerTest(unittest.TestCase):
             runner.FALLBACK_TARGETS,
             frozenset(runner.TARGETS[-5:]),
         )
+        self.assertEqual(runner.REPLAYABLE_TARGETS, runner.TARGETS[:11])
+
+    def test_replayable_roster_is_an_explicit_eligibility_subset(self) -> None:
+        runner = _runner()
+        required = [
+            "--checkpoint", "checkpoint.pt",
+            "--expected-checkpoint-sha256", "a" * 64,
+            "--showdown-root", "/showdown",
+            "--source-root", "/r4",
+            "--out-root", "/out",
+        ]
+        original = runner._parse_args(required)
+        replayable = runner._parse_args([*required, "--replayable-targets-only"])
+        self.assertEqual(runner._targets_for_args(original), runner.TARGETS)
+        self.assertEqual(runner._targets_for_args(replayable), runner.REPLAYABLE_TARGETS)
+        self.assertFalse(set(runner.REPLAYABLE_TARGETS) & runner.FALLBACK_TARGETS)
 
     def test_source_paths_are_targeted_not_a_full_corpus_glob(self) -> None:
         runner = _runner()

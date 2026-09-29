@@ -57,7 +57,7 @@ from pokezero.mcts_eval.source_root_replay import (  # noqa: E402
 from pokezero.public_decision_corpus import PublicDecisionRecord  # noqa: E402
 
 
-SCHEMA_VERSION = "pokezero.source-root-leaf-ablation.v4"
+SCHEMA_VERSION = "pokezero.source-root-leaf-ablation.v5"
 SOURCE_WRAPPER_SCHEMA = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 ARMS = ("model_control_a", "model_control_b", "rollout_leaf")
 SEARCH = {"depth": 6, "sims": 4096, "batch": 16, "worlds": 4}
@@ -120,6 +120,14 @@ TARGETS = (
     SourceRoot(2026092006, "p2", 127),
 )
 FALLBACK_TARGETS = frozenset(TARGETS[-5:])
+# The archived R4 panel has sixteen deliberately chosen roots.  Five have a
+# public-history gap that the source-bound replay guard correctly rejects
+# (``unresolved_public_event_for_non_source_player``).  This is an execution
+# eligibility split, not an outcome-based selection: this roster is exactly
+# every member of the original panel that completed the prior repaired replay.
+# A fresh run over this complete eleven-root roster is interpretable; reusing
+# the interrupted sixteen-root output is not.
+REPLAYABLE_TARGETS = TARGETS[:11]
 
 
 class AblationError(RuntimeError):
@@ -196,6 +204,14 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-root", required=True, help="Completed R4 durable root.")
     parser.add_argument("--out-root", required=True)
     parser.add_argument(
+        "--replayable-targets-only",
+        action="store_true",
+        help=(
+            "run the predeclared eleven-root replayable subset of the archived R4 panel; "
+            "excludes only the five source histories rejected by the replay guard"
+        ),
+    )
+    parser.add_argument(
         "--expected-source-commit",
         help=(
             "Optional full commit that the executing image must contain. Required for a "
@@ -234,6 +250,12 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     if args.finalize_only and args.shard_index != 0:
         parser.error("--finalize-only requires shard index zero")
     return args
+
+
+def _targets_for_args(args: argparse.Namespace) -> tuple[SourceRoot, ...]:
+    """Return the immutable roster selected before the run begins."""
+
+    return REPLAYABLE_TARGETS if args.replayable_targets_only else TARGETS
 
 
 def _root_directory(out_root: Path, root: SourceRoot) -> Path:
@@ -617,7 +639,7 @@ def _load_historical_fallback(
 
 
 def _load_source_records(
-    source_root: Path,
+    source_root: Path, *, targets: Sequence[SourceRoot],
 ) -> tuple[
     dict[SourceRoot, tuple[PublicDecisionRecord, Mapping[str, Any]]],
     dict[int, tuple[PublicDecisionRecord, ...]],
@@ -635,7 +657,7 @@ def _load_source_records(
         raise AblationError("source root is not the exact completed R4 recovery")
     selected: dict[SourceRoot, tuple[PublicDecisionRecord, Mapping[str, Any]]] = {}
     wrappers: list[Mapping[str, Any]] = []
-    for root in TARGETS:
+    for root in targets:
         record, wrapper = _read_source_wrapper(_source_wrapper_path(source_root, root))
         if SourceRoot(record.seed, record.acting_player, record.turn_index) != root:
             raise AblationError(f"source record address disagrees with declared target {root}")
@@ -666,7 +688,8 @@ def _load_source_records(
         register_source(_source_wrapper_path(source_root, root), record, wrapper)
     historical_fallbacks = {
         root: _load_historical_fallback(source_root, root, selected[root][0])
-        for root in FALLBACK_TARGETS
+        for root in targets
+        if root in FALLBACK_TARGETS
     }
     # Retain only the source-owned earlier decision records that an explicit
     # placeholder repair may consult.  Scanning every captured record is both
@@ -1062,6 +1085,7 @@ def _run_root(
 def _manifest(
     *, args: argparse.Namespace, contract: Any,
     selected: Mapping[SourceRoot, tuple[PublicDecisionRecord, Mapping[str, Any]]],
+    targets: Sequence[SourceRoot],
     historical_baseline: Mapping[str, Any],
     execution_runtime: Mapping[str, Any],
     source_inventory: Sequence[Mapping[str, Any]],
@@ -1080,7 +1104,23 @@ def _manifest(
         "execution_runtime": dict(execution_runtime),
         "checkpoint": contract.to_manifest(),
         "historical_baseline": dict(historical_baseline),
-        "targets": [root.to_dict() for root in TARGETS],
+        "targets": [root.to_dict() for root in targets],
+        "target_selection": {
+            "kind": (
+                "original_r4_panel" if tuple(targets) == TARGETS
+                else "replayable_r4_panel"
+            ),
+            "original_panel_size": len(TARGETS),
+            "selected_panel_size": len(targets),
+            "excluded_roots": [
+                root.to_dict() for root in TARGETS if root not in targets
+            ],
+            "exclusion_reason": (
+                None
+                if tuple(targets) == TARGETS
+                else "source_bound_replay_rejected_unresolved_public_event_for_non_source_player"
+            ),
+        },
         "historical_fallback_ledgers": [
             {"source": root.to_dict(), **dict(historical_fallbacks[root])}
             for root in sorted(historical_fallbacks)
@@ -1092,7 +1132,7 @@ def _manifest(
         "execution_plan": {
             "shard_count": args.shard_count,
             "root_assignment": {
-                str(index): [root.to_dict() for root_index, root in enumerate(TARGETS) if root_index % args.shard_count == index]
+                str(index): [root.to_dict() for root_index, root in enumerate(targets) if root_index % args.shard_count == index]
                 for index in range(args.shard_count)
             },
         },
@@ -1152,7 +1192,10 @@ def _validate_completed_root(
 def _run(args: argparse.Namespace) -> dict[str, Any]:
     source_root = Path(args.source_root).resolve()
     out_root = Path(args.out_root).resolve()
-    selected, by_seed, source_inventory, historical_fallbacks = _load_source_records(source_root)
+    targets = _targets_for_args(args)
+    selected, by_seed, source_inventory, historical_fallbacks = _load_source_records(
+        source_root, targets=targets
+    )
     historical_baseline = _validate_historical_baseline(source_root)
     execution_runtime = _execution_runtime(args, historical_baseline)
     try:
@@ -1172,6 +1215,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         args=args,
         contract=contract,
         selected=selected,
+        targets=targets,
         historical_baseline=historical_baseline,
         execution_runtime=execution_runtime,
         source_inventory=source_inventory,
@@ -1188,11 +1232,11 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         return {
             "schema_version": SCHEMA_VERSION,
             "state": "PREPARED",
-            "target_count": len(TARGETS),
+            "target_count": len(targets),
         }
     completed: list[dict[str, Any]] = []
     owned_targets = tuple(
-        root for index, root in enumerate(TARGETS) if index % args.shard_count == args.shard_index
+        root for index, root in enumerate(targets) if index % args.shard_count == args.shard_index
     )
     if args.finalize_only:
         owned_targets = ()
@@ -1212,9 +1256,9 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "state": "RUNNING",
                 "completed_roots": sum(
                     (_root_directory(out_root, known_root) / "COMPLETE.json").exists()
-                    for known_root in TARGETS
+                    for known_root in targets
                 ),
-                "total_roots": len(TARGETS),
+                "total_roots": len(targets),
                 "current": root.to_dict(),
                 "worker_shard": {"index": args.shard_index, "count": args.shard_count},
             })
@@ -1247,7 +1291,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             receipt_path = out_root / "shards" / f"shard-{shard_index}.json"
             receipt = _read_json(receipt_path)
             expected_roots = [
-                root.to_dict() for root_index, root in enumerate(TARGETS)
+                root.to_dict() for root_index, root in enumerate(targets)
                 if root_index % args.shard_count == shard_index
             ]
             if receipt != {
@@ -1259,7 +1303,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "roots": expected_roots,
             }:
                 raise AblationError(f"shard {shard_index}: receipt differs from frozen execution plan")
-    for root in TARGETS:
+    for root in targets:
         record, _ = selected[root]
         complete_path = _root_directory(out_root, root) / "COMPLETE.json"
         if not complete_path.exists():
@@ -1275,7 +1319,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         "state": "PASS",
         "marker": "SOURCE_ROOT_LEAF_ABLATION_PASS",
         "root_count": len(all_completed),
-        "targets": [root.to_dict() for root in TARGETS],
+        "targets": [root.to_dict() for root in targets],
         "complete_root_sha256": _sha256(all_completed),
         "scope": {
             "selection_only": True,
