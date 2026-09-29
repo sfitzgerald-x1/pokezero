@@ -1725,12 +1725,19 @@ poke-engine-gen3-sleep-clock-bound.patch
 # gen3 patch stack and includes an exact-repeat witness on the FoulPlay state.
 poke-engine-gen3-seeded-mcts.patch
 
+# Empty move slots retain the engine default's nonzero PP, but they are not
+# executable actions.  The old option generator emitted phantom `Move(slot)`
+# arms for those `Choices::NONE` slots; a native MCTS branch then had an engine
+# arm with no model/request action identity and correctly failed closed on its
+# prior map.  Filter the slot at the engine boundary and pin the behavior in
+# the engine suite.  Authored against the seeded-MCTS-patched tree.
+poke-engine-gen3-empty-move-option.patch
+
 # A forced replacement is a separate boundary from the other side's pending
-# recharge turn.  When a saved second-move commitment coexists with
-# MUSTRECHARGE, the option generator previously returned that saved move and
-# let it attack during the replacement.  Preserve the existing no-choice
+# recharge turn. When a saved second-move commitment coexists with
+# MUSTRECHARGE, the option generator must preserve the existing no-choice
 # `MoveChoice::None` at this boundary, so the earlier recharge-timing patch
-# continues to defer the recharge until the next actual turn.  The regression
-# proves the saved move neither attacks nor spends PP, recharge survives the
-# replacement, and apply/reverse returns to the exact pre-boundary state.
+# defers recharge until the next actual turn. The regression proves the saved
+# move neither attacks nor spends PP, recharge survives replacement, and
+# apply/reverse returns to the exact pre-boundary state.
 poke-engine-gen3-deferred-recharge-option.patch

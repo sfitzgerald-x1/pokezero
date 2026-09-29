@@ -34,7 +34,7 @@ use std::collections::HashMap;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 /// Encode sub-phase counters (nanoseconds). Global + relaxed: the leaf-pricing
@@ -43,6 +43,11 @@ use std::sync::Arc;
 pub(crate) static ROW_INPUT_NANOS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static PRODUCTS_NANOS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static ROW_WRITE_NANOS: AtomicU64 = AtomicU64::new(0);
+
+/// Diagnostic only: cap opt-in contradiction dumps so an integrity failure
+/// cannot turn a short witness run into an unbounded log artifact.
+static UNMAPPED_ACTION_DUMP_COUNT: AtomicUsize = AtomicUsize::new(0);
+const UNMAPPED_ACTION_DUMP_LIMIT: usize = 16;
 
 /// Drain the encode sub-phase counters, returning (row_inputs, products, write)
 /// in seconds and resetting them for the next search.
@@ -2288,7 +2293,17 @@ impl LeafContext {
                 MoveChoice::Move(engine_index) => {
                     let slot = engine_index.serialize().parse::<usize>().unwrap_or(usize::MAX);
                     if recharging && !force_switch_shape {
-                        None // recharge shape offers no real move candidates
+                        // A normal recharge is represented by `MoveChoice::None`.
+                        // An indexed move can occur while the opposing side owes
+                        // a forced replacement: it is the engine's saved
+                        // turn-order commitment, not the recharge action.  The
+                        // engine still executes that indexed move if selected,
+                        // so mapping it onto the synthetic recharge candidate
+                        // would assign a prior to a different transition.
+                        // Keep this contradiction unmapped (and therefore
+                        // fail closed) until the engine option and transition
+                        // semantics are made equivalent.
+                        None
                     } else {
                         legal_action_index(&|obj| {
                             obj.get("kind").and_then(Value::as_str) == Some("move")
@@ -2336,9 +2351,56 @@ impl LeafContext {
                     let placeholder_name = format!("slot:{}", slot + 1);
                     match candidate {
                         None => unmapped_move_surface.unexplained += 1,
-                        Some(candidate) if candidate.get("move_name").and_then(Value::as_str)
-                            == Some(placeholder_name.as_str()) => {
+                        Some(candidate)
+                            if candidate.get("move_name").and_then(Value::as_str)
+                                == Some(placeholder_name.as_str()) =>
+                        {
                             unmapped_move_surface.engine_move_missing += 1;
+                            // This shape is an engine/action-surface contradiction: the
+                            // option list supplied a real slot, but this exact state's
+                            // active move array calls that slot `NONE`.  It must remain a
+                            // strict refusal in normal operation.  A bounded, opt-in
+                            // trace lets a short source-bound diagnostic capture the
+                            // alternate `get_all_options` path without loosening the
+                            // mapper or rerunning a full strength cohort blind.
+                            if std::env::var("POKEZERO_UNMAPPED_ACTION_DUMP")
+                                .ok()
+                                .as_deref()
+                                == Some("1")
+                                && UNMAPPED_ACTION_DUMP_COUNT.fetch_add(1, Ordering::Relaxed)
+                                    < UNMAPPED_ACTION_DUMP_LIMIT
+                            {
+                                let active_moves: Vec<String> = self_side
+                                    .get_active_immutable()
+                                    .moves
+                                    .into_iter()
+                                    .map(|mv| format!("{:?}", mv.id))
+                                    .collect();
+                                let option_slots: Vec<String> = options
+                                    .iter()
+                                    .map(|choice| match choice {
+                                        MoveChoice::Move(index) => {
+                                            format!("move:{}", index.serialize())
+                                        }
+                                        MoveChoice::Switch(index) => {
+                                            format!("switch:{}", index.serialize())
+                                        }
+                                        MoveChoice::None => "none".to_string(),
+                                    })
+                                    .collect();
+                                eprintln!(
+                                    "PZ_UNMAPPED_ACTION_TRACE_V1 slot={} side={} force_switch={} hp={} must_recharge={} saved_move={:?} active_moves={:?} options={:?} state={}",
+                                    slot,
+                                    if side_is_p1 { "p1" } else { "p2" },
+                                    self_side.force_switch,
+                                    self_side.get_active_immutable().hp,
+                                    recharging,
+                                    self_side.switch_out_move_second_saved_move,
+                                    active_moves,
+                                    option_slots,
+                                    state.serialize(),
+                                );
+                            }
                         }
                         Some(candidate) if !candidate.get("legal").and_then(Value::as_bool).unwrap_or(false) => {
                             unmapped_move_surface.engine_move_present_but_illegal += 1;
@@ -3487,6 +3549,50 @@ mod tests {
             vec![Some(2)],
             "M2 must retain its action-block position even when earlier engine slots are empty"
         );
+    }
+
+    #[test]
+    fn recharge_boundary_maps_none_and_refuses_contradictory_indexed_move() {
+        // At an opponent forced-replacement boundary, an engine-corrected
+        // recharging side exposes `None`, which maps to the forced recharge
+        // pseudo-action. A stale or fabricated indexed move would execute an
+        // attack instead, so it must remain unmapped rather than inherit that
+        // forced action's prior.
+        use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus};
+        use poke_engine::state::PokemonMoveIndex;
+
+        let (ctx, mut state) = order_context(None);
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::MUSTRECHARGE);
+        state.side_two.force_switch = true;
+        state.side_one.switch_out_move_second_saved_move = Choices::TACKLE;
+        let (options, _) = state.get_all_options();
+        assert_eq!(options, vec![MoveChoice::None]);
+        let (map, witness) = ctx
+            .self_action_map_with_unmapped_witness(&state, &options, None, None, false)
+            .expect("recharge-boundary map");
+
+        assert_eq!(map, vec![Some(0)]);
+        assert_eq!(witness.engine_move_missing, 0);
+        assert_eq!(witness.engine_move_present_but_illegal, 0);
+        assert_eq!(witness.unexplained, 0);
+
+        let contradictory = vec![MoveChoice::Move(PokemonMoveIndex::M0)];
+        let (map, witness) = ctx
+            .self_action_map_with_unmapped_witness(
+                &state,
+                &contradictory,
+                None,
+                None,
+                false,
+            )
+            .expect("contradictory recharge-boundary map");
+        assert_eq!(map, vec![None]);
+        assert_eq!(witness.engine_move_missing, 0);
+        assert_eq!(witness.engine_move_present_but_illegal, 0);
+        assert_eq!(witness.unexplained, 1);
     }
 
     #[test]

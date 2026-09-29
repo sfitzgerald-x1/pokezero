@@ -1,0 +1,62 @@
+diff --git a/src/gen3/state.rs b/src/gen3/state.rs
+index f380f31..43c2141 100644
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -253,7 +253,13 @@ impl Pokemon {
+     ) {
+         let mut iter = self.moves.into_iter();
+         while let Some(p) = iter.next() {
+-            if !p.disabled && p.pp > 0 {
++            // `Move::default()` deliberately retains a nonzero PP so a real
++            // move can be filled into that slot without separately seeding
++            // its counter.  An empty `Choices::NONE` slot is nevertheless
++            // not a legal action.  Letting it through here produces a
++            // `Move(slot)` arm with no move identity; downstream consumers
++            // correctly have no request/action candidate to attach it to.
++            if p.id != Choices::NONE && !p.disabled && p.pp > 0 {
+                 match last_used_move {
+                     LastUsedMove::Move(last_used_move) => {
+                         if encored && last_used_move != &iter.pokemon_move_index {
+diff --git a/tests/test_gen3.rs b/tests/test_gen3.rs
+index 6201fb5..3382d33 100644
+--- a/tests/test_gen3.rs
++++ b/tests/test_gen3.rs
+@@ -53,6 +53,38 @@ fn set_moves_on_pkmn_and_call_generate_instructions(
+         &MoveChoice::Move(PokemonMoveIndex::M0),
+     );
+     instructions
++}
++
++#[test]
++fn empty_move_slots_are_not_emitted_as_legal_options() {
++    // Empty engine slots retain default PP.  They must never become phantom
++    // `Move(slot)` choices merely because the PP field is nonzero: there is no
++    // move identity or request action for a caller to execute.
++    let mut state = State::default();
++    state
++        .side_one
++        .get_active()
++        .replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
++    state
++        .side_two
++        .get_active()
++        .replace_move(PokemonMoveIndex::M0, Choices::TACKLE);
++
++    let (side_one_options, side_two_options) = state.get_all_options();
++    for options in [&side_one_options, &side_two_options] {
++        assert!(options.contains(&MoveChoice::Move(PokemonMoveIndex::M0)));
++        assert!(
++            !options.iter().any(|option| {
++                matches!(
++                    option,
++                    MoveChoice::Move(PokemonMoveIndex::M1)
++                        | MoveChoice::Move(PokemonMoveIndex::M2)
++                        | MoveChoice::Move(PokemonMoveIndex::M3)
++                )
++            }),
++            "empty default slots must not be offered as moves"
++        );
++    }
+ }
+ 
+ // Captured, create-only diagnostic witness: FoulPlay passed this Gen 3 state
