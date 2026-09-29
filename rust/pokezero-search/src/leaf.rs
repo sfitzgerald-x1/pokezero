@@ -2293,17 +2293,17 @@ impl LeafContext {
                 MoveChoice::Move(engine_index) => {
                     let slot = engine_index.serialize().parse::<usize>().unwrap_or(usize::MAX);
                     if recharging && !force_switch_shape {
-                        // Normally the engine exposes forced recharge as
-                        // `MoveChoice::None`.  Constructed interior worlds can
-                        // carry the pre-recharge move index alongside the live
-                        // MUSTRECHARGE volatile, though.  Both encodings mean
-                        // the same forced, PP-less production action; mapping
-                        // the indexed form to the recharge pseudo-action keeps
-                        // the arm aligned with the encoded legal surface
-                        // without pretending that the original move is legal.
-                        legal_action_index(&|obj| {
-                            obj.get("move_id").and_then(Value::as_str) == Some("recharge")
-                        })
+                        // A normal recharge is represented by `MoveChoice::None`.
+                        // An indexed move can occur while the opposing side owes
+                        // a forced replacement: it is the engine's saved
+                        // turn-order commitment, not the recharge action.  The
+                        // engine still executes that indexed move if selected,
+                        // so mapping it onto the synthetic recharge candidate
+                        // would assign a prior to a different transition.
+                        // Keep this contradiction unmapped (and therefore
+                        // fail closed) until the engine option and transition
+                        // semantics are made equivalent.
+                        None
                     } else {
                         legal_action_index(&|obj| {
                             obj.get("kind").and_then(Value::as_str) == Some("move")
@@ -3552,14 +3552,14 @@ mod tests {
     }
 
     #[test]
-    fn indexed_recharge_arm_maps_to_the_forced_recharge_pseudo_action() {
-        // The engine normally represents recharge as MoveChoice::None.  A
-        // constructed interior world can retain the consumed move's index at
-        // that boundary, while its live MUSTRECHARGE volatile correctly makes
-        // the encoded action surface the one-action "recharge" request.  The
-        // indexed representation must therefore map to that pseudo-action,
-        // rather than making branch priors fall back to uniform.
-        use poke_engine::engine::state::PokemonVolatileStatus;
+    fn indexed_move_at_recharge_boundary_stays_unmapped() {
+        // At an opponent forced-replacement boundary the engine exposes a
+        // saved indexed move before its ordinary MUSTRECHARGE branch.  That is
+        // not semantically a recharge: `generate_instructions_from_move_pair`
+        // clones and executes the indexed move, whereas only `MoveChoice::None`
+        // consumes MUSTRECHARGE.  Refusing the arm is safer than assigning its
+        // prior to the synthetic recharge candidate.
+        use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus};
         use poke_engine::state::PokemonMoveIndex;
 
         let (ctx, mut state) = order_context(None);
@@ -3567,15 +3567,18 @@ mod tests {
             .side_one
             .volatile_statuses
             .insert(PokemonVolatileStatus::MUSTRECHARGE);
-        let options = vec![MoveChoice::Move(PokemonMoveIndex::M2)];
+        state.side_two.force_switch = true;
+        state.side_one.switch_out_move_second_saved_move = Choices::TACKLE;
+        let (options, _) = state.get_all_options();
+        assert_eq!(options, vec![MoveChoice::Move(PokemonMoveIndex::M0)]);
         let (map, witness) = ctx
             .self_action_map_with_unmapped_witness(&state, &options, None, None, false)
-            .expect("indexed recharge map");
+            .expect("recharge-boundary map");
 
-        assert_eq!(map, vec![Some(0)]);
+        assert_eq!(map, vec![None]);
         assert_eq!(witness.engine_move_missing, 0);
         assert_eq!(witness.engine_move_present_but_illegal, 0);
-        assert_eq!(witness.unexplained, 0);
+        assert_eq!(witness.unexplained, 1);
     }
 
     #[test]
