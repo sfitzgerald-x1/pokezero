@@ -380,6 +380,24 @@ class PolicyTelemetry:
     rollout_cap_hits: int = 0
     rollout_dead_ends: int = 0
     rollout_encode_skipped: int = 0
+    # Preserve the engine's monotonic phase timers alongside the total decision
+    # wall.  The game writer already makes this telemetry durable; dropping
+    # these counters here meant a completed strength cohort could prove that a
+    # decision was slow but not whether folding, encoding, native inference,
+    # traversal, or action mapping consumed the time.  They are observational:
+    # no selection or scoring path reads them.
+    search_wall_seconds: float = 0.0
+    model_wall_seconds: float = 0.0
+    tree_wall_seconds: float = 0.0
+    encode_wall_seconds: float = 0.0
+    fold_clone_wall_seconds: float = 0.0
+    render_wall_seconds: float = 0.0
+    fold_advance_wall_seconds: float = 0.0
+    tensor_wall_seconds: float = 0.0
+    action_map_wall_seconds: float = 0.0
+    row_input_wall_seconds: float = 0.0
+    products_wall_seconds: float = 0.0
+    row_write_wall_seconds: float = 0.0
     decision_wall_seconds: float = 0.0
 
     def __post_init__(self) -> None:
@@ -508,8 +526,23 @@ class PolicyTelemetry:
             if self.rollout_encode_skipped > self.rollout_leaves_priced:
                 raise ValueError("rollout encode skips cannot exceed priced leaves.")
         object.__setattr__(self, "rollout_leaf_modes", rollout_modes)
-        if not math.isfinite(self.decision_wall_seconds) or self.decision_wall_seconds < 0:
-            raise ValueError("policy decision wall time must be finite and non-negative.")
+        phase_timers = (
+            self.decision_wall_seconds,
+            self.search_wall_seconds,
+            self.model_wall_seconds,
+            self.tree_wall_seconds,
+            self.encode_wall_seconds,
+            self.fold_clone_wall_seconds,
+            self.render_wall_seconds,
+            self.fold_advance_wall_seconds,
+            self.tensor_wall_seconds,
+            self.action_map_wall_seconds,
+            self.row_input_wall_seconds,
+            self.products_wall_seconds,
+            self.row_write_wall_seconds,
+        )
+        if any(not math.isfinite(value) or value < 0 for value in phase_timers):
+            raise ValueError("policy wall-time telemetry must be finite and non-negative.")
 
     @classmethod
     def capture(cls, policy: Any) -> "PolicyTelemetry":
@@ -598,6 +631,18 @@ class PolicyTelemetry:
             rollout_cap_hits=getattr(stats, "rollout_cap_hits", 0),
             rollout_dead_ends=getattr(stats, "rollout_dead_ends", 0),
             rollout_encode_skipped=getattr(stats, "rollout_encode_skipped", 0),
+            search_wall_seconds=float(getattr(stats, "search_wall_seconds", 0.0)),
+            model_wall_seconds=float(getattr(stats, "model_wall_seconds", 0.0)),
+            tree_wall_seconds=float(getattr(stats, "tree_wall_seconds", 0.0)),
+            encode_wall_seconds=float(getattr(stats, "encode_wall_seconds", 0.0)),
+            fold_clone_wall_seconds=float(getattr(stats, "fold_clone_wall_seconds", 0.0)),
+            render_wall_seconds=float(getattr(stats, "render_wall_seconds", 0.0)),
+            fold_advance_wall_seconds=float(getattr(stats, "fold_advance_wall_seconds", 0.0)),
+            tensor_wall_seconds=float(getattr(stats, "tensor_wall_seconds", 0.0)),
+            action_map_wall_seconds=float(getattr(stats, "action_map_wall_seconds", 0.0)),
+            row_input_wall_seconds=float(getattr(stats, "row_input_wall_seconds", 0.0)),
+            products_wall_seconds=float(getattr(stats, "products_wall_seconds", 0.0)),
+            row_write_wall_seconds=float(getattr(stats, "row_write_wall_seconds", 0.0)),
             decision_wall_seconds=float(getattr(stats, "decision_wall_seconds", 0.0)),
         )
 
