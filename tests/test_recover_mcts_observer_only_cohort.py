@@ -26,6 +26,7 @@ SPEC.loader.exec_module(MODULE)
 OLD_COMMIT = "a" * 40
 NEW_COMMIT = "b" * 40
 ENGINE = "c" * 64
+REPLACEMENT_ENGINE = "f" * 64
 SHOWDOWN = "d" * 64
 CHECKPOINT = "e" * 64
 
@@ -35,13 +36,13 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _policy(commit: str, tree: str, policy_id: str) -> dict[str, object]:
+def _policy(commit: str, tree: str, policy_id: str, *, engine: str = ENGINE) -> dict[str, object]:
     return {
         "config_id": policy_id,
         "policy_id": policy_id,
         "source_commit": commit,
         "source_tree_sha256": tree,
-        "engine_fingerprint": ENGINE,
+        "engine_fingerprint": engine,
         "checkpoint_sha256": CHECKPOINT,
         "showdown_source_sha256": SHOWDOWN,
         "config": {"search_sims": 4096, "model_priors": True},
@@ -56,14 +57,21 @@ def _seed_dir(root: Path, seed: int, *, original: bool) -> Path:
     return root / "lanes" / lane / "seeds" / f"seed-{seed}"
 
 
-def _write_terminal(root: Path, seed: int, *, commit: str, original: bool) -> None:
+def _write_terminal(
+    root: Path,
+    seed: int,
+    *,
+    commit: str,
+    original: bool,
+    engine: str = ENGINE,
+) -> None:
     directory = _seed_dir(root, seed, original=original)
     tree = "1" * 64 if commit == OLD_COMMIT else "2" * 64
-    candidate = _policy(commit, tree, "candidate")
-    raw = _policy(commit, tree, "raw")
+    candidate = _policy(commit, tree, "candidate", engine=engine)
+    raw = _policy(commit, tree, "raw", engine=engine)
     manifest = {
         "active_source": {"commit": commit, "tree_sha256": tree},
-        "active_engine_fingerprint": ENGINE,
+        "active_engine_fingerprint": engine,
         "active_showdown_source": {"content_sha256": SHOWDOWN},
         "candidate": candidate,
         "raw": raw,
@@ -178,22 +186,103 @@ class ObserverRecoveryTest(unittest.TestCase):
                     replay_commit=NEW_COMMIT,
                 )
 
-    def test_replaces_one_completed_original_pair_with_a_source_bound_repair(self) -> None:
+    def test_replaces_one_completed_original_pair_with_a_fully_bound_engine_repair(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             original, replay = self._roots(Path(temporary))
             seed = 2026093109
             replacement = Path(temporary) / "replacement"
-            _write_terminal(replacement, seed, commit=NEW_COMMIT, original=False)
+            _write_terminal(
+                replacement,
+                seed,
+                commit=NEW_COMMIT,
+                original=False,
+                engine=REPLACEMENT_ENGINE,
+            )
             lane = replacement / "lanes" / "s1" / "seeds" / f"seed-{seed}"
             target = replacement / "seeds" / f"seed-{seed}"
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(lane), target)
             games = _fake_pair_games()
             with patch.object(MODULE, "load_pair", return_value=games), patch.object(MODULE, "complete_pair", return_value=tuple(games.values())):
-                manifest = MODULE.build_recovery_manifest(original_root=original, replay_root=replay, original_commit=OLD_COMMIT, replay_commit=NEW_COMMIT, replacement_root=replacement, replacement_seed=seed, replacement_commit=NEW_COMMIT)
+                manifest = MODULE.build_recovery_manifest(
+                    original_root=original,
+                    replay_root=replay,
+                    original_commit=OLD_COMMIT,
+                    replay_commit=NEW_COMMIT,
+                    replacement_root=replacement,
+                    replacement_seed=seed,
+                    replacement_commit=NEW_COMMIT,
+                    replacement_tree_sha256="2" * 64,
+                    replacement_engine_fingerprint=REPLACEMENT_ENGINE,
+                    replacement_showdown_source_sha256=SHOWDOWN,
+                )
         self.assertEqual(manifest["pair_count"], 200)
         self.assertEqual(manifest["recovery_scope"]["original_pairs_reused"], 194)
         self.assertEqual([entry["seed"] for entry in manifest["replacement_pairs"]], [seed])
+        self.assertEqual(manifest["replacement_source"]["engine_fingerprint"], REPLACEMENT_ENGINE)
+
+    def test_rejects_replacement_without_a_complete_source_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            original, replay = self._roots(Path(temporary))
+            seed = 2026093109
+            replacement = Path(temporary) / "replacement"
+            _write_terminal(
+                replacement,
+                seed,
+                commit=NEW_COMMIT,
+                original=False,
+                engine=REPLACEMENT_ENGINE,
+            )
+            lane = replacement / "lanes" / "s1" / "seeds" / f"seed-{seed}"
+            target = replacement / "seeds" / f"seed-{seed}"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(lane), target)
+            games = _fake_pair_games()
+            with patch.object(MODULE, "load_pair", return_value=games), patch.object(
+                MODULE, "complete_pair", return_value=tuple(games.values())
+            ), self.assertRaisesRegex(MODULE.RecoveryError, "explicit replacement source contract"):
+                MODULE.build_recovery_manifest(
+                    original_root=original,
+                    replay_root=replay,
+                    original_commit=OLD_COMMIT,
+                    replay_commit=NEW_COMMIT,
+                    replacement_root=replacement,
+                    replacement_seed=seed,
+                    replacement_commit=NEW_COMMIT,
+                )
+
+    def test_rejects_replacement_that_disagrees_with_its_bound_engine(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            original, replay = self._roots(Path(temporary))
+            seed = 2026093109
+            replacement = Path(temporary) / "replacement"
+            _write_terminal(
+                replacement,
+                seed,
+                commit=NEW_COMMIT,
+                original=False,
+                engine=REPLACEMENT_ENGINE,
+            )
+            lane = replacement / "lanes" / "s1" / "seeds" / f"seed-{seed}"
+            target = replacement / "seeds" / f"seed-{seed}"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(lane), target)
+            games = _fake_pair_games()
+            with patch.object(MODULE, "load_pair", return_value=games), patch.object(
+                MODULE, "complete_pair", return_value=tuple(games.values())
+            ), self.assertRaisesRegex(MODULE.RecoveryError, "does not match its explicit source contract"):
+                MODULE.build_recovery_manifest(
+                    original_root=original,
+                    replay_root=replay,
+                    original_commit=OLD_COMMIT,
+                    replay_commit=NEW_COMMIT,
+                    replacement_root=replacement,
+                    replacement_seed=seed,
+                    replacement_commit=NEW_COMMIT,
+                    replacement_tree_sha256="2" * 64,
+                    replacement_engine_fingerprint=ENGINE,
+                    replacement_showdown_source_sha256=SHOWDOWN,
+                )
 
     def test_rejects_fallback_tainted_pair_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

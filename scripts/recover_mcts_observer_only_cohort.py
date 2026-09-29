@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Fail-closed fan-in for an observer-only MCTS cohort repair.
+"""Fail-closed fan-in for a narrowly repaired MCTS cohort.
 
-This is deliberately an *aggregator*, not a copier.  It keeps a terminal
-record at its original path and makes a second, explicit entry for each replay
-made with a source image that differs only in the post-action evidence writer.
-The result is therefore a transparent recovered cohort rather than a relabelled
-fresh run.
+This is deliberately an *aggregator*, not a copier.  It keeps every terminal
+record at its original path, permits the registered observer-only replays only
+when their native engine and Showdown source are unchanged, and permits at most
+one separately recorded engine-integrity replacement when its full source
+identity is supplied up front.  The result is therefore a transparent recovered
+cohort rather than a relabelled fresh run.
 """
 
 from __future__ import annotations
@@ -110,14 +111,22 @@ def _execution_identity(manifest: Mapping[str, Any], *, label: str) -> dict[str,
     raw = declared.get("raw")
     if not isinstance(candidate, Mapping) or not isinstance(raw, Mapping):
         raise RecoveryError(f"{label} has no declared candidate/raw identity.")
-    # Source receipt fields are intentionally excluded here: they are recorded
-    # separately and must differ for the observer fix. Everything that can
-    # affect a battle/search remains byte-for-byte equal.
+    # Source receipt fields are intentionally excluded here: provenance is
+    # checked separately, including strict same-engine checks for observer
+    # replays and the exact contract for the one engine-integrity replacement.
+    # Everything else that can affect a battle/search remains byte-for-byte
+    # equal.
     def without_source(value: Mapping[str, Any]) -> dict[str, Any]:
         return {
             str(key): item
             for key, item in value.items()
-            if key not in {"source_commit", "source_tree_sha256"}
+            if key
+            not in {
+                "source_commit",
+                "source_tree_sha256",
+                "engine_fingerprint",
+                "showdown_source_sha256",
+            }
         }
 
     return {
@@ -128,6 +137,33 @@ def _execution_identity(manifest: Mapping[str, Any], *, label: str) -> dict[str,
         "max_decision_rounds": declared.get("max_decision_rounds"),
         "bootstrap": declared.get("bootstrap"),
     }
+
+
+def _source_contract(
+    *,
+    commit: str | None,
+    tree_sha256: str | None,
+    engine_fingerprint: str | None,
+    showdown_source_sha256: str | None,
+) -> dict[str, str] | None:
+    """Require a complete explicit source contract for an engine replacement."""
+    values = {
+        "commit": commit,
+        "tree_sha256": tree_sha256,
+        "engine_fingerprint": engine_fingerprint,
+        "showdown_source_sha256": showdown_source_sha256,
+    }
+    supplied = [value is not None for value in values.values()]
+    if not any(supplied):
+        return None
+    if not all(supplied):
+        raise RecoveryError("explicit replacement source contract must bind commit, tree, engine, and Showdown.")
+    contract: dict[str, str] = {}
+    for key, value in values.items():
+        if not isinstance(value, str) or not value:
+            raise RecoveryError(f"replacement source contract has no non-empty {key!r}.")
+        contract[key] = value
+    return contract
 
 
 def _summary_evidence(
@@ -285,6 +321,9 @@ def build_recovery_manifest(
     replacement_root: Path | None = None,
     replacement_seed: int | None = None,
     replacement_commit: str | None = None,
+    replacement_tree_sha256: str | None = None,
+    replacement_engine_fingerprint: str | None = None,
+    replacement_showdown_source_sha256: str | None = None,
     seeds: Sequence[int] = DEFAULT_SEEDS,
     repair_seeds: Sequence[int] = DEFAULT_REPAIR_SEEDS,
 ) -> dict[str, Any]:
@@ -301,6 +340,16 @@ def build_recovery_manifest(
         raise RecoveryError("replacement seed cannot also be an observer-only repair seed.")
     if replacement_seed is not None and replacement_seed not in roster:
         raise RecoveryError("replacement seed is outside the registered roster.")
+    replacement_source_contract = _source_contract(
+        commit=replacement_commit,
+        tree_sha256=replacement_tree_sha256,
+        engine_fingerprint=replacement_engine_fingerprint,
+        showdown_source_sha256=replacement_showdown_source_sha256,
+    )
+    if replacing and replacement_source_contract is None:
+        raise RecoveryError("an engine-integrity replacement requires an explicit source contract.")
+    if not replacing and replacement_source_contract is not None:
+        raise RecoveryError("replacement source contract supplied without a replacement pair.")
 
     retained: list[dict[str, Any]] = []
     for seed in roster:
@@ -359,8 +408,14 @@ def build_recovery_manifest(
         raise RecoveryError("replay changes the native engine fingerprint; observer-only recovery refused.")
     if original_source["showdown_source_sha256"] != replay_source["showdown_source_sha256"]:
         raise RecoveryError("replay changes the Showdown source; observer-only recovery refused.")
-    if replacement_source is not None and (original_source["engine_fingerprint"] != replacement_source["engine_fingerprint"] or original_source["showdown_source_sha256"] != replacement_source["showdown_source_sha256"]):
-        raise RecoveryError("replacement changes engine or Showdown source; recovery refused.")
+    if replacement_source is not None:
+        assert replacement_source_contract is not None
+        if replacement_source != replacement_source_contract:
+            raise RecoveryError("replacement source does not match its explicit source contract.")
+        if original_source["showdown_source_sha256"] != replacement_source["showdown_source_sha256"]:
+            raise RecoveryError("replacement changes the Showdown source; recovery refused.")
+        if original_source["engine_fingerprint"] == replacement_source["engine_fingerprint"]:
+            raise RecoveryError("replacement does not establish a distinct engine-integrity repair.")
 
     bootstrap = _bootstrap_contract(original_execution)
     accepted = retained + repaired + replacements
@@ -416,6 +471,7 @@ def build_recovery_manifest(
         "game_count": 2 * len(accepted),
         "original_source": original_source,
         "observer_replay_source": replay_source,
+        "replacement_source": replacement_source,
         "execution_identity": original_execution,
         "candidate_score_95ci": score_interval.to_payload(),
         "candidate_margin_over_neutral_95ci": margin_over_neutral,
@@ -436,6 +492,7 @@ def build_recovery_manifest(
             "replayed_games": 10,
             "replacement_pairs": len(replacements),
             "replacement_seed": replacement_seed,
+            "replacement_source_contract": replacement_source_contract,
             "rule": "no original durable game is copied, moved, or relabelled",
         },
     }
@@ -480,6 +537,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--replacement-root", type=Path)
     parser.add_argument("--replacement-seed", type=int)
     parser.add_argument("--replacement-commit")
+    parser.add_argument("--replacement-tree-sha256")
+    parser.add_argument("--replacement-engine-fingerprint")
+    parser.add_argument("--replacement-showdown-source-sha256")
     return parser
 
 
@@ -493,6 +553,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         replacement_root=args.replacement_root,
         replacement_seed=args.replacement_seed,
         replacement_commit=args.replacement_commit,
+        replacement_tree_sha256=args.replacement_tree_sha256,
+        replacement_engine_fingerprint=args.replacement_engine_fingerprint,
+        replacement_showdown_source_sha256=args.replacement_showdown_source_sha256,
     )
     write_immutable_json(args.out, payload)
     print(json.dumps(payload, sort_keys=True))
