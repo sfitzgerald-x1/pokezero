@@ -243,6 +243,65 @@ class ObserverRecoveryTest(unittest.TestCase):
             12,
         )
 
+    def test_recovers_registered_three_stale_recharge_replacements(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            original, replay = self._roots(base)
+            registered: dict[int, dict[str, object]] = {}
+            for seed, fallback_count in ((2026093109, 12), (2026093181, 2), (2026093193, 34)):
+                _mark_stale_recharge_taint(original, seed)
+                summary = _seed_dir(original, seed, original=True) / "summary.json"
+                summary_payload = json.loads(summary.read_text(encoding="utf-8"))
+                summary_payload["candidate_prior_fallbacks"] = fallback_count
+                summary_payload["candidate_branch_prior_fallbacks"] = fallback_count
+                _write_json(summary, summary_payload)
+                complete = summary.with_name("COMPLETE.json")
+                complete_payload = json.loads(complete.read_text(encoding="utf-8"))
+                complete_payload["summary_sha256"] = hashlib.sha256(summary.read_bytes()).hexdigest()
+                _write_json(complete, complete_payload)
+
+                replacement = base / f"replacement-{seed}"
+                _write_terminal(
+                    replacement,
+                    seed,
+                    commit=NEW_COMMIT,
+                    original=False,
+                    engine=REPLACEMENT_ENGINE,
+                )
+                lane = replacement / "lanes" / "s1" / "seeds" / f"seed-{seed}"
+                target = replacement / "seeds" / f"seed-{seed}"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(lane), target)
+                registered[seed] = {
+                    "root": str(replacement),
+                    "candidate_prior_fallbacks": fallback_count,
+                    "candidate_branch_prior_fallbacks": fallback_count,
+                }
+
+            games = _fake_pair_games()
+            with patch.object(MODULE, "REGISTERED_RECHARGE_REPLACEMENTS", registered), patch.object(
+                MODULE, "REGISTERED_RECHARGE_COMMIT", NEW_COMMIT
+            ), patch.object(MODULE, "REGISTERED_RECHARGE_TREE_SHA256", "2" * 64), patch.object(
+                MODULE, "REGISTERED_RECHARGE_ENGINE_FINGERPRINT", REPLACEMENT_ENGINE
+            ), patch.object(MODULE, "REGISTERED_RECHARGE_SHOWDOWN_SHA256", SHOWDOWN), patch.object(
+                MODULE, "load_pair", return_value=games
+            ), patch.object(MODULE, "complete_pair", return_value=tuple(games.values())):
+                manifest = MODULE.build_recovery_manifest(
+                    original_root=original,
+                    replay_root=replay,
+                    original_commit=OLD_COMMIT,
+                    replay_commit=NEW_COMMIT,
+                    use_registered_recharge_replacements=True,
+                )
+
+        self.assertEqual(manifest["pair_count"], 200)
+        self.assertEqual(manifest["recovery_scope"]["original_pairs_reused"], 192)
+        self.assertEqual(manifest["recovery_scope"]["replacement_seeds"], [2026093109, 2026093181, 2026093193])
+        self.assertTrue(manifest["recovery_scope"]["registered_recharge_replacements"])
+        self.assertEqual([entry["seed"] for entry in manifest["replacement_pairs"]], [2026093109, 2026093181, 2026093193])
+        self.assertEqual(len(manifest["superseded_original_pairs"]), 3)
+        self.assertIsNone(manifest["superseded_original_pair"])
+
     def test_rejects_replacement_when_completed_original_is_not_registered_taint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             original, replay = self._roots(Path(temporary))
