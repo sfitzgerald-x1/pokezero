@@ -34,6 +34,7 @@ class SourceBoundDeadlineProfileReceiptTest(unittest.TestCase):
                 "scripts/run_mcts_deadline_qualification.py",
                 receipt_tool.PROFILE_RUNNER,
                 receipt_tool.FIXED_WORK_PARITY_RUNNER,
+                receipt_tool.OWN_PRIOR_REPLAY_RUNNER,
                 receipt_tool.LEAF_ABLATION_RUNNER,
                 receipt_tool.LEAF_CONTINUATION_RUNNER,
                 "scripts/engine_build_fingerprint.py",
@@ -75,6 +76,7 @@ class SourceBoundDeadlineProfileReceiptTest(unittest.TestCase):
             )
             self.assertIn(receipt_tool.PROFILE_RUNNER, receipt["source_files_sha256"])
             self.assertIn(receipt_tool.FIXED_WORK_PARITY_RUNNER, receipt["source_files_sha256"])
+            self.assertIn(receipt_tool.OWN_PRIOR_REPLAY_RUNNER, receipt["source_files_sha256"])
             self.assertIn(receipt_tool.LEAF_ABLATION_RUNNER, receipt["source_files_sha256"])
             self.assertIn(receipt_tool.LEAF_CONTINUATION_RUNNER, receipt["source_files_sha256"])
 
