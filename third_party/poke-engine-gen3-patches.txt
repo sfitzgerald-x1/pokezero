@@ -1724,3 +1724,11 @@ poke-engine-gen3-sleep-clock-bound.patch
 # still make that mode non-reproducible. Authored against the complete preceding
 # gen3 patch stack and includes an exact-repeat witness on the FoulPlay state.
 poke-engine-gen3-seeded-mcts.patch
+
+# Empty move slots retain the engine default's nonzero PP, but they are not
+# executable actions.  The old option generator emitted phantom `Move(slot)`
+# arms for those `Choices::NONE` slots; a native MCTS branch then had an engine
+# arm with no model/request action identity and correctly failed closed on its
+# prior map.  Filter the slot at the engine boundary and pin the behavior in
+# the engine suite.  Authored against the seeded-MCTS-patched tree.
+poke-engine-gen3-empty-move-option.patch
