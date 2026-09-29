@@ -1724,3 +1724,13 @@ poke-engine-gen3-sleep-clock-bound.patch
 # still make that mode non-reproducible. Authored against the complete preceding
 # gen3 patch stack and includes an exact-repeat witness on the FoulPlay state.
 poke-engine-gen3-seeded-mcts.patch
+
+# A forced replacement is a separate boundary from the other side's pending
+# recharge turn.  When a saved second-move commitment coexists with
+# MUSTRECHARGE, the option generator previously returned that saved move and
+# let it attack during the replacement.  Preserve the existing no-choice
+# `MoveChoice::None` at this boundary, so the earlier recharge-timing patch
+# continues to defer the recharge until the next actual turn.  The regression
+# proves the saved move neither attacks nor spends PP, recharge survives the
+# replacement, and apply/reverse returns to the exact pre-boundary state.
+poke-engine-gen3-deferred-recharge-option.patch
