@@ -64,7 +64,12 @@ def _seed_dir(root: Path, seed: int, *, original: bool) -> Path:
     if original:
         shard = "s0" if seed < 2026093100 else "s1"
         return root / "shards" / shard / "seeds" / f"seed-{seed}"
-    return root / "seeds" / f"seed-{seed}"
+    matches = sorted(root.glob(f"lanes/s*/seeds/seed-{seed}"))
+    if len(matches) != 1:
+        raise RecoveryError(
+            f"replay seed {seed} must occur in exactly one durable lane; found {len(matches)}."
+        )
+    return matches[0]
 
 
 def _policy_pair(manifest: Mapping[str, Any], *, label: str) -> tuple[MctsPolicySpec, MctsPolicySpec]:

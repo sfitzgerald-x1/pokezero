@@ -50,7 +50,8 @@ def _seed_dir(root: Path, seed: int, *, original: bool) -> Path:
     if original:
         shard = "s0" if seed < 2026093100 else "s1"
         return root / "shards" / shard / "seeds" / f"seed-{seed}"
-    return root / "seeds" / f"seed-{seed}"
+    lane = "s0" if seed in MODULE.DEFAULT_REPAIR_SEEDS[:3] else "s1"
+    return root / "lanes" / lane / "seeds" / f"seed-{seed}"
 
 
 def _write_terminal(root: Path, seed: int, *, commit: str, original: bool) -> None:
@@ -149,6 +150,21 @@ class ObserverRecoveryTest(unittest.TestCase):
             with patch.object(MODULE, "load_pair", return_value={"p1": object(), "p2": object()}), patch.object(
                 MODULE, "complete_pair", return_value=(object(), object())
             ), self.assertRaisesRegex(MODULE.RecoveryError, "battle/search setting"):
+                MODULE.build_recovery_manifest(
+                    original_root=original,
+                    replay_root=replay,
+                    original_commit=OLD_COMMIT,
+                    replay_commit=NEW_COMMIT,
+                )
+
+    def test_rejects_a_replay_seed_present_in_two_lanes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            original, replay = self._roots(Path(temporary))
+            seed = MODULE.DEFAULT_REPAIR_SEEDS[0]
+            duplicate = replay / "lanes" / "s1" / "seeds" / f"seed-{seed}"
+            duplicate.parent.mkdir(parents=True)
+            _write_json(duplicate / "sentinel.json", {"unexpected": True})
+            with self.assertRaisesRegex(MODULE.RecoveryError, "exactly one durable lane"):
                 MODULE.build_recovery_manifest(
                     original_root=original,
                     replay_root=replay,
