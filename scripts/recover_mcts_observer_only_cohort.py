@@ -30,6 +30,15 @@ from pokezero.mcts_eval.scoring import bootstrap_indices, bootstrap_mean
 SCHEMA_VERSION = "pokezero.mcts-observer-only-recovery.v1"
 DEFAULT_SEEDS = tuple(range(2026093000, 2026093200))
 DEFAULT_REPAIR_SEEDS = (2026093055, 2026093092, 2026093125, 2026093150, 2026093180)
+# The original cohort contains three known, interior-only fallback signatures.
+# They are not root-prior fallbacks and are retained rather than replaced.  This
+# fixed ledger makes that narrow exception auditable without accepting any
+# newly observed fallback as harmless.
+REGISTERED_BRANCH_ONLY_FALLBACKS = {
+    2026093109: {"candidate": 12, "incumbent": 0},
+    2026093181: {"candidate": 2, "incumbent": 0},
+    2026093193: {"candidate": 34, "incumbent": 0},
+}
 
 
 class RecoveryError(RuntimeError):
@@ -135,8 +144,13 @@ def _summary_evidence(
     *,
     seed: int,
     label: str,
-) -> tuple[dict[str, Any], float]:
-    """Load one terminal summary and reject fallback-tainted scoring evidence."""
+) -> tuple[dict[str, Any], float, dict[str, int]]:
+    """Load one terminal summary and reject unexpected fallback evidence.
+
+    A small, registered set of *interior branch-only* fallbacks belongs to the
+    historical cohort.  Root fallbacks, malformed accounting, and every
+    unregistered branch fallback remain hard failures.
+    """
     summary = _read_object(directory / "summary.json", label=f"{label} summary")
     if summary.get("seeds") != [seed]:
         raise RecoveryError(f"{label} summary does not contain exactly seed {seed}.")
@@ -150,11 +164,28 @@ def _summary_evidence(
     ):
         raise RecoveryError(f"{label} summary lacks one valid mirrored pair score.")
 
+    expected_branches = REGISTERED_BRANCH_ONLY_FALLBACKS.get(
+        seed, {"candidate": 0, "incumbent": 0}
+    )
+    observed_branches: dict[str, int] = {}
     for prefix in ("candidate", "incumbent"):
-        for key in ("prior_fallbacks", "root_prior_fallbacks", "branch_prior_fallbacks"):
-            field = f"{prefix}_{key}"
-            if summary.get(field) != 0:
-                raise RecoveryError(f"{label} has nonzero {field}; recovery refused.")
+        fields = {
+            key: summary.get(f"{prefix}_{key}")
+            for key in ("prior_fallbacks", "root_prior_fallbacks", "branch_prior_fallbacks")
+        }
+        if any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in fields.values()):
+            raise RecoveryError(f"{label} has malformed {prefix} fallback accounting.")
+        if fields["root_prior_fallbacks"] != 0:
+            raise RecoveryError(
+                f"{label} has nonzero {prefix}_root_prior_fallbacks; recovery refused."
+            )
+        if fields["prior_fallbacks"] != fields["branch_prior_fallbacks"]:
+            raise RecoveryError(f"{label} has non-branch {prefix} prior fallback evidence.")
+        if fields["branch_prior_fallbacks"] != expected_branches[prefix]:
+            raise RecoveryError(
+                f"{label} has unexpected {prefix}_branch_prior_fallbacks; recovery refused."
+            )
+        observed_branches[prefix] = fields["branch_prior_fallbacks"]
         for key in (
             "opponent_request_order_root_fallback_statuses",
             "opponent_request_order_root_omission_statuses",
@@ -162,7 +193,7 @@ def _summary_evidence(
             field = f"{prefix}_{key}"
             if summary.get(field) != {}:
                 raise RecoveryError(f"{label} has nonempty {field}; recovery refused.")
-    return summary, float(pair_scores[0])
+    return summary, float(pair_scores[0]), observed_branches
 
 
 def _bootstrap_contract(execution: Mapping[str, Any]) -> dict[str, float | int]:
@@ -259,7 +290,9 @@ def _validate_terminal_seed(
         capped_games += int(capped)
     if set(seat_scores) != {"p1", "p2"}:
         raise RecoveryError(f"{label} does not provide both candidate seats.")
-    _summary, pair_score = _summary_evidence(directory, seed=seed, label=label)
+    _summary, pair_score, branch_fallbacks = _summary_evidence(
+        directory, seed=seed, label=label
+    )
     if pair_score != (seat_scores["p1"] + seat_scores["p2"]) / 2.0:
         raise RecoveryError(f"{label} summary pair score disagrees with its games.")
     return {
@@ -273,6 +306,7 @@ def _validate_terminal_seed(
         "capped_games": capped_games,
         "source": source,
         "execution": _execution_identity(manifest, label=label),
+        "registered_branch_only_fallbacks": branch_fallbacks,
     }
 
 
@@ -378,6 +412,11 @@ def build_recovery_manifest(
             outcomes[outcome] += 1
 
     roster_sha256 = hashlib.sha256(",".join(str(seed) for seed in roster).encode("utf-8")).hexdigest()
+    observed_branch_fallbacks = {
+        str(entry["seed"]): entry["registered_branch_only_fallbacks"]
+        for entry in retained + repaired
+        if any(entry["registered_branch_only_fallbacks"].values())
+    }
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "RECOVERED_COMPLETE",
@@ -403,6 +442,14 @@ def build_recovery_manifest(
             "scored_games": 2 * len(scores),
             "capped_game_fraction": capped_games / (2 * len(scores)),
             "candidate_outcomes": outcomes,
+        },
+        "fallback_audit": {
+            "root_prior_fallbacks": {"candidate": 0, "incumbent": 0},
+            "registered_branch_only_fallbacks": {
+                "expected": {str(seed): values for seed, values in REGISTERED_BRANCH_ONLY_FALLBACKS.items()},
+                "observed": observed_branch_fallbacks,
+                "rule": "only the exact registered interior branch signatures are retained",
+            },
         },
         "recovery_scope": {
             "original_pairs_reused": 195,
