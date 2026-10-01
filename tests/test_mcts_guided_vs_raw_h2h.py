@@ -282,6 +282,24 @@ class RawAdapterTest(unittest.TestCase):
         self.assertGreaterEqual(adapter.stats.decision_wall_seconds, 0.0)
 
 
+class SealedContinuationFactoryTest(unittest.TestCase):
+    def test_returns_fresh_mappings_for_each_continuation_arm(self) -> None:
+        created: list[str] = []
+
+        def policy_for_player(player_id: str) -> object:
+            created.append(player_id)
+            return object()
+
+        factory = RUNNER._fresh_two_seat_policy_factory(policy_for_player)
+        first = factory()
+        second = factory()
+        self.assertEqual(set(first), {"p1", "p2"})
+        self.assertEqual(set(second), {"p1", "p2"})
+        self.assertIsNot(first["p1"], second["p1"])
+        self.assertIsNot(first["p2"], second["p2"])
+        self.assertEqual(created, ["p1", "p2", "p1", "p2"])
+
+
 class StudyShapeTest(unittest.TestCase):
     def test_registered_study_requires_exact_pair_and_game_counts(self) -> None:
         manifest = {

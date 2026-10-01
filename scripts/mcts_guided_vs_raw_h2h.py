@@ -18,7 +18,7 @@ import math
 from pathlib import Path
 import sys
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -91,6 +91,17 @@ RAW_SELECTOR = {
     "family_gated_selection": False,
     "search": False,
 }
+
+
+def _fresh_two_seat_policy_factory(
+    policy_for_player: Callable[[str], Any],
+) -> Callable[[], Mapping[str, Any]]:
+    """Return fresh policies for each independently evaluated continuation."""
+
+    def factory() -> Mapping[str, Any]:
+        return {"p1": policy_for_player("p1"), "p2": policy_for_player("p2")}
+
+    return factory
 REGISTERED_ENGINE_CONFIG = {
     # ``EngineMctsConfig`` materializes this fail-closed default even when a
     # source-bound manifest correctly omits it.  Register the realized value,
@@ -2783,7 +2794,7 @@ def main(argv: list[str] | None = None) -> int:
                 policy_id=incumbent.policy_id,
             )
 
-        return {"p1": raw_policy("p1"), "p2": raw_policy("p2")}
+        return _fresh_two_seat_policy_factory(raw_policy)
 
     def root_action_continuation_policy_factories(
         subject_seat: str,
