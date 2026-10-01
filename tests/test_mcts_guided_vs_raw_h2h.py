@@ -398,6 +398,25 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered deterministic raw selector"):
             RUNNER._sealed_override_audit_config(manifest)
 
+    def test_continuation_policy_builder_returns_a_fresh_callable_factory(self) -> None:
+        histories = {"p1": ("p1-prefix",), "p2": ("p2-prefix",)}
+        allocations: list[dict[str, tuple[str, ...]]] = []
+
+        def policy_builder(observation_histories: object) -> dict[str, object]:
+            copied = {player: tuple(history) for player, history in observation_histories.items()}
+            allocations.append(copied)
+            return {"p1": object(), "p2": object()}
+
+        factory_builder = RUNNER._fresh_continuation_policy_factory_builder(policy_builder)
+        factory = factory_builder(histories)
+        self.assertTrue(callable(factory))
+        first = factory()
+        second = factory()
+        self.assertEqual(set(first), {"p1", "p2"})
+        self.assertEqual(set(second), {"p1", "p2"})
+        self.assertIsNot(first["p1"], second["p1"])
+        self.assertEqual(allocations, [histories, histories])
+
     def test_root_action_audit_contract_requires_fixed_trials_and_predeclared_roots(self) -> None:
         self.assertIsNone(RUNNER._sealed_root_action_audit_config({}, seeds=(19,)))
         manifest = {
