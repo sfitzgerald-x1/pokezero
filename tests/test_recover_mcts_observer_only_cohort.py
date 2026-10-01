@@ -64,6 +64,8 @@ def _write_terminal(
     commit: str,
     original: bool,
     engine: str = ENGINE,
+    candidate_branch_fallbacks: int = 0,
+    incumbent_branch_fallbacks: int = 0,
 ) -> None:
     directory = _seed_dir(root, seed, original=original)
     tree = "1" * 64 if commit == OLD_COMMIT else "2" * 64
@@ -92,14 +94,14 @@ def _write_terminal(
         {
             "seeds": [seed],
             "pair_scores": [0.5],
-            "candidate_prior_fallbacks": 0,
+            "candidate_prior_fallbacks": candidate_branch_fallbacks,
             "candidate_root_prior_fallbacks": 0,
-            "candidate_branch_prior_fallbacks": 0,
+            "candidate_branch_prior_fallbacks": candidate_branch_fallbacks,
             "candidate_opponent_request_order_root_fallback_statuses": {},
             "candidate_opponent_request_order_root_omission_statuses": {},
-            "incumbent_prior_fallbacks": 0,
+            "incumbent_prior_fallbacks": incumbent_branch_fallbacks,
             "incumbent_root_prior_fallbacks": 0,
-            "incumbent_branch_prior_fallbacks": 0,
+            "incumbent_branch_prior_fallbacks": incumbent_branch_fallbacks,
             "incumbent_opponent_request_order_root_fallback_statuses": {},
             "incumbent_opponent_request_order_root_omission_statuses": {},
         },
@@ -157,20 +159,36 @@ def _fake_pair_games() -> dict[str, object]:
 
 
 class ObserverRecoveryTest(unittest.TestCase):
-    def _roots(self, directory: Path) -> tuple[Path, Path]:
+    def _roots(
+        self, directory: Path, *, retain_branch_only: bool = False
+    ) -> tuple[Path, Path]:
         original = directory / "original"
         replay = directory / "replay"
         repair = set(MODULE.DEFAULT_REPAIR_SEEDS)
         for seed in MODULE.DEFAULT_SEEDS:
             if seed not in repair:
-                _write_terminal(original, seed, commit=OLD_COMMIT, original=True)
+                signature = (
+                    MODULE.REGISTERED_RETAINED_BRANCH_ONLY_FALLBACKS.get(
+                        seed, {"candidate": 0, "incumbent": 0}
+                    )
+                    if retain_branch_only
+                    else {"candidate": 0, "incumbent": 0}
+                )
+                _write_terminal(
+                    original,
+                    seed,
+                    commit=OLD_COMMIT,
+                    original=True,
+                    candidate_branch_fallbacks=signature["candidate"],
+                    incumbent_branch_fallbacks=signature["incumbent"],
+                )
         for seed in MODULE.DEFAULT_REPAIR_SEEDS:
             _write_terminal(replay, seed, commit=NEW_COMMIT, original=False)
         return original, replay
 
     def test_recovers_exactly_195_original_pairs_and_five_replays(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            original, replay = self._roots(Path(temporary))
+            original, replay = self._roots(Path(temporary), retain_branch_only=True)
             games = _fake_pair_games()
             with patch.object(MODULE, "load_pair", return_value=games), patch.object(
                 MODULE, "complete_pair", return_value=tuple(games.values())
@@ -189,10 +207,17 @@ class ObserverRecoveryTest(unittest.TestCase):
         self.assertEqual(manifest["seat_sensitivity"]["p1_minus_p2_score_95ci"]["point"], 1.0)
         self.assertEqual(manifest["cap_sensitivity"]["capped_games"], 0)
         self.assertEqual([item["seed"] for item in manifest["replayed_pairs"]], list(MODULE.DEFAULT_REPAIR_SEEDS))
+        self.assertEqual(
+            manifest["fallback_audit"]["registered_branch_only_fallbacks"]["observed"],
+            {
+                str(seed): values
+                for seed, values in MODULE.REGISTERED_RETAINED_BRANCH_ONLY_FALLBACKS.items()
+            },
+        )
 
     def test_rejects_a_missing_retained_pair(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            original, replay = self._roots(Path(temporary))
+            original, replay = self._roots(Path(temporary), retain_branch_only=True)
             missing = _seed_dir(original, 2026093000, original=True) / "COMPLETE.json"
             missing.unlink()
             with self.assertRaisesRegex(MODULE.RecoveryError, "retained seed 2026093000"):
@@ -401,7 +426,7 @@ class ObserverRecoveryTest(unittest.TestCase):
 
     def test_rejects_fallback_tainted_pair_summary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            original, replay = self._roots(Path(temporary))
+            original, replay = self._roots(Path(temporary), retain_branch_only=True)
             summary = _seed_dir(replay, MODULE.DEFAULT_REPAIR_SEEDS[0], original=False) / "summary.json"
             payload = json.loads(summary.read_text(encoding="utf-8"))
             payload["candidate_root_prior_fallbacks"] = 1
@@ -421,9 +446,32 @@ class ObserverRecoveryTest(unittest.TestCase):
                     replay_commit=NEW_COMMIT,
                 )
 
+    def test_rejects_an_unregistered_branch_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            original, replay = self._roots(Path(temporary), retain_branch_only=True)
+            summary = _seed_dir(original, 2026093000, original=True) / "summary.json"
+            payload = json.loads(summary.read_text(encoding="utf-8"))
+            payload["candidate_prior_fallbacks"] = 1
+            payload["candidate_branch_prior_fallbacks"] = 1
+            _write_json(summary, payload)
+            complete = summary.with_name("COMPLETE.json")
+            complete_payload = json.loads(complete.read_text(encoding="utf-8"))
+            complete_payload["summary_sha256"] = hashlib.sha256(summary.read_bytes()).hexdigest()
+            _write_json(complete, complete_payload)
+            games = _fake_pair_games()
+            with patch.object(MODULE, "load_pair", return_value=games), patch.object(
+                MODULE, "complete_pair", return_value=tuple(games.values())
+            ), self.assertRaisesRegex(MODULE.RecoveryError, "unexpected candidate_branch_prior_fallbacks"):
+                MODULE.build_recovery_manifest(
+                    original_root=original,
+                    replay_root=replay,
+                    original_commit=OLD_COMMIT,
+                    replay_commit=NEW_COMMIT,
+                )
+
     def test_rejects_a_replay_that_changes_search_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            original, replay = self._roots(Path(temporary))
+            original, replay = self._roots(Path(temporary), retain_branch_only=True)
             changed = _seed_dir(replay, MODULE.DEFAULT_REPAIR_SEEDS[0], original=False) / "manifest.json"
             payload = json.loads(changed.read_text(encoding="utf-8"))
             payload["declared_manifest"]["candidate"]["config"]["search_sims"] = 1
@@ -441,7 +489,7 @@ class ObserverRecoveryTest(unittest.TestCase):
 
     def test_rejects_a_replay_seed_present_in_two_lanes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            original, replay = self._roots(Path(temporary))
+            original, replay = self._roots(Path(temporary), retain_branch_only=True)
             seed = MODULE.DEFAULT_REPAIR_SEEDS[0]
             duplicate = replay / "lanes" / "s1" / "seeds" / f"seed-{seed}"
             duplicate.parent.mkdir(parents=True, exist_ok=True)
