@@ -71,6 +71,13 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 runner._parse_args(args[:-1] + ["5"])
 
+    def test_model_priors_are_explicit_and_default_to_legacy_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            args = _arguments(Path(temporary) / "out")
+            self.assertFalse(runner._parse_args(args).model_priors)
+            self.assertTrue(runner._parse_args(args + ["--model-priors"]).model_priors)
+            self.assertFalse(runner._parse_args(args + ["--no-model-priors"]).model_priors)
+
     def test_native_batch_guard_must_fit_the_frozen_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             args = _arguments(Path(temporary) / "out") + [
@@ -284,14 +291,14 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
                 mock.patch.object(runner, "resolve_checkpoint_contract", return_value=FakeContract()) as resolver,
                 mock.patch.object(runner, "_LiveEngineTimingDecider", FakeDecider),
             ):
-                self.assertEqual(runner.main(_arguments(out_root)), 0)
+                self.assertEqual(runner.main(_arguments(out_root) + ["--model-priors"]), 0)
 
             terminal = json.loads((out_root / "PASS.json").read_text())
             self.assertEqual(terminal["state"], "PASS")
             self.assertEqual(terminal["marker"], "DEADLINE_QUALIFICATION_PASS")
             self.assertEqual(terminal["summary"]["decision_count"], 16)
             self.assertEqual(terminal["summary"]["native_prefix_count"], 1)
-            self.assertFalse(terminal["manifest"]["search_config"]["model_priors"])
+            self.assertTrue(terminal["manifest"]["search_config"]["model_priors"])
             self.assertFalse(terminal["manifest"]["search_config"]["use_opponent_priors"])
             self.assertEqual(
                 terminal["manifest"]["search_config"]["model_native_batch_guard_ms"], 0
@@ -312,7 +319,7 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
                     "model_decision_time_ms": 1000,
                     "model_native_batch_guard_ms": 0,
                     "model_world_workers": 1,
-                    "model_priors": False,
+                    "model_priors": True,
                     "use_opponent_priors": False,
                 },
             )
