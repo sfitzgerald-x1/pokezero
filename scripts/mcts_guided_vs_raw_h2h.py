@@ -143,6 +143,14 @@ REGISTERED_ENGINE_CONFIG = {
     "worlds": 4,
     "worlds_min": None,
 }
+# The practical parallel candidate preserves the registered one-second search
+# semantics while evaluating two of its four materialized worlds concurrently.
+# It is a separately named fixed configuration so evidence collection cannot
+# silently become a worker-count sweep.
+REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG = {
+    **REGISTERED_ENGINE_CONFIG,
+    "model_world_workers": 2,
+}
 # The sidecar is intentionally not a general-purpose MCTS evaluator: it may
 # only certify a configuration whose search semantics have been registered in
 # advance.  The CUDA deep protocol is the exact fixed-work configuration used
@@ -204,6 +212,7 @@ REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG = {
 }
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
+    REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG,

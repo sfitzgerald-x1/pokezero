@@ -791,6 +791,24 @@ class GuidedConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
+    def test_registered_practical_parallel_configuration_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {"model_world_workers": 2},
+            "the practical parallel candidate may differ only on fixed world parallelism",
+        )
+        self.assertEqual(set(config), set(baseline))
+        RUNNER._require_registered_candidate_config(config)
+        config["model_world_workers"] = 3
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
     def test_registered_deep_cuda_protocol_is_accepted_exactly(self) -> None:
         config = dict(RUNNER.REGISTERED_DEEP_ENGINE_CONFIG)
         RUNNER._require_registered_candidate_config(config)
