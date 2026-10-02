@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.engine_search import opponent_request_order
+from pokezero.mcts_eval.head_to_head import public_only_context
 from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider, _decode_decision_rng_state, time_lattice_cell
 from pokezero.mcts_eval.manifest import SearchConfig
 from pokezero.mcts_eval.resolver import CheckpointContract, ContractError
@@ -236,10 +237,20 @@ class T(unittest.TestCase):
             return policy
 
         decider._policy_for = policy_for
-        with patch("pokezero.public_replay_materializer.replay_public_action_rounds", return_value=replayed):
+        with (
+            patch(
+                "pokezero.public_replay_materializer.replay_public_action_rounds",
+                return_value=replayed,
+            ),
+            patch(
+                "pokezero.mcts_eval.head_to_head.public_only_context",
+                wraps=public_only_context,
+            ) as sanitize,
+        ):
             telemetry = decider.prepare(record, SearchConfig(depth=4, sims=512))()
         self.assertEqual(telemetry["root_action"], "switch 2")
         self.assertEqual(telemetry["prior_fallbacks"], 0)
+        sanitize.assert_not_called()
 
     def test_public_replay_retains_ephemeral_request_history(self):
         """The live adapter's history must come from the actual replay, not a fixture."""
@@ -397,7 +408,16 @@ class T(unittest.TestCase):
         decider._closed = False
         decider._env = FakeEnv()
         decider._policy_for = lambda _config: FakePolicy()
-        with patch("pokezero.public_replay_materializer.replay_public_action_rounds", return_value=replayed):
+        with (
+            patch(
+                "pokezero.public_replay_materializer.replay_public_action_rounds",
+                return_value=replayed,
+            ),
+            patch(
+                "pokezero.mcts_eval.head_to_head.public_only_context",
+                wraps=public_only_context,
+            ) as sanitize,
+        ):
             telemetry = decider.prepare_public_decision(
                 source_record,
                 SearchConfig(depth=4, sims=512),
@@ -411,6 +431,7 @@ class T(unittest.TestCase):
                 },
             )()
         self.assertEqual(telemetry["root_action"], "switch 2")
+        sanitize.assert_called_once()
 
     def test_source_root_rejects_malformed_rng_witness(self):
         with self.assertRaisesRegex(ContractError, "unsupported algorithm"):

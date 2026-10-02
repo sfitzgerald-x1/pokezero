@@ -697,6 +697,16 @@ class _LiveEngineTimingDecider:
                 requested_observations={record.seat: observation},
                 public_materialization_state=public_state,
             )
+            # Source-root records are captured through ``PublicOnlyMctsPolicy``.
+            # Reuse that exact sanitizer at replay rather than relying on this
+            # adapter's structurally similar public trajectory.  Keeping the
+            # collection and replay selection contexts identical is required
+            # for an RNG witness to be meaningful.  Timing-corpus replay keeps
+            # its established context unchanged.
+            if expected_public_observation is not None:
+                from .head_to_head import public_only_context
+
+                context = public_only_context(context)
             before = self._snapshot_stats(policy)
             selection_rng = decision_rng or random.Random(record.bot_rng_seed)
             decision = policy.select_action_with_context(
