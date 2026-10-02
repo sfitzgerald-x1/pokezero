@@ -845,6 +845,18 @@ class GuidedConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
+    def test_registered_practical_world4_batch8_s16_configuration_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_PRACTICAL_WORLD4_BATCH8_S16_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG
+        self.assertEqual(
+            {key: value for key, value in config.items() if baseline.get(key) != value},
+            {"search_sims": 16},
+        )
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 17
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
     def test_registered_deep_cuda_protocol_is_accepted_exactly(self) -> None:
         config = dict(RUNNER.REGISTERED_DEEP_ENGINE_CONFIG)
         RUNNER._require_registered_candidate_config(config)
