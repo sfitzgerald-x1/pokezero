@@ -44,6 +44,51 @@ PreparedDecision = Callable[[], dict[str, Any]]
 PreparedDecider = Callable[[TimingDecisionRecord, SearchConfig], PreparedDecision]
 
 
+def _decode_decision_rng_state(
+    value: Mapping[str, Any],
+) -> tuple[int, tuple[int, ...], float | None]:
+    """Decode the JSON-safe state emitted by the source decision witness.
+
+    The caller is still responsible for binding the witness to its source
+    record and policy provenance. This narrow decoder only establishes that
+    the serialized state is a valid Python ``random.Random`` state before it
+    is supplied to native search. It deliberately refuses permissive mappings
+    so a malformed or hand-edited witness cannot quietly fall back to an
+    invented per-root seed.
+    """
+
+    if set(value) != {"algorithm", "state_version", "internal_state", "gauss_next"}:
+        raise ContractError("decision RNG witness has an unsupported shape")
+    if value.get("algorithm") != "python-random-mt19937":
+        raise ContractError("decision RNG witness uses an unsupported algorithm")
+    version = value.get("state_version")
+    internal = value.get("internal_state")
+    gauss_next = value.get("gauss_next")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or not isinstance(internal, Sequence)
+        or isinstance(internal, (str, bytes))
+        or len(internal) < 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in internal)
+        or (
+            gauss_next is not None
+            and (
+                isinstance(gauss_next, bool)
+                or not isinstance(gauss_next, (int, float))
+                or not math.isfinite(float(gauss_next))
+            )
+        )
+    ):
+        raise ContractError("decision RNG witness has an invalid state")
+    state = (version, tuple(internal), gauss_next)
+    try:
+        random.Random().setstate(state)
+    except (TypeError, ValueError) as error:
+        raise ContractError("decision RNG witness is not replayable") from error
+    return state
+
+
 @dataclass(frozen=True)
 class _PublicReplayStep:
     """One ephemeral replay action with only the actor's public observation.
@@ -488,7 +533,7 @@ class _LiveEngineTimingDecider:
         *,
         public_action_rounds: Sequence[Any],
         decision_rng_seed: int,
-        decision_rng_state: tuple[object, object, object] | None = None,
+        decision_rng_state: tuple[object, object, object] | Mapping[str, Any] | None = None,
     ) -> PreparedDecision:
         """Replay one source-captured public root without inventing a corpus line.
 
@@ -513,7 +558,12 @@ class _LiveEngineTimingDecider:
         decision_rng = random.Random(decision_rng_seed)
         if decision_rng_state is not None:
             try:
-                decision_rng.setstate(decision_rng_state)
+                state = (
+                    _decode_decision_rng_state(decision_rng_state)
+                    if isinstance(decision_rng_state, Mapping)
+                    else decision_rng_state
+                )
+                decision_rng.setstate(state)
             except (TypeError, ValueError) as error:
                 raise ContractError(
                     f"{record.decision_id}: decision RNG state is not replayable"
