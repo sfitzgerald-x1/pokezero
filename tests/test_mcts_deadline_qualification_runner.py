@@ -77,6 +77,14 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             self.assertFalse(runner._parse_args(base).model_priors)
             self.assertTrue(runner._parse_args(base + ["--model-priors"]).model_priors)
 
+    def test_zero_native_prefix_exception_is_explicitly_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = _arguments(Path(temporary) / "out")
+            self.assertFalse(runner._parse_args(base).allow_zero_native_prefix)
+            self.assertTrue(
+                runner._parse_args(base + ["--allow-zero-native-prefix"]).allow_zero_native_prefix
+            )
+
     def test_native_batch_guard_must_fit_the_frozen_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             args = _arguments(Path(temporary) / "out") + [
