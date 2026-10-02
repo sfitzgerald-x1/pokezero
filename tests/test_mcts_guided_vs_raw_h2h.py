@@ -8,6 +8,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+import random
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -730,6 +731,52 @@ class DurableLauncherHandoffTest(unittest.TestCase):
             )
 
 
+class DecisionRngCaptureContractTest(unittest.TestCase):
+    def _write_runtime_manifest(self, root: Path, payload: dict[str, object]) -> None:
+        (root / "manifest.json").write_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+    def test_new_root_freezes_requested_capture_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                RUNNER._resolve_decision_rng_capture_contract(
+                    Path(directory), capture_requested=True
+                ),
+                {"capture_required": True},
+            )
+
+    def test_capture_mode_cannot_change_when_resuming(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_runtime_manifest(
+                root,
+                {
+                    "schema_version": RUNNER.MANIFEST_SCHEMA_VERSION,
+                    RUNNER.DECISION_RNG_CAPTURE_CONTRACT_KEY: {"capture_required": True},
+                },
+            )
+            with self.assertRaisesRegex(Exception, "differs from the immutable"):
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=False)
+            self.assertEqual(
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=True),
+                {"capture_required": True},
+            )
+
+    def test_legacy_root_can_resume_only_without_witness_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_runtime_manifest(
+                root, {"schema_version": RUNNER.MANIFEST_SCHEMA_VERSION}
+            )
+            self.assertIsNone(
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=False)
+            )
+            with self.assertRaisesRegex(Exception, "cannot upgrade a legacy"):
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=True)
+
+
 class GuidedConfigTest(unittest.TestCase):
     def test_guided_configuration_is_exact_not_a_budget_lookalike(self) -> None:
         config = dict(RUNNER.REGISTERED_ENGINE_CONFIG)
@@ -1316,6 +1363,61 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 RUNNER._validate_public_decision_evidence(Path(directory), game),
                 (record,),
             )
+            self.assertFalse((Path(directory) / "decision-rng-witnesses").exists())
+
+    def test_writer_can_capture_a_replayable_rng_boundary_witness(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_record(record)
+        guided.latest_decision_rng_state = random.Random(23).getstate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            RUNNER._public_decision_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+                capture_decision_rng_state=True,
+            )(record)
+            path = RUNNER._decision_rng_witness_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema_version"], RUNNER.DECISION_RNG_WITNESS_SCHEMA_VERSION)
+            self.assertEqual(payload["public_decision"]["decision_id"], record.decision_id)
+            self.assertEqual(payload["rng_state"]["algorithm"], "python-random-mt19937")
+            restored = random.Random()
+            state = payload["rng_state"]
+            restored.setstate((state["state_version"], tuple(state["internal_state"]), state["gauss_next"]))
+            self.assertEqual(restored.getstate(), guided.latest_decision_rng_state)
+
+    def test_rng_witness_validator_requires_each_guided_decision(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_record(record)
+        guided.latest_decision_rng_state = random.Random(23).getstate()
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+                capture_decision_rng_state=True,
+            )(record)
+            RUNNER._validate_decision_rng_witness_evidence(Path(directory), game)
 
     def test_writer_refuses_to_bind_one_decision_to_another_decision_metadata(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")

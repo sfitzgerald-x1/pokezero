@@ -246,7 +246,7 @@ def public_only_context(context: PolicyContext) -> PolicyContext:
 class PublicOnlyMctsPolicy:
     """A narrow context-sanitising wrapper for a context-aware MCTS policy."""
 
-    def __init__(self, policy: Any) -> None:
+    def __init__(self, policy: Any, *, capture_decision_rng_state: bool = False) -> None:
         self._policy = policy
         self.policy_id = str(policy.policy_id)
         # The rollout commits the public record after both players have chosen,
@@ -256,6 +256,12 @@ class PublicOnlyMctsPolicy:
         # This is deliberately not added to the public context or trajectory.
         self._latest_decision_metadata: Mapping[str, Any] = {}
         self._latest_decision_address: Mapping[str, Any] | None = None
+        # The native search samples hidden worlds from the RolloutDriver's
+        # stateful per-player RNG.  Retain a pre-decision snapshot only for a
+        # source-bound evaluator that explicitly elects to persist it; it is
+        # never placed in the public policy context or trajectory.
+        self._latest_decision_rng_state: Any | None = None
+        self._capture_decision_rng_state = capture_decision_rng_state
         self.requires_public_materialization_state = bool(
             getattr(policy, "requires_public_materialization_state", False)
         )
@@ -290,6 +296,18 @@ class PublicOnlyMctsPolicy:
             else dict(self._latest_decision_address)
         )
 
+    @property
+    def latest_decision_rng_state(self) -> Any | None:
+        """Pre-selection RNG state for an opt-in, source-bound witness.
+
+        ``random.Random.getstate`` returns an immutable tuple of primitives,
+        so exposing it here cannot let an evidence writer mutate the live
+        RolloutDriver RNG.  Non-standard policy callers may not provide a
+        stateful RNG; those remain explicitly unavailable.
+        """
+
+        return self._latest_decision_rng_state
+
     def select_action(self, observation: Any, *, rng: Any) -> Any:
         return self._policy.select_action(observation, rng=rng)
 
@@ -300,6 +318,11 @@ class PublicOnlyMctsPolicy:
                 f"{self.policy_id} has no context-aware selector; refusing to degrade MCTS to "
                 "the context-free path."
             )
+        if self._capture_decision_rng_state:
+            snapshot = getattr(rng, "getstate", None)
+            self._latest_decision_rng_state = snapshot() if callable(snapshot) else None
+        else:
+            self._latest_decision_rng_state = None
         decision = selector(public_only_context(context), rng=rng)
         metadata = getattr(decision, "metadata", {})
         if not isinstance(metadata, Mapping):

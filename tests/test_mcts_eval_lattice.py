@@ -4,9 +4,9 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.engine_search import opponent_request_order
-from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider, time_lattice_cell
+from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider, _decode_decision_rng_state, time_lattice_cell
 from pokezero.mcts_eval.manifest import SearchConfig
-from pokezero.mcts_eval.resolver import CheckpointContract
+from pokezero.mcts_eval.resolver import CheckpointContract, ContractError
 from tests.test_mcts_eval_timing_corpus import _record
 from pokezero.public_decision_corpus import (
     PublicActionIdentifier,
@@ -370,6 +370,9 @@ class T(unittest.TestCase):
                 case.assertEqual(player, "p1")
                 return state
 
+        replay_rng = random.Random(97)
+        replay_state = replay_rng.getstate()
+
         class FakePolicy:
             def __init__(self):
                 self.stats = SimpleNamespace(
@@ -387,7 +390,7 @@ class T(unittest.TestCase):
 
             def select_action_with_context(self, context, *, rng):
                 case.assertEqual(context.seed, 17)
-                case.assertEqual(rng.randrange(10_000), random.Random(73).randrange(10_000))
+                case.assertEqual(rng.randrange(10_000), replay_rng.randrange(10_000))
                 return SimpleNamespace(action_index=4)
 
         decider = object.__new__(_LiveEngineTimingDecider)
@@ -400,8 +403,23 @@ class T(unittest.TestCase):
                 SearchConfig(depth=4, sims=512),
                 public_action_rounds=source_record.public_resolved_action_rounds,
                 decision_rng_seed=73,
+                decision_rng_state={
+                    "algorithm": "python-random-mt19937",
+                    "state_version": replay_state[0],
+                    "internal_state": list(replay_state[1]),
+                    "gauss_next": replay_state[2],
+                },
             )()
         self.assertEqual(telemetry["root_action"], "switch 2")
+
+    def test_source_root_rejects_malformed_rng_witness(self):
+        with self.assertRaisesRegex(ContractError, "unsupported algorithm"):
+            _decode_decision_rng_state({
+                "algorithm": "not-python-random",
+                "state_version": 3,
+                "internal_state": [0, 1],
+                "gauss_next": None,
+            })
 
     def test_source_root_rejects_metadata_only_observation_drift(self):
         """Public metadata is a native-search input, not incidental decoration."""
