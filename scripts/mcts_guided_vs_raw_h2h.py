@@ -181,6 +181,15 @@ REGISTERED_PRACTICAL_WORLD4_BATCH8_S16_ENGINE_CONFIG = {
     **REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
     "search_sims": 16,
 }
+# The full-game s16 collector showed that two eight-simulation native batches
+# can overrun the one-second whole-decision contract on a tail position.  This
+# is the one bounded replacement: exactly one native batch per world.  It is a
+# separately named configuration so no later evidence can silently trade
+# fixed work for deadline-truncated work.
+REGISTERED_PRACTICAL_WORLD4_BATCH8_S8_ENGINE_CONFIG = {
+    **REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
+    "search_sims": 8,
+}
 # The sidecar is intentionally not a general-purpose MCTS evaluator: it may
 # only certify a configuration whose search semantics have been registered in
 # advance.  The CUDA deep protocol is the exact fixed-work configuration used
@@ -246,6 +255,7 @@ REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
     REGISTERED_PRACTICAL_WORLD4_BATCH8_S24_ENGINE_CONFIG,
     REGISTERED_PRACTICAL_WORLD4_BATCH8_S16_ENGINE_CONFIG,
+    REGISTERED_PRACTICAL_WORLD4_BATCH8_S8_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG,
