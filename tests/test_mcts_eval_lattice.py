@@ -401,6 +401,7 @@ class T(unittest.TestCase):
 
             def select_action_with_context(self, context, *, rng):
                 case.assertEqual(context.seed, 17)
+                case.assertEqual(context.requested_players, ("p1", "p2"))
                 case.assertEqual(rng.randrange(10_000), replay_rng.randrange(10_000))
                 return SimpleNamespace(action_index=4)
 
@@ -429,6 +430,7 @@ class T(unittest.TestCase):
                     "internal_state": list(replay_state[1]),
                     "gauss_next": replay_state[2],
                 },
+                source_requested_players=("p1", "p2"),
             )()
         self.assertEqual(telemetry["root_action"], "switch 2")
         sanitize.assert_called_once()
