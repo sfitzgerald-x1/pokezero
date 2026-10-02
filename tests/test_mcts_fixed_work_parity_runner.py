@@ -6,6 +6,7 @@ import importlib.util
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,6 +65,32 @@ class FixedWorkParityRunnerSafetyTest(unittest.TestCase):
             runner._parse_args(base + ["--parallel-workers", "1"])
         with self.assertRaises(SystemExit):
             runner._parse_args(base + ["--parallel-workers", "5"])
+
+    def test_model_priors_are_explicit_and_default_to_legacy_contract(self) -> None:
+        base = [
+            "--checkpoint", "/checkpoint.pt", "--expected-checkpoint-sha256", "a" * 64,
+            "--showdown-root", "/showdown", "--corpus", "/corpus.jsonl",
+            "--expected-corpus-sha256", "b" * 64,
+            "--expected-corpus-file-sha256", "c" * 64,
+            "--source-receipt", "/receipt.json", "--expected-showdown-source-sha256", "d" * 64,
+            "--out-root", "/out",
+        ]
+        self.assertFalse(runner._parse_args(base).model_priors)
+        self.assertTrue(runner._parse_args(base + ["--model-priors"]).model_priors)
+        self.assertFalse(runner._parse_args(base + ["--no-model-priors"]).model_priors)
+
+    def test_model_priors_reaches_both_fixed_work_arms(self) -> None:
+        args = runner._parse_args([
+            "--checkpoint", "/checkpoint.pt", "--expected-checkpoint-sha256", "a" * 64,
+            "--showdown-root", "/showdown", "--corpus", "/corpus.jsonl",
+            "--expected-corpus-sha256", "b" * 64,
+            "--expected-corpus-file-sha256", "c" * 64,
+            "--source-receipt", "/receipt.json", "--expected-showdown-source-sha256", "d" * 64,
+            "--out-root", "/out", "--model-priors",
+        ])
+        with mock.patch.object(runner.legacy, "_LiveEngineTimingDecider") as decider:
+            runner._new_decider(object(), args, workers=1)
+        self.assertTrue(decider.call_args.kwargs["model_priors"])
 
     def test_matching_fixed_work_arms_are_accepted(self) -> None:
         args = runner._parse_args([

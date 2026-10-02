@@ -302,6 +302,15 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--worlds", type=int, default=4)
     parser.add_argument(
+        "--model-priors",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Use the model policy as the candidate-side MCTS selection prior. "
+            "Disabled by default to preserve the original deadline-mechanics contract."
+        ),
+    )
+    parser.add_argument(
         "--model-world-workers",
         type=int,
         default=1,
@@ -352,10 +361,10 @@ def _frozen_manifest(
             "batch": args.batch,
             "worlds": args.worlds,
             "early_stop": False,
-            # This is a deadline-mechanics qualification, not a prior-policy
-            # study.  Freeze both selection-prior toggles off exactly as the
-            # predeclared contract requires.
-            "model_priors": False,
+            # The selected-prior policy is a first-class part of a timing
+            # contract.  Keep it explicit in the immutable manifest so an
+            # unguided profile cannot be mistaken for own-prior evidence.
+            "model_priors": args.model_priors,
             "use_opponent_priors": False,
             "model_decision_time_ms": args.deadline_ms,
             "model_native_batch_guard_ms": args.native_batch_guard_ms,
@@ -621,7 +630,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         model_decision_time_ms=args.deadline_ms,
         model_native_batch_guard_ms=args.native_batch_guard_ms,
         model_world_workers=args.model_world_workers,
-        model_priors=False,
+        model_priors=args.model_priors,
         use_opponent_priors=False,
     )
     try:

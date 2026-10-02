@@ -140,6 +140,15 @@ REGISTERED_ENGINE_CONFIG = {
     "worlds": 4,
     "worlds_min": None,
 }
+# This is the sole practical-budget execution candidate admitted after the
+# source-bound parity profile: it keeps the one-second guided-MCTS semantics
+# intact while allowing two of the four materialized worlds to evaluate in
+# parallel.  A separate constant, rather than a tunable worker range, keeps
+# the strength runner fail-closed against an accidental search sweep.
+REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG = {
+    **REGISTERED_ENGINE_CONFIG,
+    "model_world_workers": 2,
+}
 # The sidecar is intentionally not a general-purpose MCTS evaluator: it may
 # only certify a configuration whose search semantics have been registered in
 # advance.  The CUDA deep protocol is the exact fixed-work configuration used
@@ -201,6 +210,7 @@ REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG = {
 }
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
+    REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG,
@@ -1938,6 +1948,27 @@ def _sealed_override_audit_writer(
     return pre_step_write, public_decision_write
 
 
+def _fresh_continuation_policy_factory_builder(policy_builder: Any):
+    """Adapt a history-aware policy builder to the continuation factory API.
+
+    The sealed controller supplies trusted source histories first, while each
+    continuation rollout must allocate a fresh pair of mutable policies later.
+    Keeping those calls separate prevents a shared history buffer from leaking
+    between the paired continuation arms.
+    """
+
+    if not callable(policy_builder):
+        raise HeadToHeadError("sealed override continuation policy builder must be callable.")
+
+    def build(observation_histories: Mapping[str, tuple[Any, ...]]):
+        def fresh() -> Mapping[str, Any]:
+            return policy_builder(observation_histories)
+
+        return fresh
+
+    return build
+
+
 def _sealed_root_action_audit_path(
     out_root: Path,
     *,
@@ -2922,7 +2953,9 @@ def main(argv: list[str] | None = None) -> int:
                 incumbent=incumbent,
                 candidate_seat=candidate_seat,
                 env_factory=lambda: LocalShowdownEnv(env_config),
-                continuation_policy_factory_builder=continuation_policy_factory,
+                continuation_policy_factory_builder=(
+                    _fresh_continuation_policy_factory_builder(continuation_policy_factory)
+                ),
                 continuation_rollout_config=continuation_rollout_config,
                 max_continuation_decision_rounds=(
                     sealed_override_audit.max_continuation_decision_rounds
