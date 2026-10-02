@@ -74,6 +74,10 @@ COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 DECISION_RNG_WITNESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-decision-rng-witness.v1"
 DECISION_RNG_CAPTURE_CONTRACT_KEY = "decision_rng_witness"
+DECISION_DEADLINE_RECEIPT_SCHEMA_VERSION = (
+    "pokezero.mcts-guided-vs-raw-decision-deadline-receipt.v1"
+)
+DECISION_DEADLINE_RECEIPT_CONTRACT_KEY = "decision_deadline_receipt"
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v5"
 )
@@ -317,6 +321,49 @@ def _resolve_decision_rng_capture_contract(
     if contract["capture_required"] is not capture_requested:
         raise HeadToHeadError(
             "decision-RNG witness capture mode differs from the immutable runtime manifest."
+        )
+    return {"capture_required": capture_requested}
+
+
+def _resolve_decision_deadline_receipt_contract(
+    out_root: Path, *, capture_requested: bool
+) -> Mapping[str, bool] | None:
+    """Freeze per-decision deadline receipt capture for one durable scorer root.
+
+    Deadline receipts make it possible to distinguish complete native work from
+    a deadline prefix. They are evidence, not a runtime option, so a resumed
+    root may not add or remove them after any decision has been committed.
+    """
+
+    runtime_manifest = out_root / "manifest.json"
+    if not runtime_manifest.exists():
+        return {"capture_required": capture_requested}
+    try:
+        payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HeadToHeadError(
+            "cannot read extant runtime manifest for deadline-receipt resume validation: "
+            f"{error}"
+        ) from error
+    payload = _mapping(payload, label="extant runtime manifest")
+    if payload.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise HeadToHeadError("extant runtime manifest has an unsupported schema.")
+    contract = payload.get(DECISION_DEADLINE_RECEIPT_CONTRACT_KEY)
+    if contract is None:
+        if capture_requested:
+            raise HeadToHeadError(
+                "cannot upgrade a legacy durable root to decision-deadline receipt capture; "
+                "start a fresh root so every completed decision has a receipt."
+            )
+        return None
+    contract = _mapping(contract, label="runtime manifest decision_deadline_receipt")
+    if set(contract) != {"capture_required"} or not isinstance(
+        contract["capture_required"], bool
+    ):
+        raise HeadToHeadError("runtime manifest has an invalid decision-deadline receipt contract.")
+    if contract["capture_required"] is not capture_requested:
+        raise HeadToHeadError(
+            "decision-deadline receipt capture mode differs from the immutable runtime manifest."
         )
     return {"capture_required": capture_requested}
 
@@ -703,6 +750,25 @@ def _decision_rng_witness_path(
     return (
         out_root
         / "decision-rng-witnesses"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
+    )
+
+
+def _decision_deadline_receipt_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+) -> Path:
+    """Canonical immutable location for one native-deadline receipt."""
+
+    if record.seed != seed or record.acting_player != candidate_seat:
+        raise HeadToHeadError("decision deadline receipt does not match its public decision identity.")
+    return (
+        out_root
+        / "decision-deadline-receipts"
         / f"seed-{seed}-{candidate_seat}"
         / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
     )
@@ -1913,6 +1979,134 @@ def _decision_rng_witness_payload(
     }
 
 
+def _validated_decision_deadline_receipt(value: object) -> dict[str, Any]:
+    """Retain only complete native-work/deadline accounting for one action."""
+
+    receipt = _mapping(value, label="guided decision deadline receipt")
+    expected = {
+        "scope", "requested_ms", "native_batch_guard_ms", "deadline_elapsed_ms",
+        "deadline_overshoot_ms", "exhausted", "worlds_budget_skipped", "native_invocations",
+    }
+    if set(receipt) != expected or receipt.get("scope") != "whole_model_decision":
+        raise HeadToHeadError("guided decision deadline receipt has an unsupported schema.")
+    requested_ms = _nonnegative_int(receipt.get("requested_ms"), label="deadline requested_ms")
+    if requested_ms <= 0:
+        raise HeadToHeadError("deadline requested_ms must be positive.")
+    guard_ms = _nonnegative_int(receipt.get("native_batch_guard_ms"), label="deadline native_batch_guard_ms")
+    elapsed_ms = _finite_number(receipt.get("deadline_elapsed_ms"), label="deadline elapsed")
+    overshoot_ms = _finite_number(receipt.get("deadline_overshoot_ms"), label="deadline overshoot")
+    if elapsed_ms < 0 or overshoot_ms < 0:
+        raise HeadToHeadError("deadline durations must be non-negative.")
+    if abs(overshoot_ms - max(0.0, elapsed_ms - requested_ms)) > 0.001:
+        raise HeadToHeadError("deadline overshoot does not match requested and elapsed time.")
+    exhausted = receipt.get("exhausted")
+    if not isinstance(exhausted, bool):
+        raise HeadToHeadError("deadline exhaustion must be boolean.")
+    skipped = _nonnegative_int(receipt.get("worlds_budget_skipped"), label="deadline skipped worlds")
+    raw_invocations = receipt.get("native_invocations")
+    if not isinstance(raw_invocations, list) or not raw_invocations:
+        raise HeadToHeadError("deadline receipt requires at least one native invocation.")
+    invocations: list[dict[str, Any]] = []
+    any_native_exhausted = False
+    common = {"status", "world_seed", "multiplicity", "requested_iterations", "time_budget_ms"}
+    for raw in raw_invocations:
+        invocation = _mapping(raw, label="deadline native invocation")
+        status = invocation.get("status")
+        if status == "completed":
+            required = common | {"completed_iterations", "remaining_iterations", "time_budget_elapsed_ms", "time_budget_batch_overshoot_ms", "time_budget_exhausted", "root_visits"}
+            if set(invocation) != required:
+                raise HeadToHeadError("completed deadline invocation has unsupported fields.")
+            completed = _nonnegative_int(invocation.get("completed_iterations"), label="completed native iterations")
+            remaining = _nonnegative_int(invocation.get("remaining_iterations"), label="remaining native iterations")
+            native_elapsed = _finite_number(invocation.get("time_budget_elapsed_ms"), label="native elapsed")
+            native_overshoot = _finite_number(invocation.get("time_budget_batch_overshoot_ms"), label="native overshoot")
+            if native_elapsed < 0 or native_overshoot < 0:
+                raise HeadToHeadError("native deadline durations must be non-negative.")
+            native_exhausted = invocation.get("time_budget_exhausted")
+            if not isinstance(native_exhausted, bool):
+                raise HeadToHeadError("native deadline exhaustion must be boolean.")
+            root_visits = _mapping(invocation.get("root_visits"), label="native root visits")
+            if set(root_visits) != {"side_one", "side_two"}:
+                raise HeadToHeadError("native root visits have an unsupported schema.")
+            normalized_visits = {
+                side: _nonnegative_int(root_visits[side], label=f"native {side} visits")
+                for side in ("side_one", "side_two")
+            }
+            if any(count != completed for count in normalized_visits.values()):
+                raise HeadToHeadError("native root visits do not equal completed iterations.")
+            time_budget_ms = _nonnegative_int(invocation.get("time_budget_ms"), label="native time budget")
+            requested_iterations = _nonnegative_int(invocation.get("requested_iterations"), label="requested native iterations")
+            if time_budget_ms <= 0 or requested_iterations != completed + remaining:
+                raise HeadToHeadError("native deadline iteration accounting is invalid.")
+            if native_exhausted and native_elapsed + 0.001 < time_budget_ms:
+                raise HeadToHeadError("native deadline exhaustion precedes its time budget.")
+            if abs(native_overshoot - max(0.0, native_elapsed - time_budget_ms)) > 0.001:
+                raise HeadToHeadError("native deadline overshoot does not match elapsed time.")
+            if remaining and not native_exhausted:
+                raise HeadToHeadError("unfinished native work lacks an exhaustion witness.")
+            normalized = {
+                "status": status,
+                "world_seed": _nonnegative_int(invocation.get("world_seed"), label="world seed"),
+                "multiplicity": _nonnegative_int(invocation.get("multiplicity"), label="world multiplicity"),
+                "requested_iterations": requested_iterations,
+                "completed_iterations": completed,
+                "remaining_iterations": remaining,
+                "time_budget_ms": time_budget_ms,
+                "time_budget_elapsed_ms": native_elapsed,
+                "time_budget_batch_overshoot_ms": native_overshoot,
+                "time_budget_exhausted": native_exhausted,
+                "root_visits": normalized_visits,
+            }
+            any_native_exhausted = any_native_exhausted or native_exhausted
+        elif status == "refused":
+            required = common | {"refusal"}
+            if set(invocation) != required or not isinstance(invocation.get("refusal"), str):
+                raise HeadToHeadError("refused deadline invocation has unsupported fields.")
+            time_budget_ms = _nonnegative_int(invocation.get("time_budget_ms"), label="native time budget")
+            if time_budget_ms <= 0:
+                raise HeadToHeadError("refused native invocation has no positive time budget.")
+            normalized = {
+                "status": status,
+                "world_seed": _nonnegative_int(invocation.get("world_seed"), label="world seed"),
+                "multiplicity": _nonnegative_int(invocation.get("multiplicity"), label="world multiplicity"),
+                "requested_iterations": _nonnegative_int(invocation.get("requested_iterations"), label="requested native iterations"),
+                "time_budget_ms": time_budget_ms,
+                "refusal": invocation["refusal"],
+            }
+            any_native_exhausted = True
+        else:
+            raise HeadToHeadError("deadline native invocation has an unknown status.")
+        if normalized["multiplicity"] <= 0:
+            raise HeadToHeadError("deadline native invocation multiplicity must be positive.")
+        invocations.append(normalized)
+    if exhausted != bool(skipped or any_native_exhausted or elapsed_ms + 0.001 >= requested_ms):
+        raise HeadToHeadError("deadline exhaustion disagrees with its invocation receipt.")
+    return {
+        "scope": "whole_model_decision", "requested_ms": requested_ms,
+        "native_batch_guard_ms": guard_ms, "deadline_elapsed_ms": elapsed_ms,
+        "deadline_overshoot_ms": overshoot_ms, "exhausted": exhausted,
+        "worlds_budget_skipped": skipped, "native_invocations": invocations,
+    }
+
+
+def _decision_deadline_receipt_payload(
+    *, candidate: MctsPolicySpec, incumbent: MctsPolicySpec, candidate_seat: str,
+    record: PublicDecisionRecord, time_budget: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": DECISION_DEADLINE_RECEIPT_SCHEMA_VERSION,
+        "seed": record.seed, "candidate_seat": candidate_seat,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "public_decision": {
+            "decision_id": record.decision_id, "battle_id": record.battle_id,
+            "acting_player": record.acting_player, "turn_index": record.turn_index,
+            "recorded_action_index": record.recorded_action_index,
+        },
+        "time_budget": _validated_decision_deadline_receipt(time_budget),
+    }
+
+
 def _validated_serialized_rng_state(value: Any) -> tuple[int, tuple[int, ...], float | None]:
     """Fail closed on a JSON witness that cannot restore Python's RNG state."""
 
@@ -1957,6 +2151,7 @@ def _public_decision_writer(
     candidate_seat: str,
     guided_policy: PublicOnlyMctsPolicy,
     capture_decision_rng_state: bool = False,
+    capture_decision_deadline_receipt: bool = False,
 ):
     """Persist guided decisions as individually immutable public replay units."""
 
@@ -1993,6 +2188,19 @@ def _public_decision_writer(
                     candidate_seat=candidate_seat,
                     record=record,
                     rng_state=rng_state,
+                ),
+            )
+        if capture_decision_deadline_receipt:
+            metadata = _mapping(guided_policy.latest_decision_metadata, label="guided decision metadata")
+            engine_mcts = _mapping(metadata.get("engine_mcts"), label="guided engine MCTS metadata")
+            time_budget = _mapping(engine_mcts.get("time_budget"), label="guided decision time budget")
+            _write_immutable_json(
+                _decision_deadline_receipt_path(
+                    out_root, seed=seed, candidate_seat=candidate_seat, record=record
+                ),
+                _decision_deadline_receipt_payload(
+                    candidate=candidate, incumbent=incumbent, candidate_seat=candidate_seat,
+                    record=record, time_budget=time_budget,
                 ),
             )
         ledger_path = _branch_prior_ledger_path(
@@ -2463,6 +2671,45 @@ def _validate_decision_rng_witness_evidence(out_root: Path, game: Any) -> None:
         _validated_serialized_rng_state(payload.get("rng_state"))
 
 
+def _validate_decision_deadline_receipt_evidence(out_root: Path, game: Any) -> None:
+    """Require one source-bound deadline/work receipt for every guided action."""
+
+    records = _validate_public_decision_evidence(out_root, game)
+    root = out_root / "decision-deadline-receipts" / f"seed-{game.seed}-{game.candidate_seat}"
+    paths = sorted(root.glob("turn-*.json")) if root.is_dir() else []
+    if len(paths) != len(records):
+        raise HeadToHeadError("deadline receipt count differs from public decision evidence.")
+    expected_paths = {
+        _decision_deadline_receipt_path(
+            out_root, seed=game.seed, candidate_seat=game.candidate_seat, record=record
+        ): record
+        for record in records
+    }
+    if set(paths) != set(expected_paths):
+        raise HeadToHeadError("deadline receipt paths do not bind public decision evidence.")
+    for path, record in expected_paths.items():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read decision deadline receipt {path}: {error}") from error
+        expected = {
+            "schema_version": DECISION_DEADLINE_RECEIPT_SCHEMA_VERSION,
+            "seed": record.seed, "candidate_seat": game.candidate_seat,
+            "candidate_provenance_sha256": game.candidate.provenance_sha256,
+            "raw_provenance_sha256": game.incumbent.provenance_sha256,
+            "public_decision": {
+                "decision_id": record.decision_id, "battle_id": record.battle_id,
+                "acting_player": record.acting_player, "turn_index": record.turn_index,
+                "recorded_action_index": record.recorded_action_index,
+            },
+        }
+        if not isinstance(payload, Mapping) or {key: payload.get(key) for key in expected} != expected:
+            raise HeadToHeadError("deadline receipt does not bind its public decision.")
+        if set(payload) != {*expected, "time_budget"}:
+            raise HeadToHeadError("deadline receipt has an unsupported wrapper shape.")
+        _validated_decision_deadline_receipt(payload.get("time_budget"))
+
+
 def _validate_sealed_override_audit_evidence(out_root: Path, game: Any) -> None:
     """Require a one-to-one sealed terminal readout for measured public overrides."""
 
@@ -2907,6 +3154,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="persist a replayable pre-selection RNG witness beside each guided public decision",
     )
+    parser.add_argument(
+        "--capture-decision-deadline-receipt",
+        action="store_true",
+        help="persist native iteration and deadline accounting beside each guided public decision",
+    )
     return parser
 
 
@@ -2917,7 +3169,11 @@ def main(argv: list[str] | None = None) -> int:
     decision_rng_capture_contract = _resolve_decision_rng_capture_contract(
         out_root, capture_requested=args.capture_decision_rng_state
     )
+    decision_deadline_receipt_contract = _resolve_decision_deadline_receipt_contract(
+        out_root, capture_requested=args.capture_decision_deadline_receipt
+    )
     capture_decision_rng_state = args.capture_decision_rng_state
+    capture_decision_deadline_receipt = args.capture_decision_deadline_receipt
     manifest = _load_manifest(args.manifest)
     seeds = _seeds(manifest)
     study = _validated_study(manifest, seeds=seeds)
@@ -3136,6 +3392,8 @@ def main(argv: list[str] | None = None) -> int:
     }
     if decision_rng_capture_contract is not None:
         runtime_manifest[DECISION_RNG_CAPTURE_CONTRACT_KEY] = decision_rng_capture_contract
+    if decision_deadline_receipt_contract is not None:
+        runtime_manifest[DECISION_DEADLINE_RECEIPT_CONTRACT_KEY] = decision_deadline_receipt_contract
     _write_immutable_json(out_root / "manifest.json", runtime_manifest)
 
     raw_adapters: dict[tuple[int, str], DeterministicRawPolicyAdapter] = {}
@@ -3176,6 +3434,7 @@ def main(argv: list[str] | None = None) -> int:
             candidate_seat=candidate_seat,
             guided_policy=guided,
             capture_decision_rng_state=capture_decision_rng_state,
+            capture_decision_deadline_receipt=capture_decision_deadline_receipt,
         )
         public_sink = public_decision_writer
         sealed_sink = None
@@ -3251,6 +3510,8 @@ def main(argv: list[str] | None = None) -> int:
             _validate_public_decision_evidence(out_root, game)
             if capture_decision_rng_state:
                 _validate_decision_rng_witness_evidence(out_root, game)
+            if capture_decision_deadline_receipt:
+                _validate_decision_deadline_receipt_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
             if sealed_root_action_audit is not None:
@@ -3263,6 +3524,8 @@ def main(argv: list[str] | None = None) -> int:
             _validate_public_decision_evidence(out_root, game)
             if capture_decision_rng_state:
                 _validate_decision_rng_witness_evidence(out_root, game)
+            if capture_decision_deadline_receipt:
+                _validate_decision_deadline_receipt_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
             if sealed_root_action_audit is not None:
@@ -3301,6 +3564,8 @@ def main(argv: list[str] | None = None) -> int:
             _validate_public_decision_evidence(out_root, game)
             if capture_decision_rng_state:
                 _validate_decision_rng_witness_evidence(out_root, game)
+            if capture_decision_deadline_receipt:
+                _validate_decision_deadline_receipt_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
             if sealed_root_action_audit is not None:
@@ -3343,6 +3608,8 @@ def main(argv: list[str] | None = None) -> int:
     }
     if decision_rng_capture_contract is not None:
         complete[DECISION_RNG_CAPTURE_CONTRACT_KEY] = decision_rng_capture_contract
+    if decision_deadline_receipt_contract is not None:
+        complete[DECISION_DEADLINE_RECEIPT_CONTRACT_KEY] = decision_deadline_receipt_contract
     _write_immutable_json(out_root / "COMPLETE.json", complete)
     print(json.dumps(complete, sort_keys=True), flush=True)
     return 0

@@ -159,6 +159,34 @@ def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
     )
 
 
+def _time_budget_receipt(*, completed: int = 16, remaining: int = 0) -> dict[str, object]:
+    requested = completed + remaining
+    return {
+        "scope": "whole_model_decision",
+        "requested_ms": 1000,
+        "native_batch_guard_ms": 64,
+        "deadline_elapsed_ms": 1000.0 if remaining else 823.0,
+        "deadline_overshoot_ms": 0.0,
+        "exhausted": bool(remaining),
+        "worlds_budget_skipped": 0,
+        "native_invocations": [
+            {
+                "status": "completed",
+                "world_seed": 7,
+                "multiplicity": 1,
+                "requested_iterations": requested,
+                "completed_iterations": completed,
+                "remaining_iterations": remaining,
+                "time_budget_ms": 936,
+                "time_budget_elapsed_ms": 936.0 if remaining else 823.0,
+                "time_budget_batch_overshoot_ms": 0.0,
+                "time_budget_exhausted": bool(remaining),
+                "root_visits": {"side_one": completed, "side_two": completed},
+            }
+        ],
+    }
+
+
 def _terminal_model_rollout_shadow() -> dict[str, object]:
     moments = {
         "leaves": 2,
@@ -775,6 +803,27 @@ class DecisionRngCaptureContractTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(Exception, "cannot upgrade a legacy"):
                 RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=True)
+
+    def test_deadline_receipt_mode_cannot_change_when_resuming(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_runtime_manifest(
+                root,
+                {
+                    "schema_version": RUNNER.MANIFEST_SCHEMA_VERSION,
+                    RUNNER.DECISION_DEADLINE_RECEIPT_CONTRACT_KEY: {"capture_required": True},
+                },
+            )
+            with self.assertRaisesRegex(Exception, "differs from the immutable"):
+                RUNNER._resolve_decision_deadline_receipt_contract(
+                    root, capture_requested=False
+                )
+            self.assertEqual(
+                RUNNER._resolve_decision_deadline_receipt_contract(
+                    root, capture_requested=True
+                ),
+                {"capture_required": True},
+            )
 
 
 class GuidedConfigTest(unittest.TestCase):
@@ -1484,6 +1533,48 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 capture_decision_rng_state=True,
             )(record)
             RUNNER._validate_decision_rng_witness_evidence(Path(directory), game)
+
+    def test_writer_captures_a_complete_deadline_receipt(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_record(record)
+        guided.latest_decision_metadata["engine_mcts"]["time_budget"] = _time_budget_receipt(
+            completed=14, remaining=2
+        )
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            RUNNER._public_decision_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+                capture_decision_deadline_receipt=True,
+            )(record)
+            path = RUNNER._decision_deadline_receipt_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload["schema_version"], RUNNER.DECISION_DEADLINE_RECEIPT_SCHEMA_VERSION
+            )
+            self.assertEqual(payload["time_budget"]["native_invocations"][0]["remaining_iterations"], 2)
+            RUNNER._validate_decision_deadline_receipt_evidence(root, game)
+
+    def test_deadline_receipt_refuses_unwitnessed_remaining_work(self) -> None:
+        receipt = _time_budget_receipt(completed=14, remaining=2)
+        receipt["native_invocations"][0]["time_budget_exhausted"] = False
+        with self.assertRaisesRegex(Exception, "unfinished native work"):
+            RUNNER._validated_decision_deadline_receipt(receipt)
 
     def test_writer_refuses_to_bind_one_decision_to_another_decision_metadata(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
