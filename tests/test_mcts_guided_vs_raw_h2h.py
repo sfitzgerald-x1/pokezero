@@ -1317,6 +1317,7 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 RUNNER._validate_public_decision_evidence(Path(directory), game),
                 (record,),
             )
+            self.assertFalse((Path(directory) / "decision-rng-witnesses").exists())
 
     def test_writer_can_capture_a_replayable_rng_boundary_witness(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
