@@ -319,6 +319,15 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--allow-zero-native-prefix",
+        action="store_true",
+        help=(
+            "Permit a qualification with no partial native deadline prefix. This is only "
+            "for a separately registered full-work contract; all normal deadline "
+            "qualifications retain the default prefix requirement."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Reuse only independently revalidated, durable decision units for this exact manifest.",
@@ -587,6 +596,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         worlds=args.worlds,
         model_world_workers=args.model_world_workers,
         expected_decisions=16,
+        require_native_prefix=not args.allow_zero_native_prefix,
     )
     corpus_file_sha256 = sha256_file(args.corpus)
     if corpus_file_sha256 != args.expected_corpus_file_sha256:
