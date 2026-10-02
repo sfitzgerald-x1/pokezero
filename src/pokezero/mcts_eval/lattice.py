@@ -534,6 +534,7 @@ class _LiveEngineTimingDecider:
         public_action_rounds: Sequence[Any],
         decision_rng_seed: int,
         decision_rng_state: tuple[object, object, object] | Mapping[str, Any] | None = None,
+        source_requested_players: Sequence[str] | None = None,
     ) -> PreparedDecision:
         """Replay one source-captured public root without inventing a corpus line.
 
@@ -555,6 +556,13 @@ class _LiveEngineTimingDecider:
             )
         if isinstance(decision_rng_seed, bool) or not isinstance(decision_rng_seed, int):
             raise ContractError(f"{record.decision_id}: decision RNG seed must be an integer")
+        requested_players: tuple[str, ...] | None = None
+        if source_requested_players is not None:
+            if isinstance(source_requested_players, (str, bytes)):
+                raise ContractError(f"{record.decision_id}: source request boundary is malformed")
+            requested_players = tuple(source_requested_players)
+            if requested_players not in {(record.acting_player,), ("p1", "p2")}:
+                raise ContractError(f"{record.decision_id}: source request boundary is unsupported")
         decision_rng = random.Random(decision_rng_seed)
         if decision_rng_state is not None:
             try:
@@ -598,6 +606,7 @@ class _LiveEngineTimingDecider:
             expected_public_observation=record.observation,
             expected_belief_view=record.public_belief_view,
             decision_rng=decision_rng,
+            source_requested_players=requested_players,
         )
 
     def _prepare_replay(
@@ -609,6 +618,7 @@ class _LiveEngineTimingDecider:
         expected_public_observation: Any | None,
         expected_belief_view: Mapping[str, Any] | None,
         decision_rng: random.Random | None = None,
+        source_requested_players: tuple[str, ...] | None = None,
     ) -> PreparedDecision:
         """Replay a public prefix, with an optional raw-line integrity witness."""
         from ..policy import PolicyContext
@@ -691,7 +701,17 @@ class _LiveEngineTimingDecider:
                 format_id=self._FORMAT_ID,
                 seed=record.battle_seed,
                 observation=observation,
-                requested_players=tuple(replayed.requested_players),
+                # A source-root record may have been selected at a simultaneous
+                # request boundary even though materialising its public prefix
+                # leaves only the acting seat requesting locally.  The source
+                # boundary is a public, recorded part of the decision context;
+                # replay it exactly when supplied rather than silently changing
+                # the MCTS input.
+                requested_players=(
+                    source_requested_players
+                    if source_requested_players is not None
+                    else tuple(replayed.requested_players)
+                ),
                 trajectory=trajectory,  # type: ignore[arg-type]  # public-only runtime history
                 requested_legal_action_masks={record.seat: legal_mask},
                 requested_observations={record.seat: observation},
