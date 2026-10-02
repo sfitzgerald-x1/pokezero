@@ -8,6 +8,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+import random
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -1316,6 +1317,35 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 RUNNER._validate_public_decision_evidence(Path(directory), game),
                 (record,),
             )
+
+    def test_writer_can_capture_a_replayable_rng_boundary_witness(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_record(record)
+        guided.latest_decision_rng_state = random.Random(23).getstate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            RUNNER._public_decision_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+                capture_decision_rng_state=True,
+            )(record)
+            path = RUNNER._decision_rng_witness_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema_version"], RUNNER.DECISION_RNG_WITNESS_SCHEMA_VERSION)
+            self.assertEqual(payload["public_decision"]["decision_id"], record.decision_id)
+            self.assertEqual(payload["rng_state"]["algorithm"], "python-random-mt19937")
+            restored = random.Random()
+            state = payload["rng_state"]
+            restored.setstate((state["state_version"], tuple(state["internal_state"]), state["gauss_next"]))
+            self.assertEqual(restored.getstate(), guided.latest_decision_rng_state)
 
     def test_writer_refuses_to_bind_one_decision_to_another_decision_metadata(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")

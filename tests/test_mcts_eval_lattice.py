@@ -370,6 +370,9 @@ class T(unittest.TestCase):
                 case.assertEqual(player, "p1")
                 return state
 
+        replay_rng = random.Random(97)
+        replay_state = replay_rng.getstate()
+
         class FakePolicy:
             def __init__(self):
                 self.stats = SimpleNamespace(
@@ -387,7 +390,7 @@ class T(unittest.TestCase):
 
             def select_action_with_context(self, context, *, rng):
                 case.assertEqual(context.seed, 17)
-                case.assertEqual(rng.randrange(10_000), random.Random(73).randrange(10_000))
+                case.assertEqual(rng.randrange(10_000), replay_rng.randrange(10_000))
                 return SimpleNamespace(action_index=4)
 
         decider = object.__new__(_LiveEngineTimingDecider)
@@ -400,6 +403,7 @@ class T(unittest.TestCase):
                 SearchConfig(depth=4, sims=512),
                 public_action_rounds=source_record.public_resolved_action_rounds,
                 decision_rng_seed=73,
+                decision_rng_state=replay_state,
             )()
         self.assertEqual(telemetry["root_action"], "switch 2")
 

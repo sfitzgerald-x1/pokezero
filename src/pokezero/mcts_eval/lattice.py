@@ -488,6 +488,7 @@ class _LiveEngineTimingDecider:
         *,
         public_action_rounds: Sequence[Any],
         decision_rng_seed: int,
+        decision_rng_state: tuple[object, object, object] | None = None,
     ) -> PreparedDecision:
         """Replay one source-captured public root without inventing a corpus line.
 
@@ -509,6 +510,14 @@ class _LiveEngineTimingDecider:
             )
         if isinstance(decision_rng_seed, bool) or not isinstance(decision_rng_seed, int):
             raise ContractError(f"{record.decision_id}: decision RNG seed must be an integer")
+        decision_rng = random.Random(decision_rng_seed)
+        if decision_rng_state is not None:
+            try:
+                decision_rng.setstate(decision_rng_state)
+            except (TypeError, ValueError) as error:
+                raise ContractError(
+                    f"{record.decision_id}: decision RNG state is not replayable"
+                ) from error
         candidates = record.observation.acting_player_state.get("action_candidates")
         if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
             raise ContractError(f"{record.decision_id}: source root has no action candidates")
@@ -538,6 +547,7 @@ class _LiveEngineTimingDecider:
             expected_event_prefix=None,
             expected_public_observation=record.observation,
             expected_belief_view=record.public_belief_view,
+            decision_rng=decision_rng,
         )
 
     def _prepare_replay(
@@ -548,6 +558,7 @@ class _LiveEngineTimingDecider:
         expected_event_prefix: Sequence[str] | None,
         expected_public_observation: Any | None,
         expected_belief_view: Mapping[str, Any] | None,
+        decision_rng: random.Random | None = None,
     ) -> PreparedDecision:
         """Replay a public prefix, with an optional raw-line integrity witness."""
         from ..policy import PolicyContext
@@ -637,8 +648,10 @@ class _LiveEngineTimingDecider:
                 public_materialization_state=public_state,
             )
             before = self._snapshot_stats(policy)
+            selection_rng = decision_rng or random.Random(record.bot_rng_seed)
             decision = policy.select_action_with_context(
-                context, rng=random.Random(record.bot_rng_seed)
+                context,
+                rng=selection_rng,
             )
             after = self._snapshot_stats(policy)
             action_index = int(decision.action_index)

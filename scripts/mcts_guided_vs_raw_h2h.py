@@ -71,6 +71,7 @@ MANIFEST_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-manifest.v1"
 PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
+DECISION_RNG_WITNESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-decision-rng-witness.v1"
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v5"
 )
@@ -599,6 +600,23 @@ def _public_decision_path(
     return (
         out_root
         / "public-decision-records"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
+    )
+
+
+def _decision_rng_witness_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+) -> Path:
+    """Canonical immutable location for one source decision's RNG boundary."""
+
+    return (
+        out_root
+        / "decision-rng-witnesses"
         / f"seed-{seed}-{candidate_seat}"
         / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
     )
@@ -1752,6 +1770,63 @@ def _public_decision_payload(
     }
 
 
+def _serializable_rng_state(value: object) -> dict[str, Any]:
+    """Encode Python's MT state without unsafe pickle deserialization.
+
+    The witness is intentionally a state snapshot, not a seed: the source
+    rollout maintains one RNG per player and that state has already advanced
+    by the time a later MCTS decision samples its belief worlds.
+    """
+
+    if not isinstance(value, tuple) or len(value) != 3:
+        raise HeadToHeadError("guided decision RNG state is not a Python Random state tuple.")
+    version, internal_state, gauss_next = value
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or not isinstance(internal_state, tuple)
+        or len(internal_state) < 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in internal_state)
+        or (gauss_next is not None and (
+            isinstance(gauss_next, bool)
+            or not isinstance(gauss_next, (int, float))
+            or not math.isfinite(float(gauss_next))
+        ))
+    ):
+        raise HeadToHeadError("guided decision RNG state has an unsupported shape.")
+    return {
+        "algorithm": "python-random-mt19937",
+        "state_version": version,
+        "internal_state": list(internal_state),
+        "gauss_next": gauss_next,
+    }
+
+
+def _decision_rng_witness_payload(
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+    rng_state: object,
+) -> dict[str, Any]:
+    return {
+        "schema_version": DECISION_RNG_WITNESS_SCHEMA_VERSION,
+        "seed": record.seed,
+        "candidate_seat": candidate_seat,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "public_decision": {
+            "decision_id": record.decision_id,
+            "battle_id": record.battle_id,
+            "acting_player": record.acting_player,
+            "turn_index": record.turn_index,
+            "recorded_action_index": record.recorded_action_index,
+        },
+        "rng_state": _serializable_rng_state(rng_state),
+    }
+
+
 def _public_decision_writer(
     out_root: Path,
     *,
@@ -1760,6 +1835,7 @@ def _public_decision_writer(
     seed: int,
     candidate_seat: str,
     guided_policy: PublicOnlyMctsPolicy,
+    capture_decision_rng_state: bool = False,
 ):
     """Persist guided decisions as individually immutable public replay units."""
 
@@ -1782,6 +1858,22 @@ def _public_decision_writer(
                 record=record,
             ),
         )
+        if capture_decision_rng_state:
+            rng_state = guided_policy.latest_decision_rng_state
+            if rng_state is None:
+                raise HeadToHeadError("guided decision lacks a capturable pre-selection RNG state.")
+            _write_immutable_json(
+                _decision_rng_witness_path(
+                    out_root, seed=seed, candidate_seat=candidate_seat, record=record
+                ),
+                _decision_rng_witness_payload(
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat=candidate_seat,
+                    record=record,
+                    rng_state=rng_state,
+                ),
+            )
         ledger_path = _branch_prior_ledger_path(
             out_root, seed=seed, candidate_seat=candidate_seat, record=record
         )
@@ -2647,6 +2739,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--capture-decision-rng-state",
+        action="store_true",
+        help="persist a replayable pre-selection RNG witness beside each guided public decision",
+    )
     return parser
 
 
@@ -2887,7 +2984,8 @@ def main(argv: list[str] | None = None) -> int:
                 config=candidate_config,
                 policy_id=candidate.policy_id,
                 annotation_source=annotations,
-            )
+            ),
+            capture_decision_rng_state=args.capture_decision_rng_state,
         )
         raw_adapter = DeterministicRawPolicyAdapter(
             load_transformer_policy(
@@ -2910,6 +3008,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=seed,
             candidate_seat=candidate_seat,
             guided_policy=guided,
+            capture_decision_rng_state=args.capture_decision_rng_state,
         )
         public_sink = public_decision_writer
         sealed_sink = None
