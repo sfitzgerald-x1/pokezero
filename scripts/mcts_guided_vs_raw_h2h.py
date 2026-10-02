@@ -168,6 +168,15 @@ REGISTERED_PRACTICAL_WORLD4_BATCH8_S24_ENGINE_CONFIG = {
     **REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
     "search_sims": 24,
 }
+# The s24 profile proved latency-safe but its source-bound full-game collector
+# exposed native deadline truncation.  This lower exact budget is therefore a
+# separate replacement candidate, not a fallback or range: it preserves the
+# qualified one-second, four-world, batch-eight semantics while leaving enough
+# per-world headroom for every registered native iteration to complete.
+REGISTERED_PRACTICAL_WORLD4_BATCH8_S16_ENGINE_CONFIG = {
+    **REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
+    "search_sims": 16,
+}
 # The sidecar is intentionally not a general-purpose MCTS evaluator: it may
 # only certify a configuration whose search semantics have been registered in
 # advance.  The CUDA deep protocol is the exact fixed-work configuration used
@@ -232,6 +241,7 @@ REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG,
     REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
     REGISTERED_PRACTICAL_WORLD4_BATCH8_S24_ENGINE_CONFIG,
+    REGISTERED_PRACTICAL_WORLD4_BATCH8_S16_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG,
