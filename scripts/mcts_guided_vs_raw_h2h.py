@@ -16,6 +16,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import random
 import sys
 import time
 from typing import Any, Mapping, Sequence
@@ -1827,6 +1828,41 @@ def _decision_rng_witness_payload(
     }
 
 
+def _validated_serialized_rng_state(value: Any) -> tuple[int, tuple[int, ...], float | None]:
+    """Fail closed on a JSON witness that cannot restore Python's RNG state."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "algorithm", "state_version", "internal_state", "gauss_next"
+    }:
+        raise HeadToHeadError("decision RNG witness has an unsupported state shape.")
+    version = value.get("state_version")
+    internal_state = value.get("internal_state")
+    gauss_next = value.get("gauss_next")
+    if (
+        value.get("algorithm") != "python-random-mt19937"
+        or isinstance(version, bool)
+        or not isinstance(version, int)
+        or not isinstance(internal_state, list)
+        or len(internal_state) < 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in internal_state)
+        or (
+            gauss_next is not None
+            and (
+                isinstance(gauss_next, bool)
+                or not isinstance(gauss_next, (int, float))
+                or not math.isfinite(float(gauss_next))
+            )
+        )
+    ):
+        raise HeadToHeadError("decision RNG witness has an invalid state.")
+    state = (version, tuple(internal_state), gauss_next)
+    try:
+        random.Random().setstate(state)
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError("decision RNG witness is not replayable.") from error
+    return state
+
+
 def _public_decision_writer(
     out_root: Path,
     *,
@@ -2298,6 +2334,48 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
     if len(decision_ids) != len(records) or len(turn_indices) != len(records):
         raise HeadToHeadError("public decision evidence contains duplicate guided decision identities.")
     return tuple(records)
+
+
+def _validate_decision_rng_witness_evidence(out_root: Path, game: Any) -> None:
+    """Require one valid, source-bound RNG witness for every guided decision."""
+
+    records = _validate_public_decision_evidence(out_root, game)
+    root = out_root / "decision-rng-witnesses" / f"seed-{game.seed}-{game.candidate_seat}"
+    paths = sorted(root.glob("turn-*.json")) if root.is_dir() else []
+    if len(paths) != len(records):
+        raise HeadToHeadError("decision RNG witness count differs from public decision evidence.")
+    expected_paths = {
+        _decision_rng_witness_path(
+            out_root, seed=game.seed, candidate_seat=game.candidate_seat, record=record
+        ): record
+        for record in records
+    }
+    if set(paths) != set(expected_paths):
+        raise HeadToHeadError("decision RNG witness paths do not bind public decision evidence.")
+    for path, record in expected_paths.items():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read decision RNG witness {path}: {error}") from error
+        expected = {
+            "schema_version": DECISION_RNG_WITNESS_SCHEMA_VERSION,
+            "seed": record.seed,
+            "candidate_seat": game.candidate_seat,
+            "candidate_provenance_sha256": game.candidate.provenance_sha256,
+            "raw_provenance_sha256": game.incumbent.provenance_sha256,
+            "public_decision": {
+                "decision_id": record.decision_id,
+                "battle_id": record.battle_id,
+                "acting_player": record.acting_player,
+                "turn_index": record.turn_index,
+                "recorded_action_index": record.recorded_action_index,
+            },
+        }
+        if not isinstance(payload, Mapping) or {key: payload.get(key) for key in expected} != expected:
+            raise HeadToHeadError("decision RNG witness does not bind its public decision.")
+        if set(payload) != {*expected, "rng_state"}:
+            raise HeadToHeadError("decision RNG witness has an unsupported wrapper shape.")
+        _validated_serialized_rng_state(payload.get("rng_state"))
 
 
 def _validate_sealed_override_audit_evidence(out_root: Path, game: Any) -> None:
@@ -3082,6 +3160,8 @@ def main(argv: list[str] | None = None) -> int:
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
             _validate_public_decision_evidence(out_root, game)
+            if args.capture_decision_rng_state:
+                _validate_decision_rng_witness_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
             if sealed_root_action_audit is not None:
@@ -3092,6 +3172,8 @@ def main(argv: list[str] | None = None) -> int:
         def on_game(game: Any) -> None:
             _validate_completed_game(game)
             _validate_public_decision_evidence(out_root, game)
+            if args.capture_decision_rng_state:
+                _validate_decision_rng_witness_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
             if sealed_root_action_audit is not None:
@@ -3128,6 +3210,8 @@ def main(argv: list[str] | None = None) -> int:
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
             _validate_public_decision_evidence(out_root, game)
+            if args.capture_decision_rng_state:
+                _validate_decision_rng_witness_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
             if sealed_root_action_audit is not None:

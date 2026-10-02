@@ -1348,6 +1348,31 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
             restored.setstate((state["state_version"], tuple(state["internal_state"]), state["gauss_next"]))
             self.assertEqual(restored.getstate(), guided.latest_decision_rng_state)
 
+    def test_rng_witness_validator_requires_each_guided_decision(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_record(record)
+        guided.latest_decision_rng_state = random.Random(23).getstate()
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+                capture_decision_rng_state=True,
+            )(record)
+            RUNNER._validate_decision_rng_witness_evidence(Path(directory), game)
+
     def test_writer_refuses_to_bind_one_decision_to_another_decision_metadata(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")
         incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
