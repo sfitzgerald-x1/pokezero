@@ -151,6 +151,15 @@ REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG = {
     **REGISTERED_ENGINE_CONFIG,
     "model_world_workers": 2,
 }
+# Four model worlds remain within the same practical one-second tail budget
+# only when native batches are capped at eight.  This is a separately named
+# exact configuration, established by the source-bound r9 profile; it is not
+# a permission to vary parallelism or batch size in an evidence run.
+REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG = {
+    **REGISTERED_ENGINE_CONFIG,
+    "model_world_workers": 4,
+    "search_batch": 8,
+}
 # The sidecar is intentionally not a general-purpose MCTS evaluator: it may
 # only certify a configuration whose search semantics have been registered in
 # advance.  The CUDA deep protocol is the exact fixed-work configuration used
@@ -213,6 +222,7 @@ REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG = {
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
     REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG,
+    REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG,
