@@ -731,6 +731,52 @@ class DurableLauncherHandoffTest(unittest.TestCase):
             )
 
 
+class DecisionRngCaptureContractTest(unittest.TestCase):
+    def _write_runtime_manifest(self, root: Path, payload: dict[str, object]) -> None:
+        (root / "manifest.json").write_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+    def test_new_root_freezes_requested_capture_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                RUNNER._resolve_decision_rng_capture_contract(
+                    Path(directory), capture_requested=True
+                ),
+                {"capture_required": True},
+            )
+
+    def test_capture_mode_cannot_change_when_resuming(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_runtime_manifest(
+                root,
+                {
+                    "schema_version": RUNNER.MANIFEST_SCHEMA_VERSION,
+                    RUNNER.DECISION_RNG_CAPTURE_CONTRACT_KEY: {"capture_required": True},
+                },
+            )
+            with self.assertRaisesRegex(Exception, "differs from the immutable"):
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=False)
+            self.assertEqual(
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=True),
+                {"capture_required": True},
+            )
+
+    def test_legacy_root_can_resume_only_without_witness_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_runtime_manifest(
+                root, {"schema_version": RUNNER.MANIFEST_SCHEMA_VERSION}
+            )
+            self.assertIsNone(
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=False)
+            )
+            with self.assertRaisesRegex(Exception, "cannot upgrade a legacy"):
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=True)
+
+
 class GuidedConfigTest(unittest.TestCase):
     def test_guided_configuration_is_exact_not_a_budget_lookalike(self) -> None:
         config = dict(RUNNER.REGISTERED_ENGINE_CONFIG)

@@ -73,6 +73,7 @@ PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
 DECISION_RNG_WITNESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-decision-rng-witness.v1"
+DECISION_RNG_CAPTURE_CONTRACT_KEY = "decision_rng_witness"
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v5"
 )
@@ -234,6 +235,52 @@ def _load_manifest(path: str | Path) -> Mapping[str, Any]:
             f"{MANIFEST_SCHEMA_VERSION!r}."
         )
     return manifest
+
+
+def _resolve_decision_rng_capture_contract(
+    out_root: Path, *, capture_requested: bool
+) -> Mapping[str, bool] | None:
+    """Freeze decision-RNG witness capture for one durable scorer root.
+
+    A scorer can resume after some games have been written.  Its witness mode
+    therefore cannot be a transient launcher flag: switching it would make a
+    mixed root look complete while only some decisions have replay witnesses.
+    New roots record an explicit contract; old roots from before this feature
+    remain resumable only in their original no-witness mode.
+    """
+
+    runtime_manifest = out_root / "manifest.json"
+    if not runtime_manifest.exists():
+        return {"capture_required": capture_requested}
+    try:
+        payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HeadToHeadError(
+            f"cannot read extant runtime manifest for RNG-witness resume validation: {error}"
+        ) from error
+    payload = _mapping(payload, label="extant runtime manifest")
+    if payload.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise HeadToHeadError("extant runtime manifest has an unsupported schema.")
+    contract = payload.get(DECISION_RNG_CAPTURE_CONTRACT_KEY)
+    if contract is None:
+        if capture_requested:
+            raise HeadToHeadError(
+                "cannot upgrade a legacy durable root to decision-RNG witness capture; "
+                "start a fresh root so every completed decision has a witness."
+            )
+        # Old roots had no capture mode.  Preserve their byte-identical
+        # runtime manifest and only allow their original no-witness resume.
+        return None
+    contract = _mapping(contract, label="runtime manifest decision_rng_witness")
+    if set(contract) != {"capture_required"} or not isinstance(
+        contract["capture_required"], bool
+    ):
+        raise HeadToHeadError("runtime manifest has an invalid decision-RNG witness contract.")
+    if contract["capture_required"] is not capture_requested:
+        raise HeadToHeadError(
+            "decision-RNG witness capture mode differs from the immutable runtime manifest."
+        )
+    return {"capture_required": capture_requested}
 
 
 def _hex(value: object, *, label: str, length: int) -> str:
@@ -2829,6 +2876,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     out_root = _durable_output_root(args.out_dir)
     _require_durable_launcher_handoff(out_root, runner_script=Path(__file__))
+    decision_rng_capture_contract = _resolve_decision_rng_capture_contract(
+        out_root, capture_requested=args.capture_decision_rng_state
+    )
+    capture_decision_rng_state = args.capture_decision_rng_state
     manifest = _load_manifest(args.manifest)
     seeds = _seeds(manifest)
     study = _validated_study(manifest, seeds=seeds)
@@ -3033,21 +3084,21 @@ def main(argv: list[str] | None = None) -> int:
         hide_opponent_legal_action_masks=True,
     )
 
-    _write_immutable_json(
-        out_root / "manifest.json",
-        {
-            "schema_version": MANIFEST_SCHEMA_VERSION,
-            "declared_manifest": manifest,
-            "active_source": source,
-            "active_engine_fingerprint": engine_fingerprint,
-            "active_checkpoint_sha256": checkpoint_sha256,
-            "active_showdown_source": showdown,
-            "candidate": candidate.to_payload(),
-            "raw": incumbent.to_payload(),
-            "study": study,
-            "seeds": list(seeds),
-        },
-    )
+    runtime_manifest = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "declared_manifest": manifest,
+        "active_source": source,
+        "active_engine_fingerprint": engine_fingerprint,
+        "active_checkpoint_sha256": checkpoint_sha256,
+        "active_showdown_source": showdown,
+        "candidate": candidate.to_payload(),
+        "raw": incumbent.to_payload(),
+        "study": study,
+        "seeds": list(seeds),
+    }
+    if decision_rng_capture_contract is not None:
+        runtime_manifest[DECISION_RNG_CAPTURE_CONTRACT_KEY] = decision_rng_capture_contract
+    _write_immutable_json(out_root / "manifest.json", runtime_manifest)
 
     raw_adapters: dict[tuple[int, str], DeterministicRawPolicyAdapter] = {}
 
@@ -3063,7 +3114,7 @@ def main(argv: list[str] | None = None) -> int:
                 policy_id=candidate.policy_id,
                 annotation_source=annotations,
             ),
-            capture_decision_rng_state=args.capture_decision_rng_state,
+            capture_decision_rng_state=capture_decision_rng_state,
         )
         raw_adapter = DeterministicRawPolicyAdapter(
             load_transformer_policy(
@@ -3086,7 +3137,7 @@ def main(argv: list[str] | None = None) -> int:
             seed=seed,
             candidate_seat=candidate_seat,
             guided_policy=guided,
-            capture_decision_rng_state=args.capture_decision_rng_state,
+            capture_decision_rng_state=capture_decision_rng_state,
         )
         public_sink = public_decision_writer
         sealed_sink = None
@@ -3160,7 +3211,7 @@ def main(argv: list[str] | None = None) -> int:
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
             _validate_public_decision_evidence(out_root, game)
-            if args.capture_decision_rng_state:
+            if capture_decision_rng_state:
                 _validate_decision_rng_witness_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
@@ -3172,7 +3223,7 @@ def main(argv: list[str] | None = None) -> int:
         def on_game(game: Any) -> None:
             _validate_completed_game(game)
             _validate_public_decision_evidence(out_root, game)
-            if args.capture_decision_rng_state:
+            if capture_decision_rng_state:
                 _validate_decision_rng_witness_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
@@ -3210,7 +3261,7 @@ def main(argv: list[str] | None = None) -> int:
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
             _validate_public_decision_evidence(out_root, game)
-            if args.capture_decision_rng_state:
+            if capture_decision_rng_state:
                 _validate_decision_rng_witness_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
@@ -3252,6 +3303,8 @@ def main(argv: list[str] | None = None) -> int:
         "summary_sha256": _sha256_bytes((json.dumps(summary, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")),
         "raw_selector": RAW_SELECTOR,
     }
+    if decision_rng_capture_contract is not None:
+        complete[DECISION_RNG_CAPTURE_CONTRACT_KEY] = decision_rng_capture_contract
     _write_immutable_json(out_root / "COMPLETE.json", complete)
     print(json.dumps(complete, sort_keys=True), flush=True)
     return 0
