@@ -161,6 +161,23 @@ explicitly constructed opponent information state.
 4. Freeze the outcome-independent profile roster, actual source/model/export
    hashes, engine fingerprint, immutable image, resource cap, and analysis.
 
+The selection-only roster is now pinned in
+`docs/paper_policy_opponent_roster_20261004.json`, file SHA-256
+`fa76bc9966bba48f0dd474a2450b4c362e49ac1452db18c39b084a256d30ff7a`.
+It contains 32 roots: the first eight source paired seeds, both seats, and
+decision indices 0 and 9. No candidate actions or outcomes were used to select
+them. The proposed continuation subset is all sixteen index-9 roots across the
+eight clusters, not the action-changing subset. All 138 available preceding
+decision records are separately byte-bound. Six source histories have uncaptured
+prior indices; the initial attempt to require every index failed with exit 1
+at seed 2026100100/p1/index 6. These are retained as explicit missing-record
+inventory, not repaired by inventing actions or replacing roots. Exact public
+replay/coverage qualification remains required: this roster is neither a valid
+run manifest nor proof that all roots can be searched. The loader checks the
+roster byte hash, exact ordered denominator, continuation subset, prefix
+inventory, refusal/no-redraw rules, source file identity/bytes, and original
+source-shard terminal. Six focused tests cover the positive/negative boundaries.
+
 Pending model rows must never cause uniform sampling at a child. A synchronous
 provider can satisfy that invariant initially; profile its measured cost before
 introducing any deferred batching optimization. Report policy forwards, draws,
@@ -209,7 +226,7 @@ retirement gate. Native-versus-Python TorchScript output parity was exact
 The portable CI-selected own-policy suite contains 52 tests with no skips; the
 private champion gate is an additional explicit local check. Eight static-parser
 tests verify inherited class selection, imported fixtures, override deduplication,
-and refusal of unknown/dynamic test members. The workflow's 38 exact-count guards
+and refusal of unknown/dynamic test members. The workflow's 39 exact-count guards
 now verify against source without importing native modules. A seed-stream gate
 checks the actual native chance-seed positional and proves no additional RNG
 draws are consumed in serial, parallel, fixed-work, or deadline dispatch.
@@ -229,6 +246,19 @@ method selection, retains the independent module/coverage pins, and adds two
 negative/positive selector controls. All 74 provenance, count-parser, and
 re-adjudication tests pass locally; all 38 workflow count guards re-derive.
 Required remote CI must still pass before review/merge or experimental advance.
+The corrected remote run passed those two checks, then failed with exit 1 on
+the maintained terminal register's old engine-input count/fingerprint and
+workflow-site counts. The register is re-derived at the unchanged current main:
+15 crate sources, 99 hashed inputs, source fingerprint `a9f3f8197e8c65ce…`, and
+39 guarded executable unittest sites including the new roster gate. Historical
+sweep fingerprints, reserved seeds, and ratification statuses are unchanged.
+The expanded local verification ran 133 roster, selector, re-adjudication,
+terminal-register, and harness-provenance tests: exit 0. The installed-engine
+check independently confirms the rebuilt 78-patch fingerprint remains current.
+The new six-test roster suite also passes with Python site packages disabled,
+qualifying the bare-checkout fast-CI path. One local run failed because a
+maintained-register sentence changed the case expected by its prose pin; the
+sentence was corrected and all 133 tests rerun, rather than weakening the pin.
 
 The downloaded iteration-9375 champion is 40,083,798 bytes and verifies as
 `0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be`.

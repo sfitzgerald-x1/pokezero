@@ -35,6 +35,7 @@ jobs:
             scripts/vendor_poke_engine_src.sh
             scripts/engine_behavioral_probes.py
             scripts/check_engine_fidelity_unittest_counts.py
+            docs/paper_policy_opponent_roster_*.json
             scripts/engine_build_fingerprint.py
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
@@ -205,6 +206,13 @@ jobs:
           python -m unittest tests.test_engine_fidelity_counts -v 2>&1 | tee /tmp/fidelity-counts.log
           grep -qE 'Ran 8 tests' /tmp/fidelity-counts.log
           grep -qE '^OK$' /tmp/fidelity-counts.log
+
+      - name: Verify frozen policy-opponent root selection
+        run: |
+          set -o pipefail
+          PYTHONPATH=src python -m unittest tests.test_policy_opponent_roster -v 2>&1 | tee /tmp/policy-roster.log
+          grep -qE 'Ran 6 tests' /tmp/policy-roster.log
+          grep -qE '^OK$' /tmp/policy-roster.log
 
   mass-gate:
     needs: [changes, unittest-count-guards]
