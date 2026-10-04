@@ -135,9 +135,13 @@ subject observation. It requires the champion's **own policy head** on an
 explicitly constructed opponent information state.
 
 1. Qualify the complete live context, public request-order walk, and sampled
-   world construction on the frozen roster. The real-champion dispatch gate
-   exercises both seats at root and child nodes but supplies registered fixture
-   root inputs and request order; it does not certify every live observer seam.
+   world construction on the frozen roster. A new real-champion live-opening
+   gate runs both seats with fixed and belief-sampled worlds, using actual env
+   observations, incremental folds, constructors, root encoding, public order,
+   and native dispatch. The incumbent and opt-in construct identical worlds.
+   The test injects only the registered immutable belief cache into the env's
+   loader; it does not certify its publication recipe or wider observer seams.
+   Separate root/child fixture gates still supply registered root inputs/order.
 2. Validate observed trapping and Transform boundaries or preserve explicit
    refusals. Do not erase those roots or quietly alter their native options.
 3. Finish runtime Dex/Showdown publication binding. The current loader generates
@@ -160,7 +164,7 @@ full decision timing, and refusal reasons in the eventual experiment ledger.
 | Plan requirement | Current state | Evidence needed next |
 | --- | --- | --- |
 | Fixed-policy opponent sampling | Root/child native callback and high-level opt-in tested | Registered root profile and complete live-context qualification |
-| Subject PUCT and critic unchanged | Shared tree/critic path; subject root priors differential-tested | Full policy call-path comparison and profile |
+| Subject PUCT and critic unchanged | Shared tree/critic path; subject root priors differential-tested; full live-opening construction matches incumbent | Expanded frozen-root comparison and profile |
 | Opponent information-state privacy | Side-only constructor and pre-callback public projection tested | Expanded frozen-root observer coverage, trapping and Transform |
 | Champion own-head provider | Real champion gate passes without changing feature flags | Runtime/source publication binding and high-level integration |
 | Exact sparse action identity | Constructor, request order, branch switches and strict gather tested | Registered native root panel including refusal surfaces |
@@ -189,7 +193,7 @@ The rebuilt native source fingerprint is
 `a9f3f8197e8c65ce30f06c9870a6c350e5f725ec7a19f4832707b283066ccfdd`.
 
 Latest native model-feature unit gate: 291 passed, zero failed, one existing
-ignored test. Python integration/regression gate: 816 tests, exit 0, one
+ignored test. Python integration/regression gate: 817 tests, exit 0, one
 existing skip, including the opt-in real champion class in both seats, engine
 search, legal mapping, parser/belief/world, and V4 annotation
 retirement gate. Native-versus-Python TorchScript output parity was exact
@@ -202,6 +206,11 @@ and refusal of unknown/dynamic test members. The workflow's 38 exact-count guard
 now verify against source without importing native modules. A seed-stream gate
 checks the actual native chance-seed positional and proves no additional RNG
 draws are consumed in serial, parallel, fixed-work, or deadline dispatch.
+The additional champion live-opening gate uses the first committed historical
+battle, chosen without candidate outcomes. Its initial run failed with exit 1
+because the test used `seed` instead of the corpus's `battle_seed`; the fixture
+field was corrected before the passing full-path gate. No production fallback
+or provenance check was loosened to make the gate pass.
 
 The downloaded iteration-9375 champion is 40,083,798 bytes and verifies as
 `0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be`.

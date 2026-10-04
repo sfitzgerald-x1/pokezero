@@ -299,6 +299,8 @@ class ChampionCanonicalOwnPolicyTest(NativeCanonicalOwnPolicyTest):
         artifact = Path(cls.tmpdir.name) / "champion-policy.pt"
         export.export_torchscript(export.build_exportable_module(model),
             export.make_random_inputs(cls.config, export.TRACE_BATCH, seed=7), artifact)
+        cls.champion_artifact = artifact
+        cls.champion_checkpoint = checkpoint
         cls.native = pokezero_search.NativeLeafModel(str(artifact), device="cpu",
             window=cls.config.window_size, tokens=cls.config.token_count,
             categorical_features=cls.config.categorical_feature_count,
@@ -306,6 +308,89 @@ class ChampionCanonicalOwnPolicyTest(NativeCanonicalOwnPolicyTest):
         print("[champion gate] checkpoint_sha256=" + digest
               + " belief_source_hash=" + source.metadata.source_hash
               + " belief_cache_sha256=" + hashlib.sha256(source_bytes).hexdigest())
+
+    def test_live_context_builds_same_worlds_without_root_or_order_stubs(self):
+        """Qualify full dispatch on a fixed historical opening, not a strength panel.
+
+        The one injected dependency is the checkpoint-registered immutable set
+        cache. This does not certify the runtime cache publication recipe. No
+        observation, fold, world constructor, request-order resolver, root
+        encoder, or native search is stubbed. Ground-truth teams create the test
+        battle; sampled-mode policies never receive the opponent's packed team.
+        """
+        import random
+        from unittest.mock import patch
+        from pokezero.env import BattleStartOverride
+        from pokezero.engine_search import EngineMctsConfig, EngineMctsPolicy
+        from pokezero.golden_corpus import load_golden_corpus
+        from pokezero.local_showdown import (DEFAULT_SHOWDOWN_ROOT,
+            LocalShowdownConfig, LocalShowdownEnv, env_config_from_checkpoint_provenance)
+        from pokezero.neural_policy import (category_vocab_from_model_config,
+            observation_spec_from_model_config, feature_masks_from_model_config)
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.policy import PolicyContext
+        from pokezero.trajectory import BattleTrajectory
+        from test_model_priors_search import COMMITTED_SAMPLE_DIR
+
+        game = load_golden_corpus(COMMITTED_SAMPLE_DIR).games[0].record
+        override = BattleStartOverride(player_teams={
+            slot: game.true_teams[slot]["packed"] for slot in ("p1", "p2")
+        }, observation_format_id="gen3randombattle")
+        vocab = category_vocab_from_model_config(self.config, DEFAULT_SHOWDOWN_ROOT)
+        env_config = env_config_from_checkpoint_provenance(
+            LocalShowdownConfig(set_belief_source=True),
+            feature_masks_from_model_config(self.config), context="champion live gate",
+            required_specs=observation_spec_from_model_config(self.config), required_vocabs=vocab,
+        )
+        tables_path = Path(self.tmpdir.name) / "champion-tables.json"
+        tables_path.write_text(self.tables_json)
+        with (patch("pokezero.local_showdown.load_gen3_randbat_source_cached",
+                    return_value=self.champion_source), LocalShowdownEnv(env_config) as env):
+            env.reset_with_start_override(seed=game.battle_seed, start_override=override)
+            for player in ("p1", "p2"):
+                observation = env.observe(player)
+                public = env.public_materialization_state(player)
+                self.assertEqual(public.replay.requests, {})
+                self.assertEqual(public.self_request["side"]["id"], player)
+                context = PolicyContext(player_id=player, decision_round_index=0,
+                    battle_id=public.replay.battle_id, seed=game.battle_seed, format_id="gen3randombattle",
+                    observation=observation, requested_players=env.requested_players(),
+                    requested_observations={player: observation},
+                    requested_legal_action_masks={player: tuple(observation.legal_action_mask)},
+                    public_materialization_state=public,
+                    trajectory=BattleTrajectory(battle_id=public.replay.battle_id,
+                        format_id="gen3randombattle", seed=game.battle_seed, steps=[], terminal=None, metadata={}))
+                for fixed in (True, False):
+                    compared_worlds = []
+                    for enabled in (False, True):
+                        with self.subTest(player=player, fixed=fixed, enabled=enabled):
+                            worlds = []
+                            policy = EngineMctsPolicy(
+                                dex=load_showdown_dex_cached(DEFAULT_SHOWDOWN_ROOT),
+                                set_source=self.champion_source, fixed_override=override if fixed else None,
+                                world_observer=lambda context, world, state: worlds.append(state.to_string()),
+                                config=EngineMctsConfig(worlds=1, search_sims=16, search_batch=1,
+                                    search_depth=2, leaf_eval="model", strict_fallbacks=True,
+                                    model_path=str(self.champion_artifact),
+                                    checkpoint_path=str(self.champion_checkpoint), tables_path=str(tables_path),
+                                    policy_opponent=enabled, policy_opponent_seed=103 if enabled else None))
+                            decision = policy.select_action_with_context(context, rng=random.Random(7))
+                            self.assertTrue(observation.legal_action_mask[decision.action_index])
+                            self.assertEqual(policy.stats.worlds_attempted, 1)
+                            self.assertEqual(policy.stats.worlds_searched, 1)
+                            self.assertEqual(policy.stats.total_iterations, 16)
+                            self.assertEqual(len(worlds), 1)
+                            compared_worlds.append(worlds)
+                            metadata = decision.metadata["engine_mcts"]
+                            if enabled:
+                                invocation = metadata["policy_opponent"]["native_invocations"][0]
+                                self.assertGreater(invocation["evaluations"], 0)
+                                self.assertEqual(policy.stats.to_dict()["policy_opponent"]["evaluations"],
+                                                 invocation["evaluations"])
+                            else:
+                                self.assertNotIn("policy_opponent", metadata)
+                                self.assertNotIn("policy_opponent", policy.stats.to_dict())
+                    self.assertEqual(compared_worlds[0], compared_worlds[1])
 
 
 if __name__ == "__main__":
