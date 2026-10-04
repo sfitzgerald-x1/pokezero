@@ -112,6 +112,7 @@ jobs:
             tests/test_leaf_encoder.py
             tests/test_roll_enumeration_scope.py
             src/pokezero/engine_search.py
+            src/pokezero/policy_opponent*.py
             src/pokezero/foulplay_bridge.py
             scripts/foulplay_paired_eval.py
             scripts/foulplay_budget_calibration.py
