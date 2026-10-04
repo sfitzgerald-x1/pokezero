@@ -1802,6 +1802,7 @@ class EngineMctsStats:
     # Actual native invocations, never multiplied by duplicate belief weight.
     policy_opponent_invocations: int = 0
     policy_opponent_evals: int = 0
+    policy_opponent_provider_calls: int = 0
     policy_opponent_samples: int = 0
     policy_opponent_wall_seconds: float = 0.0
     # Native per-phase search wall (crate-measured, never derived by
@@ -2250,6 +2251,7 @@ class EngineMctsStats:
             **({"policy_opponent": {
                 "native_invocations": self.policy_opponent_invocations,
                 "evaluations": self.policy_opponent_evals,
+                "provider_calls": self.policy_opponent_provider_calls,
                 "samples": self.policy_opponent_samples,
                 "seconds": self.policy_opponent_wall_seconds,
             }} if self.policy_opponent_invocations else {}),
@@ -6420,9 +6422,11 @@ class EngineMctsPolicy:
                             or type(report.get("remaining_iterations")) is not int
                             or report["remaining_iterations"] != 0):
                         raise EngineSearchWitnessError("policy opponent fixed-work witness mismatch")
-                    for key in ("policy_opponent_evals", "policy_opponent_samples"):
+                    for key in ("policy_opponent_evals", "policy_opponent_provider_calls", "policy_opponent_samples"):
                         if type(report.get(key)) is not int or report[key] < 0:
                             raise EngineSearchWitnessError(f"policy opponent invalid {key}")
+                    if report["policy_opponent_evals"] > report["policy_opponent_provider_calls"]:
+                        raise EngineSearchWitnessError("policy opponent evaluations exceed certified provider calls")
                     duration = report.get("policy_opponent_s")
                     if (isinstance(duration, bool) or not isinstance(duration, (float, int))
                             or not math.isfinite(duration) or duration < 0):
@@ -6431,6 +6435,7 @@ class EngineMctsPolicy:
                         "world_seed": record["seed"], "policy_seed": expected_seed,
                         "belief_multiplicity": weight,
                         "evaluations": report["policy_opponent_evals"],
+                        "provider_calls": report["policy_opponent_provider_calls"],
                         "samples": report["policy_opponent_samples"], "seconds": duration,
                     })
                 if time_budget_ms is not None:
@@ -6672,6 +6677,7 @@ class EngineMctsPolicy:
             if config.policy_opponent:
                 self.stats.policy_opponent_invocations += 1
                 self.stats.policy_opponent_evals += report["policy_opponent_evals"]
+                self.stats.policy_opponent_provider_calls += report["policy_opponent_provider_calls"]
                 self.stats.policy_opponent_samples += report["policy_opponent_samples"]
                 self.stats.policy_opponent_wall_seconds += report["policy_opponent_s"]
             # Reached depth, same accumulation the hp_fraction path already does.

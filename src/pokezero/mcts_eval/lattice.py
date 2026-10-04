@@ -245,6 +245,19 @@ def time_lattice_cell(
     )
 
 
+def _policy_opponent_config_kwargs(enabled: bool, seed: int | None) -> dict[str, Any]:
+    """Explicit experimental arm; leave incumbent configuration shape intact."""
+    if type(enabled) is not bool:
+        raise ValueError("policy_opponent must be a boolean")
+    if not enabled:
+        if seed is not None:
+            raise ValueError("policy_opponent_seed requires policy_opponent")
+        return {}
+    if type(seed) is not int or not 0 <= seed < 2**64:
+        raise ValueError("policy_opponent requires an explicit unsigned 64-bit seed")
+    return {"policy_opponent": True, "policy_opponent_seed": seed, "strict_fallbacks": True}
+
+
 class _LiveEngineTimingDecider:
     """Replay one corpus record into the genuine model-backed engine policy.
 
@@ -287,6 +300,8 @@ class _LiveEngineTimingDecider:
         model_priors: bool = True,
         use_opponent_priors: bool = False,
         override_telemetry: bool = False,
+        policy_opponent: bool = False,
+        policy_opponent_seed: int | None = None,
         rollout_leaf_eval: bool = False,
         rollout_count: int = 32,
         rollout_max_plies: int = 200,
@@ -301,6 +316,9 @@ class _LiveEngineTimingDecider:
         from ..local_showdown import LocalShowdownConfig, LocalShowdownEnv
         from ..randbat import load_gen3_randbat_source_cached
 
+        opponent_kwargs = _policy_opponent_config_kwargs(policy_opponent, policy_opponent_seed)
+        if policy_opponent and (not model_priors or use_opponent_priors or rollout_leaf_eval):
+            raise ValueError("policy opponent profile requires subject priors, no auxiliary opponent priors or rollout leaves")
         if model_decision_time_ms is not None and model_decision_time_ms <= 0:
             raise ValueError("model_decision_time_ms must be positive when set")
         if (
@@ -342,6 +360,7 @@ class _LiveEngineTimingDecider:
         # for the already-supported root-allocation witness without widening the
         # default replay contract.
         self._override_telemetry = override_telemetry
+        self._policy_opponent_kwargs = opponent_kwargs
         # The source-root leaf ablation uses the existing model-prior rollout
         # seam.  Keep every knob explicit here, rather than letting a caller
         # bolt an unregistered leaf value onto the timing adapter.  Production
@@ -414,6 +433,7 @@ class _LiveEngineTimingDecider:
                 rollout_seed=self._rollout_seed,
                 rollout_threads=self._rollout_threads,
                 rollout_threads_cpu_budget_ack=self._rollout_threads_cpu_budget_ack,
+                **getattr(self, "_policy_opponent_kwargs", {}),
             ),
             policy_id=f"mcts-timing-{config.config_id}",
             annotation_source=self._annotation_source,

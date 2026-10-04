@@ -41,7 +41,9 @@ class NativePolicyOpponentSearchTest(_EncodedSearchFixture, unittest.TestCase):
         report = self.run_search(provide)
         self.assertEqual(report["iterations"], 64)
         self.assertEqual(report["policy_opponent_mode"], "own_policy_callback")
-        self.assertEqual(report["policy_opponent_evals"], len(payloads))
+        self.assertEqual(report["policy_opponent_provider_calls"], len(payloads))
+        self.assertEqual(report["policy_opponent_evals"], sum(
+            len(p["native_request_bundle"]["native_action_indices"]) > 1 for p in payloads))
         self.assertGreater(report["policy_opponent_samples"], len(payloads))
         self.assertEqual(payloads[0]["public_branch_lines"], [])
         self.assertTrue(any(p["public_branch_lines"] for p in payloads[1:]), "child policy was never inferred")
@@ -65,7 +67,7 @@ class NativePolicyOpponentSearchTest(_EncodedSearchFixture, unittest.TestCase):
         first, trace = collect()
         second, duplicate = collect()
         self.assertEqual(trace, duplicate)
-        for field in ("side_one", "side_two", "iterations", "policy_opponent_samples", "policy_opponent_evals"):
+        for field in ("side_one", "side_two", "iterations", "policy_opponent_samples", "policy_opponent_evals", "policy_opponent_provider_calls"):
             self.assertEqual(first[field], second[field])
 
     def test_switches_evolve_request_order(self):
@@ -90,6 +92,19 @@ class NativePolicyOpponentSearchTest(_EncodedSearchFixture, unittest.TestCase):
                          lambda raw: [0.0] * len(json.loads(raw)["native_request_bundle"]["native_action_indices"])):
             with self.subTest(callback=callback), self.assertRaises(ValueError):
                 self.run_search(callback)
+        # Hidden trapping can collapse the native legal surface to one move.
+        # It must still refuse at the side-only constructor, not bypass the
+        # provider just because there is only one native arm.
+        trapped = dict(self.position)
+        subject, opponent = trapped["state_str"].split("/", 1)
+        subject_fields = subject.split(",")
+        subject_fields[8] = subject_fields[9] = "SHADOWTAG"
+        opponent_fields = opponent.split(",")
+        for index in (23, 24, 25):
+            opponent_fields[index] = "NONE;true;0"
+        trapped["state_str"] = ",".join(subject_fields) + "/" + ",".join(opponent_fields)
+        with self.assertRaisesRegex(ValueError, "native and private-knowledge legal surfaces differ"):
+            self.run_search(failure, position=trapped, max_depth=1)
         # A provider exception cannot poison subsequent searches or the model.
         self.assertEqual(self.run_search()["iterations"], 64)
 

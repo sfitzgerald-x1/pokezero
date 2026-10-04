@@ -202,7 +202,9 @@ _CORPUS_TREES = ("reports", "docs")
 # 404 -> 406: the OI-1 ordering instrument adds its independently banked report and failing-input
 # demonstration. Re-derived on the merge tree; both paths stay inside this corpus so the never-fired
 # counter census reads the same JSON set as the terminal-disposition register.
-_EXPECTED_COUNTER_ARTIFACTS = 406
+# 406 -> 407: the frozen paper-policy opponent roster adds one tracked selection
+# document, not a measurement. No historical JSON was removed or altered.
+_EXPECTED_COUNTER_ARTIFACTS = 407
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

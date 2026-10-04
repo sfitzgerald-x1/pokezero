@@ -975,7 +975,7 @@ jobs:
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
             tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 52 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 53 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"
@@ -1036,8 +1036,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_seed_registry_coverage -v 2>&1 \
             | tee /tmp/seedregistry.log
-          if ! grep -qE 'Ran 41 tests' /tmp/seedregistry.log; then
-            echo "::error::expected 41 seed-registry pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 45 tests' /tmp/seedregistry.log; then
+            echo "::error::expected 45 seed-registry pins; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/seedregistry.log; then

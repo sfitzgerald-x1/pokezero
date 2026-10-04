@@ -1913,8 +1913,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // not hidden -- it is the cost of finishing the final complete batch rather
     // than abandoning traversals after selection.
     let extra = if let Some((bridge, seed)) = policy_opponent {
-        format!("{extra},\"policy_opponent_mode\":\"own_policy_callback\",\"policy_opponent_seed\":{},\"policy_opponent_evals\":{},\"policy_opponent_samples\":{},\"policy_opponent_s\":{:.6}",
-            seed, bridge.evaluations.get(), policy_sampler.as_ref().expect("registered policy sampler").samples,
+        format!("{extra},\"policy_opponent_mode\":\"own_policy_callback\",\"policy_opponent_seed\":{},\"policy_opponent_evals\":{},\"policy_opponent_provider_calls\":{},\"policy_opponent_samples\":{},\"policy_opponent_s\":{:.6}",
+            seed, bridge.evaluations.get(), bridge.provider_calls.get(), policy_sampler.as_ref().expect("registered policy sampler").samples,
             bridge.policy_nanos.get() as f64 / 1e9)
     } else { extra };
     let extra = match (time_budget_ms, time_budget_started) {

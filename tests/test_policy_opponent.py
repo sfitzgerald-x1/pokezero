@@ -68,6 +68,28 @@ class PolicyOpponentProviderTest(unittest.TestCase):
                 with self.assertRaises(PolicyOpponentViewError):
                     self.distribution()
 
+    def test_singleton_and_wait_require_certified_surface_but_no_network(self):
+        from copy import deepcopy
+        from test_policy_opponent_request import bundle, arguments
+        from pokezero.policy_opponent_view import build_policy_opponent_view_from_native_bundle
+        supplied = bundle()
+        supplied["request"]["side"]["pokemon"][1]["condition"] = "0 fnt"
+        supplied["request"]["active"][0]["moves"][1]["disabled"] = True
+        supplied["self_move_states"]["snorlax"][1]["disabled"] = True
+        supplied["native_action_indices"] = [0]
+        self.view = build_policy_opponent_view_from_native_bundle(native_request_bundle=supplied, **arguments())
+        with patch("pokezero.neural_policy.evaluate_transformer_action_priors") as forward:
+            self.assertEqual(self.distribution((0,)), (1.0,))
+            with self.assertRaises(PolicyOpponentViewError):
+                self.distribution((1,))
+            waiting = deepcopy(bundle())
+            waiting["request"].pop("active")
+            waiting["request"]["wait"] = True
+            waiting["native_action_indices"] = [None]
+            self.view = build_policy_opponent_view_from_native_bundle(native_request_bundle=waiting, **arguments())
+            self.assertEqual(self.distribution((None,)), (1.0,))
+            forward.assert_not_called()
+
     def test_model_schema_masks_vocab_and_source_binding_fail_before_forward(self):
         cases = (
             dict(model=SimpleNamespace(config=config(window_size=2))),

@@ -16,7 +16,8 @@ and binds each inferred distribution to one tree node's ordered legal surface.
 It never reuses a cache across trees. Sparse action maps are strict: missing,
 duplicated, out-of-range, negative, nonfinite, and zero-mass distributions fail;
 there is no uniform or adversarial fallback. A sole native legal choice is
-deterministic and requires no policy inference.
+deterministic, but still requires the private-safe request and legal-surface
+certification before the provider can omit policy inference.
 
 `traverse_with_policy_opponent` uses the existing engine chance traversal,
 expansion, and backup implementation. Its provider receives the reached engine
@@ -33,7 +34,8 @@ Focused tests cover:
 - Sampling all legal actions, including a 1% arm, through a sparse slot map.
 - Invalid distribution refusal, tiny positive mass, and zero-probability arms.
 - Seeded replay, seat mirroring, and independence from opponent search stats.
-- One inference per cached node and deterministic no-choice handling.
+- One certification per cached node, inference only for multiple choices, and
+  deterministic certified no-choice handling.
 - Real engine traversal/state restoration and interior-provider failure cleanup.
 
 ## Implemented public-view and own-head reference
@@ -89,7 +91,10 @@ exception stops the search instead of choosing a fallback.
 The optional native call requires callback, independent policy seed, and
 complete sampled request order together. It requires subject model priors,
 disables the auxiliary opponent-prior mode, and retains the model-value leaf.
-It reports opponent forwards, samples, and elapsed opponent time separately.
+It reports provider certifications, multi-choice evaluations, samples, and
+elapsed opponent time separately. For the canonical own-head provider each
+multi-choice evaluation is one model forward; arbitrary diagnostic callbacks
+are not a physical model-forward witness.
 That time is included in the native decision deadline. Mode-off keeps the
 incumbent report schema and performs no additional context copy or Dex lookup.
 
@@ -213,8 +218,8 @@ matching tch 0.26.0. No ABI guard was bypassed or existing environment replaced.
 The full engine source builder verified its sdist and applied the repository's
 78 engine patches; both consumers rebuilt and all builder behavior probes
 passed. The model-feature wheel build subsequently completed with exit 0.
-The rebuilt native source fingerprint is
-`a9f3f8197e8c65ce30f06c9870a6c350e5f725ec7a19f4832707b283066ccfdd`.
+The latest rebuilt native source fingerprint is
+`4bf56184eeddb642131d960609ed482a717991373f4d435c50a5b01f44263de0`.
 
 Latest native model-feature unit gate: 291 passed, zero failed, one existing
 ignored test. Python integration/regression gate: 817 tests, exit 0, one
@@ -223,7 +228,7 @@ search, legal mapping, parser/belief/world, and V4 annotation
 retirement gate. Native-versus-Python TorchScript output parity was exact
 (maximum absolute difference zero). These gates do not establish strength.
 
-The portable CI-selected own-policy suite contains 52 tests with no skips; the
+The portable CI-selected own-policy suite now contains 53 tests with no skips; the
 private champion gate is an additional explicit local check. Eight static-parser
 tests verify inherited class selection, imported fixtures, override deduplication,
 and refusal of unknown/dynamic test members. The workflow's 39 exact-count guards
@@ -236,7 +241,7 @@ because the test used `seed` instead of the corpus's `battle_seed`; the fixture
 field was corrected before the passing full-path gate. No production fallback
 or provenance check was loosened to make the gate pass.
 
-The latest additional gate ran all ten champion-class tests with the clean
+The earlier additional gate ran all ten champion-class tests with the clean
 pinned runtime and no live-source injection: exit 0. The 52 portable tests
 also pass. The first remote CI run failed (exit 1) on two metadata/guard
 defects: the expected harness closure omitted the two new imported provider
@@ -278,6 +283,64 @@ punctuation, and preservation of unrelated event fields; no OOV assertion was
 removed. Earlier constructor/PP test and compile failures were repaired before
 the passing gates above. All nonzero verification exits were treated as
 failures, not accepted as skips or partial evidence.
+
+### October 4 review repairs and current verification
+
+An independent Codex review reproduced a real hidden-trapping refusal bypass:
+when the native opponent surface had only one move, sampling skipped the
+side-only request constructor. A hidden Shadow Tag ability could therefore
+suppress switches without certification. Every new node now certifies its
+request, including singleton and WAIT positions. The own-head provider omits a
+network forward only after validating the complete view, checkpoint/source
+contract, ordered action map, and exact observation legal mask. Tests retain
+the refusal rather than accepting a full-state trapping disclosure.
+
+The same review identified misleading work telemetry after this correction.
+Provider calls and multi-choice model evaluations are now separate native
+counters, high-level per-invocation receipts, and aggregate statistics. Missing,
+negative, or inconsistent counters refuse. Independent verification against
+the final rebuilt wheel passed all 53 portable tests, no skips, and a canonical
+singleton search completed 64 traversals with one provider certification, zero
+evaluations, and zero neural forwards. The hidden-trapping regression also
+passed. Both review findings are closed; no new actionable finding was reported.
+
+Final local verification at the fingerprint above:
+
+- Both installed engine consumers rebuilt successfully, their source stamp is
+  current, and all builder behavioral probes pass. No ABI guard was bypassed.
+- Native release model-feature gate: 291 passed, zero failed, one existing
+  ignored test; exit 0.
+- Own-policy portable and real-champion combined gate: 63 tests, no skips;
+  exit 0. This uses the clean pinned Showdown runtime and actual champion bytes.
+- Replay/lattice, roster, seed registry, corpus census, terminal register,
+  selector, current-source deadline wrapper, and provenance gate: 244 tests;
+  exit 0. All 39 workflow count guards independently re-derive.
+
+Remote run 37195088366 at the previous head failed the seed-registry and mass
+gates (exit 1). Its other listed checks, including harness provenance, succeeded.
+The failure causes were the frozen gameplay roster being misclassified as a
+fidelity sweep and the corpus census retaining 406 after the roster became the
+407th document. The classification repair is exact-path and SHA-256 bound,
+parses the document first, and does not exempt copied or changed rosters. The
+four fidelity bands, their reserved seeds, and all historical sweep evidence
+remain unchanged. The four new registry tests bring that gate to 45. The one
+new singleton provider test brings the portable gate to 53; its legacy scanner
+test's stale 52 expectation initially failed, then was corrected to 53 and the
+244-test gate rerun. Required remote CI at the corrected head remains pending.
+
+An exploratory legacy deadline-qualification runner test failed (exit 1) on
+its intentional historical engine-fingerprint fence. That older qualification
+is not evidence for this new engine, and its pins were not rewritten. The
+current-source deadline-profile wrapper tests pass; a newly registered actual
+profile is still required. Two earlier test invocations also exited 1 because
+they named nonexistent modules; the discovered correct modules are included
+in the passing 244-test gate. These are not claims of an all-repository pass.
+
+The timing/replay adapter now accepts the explicit policy-opponent mode and
+unsigned 64-bit seed, rejects conflicting arms before materialization, and
+leaves the incumbent's argument shape unchanged. This forwards the opt-in;
+it does not complete the raw/current/candidate three-arm harness, run the
+frozen roots, or qualify their replay histories.
 
 No cluster experiment, training job, root screen, game pilot, finalizer, or
 deployment was launched by these changes. No historical object or shared

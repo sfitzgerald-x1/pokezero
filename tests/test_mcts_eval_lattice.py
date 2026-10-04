@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from pokezero.engine_search import opponent_request_order
 from pokezero.mcts_eval.head_to_head import public_only_context
-from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider, _decode_decision_rng_state, time_lattice_cell
+from pokezero.mcts_eval.lattice import _LiveEngineTimingDecider, _decode_decision_rng_state, _policy_opponent_config_kwargs, time_lattice_cell
 from pokezero.mcts_eval.manifest import SearchConfig
 from pokezero.mcts_eval.resolver import CheckpointContract, ContractError
 from tests.test_mcts_eval_timing_corpus import _record
@@ -514,6 +514,21 @@ class T(unittest.TestCase):
             )
         )
 
+    def test_policy_opponent_arm_is_explicit_and_incumbent_shape_is_unchanged(self):
+        self.assertEqual(_policy_opponent_config_kwargs(False, None), {})
+        self.assertEqual(_policy_opponent_config_kwargs(True, 71),
+                         {"policy_opponent": True, "policy_opponent_seed": 71, "strict_fallbacks": True})
+        for enabled, seed in ((1, 71), (False, 71), (True, None), (True, True), (True, -1), (True, 2**64)):
+            with self.assertRaises(ValueError):
+                _policy_opponent_config_kwargs(enabled, seed)
+
+    def test_policy_opponent_conflicting_arms_refuse_before_materializing_artifacts(self):
+        with patch("pokezero.mcts_eval.lattice.materialize_search_artifacts") as export:
+            for kwargs in ({"model_priors": False}, {"use_opponent_priors": True}, {"rollout_leaf_eval": True}):
+                with self.assertRaisesRegex(ValueError, "profile requires"):
+                    _LiveEngineTimingDecider(C, None, policy_opponent=True, policy_opponent_seed=71, **kwargs)
+            export.assert_not_called()
+
     def test_rollout_leaf_seam_is_forwarded_without_changing_default_adapter_shape(self):
         """The direct-root runner can select only the existing registered seam."""
 
@@ -554,6 +569,24 @@ class T(unittest.TestCase):
         self.assertEqual(config.rollout_threads, 12)
         self.assertTrue(config.rollout_threads_cpu_budget_ack)
         self.assertTrue(config.model_priors)
+        self.assertFalse(config.policy_opponent)
+        self.assertIsNone(config.policy_opponent_seed)
+        # The experimental arm uses the same adapter, source, critic and work
+        # allocation, not a synthetic timing callback or a replacement policy.
+        decider._policies = {}
+        decider._rollout_leaf_eval = False
+        decider._policy_opponent_kwargs = _policy_opponent_config_kwargs(True, 71)
+        with patch("pokezero.engine_search.EngineMctsPolicy", FakePolicy):
+            decider._policy_for(SearchConfig(depth=6, sims=4096, batch=16, worlds=4))
+        candidate = captured["config"]
+        self.assertTrue(candidate.policy_opponent)
+        self.assertTrue(candidate.strict_fallbacks)
+        self.assertEqual(candidate.policy_opponent_seed, 71)
+        self.assertEqual(candidate.search_sims, config.search_sims)
+        self.assertEqual(candidate.worlds, config.worlds)
+        self.assertEqual(candidate.checkpoint_path, config.checkpoint_path)
+        self.assertEqual(candidate.model_path, config.model_path)
+        self.assertEqual(candidate.tables_path, config.tables_path)
 
 if __name__ == "__main__":
     unittest.main()

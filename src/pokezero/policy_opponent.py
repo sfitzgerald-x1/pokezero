@@ -28,8 +28,9 @@ def policy_opponent_distribution(
 ) -> tuple[float, ...]:
     """Return probabilities in the exact native legal-option order, or refuse.
 
-    Single-choice/no-action boundaries are handled by the native sampler without
-    a network call. This reference requires a one-snapshot checkpoint: passing
+    Single-choice/no-action boundaries skip the network only AFTER the complete
+    private-safe view and legal surface are certified. This reference requires
+    a one-snapshot checkpoint: passing
     one current view to a multi-window model would silently discard history.
     No epsilon floor, temperature sweep, or fallback distribution is applied.
     """
@@ -57,15 +58,20 @@ def policy_opponent_distribution(
     indices = tuple(native_action_indices)
     if view.native_action_indices is not None and indices != view.native_action_indices:
         raise PolicyOpponentViewError("policy opponent action map differs from certified native bundle")
-    if not indices or any(type(index) is not int or not 0 <= index < ACTION_COUNT for index in indices):
+    waiting = indices == (None,) and view.native_action_indices == (None,)
+    if not waiting and (not indices or any(
+        type(index) is not int or not 0 <= index < ACTION_COUNT for index in indices
+    )):
         raise PolicyOpponentViewError("unmapped native policy-opponent action")
     if len(set(indices)) != len(indices):
         raise PolicyOpponentViewError("duplicate native policy-opponent action")
     observation = view.observation(category_vocab=category_vocab, dex=dex)
     observation.validate(view.spec)
     legal = {index for index, enabled in enumerate(observation.legal_action_mask) if enabled}
-    if set(indices) != legal:
+    if (set() if waiting else set(indices)) != legal:
         raise PolicyOpponentViewError("native and sampled-request legal surfaces differ")
+    if len(indices) == 1:
+        return (1.0,)
     # The canonical evaluator calls eval()/to() before each forward. Parallel
     # trees may share weights, but must never mutate that module concurrently.
     # Only inference is serialized; observations remain invocation-owned.

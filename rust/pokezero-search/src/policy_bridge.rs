@@ -36,6 +36,7 @@ pub(crate) struct PolicyOpponentBridge {
     // fold's ownership or any incumbent encoder path.
     prefixes: RefCell<HashMap<BranchKey, PublicPrefix>>,
     pub(crate) evaluations: Cell<usize>,
+    pub(crate) provider_calls: Cell<usize>,
     pub(crate) policy_nanos: Cell<u128>,
 }
 
@@ -66,6 +67,7 @@ impl PolicyOpponentBridge {
             display_ctx,
             prefixes: RefCell::new(HashMap::new()),
             evaluations: Cell::new(0),
+            provider_calls: Cell::new(0),
             policy_nanos: Cell::new(0),
         }
     }
@@ -158,7 +160,12 @@ impl PolicyOpponentBridge {
             let payload = json!({"native_request_bundle": bundle, "public_branch_lines": lines,
                 "opponent_slot": slot})
             .to_string();
-            self.evaluations.set(self.evaluations.get() + 1);
+            self.provider_calls.set(self.provider_calls.get() + 1);
+            // Certified singleton/WAIT providers return without a network
+            // forward. Keep certification calls distinct from policy evals.
+            if options.len() > 1 {
+                self.evaluations.set(self.evaluations.get() + 1);
+            }
             let weights: Vec<f32> =
                 Python::attach(|py| self.callback.call1(py, (payload,))?.extract(py))?;
             ActionDistribution::new(&weights, options.len())

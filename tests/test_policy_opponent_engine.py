@@ -124,7 +124,7 @@ class PolicyOpponentEngineTests(unittest.TestCase):
                           if deadline is not None else Fixtures._report(60, 40))
                 report.update(policy_opponent_mode="own_policy_callback",
                               policy_opponent_seed=kwargs["policy_opponent_seed"],
-                              policy_opponent_evals=3, policy_opponent_samples=100,
+                              policy_opponent_evals=3, policy_opponent_provider_calls=3, policy_opponent_samples=100,
                               policy_opponent_s=.02, model_priors=True)
                 report.update(report_override or {})
                 return json.dumps(report)
@@ -164,6 +164,7 @@ class PolicyOpponentEngineTests(unittest.TestCase):
                 witness = decision.metadata["engine_mcts"]["policy_opponent"]
                 self.assertEqual(len(witness["native_invocations"]), 2)
                 self.assertEqual(sum(row["evaluations"] for row in witness["native_invocations"]), 6)
+                self.assertEqual(sum(row["provider_calls"] for row in witness["native_invocations"]), 6)
                 ordered = sorted((args[0], args[9], kwargs["policy_opponent_seed"])
                                  for args, kwargs in calls)
                 seeds.append(ordered)
@@ -187,6 +188,7 @@ class PolicyOpponentEngineTests(unittest.TestCase):
         for override in (
             {"policy_opponent_mode": None}, {"policy_opponent_seed": True},
             {"policy_opponent_seed": 7}, {"policy_opponent_evals": -1},
+            {"policy_opponent_provider_calls": -1}, {"policy_opponent_provider_calls": 2},
             {"policy_opponent_samples": False}, {"policy_opponent_s": float("nan")},
             {"policy_opponent_s": -1}, {"prior_fallbacks": 1},
             {"model_priors": False}, {"iterations": 99},

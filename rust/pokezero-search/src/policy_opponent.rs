@@ -135,11 +135,11 @@ impl PolicyOpponent {
         };
         let ordered_arms: Vec<String> = opponent.iter().map(|s| s.display.clone()).collect();
         if !self.nodes.contains_key(&node_id) {
-            let distribution = if opponent.len() == 1 {
-                ActionDistribution::new(&[1.0], 1)?
-            } else {
-                provide()?
-            };
+            // Arity alone cannot certify forced play: hidden trapping can
+            // suppress legal switches and leave one move. Always cross the
+            // side-only request boundary, even for singleton/WAIT nodes.
+            // The Python provider may skip inference AFTER certification.
+            let distribution = provide()?;
             if distribution.0.len() != opponent.len() || opponent.is_empty() {
                 return Err(PyValueError::new_err(
                     "policy opponent: node distribution arity mismatch",
@@ -317,20 +317,30 @@ mod tests {
     }
 
     #[test]
-    fn single_choice_needs_no_model_but_multiple_choices_do() {
+    fn single_choice_still_requires_certification_before_sampling() {
+        Python::initialize();
         let mut n = node();
         n.s2_stats.truncate(1);
         n.s2_options.truncate(1);
         let mut sampler = PolicyOpponent::new(false, 31);
+        assert!(sampler
+            .select_joint(0, &n, 1.4, None, || {
+                Err(PyValueError::new_err("uncertified singleton"))
+            })
+            .is_err());
+        assert_eq!(sampler.samples, 0);
+        let mut certifications = 0;
         assert_eq!(
             sampler
                 .select_joint(0, &n, 1.4, None, || {
-                    panic!("a forced single choice must not call the model")
+                    certifications += 1;
+                    ActionDistribution::new(&[1.0], 1)
                 })
                 .unwrap()
                 .1,
             0
         );
+        assert_eq!(certifications, 1);
     }
 
     #[test]
