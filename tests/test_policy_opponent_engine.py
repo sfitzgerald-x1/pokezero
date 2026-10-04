@@ -108,10 +108,11 @@ class PolicyOpponentEngineTests(unittest.TestCase):
         self.assertEqual(policy.stats.worlds_attempted, 1)
 
     def run_policy(self, *, workers=1, deadline=None, bad=None, provider_error=False,
-                   report_override=None, order_missing=False):
+                   report_override=None, order_missing=False, joint=False, sampled=True):
         policy = Fixtures._policy(workers=workers, deadline_ms=deadline)
         policy._config = replace(policy._config, strict_fallbacks=True,
-                                 policy_opponent=True, policy_opponent_seed=13)
+                                 policy_opponent=sampled, policy_opponent_seed=13 if sampled else None,
+                                 record_joint_actions=joint)
         ctx = Fixtures._context()
         calls = []
 
@@ -122,14 +123,30 @@ class PolicyOpponentEngineTests(unittest.TestCase):
                     raise ValueError("registered provider refused this world")
                 report = (Fixtures._timed_report(60, 40, time_budget_ms=args[-1])
                           if deadline is not None else Fixtures._report(60, 40))
-                report.update(policy_opponent_mode="own_policy_callback",
-                              policy_opponent_seed=kwargs["policy_opponent_seed"],
-                              policy_opponent_evals=3, policy_opponent_provider_calls=3, policy_opponent_samples=100,
-                              policy_opponent_s=.02, model_priors=True)
+                if sampled:
+                    report.update(policy_opponent_mode="own_policy_callback",
+                                  policy_opponent_seed=kwargs["policy_opponent_seed"],
+                                  policy_opponent_evals=3, policy_opponent_provider_calls=3, policy_opponent_samples=100,
+                                  policy_opponent_s=.02, model_priors=True)
+                if joint:
+                    self.assertIs(kwargs.get("record_joint_actions"), True)
+                    report["side_two"] = [dict(move="alpha", visits=60, q=.5), dict(move="beta", visits=40, q=.5)]
+                    report["joint_action_witness"] = dict(
+                        schema="completed-joint-actions-v1", scope="single_native_tree",
+                        basis="finalized_backups_not_reservations", root_completed_traversals=100,
+                        root_distinct_pairs=2, root_side_one_options=2, root_side_two_options=2,
+                        root_side_one_visits=[40, 60], root_side_two_visits=[40, 60],
+                        root_side_one_moves=["beta", "alpha"], root_side_two_moves=["beta", "alpha"],
+                        root_side_one_report_order=[1, 0], root_side_two_report_order=[1, 0],
+                        root_pairs=[dict(side_one_option=0, side_two_option=0, completed_visits=40),
+                                    dict(side_one_option=1, side_two_option=1, completed_visits=60)],
+                        tree_distinct_node_pairs=3, tree_completed_selections=150)
                 report.update(report_override or {})
                 return json.dumps(report)
 
         def kwargs(_policy, context, record):
+            if not sampled:
+                return {}
             if provider_error:
                 raise ValueError("public prefix is incomplete")
             return dict(policy_opponent_callback=lambda raw: (),
@@ -173,11 +190,23 @@ class PolicyOpponentEngineTests(unittest.TestCase):
                                  [expected_rng.getrandbits(63) for _ in range(2)])
                 self.assertTrue(all(callable(kwargs["policy_opponent_callback"]) for _, kwargs in calls))
         self.assertTrue(all(value == seeds[0] for value in seeds))
+        for workers, deadline in cases:
+            for sampled in (False, True):
+                decision, calls = self.run_policy(workers=workers, deadline=deadline, joint=True, sampled=sampled)
+                joint = decision.metadata["engine_mcts"]["joint_actions"]
+                self.assertEqual(joint["scope"], "per_native_invocation_without_belief_reweighting")
+                self.assertEqual(len(joint["native_invocations"]), 2)
+                self.assertEqual(sum(row["witness"]["root_completed_traversals"] for row in joint["native_invocations"]), 200)
+                self.assertEqual("policy_opponent" in decision.metadata["engine_mcts"], sampled)
+                self.assertEqual(len(calls), 2)
 
     def test_failed_world_cannot_be_hidden_by_healthy_sibling(self):
         for workers in (1, 2):
             with self.subTest(workers=workers), self.assertRaisesRegex(EngineSearchWitnessError, "world refused"):
                 self.run_policy(workers=workers, bad="b")
+            for sampled in (False, True):
+                with self.assertRaisesRegex(EngineSearchWitnessError, "world refused"):
+                    self.run_policy(workers=workers, bad="b", joint=True, sampled=sampled)
 
     def test_provider_setup_failure_cannot_fall_back(self):
         for workers in (1, 2):
@@ -196,6 +225,15 @@ class PolicyOpponentEngineTests(unittest.TestCase):
         ):
             with self.subTest(override=override), self.assertRaises(EngineSearchWitnessError):
                 self.run_policy(report_override=override)
+        for workers in (1, 2):
+            for sampled in (False, True):
+                with self.assertRaisesRegex(EngineSearchWitnessError, "joint-action witness missing"):
+                    self.run_policy(workers=workers, joint=True, sampled=sampled,
+                                    report_override={"joint_action_witness": None})
+                with self.assertRaisesRegex(EngineSearchWitnessError, "reported root arms"):
+                    self.run_policy(workers=workers, joint=True, sampled=sampled,
+                        report_override={"side_two": [dict(move="beta", visits=60, q=.5),
+                                                      dict(move="alpha", visits=40, q=.5)]})
 
     def test_unknown_sampled_request_order_refuses_instead_of_guessing(self):
         with self.assertRaisesRegex(EngineSearchWitnessError, "lost_active_permutation"):

@@ -92,6 +92,76 @@ class EngineSearchFallbackError(RuntimeError):
     """Raised instead of falling back when ``strict_fallbacks`` is set."""
 
 
+def validate_native_joint_action_witness(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate finalized, node-local pairs; never infer them from arm visits.
+
+    A pair count summed over native trees is incidence, not a union of actions
+    across different sampled worlds. A collapsed world's belief multiplicity
+    must not reweight this compute receipt.
+    """
+    witness = report.get("joint_action_witness")
+    if not isinstance(witness, Mapping):
+        raise EngineSearchWitnessError("native joint-action witness missing")
+    if (witness.get("schema") != "completed-joint-actions-v1"
+            or witness.get("scope") != "single_native_tree"
+            or witness.get("basis") != "finalized_backups_not_reservations"):
+        raise EngineSearchWitnessError("native joint-action schema/scope/basis mismatch")
+    fields = ("root_completed_traversals", "root_distinct_pairs", "root_side_one_options",
+              "root_side_two_options", "tree_distinct_node_pairs", "tree_completed_selections")
+    if (any(type(witness.get(field)) is not int or witness[field] < 0 for field in fields)
+            or type(report.get("iterations")) is not int or report["iterations"] < 0
+            or witness["root_completed_traversals"] != report["iterations"]
+            or min(witness["root_side_one_options"], witness["root_side_two_options"]) <= 0):
+        raise EngineSearchWitnessError("native joint-action counts/iterations malformed")
+    pairs = witness.get("root_pairs")
+    if not isinstance(pairs, list) or len(pairs) != witness["root_distinct_pairs"]:
+        raise EngineSearchWitnessError("native joint-action pair coverage malformed")
+    marginals = [[0] * witness[f"root_{side}_options"] for side in ("side_one", "side_two")]
+    keys = []
+    completed = 0
+    for row in pairs:
+        if (not isinstance(row, Mapping)
+                or any(type(row.get(field)) is not int for field in
+                       ("side_one_option", "side_two_option", "completed_visits"))
+                or row["completed_visits"] <= 0):
+            raise EngineSearchWitnessError("native joint-action pair row malformed")
+        key = (row["side_one_option"], row["side_two_option"])
+        for seat, index in enumerate(key):
+            if not 0 <= index < len(marginals[seat]):
+                raise EngineSearchWitnessError("native joint-action option out of range")
+            marginals[seat][index] += row["completed_visits"]
+        keys.append(key)
+        completed += row["completed_visits"]
+    if (keys != sorted(set(keys)) or completed != report["iterations"]
+            or not witness["root_distinct_pairs"] <= witness["tree_distinct_node_pairs"] <= witness["tree_completed_selections"]
+            or witness["tree_completed_selections"] < completed
+            or (completed == 0) != (witness["tree_completed_selections"] == 0)):
+        raise EngineSearchWitnessError("native joint-action completed work does not conserve")
+    for seat, side in enumerate(("side_one", "side_two")):
+        visits = witness.get(f"root_{side}_visits")
+        if (not isinstance(visits, list) or len(visits) != len(marginals[seat])
+                or any(type(count) is not int or count < 0 for count in visits)
+                or visits != marginals[seat]):
+            raise EngineSearchWitnessError("native joint-action marginals differ from completed arm visits")
+        moves = witness.get(f"root_{side}_moves")
+        order = witness.get(f"root_{side}_report_order")
+        if (not isinstance(moves, list) or len(moves) != len(visits)
+                or any(not isinstance(move, str) or not move for move in moves)
+                or not isinstance(order, list) or any(type(index) is not int for index in order)
+                or order != sorted(range(len(visits)), key=lambda index: -visits[index])):
+            raise EngineSearchWitnessError("native joint-action option identity/report order malformed")
+        # Reports are visit-sorted, not native-option-ordered. Explicit indices
+        # retain identity even for duplicate display labels and tied visits.
+        if side in report:
+            arms = report[side]
+            if (not isinstance(arms, list) or len(arms) != len(order)
+                    or any(not isinstance(row, Mapping) or row.get("move") != moves[index]
+                           or type(row.get("visits")) is not int or row["visits"] != visits[index]
+                           for row, index in zip(arms, order))):
+                raise EngineSearchWitnessError("native joint-action marginals differ from reported root arms")
+    return dict(witness)
+
+
 def policy_opponent_world_seed(config: Any, context: Any, record: Mapping[str, Any]) -> int:
     """Versioned deterministic stream split; consumes no decision/chance draws."""
     payload = json.dumps([
@@ -804,6 +874,8 @@ class EngineMctsConfig:
     # policy, not its auxiliary head or opposing PUCT. Never enabled implicitly.
     policy_opponent: bool = False
     policy_opponent_seed: int | None = None
+    # Opt-in measurement only: finalized node-local joint action backups.
+    record_joint_actions: bool = False
     # First-play urgency for UNVISITED arms in the native PUCT selection.
     # None = the flat 0.5 the crate has always used (`MoveStats::mean` at zero
     # visits); a float r prices an unvisited arm at
@@ -917,6 +989,9 @@ class EngineMctsConfig:
     def __post_init__(self) -> None:
         if type(self.policy_opponent) is not bool:
             raise ValueError("policy_opponent must be a boolean.")
+        if type(self.record_joint_actions) is not bool or (self.record_joint_actions and (
+                self.leaf_eval != "model" or not self.strict_fallbacks)):
+            raise ValueError("record_joint_actions must be boolean and requires model leaves with strict_fallbacks.")
         if self.policy_opponent:
             if (type(self.policy_opponent_seed) is not int
                     or not 0 <= self.policy_opponent_seed < 2**64):
@@ -4881,7 +4956,7 @@ class EngineMctsPolicy:
                 # permits a world; classify a missing patch as an attributed
                 # fallback instead of silently searching an optimistic state.
                 self.stats.world_failure_reasons["attract_patch_unavailable"] += 1
-                if self._config.policy_opponent:
+                if self._config.policy_opponent or self._config.record_joint_actions:
                     raise EngineSearchWitnessError("policy opponent Attract world refused") from error
                 continue
             except PokeEngineMoveTrapUnsupportedError as error:
@@ -4893,7 +4968,7 @@ class EngineMctsPolicy:
                 # hand the trapped seat its switch options back, so declining is correct --
                 # but declining is a fallback, not a crashed run.
                 self.stats.world_failure_reasons["move_trap_patch_unavailable"] += 1
-                if self._config.policy_opponent:
+                if self._config.policy_opponent or self._config.record_joint_actions:
                     raise EngineSearchWitnessError("policy opponent move-trap world refused") from error
                 continue
             except PokeEngineUnavailableError as error:
@@ -4919,12 +4994,12 @@ class EngineMctsPolicy:
                 self.stats.world_failure_reasons[
                     f"engine_capability_unavailable: {type(error).__name__}"
                 ] += 1
-                if self._config.policy_opponent:
+                if self._config.policy_opponent or self._config.record_joint_actions:
                     raise EngineSearchWitnessError("policy opponent engine world refused") from error
                 continue
             except EngineWorldUnsupported as error:
                 self.stats.world_failure_reasons[_world_failure_key(error)] += 1
-                if self._config.policy_opponent:
+                if self._config.policy_opponent or self._config.record_joint_actions:
                     raise EngineSearchWitnessError(f"policy opponent world construction refused: {error}") from error
                 continue
             worlds.append((world, state))
@@ -6225,6 +6300,7 @@ class EngineMctsPolicy:
         # distinction is necessary to audit a deadline prefix honestly.
         native_time_budget_invocations: list[dict[str, Any]] = []
         policy_opponent_invocations: list[dict[str, Any]] = []
+        joint_action_invocations: list[dict[str, Any]] = []
         native_batch_guard_seconds = config.model_native_batch_guard_ms / 1000.0
         time_budget_duration_seconds = (
             config.model_decision_time_ms / 1000.0
@@ -6361,6 +6437,8 @@ class EngineMctsPolicy:
                         time_budget_ms=time_budget_ms,
                     )
                     policy_kwargs = self._policy_opponent_native_kwargs(context, record)
+                    if config.record_joint_actions:
+                        policy_kwargs["record_joint_actions"] = True
                     native_invocation_started = time_budget_ms is not None
                     if (
                         decision_deadline is not None
@@ -6402,6 +6480,12 @@ class EngineMctsPolicy:
                     # rejects the whole decision.  The dispatch mode may change
                     # throughput, never that failure boundary.
                     report = payload
+                if config.record_joint_actions:
+                    joint = validate_native_joint_action_witness(report)
+                    joint_action_invocations.append({
+                        "world_seed": record["seed"], "belief_multiplicity": weight,
+                        "witness": joint,
+                    })
                 if config.policy_opponent:
                     # No healthy sibling may hide an absent or malformed mode
                     # witness, nor a uniform subject-prior fallback at a child.
@@ -6657,10 +6741,10 @@ class EngineMctsPolicy:
                 # ... and everything ELSE the world observed before it aborted, which
                 # this seam used to discard wholesale.
                 self._absorb_aborted_lossy_subcases(error)
-                if config.policy_opponent:
+                if config.policy_opponent or config.record_joint_actions:
                     finalize_time_budget()
                     raise EngineSearchWitnessError(
-                        f"policy opponent world refused (chance seed={record['seed']}): {reason}"
+                        f"{'policy opponent' if config.policy_opponent else 'joint-action measurement'} world refused (chance seed={record['seed']}): {reason}"
                     ) from error
                 return None
             # Invocation-level counters reflect actual compute. A stopped
@@ -7204,7 +7288,8 @@ class EngineMctsPolicy:
                     return _ParallelWorldPrefetch(
                         completed=True,
                         payload=json.loads(handle.search_batched_multi_encoded(
-                            *search_args, **self._policy_opponent_native_kwargs(context, _record))),
+                            *search_args, **self._policy_opponent_native_kwargs(context, _record),
+                            **({"record_joint_actions": True} if config.record_joint_actions else {}))),
                         native_invocation_started=True,
                     )
                 except Exception as error:  # preserve serial refusal taxonomy
@@ -7250,6 +7335,8 @@ class EngineMctsPolicy:
                             time_budget_ms=time_budget_ms,
                         )
                         policy_kwargs = self._policy_opponent_native_kwargs(context, record)
+                        if config.record_joint_actions:
+                            policy_kwargs["record_joint_actions"] = True
                     except Exception as error:
                         # No native call occurred.  Keep the planned budget out
                         # of the invocation ledger, just like serial argument
@@ -7639,6 +7726,10 @@ class EngineMctsPolicy:
         metadata = {
             "engine_mcts": {
                 "leaf_eval": "model",
+                **({"joint_actions": {
+                    "scope": "per_native_invocation_without_belief_reweighting",
+                    "native_invocations": joint_action_invocations,
+                }} if config.record_joint_actions else {}),
                 **({"policy_opponent": {
                     "mode": "own_policy_callback", "seed_root": config.policy_opponent_seed,
                     "seed_derivation": "sha256-domain-separated-v1",

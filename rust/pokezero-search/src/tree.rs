@@ -151,6 +151,9 @@ fn debug_assert_probability_conservation(branches: &[ChanceBranch]) {
 pub(crate) struct Tree {
     pub decisions: Vec<DecisionNode>,
     pub chances: Vec<ChanceNode>,
+    /// Measurement-only completed backups, never collection reservations.
+    /// Absent unless explicitly requested by a native measurement caller.
+    pub joint_action_visits: Option<std::collections::BTreeMap<(usize, usize, usize), u64>>,
 }
 
 /// Whether the acting side's most-visited root arm is mathematically
@@ -210,7 +213,62 @@ impl Tree {
         Ok(Tree {
             decisions: vec![root],
             chances: Vec::new(),
+            joint_action_visits: None,
         })
+    }
+
+    /// Stable per-native-tree work receipt. Counts are not multiplied by belief
+    /// multiplicity and node-local option indices are not cross-world identities.
+    pub(crate) fn joint_action_witness(&self, completed: usize) -> PyResult<Option<String>> {
+        let Some(visits) = &self.joint_action_visits else { return Ok(None) };
+        let root = &self.decisions[0];
+        let mut root_pairs = Vec::new();
+        let mut root_completed = 0u64;
+        let mut tree_completed = 0u64;
+        for (&(node, i, j), &count) in visits {
+            let decision = self.decisions.get(node)
+                .ok_or_else(|| PyValueError::new_err("joint-action ledger has an unknown decision node"))?;
+            if count == 0 || i >= decision.s1_options.len() || j >= decision.s2_options.len() {
+                return Err(PyValueError::new_err("joint-action ledger has invalid options or zero completed visits"));
+            }
+            tree_completed += count;
+            if node == 0 {
+                root_completed += count;
+                root_pairs.push(serde_json::json!({
+                    "side_one_option": i, "side_two_option": j, "completed_visits": count
+                }));
+            }
+        }
+        let s1_visits: u64 = root.s1_stats.iter().map(|s| u64::from(s.visits)).sum();
+        let s2_visits: u64 = root.s2_stats.iter().map(|s| u64::from(s.visits)).sum();
+        if root_completed != completed as u64 || root_completed != s1_visits || root_completed != s2_visits {
+            return Err(PyValueError::new_err("joint-action completed backups disagree with root visits/iterations"));
+        }
+        // Mirror stats_to_json's stable visit sort, preserving native option
+        // identity even when two options share a display label.
+        let report_order = |stats: &[MoveStats]| {
+            let mut order: Vec<usize> = (0..stats.len()).collect();
+            order.sort_by(|&a, &b| stats[b].visits.cmp(&stats[a].visits));
+            order
+        };
+        Ok(Some(serde_json::json!({
+            "schema": "completed-joint-actions-v1",
+            "scope": "single_native_tree",
+            "basis": "finalized_backups_not_reservations",
+            "root_completed_traversals": root_completed,
+            "root_distinct_pairs": root_pairs.len(),
+            "root_pairs": root_pairs,
+            "root_side_one_options": root.s1_options.len(),
+            "root_side_two_options": root.s2_options.len(),
+            "root_side_one_visits": root.s1_stats.iter().map(|s| s.visits).collect::<Vec<_>>(),
+            "root_side_two_visits": root.s2_stats.iter().map(|s| s.visits).collect::<Vec<_>>(),
+            "root_side_one_moves": root.s1_stats.iter().map(|s| s.display.as_str()).collect::<Vec<_>>(),
+            "root_side_two_moves": root.s2_stats.iter().map(|s| s.display.as_str()).collect::<Vec<_>>(),
+            "root_side_one_report_order": report_order(&root.s1_stats),
+            "root_side_two_report_order": report_order(&root.s2_stats),
+            "tree_distinct_node_pairs": visits.len(),
+            "tree_completed_selections": tree_completed
+        }).to_string()))
     }
 }
 
@@ -1008,6 +1066,9 @@ pub(crate) fn finalize(tree: &mut Tree, traversal: &Traversal, row_values: &[f32
         node.s1_stats[step.i].total_value += expectation;
         node.s2_stats[step.j].total_value += expectation - 1.0; // replace virtual loss
         value = expectation;
+        if let Some(visits) = &mut tree.joint_action_visits {
+            *visits.entry((step.decision, step.i, step.j)).or_default() += 1;
+        }
     }
     value
 }
@@ -1762,6 +1823,7 @@ mod tests {
     #[test]
     fn both_seats_priors_land_on_their_own_stats_at_child_creation() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
                 branches: vec![priored_branch(
@@ -1781,6 +1843,7 @@ mod tests {
     #[test]
     fn stored_side_flags_route_the_apply_when_the_searching_seat_is_side_two() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
                 branches: vec![priored_branch(
@@ -1799,6 +1862,7 @@ mod tests {
     #[test]
     fn an_opponent_only_branch_leaves_the_acting_seat_uniform() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
                 branches: vec![priored_branch(None, Some((false, vec![0.2, 0.8])))],
@@ -1812,6 +1876,7 @@ mod tests {
     #[test]
     fn a_branch_with_no_stored_priors_leaves_the_child_uniform() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
                 branches: vec![priored_branch(None, None)],
@@ -1857,6 +1922,70 @@ mod tests {
     /// Charmander (ember/tackle) vs Squirtle (watergun/tackle), 100 HP each —
     /// the crate's standard minimal fixture (`minimal_gen3_fixture`).
     const MINIMAL: &str = include_str!("test_fixtures/minimal.state");
+
+    #[test]
+    fn joint_action_ledger_counts_only_completed_backups() {
+        Python::initialize();
+        let mut state = parse_state(MINIMAL.trim()).unwrap();
+        let mut tree = Tree::from_root(&state).unwrap();
+        assert!(tree.joint_action_witness(0).unwrap().is_none());
+        tree.joint_action_visits = Some(Default::default());
+        let cfg = MultiPlyConfig {
+            max_depth: 2, c_puct: 1.4, deep_ko_split: true,
+            use_opponent_priors: false, fpu_reduction: None,
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+        let mut counters = SearchCounters::default();
+        let traversals: Vec<_> = (0..32).map(|_| traverse(
+            &mut tree, &mut state, &mut rng, &cfg, &mut counters,
+            &mut |_state, _seam| LeafPrice::Ready(0.5))).collect();
+        assert!(tree.joint_action_visits.as_ref().unwrap().is_empty(),
+            "collection and virtual visits must not count as completed work");
+        assert!(tree.joint_action_witness(32).is_err(),
+            "reserved arm visits must not be accepted without backups");
+        let mut expected = std::collections::BTreeMap::new();
+        for traversal in &traversals {
+            for step in &traversal.path {
+                *expected.entry((step.decision, step.i, step.j)).or_insert(0u64) += 1;
+            }
+            finalize(&mut tree, traversal, &[]);
+        }
+        assert_eq!(tree.joint_action_visits.as_ref().unwrap(), &expected);
+        let receipt: serde_json::Value = serde_json::from_str(
+            &tree.joint_action_witness(32).unwrap().unwrap()).unwrap();
+        assert_eq!(receipt["root_completed_traversals"], 32);
+        assert_eq!(receipt["tree_distinct_node_pairs"].as_u64().unwrap(), expected.len() as u64);
+        assert_eq!(receipt["root_distinct_pairs"].as_u64().unwrap(),
+            expected.keys().filter(|(node, _, _)| *node == 0).count() as u64);
+        assert_eq!(receipt["tree_completed_selections"].as_u64().unwrap(), expected.values().sum::<u64>());
+        assert!(tree.joint_action_witness(31).is_err());
+    }
+
+    #[test]
+    fn joint_action_ledger_cannot_change_search_choices_or_backups() {
+        let mut state = parse_state(MINIMAL.trim()).unwrap();
+        let cfg = MultiPlyConfig {
+            max_depth: 3, c_puct: 1.4, deep_ko_split: true,
+            use_opponent_priors: false, fpu_reduction: None,
+        };
+        let ordinary = multiply_search_with_eval(&mut state, 32, &cfg, 11, &HpFractionEval).unwrap();
+        let mut measured = Tree::from_root(&state).unwrap();
+        measured.joint_action_visits = Some(Default::default());
+        let mut rng = StdRng::seed_from_u64(11);
+        let mut counters = SearchCounters::default();
+        for _ in 0..32 {
+            let traversal = traverse(&mut measured, &mut state, &mut rng, &cfg, &mut counters,
+                &mut |leaf, _seam| LeafPrice::Ready(HpFractionEval.eval(leaf)));
+            finalize(&mut measured, &traversal, &[]);
+        }
+        assert_eq!(stats_to_json(&ordinary.tree.decisions[0].s1_stats, true),
+                   stats_to_json(&measured.decisions[0].s1_stats, true));
+        assert_eq!(stats_to_json(&ordinary.tree.decisions[0].s2_stats, true),
+                   stats_to_json(&measured.decisions[0].s2_stats, true));
+        assert_eq!(ordinary.tree.decisions.len(), measured.decisions.len());
+        assert_eq!(ordinary.tree.chances.len(), measured.chances.len());
+        assert!(measured.joint_action_witness(32).unwrap().is_some());
+    }
 
     /// The REAL panic, contained, end to end -- and the process survives it.
     ///
@@ -2537,6 +2666,7 @@ mod tests {
                 })
                 .collect();
             let mut tree = Tree {
+                joint_action_visits: None,
                 decisions: vec![root],
                 chances: vec![ChanceNode { branches }],
             };

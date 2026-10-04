@@ -110,6 +110,32 @@ class NativePolicyOpponentSearchTest(_EncodedSearchFixture, unittest.TestCase):
 
     def test_disabled_mode_keeps_report_schema_and_requires_complete_opt_in(self):
         report = self.run_search()
+        self.assertNotIn("joint_action_witness", report)
+        from pokezero.engine_search import validate_native_joint_action_witness
+        for callback in (None, lambda raw: [1.] * len(json.loads(raw)["native_request_bundle"]["native_action_indices"])):
+            ordinary = self.run_search(callback)
+            measured = self.run_search(callback, record_joint_actions=True)
+            explicit_off = self.run_search(callback, record_joint_actions=False)
+            for field in ("side_one", "side_two", "root_value", "iterations", "root_priors",
+                          "decision_nodes", "chance_nodes", "max_depth_reached", "leaf_evals"):
+                self.assertEqual(ordinary[field], measured[field], field)
+                self.assertEqual(ordinary[field], explicit_off[field], field)
+            witness = validate_native_joint_action_witness(measured)
+            self.assertEqual(witness["root_completed_traversals"], 64)
+            self.assertGreater(witness["root_distinct_pairs"], 0)
+            self.assertLessEqual(witness["root_distinct_pairs"], 64)
+            self.assertGreater(witness["tree_completed_selections"], 64)
+            # Native option order differs from the report's stable visit sort.
+            # Bind by explicit indices rather than sorting the counts alone.
+            for side in ("side_one", "side_two"):
+                order = witness[f"root_{side}_report_order"]
+                self.assertEqual([row["move"] for row in measured[side]],
+                                 [witness[f"root_{side}_moves"][index] for index in order])
+                changed = json.loads(json.dumps(measured))
+                changed[side][0]["move"] = "wrong-option-identity"
+                with self.assertRaisesRegex(RuntimeError, "reported root arms"):
+                    validate_native_joint_action_witness(changed)
+            self.assertNotIn("joint_action_witness", explicit_off)
         self.assertFalse(any(key.startswith("policy_opponent_") for key in report))
         for options in (dict(policy_opponent_seed=9), dict(policy_opponent_request_order=["unknown"]),
                         dict(policy_opponent_callback=123, policy_opponent_seed=9, policy_opponent_request_order=["unknown"])):
@@ -131,7 +157,9 @@ class NativePolicyOpponentSearchTest(_EncodedSearchFixture, unittest.TestCase):
         def costly_provider(raw):
             time.sleep(.15)
             return [1.] * len(json.loads(raw)["native_request_bundle"]["native_action_indices"])
-        report = self.run_search(costly_provider, time_budget_ms=100)
+        report = self.run_search(costly_provider, time_budget_ms=100, record_joint_actions=True)
+        from pokezero.engine_search import validate_native_joint_action_witness
+        self.assertEqual(validate_native_joint_action_witness(report)["root_completed_traversals"], report["iterations"])
         self.assertGreaterEqual(report["policy_opponent_evals"], 1)
         self.assertGreaterEqual(report["policy_opponent_s"], .15)
         self.assertGreaterEqual(report["time_budget_elapsed_ms"], 150)

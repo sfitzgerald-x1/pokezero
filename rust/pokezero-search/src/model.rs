@@ -1129,6 +1129,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     time_budget_started: Option<Instant>,
     lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
     policy_opponent: Option<(&crate::policy_bridge::PolicyOpponentBridge, u64)>,
+    record_joint_actions: bool,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
@@ -1142,6 +1143,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         fpu_reduction,
     };
     let mut tree = Tree::from_root(&state)?;
+    if record_joint_actions {
+        tree.joint_action_visits = Some(Default::default());
+    }
     let mut counters = SearchCounters::default();
     // Within-round selection collisions, per seat (stage 0 of the selection
     // tuning plan). Only THIS core carries it: it is the only one that batches
@@ -1908,6 +1912,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         collisions.leaf_repeats,
         opponent_request_order_status_field,
     );
+    let extra = match outcome.tree.joint_action_witness(completed)? {
+        Some(witness) => format!("{extra},\"joint_action_witness\":{witness}"),
+        None => extra,
+    };
     // Deadline fields are appended only for the opt-in path: a historical
     // fixed-work report remains byte-for-byte on its old schema. An overrun is
     // not hidden -- it is the cost of finishing the final complete batch rather
@@ -2359,6 +2367,7 @@ impl NativeLeafModel {
         policy_opponent_callback = None,
         policy_opponent_seed = None,
         policy_opponent_request_order = None,
+        record_joint_actions = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -2392,6 +2401,7 @@ impl NativeLeafModel {
         policy_opponent_callback: Option<Py<PyAny>>,
         policy_opponent_seed: Option<u64>,
         policy_opponent_request_order: Option<Vec<String>>,
+        record_joint_actions: bool,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -2561,6 +2571,7 @@ impl NativeLeafModel {
                     time_budget_started,
                     lossy_subcases,
                     policy_bridge.as_ref().map(|bridge| (bridge, policy_opponent_seed.expect("validated policy seed"))),
+                    record_joint_actions,
                 )
             })
         })

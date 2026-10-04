@@ -155,7 +155,7 @@ def make_profile_decider(
     if arm == "raw_policy":
         return _LiveRawPolicyTimingDecider(contract, showdown_root)
     return _LiveEngineTimingDecider(contract, showdown_root,
-        override_telemetry=True, model_priors=True, use_opponent_priors=False,
+        override_telemetry=True, record_joint_actions=True, model_priors=True, use_opponent_priors=False,
         model_world_workers=1,
         model_decision_time_ms=deadline_ms if mode == "matched_deadline" else None,
         model_native_batch_guard_ms=native_batch_guard_ms if mode == "matched_deadline" else 0,
@@ -193,6 +193,27 @@ def validate_selection(telemetry: Any, *, arm: str, mode: str, config: SearchCon
         return
     if arm not in ARMS or mode not in MODES or "raw_policy" in telemetry or engine.get("leaf_eval") != "model":
         raise ContractError("profile search arm identity drift")
+    from ..engine_search import EngineSearchWitnessError, validate_native_joint_action_witness
+    joint = engine.get("joint_actions")
+    if (not isinstance(joint, Mapping)
+            or joint.get("scope") != "per_native_invocation_without_belief_reweighting"
+            or not isinstance(joint.get("native_invocations"), list) or not joint["native_invocations"]):
+        raise ContractError("profile native joint-action witness missing")
+    completed = 0
+    for invocation in joint["native_invocations"]:
+        if (not isinstance(invocation, Mapping) or type(invocation.get("world_seed")) is not int
+                or type(invocation.get("belief_multiplicity")) is not int or invocation["belief_multiplicity"] <= 0
+                or not isinstance(invocation.get("witness"), Mapping)):
+            raise ContractError("profile joint-action invocation identity malformed")
+        witness = invocation["witness"]
+        try:
+            validate_native_joint_action_witness({"iterations": witness.get("root_completed_traversals"),
+                                                   "joint_action_witness": witness})
+        except EngineSearchWitnessError as error:
+            raise ContractError(str(error)) from error
+        completed += witness["root_completed_traversals"]
+    if completed != telemetry["total_iterations"]:
+        raise ContractError("profile joint-action work differs from actual native iterations")
     searched = engine.get("worlds_searched")
     if (type(searched) is not int or not 0 < searched <= config.worlds
             or type(engine.get("worlds_constructed")) is not int
@@ -283,7 +304,7 @@ def profile_root(
         "turn_index": record.turn_index, "decision_seed": decision_seed,
         "opponent_seed": opponent_seed, "seed_domain": SEED_DOMAIN.decode().rstrip("\0"),
         "timing_boundary": "request_available_to_validated_showdown_choice",
-        "qualification": "PENDING_ROSTER_BYTE_BINDING_AND_NATIVE_JOINT_ACTION_WITNESS",
+        "qualification": "PENDING_ROSTER_BYTE_BINDING_AND_RUNTIME_QUALIFICATION",
         "modes": {}, "state": "REFUSED"}
     try:
         prefix = source_bound_replay_prefix(record, source_records=source_records)

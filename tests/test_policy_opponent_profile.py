@@ -36,6 +36,17 @@ def telemetry(arm, mode, opponent_seed):
             "root_allocation": dict(worlds=4, prior_authority=True, prior_cause=None,
                 arms=[dict(action_index=index, visit_share=value, model_prior=value,
                            reported_prior=value) for index, value in enumerate((.1, .9))])})
+    engine["joint_actions"] = dict(scope="per_native_invocation_without_belief_reweighting",
+        native_invocations=[dict(world_seed=17, belief_multiplicity=4, witness=dict(
+            schema="completed-joint-actions-v1", scope="single_native_tree",
+            basis="finalized_backups_not_reservations", root_completed_traversals=64,
+            root_distinct_pairs=2, root_side_one_options=2, root_side_two_options=1,
+            root_side_one_visits=[6, 58], root_side_two_visits=[64],
+            root_side_one_moves=["alpha", "beta"], root_side_two_moves=["reply"],
+            root_side_one_report_order=[1, 0], root_side_two_report_order=[0],
+            root_pairs=[dict(side_one_option=0, side_two_option=0, completed_visits=6),
+                        dict(side_one_option=1, side_two_option=0, completed_visits=58)],
+            tree_distinct_node_pairs=3, tree_completed_selections=80))])
     if arm == "own_policy_opponent_mcts":
         engine["policy_opponent"] = dict(mode="own_policy_callback", seed_root=opponent_seed,
             seed_derivation="sha256-domain-separated-v1", native_invocations=[
@@ -73,6 +84,7 @@ class ProfileContractTests(unittest.TestCase):
                     mode=mode, opponent_seed=71, deadline_ms=1000, native_batch_guard_ms=64)
                 kwargs = engine.call_args.kwargs
                 self.assertTrue(kwargs["policy_opponent"])
+                self.assertTrue(kwargs["record_joint_actions"])
                 self.assertTrue(kwargs["model_priors"])
                 self.assertFalse(kwargs["use_opponent_priors"])
                 self.assertEqual(kwargs["policy_opponent_seed"], 71)
@@ -100,7 +112,7 @@ class ProfileContractTests(unittest.TestCase):
                 validate(telemetry(arm, mode, 71), arm, mode)
         row = telemetry("incumbent_mcts", "fixed_work", 71)
         row["total_iterations"] -= 1
-        with self.assertRaisesRegex(ContractError, "exact allocation"):
+        with self.assertRaisesRegex(ContractError, "actual native iterations"):
             validate(row)
         row = telemetry("own_policy_opponent_mcts", "fixed_work", 71)
         del row["engine_mcts"]["policy_opponent"]
@@ -113,11 +125,15 @@ class ProfileContractTests(unittest.TestCase):
         row["engine_mcts"]["aggregated_choices_basis"] = "deadline_prefix"
         row["engine_mcts"]["time_budget"]["native_invocations"][0].update(
             completed_iterations=32, remaining_iterations=32)
+        joint = row["engine_mcts"]["joint_actions"]["native_invocations"][0]["witness"]
+        joint.update(root_completed_traversals=32, root_side_one_visits=[3, 29], root_side_two_visits=[32])
+        for pair in joint["root_pairs"]:
+            pair["completed_visits"] //= 2
         validate(row, mode="matched_deadline")
         with self.assertRaisesRegex(ContractError, "exact allocation"):
             validate(row)
         row["total_iterations"] -= 1
-        with self.assertRaisesRegex(ContractError, "productive work"):
+        with self.assertRaisesRegex(ContractError, "actual native iterations"):
             validate(row, mode="matched_deadline")
 
     def test_raw_search_leakage_invalid_mass_and_wrong_argmax_refuse(self):
@@ -149,6 +165,30 @@ class ProfileContractTests(unittest.TestCase):
         row["engine_mcts"]["policy_opponent"]["native_invocations"][0]["evaluations"] = 3
         with self.assertRaisesRegex(ContractError, "opponent work"):
             validate(row, "own_policy_opponent_mcts")
+        # A collapsed tree's multiplicity remains four, but its compute ledger
+        # counts 64 traversals once, not 256. Reserving, reweighting, duplicating,
+        # omitting, or inventing pair evidence must fail closed.
+        for mutation in (
+            lambda engine: engine.pop("joint_actions"),
+            lambda engine: engine["joint_actions"].update(scope="belief_weighted"),
+            lambda engine: engine["joint_actions"]["native_invocations"][0].update(belief_multiplicity=True),
+            lambda engine: engine["joint_actions"]["native_invocations"].append(
+                deepcopy(engine["joint_actions"]["native_invocations"][0])),
+        ):
+            row = telemetry("incumbent_mcts", "fixed_work", 71)
+            mutation(row["engine_mcts"])
+            with self.assertRaises(ContractError):
+                validate(row)
+        for change in (dict(basis="collected_reservations"), dict(root_completed_traversals=256),
+                       dict(root_distinct_pairs=True), dict(root_distinct_pairs=1),
+                       dict(tree_completed_selections=1), dict(root_side_one_visits=[58, 6]),
+                       dict(root_pairs=[]), dict(root_side_two_options=0),
+                       dict(root_side_one_moves=["alpha"]), dict(root_side_one_report_order=[0, 1]),
+                       dict(root_side_two_report_order=[True])):
+            row = telemetry("incumbent_mcts", "fixed_work", 71)
+            row["engine_mcts"]["joint_actions"]["native_invocations"][0]["witness"].update(change)
+            with self.assertRaises(ContractError):
+                validate(row)
 
 
 class ProfileBoundaryTests(unittest.TestCase):

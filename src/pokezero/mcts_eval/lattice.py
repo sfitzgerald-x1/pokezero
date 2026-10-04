@@ -302,6 +302,7 @@ class _LiveEngineTimingDecider:
         override_telemetry: bool = False,
         policy_opponent: bool = False,
         policy_opponent_seed: int | None = None,
+        record_joint_actions: bool = False,
         rollout_leaf_eval: bool = False,
         rollout_count: int = 32,
         rollout_max_plies: int = 200,
@@ -340,7 +341,7 @@ class _LiveEngineTimingDecider:
             raise ValueError("model_world_workers must be positive")
         if not all(
             isinstance(value, bool)
-            for value in (model_priors, use_opponent_priors, override_telemetry)
+            for value in (model_priors, use_opponent_priors, override_telemetry, record_joint_actions)
         ):
             raise ValueError(
                 "model_priors, use_opponent_priors, and override_telemetry must be booleans"
@@ -360,7 +361,9 @@ class _LiveEngineTimingDecider:
         # for the already-supported root-allocation witness without widening the
         # default replay contract.
         self._override_telemetry = override_telemetry
-        self._policy_opponent_kwargs = opponent_kwargs
+        self._record_joint_actions = record_joint_actions
+        self._policy_opponent_kwargs = {**opponent_kwargs,
+            **({"strict_fallbacks": True} if record_joint_actions else {})}
         # The source-root leaf ablation uses the existing model-prior rollout
         # seam.  Keep every knob explicit here, rather than letting a caller
         # bolt an unregistered leaf value onto the timing adapter.  Production
@@ -422,6 +425,7 @@ class _LiveEngineTimingDecider:
                 model_priors=self._model_priors,
                 use_opponent_priors=self._use_opponent_priors,
                 override_telemetry=self._override_telemetry,
+                record_joint_actions=getattr(self, "_record_joint_actions", False),
                 early_stop=False,
                 model_decision_time_ms=self._model_decision_time_ms,
                 model_native_batch_guard_ms=self._model_native_batch_guard_ms,

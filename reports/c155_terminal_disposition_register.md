@@ -336,6 +336,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1415 branch-prior fallback reason ledger | `rust/pokezero-search/src/model.rs` and `src/priors.rs`: six exhaustive interior-fallback causes are emitted and conserved, while valid finite low-mass legal priors remain accepted | `e3483c2b281fb346…` |
 | #1425 model-feature abort seam cleanup | `rust/pokezero-search/src/tree.rs`: make the feature-gated seam test self-initializing so CI can run it independently of unrelated test order | `7ea25b3c27d7e5a1…` |
 | #1503 opt-in own-policy opponent experiment | New `policy_opponent.rs`, `policy_request.rs`, and `policy_bridge.rs`, plus traversal/model/encoder wiring; full masked policy sampling and private-safe reached-node requests, including singleton certification and separate provider-call/evaluation counts | `4bf56184eeddb642…` |
+| #1503 completed joint-action measurement | `tree.rs` finalized-backup ledger and two behavioral tests; `model.rs` explicit default-off receipt flag; `priors.rs` fixture initialization. Native node-local pairs are counted once per compute invocation, without belief-multiplicity reweighting; explicit option labels and stable report-sort indices bind displayed marginals | `2b019d6667a5bd36…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -956,7 +957,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 15 |
 | `t1.hashed_input_files` | 99 |
-| `t1.head_fingerprint` | 4bf56184eeddb642 |
+| `t1.head_fingerprint` | 2b019d6667a5bd36 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

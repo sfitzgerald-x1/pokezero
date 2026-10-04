@@ -152,7 +152,7 @@ Checkpoint, vocabulary, and non-null belief-source bindings remain required.
 Source-prefix, action, sampling, and cleanup refusals retain root identity and
 all available comparison rows. No failed root is redrawn. A row's `COMPLETE`
 means execution/witness validation only: the foundation explicitly marks
-roster/runtime/native-joint-action qualification as pending. It is not a
+roster/runtime qualification as pending. It is not a
 launcher, a valid experiment manifest, or a strength result.
 
 Thirteen focused foundation tests pass, including real PyTorch raw inference,
@@ -425,3 +425,90 @@ frozen roots, or qualify their replay histories.
 No cluster experiment, training job, root screen, game pilot, finalizer, or
 deployment was launched by these changes. No historical object or shared
 artifact was modified. The full staged goal remains incomplete and active.
+
+### October 4 completed joint-action measurement
+
+The default-off native measurement records node-local action pairs only after
+their backups complete. Reservations and selection collisions are not completed
+work. Root pair counts conserve actual traversals and both seats' visit marginals;
+tree-wide counts are node/pair incidences, not a union across hidden worlds.
+Collapsed belief multiplicity does not multiply compute receipts. Both search
+arms opt in for the bounded profile, retain each native invocation separately,
+and refuse malformed receipts or a failed world rather than hiding it behind a
+healthy sibling. The raw arm remains unchanged.
+
+The first rebuilt-wheel verification failed with exit 1: six of the 77 tests
+errored because the new validator compared native-option-ordered visits with
+visit-sorted report rows. Independent review reproduced the same P1 in four
+enabled-wheel tests. The repair records explicit option labels and stable
+report-sort indices, binding displayed moves and visits to native option identity
+even for tied visits or duplicate display labels. It does not reorder the existing
+report, sort away identity disagreements, or weaken marginal conservation.
+
+Both installed engine consumers rebuilt successfully, followed by the model-feature
+wheel and a fresh two-consumer artifact attestation. Current source fingerprint:
+`2b019d6667a5bd36a741f55370e557c3f82414ab580bc0a4a212f21bc5928547`.
+All builder behavioral probes pass. The final native gate has 293 passes and one
+existing ignored test (exit 0); 37 profile/engine/lattice tests, 99 maintained
+register/count/selector tests, and the 77-test portable/private-champion gate
+pass (exit 0, no skips). Native on/off controls retain identical choices,
+backups, root priors, depth, and evaluator counts; deadline tests charge the
+receipt to actual native work. These checks do not qualify the frozen panel.
+
+Remote run 37199006417 on published foundation `c1fa0eb63ea19dccd4c22922c3bbe901259e0c9f`
+completed successfully, including the mass gate and `gate-status`; the other
+PR checks also succeeded. That result does not certify this subsequent uncommitted
+native measurement change. Independent re-review closed the ordering P1 with no
+new actionable findings; its four enabled-wheel canonical/native fixture tests
+pass with exit 0 and no skips. Private-champion paths were verified by the main
+77-test gate, not independently rerun by this reviewer. The fresh full mutation
+sweep completed with exit 0: all 66 mutants applied and killed, no survivors,
+unapplied mutants, or did-not-run defects, and all seven controls produced their
+expected verdicts. Source files were restored byte-for-byte. The 381-test affected
+arbiter/calibration suite, 247 focused replay/registry/provenance tests (including
+the three new prefix-preflight tests), and all 39 count guards pass afterward.
+Frozen-roster replay qualification, source-bound
+runtime publication, the registered profile manifest, and the actual root screen
+remain outstanding. No experiment has been launched by this measurement work.
+
+### Frozen source-prefix preflight
+
+Read-only access was verified on OLFUSA through the explicitly pinned `kx`
+context (its minified context and cluster are both `olfusa`; the global default
+context remains unrelated). The registered source shard's durable terminal
+matches SHA-256 `dde2d620c973cd330014b853bfb29ea0a1960b07fbfa6e7773059f8903c96f78`.
+Only the 155 distinct required files were copied to local scratch
+`/tmp/pokezero-paper-root-source.PUme82`, not the full source cohort.
+
+The frozen-roster loader and source verifier check all file hashes and source
+identities against roster SHA-256
+`fa76bc9966bba48f0dd474a2450b4c362e49ac1452db18c39b084a256d30ff7a`.
+All 154 distinct public records parse and retain their canonical decision IDs.
+The source-prefix preflight keeps all 32 registered roots: 31 prefixes validate,
+with two explicitly source-owned repairs, and one refuses:
+
+- Seed `2026100104`, p2, decision index 9, decision ID
+  `d81daca99c6b1c0ff42357f84c9b1676706bd001afd8fe37dbddf87b20650a67`:
+  `unresolved_public_event_for_non_source_player`.
+
+That root is not replaced or silently dropped. This is source-byte and prefix
+evidence only: no live observation equality, native root eligibility, timing,
+candidate action selection, continuation outcome, or strength is qualified by
+this preflight. Every source/shared artifact and existing Kubernetes object
+remains unchanged.
+
+The reusable read-only checker is
+`scripts/qualify_policy_opponent_source_prefixes.py`, backed by
+`policy_opponent_source_prefixes.py`. It rechecks the bytes actually decoded and
+the roster/source identities after evaluation. Canonical/integrity errors abort
+the preflight instead of becoming eligibility refusals; source-prefix errors keep
+their root identities and repair ledgers. The resulting status explicitly is
+not a strength or live-replay receipt. Nine roster/preflight tests pass with site
+packages disabled; the existing CI gate now requires those nine rather than six.
+The actual-source CLI independently reproduces 31 valid prefixes, one refusal,
+two source-owned repairs, and zero replacement roots, with both live-replay and
+profile qualification false. Independent review found no actionable defect:
+its site-disabled nine-test suite and actual-source CLI both pass with exit 0,
+reproducing the same denominator, repairs, refusal, and pending qualifications.
+The reviewer corrected one summary invocation that had failed with exit 1 for
+an omitted `PYTHONPATH`; no source or integrity checks were changed for it.
