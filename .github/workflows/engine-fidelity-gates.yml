@@ -203,7 +203,7 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_fidelity_counts -v 2>&1 | tee /tmp/fidelity-counts.log
-          grep -qE 'Ran 6 tests' /tmp/fidelity-counts.log
+          grep -qE 'Ran 8 tests' /tmp/fidelity-counts.log
           grep -qE '^OK$' /tmp/fidelity-counts.log
 
   mass-gate:

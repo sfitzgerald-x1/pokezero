@@ -253,8 +253,8 @@ class ChampionCanonicalOwnPolicyTest(NativeCanonicalOwnPolicyTest):
     """Opt-in real-weight gate; never silently substitute fixture weights.
 
     The paths are provided explicitly so ordinary unit tests stay portable.
-    This proves the local checkpoint/cache bytes used, not an immutable image
-    publication, current Showdown source fidelity, or playing strength.
+    This proves the local checkpoint/cache bytes and independently rebuilt
+    runtime source binding, not an immutable image publication or playing strength.
     """
 
     @classmethod
@@ -286,7 +286,19 @@ class ChampionCanonicalOwnPolicyTest(NativeCanonicalOwnPolicyTest):
         source = Gen3RandbatSource.from_payload(json.loads(source_bytes))
         if source.metadata.source_hash != result.belief_set_source_hash:
             raise ValueError("champion gate belief source does not match checkpoint")
-        cls.champion_source = source
+        # Re-enumerate from the configured built runtime, without adopting its
+        # cached payload. A matching imported cache alone cannot certify the
+        # Showdown bytes that the live environment is actually using.
+        runtime_source = Gen3RandbatSource.from_showdown_root(DEFAULT_SHOWDOWN_ROOT, use_cache=False)
+        if runtime_source.metadata.source_hash != result.belief_set_source_hash:
+            raise ValueError("champion gate runtime source differs from checkpoint; use the clean pinned Showdown checkout")
+        registered_payload = source.to_payload()
+        runtime_payload = runtime_source.to_payload()
+        registered_payload.pop("metadata")
+        runtime_payload.pop("metadata")
+        if runtime_payload != registered_payload:
+            raise ValueError("champion gate rebuilt runtime universe differs from registered cache")
+        cls.champion_source = runtime_source
         cls.champion_result = result
         cls.python_model = model
         cls.config = result.model_config
@@ -312,14 +324,13 @@ class ChampionCanonicalOwnPolicyTest(NativeCanonicalOwnPolicyTest):
     def test_live_context_builds_same_worlds_without_root_or_order_stubs(self):
         """Qualify full dispatch on a fixed historical opening, not a strength panel.
 
-        The one injected dependency is the checkpoint-registered immutable set
-        cache. This does not certify the runtime cache publication recipe. No
-        observation, fold, world constructor, request-order resolver, root
-        encoder, or native search is stubbed. Ground-truth teams create the test
+        No cache loader, observation, fold, world constructor, request-order
+        resolver, root encoder, or native search is stubbed. The configured
+        runtime's independently rebuilt set universe must bind the champion.
+        This is still not an immutable image receipt. Ground-truth teams create the test
         battle; sampled-mode policies never receive the opponent's packed team.
         """
         import random
-        from unittest.mock import patch
         from pokezero.env import BattleStartOverride
         from pokezero.engine_search import EngineMctsConfig, EngineMctsPolicy
         from pokezero.golden_corpus import load_golden_corpus
@@ -344,8 +355,8 @@ class ChampionCanonicalOwnPolicyTest(NativeCanonicalOwnPolicyTest):
         )
         tables_path = Path(self.tmpdir.name) / "champion-tables.json"
         tables_path.write_text(self.tables_json)
-        with (patch("pokezero.local_showdown.load_gen3_randbat_source_cached",
-                    return_value=self.champion_source), LocalShowdownEnv(env_config) as env):
+        with LocalShowdownEnv(env_config) as env:
+            self.assertEqual(env.belief_set_source_hash, self.champion_result.belief_set_source_hash)
             env.reset_with_start_override(seed=game.battle_seed, start_override=override)
             for player in ("p1", "p2"):
                 observation = env.observe(player)

@@ -139,18 +139,25 @@ explicitly constructed opponent information state.
    gate runs both seats with fixed and belief-sampled worlds, using actual env
    observations, incremental folds, constructors, root encoding, public order,
    and native dispatch. The incumbent and opt-in construct identical worlds.
-   The test injects only the registered immutable belief cache into the env's
-   loader; it does not certify its publication recipe or wider observer seams.
+   The gate now rebuilds its belief source from the configured clean Showdown
+   runtime and uses the real env cache loader without injection. It does not
+   certify an immutable image publication or wider observer seams.
    Separate root/child fixture gates still supply registered root inputs/order.
 2. Validate observed trapping and Transform boundaries or preserve explicit
    refusals. Do not erase those roots or quietly alter their native options.
-3. Finish runtime Dex/Showdown publication binding. The current loader generates
-   source hash `f9e35e1fddae5064`, different from the champion's registered cache.
-   Canonical cache contents excluding metadata are byte-identical, including
-   all variants and resolved move/species metadata, with SHA-256
-   `c718948e86320e5cafd9b22723d4f8e4c54f7ddd7a6cf8e45f020448f2196364`.
-   This proves materialized-universe equality, not the original source recipe
-   or an immutable image receipt; keep that distinction in the run manifest.
+3. Publish the verified runtime binding in an immutable image. A fresh clean
+   Showdown checkout at `f76228a1354b5d0f307ca2d16101294ad3a2308b`, installed
+   with `npm ci --ignore-scripts --no-audit --no-fund` and built with `node build`,
+   independently re-enumerates (disk cache disabled) source hash
+   `f5a5265143d423af`, matching the champion. Its executable Showdown dependency
+   hash is `93f81c8eae3d9f769f579a3be5e87bc0d62df39c0c0166bd47a228238188e4b3`,
+   exactly the completed practical pilot's runtime. The normalized
+   `Gen3RandbatSource.to_payload()` content excluding metadata is identical to
+   the registered cache, SHA-256
+   `42f7cda15e712499a6cc4b2132b28e06bcddea4f37dc0c40fe522a9472a8a75a`.
+   The earlier `f9e35e1fddae5064` came from the separate user-edited checkout;
+   its edits remain untouched. Local reproducibility is now proven, but an
+   immutable image receipt still remains outstanding.
 4. Freeze the outcome-independent profile roster, actual source/model/export
    hashes, engine fingerprint, immutable image, resource cap, and analysis.
 
@@ -166,10 +173,10 @@ full decision timing, and refusal reasons in the eventual experiment ledger.
 | Fixed-policy opponent sampling | Root/child native callback and high-level opt-in tested | Registered root profile and complete live-context qualification |
 | Subject PUCT and critic unchanged | Shared tree/critic path; subject root priors differential-tested; full live-opening construction matches incumbent | Expanded frozen-root comparison and profile |
 | Opponent information-state privacy | Side-only constructor and pre-callback public projection tested | Expanded frozen-root observer coverage, trapping and Transform |
-| Champion own-head provider | Real champion gate passes without changing feature flags | Runtime/source publication binding and high-level integration |
+| Champion own-head provider | Real champion gate passes without changing feature flags or injecting a belief cache | Immutable runtime/source image receipt and wider roots |
 | Exact sparse action identity | Constructor, request order, branch switches and strict gather tested | Registered native root panel including refusal surfaces |
 | Separate policy/chance randomness | Explicit sampler RNG, duplicate native trace, and versioned per-world seed split tested | Frozen run manifest and profile replay |
-| Checkpoint/source/export/image binding | Actual checkpoint hash verified; local cache content pinned | Reproducible engine/export receipt and immutable image |
+| Checkpoint/source/export/image binding | Actual checkpoint verified; clean rebuilt Showdown runtime matches the historical pilot and champion | Reproducible engine/export receipt and immutable image |
 | Fixed-work and matched-time root profiles | Not launched | Frozen outcome-independent panel and bounded readout |
 | Continuation screen | Not launched | Profile prerequisite and preregistered 16-root roster |
 | Trajectory-level determinization | Controlled deviation remains | Stage-four audit/implementation, only if screen advances |
@@ -200,7 +207,7 @@ retirement gate. Native-versus-Python TorchScript output parity was exact
 (maximum absolute difference zero). These gates do not establish strength.
 
 The portable CI-selected own-policy suite contains 52 tests with no skips; the
-private champion gate is an additional explicit local check. Six static-parser
+private champion gate is an additional explicit local check. Eight static-parser
 tests verify inherited class selection, imported fixtures, override deduplication,
 and refusal of unknown/dynamic test members. The workflow's 38 exact-count guards
 now verify against source without importing native modules. A seed-stream gate
@@ -211,6 +218,17 @@ battle, chosen without candidate outcomes. Its initial run failed with exit 1
 because the test used `seed` instead of the corpus's `battle_seed`; the fixture
 field was corrected before the passing full-path gate. No production fallback
 or provenance check was loosened to make the gate pass.
+
+The latest additional gate ran all ten champion-class tests with the clean
+pinned runtime and no live-source injection: exit 0. The 52 portable tests
+also pass. The first remote CI run failed (exit 1) on two metadata/guard
+defects: the expected harness closure omitted the two new imported provider
+modules, and the older count scanner dropped class targets when a module was
+also selected. The repair includes every target, strictly validates class and
+method selection, retains the independent module/coverage pins, and adds two
+negative/positive selector controls. All 74 provenance, count-parser, and
+re-adjudication tests pass locally; all 38 workflow count guards re-derive.
+Required remote CI must still pass before review/merge or experimental advance.
 
 The downloaded iteration-9375 champion is 40,083,798 bytes and verifies as
 `0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be`.

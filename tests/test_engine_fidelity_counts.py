@@ -70,6 +70,21 @@ class Second(unittest.TestCase):
             with self.subTest(target=target), self.assertRaises(ValueError):
                 self.count(target, "class Child:\n    pass\n")
 
+    def test_legacy_workflow_scanner_counts_mixed_module_and_class_selection(self):
+        from tests.test_unreachable_readjudication import EveryWorkflowTestCountGuardMatchesItsModuleTests as scanner
+        targets = (
+            "tests.test_policy_opponent_engine", "tests.test_policy_opponent",
+            "tests.test_policy_opponent_view", "tests.test_policy_opponent_request",
+            "tests.test_policy_opponent_native.NativePolicyOpponentSearchTest",
+            "tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest",
+        )
+        self.assertEqual(sum(scanner._target_methods(target) for target in targets), 52)
+
+    def test_legacy_workflow_scanner_refuses_invalid_class_method_selection(self):
+        from tests.test_unreachable_readjudication import EveryWorkflowTestCountGuardMatchesItsModuleTests as scanner
+        with self.assertRaisesRegex(ValueError, "not a unittest test method"):
+            scanner._target_methods("tests.test_engine_fidelity_counts.FidelityCountTests.test_missing")
+
 
 if __name__ == "__main__":
     unittest.main()
