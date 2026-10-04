@@ -20,6 +20,7 @@ pub mod model;
 // NOT feature-gated even though `model` is its only caller: the gather/apply
 // arithmetic is pure and must stay testable on a host without libtorch.
 pub(crate) mod priors;
+pub(crate) mod policy_opponent;
 pub mod rollout;
 pub mod tree;
 
