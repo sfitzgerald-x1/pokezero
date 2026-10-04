@@ -795,6 +795,8 @@ class _LiveEngineTimingDecider:
                 "engine_mcts": dict(
                     (getattr(decision, "metadata", {}) or {}).get("engine_mcts", {})
                 ),
+                **({"raw_policy": dict(decision.metadata["raw_policy"])}
+                   if "raw_policy" in (getattr(decision, "metadata", {}) or {}) else {}),
             }
 
         return timed_decision

@@ -972,10 +972,11 @@ jobs:
           python -m unittest \
             tests.test_policy_opponent_engine tests.test_policy_opponent \
             tests.test_policy_opponent_view tests.test_policy_opponent_request \
+            tests.test_policy_opponent_profile \
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
             tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 53 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 66 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"

@@ -133,6 +133,38 @@ still record whole-call wall time. Successful calls expose per-invocation
 receipts and cumulative opponent counters, without adding an opponent block to
 mode-off decision or statistics payloads.
 
+## Three-arm measurement foundation
+
+`policy_opponent_profile.py` compares raw policy, incumbent MCTS, and the
+own-policy-opponent candidate at a shared live replay boundary. Fixed-work and
+matched-deadline rows are distinct; invocation receipts must conserve completed
+and remaining iterations. The outer timer includes fresh observation/context
+construction, inference/search, selection, and Showdown choice serialization.
+Checkpoint loading, export, and historical prefix replay are preparation, not
+decision latency. Execution order rotates by root and timing mode.
+
+The raw arm uses canonical local, one-snapshot deterministic masked argmax.
+Its opt-in probability receipt reuses the already computed own-head row rather
+than adding a forward; ordinary decision metadata remains unchanged. A timing
+sink measures its real encode/forward work and it reports zero search work.
+Checkpoint, vocabulary, and non-null belief-source bindings remain required.
+
+Source-prefix, action, sampling, and cleanup refusals retain root identity and
+all available comparison rows. No failed root is redrawn. A row's `COMPLETE`
+means execution/witness validation only: the foundation explicitly marks
+roster/runtime/native-joint-action qualification as pending. It is not a
+launcher, a valid experiment manifest, or a strength result.
+
+Thirteen focused foundation tests pass, including real PyTorch raw inference,
+default-off metadata, seed separation, full legal probability/action identity,
+timing-boundary exclusion of preparation, exact-work versus deadline prefixes,
+and retained failed-arm telemetry. The portable suite now has 66 tests, with
+no skips. A focused private live-champion test also passes for both seats:
+actual public replay selects the canonical raw action and full probability row,
+with a model hook witnessing exactly one forward. Independent foundation
+review found no actionable defect. Wider frozen-root replay qualification and
+measured search costs remain unrun.
+
 ## Remaining before a frozen root profile
 
 Do not enable this seam by feeding the auxiliary opponent head or a seat-swapped
@@ -190,6 +222,24 @@ full decision timing, and refusal reasons in the eventual experiment ledger.
 
 ## Fidelity and advancement ledger
 
+Reference check: the [official thesis PDF](https://dspace.mit.edu/server/api/core/bitstreams/b13e7ad7-b176-4a0e-aa8b-24b7aa0634c3/content)
+matches MIT's published MD5 `b9b73e45eb45bddad400ae207ce8720e`.
+Page 21 specifies `Q + alpha * P**beta * sqrt(M)/(N+1)`, with
+`alpha,beta` in `[0,1]`, and terminal values `+1/-1/0`. Sections 3.2.2-3
+(pages 26-28) describe per-trajectory hidden completion, ten rejection attempts
+before an incompatible forced completion, twenty workers exchanging statistics
+every ten rollouts, and persistent statistics pruned by total faint count.
+Text extraction plus rendered-page inspection verified those rules. The full
+PDF search found no selected numerical MCTS alpha/beta; its appendix table
+contains PPO parameters instead. Exact settings remain unresolved.
+
+Implementation inference, not a reported thesis setting: for our `[0,1]`
+win-value scale, the affine conversion `Q_paper = 2*Q_native - 1` requires
+`c_native = alpha/2` when the prior term is identical. Copying an exploration
+constant without this conversion is not equivalent. Stage one's incumbent
+constant remains unchanged to isolate opponent modeling; a later faithful
+variant must register its scale and prior exponent separately.
+
 | Plan requirement | Current state | Evidence needed next |
 | --- | --- | --- |
 | Fixed-policy opponent sampling | Root/child native callback and high-level opt-in tested | Registered root profile and complete live-context qualification |
@@ -203,7 +253,7 @@ full decision timing, and refusal reasons in the eventual experiment ledger.
 | Continuation screen | Not launched | Profile prerequisite and preregistered 16-root roster |
 | Trajectory-level determinization | Controlled deviation remains | Stage-four audit/implementation, only if screen advances |
 | Tree persistence and pruning | Not implemented | Stage-four information-state identity and memory tests |
-| Published exploration/prior exponent | Unresolved | Exact thesis/author-source extraction and registered choice |
+| Published exploration/prior exponent | Formula and value-scale difference verified; selected numerical alpha/beta unresolved | Author-source settings or one explicitly justified registered choice; no sweep |
 | Game pilot and independent confirmation | Not launched | Prior stage passes, throughput check, frozen manifests |
 | Foul Play claim | None | Independent confirmation followed by pinned opponent benchmark |
 
@@ -228,7 +278,7 @@ search, legal mapping, parser/belief/world, and V4 annotation
 retirement gate. Native-versus-Python TorchScript output parity was exact
 (maximum absolute difference zero). These gates do not establish strength.
 
-The portable CI-selected own-policy suite now contains 53 tests with no skips; the
+The earlier portable CI-selected own-policy suite contained 53 tests with no skips; the
 private champion gate is an additional explicit local check. Eight static-parser
 tests verify inherited class selection, imported fixtures, override deduplication,
 and refusal of unknown/dynamic test members. The workflow's 39 exact-count guards
@@ -326,7 +376,37 @@ four fidelity bands, their reserved seeds, and all historical sweep evidence
 remain unchanged. The four new registry tests bring that gate to 45. The one
 new singleton provider test brings the portable gate to 53; its legacy scanner
 test's stale 52 expectation initially failed, then was corrected to 53 and the
-244-test gate rerun. Required remote CI at the corrected head remains pending.
+244-test gate rerun.
+
+Remote run 37196476682 at `6e383b93` completed with exit 1 in its mass gate.
+The other seven prerequisite jobs succeeded. Its 381-test arbiter suite had
+two failures: a model-depth source guard's 900-character window stopped before
+the real accumulation after opponent telemetry was added, and the maintained
+rollout mutation battery still bound the previous `engine_search.py` bytes.
+The former now uses a structural checker with padding, removed-write,
+valueless-annotation, and uncalled-closure negative controls. Independent
+review's declaration false positive was repaired and independently closed.
+The checker explicitly proves syntactic instrumentation, not that every runtime
+branch executed. The latter was repaired by rerunning the actual mutation
+harness, never hand-editing evidence hashes: all 66 mutants were applied and
+killed, with zero survivors, unapplied mutants, or did-not-run verdicts, and
+all seven classifier controls produced their required verdicts. Source files
+were restored byte-for-byte. After hardening the checker, its four affected
+depth mutants were rerun and killed. The first attempted sweep refused before
+edits (exit 1) because pytest was absent; pytest was installed only in this
+isolated environment before the successful sweep.
+
+Current final local verification: 77 portable/private-champion tests, 381 tests
+in the exact previously failed remote arbiter/calibration suite, and the
+six-test depth-instrumentation class all pass with exit 0 and no skips. The
+native content fingerprint remains current; no native source changed in this
+measurement-foundation step. Required CI on the next published head remains
+pending, not superseded by these local passes.
+The 244-test focused replay/registry/provenance gate and all 39 workflow count
+guards have been rerun successfully against the measurement foundation.
+The broader neural-policy regression suite also passes: 238 tests, ten existing
+dependency/artifact skips, exit 0. Those skips are not counted as live-champion
+coverage; the explicit 77-test gate above has none.
 
 An exploratory legacy deadline-qualification runner test failed (exit 1) on
 its intentional historical engine-fingerprint fence. That older qualification

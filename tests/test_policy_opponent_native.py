@@ -418,6 +418,58 @@ class ChampionCanonicalOwnPolicyTest(NativeCanonicalOwnPolicyTest):
                                 self.assertNotIn("policy_opponent", policy.stats.to_dict())
                     self.assertEqual(compared_worlds[0], compared_worlds[1])
 
+    def test_raw_profile_replays_live_champion_root_and_uses_one_forward(self):
+        """Actual replay/observation/own-head path, not persisted input tensors."""
+        import random
+        from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
+        from pokezero.mcts_eval.manifest import SearchConfig
+        from pokezero.mcts_eval.policy_opponent_profile import (
+            _LiveRawPolicyTimingDecider, validate_selection,
+        )
+        from pokezero.mcts_eval.resolver import resolve_checkpoint_contract
+        from pokezero.neural_policy import load_transformer_policy
+        from pokezero.public_decision_corpus import PublicDecisionRecord, PublicObservation
+
+        contract = resolve_checkpoint_contract(str(self.champion_checkpoint),
+            expected_sha256="0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be",
+            model_device="cpu", showdown_root=str(DEFAULT_SHOWDOWN_ROOT))
+        decider = _LiveRawPolicyTimingDecider(contract, str(DEFAULT_SHOWDOWN_ROOT))
+        try:
+            seed = 2026100100
+            config = SearchConfig(depth=2, sims=16, batch=1, worlds=1)
+            for player in ("p1", "p2"):
+                decider._env.reset(seed=seed)
+                observation = decider._env.observe(player)
+                canonical = load_transformer_policy(str(self.champion_checkpoint), device="cpu",
+                    deterministic=True, exploration_epsilon=0., sampling_temperature=1., family_gated_selection=False)
+                canonical.record_policy_distribution = True
+                expected = canonical.select_action(observation, rng=random.Random(7))
+                record = PublicDecisionRecord(
+                    decision_id=hashlib.sha256(f"raw-profile-live-gate:{seed}:{player}".encode()).hexdigest(),
+                    battle_id=f"mcts-h2h-{seed}-{player}", seed=seed, format_id="gen3randombattle",
+                    acting_player=player, turn_index=0, recorded_action_index=expected.action_index,
+                    observation=PublicObservation.from_observation(observation), history=(),
+                    current_legal_action_mask=tuple(observation.legal_action_mask),
+                    public_resolved_action_rounds=(), public_belief_view=dict(observation.metadata["belief_view"]))
+                prepared = decider.prepare_public_decision(record, config, public_action_rounds=(),
+                    decision_rng_seed=7, source_requested_players=("p1", "p2"))
+                model = decider._policies[config.config_id].policy.model
+                forwards = []
+                hook = model.register_forward_hook(lambda module, args, output: forwards.append(True))
+                try:
+                    telemetry = prepared()
+                finally:
+                    hook.remove()
+                self.assertEqual(forwards, [True])
+                self.assertEqual(telemetry["raw_policy"]["action_index"], expected.action_index)
+                self.assertEqual(telemetry["raw_policy"]["policy_distribution"],
+                                 list(expected.metadata["policy_distribution"]))
+                validate_selection(telemetry, arm="raw_policy", mode="fixed_work", config=config,
+                    mask=record.current_legal_action_mask, opponent_seed=71,
+                    deadline_ms=1000, native_batch_guard_ms=64)
+        finally:
+            decider.close()
+
 
 if __name__ == "__main__":
     unittest.main()
