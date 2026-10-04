@@ -287,7 +287,11 @@ fn project_public_hp(lines: &[String], percentage: [bool; 2]) -> PyResult<Vec<St
             let fields = match event {
                 "switch" | "drag" | "replace" => vec![4],
                 "-damage" | "-heal" => vec![3],
-                "-sethp" if parts.len() > 5 => vec![3, 5],
+                // Pain Split emits separate one-owner lines with optional
+                // [from]/[silent] qualifiers, not necessarily two-owner HP.
+                "-sethp" if parts.get(4).is_some_and(|s| !s.starts_with('[')) => {
+                    vec![3, 5]
+                }
                 "-sethp" => vec![3],
                 "request" | "split" => {
                     return Err(PyValueError::new_err(
@@ -296,6 +300,18 @@ fn project_public_hp(lines: &[String], percentage: [bool; 2]) -> PyResult<Vec<St
                 }
                 _ => Vec::new(),
             };
+            if event == "-sethp" {
+                let qualifier_start = if fields.len() == 2 { 6 } else { 4 };
+                if parts
+                    .iter()
+                    .skip(qualifier_start)
+                    .any(|s| !s.starts_with('['))
+                {
+                    return Err(PyValueError::new_err(
+                        "policy opponent: malformed public HP qualifiers",
+                    ));
+                }
+            }
             for field in fields {
                 let ident = if field == 4 { 2 } else { field - 1 };
                 let side = match parts.get(ident).map(String::as_str) {
@@ -383,6 +399,9 @@ mod tests {
         let lines = [
             "|switch|p1a: A|A, L80|999/1000",
             "|-sethp|p1a: A|5/10|p2a: B|10/20 brn",
+            "|-sethp|p2a: Wigglytuff|128/407|[from] move: Pain Split|[silent]",
+            "|-sethp|p1a: Dusclops|128/209|[from] move: Pain Split",
+            "|-sethp|p1a: A|5/10|p2a: B|10/20 brn|[from] move: Pain Split",
             "|upkeep ",
         ]
         .map(String::from);
@@ -391,6 +410,9 @@ mod tests {
             [
                 "|switch|p1a: A|A, L80|99/100",
                 "|-sethp|p1a: A|50/100|p2a: B|50/100 brn",
+                "|-sethp|p2a: Wigglytuff|32/100|[from] move: Pain Split|[silent]",
+                "|-sethp|p1a: Dusclops|62/100|[from] move: Pain Split",
+                "|-sethp|p1a: A|50/100|p2a: B|50/100 brn|[from] move: Pain Split",
                 "|upkeep "
             ]
         );
@@ -406,6 +428,9 @@ mod tests {
             "|split|p1",
             "|-damage|p3a: A|10/100",
             "|-heal|p1a: A|10/0",
+            "|-sethp|p1a: A|10/20|p2a: B",
+            "|-sethp|p1a: A|10/20|p3a: B|10/20",
+            "|-sethp|p1a: A|10/20|[from] move: Pain Split|10/20",
         ] {
             assert!(project_public_hp(&[line.into()], [false, false]).is_err());
         }

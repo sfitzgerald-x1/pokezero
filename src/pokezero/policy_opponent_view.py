@@ -73,8 +73,17 @@ def public_policy_lines(
             # switch/drag/replace have an intervening details field; -sethp
             # may update two seats in one line.
             hp_fields = [4] if event in {"switch", "drag", "replace"} else [3]
-            if event == "-sethp" and len(parts) > 5:
-                hp_fields.append(5)
+            if event == "-sethp" and len(parts) > 4:
+                # Pain Split is normally TWO single-target lines, with public
+                # [from]/[silent] qualifiers. Those are not a second HP owner.
+                qualifiers_start = 4
+                if not parts[4].startswith("["):
+                    if len(parts) <= 5:
+                        raise PolicyOpponentViewError("missing second public HP condition")
+                    hp_fields.append(5)
+                    qualifiers_start = 6
+                if any(not field.startswith("[") for field in parts[qualifiers_start:]):
+                    raise PolicyOpponentViewError("malformed public HP qualifiers")
             for hp_index in hp_fields:
                 if hp_index >= len(parts):
                     raise PolicyOpponentViewError("missing public HP condition")

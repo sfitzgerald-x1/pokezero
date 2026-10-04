@@ -133,6 +133,13 @@ class PolicyOpponentViewTest(unittest.TestCase):
             public_policy_lines(("|split|p1", LINES[3]), hp_visibility={})
         with self.assertRaises(PolicyOpponentViewError):
             public_policy_lines(("|-damage|p1a: A|42/48",), hp_visibility={"p1": "percentage"})
+        for malformed in (
+            "|-sethp|p1a: A|10/20|p2a: B",
+            "|-sethp|p1a: A|10/20|p3a: B|10/20",
+            "|-sethp|p1a: A|10/20|[from] move: Pain Split|10/20",
+        ):
+            with self.assertRaises(PolicyOpponentViewError):
+                public_policy_lines((malformed,), hp_visibility={"p1": "exact", "p2": "exact"})
         broken = deepcopy(request())
         broken["side"]["pokemon"][1]["ident"] = "p1: SECRET"
         with self.assertRaises(PolicyOpponentViewError):
@@ -140,10 +147,16 @@ class PolicyOpponentViewTest(unittest.TestCase):
 
     def test_near_full_hp_does_not_disclose_full_health_and_sethp_handles_both(self):
         actual = public_policy_lines(
-            ("|-heal|p1a: A|999/1000", "|-sethp|p1a: A|5/10|p2a: B|10/20"),
+            ("|-heal|p1a: A|999/1000", "|-sethp|p1a: A|5/10|p2a: B|10/20",
+             "|-sethp|p2a: Wigglytuff|128/407|[from] move: Pain Split|[silent]",
+             "|-sethp|p1a: Dusclops|128/209|[from] move: Pain Split",
+             "|-sethp|p1a: A|5/10|p2a: B|10/20|[from] move: Pain Split"),
             hp_visibility={"p1": "exact", "p2": "exact"},
         )
-        self.assertEqual(actual, ("|-heal|p1a: A|99/100", "|-sethp|p1a: A|50/100|p2a: B|50/100"))
+        self.assertEqual(actual, ("|-heal|p1a: A|99/100", "|-sethp|p1a: A|50/100|p2a: B|50/100",
+            "|-sethp|p2a: Wigglytuff|32/100|[from] move: Pain Split|[silent]",
+            "|-sethp|p1a: Dusclops|62/100|[from] move: Pain Split",
+            "|-sethp|p1a: A|50/100|p2a: B|50/100|[from] move: Pain Split"))
 
     def test_public_projection_never_canonicalizes_upkeep_evidence(self):
         markers = ("|upkeep ", "|upkeep\r", "|upkeep|payload")

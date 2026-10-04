@@ -3,9 +3,12 @@
 Updated October 4, 2026. Implements the staged plan in
 the workspace report `paper-faithful-mcts-plan-20261003.md`.
 
-This branch is implementation work, **not an enabled experiment or a claim of
-paper reproduction**. No historical checkpoint, Kubernetes object, or shared
-experiment artifact has been changed.
+This branch is default-off implementation work and a completed, explicitly
+opted-in diagnostic, **not a deployment or a claim of paper reproduction**.
+No historical checkpoint, Kubernetes object, or shared experiment artifact has
+been changed. The current study disposition is **PARK_UNRESOLVED**; the
+[October 4 readout](paper_policy_opponent_profile_readout_20261004.md) supersedes
+the historical pre-launch status entries below.
 
 ## Implemented native foundation
 
@@ -625,9 +628,53 @@ The Python-floor check passes all 656 tracked Python files; staged secret
 scanning and diff checks pass with exit 0. These are local publication checks,
 not CI evidence for this new head.
 
-The complete experiment is still pending immutable source-image publication,
+At that pre-launch foundation stage, the complete experiment was still pending
+immutable source-image publication,
 actual runtime/resource verification, native frozen-root profiling, bounded
 continuations and the plan's conditional later stages. Synthetic launcher
 fixtures, public replay qualification and local champion tests cannot stand in
 for that execution. No new Kubernetes workload/shared artifact was created by
 this launcher verification and historical artifacts remain unchanged.
+
+## Executed profile and narrow correctness repair
+
+Source `1c16419b19c513deda7c918c103619be91fd7c4f` passed all twelve PR checks,
+published the immutable `a24a7d6a` image with complete v8 receipt and Showdown
+sidecar, and executed the original 32-root profile on OLFUSA. Job
+`paper-policy-profile-1c16419b-20261004-r1` completed at 14:21:30 UTC with
+succeeded=1, exit 0 and zero restarts. The diagnostic took 1064.381 seconds
+including initialization and reserved 0.591323 CPU-hours. It is not a strength
+PASS. The readout retains 23 COMPLETE and nine REFUSED roots: five public-HP
+projection refusals, two private/native legal-surface disagreements, one lost
+public active permutation, and the original source-prefix refusal.
+
+All 23 fully completed roots select the same canonical action as raw policy
+and incumbent MCTS in both timing modes. This is conditional on completion,
+not an all-root neutral effect or a strength conclusion. No continuations were
+launched because the correctness prerequisite did not pass. The shared clock
+started at 14:03:42.203 UTC; its 16:03:42.203 UTC deadline has expired. The old
+readout's remaining-seconds field is a publication-time value, not permission
+to reset the window or submit a new study.
+
+The observed HP failure exposed a concrete protocol parser defect: canonical
+Pain Split emits single-owner `-sethp` lines with optional `[from]`/`[silent]`
+qualifiers. Both projections incorrectly treated a six-field qualified line
+as two HP owners. The narrow repair distinguishes an actual second owner
+from qualifiers, preserves public percentage projection and qualifier spelling,
+and retains strict malformed/unknown-owner/private-surface refusals. The
+existing tests now include single-owner, dual-owner, malformed-tail and
+missing-HP cases. No fallback, roster, RNG, comparator or historical record
+was changed. Local repair does not certify recovery of the five frozen roots,
+and does not resolve the two legality or one permutation refusal.
+
+Both native consumers rebuilt successfully after the repair; the current
+fingerprint is `a547a1c37b2d4650dfe941441ed4d702b83131a2d5d255ee8d362998f4721c7c`.
+Verification exits 0: 293 native model-feature tests pass with one existing
+ignored test; all 78 rebuilt-wheel/private-champion tests and 37 portable
+registration/launcher tests pass without skips; all 656 tracked Python files
+parse on the Python 3.11 floor; Rust formatting and diff checks pass.
+Independent review reports no actionable findings and independently reproduces
+the old Pain Split refusal and repaired projection with all 16 view tests
+passing. Remote CI for this repair remains separate from the passing frozen
+source checks. No repaired source image or replacement experiment is certified
+by these local tests.
