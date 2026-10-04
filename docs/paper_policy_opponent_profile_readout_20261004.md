@@ -121,6 +121,87 @@ image retroactively. No full rerun, repaired image, changed fallback, roster
 replacement or deployment is inferred. The legality and order refusals require
 their own source-scoped diagnosis, not weakening the privacy guard.
 
+## Source-only disposition of remaining refusals
+
+This disposition reads the frozen source and existing receipts; it does not
+replay a battle, execute native search, qualify a recovery or reset the study.
+
+**Ordinal 21, seed 2026100105/p1/index 9:** source file SHA-256
+`93a796832f2923fc01f829a414e4c7f63daaa1d20d528401ffeb98fdd515b654`.
+The acting-seat history contains every index 0 through 8, so this refusal is
+not explained by an uncaptured actor-history index. At public round 6, Dustox
+uses Whirlwind while Crawdaunt uses Double-Edge; the following boundary records
+`|drag|opponenta: Mightyena|Mightyena, L92, F|278/278` and active Mightyena.
+The public-order walk has pinned Luvdisc, Xatu and Crawdaunt through the prior
+opening/switches, but not Mightyena's original party index. Reconciliation
+therefore sets `active_position=None`. Its helper deliberately cannot restore
+an unknown permutation from the later Crawdaunt switch alone.
+
+A read-only structural audit enumerates all 25 hypothetical prior switch-label
+assignments: five are inconsistent before the drag; all 20 consistent ones lose
+the active permutation there, and retain that loss for each of the five possible
+later switch labels. These are structural controls, not reconstructed historical
+private labels. The [audit script](</Users/scott/Documents/New project/reports/audit-paper-order-refusal-20261004.py>)
+and [result](</Users/scott/Documents/New project/reports/paper-order-refusal-source-audit-20261004.json>)
+record the scope. A future correction needs a privacy-valid treatment of
+uncertain public party permutations, with action-identity/noninterference tests;
+guessing a slot or reading unrevealed truth would not qualify this root.
+
+**Ordinals 07 and 27:** seeds 2026100101/p2/index 9 and
+2026100106/p2/index 9. In both timing modes they fail in chance worlds
+`2957456635558677786` and `3596390703594257590`, respectively, with exactly
+`native and private-knowledge legal surfaces differ`. In `policy_request.rs`,
+this is the equality guard between the native option labels and the legal set
+constructed from only the sampled seat's own state. It runs before the Python
+policy provider; the receipt does not establish whether the failing node is the
+root or a descendant. Move availability, charging/recharge, forced replacement,
+waiting and permitted trapping knowledge all participate in that constructor.
+
+The existing hidden-Shadow-Tag fixture deliberately produces this same refusal:
+it demonstrates an intended privacy guard, not the cause of either historical
+root. Neither failing option set, node depth nor sufficient reached-node state
+is retained to distinguish a protected hidden-trapping case from another
+legality-construction discrepancy. The source prefixes' known actor-history
+gaps likewise do not establish causation. Keep both roots unresolved and retain
+the strict refusal. A future bounded diagnostic would need a sealed failing-node
+witness binding depth/state/chance identity and both action-label sets, without
+feeding hidden opposing information into the provider. No such instrumentation,
+new study or recovery is authorized by this readout.
+
+## Receipt-level allocation audit
+
+The [read-only audit](</Users/scott/Documents/New project/reports/audit-paper-profile-receipts-20261004.py>)
+checks the canonical hashes and all 218 original root/arm files (32 roots,
+186 arms), exact root-cell/arm agreement, fixed-work 1024-iteration conservation,
+productive joint backups, selected action mapping and zero fallbacks on complete
+cells. Its [derived capture](</Users/scott/Documents/New project/reports/paper-policy-profile-1c16419b-receipt-audit-20261004.json>)
+retains the inventory and allocation statistics. This validates diagnostic
+telemetry, not playing strength.
+
+For each of the 170 COMPLETE arm/mode cells, a source-hash-verified action map
+binds the selected raw/search index to the stored canonical choice and, for
+search, its selected allocation move/species. Two in-memory negative controls
+prove that a wrong choice or allocation label refuses. No historical bytes are
+edited to perform those controls.
+
+| Native invocation / complete-cell subset | Invocations | Distinct joint pairs p50 / p95 / max |
+| --- | ---: | --- |
+| Fixed incumbent, 31 roots | 124 | 21 / 43 / 61 |
+| Fixed candidate, 23 roots | 92 | 9 / 20 / 34 |
+| Deadline incumbent, 31 roots | 31 | 16 / 30 / 34 |
+| Deadline candidate, 23 roots | 31 | 7 / 13 / 19 |
+
+Counts are per native invocation, not a cross-world unique union or independent
+root samples. A deadline invocation can finish no productive pair; work is not
+invented for it. Candidate selected-action model prior p50/p95 is
+0.797147/0.999646 in both modes. Selected visit-share p50/p95 is
+0.787109/0.984375 fixed and 0.765766/0.980843 deadline. Among 200 candidate
+own-action allocation rows, 70 fixed and 43 deadline rows with model prior below
+1% received positive visits. These are own-action rows, not probabilities of
+rare opponent replies or independent trials. Low-prior allocation did not change
+the final selected actions on the complete subset; it cannot establish robust
+middle-ground value, optimality or a fundamental flaw in training.
+
 ## Fidelity ledger and stage decision
 
 | Requirement | State / evidence |

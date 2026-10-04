@@ -678,3 +678,31 @@ the old Pain Split refusal and repaired projection with all 16 view tests
 passing. Remote CI for this repair remains separate from the passing frozen
 source checks. No repaired source image or replacement experiment is certified
 by these local tests.
+
+### Source-only closeout after the bounded stop
+
+Remote run `37239590432` on repair head `cbc11b2e` exited 1 in the
+terminal-disposition register: three independently derived fingerprint checks
+found the old `2b019d66` row instead of current `a547a1c3`. The repair updates
+the maintained factual row and adds the source transition to its history;
+no test, historical sweep or ratification status is changed. All 53 register
+tests pass locally after that correction. Required CI on the next head remains
+outstanding.
+
+The terminal readout now records the available source-only diagnosis for all
+remaining refusal classes and a receipt-level allocation audit. A hash-verified
+public chronology and structural controls locate ordinal 21's order loss at
+Whirlwind's newly revealed Mightyena: its original party index is not public.
+The two legal-surface refusals cannot be attributed more narrowly from their
+stored receipts; the failing legal sets and node depth were not retained. That
+uncertainty is explicitly preserved, along with the evidence a future separately
+authorized diagnosis would need. No simulator/search was invoked for this
+closeout, and no extant cluster/shared artifact was changed.
+
+The 218-file original root/arm inventory, exact-work productive backup
+conservation, selected action identity, prior/visit summaries and strict
+zero-fallback completed cells were read-only audited. These checks verify the
+measurement boundary, not correctness coverage or playing strength. The
+original category coverage and later conditional paper-reproduction stages
+remain unqualified; the plan's permitted unresolved stop does not turn them
+into achieved scientific results.
