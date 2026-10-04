@@ -1,7 +1,7 @@
 # Paper-policy-opponent implementation ledger
 
 Updated October 4, 2026. Implements the staged plan in
-`/Users/scott/Documents/New project/reports/paper-faithful-mcts-plan-20261003.md`.
+the workspace report `paper-faithful-mcts-plan-20261003.md`.
 
 This branch is implementation work, **not an enabled experiment or a claim of
 paper reproduction**. No historical checkpoint, Kubernetes object, or shared
@@ -51,24 +51,47 @@ Tests compare actual encoded categorical/numeric arrays, attention masks, and
 legal masks across hidden-HP changes and seat mirrors. They also cover evolving
 public move/species reveals, sparse slots, forced replacement, recharge state,
 parent/sibling isolation, malformed requests, terminal refusal, and the
-checkpoint's protocol-item-narrowing flag. This is a correctness reference,
-not proof that every native branch has been wired to it.
+checkpoint's protocol-item-narrowing flag. Native callback integration now
+exercises this reference at both root and reached child nodes.
 
 `policy_opponent.py` uses the **own policy head** of the model on this view,
 validates checkpoint schema/masks/vocabulary/belief-source binding, and gathers
 the full distribution in exact native-option order. Missing/duplicated actions,
 legal-surface disagreement, invalid probabilities, and illegal mass refuse
 without fallback. A real Python PyTorch forward with intentionally contradictory
-own/auxiliary heads proves which head is read. This uses fixture weights, not a
-verified champion checkpoint, and does not verify the native TorchScript path.
+own/auxiliary heads proves which head is read. The opt-in native integration
+also runs the registered champion's own head, with the same checkpoint exported
+to TorchScript for the unchanged subject critic and prior path.
 
-The reference currently requires one-snapshot checkpoints. Investment observers
-and legacy-history residual observers are not implemented; configurations that
-need them explicitly refuse rather than quietly receive zero annotations.
-These are remaining integration requirements, not permission to change the
-champion's feature flags. A supplied sampled own request must also be produced
-by a certified private-side constructor; that constructor and complete bench-PP
-materialization are still pending.
+The reference requires one-snapshot checkpoints. Belief-narrowing investment
+observers and legacy-history residual/investment observers remain unsupported
+and explicitly refuse. V4 retired the history region and both pinned Tier-2
+columns. The champion's narrowing switch is off, so its retained Tier-2 flags
+have no encoded consumer. Tests inject nonzero residual, Choice Band, and
+investment annotations and prove unchanged V4 input tensors; no champion flag
+was disabled. Legacy schemas and narrowing-enabled configurations still refuse.
+
+`policy_request.rs` constructs a complete request from only the sampled acting
+`Side`: private stats, item, ability, gender, full party, sparse move slots,
+exact PP, forced replacements, recharge, and explicit request order. Native
+options must match that own-information legal surface exactly. The constructor
+does not query the actual other seat to disclose an unrevealed trapping ability.
+Complete bench PP is carried into canonical materialization.
+
+`policy_bridge.rs` keeps immutable public prefixes per native branch, projects
+exact public HP before calling Python, uses registered species display names,
+evolves switch order, and corrects own PP from the root base plus the branch
+move-charge ledger. The engine stops decrementing high PP; reading leaf PP
+alone would be wrong. Low-PP moves are not double-charged. Every uncertain legal
+surface, unsupported Transform observer, invalid probability row, or provider
+exception stops the search instead of choosing a fallback.
+
+The optional native call requires callback, independent policy seed, and
+complete sampled request order together. It requires subject model priors,
+disables the auxiliary opponent-prior mode, and retains the model-value leaf.
+It reports opponent forwards, samples, and elapsed opponent time separately.
+That time is included in the native decision deadline. Mode-off keeps the
+incumbent report schema and performs no additional context copy or Dex lookup.
 
 ## Remaining stage-one integration
 
@@ -76,18 +99,25 @@ Do not enable this seam by feeding the auxiliary opponent head or a seat-swapped
 subject observation. It requires the champion's **own policy head** on an
 explicitly constructed opponent information state.
 
-The next implementation step is native dual-perspective model integration:
+Remaining before a frozen root profile:
 
-1. Retain the subject's current value/prior observation unchanged.
-2. Give the opponent its sampled team's legitimately known private facts.
-3. Use the public-view reference to reconstruct its knowledge of the subject, not the
-   subject request or full sampled engine state. Round private exact HP into the
-   opponent-visible public representation where necessary.
-4. Evolve that opponent observation along each branch, including newly revealed
-   species, moves, abilities, items, request order, and forced-action boundaries.
-5. Gather its own policy head through its exact native legal-option map.
-6. Verify hidden-truth noninterference, full head/seat binding, replay, and
-   engine action identity before adding an opt-in Python/native call contract.
+1. Wire an explicit opt-in `EngineMctsPolicy`/experiment call contract, including
+   callback ownership, public-prefix provenance, request order, and registered
+   per-world policy RNG seeds. The native seam is not enabled in live policies.
+2. Require strict refusal propagation and account for all invocation timing;
+   no high-level exception handler may silently replace this mode with raw,
+   uniform, or opposing-PUCT search.
+3. Validate observed trapping and Transform boundaries or preserve explicit
+   refusals. Do not erase those roots or quietly alter their native options.
+4. Finish runtime Dex/Showdown publication binding. The current loader generates
+   source hash `f9e35e1fddae5064`, different from the champion's registered cache.
+   Canonical cache contents excluding metadata are byte-identical, including
+   all variants and resolved move/species metadata, with SHA-256
+   `c718948e86320e5cafd9b22723d4f8e4c54f7ddd7a6cf8e45f020448f2196364`.
+   This proves materialized-universe equality, not the original source recipe
+   or an immutable image receipt; keep that distinction in the run manifest.
+5. Freeze the outcome-independent profile roster, actual source/model/export
+   hashes, engine fingerprint, immutable image, resource cap, and analysis.
 
 Pending model rows must never cause uniform sampling at a child. A synchronous
 provider can satisfy that invariant initially; profile its measured cost before
@@ -98,13 +128,13 @@ full decision timing, and refusal reasons in the eventual experiment ledger.
 
 | Plan requirement | Current state | Evidence needed next |
 | --- | --- | --- |
-| Fixed-policy opponent sampling | Native foundation implemented | Actual champion own-policy provider at root and child nodes |
-| Subject PUCT and critic unchanged | Shared tree path retains selector/backup | Model-feature differential verification |
-| Opponent information-state privacy | Canonical reference and tensor mutation tests implemented | Native branch observer differential tests and certified sampled-private request construction |
-| Champion own-head provider | Strict Python reference implemented, fixture forward tested | Verified champion, matched native model runtime, root/child model integration |
-| Exact sparse action identity | Strict gather tested | Root/branch engine mapping tests with the provider |
-| Separate policy/chance randomness | Explicit sampler RNG implemented | End-to-end registered trace with both streams |
-| Checkpoint/source/export/image binding | Not yet registered | Verify actual checkpoint hash and immutable receipt |
+| Fixed-policy opponent sampling | Root/child native callback implemented and tested | High-level opt-in and registered root profile |
+| Subject PUCT and critic unchanged | Shared tree/critic path; subject root priors differential-tested | Full policy call-path comparison and profile |
+| Opponent information-state privacy | Side-only constructor and pre-callback public projection tested | Expanded frozen-root observer coverage, trapping and Transform |
+| Champion own-head provider | Real champion gate passes without changing feature flags | Runtime/source publication binding and high-level integration |
+| Exact sparse action identity | Constructor, request order, branch switches and strict gather tested | Registered native root panel including refusal surfaces |
+| Separate policy/chance randomness | Explicit sampler RNG and duplicate native trace tested | Per-world registered seeds through high-level policy |
+| Checkpoint/source/export/image binding | Actual checkpoint hash verified; local cache content pinned | Reproducible engine/export receipt and immutable image |
 | Fixed-work and matched-time root profiles | Not launched | Frozen outcome-independent panel and bounded readout |
 | Continuation screen | Not launched | Profile prerequisite and preregistered 16-root roster |
 | Trajectory-level determinization | Controlled deviation remains | Stage-four audit/implementation, only if screen advances |
@@ -117,27 +147,42 @@ No expensive screen or game cohort is justified by the sampler tests alone.
 Keep the original plan's ceilings and gates. A stopped or failed stage is a
 documented decision, not permission to redraw seeds or restart a full cohort.
 
-## Verification environment
+## Verification evidence
 
-The engine source was fetched using the repository's verified-sdist and patch
-builder. Plain native unit tests do not require TorchScript. The initial
-compile failed with exit 101 because a new test match arm returned the backup
-value instead of unit; that test-code error was repaired before verification.
-The subsequent full `cargo test --manifest-path rust/pokezero-search/Cargo.toml
---lib` completed with exit 0: 275 passed, zero failed, one existing ignored test.
+An isolated worktree environment uses Python 3.13.13 and PyTorch 2.13.0,
+matching tch 0.26.0. No ABI guard was bypassed or existing environment replaced.
+The full engine source builder verified its sdist and applied the repository's
+78 engine patches; both consumers rebuilt and all builder behavior probes
+passed. The model-feature wheel build subsequently completed with exit 0.
+The rebuilt native source fingerprint is
+`a9f3f8197e8c65ce30f06c9870a6c350e5f725ec7a19f4832707b283066ccfdd`.
 
-The discovered laptop model runtime is PyTorch 2.12.1. This source requires
-PyTorch 2.13.0 / tch 0.26.0. Do not bypass the ABI guard or call model-feature
-verification complete on the older runtime. Use a matching isolated/runtime
-image for that gate; preserve existing environments.
+Latest native model-feature unit gate: 291 passed, zero failed, one existing
+ignored test. Python integration/regression gate: 797 tests, exit 0, one
+existing skip, including the opt-in real champion class in both seats, engine
+search, legal mapping, parser/belief/world, and V4 annotation
+retirement gate. Native-versus-Python TorchScript output parity was exact
+(maximum absolute difference zero). These gates do not establish strength.
 
-The public-view/provider tests completed with exit 0: 19 tests, including the
-real Python own-head forward, in the existing Python PyTorch environment. The
-isolated no-Torch environment skips that one forward test explicitly. An initial
-new test fixture failed with exit 1 because it constructed a V4 checkpoint with
-an impossible nonzero history budget; it was corrected to test a valid
-exact-state-mask mismatch instead. Broader parser/belief/world regression tests
-completed with exit 0: 267 tests, four existing environment-dependent skips.
-Plain native tests were rerun: 275 passed, zero failed, one existing ignored
-test. None of these results certifies model-feature native integration or
-playing strength.
+The downloaded iteration-9375 champion is 40,083,798 bytes and verifies as
+`0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be`.
+Its own-head provider uses V4, one snapshot, zero history budget, original
+Tier-2 flags, and `investment_belief_narrowing=False`. The source cache has
+registered metadata hash `f5a5265143d423af` and actual file SHA-256
+`82950121aed1d3cc0b30c91debf7293b08ba101dea71df16ce95f1a83024460b`.
+Checkpoint loading escalates fresh/random value-head initialization to an
+error; the original calibration fence also runs. The explicit local gate uses
+these bytes rather than substituting fixture weights or setting the source
+hash to null.
+
+The native integration initially failed because engine-normalized
+`deoxysdefense` did not match the checkpoint's canonical species token. The
+repair derives display names from registered Dex tables and tests form names,
+punctuation, and preservation of unrelated event fields; no OOV assertion was
+removed. Earlier constructor/PP test and compile failures were repaired before
+the passing gates above. All nonzero verification exits were treated as
+failures, not accepted as skips or partial evidence.
+
+No cluster experiment, training job, root screen, game pilot, finalizer, or
+deployment was launched by these changes. No historical object or shared
+artifact was modified. The full staged goal remains incomplete and active.

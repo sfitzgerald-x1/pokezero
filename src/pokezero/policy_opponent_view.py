@@ -14,6 +14,7 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
+from .actions import ACTION_COUNT
 from .belief import PokemonSetSource, PublicBattleBeliefEngine
 from .dex import ShowdownDex
 from .local_showdown import PublicBattleMaterializationState, _public_materialization_payload
@@ -114,6 +115,7 @@ class PolicyOpponentView:
     spec: ObservationSpec
     feature_masks: ObservationFeatureMasks
     battle_seed: int
+    native_action_indices: tuple[int | None, ...] | None = None
 
     def row_inputs(self, *, dex: ShowdownDex) -> dict[str, Any]:
         metadata = _observation_metadata(self.state, dex=dex, schema_version=self.spec.schema_version)
@@ -144,6 +146,7 @@ def build_policy_opponent_view(
     battle_id: str, battle_seed: int, format_id: str,
     set_source: PokemonSetSource, spec: ObservationSpec,
     feature_masks: ObservationFeatureMasks,
+    sampled_self_move_states: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
 ) -> PolicyOpponentView:
     """Rebuild at root OR child from a complete prefix and sampled own request.
 
@@ -154,13 +157,15 @@ def build_policy_opponent_view(
     """
     if opponent_slot not in {"p1", "p2"} or set_source is None:
         raise PolicyOpponentViewError("opponent slot and canonical set source are required")
-    # The canonical live source annotates these through perspective-specific
-    # damage inference. A bare public replay cannot silently substitute zeros
-    # for a checkpoint that depends on those annotations. Implement the same
-    # observer before enabling such a checkpoint through this reference path.
-    if feature_masks.investment_belief_narrowing or feature_masks.tier2_investment:
+    # Damage conclusions mutate belief when narrowing is enabled and occupy
+    # encoded columns in legacy schemas. V4 explicitly retired BOTH the
+    # history region and pinned residual/investment columns: with narrowing
+    # disabled those provenance flags have no input consumer. Keep the flags
+    # unchanged, and refuse whenever a real observer-dependent surface exists.
+    feature_pack = spec.schema_version in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS
+    if feature_masks.investment_belief_narrowing or (feature_masks.tier2_investment and not feature_pack):
         raise PolicyOpponentViewError("investment observer is not implemented for policy opponent")
-    if feature_masks.tier2_residuals and spec.schema_version not in FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS:
+    if feature_masks.tier2_residuals and not feature_pack:
         raise PolicyOpponentViewError("residual observer is not implemented for policy opponent history")
     clean_lines = public_policy_lines(public_lines, hp_visibility=hp_visibility)
     if "|start" not in clean_lines:
@@ -180,6 +185,7 @@ def build_policy_opponent_view(
         raise PolicyOpponentViewError("sampled own request has no party")
     if any(not isinstance(mon, dict) or not str(mon.get("ident", "")).startswith(f"{opponent_slot}:") for mon in team):
         raise PolicyOpponentViewError("sampled party identity belongs to a different seat")
+    move_states = _sampled_move_states(request, sampled_self_move_states)
     replay = parse_showdown_replay(
         clean_lines, battle_id=battle_id, complete_prefix=True,
         hp_visibility={"p1": "percentage", "p2": "percentage"},
@@ -199,14 +205,95 @@ def build_policy_opponent_view(
         player_id=opponent_slot, format_id=format_id, observation_format_id=format_id,
         replay=replace(replay, requests={}), belief_engine=belief,
         self_request=request, self_initial_request=request,
+        self_move_states=move_states,
     )
     return PolicyOpponentView(state, materialization, clean_lines, spec, feature_masks, battle_seed)
+
+
+def _sampled_move_states(
+    request: Mapping[str, Any], supplied: Mapping[str, Sequence[Mapping[str, Any]]] | None,
+) -> dict[str, tuple[Mapping[str, Any], ...]]:
+    """Clone complete native own-party PP, including Pokemon on the bench.
+
+    The older request-only reference remains available for observer tests, but
+    native integration must use the bundle boundary below. An active request
+    alone cannot certify PP after a switch or a forced-replacement boundary.
+    """
+    if supplied is None:
+        return {}
+    try:
+        states = json.loads(json.dumps(supplied, allow_nan=False))
+    except (TypeError, ValueError) as error:
+        raise PolicyOpponentViewError("sampled move states are not finite JSON") from error
+    team = request["side"]["pokemon"]
+    identities = [mon["ident"].split(":", 1)[-1].strip().casefold() for mon in team]
+    if len(set(identities)) != len(identities) or not isinstance(states, dict) or set(states) != set(identities):
+        raise PolicyOpponentViewError("sampled move states do not cover the exact own party")
+
+    def move_id(name: str) -> str:
+        normalized = "".join(c for c in name.casefold() if c.isalnum())
+        return "hiddenpower" if normalized.startswith("hiddenpower") else normalized
+
+    result = {}
+    for identity, mon in zip(identities, team):
+        rows = states[identity]
+        known = mon.get("moves")
+        if not isinstance(rows, list) or not isinstance(known, list) or not all(isinstance(name, str) for name in known):
+            raise PolicyOpponentViewError("sampled own moves must be complete lists")
+        for row in rows:
+            if (not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]
+                or not isinstance(row.get("move"), str) or not row["move"]
+                or type(row.get("pp")) is not int or type(row.get("maxpp")) is not int
+                or not 0 <= row["pp"] <= row["maxpp"] or row["maxpp"] <= 0
+                or type(row.get("disabled")) is not bool):
+                raise PolicyOpponentViewError("invalid sampled own move PP state")
+        ids = [move_id(row["id"]) for row in rows]
+        if len(set(ids)) != len(ids) or ids != [move_id(name) for name in known]:
+            raise PolicyOpponentViewError("sampled move-state identity differs from own request")
+        result[identity] = tuple(rows)
+    return result
+
+
+def build_policy_opponent_view_from_native_bundle(
+    *, native_request_bundle: Mapping[str, Any], **view_arguments: Any,
+) -> PolicyOpponentView:
+    """Certify the native side-only request, full PP and exact action surface.
+
+    This is the production integration boundary, not a constructor accepting a
+    full engine state. Native callers supply only the sampled acting side's
+    request bundle and a public transcript.
+    """
+    if not isinstance(native_request_bundle, Mapping) or set(native_request_bundle) != {
+        "request", "self_move_states", "native_action_indices",
+    }:
+        raise PolicyOpponentViewError("incomplete native private-request bundle")
+    if not isinstance(native_request_bundle["self_move_states"], Mapping):
+        raise PolicyOpponentViewError("native private-request bundle lacks complete own PP")
+    raw_indices = native_request_bundle["native_action_indices"]
+    if not isinstance(raw_indices, (list, tuple)) or not raw_indices:
+        raise PolicyOpponentViewError("empty native private-request action map")
+    indices = tuple(raw_indices)
+    if any(index is not None and (type(index) is not int or not 0 <= index < ACTION_COUNT) for index in indices):
+        raise PolicyOpponentViewError("invalid native private-request action map")
+    mapped = [index for index in indices if index is not None]
+    if len(set(mapped)) != len(mapped) or (None in indices and indices != (None,)):
+        raise PolicyOpponentViewError("ambiguous native private-request action map")
+    view = build_policy_opponent_view(
+        sampled_self_request=native_request_bundle["request"],
+        sampled_self_move_states=native_request_bundle["self_move_states"],
+        **view_arguments,
+    )
+    legal = {index for index, enabled in enumerate(view.state.legal_action_mask) if enabled}
+    if legal != set(mapped):
+        raise PolicyOpponentViewError("native and canonical private-request legal surfaces differ")
+    return replace(view, native_action_indices=indices)
 
 
 def advance_policy_opponent_view(
     parent: PolicyOpponentView, *, public_branch_lines: Sequence[str],
     branch_hp_visibility: Mapping[str, str], sampled_self_request: Mapping[str, Any],
     set_source: PokemonSetSource,
+    sampled_self_move_states: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
 ) -> PolicyOpponentView:
     """Rebuild a child without confusing root percentage HP with exact branch HP.
 
@@ -223,4 +310,5 @@ def advance_policy_opponent_view(
         battle_id=parent.state.battle_id, battle_seed=parent.battle_seed,
         format_id=parent.materialization.observation_format_id, set_source=set_source,
         spec=parent.spec, feature_masks=parent.feature_masks,
+        sampled_self_move_states=sampled_self_move_states,
     )

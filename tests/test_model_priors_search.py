@@ -126,15 +126,15 @@ _crate_ready = bool(
 _TABLES_FAILURE: str | None = None
 
 
-def _tables_json() -> str | None:
+def _tables_json(observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3, transition_token_budget=SEARCH_TEST_TRANSITION_TOKEN_BUDGET) -> str | None:
     global _TABLES_FAILURE
     local = REPO_ROOT / "corpus" / "encoder_tables.json"
     if local.exists():
         payload = json.loads(local.read_text(encoding="utf-8"))
-        if payload.get("layout", {}).get("schema_version") == OBSERVATION_SCHEMA_VERSION_V3:
+        if payload.get("layout", {}).get("schema_version") == observation_schema_version:
             payload["layout"]["default_feature_masks"][
                 "transition_token_budget"
-            ] = SEARCH_TEST_TRANSITION_TOKEN_BUDGET
+            ] = transition_token_budget
             return json.dumps(payload, sort_keys=True, separators=(",", ":"))
     try:
         from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
@@ -147,11 +147,11 @@ def _tables_json() -> str | None:
 
         payload = build_tables(
             str(DEFAULT_SHOWDOWN_ROOT),
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
+            observation_schema_version=observation_schema_version,
         )
         payload["layout"]["default_feature_masks"][
             "transition_token_budget"
-        ] = SEARCH_TEST_TRANSITION_TOKEN_BUDGET
+        ] = transition_token_budget
         return json.dumps(
             payload,
             sort_keys=True,
@@ -182,9 +182,12 @@ class _EncodedSearchFixture:
     decorators — decorators do not inherit.
     """
 
+    observation_schema_version = OBSERVATION_SCHEMA_VERSION_V3
+    transition_token_budget = SEARCH_TEST_TRANSITION_TOKEN_BUDGET
+
     @classmethod
     def setUpClass(cls) -> None:
-        cls.tables_json = _tables_json()
+        cls.tables_json = _tables_json(cls.observation_schema_version, cls.transition_token_budget)
         if cls.tables_json is None:
             # Name the fix. `corpus/` is gitignored, so a fresh checkout has no
             # tables artifact and this gate silently did not run; the artifact
@@ -239,6 +242,7 @@ class _EncodedSearchFixture:
         # through 4 do, so no fixture surgery is needed — just do not stop at
         # the first drivable row.
         cls.asymmetric_position = None
+        cls.perspective_positions = {}
         for index, row in enumerate(corpus.decision_rows):
             game = games[row.battle_id]
             packed = {
@@ -262,7 +266,7 @@ class _EncodedSearchFixture:
             # The committed sample predates V3, but this mechanics gate consumes only its
             # schema-independent public/belief inputs. Stamp the schema the live V3 policy
             # supplies so the native encoder exercises the current layout fail-closed.
-            row_inputs["observation_schema_version"] = OBSERVATION_SCHEMA_VERSION_V3
+            row_inputs["observation_schema_version"] = cls.observation_schema_version
             candidate = {
                 "state_str": state.to_string(),
                 "row_inputs": json.dumps(row_inputs, sort_keys=True),
@@ -282,9 +286,10 @@ class _EncodedSearchFixture:
             }
             if cls.position is None:
                 cls.position = candidate
+            cls.perspective_positions.setdefault(candidate["self_side"], candidate)
             if cls.asymmetric_position is None and len(set(candidate["actives"])) == 2:
                 cls.asymmetric_position = candidate
-            if cls.position is not None and cls.asymmetric_position is not None:
+            if cls.position is not None and cls.asymmetric_position is not None and len(cls.perspective_positions) == 2:
                 break
         if cls.position is None:
             raise unittest.SkipTest("no committed-sample row could be driven")
@@ -310,11 +315,13 @@ class _EncodedSearchFixture:
             attention_heads=2,
             feedforward_dim=64,
             dropout=0.0,
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION_V3,
-            transition_token_budget=SEARCH_TEST_TRANSITION_TOKEN_BUDGET,
+            observation_schema_version=cls.observation_schema_version,
+            transition_token_budget=cls.transition_token_budget,
         )
         torch.manual_seed(20260719)
         model = EntityTokenTransformerPolicy(config).eval()
+        cls.config = config
+        cls.python_model = model
         shim = export.build_exportable_module(model)
         cls.tmpdir = tempfile.TemporaryDirectory()
         # Retained: the opponent gate reloads this artifact in torch to

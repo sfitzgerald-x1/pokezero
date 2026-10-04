@@ -215,9 +215,36 @@ class PolicyOpponentViewTest(unittest.TestCase):
     def test_item_narrowing_matches_mask_and_missing_observers_refuse(self):
         masks = ObservationFeatureMasks(transition_token_budget=0, item_belief_narrowing=True)
         self.assertTrue(view(feature_masks=masks).materialization.belief_engine.item_belief_narrowing)
-        for flag in ("investment_belief_narrowing", "tier2_investment"):
+        for flag in ("investment_belief_narrowing",):
             with self.assertRaisesRegex(PolicyOpponentViewError, "observer"):
                 view(feature_masks=replace(masks, **{flag: True}))
+
+    def test_v4_retired_annotations_do_not_change_encoded_champion_surface(self):
+        # The champion retains tier2 provenance flags but V4 dropped their
+        # input columns. Test nonzero annotations, not merely empty history.
+        lines = (*LINES, "|move|p2a: Snorlax|Body Slam|p1a: Swampert",
+                 "|-damage|p1a: Swampert|150/300", "|turn|2")
+        masks = ObservationFeatureMasks(transition_token_budget=0, tier2_residuals=True,
+            tier2_investment=True, investment_belief_narrowing=False)
+        original = view(lines, feature_masks=masks)
+        self.assertTrue(original.state.transition_tokens)
+        poisoned = replace(original, state=replace(original.state, transition_tokens=tuple(
+            replace(token, residual=.9, residual_valid=True, cb_bit=True, investment=1.)
+            for token in original.state.transition_tokens)))
+        inactive = view(lines, feature_masks=replace(masks, tier2_residuals=False, tier2_investment=False))
+        baseline = tensor_fields(original.observation(category_vocab=VOCAB, dex=_dex()))
+        self.assertEqual(baseline, tensor_fields(poisoned.observation(category_vocab=VOCAB, dex=_dex())))
+        self.assertEqual(baseline, tensor_fields(inactive.observation(category_vocab=VOCAB, dex=_dex())))
+        self.assertEqual(original.feature_masks, masks)
+
+    def test_legacy_observer_columns_remain_strictly_refused(self):
+        from pokezero.showdown import V3_REPLAY_OBSERVATION_SPEC
+        for masks in (
+            ObservationFeatureMasks(transition_token_budget=0, tier2_residuals=False, tier2_investment=True),
+            ObservationFeatureMasks(transition_token_budget=0, tier2_residuals=True, tier2_investment=False),
+        ):
+            with self.subTest(masks=masks), self.assertRaisesRegex(PolicyOpponentViewError, "observer"):
+                view(spec=V3_REPLAY_OBSERVATION_SPEC, feature_masks=masks)
 
     def test_terminal_and_non_json_requests_fail_without_fallback(self):
         for terminal in ("|win|Opponent", "|tie"):

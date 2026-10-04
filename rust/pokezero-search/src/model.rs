@@ -1128,6 +1128,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     time_budget_ms: Option<u64>,
     time_budget_started: Option<Instant>,
     lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
+    policy_opponent: Option<(&crate::policy_bridge::PolicyOpponentBridge, u64)>,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
@@ -1191,6 +1192,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         std::collections::HashMap::new();
     let root_turn = event_ctx.turn;
     let self_side_one = leaf_ctx.self_is_side_one();
+    let mut policy_sampler = policy_opponent.map(|(_, seed)|
+        crate::policy_opponent::PolicyOpponent::new(!self_side_one, seed));
     // Prior wiring telemetry: nodes whose acting-side priors came from the
     // model vs fallbacks to uniform (unmapped option / underflow / mismatch).
     //
@@ -1347,6 +1350,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         let mut leaf_error: Option<PyErr> = None;
         let traverse_started = Instant::now();
         let encode_before_traverse = encode_nanos;
+        let policy_before_traverse = policy_opponent.map_or(0, |(bridge, _)| bridge.policy_nanos.get());
         // The round's row budget counts LEAVES, and under the rollout seam
         // `pending` is no longer one-per-leaf, so it stops being the right
         // counter. Under `ModelValue` the two are equal by construction (every
@@ -1360,13 +1364,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 pending.len()
             }) < batch_size
         {
-            let traversal = traverse(
-                &mut tree,
-                &mut state,
-                &mut rng,
-                &cfg,
-                &mut counters,
-                &mut |leaf: &State, seam: &BranchSeam| {
+            let mut price = |leaf: &State, seam: &BranchSeam| {
                     if leaf_error.is_some() {
                         return LeafPrice::Ready(0.5);
                     }
@@ -1599,6 +1597,12 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             }
                         }
                     }
+                    if let Some((bridge, _)) = policy_opponent {
+                        if let Err(error) = bridge.record(seam.parent, (seam.chance, seam.branch_index), &rendered.lines, &ctx, &meta) {
+                            leaf_error = Some(error);
+                            return LeafPrice::Ready(0.5);
+                        }
+                    }
                     fold_by_branch.insert(
                         (seam.chance, seam.branch_index),
                         BranchFold {
@@ -1623,15 +1627,24 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     } else {
                         LeafPrice::Deferred(row)
                     }
-                },
-            );
+                };
+            let traversal = if let Some((bridge, _)) = policy_opponent {
+                crate::tree::traverse_with_policy_opponent(
+                    &mut tree, &mut state, &mut rng, &cfg, &mut counters, &mut price,
+                    policy_sampler.as_mut().expect("registered policy sampler"),
+                    &mut |reached, node, parent| bridge.provide(reached, node, parent, event_ctx),
+                )?
+            } else {
+                traverse(&mut tree, &mut state, &mut rng, &cfg, &mut counters, &mut price)
+            };
             traversals.push(traversal);
         }
         // Traversal span minus the encode measured inside it = pure tree work.
         tree_nanos += traverse_started
             .elapsed()
             .as_nanos()
-            .saturating_sub(encode_nanos - encode_before_traverse);
+            .saturating_sub(encode_nanos - encode_before_traverse)
+            .saturating_sub(policy_opponent.map_or(0, |(bridge, _)| bridge.policy_nanos.get()) - policy_before_traverse);
         if let Some(error) = leaf_error {
             return Err(error);
         }
@@ -1899,6 +1912,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // fixed-work report remains byte-for-byte on its old schema. An overrun is
     // not hidden -- it is the cost of finishing the final complete batch rather
     // than abandoning traversals after selection.
+    let extra = if let Some((bridge, seed)) = policy_opponent {
+        format!("{extra},\"policy_opponent_mode\":\"own_policy_callback\",\"policy_opponent_seed\":{},\"policy_opponent_evals\":{},\"policy_opponent_samples\":{},\"policy_opponent_s\":{:.6}",
+            seed, bridge.evaluations.get(), policy_sampler.as_ref().expect("registered policy sampler").samples,
+            bridge.policy_nanos.get() as f64 / 1e9)
+    } else { extra };
     let extra = match (time_budget_ms, time_budget_started) {
         (Some(budget_ms), Some(started)) => {
             let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
@@ -2335,6 +2353,12 @@ impl NativeLeafModel {
         // positional. ``None`` leaves the historical fixed-work call and report
         // untouched; a value is checked only between full traversal batches.
         time_budget_ms = None,
+        // Correctness-first paper opponent seam: the callback accepts ONLY a
+        // side-only sampled request plus projected public branch events.
+        // Explicit order and independent RNG seed are mandatory, no fallback.
+        policy_opponent_callback = None,
+        policy_opponent_seed = None,
+        policy_opponent_request_order = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -2365,6 +2389,9 @@ impl NativeLeafModel {
         rollout_threads: usize,
         rollout_branch_on_damage: bool,
         time_budget_ms: Option<u64>,
+        policy_opponent_callback: Option<Py<PyAny>>,
+        policy_opponent_seed: Option<u64>,
+        policy_opponent_request_order: Option<Vec<String>>,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -2383,6 +2410,16 @@ impl NativeLeafModel {
             return Err(PyValueError::new_err(
                 "time_budget_ms must be positive when set",
             ));
+        }
+        let policy_enabled = policy_opponent_callback.is_some();
+        if policy_enabled != policy_opponent_seed.is_some() || policy_enabled != policy_opponent_request_order.is_some() {
+            return Err(PyValueError::new_err("policy opponent requires callback, independent seed and complete sampled request order together"));
+        }
+        if policy_enabled && (use_opponent_priors || !model_priors || rollout_leaf_mode.is_some()) {
+            return Err(PyValueError::new_err("policy opponent requires subject model priors, disabled auxiliary opponent priors and unchanged model-value leaf"));
+        }
+        if policy_opponent_callback.as_ref().is_some_and(|callback| !callback.bind(py).is_callable()) {
+            return Err(PyValueError::new_err("policy opponent callback must be callable"));
         }
         // Start before every setup step that can consume the supplied native
         // remainder. The core only begins a traversal batch after checking
@@ -2447,7 +2484,21 @@ impl NativeLeafModel {
             crate::events::EventContext::from_json(ctx_json).map_err(PyValueError::new_err)?;
         let fold = root_fold.inner().clone();
         drop(root_fold);
-        py.detach(|| {
+        let policy_bridge = if let Some(callback) = policy_opponent_callback {
+            // No extra context copy or table lookup on the incumbent path.
+            let mut policy_display_ctx = event_ctx.clone();
+            for species in policy_display_ctx.species.iter_mut().flatten() {
+                *species = leaf_ctx.tables.registered_species_display(species).ok_or_else(||
+                    PyValueError::new_err("policy opponent: sampled species missing registered display identity"))?;
+            }
+            Some(crate::policy_bridge::PolicyOpponentBridge::new(
+                callback, !leaf_ctx.self_is_side_one(), policy_opponent_request_order.expect("validated sampled order"),
+                leaf_ctx.tables.registered_move_max_pp(),
+                if leaf_ctx.self_is_side_one() { root_state.side_two.clone() } else { root_state.side_one.clone() },
+                policy_display_ctx,
+            ))
+        } else { None };
+        py.detach(move || {
             let spec = self.evaluator.spec();
             // Contain poke-engine's own panics, AND carry the sub-case counts out of
             // every failure the search can produce. Both halves live in
@@ -2509,6 +2560,7 @@ impl NativeLeafModel {
                     time_budget_ms,
                     time_budget_started,
                     lossy_subcases,
+                    policy_bridge.as_ref().map(|bridge| (bridge, policy_opponent_seed.expect("validated policy seed"))),
                 )
             })
         })

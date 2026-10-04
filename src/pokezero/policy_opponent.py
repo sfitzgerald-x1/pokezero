@@ -1,19 +1,23 @@
-"""Strict own-policy provider for the paper-opponent correctness reference.
+"""Strict own-policy provider for the isolated native opponent-sampling mode.
 
-This is not the auxiliary opponent head and not an enabled search mode. It
-provides the reference distribution against which native integration must be
-checked at roots and reached children before that mode can be enabled.
+This is not the auxiliary opponent head. The callback constructs this seat's
+canonical information state at root and child nodes; it is opt-in and is not
+enabled in the live high-level policy or any benchmark by default.
 """
 
 from __future__ import annotations
 
+import json
 import math
-from typing import Any, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
 from .category_vocab import CategoryVocabulary
 from .dex import ShowdownDex
-from .policy_opponent_view import PolicyOpponentView, PolicyOpponentViewError
+from .policy_opponent_view import (
+    PolicyOpponentView, PolicyOpponentViewError,
+    build_policy_opponent_view_from_native_bundle, public_policy_lines,
+)
 
 
 def policy_opponent_distribution(
@@ -50,6 +54,8 @@ def policy_opponent_distribution(
     if expected_source_hash is not None and source_hash != expected_source_hash:
         raise PolicyOpponentViewError("policy opponent belief source differs from checkpoint")
     indices = tuple(native_action_indices)
+    if view.native_action_indices is not None and indices != view.native_action_indices:
+        raise PolicyOpponentViewError("policy opponent action map differs from certified native bundle")
     if not indices or any(type(index) is not int or not 0 <= index < ACTION_COUNT for index in indices):
         raise PolicyOpponentViewError("unmapped native policy-opponent action")
     if len(set(indices)) != len(indices):
@@ -72,3 +78,50 @@ def policy_opponent_distribution(
     if not math.isfinite(total) or total <= 0:
         raise PolicyOpponentViewError("own-policy legal distribution has no mass")
     return tuple(weight / total for weight in weights)
+
+
+def make_policy_opponent_callback(
+    *, public_lines: Sequence[str], hp_visibility: Mapping[str, str], opponent_slot: str,
+    battle_id: str, battle_seed: int, format_id: str, set_source: Any,
+    model: Any, result: Any, category_vocab: CategoryVocabulary, dex: ShowdownDex,
+    device: Any = None, timing: Any = None,
+) -> Callable[[str], tuple[float, ...]]:
+    """Native search callback using ONLY this seat's canonical own policy.
+
+    Each reached node supplies a complete projected branch suffix and an
+    updated sampled own-party request. Rebuild from the immutable root public
+    prefix, not from the last callback's state: traversal order can revisit a
+    parent or alternate between sibling branches. The native sampler caches
+    each returned distribution for its specific node/ordered action surface.
+    """
+    from .neural_policy import feature_masks_from_model_config, observation_spec_from_model_config
+
+    root_prefix = public_policy_lines(public_lines, hp_visibility=hp_visibility)
+    spec = observation_spec_from_model_config(result.model_config)
+    masks = feature_masks_from_model_config(result.model_config)
+
+    def provide(payload_json: str) -> tuple[float, ...]:
+        try:
+            payload = json.loads(payload_json)
+        except (TypeError, ValueError) as error:
+            raise PolicyOpponentViewError("malformed native policy-opponent payload") from error
+        if not isinstance(payload, dict) or set(payload) != {
+            "native_request_bundle", "public_branch_lines", "opponent_slot",
+        } or payload["opponent_slot"] != opponent_slot:
+            raise PolicyOpponentViewError("native policy-opponent payload seat/field binding mismatch")
+        suffix = payload["public_branch_lines"]
+        if not isinstance(suffix, list) or not all(isinstance(line, str) for line in suffix):
+            raise PolicyOpponentViewError("native policy-opponent public suffix must be lines")
+        view = build_policy_opponent_view_from_native_bundle(
+            native_request_bundle=payload["native_request_bundle"],
+            public_lines=(*root_prefix, *suffix), hp_visibility={"p1": "percentage", "p2": "percentage"},
+            opponent_slot=opponent_slot, battle_id=battle_id, battle_seed=battle_seed,
+            format_id=format_id, set_source=set_source, spec=spec, feature_masks=masks,
+        )
+        return policy_opponent_distribution(
+            view, native_action_indices=view.native_action_indices or (),
+            model=model, result=result, category_vocab=category_vocab, dex=dex,
+            device=device, timing=timing,
+        )
+
+    return provide
