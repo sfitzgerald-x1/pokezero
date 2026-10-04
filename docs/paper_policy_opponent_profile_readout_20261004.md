@@ -141,9 +141,11 @@ A read-only structural audit enumerates all 25 hypothetical prior switch-label
 assignments: five are inconsistent before the drag; all 20 consistent ones lose
 the active permutation there, and retain that loss for each of the five possible
 later switch labels. These are structural controls, not reconstructed historical
-private labels. The [audit script](</Users/scott/Documents/New project/reports/audit-paper-order-refusal-20261004.py>)
-and [result](</Users/scott/Documents/New project/reports/paper-order-refusal-source-audit-20261004.json>)
-record the scope. A future correction needs a privacy-valid treatment of
+private labels. The workspace-only derived artifacts
+`audit-paper-order-refusal-20261004.py` and
+`paper-order-refusal-source-audit-20261004.json` record the scope; their local
+links are in the workspace plan, not this portable repository document.
+A future correction needs a privacy-valid treatment of
 uncertain public party permutations, with action-identity/noninterference tests;
 guessing a slot or reading unrevealed truth would not qualify this root.
 
@@ -170,11 +172,12 @@ new study or recovery is authorized by this readout.
 
 ## Receipt-level allocation audit
 
-The [read-only audit](</Users/scott/Documents/New project/reports/audit-paper-profile-receipts-20261004.py>)
+The workspace-only read-only audit `audit-paper-profile-receipts-20261004.py`
 checks the canonical hashes and all 218 original root/arm files (32 roots,
 186 arms), exact root-cell/arm agreement, fixed-work 1024-iteration conservation,
 productive joint backups, selected action mapping and zero fallbacks on complete
-cells. Its [derived capture](</Users/scott/Documents/New project/reports/paper-policy-profile-1c16419b-receipt-audit-20261004.json>)
+cells. Its derived capture
+`paper-policy-profile-1c16419b-receipt-audit-20261004.json`
 retains the inventory and allocation statistics. This validates diagnostic
 telemetry, not playing strength.
 
