@@ -135,6 +135,73 @@ class NativeCanonicalOwnPolicyTest(NativePolicyOpponentSearchTest):
     observation_schema_version = "pokezero.observation.v4"
     transition_token_budget = 0
 
+    def test_full_policy_dispatches_canonical_own_head_in_both_seats(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        import random
+        from threading import Lock
+        from pokezero.engine_search import (EngineMctsConfig, EngineMctsPolicy,
+            EngineMctsStats, OpponentRequestOrderResolution)
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
+        from pokezero.showdown import parse_showdown_replay
+        from test_showdown import FakeSetSource
+        from golden_encoder_backends import _legal_mask_from_metadata
+
+        for side, position in self.perspective_positions.items():
+            with self.subTest(side=side):
+                inputs, ctx = json.loads(position["row_inputs"]), json.loads(position["ctx"])
+                md = inputs["observation_metadata"]
+                subject = md["showdown_slot"]
+                opponent = "p2" if subject == "p1" else "p1"
+                prefix = tuple(line.replace("|selfa:", f"|{subject}a:").replace("|opponenta:", f"|{opponent}a:")
+                               for line in md["recent_public_events"])
+                replay = parse_showdown_replay(prefix, battle_id=inputs["battle_id"],
+                                               hp_visibility={"p1": "exact", "p2": "exact"})
+                context = SimpleNamespace(player_id=subject, battle_id=inputs["battle_id"],
+                    seed=inputs["battle_seed"], format_id=inputs["format_id"], decision_round_index=0,
+                    observation=SimpleNamespace(metadata=md, legal_action_mask=_legal_mask_from_metadata(md)),
+                    public_materialization_state=SimpleNamespace(replay=replay))
+                policy = object.__new__(EngineMctsPolicy)
+                policy.policy_id = "own-policy-test"
+                policy._config = EngineMctsConfig(worlds=1, leaf_eval="model", model_path="fixture.pt",
+                    checkpoint_path="fixture.ckpt", tables_path="fixture.json", strict_fallbacks=True,
+                    policy_opponent=True, policy_opponent_seed=103, search_sims=64, search_batch=1,
+                    search_depth=3)
+                policy.stats = EngineMctsStats()
+                policy._world_failures_before = {}
+                policy._tables_json = self.tables_json
+                policy._policy_opponent_model = self.python_model
+                policy._policy_opponent_inference_lock = Lock()
+                policy._policy_opponent_result = getattr(self, "champion_result", None) or SimpleNamespace(
+                    model_config=self.config, belief_set_source_hash=None)
+                policy._set_source = getattr(self, "champion_source", None) or FakeSetSource()
+                policy._dex = load_showdown_dex_cached(DEFAULT_SHOWDOWN_ROOT)
+                order = list(ctx[opponent])
+                active = position["actives"][0 if opponent == "p1" else 1]
+                order[0], order[active] = order[active], order[0]
+                world = SimpleNamespace(party_species={slot: ctx[slot] for slot in ("p1", "p2")},
+                                        slot_sides={subject: side})
+                state = SimpleNamespace(to_string=lambda: position["state_str"])
+                with (patch.object(policy, "_validate_model_root_observation"),
+                      patch.object(policy, "_root_inputs_json", return_value=position["row_inputs"]),
+                      patch.object(policy, "_native", return_value=self.native),
+                      patch.object(policy, "_search", side_effect=lambda context, rng: policy._search_model(
+                          context, [(world, state)],
+                          SimpleNamespace(to_payload=lambda: position["fold_state"]), rng)),
+                      patch("pokezero.engine_search.opponent_request_order_resolution",
+                            return_value=OpponentRequestOrderResolution(tuple(order), "resolved"))):
+                    decision = policy.select_action_with_context(context, rng=random.Random(7))
+                witness = decision.metadata["engine_mcts"]["policy_opponent"]
+                self.assertEqual(len(witness["native_invocations"]), 1)
+                self.assertGreater(witness["native_invocations"][0]["evaluations"], 1)
+                self.assertEqual(policy.stats.total_iterations, 64)
+                self.assertEqual(policy.stats.worlds_searched, 1)
+                self.assertEqual(policy.stats.to_dict()["policy_opponent"]["evaluations"],
+                                 witness["native_invocations"][0]["evaluations"])
+                self.assertGreaterEqual(decision.metadata["policy_opponent_decision_elapsed_ms"],
+                                        policy.stats.policy_opponent_wall_seconds * 1000)
+
     def test_canonical_own_head_runs_at_native_root_and_reached_children(self):
         self.assertEqual(set(self.perspective_positions), {"side_one", "side_two"})
         for side, position in self.perspective_positions.items():

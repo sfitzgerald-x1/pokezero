@@ -44,6 +44,16 @@ class PolicyOpponentProviderTest(unittest.TestCase):
         self.assertEqual(obs.metadata["showdown_slot"], "p2")
         self.assertEqual(obs.metadata["opponent_team"][0]["condition"], "67/100")
 
+    def test_shared_module_forward_is_protected_by_the_inference_lock(self):
+        from threading import Lock
+        lock = Lock()
+        def evaluate(**kwargs):
+            self.assertTrue(lock.locked())
+            return (.89, .10, 0, 0, .01, 0, 0, 0, 0)
+        with patch("pokezero.neural_policy.evaluate_transformer_action_priors", side_effect=evaluate):
+            self.assertEqual(self.distribution(inference_lock=lock), (.01, .10, .89))
+        self.assertFalse(lock.locked())
+
     def test_legal_map_must_match_request_exactly_before_any_forward(self):
         for indices in ((), (0, 1), (0, 1, 4, 5), (0, 0, 4), (None, 1, 4), (-1, 1, 4), (True, 1, 4)):
             with self.subTest(indices=indices), patch("pokezero.neural_policy.evaluate_transformer_action_priors") as forward:

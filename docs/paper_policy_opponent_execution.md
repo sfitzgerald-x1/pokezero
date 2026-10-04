@@ -93,30 +93,61 @@ It reports opponent forwards, samples, and elapsed opponent time separately.
 That time is included in the native decision deadline. Mode-off keeps the
 incumbent report schema and performs no additional context copy or Dex lookup.
 
-## Remaining stage-one integration
+## Implemented high-level experimental call contract
+
+`EngineMctsConfig(policy_opponent=True, policy_opponent_seed=<registered seed>)`
+is an explicit opt-in. It requires model leaves, subject priors, strict
+fallbacks, a fixed allocation, and no auxiliary opponent priors, rollout
+substitution, or early-stop replay. The ordinary configuration remains off.
+Initialization loads the own head from the supplied source checkpoint,
+escalates fresh value-head initialization to an error, retains the calibration
+fence, and requires a non-null matching belief-source binding.
+
+Serial, parallel fixed-work, and parallel deadline dispatch all pass an
+invocation-owned public-prefix callback and exact sampled request order. Each
+callback has a separate vocabulary/OOV tracker, with aliases taken from the
+same native encoder tables. Policy RNG seeds are derived by a versioned,
+domain-separated SHA-256 split of the registered seed, battle, seat, decision,
+and native chance seed. They consume no extra decision RNG draws. Duplicate
+world accounting keeps actual invocations separate from belief multiplicity.
+
+The canonical evaluator calls `eval()` and `to()` before forwarding. The shared
+own-head runtime therefore has an inference lock; concurrent trees do not mutate
+the module simultaneously. Lock waiting is charged to opponent and decision
+wall time. This correctness-first serialization is a measured cost to profile,
+not a throughput claim. Public-view construction remains invocation-owned.
+
+Every native report must witness the requested opponent mode/seed, valid
+inference/sample/time counters, and zero prior fallbacks. Fixed-work calls must
+complete their exact registered iteration allocation; deadline calls retain the
+existing completed/remaining-work checks. Provider failures or unsupported
+world construction stop the decision even when another world is healthy.
+Missing request order is a refusal, not an inferred permutation. Context-free
+calls cannot use the ordinary uniform-legal shortcut. Failed experimental calls
+still record whole-call wall time. Successful calls expose per-invocation
+receipts and cumulative opponent counters, without adding an opponent block to
+mode-off decision or statistics payloads.
+
+## Remaining before a frozen root profile
 
 Do not enable this seam by feeding the auxiliary opponent head or a seat-swapped
 subject observation. It requires the champion's **own policy head** on an
 explicitly constructed opponent information state.
 
-Remaining before a frozen root profile:
-
-1. Wire an explicit opt-in `EngineMctsPolicy`/experiment call contract, including
-   callback ownership, public-prefix provenance, request order, and registered
-   per-world policy RNG seeds. The native seam is not enabled in live policies.
-2. Require strict refusal propagation and account for all invocation timing;
-   no high-level exception handler may silently replace this mode with raw,
-   uniform, or opposing-PUCT search.
-3. Validate observed trapping and Transform boundaries or preserve explicit
+1. Qualify the complete live context, public request-order walk, and sampled
+   world construction on the frozen roster. The real-champion dispatch gate
+   exercises both seats at root and child nodes but supplies registered fixture
+   root inputs and request order; it does not certify every live observer seam.
+2. Validate observed trapping and Transform boundaries or preserve explicit
    refusals. Do not erase those roots or quietly alter their native options.
-4. Finish runtime Dex/Showdown publication binding. The current loader generates
+3. Finish runtime Dex/Showdown publication binding. The current loader generates
    source hash `f9e35e1fddae5064`, different from the champion's registered cache.
    Canonical cache contents excluding metadata are byte-identical, including
    all variants and resolved move/species metadata, with SHA-256
    `c718948e86320e5cafd9b22723d4f8e4c54f7ddd7a6cf8e45f020448f2196364`.
    This proves materialized-universe equality, not the original source recipe
    or an immutable image receipt; keep that distinction in the run manifest.
-5. Freeze the outcome-independent profile roster, actual source/model/export
+4. Freeze the outcome-independent profile roster, actual source/model/export
    hashes, engine fingerprint, immutable image, resource cap, and analysis.
 
 Pending model rows must never cause uniform sampling at a child. A synchronous
@@ -128,12 +159,12 @@ full decision timing, and refusal reasons in the eventual experiment ledger.
 
 | Plan requirement | Current state | Evidence needed next |
 | --- | --- | --- |
-| Fixed-policy opponent sampling | Root/child native callback implemented and tested | High-level opt-in and registered root profile |
+| Fixed-policy opponent sampling | Root/child native callback and high-level opt-in tested | Registered root profile and complete live-context qualification |
 | Subject PUCT and critic unchanged | Shared tree/critic path; subject root priors differential-tested | Full policy call-path comparison and profile |
 | Opponent information-state privacy | Side-only constructor and pre-callback public projection tested | Expanded frozen-root observer coverage, trapping and Transform |
 | Champion own-head provider | Real champion gate passes without changing feature flags | Runtime/source publication binding and high-level integration |
 | Exact sparse action identity | Constructor, request order, branch switches and strict gather tested | Registered native root panel including refusal surfaces |
-| Separate policy/chance randomness | Explicit sampler RNG and duplicate native trace tested | Per-world registered seeds through high-level policy |
+| Separate policy/chance randomness | Explicit sampler RNG, duplicate native trace, and versioned per-world seed split tested | Frozen run manifest and profile replay |
 | Checkpoint/source/export/image binding | Actual checkpoint hash verified; local cache content pinned | Reproducible engine/export receipt and immutable image |
 | Fixed-work and matched-time root profiles | Not launched | Frozen outcome-independent panel and bounded readout |
 | Continuation screen | Not launched | Profile prerequisite and preregistered 16-root roster |
@@ -158,11 +189,19 @@ The rebuilt native source fingerprint is
 `a9f3f8197e8c65ce30f06c9870a6c350e5f725ec7a19f4832707b283066ccfdd`.
 
 Latest native model-feature unit gate: 291 passed, zero failed, one existing
-ignored test. Python integration/regression gate: 797 tests, exit 0, one
+ignored test. Python integration/regression gate: 816 tests, exit 0, one
 existing skip, including the opt-in real champion class in both seats, engine
 search, legal mapping, parser/belief/world, and V4 annotation
 retirement gate. Native-versus-Python TorchScript output parity was exact
 (maximum absolute difference zero). These gates do not establish strength.
+
+The portable CI-selected own-policy suite contains 52 tests with no skips; the
+private champion gate is an additional explicit local check. Six static-parser
+tests verify inherited class selection, imported fixtures, override deduplication,
+and refusal of unknown/dynamic test members. The workflow's 38 exact-count guards
+now verify against source without importing native modules. A seed-stream gate
+checks the actual native chance-seed positional and proves no additional RNG
+draws are consumed in serial, parallel, fixed-work, or deadline dispatch.
 
 The downloaded iteration-9375 champion is 40,083,798 bytes and verifies as
 `0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be`.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextlib import nullcontext
 from typing import Any, Callable, Mapping, Sequence
 
 from .actions import ACTION_COUNT
@@ -23,7 +24,7 @@ from .policy_opponent_view import (
 def policy_opponent_distribution(
     view: PolicyOpponentView, *, native_action_indices: Sequence[int | None],
     model: Any, result: Any, category_vocab: CategoryVocabulary, dex: ShowdownDex,
-    device: Any = None, timing: Any = None,
+    device: Any = None, timing: Any = None, inference_lock: Any = None,
 ) -> tuple[float, ...]:
     """Return probabilities in the exact native legal-option order, or refuse.
 
@@ -65,10 +66,14 @@ def policy_opponent_distribution(
     legal = {index for index, enabled in enumerate(observation.legal_action_mask) if enabled}
     if set(indices) != legal:
         raise PolicyOpponentViewError("native and sampled-request legal surfaces differ")
-    probabilities = evaluate_transformer_action_priors(
-        model=model, result=result, observations=(observation,), temperature=1.0,
-        device=device, timing=timing,
-    )
+    # The canonical evaluator calls eval()/to() before each forward. Parallel
+    # trees may share weights, but must never mutate that module concurrently.
+    # Only inference is serialized; observations remain invocation-owned.
+    with inference_lock if inference_lock is not None else nullcontext():
+        probabilities = evaluate_transformer_action_priors(
+            model=model, result=result, observations=(observation,), temperature=1.0,
+            device=device, timing=timing,
+        )
     if len(probabilities) != ACTION_COUNT or any(not math.isfinite(value) or value < 0 for value in probabilities):
         raise PolicyOpponentViewError("invalid own-policy probability row")
     if any(probabilities[index] != 0 for index in range(ACTION_COUNT) if index not in legal):
@@ -84,7 +89,7 @@ def make_policy_opponent_callback(
     *, public_lines: Sequence[str], hp_visibility: Mapping[str, str], opponent_slot: str,
     battle_id: str, battle_seed: int, format_id: str, set_source: Any,
     model: Any, result: Any, category_vocab: CategoryVocabulary, dex: ShowdownDex,
-    device: Any = None, timing: Any = None,
+    device: Any = None, timing: Any = None, inference_lock: Any = None,
 ) -> Callable[[str], tuple[float, ...]]:
     """Native search callback using ONLY this seat's canonical own policy.
 
@@ -121,7 +126,7 @@ def make_policy_opponent_callback(
         return policy_opponent_distribution(
             view, native_action_indices=view.native_action_indices or (),
             model=model, result=result, category_vocab=category_vocab, dex=dex,
-            device=device, timing=timing,
+            device=device, timing=timing, inference_lock=inference_lock,
         )
 
     return provide

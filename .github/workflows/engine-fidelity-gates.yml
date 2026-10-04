@@ -124,6 +124,8 @@ jobs:
             scripts/mutate_rollout_leaf_witness.py
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
             tests/test_model_priors_search.py
+            tests/test_policy_opponent*.py
+            tests/test_engine_fidelity_counts.py
             tests/conftest.py
             tests/test_rollout_model_priors.py
             tests/test_mcts_acceptance_report.py
@@ -195,6 +197,13 @@ jobs:
 
       - name: Verify exact unittest-count guards against source
         run: python scripts/check_engine_fidelity_unittest_counts.py
+
+      - name: Verify inherited unittest-count parser contracts
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_fidelity_counts -v 2>&1 | tee /tmp/fidelity-counts.log
+          grep -qE 'Ran 6 tests' /tmp/fidelity-counts.log
+          grep -qE '^OK$' /tmp/fidelity-counts.log
 
   mass-gate:
     needs: [changes, unittest-count-guards]
@@ -944,6 +953,31 @@ jobs:
             exit 1
           fi
           python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
+
+      - name: Private-safe own-policy opponent contracts on the model wheel
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+          PYTHONPATH: src:tests
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tests.test_policy_opponent_engine tests.test_policy_opponent \
+            tests.test_policy_opponent_view tests.test_policy_opponent_request \
+            tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
+            tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
+            | tee /tmp/policy-opponent.log
+          grep -qE 'Ran 52 tests' /tmp/policy-opponent.log
+          grep -qE '^OK$' /tmp/policy-opponent.log
+          if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
+            echo "::error::the own-policy opponent contracts must not skip"
+            exit 1
+          fi
+          export LD_LIBRARY_PATH="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          LIBTORCH_USE_PYTORCH=1 \
+            cargo test --release --features model --lib policy_bridge::tests \
+            --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/policy-opponent-bridge.log
+          grep -qE '^test result: ok\. 4 passed; 0 failed' /tmp/policy-opponent-bridge.log
 
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
