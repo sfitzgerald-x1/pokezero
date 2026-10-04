@@ -210,8 +210,8 @@ jobs:
       - name: Verify frozen policy-opponent root selection
         run: |
           set -o pipefail
-          PYTHONPATH=src python -m unittest tests.test_policy_opponent_roster tests.test_policy_opponent_source_prefixes -v 2>&1 | tee /tmp/policy-roster.log
-          grep -qE 'Ran 9 tests' /tmp/policy-roster.log
+          PYTHONPATH=src python -m unittest tests.test_policy_opponent_roster tests.test_policy_opponent_source_prefixes tests.test_policy_opponent_live_replay -v 2>&1 | tee /tmp/policy-roster.log
+          grep -qE 'Ran 13 tests' /tmp/policy-roster.log
           grep -qE '^OK$' /tmp/policy-roster.log
 
   mass-gate:

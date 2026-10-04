@@ -20,10 +20,8 @@ from ..public_decision_corpus import PublicDecisionRecord
 SCHEMA = "pokezero.paper-policy-opponent-source-prefix-preflight.v1"
 
 
-def qualify_source_prefixes(
-    roster_path: str | Path, *, expected_roster_sha256: str, source_root: str | Path,
-) -> dict[str, Any]:
-    roster = load_frozen_roster(roster_path, expected_sha256=expected_roster_sha256)
+def load_source_records(source_root: str | Path, roster: Any) -> dict[str, PublicDecisionRecord]:
+    """Decode only verified canonical bytes, including a second hash at decode."""
     base = Path(source_root).resolve(strict=True)
     verify_source_files(base, roster)
     references = {row["source_relative_path"]: row
@@ -41,6 +39,15 @@ def qualify_source_prefixes(
             records[relative] = PublicDecisionRecord.from_dict(json.loads(raw)["record"])
         except (ValueError, TypeError, KeyError) as error:
             raise RosterError(f"invalid canonical source record: {row['decision_id']}") from error
+    return records
+
+
+def qualify_source_prefixes(
+    roster_path: str | Path, *, expected_roster_sha256: str, source_root: str | Path,
+) -> dict[str, Any]:
+    roster = load_frozen_roster(roster_path, expected_sha256=expected_roster_sha256)
+    base = Path(source_root).resolve(strict=True)
+    records = load_source_records(base, roster)
     results = []
     for row in roster["profile_roots"]:
         record = records[row["source_relative_path"]]
@@ -56,6 +63,8 @@ def qualify_source_prefixes(
     load_frozen_roster(roster_path, expected_sha256=expected_roster_sha256)
     verify_source_files(base, roster)
     terminal = f"shards/{roster['source_shard']}/COMPLETE.json"
+    references = {row["source_relative_path"]: row
+                  for row in roster["profile_roots"] + roster["prefix_witnesses"]}
     inventory = [{"source_relative_path": relative, "source_file_sha256": row["source_file_sha256"]}
                  for relative, row in sorted(references.items())]
     inventory.append({"source_relative_path": terminal, "source_file_sha256": roster["source_terminal_sha256"]})

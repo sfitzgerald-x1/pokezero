@@ -457,8 +457,8 @@ receipt to actual native work. These checks do not qualify the frozen panel.
 
 Remote run 37199006417 on published foundation `c1fa0eb63ea19dccd4c22922c3bbe901259e0c9f`
 completed successfully, including the mass gate and `gate-status`; the other
-PR checks also succeeded. That result does not certify this subsequent uncommitted
-native measurement change. Independent re-review closed the ordering P1 with no
+PR checks also succeeded. That result did not certify the subsequent native
+measurement change. Independent re-review closed the ordering P1 with no
 new actionable findings; its four enabled-wheel canonical/native fixture tests
 pass with exit 0 and no skips. Private-champion paths were verified by the main
 77-test gate, not independently rerun by this reviewer. The fresh full mutation
@@ -512,3 +512,56 @@ its site-disabled nine-test suite and actual-source CLI both pass with exit 0,
 reproducing the same denominator, repairs, refusal, and pending qualifications.
 The reviewer corrected one summary invocation that had failed with exit 1 for
 an omitted `PYTHONPATH`; no source or integrity checks were changed for it.
+
+### Frozen live-public replay preflight
+
+The completed joint-action and prefix changes were published at
+`cd2cc06e6c0c0be698ae217b8d6b9d6bfc667920`. Remote engine-fidelity run
+37201601877 completed successfully, including its mass gate and `gate-status`;
+the secret-scanning, fleet-worker and neural-smoke checks also passed. These
+results apply to that head, not subsequent live-preflight changes.
+
+The new read-only `scripts/qualify_policy_opponent_live_replay.py` replays the
+same byte-bound source records in the checkpoint-configured live Showdown
+environment, without invoking a policy or native search. It requires an exact
+clean runtime-content hash and checkpoint hash, checks them again afterward,
+and repeats the source preflight. Each accepted root matches the entire public
+observation, belief input, legal mask and every persisted actor-history
+observation. Every legal action is serialized to a live Showdown choice. Missing
+or different inputs refuse the original root; source integrity drift aborts the
+whole check.
+
+Actual-source invocation completed with exit 0: all 32 registered roots remain,
+31 are live-public-valid, 130 earlier actor observations match, and the original
+seed `2026100104` p2 decision-9 source-prefix refusal remains. Both source-owned
+repairs are retained. Seed `2026100106` p1 decision 9, ID
+`a7f3251c1922343b6d60a1286c3a43e46f3c58471fcde85ae068cd325372a34f`,
+is a one-sided forced-replacement request. It is valid for the root profile but
+not eligible for a simultaneous fixed-opponent continuation. Keep that explicit
+disposition in the proposed 16-root continuation denominator; do not redraw it.
+
+The actual runtime is clean Showdown commit
+`f76228a1354b5d0f307ca2d16101294ad3a2308b`, content SHA-256
+`93f81c8eae3d9f769f579a3be5e87bc0d62df39c0c0166bd47a228238188e4b3`.
+Its belief-source hash `f5a5265143d423af` matches the champion checkpoint SHA-256
+`0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be`.
+The CLI reports image/native-world/profile qualification false and search not
+invoked. Its aggregate live-replay qualification is also false because one
+registered root is refused; the 31 individual root receipts are not discarded.
+
+The first ad-hoc diagnostic failed with exit 1 on an incorrect configuration
+helper import, before any replay; correcting the import reproduced 31/32. The
+subsequent reusable CLI additionally verified complete actor history and runtime
+binding. All 13 roster/source/live tests pass, including with site packages
+disabled, and the existing CI count guard now requires 13. The 251-test focused
+replay/registry/provenance suite and all 39 count guards pass with exit 0.
+Independent review found no actionable findings; its 13-test suite and actual
+CLI independently passed with exit 0 and reproduced the same identities,
+repairs, one-sided request, refusal and pending qualifications.
+
+This closes local public-input replay qualification, not native world formation,
+opponent request-order certification, immutable image publication, the registered
+profile/resource manifest, actual candidate comparisons or playing strength.
+No cluster object/shared source artifact was modified and no candidate search,
+continuation, training run or deployment was launched. The full goal remains
+incomplete and active.
