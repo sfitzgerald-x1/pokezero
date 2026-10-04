@@ -192,17 +192,18 @@ class ProfileContractTests(unittest.TestCase):
 
 
 class ProfileBoundaryTests(unittest.TestCase):
-    def run_root(self, factory, clock, ordinal=0):
+    def run_root(self, factory, clock, ordinal=0, on_row=None):
         with patch("pokezero.mcts_eval.policy_opponent_profile.source_bound_replay_prefix",
                    return_value=SimpleNamespace(public_action_rounds=("source-only",), repairs=())):
             return profile_root(ROOT, source_records=(), contract=object(), showdown_root="/showdown",
                 config=CONFIG, seed=71, root_ordinal=ordinal, source_requested_players=("p1", "p2"),
-                decider_factory=factory, clock=clock)
+                decider_factory=factory, clock=clock, on_row=on_row)
 
     def test_timer_excludes_preparation_and_rotates_arm_order(self):
         now = [0.]
         calls = []
         closed = []
+        persisted = []
         def factory(contract, showdown, **kwargs):
             now[0] += 10  # model/export initialization, deliberately untimed
             arm, mode = kwargs["arm"], kwargs["mode"]
@@ -221,11 +222,15 @@ class ProfileBoundaryTests(unittest.TestCase):
                     closed.append((mode, arm))
             return Decider()
         self_case = self
-        result = self.run_root(factory, lambda: now[0], ordinal=1)
+        def persist(mode, arm, row):
+            self.assertEqual(closed[-1], (mode, arm))
+            persisted.append((mode, arm, row["decision_wall_seconds"]))
+        result = self.run_root(factory, lambda: now[0], ordinal=1, on_row=persist)
         self.assertEqual(result["state"], "COMPLETE")
         self.assertEqual(calls, [(MODES[0], arm) for arm in ARMS[1:] + ARMS[:1]] +
                          [(MODES[1], arm) for arm in ARMS[2:] + ARMS[:2]])
         self.assertEqual(calls, closed)
+        self.assertEqual(persisted, [(mode, arm, .25) for mode, arm in calls])
         self.assertIn("PENDING", result["qualification"])
         for mode in MODES:
             self.assertEqual(set(result["modes"][mode]), set(ARMS))
@@ -270,6 +275,21 @@ class ProfileBoundaryTests(unittest.TestCase):
         self.assertEqual(result["refusal"]["phase"], "source_prefix")
         self.assertEqual(result["modes"], {})
         factory.assert_not_called()
+
+    def test_durable_sink_failure_stops_before_selecting_another_arm(self):
+        calls = []
+        def factory(contract, showdown, **kwargs):
+            calls.append((kwargs["mode"], kwargs["arm"]))
+            class Decider:
+                def prepare_public_decision(self, record, config, **replay):
+                    return lambda: telemetry(kwargs["arm"], kwargs["mode"], kwargs["opponent_seed"])
+                def close(self): pass
+            return Decider()
+        def fail_sink(*_args):
+            raise FileExistsError("existing receipt must not be overwritten")
+        with self.assertRaises(FileExistsError):
+            self.run_root(factory, lambda: 0., on_row=fail_sink)
+        self.assertEqual(len(calls), 1)
 
 
 class RawForwardTests(unittest.TestCase):

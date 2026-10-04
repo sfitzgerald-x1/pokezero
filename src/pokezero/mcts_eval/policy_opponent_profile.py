@@ -284,6 +284,7 @@ def profile_root(
     native_batch_guard_ms: int = 64,
     decider_factory: Callable[..., Any] = make_profile_decider,
     clock: Callable[[], float] = time.perf_counter,
+    on_row: Callable[[str, str, Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Measure each arm/mode without swallowing errors or dropping a root.
 
@@ -354,6 +355,11 @@ def profile_root(
                     except (OSError, RuntimeError) as error:
                         rows[arm].update(state="REFUSED", cleanup_error={
                             "type": type(error).__name__, "reason": str(error)})
+            if on_row is not None:
+                # Outside the decision timer and after cleanup adjudication.
+                # A durable sink failure stops execution; never hide it as an
+                # eligibility refusal or retry/overwrite its earlier receipt.
+                on_row(mode, arm, rows[arm])
     if all(row["state"] == "COMPLETE" for mode in result["modes"].values() for row in mode.values()):
         result["state"] = "COMPLETE"
     return result

@@ -565,3 +565,69 @@ profile/resource manifest, actual candidate comparisons or playing strength.
 No cluster object/shared source artifact was modified and no candidate search,
 continuation, training run or deployment was launched. The full goal remains
 incomplete and active.
+
+### Bounded registered root-profile launcher
+
+All twelve remote PR checks on published head
+`3dab091e1245370f7604581d5ccea35b7b2c8fb1` now pass, including engine-fidelity
+run 37202592211. This does not certify subsequent launcher changes.
+
+The new registration binds the original 32 roots, all three arms, fixed-work
+and matched-deadline modes, champion/oracle/source/native/export/image hashes,
+per-root RNG domains, and the existing d2/s256/b16/w4 practical configuration.
+It retains the 16 proposed continuation identities, the one source refusal and
+the separate one-sided eligibility disposition; no replacement roots or
+strength/reproduction claims are authorized. The two-hour/96 CPU-hour budget
+is shared with continuations. The first profile is serial on two CPUs, with
+one Torch thread and one interop thread, no GPU, a 600-second root-worker cap,
+and five seconds reserved for owned process cleanup.
+
+`scripts/run_policy_opponent_root_profile.py` requires an actual clean attested
+Linux/arm64 v8 source image and v4 copied model runtime. It checks both native
+consumers, Torch, interpreter, exact two-CPU cgroup quota, champion, Showdown
+content and source bytes. It copies the checkpoint to a fresh study input
+directory so model exports do not change the historical checkpoint cache.
+Registration, complete live-preflight evidence and study start are immutable
+and externally byte-pinned before any root action is selected.
+
+Each adjudicated arm writes its own create-only receipt after cleanup and
+outside the decision timer. Late terminal/arm records survive a later timeout;
+partial cap records are explicitly inventoried as diagnostic-only and excluded
+from completed-root statistics. All 32 root dispositions remain visible.
+Nonzero worker exits, missing/malformed terminals or final binding drift stop
+readout publication. An exit-zero diagnostic readout is not a strength PASS
+and never automatically authorizes advancement.
+
+Independent review found and closed a setup-cap escape, inherited termination
+signal masking, stale/reaped process ownership, an outer SIGTERM cleanup hole,
+and a SIGINT ownership-publication race. The outer owned study supervisor now
+bounds initialization, exports, preflight and root execution. Handled signals
+are masked only while owned child identity is published, then unmasked by the
+CLI before imports; external termination cascades into the separately owned
+root group. Existing processes, Kubernetes objects and shared evidence are
+never targeted. Real harmless nested-process tests prove timeout and outer
+SIGTERM cleanup/reaping, not candidate search performance.
+
+Verification: 37 site-disabled roster/source/live/registration/launcher tests
+pass with exit 0, no skips. These include the real 32-root publication/control
+loop with synthetic refusals/caps, immutable late evidence, exit-17 refusal and
+final source drift. The full rebuilt-wheel/private-champion suite passes all
+78 tests with exit 0, no skips; the earlier invocation without private inputs
+skipped 11 and is not the private-champion evidence. Native source remains
+current at fingerprint
+`2b019d6667a5bd36a741f55370e557c3f82414ab580bc0a4a212f21bc5928547`.
+An initial count check failed (exit 1) because the model-suite guard still
+expected 66 rather than 67 after adding the durable-sink failure test; the
+corrected workflow and all 39 static count guards pass. Independent review
+reproduced 37 portable and 14 profile tests and all 39 count guards, found no
+remaining actionable issues, and did not run an image or candidate search.
+The Python-floor check passes all 656 tracked Python files; staged secret
+scanning and diff checks pass with exit 0. These are local publication checks,
+not CI evidence for this new head.
+
+The complete experiment is still pending immutable source-image publication,
+actual runtime/resource verification, native frozen-root profiling, bounded
+continuations and the plan's conditional later stages. Synthetic launcher
+fixtures, public replay qualification and local champion tests cannot stand in
+for that execution. No new Kubernetes workload/shared artifact was created by
+this launcher verification and historical artifacts remain unchanged.

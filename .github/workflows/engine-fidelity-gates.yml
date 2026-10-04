@@ -35,6 +35,7 @@ jobs:
             scripts/vendor_poke_engine_src.sh
             scripts/engine_behavioral_probes.py
             scripts/check_engine_fidelity_unittest_counts.py
+            scripts/*policy_opponent*.py
             docs/paper_policy_opponent_roster_*.json
             scripts/engine_build_fingerprint.py
             scripts/verify_poke_engine_source.py
@@ -210,8 +211,8 @@ jobs:
       - name: Verify frozen policy-opponent root selection
         run: |
           set -o pipefail
-          PYTHONPATH=src python -m unittest tests.test_policy_opponent_roster tests.test_policy_opponent_source_prefixes tests.test_policy_opponent_live_replay -v 2>&1 | tee /tmp/policy-roster.log
-          grep -qE 'Ran 13 tests' /tmp/policy-roster.log
+          PYTHONPATH=src python -m unittest tests.test_policy_opponent_roster tests.test_policy_opponent_source_prefixes tests.test_policy_opponent_live_replay tests.test_policy_opponent_registration tests.test_policy_opponent_root_launcher -v 2>&1 | tee /tmp/policy-roster.log
+          grep -qE 'Ran 37 tests' /tmp/policy-roster.log
           grep -qE '^OK$' /tmp/policy-roster.log
 
   mass-gate:
@@ -976,7 +977,7 @@ jobs:
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
             tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 66 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 67 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"
