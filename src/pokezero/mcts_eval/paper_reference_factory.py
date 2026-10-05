@@ -129,7 +129,8 @@ class PublicRootWorldFactory:
                 opponent: pack_team(draw.team)}, observation_format_id="gen3randombattle")
             seed = hidden_rng.getrandbits(32)
             evidence["materialization_seed"] = seed
-            self.env.materialize_public_world(state=self.state, start_override=override, seed=seed)
+            self.env.materialize_public_world(state=self.state, start_override=override, seed=seed,
+                reference_rest_sleep=True)
             if decision_state(self.env.observe(self.state.player_id), player=self.state.player_id) != self.root:
                 raise ReferenceRefusal("fresh sampled world does not preserve exact player-known root")
             evidence["status"] = "ROOT_VALIDATED"

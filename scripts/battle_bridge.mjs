@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
+import {referenceRestState, bindReferenceRestSources} from "./battle_bridge_reference_rest.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -487,7 +488,7 @@ function materializeBattle(command) {
   // This template belongs to the already belief-sampled search world. We construct a new
   // public branch-point payload from it, then let Showdown deserialize that payload directly.
   const snapshot = State.serializeBattle(battle.battleStream.battle);
-  applyPublicState(snapshot, publicState);
+  applyPublicState(snapshot, publicState, command.referenceRestSleep === true);
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
@@ -1007,7 +1008,7 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
   };
 }
 
-function applyPublicState(snapshot, publicState) {
+function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
   if (!Number.isInteger(publicState.turn) || publicState.turn < 1) {
     throw new Error("Materialize requires a positive integer turn.");
   }
@@ -1127,6 +1128,7 @@ function applyPublicState(snapshot, publicState) {
         sideId,
         row.species,
         publicSide.toxicStage,
+        referenceRestSleep ? row : null,
       );
       serializedSide.pokemon[index].boosts = row.active
         ? normalizedBoosts(publicSide.boosts)
@@ -1180,6 +1182,7 @@ function applyPublicState(snapshot, publicState) {
         if (matchingIndex >= 0) applyKnownMoveState(serializedSide.pokemon[matchingIndex], row.moves);
       }
     }
+    if (referenceRestSleep) bindReferenceRestSources(serializedSide, sideId);
     if (pendingBatonPassSides.includes(sideId)) {
       // BattleQueue turns this exact flag into the Baton Pass source effect when it resolves the
       // switch. The skip flag mirrors the already-completed BeforeSwitchOut phase.
@@ -1630,14 +1633,14 @@ function applyPublicVolatiles(
   }
 }
 
-function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage) {
+function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, referenceRow = null) {
   if (typeof condition !== "string" || !condition.trim()) {
     throw new Error(`Materialize is missing a condition for ${sideId} ${species}.`);
   }
   const parts = condition.trim().split(/\s+/);
   const fainted = parts.includes("fnt") || parts[0] === "0";
-  const status = parts.find(part => ["brn", "frz", "par", "psn", "tox"].includes(part)) || "";
-  if (parts.includes("slp")) {
+  const status = parts.find(part => ["brn", "frz", "par", "psn", "tox", "slp"].includes(part)) || "";
+  if (parts.includes("slp") && referenceRow === null) {
     throw new Error("Materialize does not yet support sleep counters.");
   }
   let hp = 0;
@@ -1658,6 +1661,7 @@ function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage) 
   pokemon.fainted = fainted;
   pokemon.status = status;
   pokemon.statusState = {id: status, effectOrder: 0};
+  if (status === "slp") pokemon.statusState = referenceRestState(referenceRow, pokemon.ability);
   if (status === "tox") {
     if (!Number.isInteger(toxicStage) || toxicStage < 0 || toxicStage > 15) {
       throw new Error(`Materialize requires a valid toxic stage for ${sideId} ${species}.`);
