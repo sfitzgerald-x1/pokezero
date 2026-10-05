@@ -1,8 +1,40 @@
 # Trajectory reference implementation progress
 
 This opt-in implementation now includes twenty persistent worker processes.
-The comparison remains unfinished. Production policies do not import it, and
+The full comparison remains unfinished. Production policies do not import it, and
 implementation tests are not a paper reproduction or a playing-strength result.
+
+## First registered comparison and bounded repair
+
+The first all-root comparison completed 170 of 192 timing cells, followed by
+264 actual terminal continuations without caps or failures. All 32 raw and
+incumbent positions completed in both timing modes. The incumbent changed one
+choice and lost two of eight paired continuations on that position; this is a
+conditional first-action audit, not a whole-policy strength result. On its 21
+completed positions the reference selected the same actions as raw policy.
+The other 11 positions remain refused, not redrawn or reported as neutral.
+
+The original refusal occurs on Crawdaunt's tenth completion template: public
+maximum HP 257 conflicts with the projected Hidden Power Flying HP IV 30, which
+produces 256. Its ninth original draw is the latest compatible HP 257 template. Poisoning
+the process pool correctly prevents silent retry but leaves 21 subsequent cells
+unmeasured. All original receipts and passing measurements are preserved.
+
+An explicit default-off completion variant now tries projected templates from
+the original ten draws in reverse order, choosing the most recent that satisfies
+every public trait. No eleventh draw, catalog proposal, invented EV adjustment
+or relaxed exclusion is permitted. The strict tenth-template rule remains the
+default. This variant is an adaptation for exact HP and hard public constraints,
+not an exact paper reproduction or a posterior-conditioned generator. Receipts
+identify attempted seeds, mismatched fields and the selected template. A fresh
+registered execution will repair only the 22 refused reference cells; it will
+not rerun completed controls or erase the strict variant's failure.
+
+The adapted sampler, worker diagnostics and retained regression suites pass
+146 tests without skips. Independent review confirmed the default-off boundary
+and actual ten-seed Crawdaunt regression. Three stale source-line citations in
+the unrelated negative census were refreshed; its measurements and source
+attestations are unchanged, and all 37 census tests now pass.
 
 The goal is an actual comparison of Wang's inference-search semantics with raw
 policy and incumbent search, using the unchanged champion and retained frozen
@@ -149,18 +181,20 @@ After these changes, the 109 simulator/replay/telemetry tests (excluding that
 known scenario-source mismatch) pass without skips in 34.621 seconds. The
 119-test result remains a failure, not a green full-suite claim.
 
-## Work still required before comparison
+## Work still required to finish comparison
 
 1. Keep unsupported pending committed actions as named refusals; all retained
-   comparison roots are simultaneous. Do not use a private commitment or the
+   roster has 31 simultaneous roots and one actor-only faint replacement. Do not use a private commitment or the
    materializer's argmax shortcut to claim support.
-2. Register one justified alpha/beta choice (the thesis does not publish its
-   selected numbers), the current Gen 3/champion representation deviation,
-   resource accounting, fixed work and full decision-boundary deadlines.
-3. Run the retained all-root raw/incumbent/reference comparison under a new
-   bounded manifest, preserving failures and source-battle clustering. Use
-   continuations/action quality and bounded matchups to judge improvement,
-   not just changed actions or a successful implementation test.
+2. Preserve the first registration's alpha 0.5/beta 1 choice (the thesis does
+   not publish its selected numbers), Gen 3/champion deviation and resource
+   accounting. Both outer clocks include the full decision boundary, but the
+   incumbent and reference have different internal stopping-clock scopes.
+3. Register and run only the 22 refused reference cells with the bounded
+   completion adaptation. Reuse pinned same-action terminal continuations;
+   run new continuations only for newly selected actions. Keep old and repaired
+   timing cohorts separate and disclose that this is conditional action quality,
+   not a live persistent-policy matchup or full paper reproduction.
 
 No fresh cluster cohort, training job, promotion or production change has been
 submitted by this work. The full comparison goal remains active and incomplete.

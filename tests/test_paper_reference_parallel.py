@@ -53,6 +53,32 @@ class StoppedChildRuntime(ToyRuntime):
     # Deliberately leave the stopped child for coordinator escalation.
 
 
+class RefusedBatchRuntime(ToyRuntime):
+    def prepare(self, request):
+        def world(rng):
+            error = ReferenceRefusal('public HP mismatch')
+            error.sampling_diagnostic = {'max_hp': {'actual':256, 'required':257}}
+            raise error
+        return PreparedDecision(request.root, lambda state: Evaluation((.5,.5), 0.), world,
+            evidence=lambda: {'draws': [{'status':'REFUSED'}]})
+
+
+class BrokenEvidenceRuntime(RefusedBatchRuntime):
+    def prepare(self, request):
+        prepared = super().prepare(request)
+        def broken():
+            raise RuntimeError('diagnostic sink failed')
+        prepared.evidence = broken
+        return prepared
+
+
+class UnserializableEvidenceRuntime(RefusedBatchRuntime):
+    def prepare(self, request):
+        prepared = super().prepare(request)
+        prepared.evidence = lambda: (lambda: 'not picklable')
+        return prepared
+
+
 class ParallelReferenceTests(unittest.TestCase):
     def test_actual_twenty_persistent_processes_exchange_every_ten_without_double_counts(self):
         with ParallelTrajectorySearch(ReferenceConfig(.5, 1), ToyRuntime) as pool:
@@ -125,6 +151,30 @@ class ParallelReferenceTests(unittest.TestCase):
         empty = search.search_batch(ROOT, deadline_at=1., clock=lambda: 2., **arguments)
         self.assertEqual(empty.trajectories, 0)
         self.assertEqual(sum(search.nodes[ROOT.key].visits), 10)
+
+    def test_failed_batch_transports_public_constraint_and_partial_draw_evidence(self):
+        with ParallelTrajectorySearch(ReferenceConfig(.5,1), RefusedBatchRuntime, workers=1) as pool:
+            with self.assertRaises(ParallelRefusal) as caught:
+                pool.search(Request(), ROOT, battle_id='b', seed=4, trajectories_per_worker=10)
+        extra = caught.exception.evidence['errors'][0][6]
+        self.assertEqual(extra['sampling_diagnostic']['max_hp'], {'actual':256,'required':257})
+        self.assertEqual(extra['partial_batch_evidence']['draws'][0]['status'], 'REFUSED')
+
+    def test_failed_evidence_sink_does_not_hide_original_worker_refusal(self):
+        with ParallelTrajectorySearch(ReferenceConfig(.5,1), BrokenEvidenceRuntime, workers=1) as pool:
+            with self.assertRaises(ParallelRefusal) as caught:
+                pool.search(Request(), ROOT, battle_id='b', seed=4, trajectories_per_worker=10)
+        message = caught.exception.evidence['errors'][0]
+        self.assertIn('public HP mismatch', message[4])
+        self.assertIn('diagnostic sink failed', message[6]['partial_batch_evidence_error'])
+
+    def test_unserializable_evidence_does_not_hide_original_worker_refusal(self):
+        with ParallelTrajectorySearch(ReferenceConfig(.5,1), UnserializableEvidenceRuntime, workers=1) as pool:
+            with self.assertRaises(ParallelRefusal) as caught:
+                pool.search(Request(), ROOT, battle_id='b', seed=4, trajectories_per_worker=10)
+        message = caught.exception.evidence['errors'][0]
+        self.assertIn('public HP mismatch', message[4])
+        self.assertIn('diagnostic_serialization_error', message[6])
 
     def test_nonpaper_exchange_cadence_and_invalid_work_refuse(self):
         with self.assertRaises(ReferenceRefusal):

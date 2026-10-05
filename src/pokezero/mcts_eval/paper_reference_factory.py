@@ -57,7 +57,8 @@ def _maximum_hp(condition: str | None) -> int | None:
 
 class PublicRootWorldFactory:
     def __init__(self, *, env: LocalShowdownEnv, state: PublicBattleMaterializationState,
-                 observation: Any, evaluator: ChampionEvaluator, set_source: Gen3RandbatSource) -> None:
+                 observation: Any, evaluator: ChampionEvaluator, set_source: Gen3RandbatSource,
+                 allow_earlier_compatible_template: bool = False) -> None:
         if state.replay.requests:
             raise ReferenceRefusal("public root must strip replay request payloads")
         if state.deferred_opponent_action_player is not None:
@@ -110,7 +111,8 @@ class PublicRootWorldFactory:
         self.known = tuple(known)
         self.env, self.state, self.evaluator = env, state, evaluator
         self.own_team = own_team
-        self.sampler = PaperHiddenTeamSampler(env, set_source=set_source)
+        self.sampler = PaperHiddenTeamSampler(env, set_source=set_source,
+            allow_earlier_compatible_template=allow_earlier_compatible_template)
         self.active = False
         self.receipts: list[dict[str, Any]] = []
 
@@ -140,6 +142,8 @@ class PublicRootWorldFactory:
         except Exception as exc:
             self.active = False
             evidence.update(status="REFUSED", error=f"{type(exc).__name__}: {exc}")
+            if getattr(exc, "sampling_diagnostic", None) is not None:
+                evidence["sampling_diagnostic"] = exc.sampling_diagnostic
             raise
 
     def _release(self, evidence: dict[str, Any]) -> None:

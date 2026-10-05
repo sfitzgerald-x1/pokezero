@@ -100,7 +100,7 @@ class ReferenceSamplingTests(unittest.TestCase):
 
     def test_tenth_draw_cannot_force_or_redraw_away_negative_public_evidence(self):
         generator = Generator()
-        with self.assertRaisesRegex(ReferenceRefusal, "trait/exclusion"):
+        with self.assertRaisesRegex(ReferenceRefusal, "traits/exclusions"):
             self.sampler(generator).draw((KnownSetTraits("Snorlax",
                 ruled_out_items=("Leftovers",)),), random.Random(4))
         self.assertEqual(sum(c[0] == "set" for c in generator.calls), 10)
@@ -110,6 +110,67 @@ class ReferenceSamplingTests(unittest.TestCase):
                 {"ruled_out_items": ["Leftovers"]}, {"ruled_out_abilities": ("",)}):
             with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ReferenceRefusal, "exclusions"):
                 KnownSetTraits("Snorlax", **kwargs)
+
+    def test_opt_in_bounded_projection_respects_hp_without_eleventh_draw(self):
+        # The real failure: HP Flying's HP IV30 gives256 rather than public257.
+        row = set_row('Crawdaunt', moves=['hiddenpowerflying', 'surf', 'brickbreak', 'crunch'], item='Choice Band')
+        row.update(ability='Hyper Cutter', level=89)
+        compatible = {**row, 'moves': ['surf', 'crunch', 'taunt', 'knockoff']}
+        draws = [row]*7+[compatible, row, row]
+        source = SimpleNamespace(species_metadata={'crawdaunt': {'baseStats': {'hp': 63}}}, move_metadata={})
+        traits = KnownSetTraits('Crawdaunt', ('Swords Dance', 'Double-Edge'), item='Leftovers', max_hp=257)
+        strict = PaperHiddenTeamSampler(Generator(draws=draws), set_source=source)
+        with self.assertRaisesRegex(ReferenceRefusal, '"actual": 256') as refused:
+            strict.draw((traits,), random.Random(4))
+        self.assertEqual(len(refused.exception.sampling_diagnostic['draw_seeds']), 10)
+        generator = Generator(draws=draws)
+        adapted = PaperHiddenTeamSampler(generator, set_source=source, allow_earlier_compatible_template=True)
+        result = adapted.draw((traits,), random.Random(4))
+        receipt = result.known[0]
+        self.assertEqual(receipt.completion_template_attempt, 8)
+        self.assertEqual(sum(c[0]=='set' for c in generator.calls), 10)
+        self.assertEqual([e['attempt'] for e in receipt.completion_projection_evidence], [10,9,8])
+        self.assertEqual(receipt.completion_projection_evidence[0]['mismatches']['max_hp'],
+            {'actual':256, 'required':257})
+        self.assertEqual(receipt.completion_projection_evidence[-1]['mismatches'], {})
+        self.assertEqual(result.team[0].ivs['hp'], 31)
+        self.assertEqual(result.team[0].item, 'Leftovers')
+        self.assertNotIn('hiddenpowerflying', result.team[0].moves)
+
+    def test_projected_hp_compatible_template_must_also_pass_negative_traits(self):
+        excluded = set_row(moves=['return','rest','sleeptalk','earthquake'], item='Lum Berry')
+        allowed = set_row(moves=['return','rest','sleeptalk','earthquake'])
+        # Every unprojected row lacks the public Surf; no early exact match.
+        generator = Generator(draws=[allowed]+[excluded]*9)
+        sampler = PaperHiddenTeamSampler(generator, set_source=SimpleNamespace(species_metadata={}, move_metadata={}),
+            allow_earlier_compatible_template=True)
+        result = sampler.draw((KnownSetTraits('Snorlax', ('Surf',),
+            ruled_out_items=('Lum Berry',)),), random.Random(4))
+        self.assertEqual(result.known[0].completion_template_attempt, 1)
+        self.assertEqual(sum(c[0]=='set' for c in generator.calls), 10)
+        self.assertEqual(result.team[0].item, 'Leftovers')
+        self.assertIn('surf', result.team[0].moves)
+        self.assertEqual(len(result.known[0].completion_projection_evidence), 10)
+
+    def test_opt_in_impossible_constraints_refuse_without_invented_completion(self):
+        generator = Generator()
+        sampler = PaperHiddenTeamSampler(generator, set_source=SimpleNamespace(species_metadata={}, move_metadata={}),
+            allow_earlier_compatible_template=True)
+        with self.assertRaisesRegex(ReferenceRefusal, 'item_exclusion') as refused:
+            sampler.draw((KnownSetTraits('Snorlax', ruled_out_items=('Leftovers',)),), random.Random(4))
+        self.assertEqual(len(refused.exception.sampling_diagnostic['projection_evidence']), 10)
+        self.assertEqual(sum(c[0]=='set' for c in generator.calls), 10)
+        self.assertFalse(any(c[0]=='party' for c in generator.calls))
+
+    def test_valid_tenth_projection_is_identical_under_opt_in_variant(self):
+        traits = KnownSetTraits('Snorlax', ('Hidden Power Ice','Surf'), item='', gender='F')
+        source = SimpleNamespace(species_metadata={}, move_metadata={})
+        strict = PaperHiddenTeamSampler(Generator(), set_source=source).draw((traits,), random.Random(7))
+        adapted = PaperHiddenTeamSampler(Generator(), set_source=source,
+            allow_earlier_compatible_template=True).draw((traits,), random.Random(7))
+        self.assertEqual(strict, adapted)
+        self.assertEqual(adapted.known[0].completion_template_attempt, 10)
+        self.assertEqual(adapted.team[0].item, '')
 
     def test_generic_public_hidden_power_accepts_typed_generator_set_without_forcing_type(self):
         row = set_row(moves=["hiddenpowerfire", "rest", "icebeam", "sleeptalk"])
@@ -163,6 +224,35 @@ class ReferenceSamplingTests(unittest.TestCase):
 
 
 class ReferenceSetBridgeTests(unittest.TestCase):
+    @requires_showdown()
+    def test_actual_failed_crawdaunt_seed_sequence_uses_latest_valid_projection(self):
+        seeds = [2166772986,2550812790,3896514086,1979801838,2971343644,
+            525443015,2194748183,1741442446,748963093,4030254809]
+        class Rng:
+            def __init__(self): self.index = 0
+            def getrandbits(self, n):
+                value = seeds[self.index] if self.index < 10 else 12345+self.index
+                self.index += 1
+                return value
+        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown_root()))
+        try:
+            source = load_gen3_randbat_source_cached(showdown_root())
+            traits = KnownSetTraits('Crawdaunt', ('Swords Dance','Double-Edge'),
+                item='Leftovers', level=89, gender='F', max_hp=257)
+            strict = PaperHiddenTeamSampler(env, set_source=source)
+            with self.assertRaisesRegex(ReferenceRefusal, '"actual": 256'):
+                strict.draw((traits,), Rng())
+            adapted = PaperHiddenTeamSampler(env, set_source=source, allow_earlier_compatible_template=True)
+            receipt = adapted.draw((traits,), Rng()).known[0]
+            self.assertEqual(receipt.seeds, tuple(seeds))
+            self.assertEqual(receipt.completion_template_attempt, 9)
+            self.assertEqual([e['attempt'] for e in receipt.completion_projection_evidence], [10,9])
+            self.assertEqual(receipt.completion_projection_evidence[0]['mismatches']['max_hp'],
+                {'actual':256,'required':257})
+            self.assertEqual(receipt.completion_projection_evidence[-1]['mismatches'], {})
+        finally:
+            env.close()
+
     def test_invalid_inputs_refuse_without_starting_a_bridge(self):
         env = LocalShowdownEnv()
         try:

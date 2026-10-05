@@ -7,6 +7,12 @@ paper does not specify team-context conditioning: known draws use empty team
 context, unknown draws preserve a generated party's context, and forced sets
 do not promise generator compatibility. Receipts make these choices visible.
 
+An explicitly registered opt-in variant may project earlier templates from
+the SAME ten draws when the tenth violates public HP or other hard facts.
+It selects the latest fully compatible projection without additional draws,
+catalog proposals, invented EVs, or silent relaxation. This is an adaptation,
+not the paper's exact tenth-template rule or a conditional posterior sampler.
+
 Inputs are explicit PUBLIC original-set traits, not a live opponent request.
 Mapping mutated current items/abilities or transformed moves to these traits
 is the root factory's responsibility, not permission to copy private fields.
@@ -15,7 +21,7 @@ This sampler alone does not qualify a root, a study, or playing strength.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 import random
@@ -84,6 +90,8 @@ class KnownDrawReceipt:
     forced: bool
     packed_set_sha256: str
     gender_assigned_after_server_draw: bool = False
+    completion_template_attempt: int | None = None
+    completion_projection_evidence: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -154,6 +162,53 @@ def _move_known_matches(required: str, moves: Sequence[str]) -> bool:
         and any(move.startswith("hiddenpower") for move in moves))
 
 
+def _force_known_traits(candidate: FixturePokemon, traits: KnownSetTraits,
+                        source: Gen3RandbatSource) -> FixturePokemon:
+    required = tuple(next((m for m in candidate.moves if m.startswith("hiddenpower")), "hiddenpower")
+        if canonical_move_id(move) == "hiddenpower" else canonical_move_id(move)
+        for move in traits.moves)
+    moves = (required + tuple(m for m in candidate.moves if m not in required))[:4]
+    candidate = replace(candidate, moves=moves,
+        ability=candidate.ability if traits.ability is None else traits.ability,
+        item=candidate.item if traits.item is None else traits.item,
+        level=candidate.level if traits.level is None else traits.level,
+        gender=candidate.gender if traits.gender is None else traits.gender)
+    spread = _gen3_randbat_fixture_spread({}, species=candidate.species,
+        moves=tuple(candidate.moves), item=candidate.item, level=candidate.level,
+        set_source=source)
+    if spread is None:
+        raise ReferenceRefusal("forced known-set spread cannot be reconstructed")
+    return replace(candidate, evs=spread["evs"], ivs=spread["ivs"])
+
+
+def _projection_evidence(candidate: FixturePokemon, traits: KnownSetTraits,
+                         source: Gen3RandbatSource, attempt: int, seed: int) -> dict[str, Any]:
+    mismatches = {}
+    if canonical_gen3_randbat_species_id(candidate.species) != canonical_gen3_randbat_species_id(traits.species):
+        mismatches["species"] = {"actual": candidate.species, "required": traits.species}
+    missing = [m for m in traits.moves if not _move_known_matches(canonical_move_id(m), candidate.moves)]
+    if missing:
+        mismatches["moves"] = {"actual": candidate.moves, "required": traits.moves}
+    for field, excluded in (("ability", traits.ruled_out_abilities), ("item", traits.ruled_out_items)):
+        actual, required = getattr(candidate, field), getattr(traits, field)
+        if required is not None and _id(actual or "") != _id(required):
+            mismatches[field] = {"actual": actual, "required": required}
+        if _id(actual or "") in {_id(v) for v in excluded}:
+            mismatches[field+"_exclusion"] = {"actual": actual, "excluded": excluded}
+    for field in ("level", "gender"):
+        actual, required = getattr(candidate, field), getattr(traits, field)
+        if field == "gender":
+            actual = actual or "N"
+        if required is not None and actual != required:
+            mismatches[field] = {"actual": actual, "required": required}
+    if traits.max_hp is not None:
+        actual_hp = _maximum_hp(candidate, source)
+        if actual_hp != traits.max_hp:
+            mismatches["max_hp"] = {"actual": actual_hp, "required": traits.max_hp}
+    return {"attempt": attempt, "seed": seed, "mismatches": mismatches,
+        "packed_set_sha256": hashlib.sha256(pack_team((candidate,)).encode()).hexdigest()}
+
+
 class PaperHiddenTeamSampler:
     """One NEW team per call, with no fixed-world cache and no private inputs.
 
@@ -162,8 +217,14 @@ class PaperHiddenTeamSampler:
     has a safety cap: exhausting it refuses, rather than inventing a team.
     """
 
-    def __init__(self, generator: ServerGenerator, *, set_source: Gen3RandbatSource) -> None:
+    def __init__(self, generator: ServerGenerator, *, set_source: Gen3RandbatSource,
+                 allow_earlier_compatible_template: bool = False) -> None:
+        if type(allow_earlier_compatible_template) is not bool:
+            raise ReferenceRefusal("completion adaptation flag must be explicit boolean")
         self.generator, self.set_source = generator, set_source
+        # Opt-in adaptation, NOT the paper's exact tenth-template rule. Preserve
+        # that rule unless the caller explicitly registers the bounded variant.
+        self.allow_earlier_compatible_template = allow_earlier_compatible_template
 
     def draw(self, known: tuple[KnownSetTraits, ...], rng: random.Random) -> HiddenTeamDraw:
         if (not isinstance(known, tuple) or len(known) > 6
@@ -176,8 +237,10 @@ class PaperHiddenTeamSampler:
         receipts = []
         for traits in known:
             seeds = []
-            assigned_gender = False
+            candidates = []
+            genders_assigned = []
             for _ in range(10):
+                assigned_gender = False
                 seed = rng.getrandbits(32)
                 seeds.append(seed)
                 candidate = _fixture(self.generator.generate_reference_set(seed=seed, species=traits.species))
@@ -196,34 +259,34 @@ class PaperHiddenTeamSampler:
                         raise ReferenceRefusal("public gender is incompatible with sampled species")
                     candidate = replace(candidate, gender=traits.gender)
                     assigned_gender = True
+                candidates.append(candidate)
+                genders_assigned.append(assigned_gender)
                 if _matches(candidate, traits, self.set_source):
                     break
             forced = not _matches(candidate, traits, self.set_source)
+            projection_evidence = []
+            selected_attempt = None
             if forced:
-                required = tuple(next((m for m in candidate.moves if m.startswith("hiddenpower")), "hiddenpower")
-                    if canonical_move_id(move) == "hiddenpower" else canonical_move_id(move)
-                    for move in traits.moves)
-                moves = (required + tuple(m for m in candidate.moves if m not in required))[:4]
-                candidate = replace(candidate, moves=moves,
-                    ability=candidate.ability if traits.ability is None else traits.ability,
-                    item=candidate.item if traits.item is None else traits.item,
-                    level=candidate.level if traits.level is None else traits.level,
-                    gender=candidate.gender if traits.gender is None else traits.gender)
-                # Gen 3 Hidden Power and pinch-item HP spreads must track the
-                # forced traits. Do not retain incompatible IVs from the draw.
-                spread = _gen3_randbat_fixture_spread({}, species=candidate.species,
-                    moves=tuple(candidate.moves), item=candidate.item, level=candidate.level,
-                    set_source=self.set_source)
-                if spread is None:
-                    raise ReferenceRefusal("forced known-set spread cannot be reconstructed")
-                candidate = replace(candidate, evs=spread["evs"], ivs=spread["ivs"])
-                if not _matches(candidate, traits, self.set_source):
-                    # Negative facts cannot be invented away or silently
-                    # discarded. No eleventh draw or catalog fallback.
-                    raise ReferenceRefusal("tenth-draw forced completion violates a public original-set trait/exclusion")
+                attempts = range(len(candidates)-1, -1, -1) if self.allow_earlier_compatible_template else (len(candidates)-1,)
+                for index in attempts:
+                    projected = _force_known_traits(candidates[index], traits, self.set_source)
+                    evidence = _projection_evidence(projected, traits, self.set_source, index+1, seeds[index])
+                    projection_evidence.append(evidence)
+                    if _matches(projected, traits, self.set_source):
+                        candidate, selected_attempt = projected, index+1
+                        assigned_gender = genders_assigned[index]
+                        break
+                if selected_attempt is None:
+                    error = ReferenceRefusal("bounded forced completion violates public traits/exclusions: "
+                        + json.dumps(projection_evidence[-1]["mismatches"], sort_keys=True))
+                    error.sampling_diagnostic = {"known_public_traits": asdict(traits), "draw_seeds": seeds,
+                        "allow_earlier_compatible_template": self.allow_earlier_compatible_template,
+                        "projection_evidence": projection_evidence}
+                    raise error
             team.append(candidate)
             receipts.append(KnownDrawReceipt(traits.species, tuple(seeds), forced,
-                hashlib.sha256(pack_team((candidate,)).encode()).hexdigest(), assigned_gender))
+                hashlib.sha256(pack_team((candidate,)).encode()).hexdigest(), assigned_gender,
+                selected_attempt, tuple(projection_evidence)))
         party_seeds = []
         while len(team) < 6:
             if len(party_seeds) >= 10:

@@ -15,6 +15,7 @@ import math
 import multiprocessing as mp
 from multiprocessing.connection import wait
 import os
+import pickle
 import signal
 import time
 import traceback
@@ -64,7 +65,7 @@ def _worker_seed(seed: int, index: int) -> int:
 
 
 def _worker(connection, index, runtime_factory, config):
-    runtime = None
+    runtime, prepared = None, None
     phase, decision = "startup", None
     started = time.perf_counter()
     try:
@@ -85,6 +86,7 @@ def _worker(connection, index, runtime_factory, config):
                 raise ReferenceRefusal("worker received an out-of-order decision command")
             _, decision, request, root, snapshot, seed, limit, deadline = command
             phase = "public_root_preparation"
+            prepared = None
             if snapshot.battle_id != battle_id:
                 battle_id, sequence = snapshot.battle_id, 0
                 search.reset_battle(battle_id)
@@ -115,9 +117,22 @@ def _worker(connection, index, runtime_factory, config):
                     break
             phase = "idle"
     except BaseException as error:
+        failure_evidence = {"sampling_diagnostic": getattr(error, "sampling_diagnostic", None)}
+        try:
+            failure_evidence["partial_batch_evidence"] = (
+                prepared.evidence() if isinstance(prepared, PreparedDecision) else None)
+        except BaseException as evidence_error:
+            # A broken diagnostic sink must not hide the original refusal.
+            failure_evidence["partial_batch_evidence_error"] = str(evidence_error)
+        try:
+            pickle.dumps(failure_evidence)
+        except BaseException as evidence_error:
+            failure_evidence = {"diagnostic_serialization_error":
+                f"{type(evidence_error).__name__}: {evidence_error}"}
         try:
             connection.send(("error", index, decision, phase,
-                f"{type(error).__name__}: {error}", traceback.format_exc()))
+                f"{type(error).__name__}: {error}", traceback.format_exc(),
+                failure_evidence))
         except (BrokenPipeError, EOFError, OSError):
             pass
     finally:
