@@ -187,6 +187,11 @@ class TrajectorySearch:
         self._faint_floor = 0
         self._ordinal = 0
         self._usable = True
+        self._local_statistics = {}
+        self._shared_statistics = {}
+        self._master_version = -1
+        self._exported_statistics = None
+        self._last_master_snapshot = None
 
     def reset_battle(self, battle_id: str) -> None:
         if not isinstance(battle_id, str) or not battle_id:
@@ -195,11 +200,111 @@ class TrajectorySearch:
         self._battle_id = battle_id
         self._faint_floor = self._ordinal = 0
         self._usable = True
+        self._local_statistics.clear()
+        self._shared_statistics.clear()
+        self._master_version = -1
+        self._exported_statistics = None
+        self._last_master_snapshot = None
+
+    def export_statistics(self, *, worker_id: str, sequence: int):
+        from .paper_reference_exchange import WorkerUpdate
+        if not self._usable or self._battle_id is None:
+            raise ReferenceRefusal("cannot export poisoned or unbound worker statistics")
+        message = WorkerUpdate(self._battle_id, worker_id, sequence,
+            tuple(r for _, r in sorted(self._local_statistics.items())
+                  if r.state.faint_count >= self._faint_floor))
+        old = self._exported_statistics
+        if old is not None:
+            if old.worker_id != worker_id or sequence < old.sequence:
+                raise ReferenceRefusal("worker identity/sequence changed before battle reset")
+            old_rows = tuple(r for r in old.rows if r.state.faint_count >= self._faint_floor)
+            if sequence == old.sequence and message.rows != old_rows:
+                raise ReferenceRefusal("same export sequence has different own evidence")
+        self._exported_statistics = message
+        return message
+
+    def merge_statistics(self, snapshot) -> None:
+        from .paper_reference_exchange import MasterSnapshot, _nonregressing
+        if (not isinstance(snapshot, MasterSnapshot) or not self._usable
+                or snapshot.battle_id != self._battle_id
+                or snapshot.faint_floor < self._faint_floor):
+            raise ReferenceRefusal("invalid master/worker battle or faint-floor contract")
+        if snapshot.version < self._master_version:
+            raise ReferenceRefusal("worker cannot roll back to an older master snapshot")
+        if snapshot.version == self._master_version and snapshot != self._last_master_snapshot:
+            raise ReferenceRefusal("same master version has different evidence or metadata")
+        shared = {r.state.key: r for r in snapshot.rows}
+        sent = self._exported_statistics
+        own = {key: row for key, row in self._local_statistics.items()
+               if row.state.faint_count >= snapshot.faint_floor}
+        if own:
+            exported = {} if sent is None else {r.state.key: r for r in sent.rows
+                                               if r.state.faint_count >= snapshot.faint_floor}
+            if own != exported:
+                raise ReferenceRefusal("master merge would overwrite unexported completed work")
+            if dict(snapshot.acknowledged).get(sent.worker_id) != sent.sequence:
+                raise ReferenceRefusal("master has not acknowledged the latest worker contribution")
+        for key, old in self._shared_statistics.items():
+            if old.state.faint_count >= snapshot.faint_floor:
+                if key not in shared:
+                    raise ReferenceRefusal("master discarded unpruned shared evidence")
+                _nonregressing(old, shared[key])
+        for key, local in self._local_statistics.items():
+            if local.state.faint_count >= snapshot.faint_floor:
+                if key not in shared:
+                    raise ReferenceRefusal("master omitted the worker's own completed evidence")
+                _nonregressing(local, shared[key])
+        for key, row in shared.items():
+            self._existing(row.state)
+        # Preserve local priors. Remote known states acquire priors lazily when
+        # encountered; imported evidence is never marked as local work.
+        self.nodes = {key: node for key, node in self.nodes.items()
+                      if node.state.faint_count >= snapshot.faint_floor}
+        for key, node in self.nodes.items():
+            if key in shared:
+                row = shared[key]
+                node.visits[:] = row.visits
+                node.totals[:] = row.totals
+                node.count = row.count
+        self._shared_statistics = shared
+        self._local_statistics = {key: row for key, row in self._local_statistics.items()
+                                  if row.state.faint_count >= snapshot.faint_floor}
+        self._faint_floor = snapshot.faint_floor
+        self._master_version = snapshot.version
+        self._last_master_snapshot = snapshot
+
+    def _discovered(self, node: Node) -> None:
+        from .paper_reference_exchange import Statistics
+        if node.state.key not in self._local_statistics:
+            self._local_statistics[node.state.key] = Statistics(node.state,
+                (0,) * len(node.priors), (0.,) * len(node.priors), 0)
+
+    def _own_backup(self, node: Node, index: int, value: float) -> None:
+        from .paper_reference_exchange import Statistics
+        self._discovered(node)
+        old = self._local_statistics[node.state.key]
+        visits, totals = list(old.visits), list(old.totals)
+        visits[index] += 1
+        totals[index] += value
+        self._local_statistics[node.state.key] = Statistics(node.state,
+            tuple(visits), tuple(totals), old.count + 1)
+
+    def _node_from_evaluation(self, state: DecisionState, evaluation: Evaluation) -> Node:
+        node = Node.from_evaluation(state, evaluation)
+        row = self._shared_statistics.get(state.key)
+        if row is not None:
+            if row.state != state:
+                raise ReferenceRefusal("remote information-state identity changed")
+            node.visits[:], node.totals[:], node.count = row.visits, row.totals, row.count
+        return node
 
     def _existing(self, state: DecisionState) -> Node | None:
         node = self.nodes.get(state.key)
         if node is not None and node.state != state:
             raise ReferenceRefusal("information-state key aliased different legal actions or faint count")
+        shared = self._shared_statistics.get(state.key)
+        if shared is not None and shared.state != state:
+            raise ReferenceRefusal("imported information-state key aliased different actions or faint count")
         return node
 
     def _trajectory(self, world: World, root: DecisionState,
@@ -224,9 +329,14 @@ class TrajectorySearch:
                 node = self._existing(state)
                 if node is None:
                     evaluation = world.evaluate(state)
-                    leaf = Node.from_evaluation(state, evaluation)
-                    value = _value(evaluation.value)
-                    break
+                    node = self._node_from_evaluation(state, evaluation)
+                    if state.key not in self._shared_statistics:
+                        leaf = node
+                        value = _value(evaluation.value)
+                        break
+                    # Another worker already expanded this information state.
+                    # Recompute P locally, but keep traversing its shared tree.
+                    self.nodes[state.key] = node
                 index = node.select(self.config)
                 subject_action = state.actions[index]
                 path.append((node, index))
@@ -250,11 +360,13 @@ class TrajectorySearch:
             return transitions, False
         if leaf is not None:
             self.nodes[leaf.state.key] = leaf
+            self._discovered(leaf)
         # Sampled trajectory mean, NOT exact chance expectation or sign-alternating minimax.
         for node, index in path:
             node.visits[index] += 1
             node.totals[index] += value
             node.count += 1
+            self._own_backup(node, index, value)
         return transitions, True
 
     def search(self, root: DecisionState, *, battle_id: str,
@@ -278,10 +390,15 @@ class TrajectorySearch:
             self._faint_floor = root.faint_count
             self.nodes = {key: node for key, node in self.nodes.items()
                           if node.state.faint_count >= self._faint_floor}
+            self._shared_statistics = {key: row for key, row in self._shared_statistics.items()
+                                      if row.state.faint_count >= self._faint_floor}
+            self._local_statistics = {key: row for key, row in self._local_statistics.items()
+                                     if row.state.faint_count >= self._faint_floor}
             node = self._existing(root)
             if node is None:
-                node = Node.from_evaluation(root, evaluate_root(root))
+                node = self._node_from_evaluation(root, evaluate_root(root))
                 self.nodes[root.key] = node
+                self._discovered(node)
             for _ in range(trajectories):
                 if expired():
                     break

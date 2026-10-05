@@ -51,7 +51,7 @@ is an information deviation from percentage-only server observations and must
 be shared and disclosed across comparison arms. Pending Baton Pass commitments
 still refuse: the existing deferred-prior argmax shortcut is not policy sampling.
 
-Verification so far: 53 focused tests pass without skips. A local fixed-team
+Verification so far: 69 focused tests pass without skips. A local fixed-team
 real Showdown/champion smoke completed eight trajectories and 11 simulator
 transitions, using 27 neural forwards and retaining nine nodes. It exercises
 the adapter, NOT fresh hidden sampling, matched timing or strength. An initial
@@ -67,14 +67,37 @@ before choices had run. A real-simulator regression now proves a move actually
 executes after materialization and reseeding.
 
 The bounded correctness preflight kept all 32 original source identities and
-verified their canonical source bytes again after execution. Thirty positions
-completed four fresh-world trajectories each; positions 29 and 31 refused
-because the Showdown materializer cannot restore their sleep counters. Five of
-240 sampled known sets required forced completion. These are correctness
-counts, not matched timing or strength evidence. Earlier diagnostic passes and
-their failures are preserved outside the repository; no source roots were
-replaced. The latest preflight took 5.584 seconds including its live prefix
-replays, not including model loading.
+verified their canonical source bytes again after execution. All 32 now complete
+four fresh-world trajectories each. The last two refusals were Articuno asleep
+after its own Rest; an explicit reference-only opt-in now reconstructs its exact
+timer from the public Rest attempt, prior-refund and trailing Sleep Talk counts.
+Current skipped time is preserved separately until the next switch-in. Unknown
+induced sleep, unsettled history and contradictory counts still refuse. The
+default materializer is unchanged. Custom fixtures must prove nickname-free
+identities, because nicknames can otherwise silently swap species-based timers.
+
+Six focused Rest tests include real-server wake timing, Early Bird, benched
+refunds, Sleep Clause exemption and a nickname collision regression. Independent
+review reproduced the collision, then confirmed that the repaired guard refuses
+before resetting the destination world. The earlier two-root refusal receipt is
+preserved; neither position was replaced.
+
+The latest all-root preflight completed 128 trajectories in 6.101 seconds,
+including live prefix replays but excluding model loading. Five of 252 sampled
+known sets required forced completion. These are correctness counts, not matched
+timing or strength evidence. All earlier diagnostic receipts remain unchanged.
+
+The worker exchange protocol now carries cumulative own Q/N/M/F contributions,
+never imported evidence or neural priors. Master aggregation is idempotent and
+validated before mutation. Worker acknowledgements prevent an old shared tree
+from erasing newly completed local work; unchanged visit counts cannot revise
+already-counted values. Remote priors are recomputed on first local encounter,
+without treating a remotely expanded node as a new leaf. Real faint counts prune
+both shared and local statistics. Ten protocol tests include two logical workers
+exchanging after ten rollouts and regression tests for issues found and verified
+by an independent reviewer. This is protocol verification only: the actual
+20-process execution layer and resource-matched timing comparison are not yet
+implemented or qualified.
 
 The broader 119-test simulator/replay/scenario/telemetry suite exited 1 with one
 scenario provenance error: its committed fixture expects source hash
@@ -83,18 +106,20 @@ isolated test fails on the pre-reference repair worktree. This pre-existing
 runtime/fixture mismatch is not treated as successful verification or repaired
 by changing the fixture's attestation.
 
+After these changes, the 109 simulator/replay/telemetry tests (excluding that
+known scenario-source mismatch) pass without skips in 34.621 seconds. The
+119-test result remains a failure, not a green full-suite claim.
+
 ## Work still required before comparison
 
-1. Restore the two retained Rest-sleep roots from their public timer provenance,
-   with simulator regression tests; keep their earlier refusals intact.
-2. Certify pending committed actions without looking at live private data and
+1. Certify pending committed actions without looking at live private data and
    audit public inference constraints and sampler accounting independently.
-3. Incremental worker-statistics exchange without double-counting old samples.
-   Current execution is single-worker, not the paper's 20-worker protocol.
-4. Register one justified alpha/beta choice (the thesis does not publish its
+2. Build and verify the actual 20-worker execution layer using the tested exchange
+   protocol. Current simulator execution remains single-worker.
+3. Register one justified alpha/beta choice (the thesis does not publish its
    selected numbers), the current Gen 3/champion representation deviation,
    resource accounting, fixed work and full decision-boundary deadlines.
-5. Run the retained all-root raw/incumbent/reference comparison under a new
+4. Run the retained all-root raw/incumbent/reference comparison under a new
    bounded manifest, preserving failures and source-battle clustering. Use
    continuations/action quality and bounded matchups to judge improvement,
    not just changed actions or a successful implementation test.
