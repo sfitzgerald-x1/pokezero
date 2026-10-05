@@ -138,7 +138,7 @@ Showdown commit is `f76228a1354b5d0f307ca2d16101294ad3a2308b` and generator hash
 `f5a5265143d423af`. Native incumbent, model export, encoder, roster, driver and
 source inputs are pinned in the immutable registrations and readouts.
 
-Local evidence lives under `/Users/scott/Documents/New project/reports/`:
+The owner's local experiment report directory retains the immutable evidence:
 
 - Original `paper-reference-comparison-20261005-r1/READOUT.json`, SHA-256
   `e7cb3476cd3423c78e73adeb72482dc915333229d0138b53c663684d2544e30b`.
