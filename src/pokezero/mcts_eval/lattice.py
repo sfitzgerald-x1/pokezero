@@ -245,6 +245,19 @@ def time_lattice_cell(
     )
 
 
+def _policy_opponent_config_kwargs(enabled: bool, seed: int | None) -> dict[str, Any]:
+    """Explicit experimental arm; leave incumbent configuration shape intact."""
+    if type(enabled) is not bool:
+        raise ValueError("policy_opponent must be a boolean")
+    if not enabled:
+        if seed is not None:
+            raise ValueError("policy_opponent_seed requires policy_opponent")
+        return {}
+    if type(seed) is not int or not 0 <= seed < 2**64:
+        raise ValueError("policy_opponent requires an explicit unsigned 64-bit seed")
+    return {"policy_opponent": True, "policy_opponent_seed": seed, "strict_fallbacks": True}
+
+
 class _LiveEngineTimingDecider:
     """Replay one corpus record into the genuine model-backed engine policy.
 
@@ -287,6 +300,9 @@ class _LiveEngineTimingDecider:
         model_priors: bool = True,
         use_opponent_priors: bool = False,
         override_telemetry: bool = False,
+        policy_opponent: bool = False,
+        policy_opponent_seed: int | None = None,
+        record_joint_actions: bool = False,
         rollout_leaf_eval: bool = False,
         rollout_count: int = 32,
         rollout_max_plies: int = 200,
@@ -301,6 +317,9 @@ class _LiveEngineTimingDecider:
         from ..local_showdown import LocalShowdownConfig, LocalShowdownEnv
         from ..randbat import load_gen3_randbat_source_cached
 
+        opponent_kwargs = _policy_opponent_config_kwargs(policy_opponent, policy_opponent_seed)
+        if policy_opponent and (not model_priors or use_opponent_priors or rollout_leaf_eval):
+            raise ValueError("policy opponent profile requires subject priors, no auxiliary opponent priors or rollout leaves")
         if model_decision_time_ms is not None and model_decision_time_ms <= 0:
             raise ValueError("model_decision_time_ms must be positive when set")
         if (
@@ -322,7 +341,7 @@ class _LiveEngineTimingDecider:
             raise ValueError("model_world_workers must be positive")
         if not all(
             isinstance(value, bool)
-            for value in (model_priors, use_opponent_priors, override_telemetry)
+            for value in (model_priors, use_opponent_priors, override_telemetry, record_joint_actions)
         ):
             raise ValueError(
                 "model_priors, use_opponent_priors, and override_telemetry must be booleans"
@@ -342,6 +361,9 @@ class _LiveEngineTimingDecider:
         # for the already-supported root-allocation witness without widening the
         # default replay contract.
         self._override_telemetry = override_telemetry
+        self._record_joint_actions = record_joint_actions
+        self._policy_opponent_kwargs = {**opponent_kwargs,
+            **({"strict_fallbacks": True} if record_joint_actions else {})}
         # The source-root leaf ablation uses the existing model-prior rollout
         # seam.  Keep every knob explicit here, rather than letting a caller
         # bolt an unregistered leaf value onto the timing adapter.  Production
@@ -403,6 +425,7 @@ class _LiveEngineTimingDecider:
                 model_priors=self._model_priors,
                 use_opponent_priors=self._use_opponent_priors,
                 override_telemetry=self._override_telemetry,
+                record_joint_actions=getattr(self, "_record_joint_actions", False),
                 early_stop=False,
                 model_decision_time_ms=self._model_decision_time_ms,
                 model_native_batch_guard_ms=self._model_native_batch_guard_ms,
@@ -414,6 +437,7 @@ class _LiveEngineTimingDecider:
                 rollout_seed=self._rollout_seed,
                 rollout_threads=self._rollout_threads,
                 rollout_threads_cpu_budget_ack=self._rollout_threads_cpu_budget_ack,
+                **getattr(self, "_policy_opponent_kwargs", {}),
             ),
             policy_id=f"mcts-timing-{config.config_id}",
             annotation_source=self._annotation_source,
@@ -775,6 +799,8 @@ class _LiveEngineTimingDecider:
                 "engine_mcts": dict(
                     (getattr(decision, "metadata", {}) or {}).get("engine_mcts", {})
                 ),
+                **({"raw_policy": dict(decision.metadata["raw_policy"])}
+                   if "raw_policy" in (getattr(decision, "metadata", {}) or {}) else {}),
             }
 
         return timed_decision

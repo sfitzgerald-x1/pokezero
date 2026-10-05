@@ -1,0 +1,1651 @@
+{
+  "schema_version": "pokezero.paper-policy-opponent-roster.v1",
+  "status": "FROZEN_SELECTION_PENDING_REPLAY_AND_COVERAGE_QUALIFICATION",
+  "source_cohort": "mcts-guided-raw-df5-20260930-pilot-r3",
+  "source_shard": "s0",
+  "source_terminal_sha256": "dde2d620c973cd330014b853bfb29ea0a1960b07fbfa6e7773059f8903c96f78",
+  "selection_rule": {
+    "paired_seeds": [
+      2026100100,
+      2026100101,
+      2026100102,
+      2026100103,
+      2026100104,
+      2026100105,
+      2026100106,
+      2026100107
+    ],
+    "seats": [
+      "p1",
+      "p2"
+    ],
+    "decision_indices": [
+      0,
+      9
+    ],
+    "selected_without_candidate_actions_or_outcomes": true
+  },
+  "planned_comparison_arms": [
+    "raw_policy",
+    "incumbent_mcts",
+    "own_policy_opponent_mcts"
+  ],
+  "profile_roots": [
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "5d8c3c8c72b4134ca55e705f811d0cf872b2c9e19e04140556b2e7765d6939bd",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-000-5d8c3c8c72b4134ca55e705f811d0cf872b2c9e19e04140556b2e7765d6939bd.json",
+      "source_file_sha256": "7a77865603bf90c9dac70fe1f338e501f30e69e5c15b0a762b4cc99d2b4448c3"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 9,
+      "decision_id": "73ce811aae82bada972bb91ea82b564f5698949bfcd9eb67838b23f25ab91a61",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-009-73ce811aae82bada972bb91ea82b564f5698949bfcd9eb67838b23f25ab91a61.json",
+      "source_file_sha256": "1af87baa89bb36622f1721f11606c7ce08e80fe159bc5e75c6cb72398f10637a"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "599a0d9d5df3c55a83a4deadaed3b63e0635b27f0fc5320b3ea32a985eb98a31",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-000-599a0d9d5df3c55a83a4deadaed3b63e0635b27f0fc5320b3ea32a985eb98a31.json",
+      "source_file_sha256": "fbd193c7d77ebf196ce40e7471cc79ca817853d68b2b0a5ec19a7381ad3765b1"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 9,
+      "decision_id": "23ca14d264ae1956e7e7c9fc8417e57f0361769409ca8c8a1345f51966d39822",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-009-23ca14d264ae1956e7e7c9fc8417e57f0361769409ca8c8a1345f51966d39822.json",
+      "source_file_sha256": "5786b74414294838f246587efb0dc6ed400f1f140eebe3652ef487e66b93421b"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "1e65cb6aa2eca973b117ca4e30974b04e169bd20e9187303997438f8bc56d739",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-000-1e65cb6aa2eca973b117ca4e30974b04e169bd20e9187303997438f8bc56d739.json",
+      "source_file_sha256": "d238f877474b9819fe6129eed4309baff62a7c9b99dad4b5ee4c7f0ae3aaa173"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 9,
+      "decision_id": "31bf6e8e4a851f47aa7aa8db687b39026d477546dc47e4d1c73866491eed0977",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-009-31bf6e8e4a851f47aa7aa8db687b39026d477546dc47e4d1c73866491eed0977.json",
+      "source_file_sha256": "cf6b1022557344c7997670ba2222dc5162e4372d8f487d320ff2ab046309eebe"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "be702210b2be3a09c3ede2409a8740b1ee94068095a35f650c1fd2a57cb521a6",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-000-be702210b2be3a09c3ede2409a8740b1ee94068095a35f650c1fd2a57cb521a6.json",
+      "source_file_sha256": "142f18c326da1c0852940e94c2bbd45bb6b3aac0542a51f718e330147964f80e"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 9,
+      "decision_id": "55158939b755814c634f3849d80d5859fdaa1f16052007c91f6d2f76d03447b8",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-009-55158939b755814c634f3849d80d5859fdaa1f16052007c91f6d2f76d03447b8.json",
+      "source_file_sha256": "cb318941faf38b006457a887544f3a6b89baa2cfbee2205ae0940657f5d37383"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "a5c6cfd43d4d1710d6bae379ba857dd169ae3aa90c86913ba93fb63b77cc667a",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-000-a5c6cfd43d4d1710d6bae379ba857dd169ae3aa90c86913ba93fb63b77cc667a.json",
+      "source_file_sha256": "0f09bc6519b3155f3fcb3a3be509dd6a7be38e714d67b600910f4f97cc82743e"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 9,
+      "decision_id": "90eddbf63de1cc8c9382cafc08f32f64eae8e5e335ea7bcb09b1c8a815eca542",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-009-90eddbf63de1cc8c9382cafc08f32f64eae8e5e335ea7bcb09b1c8a815eca542.json",
+      "source_file_sha256": "1f6e132651172b0b11517643211d85997f60765c13c3f27b46c6fe622479916e"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "0b7f5f83fc64622d7b09a2a67a669f1dd01e0cfdbfb4ea466f26a6f9f6cdf6f6",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-000-0b7f5f83fc64622d7b09a2a67a669f1dd01e0cfdbfb4ea466f26a6f9f6cdf6f6.json",
+      "source_file_sha256": "eb64a43acc34cbd99e42411dd6fdd963d11e9231159cd6d1c12df777e9e9d4a3"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 9,
+      "decision_id": "ba71f4f7c153ad44bbdee598c1fef9dc06377b83b0f31420ad7b74d68779dcef",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-009-ba71f4f7c153ad44bbdee598c1fef9dc06377b83b0f31420ad7b74d68779dcef.json",
+      "source_file_sha256": "44497634e8f997afbdb8bdc5cc9a638dec4b8bb6588c83a4edb65df9c773b319"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "24848d63b477b6e0a811940eabd52ea8a7dd4ebbec2bf33e77485547bd7e0d06",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-000-24848d63b477b6e0a811940eabd52ea8a7dd4ebbec2bf33e77485547bd7e0d06.json",
+      "source_file_sha256": "b3e896eece2d27818919fc38340bd9f7ac5b99a7f61283c9320a1bd5eb0cf4e5"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 9,
+      "decision_id": "0d798c547e9ebb0700aa6c2449204a9d69c06d56944007c26d0659812bd5d614",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-009-0d798c547e9ebb0700aa6c2449204a9d69c06d56944007c26d0659812bd5d614.json",
+      "source_file_sha256": "eee5ab1ce70775aece4ef0c4544613d0ce1e94a588e16a57f50a276ed97db676"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "43e3efad7bc060a39e065eda8f6b1b0cf237eeaef783091725af562b336acef5",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-000-43e3efad7bc060a39e065eda8f6b1b0cf237eeaef783091725af562b336acef5.json",
+      "source_file_sha256": "7b1e82584b53a6e503fbfc6f0f57866457d4b126df4f62c50a400d6c9ea14053"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 9,
+      "decision_id": "4503c1e1b27048cd1a36b0a95f03609ad56a46f76a238de5098fe4a0324d409e",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-009-4503c1e1b27048cd1a36b0a95f03609ad56a46f76a238de5098fe4a0324d409e.json",
+      "source_file_sha256": "c1c2eb8a7356af26634a2f133205bba60d06c832b4fa007ca5981c6ed0fc2265"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "8edcad9ee1127a42091272c2912cccfbb60f132e50207f0d50b43e5e63d8aa4f",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-000-8edcad9ee1127a42091272c2912cccfbb60f132e50207f0d50b43e5e63d8aa4f.json",
+      "source_file_sha256": "9f1c61ab5a9f537d76ac231d42c1fe16b2d3676d3eabbb9d20dd3639d7957f60"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 9,
+      "decision_id": "47f7fff8327916ff6ab770f0e33f183cc967c9e8edc018791a7e13b02eb464aa",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-009-47f7fff8327916ff6ab770f0e33f183cc967c9e8edc018791a7e13b02eb464aa.json",
+      "source_file_sha256": "0058ce9329cfccf321173402990e504235509f62c0d5a615e84802382cb7fe62"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "858fade3ac0460fe65593033d889ee0d06316855111d7bb588f33ec65600b0ca",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-000-858fade3ac0460fe65593033d889ee0d06316855111d7bb588f33ec65600b0ca.json",
+      "source_file_sha256": "4d9d360c8adcb361257d215169f9be51d7aed15bf93ad5e4a6010fe3b3e76ca1"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 9,
+      "decision_id": "d81daca99c6b1c0ff42357f84c9b1676706bd001afd8fe37dbddf87b20650a67",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-009-d81daca99c6b1c0ff42357f84c9b1676706bd001afd8fe37dbddf87b20650a67.json",
+      "source_file_sha256": "9afe17f2a25600c90fa340cb688e28a9585e1718e4e60b6eb0db08b4e0ddc011"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "b2d776722d0d9082e0cdead5ae34b1db0ed16da9a730da15ec11d0ff679ed6d9",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-000-b2d776722d0d9082e0cdead5ae34b1db0ed16da9a730da15ec11d0ff679ed6d9.json",
+      "source_file_sha256": "44de1f12d4143f0ccf0a41497d231f3a2581b193611e6144c6c45399562db82a"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 9,
+      "decision_id": "2fa5a1af930e85ab99f40cd097144407315ab31559034099f9f04b895e077d11",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-009-2fa5a1af930e85ab99f40cd097144407315ab31559034099f9f04b895e077d11.json",
+      "source_file_sha256": "93a796832f2923fc01f829a414e4c7f63daaa1d20d528401ffeb98fdd515b654"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "498be6934c7d285c59bc03a17761193bd7e52df0bbbadef4526ba6081bcdb0f7",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-000-498be6934c7d285c59bc03a17761193bd7e52df0bbbadef4526ba6081bcdb0f7.json",
+      "source_file_sha256": "36182e7d8cf2187c02f5bc0b85ad009175301bf90348d1817da7ce4ef4548505"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 9,
+      "decision_id": "4a59eec4316715c9522a3a52270279a715db96f95953573c7f5f57de3fbf5796",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-009-4a59eec4316715c9522a3a52270279a715db96f95953573c7f5f57de3fbf5796.json",
+      "source_file_sha256": "64f76b72f2181db135188fdff2a67daf2a9dc0077d601d8fb0fa63bc758bf82d"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "bcd806ed71d6d079f0ac149d6d323cd9254c33faaebbd0e10bfa943e3744d4d6",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-000-bcd806ed71d6d079f0ac149d6d323cd9254c33faaebbd0e10bfa943e3744d4d6.json",
+      "source_file_sha256": "3dfcd0e938361f105b5a46d3983855145b3901711525cf37b7b527b58a9cd42a"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 9,
+      "decision_id": "a7f3251c1922343b6d60a1286c3a43e46f3c58471fcde85ae068cd325372a34f",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-009-a7f3251c1922343b6d60a1286c3a43e46f3c58471fcde85ae068cd325372a34f.json",
+      "source_file_sha256": "4925acbe1aee61becaa450bf965ff1987f15cb989a0425f795b3bee3f23eb520"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "cfae55f9ab973a7a88fe686653118b98610364cf7630773bf498467d78e75074",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-000-cfae55f9ab973a7a88fe686653118b98610364cf7630773bf498467d78e75074.json",
+      "source_file_sha256": "ab4dfb68eb1f85750e3e21405ac5f60900607cde026624371ef0e471a8803fcf"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 9,
+      "decision_id": "4713e00b628747119f39070bb41ee4abbb4c248756e77b7eed2880a17f0f635f",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-009-4713e00b628747119f39070bb41ee4abbb4c248756e77b7eed2880a17f0f635f.json",
+      "source_file_sha256": "986fe61f3a3aea10d4e3f530009f48266a5022254e57d06ea51dab375b4acf52"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "9084e5e51575fb2b6593ce3292a7b29d55441e0043c39bb49f8602c7c9f93b95",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-000-9084e5e51575fb2b6593ce3292a7b29d55441e0043c39bb49f8602c7c9f93b95.json",
+      "source_file_sha256": "38ebf2e3be8af0640757c576a002d0440c781095efc981ab9223e4ae82411586"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 9,
+      "decision_id": "42182d2afe0d1888b48bc7f2c2e558f2a49526ff9397e8648c29469a1080c444",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-009-42182d2afe0d1888b48bc7f2c2e558f2a49526ff9397e8648c29469a1080c444.json",
+      "source_file_sha256": "9f59145b726a6e81fd689f2316fe52fecc7c14f7ba5807dd067021543dea8b5e"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "a1bcd7626021a17d0dbdfeda8500c579725d98bce0bc2b2ecbe7d134042d8015",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-000-a1bcd7626021a17d0dbdfeda8500c579725d98bce0bc2b2ecbe7d134042d8015.json",
+      "source_file_sha256": "a61084c3937cfd540af371945ba92e19e669dedf351580fef5164ee5ac6d6681"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 9,
+      "decision_id": "ec22262fc88ef861fbdfd78ac77ede4084615d93d32a6e0fbed62d46cc5ae9b0",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-009-ec22262fc88ef861fbdfd78ac77ede4084615d93d32a6e0fbed62d46cc5ae9b0.json",
+      "source_file_sha256": "51eee4fc12286629cac42cdcb240f6013bac3bb1b82de8761109f52af4e3dfed"
+    }
+  ],
+  "proposed_continuation_root_ids": [
+    "73ce811aae82bada972bb91ea82b564f5698949bfcd9eb67838b23f25ab91a61",
+    "23ca14d264ae1956e7e7c9fc8417e57f0361769409ca8c8a1345f51966d39822",
+    "31bf6e8e4a851f47aa7aa8db687b39026d477546dc47e4d1c73866491eed0977",
+    "55158939b755814c634f3849d80d5859fdaa1f16052007c91f6d2f76d03447b8",
+    "90eddbf63de1cc8c9382cafc08f32f64eae8e5e335ea7bcb09b1c8a815eca542",
+    "ba71f4f7c153ad44bbdee598c1fef9dc06377b83b0f31420ad7b74d68779dcef",
+    "0d798c547e9ebb0700aa6c2449204a9d69c06d56944007c26d0659812bd5d614",
+    "4503c1e1b27048cd1a36b0a95f03609ad56a46f76a238de5098fe4a0324d409e",
+    "47f7fff8327916ff6ab770f0e33f183cc967c9e8edc018791a7e13b02eb464aa",
+    "d81daca99c6b1c0ff42357f84c9b1676706bd001afd8fe37dbddf87b20650a67",
+    "2fa5a1af930e85ab99f40cd097144407315ab31559034099f9f04b895e077d11",
+    "4a59eec4316715c9522a3a52270279a715db96f95953573c7f5f57de3fbf5796",
+    "a7f3251c1922343b6d60a1286c3a43e46f3c58471fcde85ae068cd325372a34f",
+    "4713e00b628747119f39070bb41ee4abbb4c248756e77b7eed2880a17f0f635f",
+    "42182d2afe0d1888b48bc7f2c2e558f2a49526ff9397e8648c29469a1080c444",
+    "ec22262fc88ef861fbdfd78ac77ede4084615d93d32a6e0fbed62d46cc5ae9b0"
+  ],
+  "prefix_witnesses": [
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "5d8c3c8c72b4134ca55e705f811d0cf872b2c9e19e04140556b2e7765d6939bd",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-000-5d8c3c8c72b4134ca55e705f811d0cf872b2c9e19e04140556b2e7765d6939bd.json",
+      "source_file_sha256": "7a77865603bf90c9dac70fe1f338e501f30e69e5c15b0a762b4cc99d2b4448c3"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 1,
+      "decision_id": "e61405a059d8d788edb64157c075b38c9a835632aa774bc4be5db035db3eb739",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-001-e61405a059d8d788edb64157c075b38c9a835632aa774bc4be5db035db3eb739.json",
+      "source_file_sha256": "0c55f0eef832c79fd87fd447bc2458a2a67fc875c1881e9980f6a260c6ba3629"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 2,
+      "decision_id": "acdc282d31e3da7d02e473d26fa312bb2524ebe95791392d0ce8284f6c0618fe",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-002-acdc282d31e3da7d02e473d26fa312bb2524ebe95791392d0ce8284f6c0618fe.json",
+      "source_file_sha256": "457ffd6fff493ded04878802ac66cd8675440f53fb0b126e62d3fc717c0bd69b"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 3,
+      "decision_id": "56b7e8dd535134899ed3835588a8a2f14539c2048ebe91a88d4723eda0f26882",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-003-56b7e8dd535134899ed3835588a8a2f14539c2048ebe91a88d4723eda0f26882.json",
+      "source_file_sha256": "ae2e4a3754689cd2a49c38093aaf31c91f9d87ecb2fc5a8b188b025c80e56f0c"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 4,
+      "decision_id": "90f9a4a7d3215b8480621fbfb606c9c08b0004f0bf9038f23c821facc34abb6a",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-004-90f9a4a7d3215b8480621fbfb606c9c08b0004f0bf9038f23c821facc34abb6a.json",
+      "source_file_sha256": "1f6ca8c9b499de539fc2949d19d6da6a89b6f657dc042b4350fe6b2f1444086f"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 5,
+      "decision_id": "b19f5cb2b563dcaa0e4de4dda35e7b87b46753cb5764b3e513f7b5b87d25b7c7",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-005-b19f5cb2b563dcaa0e4de4dda35e7b87b46753cb5764b3e513f7b5b87d25b7c7.json",
+      "source_file_sha256": "b49bc5b170fcaf1565be589554144ed82d7fe151fee3f0f69c12bc09e69a6bcc"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 7,
+      "decision_id": "bb98b58696f6aa5a9b02f52b20db95029df7fdc6f385c7df7a4cedfe77d9202b",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-007-bb98b58696f6aa5a9b02f52b20db95029df7fdc6f385c7df7a4cedfe77d9202b.json",
+      "source_file_sha256": "a4f6cda24ecdaaaad283adabef6043d581b2767035f17993fe01686db62305f3"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "turn_index": 8,
+      "decision_id": "b62a3668678f088ffef0d100e526d1215b889c03f9a9289dd65b3942524ec444",
+      "battle_id": "mcts-h2h-2026100100-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p1/turn-008-b62a3668678f088ffef0d100e526d1215b889c03f9a9289dd65b3942524ec444.json",
+      "source_file_sha256": "ed2cc05b88b742aaf9b3c8c87f919dd8a4439e2341734d47481304276eaaed35"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "599a0d9d5df3c55a83a4deadaed3b63e0635b27f0fc5320b3ea32a985eb98a31",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-000-599a0d9d5df3c55a83a4deadaed3b63e0635b27f0fc5320b3ea32a985eb98a31.json",
+      "source_file_sha256": "fbd193c7d77ebf196ce40e7471cc79ca817853d68b2b0a5ec19a7381ad3765b1"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 1,
+      "decision_id": "daf1ebc2e5292be3e462342b85fb9479a5fffc62efb50395527cb06fa3edefd9",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-001-daf1ebc2e5292be3e462342b85fb9479a5fffc62efb50395527cb06fa3edefd9.json",
+      "source_file_sha256": "c505cdd6d61160d5f4a1f37a3a885184fea72d9a56f0717bb78d242bca4cd4db"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 2,
+      "decision_id": "4977c6e65689f637efa52a598661da1c1845d664596ba250a4169e4d44f6cf1d",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-002-4977c6e65689f637efa52a598661da1c1845d664596ba250a4169e4d44f6cf1d.json",
+      "source_file_sha256": "3c94603f789b67dfd96b005ab7e8713006c3df59eab3f3ba745d23d157f2dbef"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 3,
+      "decision_id": "f3594acbbda10a6c21e12edec9c81cde876b4a6c1ef3db1bc1605309d27e20ce",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-003-f3594acbbda10a6c21e12edec9c81cde876b4a6c1ef3db1bc1605309d27e20ce.json",
+      "source_file_sha256": "e34476b96553cc515eaa493519fd84bc0a06def0bbe4e37c02c862750eec129c"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 4,
+      "decision_id": "66c38b32ca835ad3d23dfa30a9c42c262cefeaa8da0b9556ec35789c811562e6",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-004-66c38b32ca835ad3d23dfa30a9c42c262cefeaa8da0b9556ec35789c811562e6.json",
+      "source_file_sha256": "8336550c550937591931439a309d7b190f0b53a5eb3d35f2dd9ee89a8e04839b"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 5,
+      "decision_id": "07cdb0319e6c4bfe85677f900c6b853a92077a85e8822d72c0a99a0fd81b83c7",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-005-07cdb0319e6c4bfe85677f900c6b853a92077a85e8822d72c0a99a0fd81b83c7.json",
+      "source_file_sha256": "8bb2537f90c49c2d681251ba9e64df008817d1dcf5986b45a9b2b88b096d8b37"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 6,
+      "decision_id": "1306d3e4c6779bc407279a939265338589b14bd5e4b705d61993d1b40cb99bfb",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-006-1306d3e4c6779bc407279a939265338589b14bd5e4b705d61993d1b40cb99bfb.json",
+      "source_file_sha256": "b02a2d22597f21a0d50fd338fdd381f10884977800724d43155e83b91968d0fa"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 7,
+      "decision_id": "0fb91a024842ef5cc8bbf1205cda8e9b034e31d7f964e95ad3a5fce64c4aa696",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-007-0fb91a024842ef5cc8bbf1205cda8e9b034e31d7f964e95ad3a5fce64c4aa696.json",
+      "source_file_sha256": "cd51bbba50751beffe041d464ce7ff0571d9508fcefcd8d6c381da3111fb6574"
+    },
+    {
+      "seed": 2026100100,
+      "seat": "p2",
+      "turn_index": 8,
+      "decision_id": "3515bfb411b33b5e5b13916e0864c1065877c1e2dcfeea0a515610b305c617ba",
+      "battle_id": "mcts-h2h-2026100100-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100100-p2/turn-008-3515bfb411b33b5e5b13916e0864c1065877c1e2dcfeea0a515610b305c617ba.json",
+      "source_file_sha256": "ffe7adc62a7dfde0634c5afd9225b17b3e23d2011fc2063ec62a2b5337bed14d"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "1e65cb6aa2eca973b117ca4e30974b04e169bd20e9187303997438f8bc56d739",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-000-1e65cb6aa2eca973b117ca4e30974b04e169bd20e9187303997438f8bc56d739.json",
+      "source_file_sha256": "d238f877474b9819fe6129eed4309baff62a7c9b99dad4b5ee4c7f0ae3aaa173"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 1,
+      "decision_id": "e525d5fa2382b7161e4ef376e51a550765b3107951abdf7f284d41b606c77b95",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-001-e525d5fa2382b7161e4ef376e51a550765b3107951abdf7f284d41b606c77b95.json",
+      "source_file_sha256": "edbf61620e61fd4b8001ebb80bf51cc89a8657fa2e46cf3bdeabaef8ba1bec0a"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 2,
+      "decision_id": "5054ff61321b0f622b329096f0069af149271b646a70f2529d9f28e2140f5da1",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-002-5054ff61321b0f622b329096f0069af149271b646a70f2529d9f28e2140f5da1.json",
+      "source_file_sha256": "4c3cbd3f67987b018dc0b083bf87549ec243d9c7ec482cebc4cab178320379b1"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 3,
+      "decision_id": "3784caa2b611e150472c620ac35246605415d560999619d0fab8ae8f0baf385d",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-003-3784caa2b611e150472c620ac35246605415d560999619d0fab8ae8f0baf385d.json",
+      "source_file_sha256": "19b1bf5199c226e0db1fb5119d4db555f59ce0541c799cf900a6a67e017d159e"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 4,
+      "decision_id": "ef27500f966082d4ae524409292425450b1f5805bace94a1ec5367feec9fb506",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-004-ef27500f966082d4ae524409292425450b1f5805bace94a1ec5367feec9fb506.json",
+      "source_file_sha256": "e7680510e177d1936505b41fee5bd3b315cc066e88102f554a52273b586ccdda"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 5,
+      "decision_id": "67093b98047143abc90a259709aa0140365c848e516788938f6c82b912b3a285",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-005-67093b98047143abc90a259709aa0140365c848e516788938f6c82b912b3a285.json",
+      "source_file_sha256": "423259fe6392a6a221bccf27d974b001779568ab8b119ef613837044539aedfe"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 6,
+      "decision_id": "22db64cac7f12fa93659010f2b4f9566b368403ef2ba7234aca3ed6a69443d15",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-006-22db64cac7f12fa93659010f2b4f9566b368403ef2ba7234aca3ed6a69443d15.json",
+      "source_file_sha256": "87f6948e55c9a349b728e55ec7d451306f57e52d8f2d119e3badfac0fd464da1"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 7,
+      "decision_id": "d7cc9219a7a4c2b2eeac7e102b3ca045e7b254837d8d271fc71f2b549ee547bd",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-007-d7cc9219a7a4c2b2eeac7e102b3ca045e7b254837d8d271fc71f2b549ee547bd.json",
+      "source_file_sha256": "018875d25d8e6ce90fc8d4c88408699040f7860ea19163d919886232b34e0d55"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p1",
+      "turn_index": 8,
+      "decision_id": "01942e72cf3bf0bfcda4041270ee11fad596db641d64c81414509c91e70f2e30",
+      "battle_id": "mcts-h2h-2026100101-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p1/turn-008-01942e72cf3bf0bfcda4041270ee11fad596db641d64c81414509c91e70f2e30.json",
+      "source_file_sha256": "fbaff6b0a9845db25025bedf1f560f7286d765a061a9be9e1343f9aba85e4ece"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "be702210b2be3a09c3ede2409a8740b1ee94068095a35f650c1fd2a57cb521a6",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-000-be702210b2be3a09c3ede2409a8740b1ee94068095a35f650c1fd2a57cb521a6.json",
+      "source_file_sha256": "142f18c326da1c0852940e94c2bbd45bb6b3aac0542a51f718e330147964f80e"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 1,
+      "decision_id": "41d883a18ce635bbb33f111f786253a813053e56f1ca599617c5643b62637372",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-001-41d883a18ce635bbb33f111f786253a813053e56f1ca599617c5643b62637372.json",
+      "source_file_sha256": "04d7f3e94b2013cc557e8006dbeea9817b3322a2b5e396cc4bb9880b523bd211"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 2,
+      "decision_id": "1536d28e8b46f158b525485c3910d10a48ae82e647b14059ae1c53dfc40fa026",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-002-1536d28e8b46f158b525485c3910d10a48ae82e647b14059ae1c53dfc40fa026.json",
+      "source_file_sha256": "6e48b812e2c8b8fb7ac13b92d970b7422d7298222af03700913a0ace6cbc8188"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 3,
+      "decision_id": "4bc0671676f9e5764e060de5e88ee7b38a47d321ec9c35c0b2e2e6a13ab9d099",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-003-4bc0671676f9e5764e060de5e88ee7b38a47d321ec9c35c0b2e2e6a13ab9d099.json",
+      "source_file_sha256": "7f18e59542cc6c70e024bd4559fbba0f6a74253858670f27dc1546f0c512a0a1"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 4,
+      "decision_id": "6bb0378dc5c3a298a2adaef1a63b588bfc08aff25feeaa21dde5f5df2bfe8295",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-004-6bb0378dc5c3a298a2adaef1a63b588bfc08aff25feeaa21dde5f5df2bfe8295.json",
+      "source_file_sha256": "9ec317a250ca427200f13e6cc83f152105461a25349e20e632f38f788225e042"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 5,
+      "decision_id": "4739c5fbc906a1b3e65a553fd8872a7778c637ad27548fe171e5914f614d981f",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-005-4739c5fbc906a1b3e65a553fd8872a7778c637ad27548fe171e5914f614d981f.json",
+      "source_file_sha256": "9d4138812d39184e0c9dc3b19215b8c1037a2be707a0ca9f357a60246f4cfbcc"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 7,
+      "decision_id": "f9ecb887b613d1f7e9541e106100c7370ff3aae838ec1016f7e9e7e2123a089c",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-007-f9ecb887b613d1f7e9541e106100c7370ff3aae838ec1016f7e9e7e2123a089c.json",
+      "source_file_sha256": "2573723dc7a3f429cc035b3255afef16a3f443b56ca76670076165a0110a931a"
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "turn_index": 8,
+      "decision_id": "986a8c068e37940abc9d01a0c87d1dd844450b3b027725543e466b2e8f3f90f2",
+      "battle_id": "mcts-h2h-2026100101-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100101-p2/turn-008-986a8c068e37940abc9d01a0c87d1dd844450b3b027725543e466b2e8f3f90f2.json",
+      "source_file_sha256": "7afc021239fa9ccbd1b4978078c893a3088156ed4ba4945315f68af1b3c1735d"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "a5c6cfd43d4d1710d6bae379ba857dd169ae3aa90c86913ba93fb63b77cc667a",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-000-a5c6cfd43d4d1710d6bae379ba857dd169ae3aa90c86913ba93fb63b77cc667a.json",
+      "source_file_sha256": "0f09bc6519b3155f3fcb3a3be509dd6a7be38e714d67b600910f4f97cc82743e"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 1,
+      "decision_id": "91574bb7a1b0fcc60c48b1bce025d54a816db39a75733676ccb8a6404a763e51",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-001-91574bb7a1b0fcc60c48b1bce025d54a816db39a75733676ccb8a6404a763e51.json",
+      "source_file_sha256": "78acfb3a19048d722564f561a0a2bd44c41e39531d6f5c3ce6670c40d93efe6e"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 3,
+      "decision_id": "4f9c57711478bd65ddd93c97cc0654fa9a7aae7d41615254ef852085d4618aa0",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-003-4f9c57711478bd65ddd93c97cc0654fa9a7aae7d41615254ef852085d4618aa0.json",
+      "source_file_sha256": "e6ba0b32d00f6066cfc6527c22cdcbdb9c634e7066a096b16d059570ba4e1e29"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 4,
+      "decision_id": "d4ff3682ddc79c197a65556150c0104f232ce11bbf92dc817fcafc5b689d9a15",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-004-d4ff3682ddc79c197a65556150c0104f232ce11bbf92dc817fcafc5b689d9a15.json",
+      "source_file_sha256": "d39a70c23786a0740da99b87b30e1b78b4c3e9847f02aef6712d4a470307c989"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 5,
+      "decision_id": "838f507dc634e15b5b08e2fe634f7491e6d9760f13c7e751139ebe2449779704",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-005-838f507dc634e15b5b08e2fe634f7491e6d9760f13c7e751139ebe2449779704.json",
+      "source_file_sha256": "7518e82a6bee4da9ddabc4a587806f1047efc8cd9ab92f4df2081b25d00ea10e"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 6,
+      "decision_id": "72143acaf1fc2215304f6faf03149c3b8a7894e2270c8caead15b0f35770e7b1",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-006-72143acaf1fc2215304f6faf03149c3b8a7894e2270c8caead15b0f35770e7b1.json",
+      "source_file_sha256": "3aefc29df5d5d57e94bac83f7bab2897fba3022d0f52f834263adaba8eed652a"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 7,
+      "decision_id": "dce64a1b2c679f7baababae5d227a62cd66995888e931ea96869e4beb2e878f3",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-007-dce64a1b2c679f7baababae5d227a62cd66995888e931ea96869e4beb2e878f3.json",
+      "source_file_sha256": "2f281e380383165a53bf36cd0c32dd00ee79906fb2c3cc7c08de4d56fc2eb504"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "turn_index": 8,
+      "decision_id": "6612fb128a31b18bcd336d2b39a77ad22bbe64032c0339fed4f3561e86abe5e7",
+      "battle_id": "mcts-h2h-2026100102-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p1/turn-008-6612fb128a31b18bcd336d2b39a77ad22bbe64032c0339fed4f3561e86abe5e7.json",
+      "source_file_sha256": "dd6a3440fd53ad947912f958b8354ec37eb802ab4c48ec7ca2c4c0e22bd360bd"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "0b7f5f83fc64622d7b09a2a67a669f1dd01e0cfdbfb4ea466f26a6f9f6cdf6f6",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-000-0b7f5f83fc64622d7b09a2a67a669f1dd01e0cfdbfb4ea466f26a6f9f6cdf6f6.json",
+      "source_file_sha256": "eb64a43acc34cbd99e42411dd6fdd963d11e9231159cd6d1c12df777e9e9d4a3"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 1,
+      "decision_id": "4ff9922b911f07718d667198eb10a443fb0f7655c8c062d64118fe97a8711f1a",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-001-4ff9922b911f07718d667198eb10a443fb0f7655c8c062d64118fe97a8711f1a.json",
+      "source_file_sha256": "193462ff73d746328837a195d67f77dcfe43011c053f8234fc7cbc18378c3522"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 2,
+      "decision_id": "f2ac86d8d3873893ec93d7b396e0149aec9b254e3a7b483b793e8524a7044c8c",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-002-f2ac86d8d3873893ec93d7b396e0149aec9b254e3a7b483b793e8524a7044c8c.json",
+      "source_file_sha256": "cdd6a51c88322be621ff05fcbf1af76ef090bedacb8a02ae9b59a3b324b907bc"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 3,
+      "decision_id": "c3d29027e015715be27922698234c92e2448048bbcf952bc7dc8334b9f5a9249",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-003-c3d29027e015715be27922698234c92e2448048bbcf952bc7dc8334b9f5a9249.json",
+      "source_file_sha256": "7be72b331c424bfb54f5fc97d869a43fd0dd866001962df8f953e1d84d2ab25c"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 4,
+      "decision_id": "84d66bab9407c45463ab8687a5460058132a91ab785725e1dc9f7a18d8171484",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-004-84d66bab9407c45463ab8687a5460058132a91ab785725e1dc9f7a18d8171484.json",
+      "source_file_sha256": "63d859e4108f5d2e11857474b35069c7e4af2749ed1156eec5e7e7c4a1eebb21"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 5,
+      "decision_id": "db097ac7b78305541d40788f43c1112ccc86bc3ada8215e316b01a5b0fe72dca",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-005-db097ac7b78305541d40788f43c1112ccc86bc3ada8215e316b01a5b0fe72dca.json",
+      "source_file_sha256": "705bc15a3a1414f4e02db1ad59a347ea280983055e1970b8fde66a625518f4c4"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 6,
+      "decision_id": "9d3d0e1c3970873835b3b459a406c0a3cfd9e0443a086736dc42cdb07fb696a8",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-006-9d3d0e1c3970873835b3b459a406c0a3cfd9e0443a086736dc42cdb07fb696a8.json",
+      "source_file_sha256": "23f664f81ed0e044c0c64735947d6e8cfe0d3beda9986ba69865fbf0061f5e99"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 7,
+      "decision_id": "ec1de655841b0aedd9482ae4e7ce713081e32b8829af31cbcf024427a7e037a0",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-007-ec1de655841b0aedd9482ae4e7ce713081e32b8829af31cbcf024427a7e037a0.json",
+      "source_file_sha256": "fef9a3dde1216ef0bdadffa7a84d6e698f72f2a37db25347b506b037a478d0ac"
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p2",
+      "turn_index": 8,
+      "decision_id": "56ddc7f94671225a3536d90a5849b55a54b62ff90da1074f29b76fe01a16ff9f",
+      "battle_id": "mcts-h2h-2026100102-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100102-p2/turn-008-56ddc7f94671225a3536d90a5849b55a54b62ff90da1074f29b76fe01a16ff9f.json",
+      "source_file_sha256": "5c5ce8da1bc60ce878f4f6d66ce12f496dcf9c12656f9aa4035a935cf282812d"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "24848d63b477b6e0a811940eabd52ea8a7dd4ebbec2bf33e77485547bd7e0d06",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-000-24848d63b477b6e0a811940eabd52ea8a7dd4ebbec2bf33e77485547bd7e0d06.json",
+      "source_file_sha256": "b3e896eece2d27818919fc38340bd9f7ac5b99a7f61283c9320a1bd5eb0cf4e5"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 1,
+      "decision_id": "9ec7ac764c7705ae2f74f7069b35c19ad05fa73b550b2b4f6123ede9a187a977",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-001-9ec7ac764c7705ae2f74f7069b35c19ad05fa73b550b2b4f6123ede9a187a977.json",
+      "source_file_sha256": "124d925f03d5182a5b98e4333a41af93ef7ec50ee45baa0e23d808abd78d3b38"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 2,
+      "decision_id": "cb0e8d523dee47ed13e6ee976296dd2414acd842b5e63cb12ad9462d9c18d9f0",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-002-cb0e8d523dee47ed13e6ee976296dd2414acd842b5e63cb12ad9462d9c18d9f0.json",
+      "source_file_sha256": "e30238c01cfd2e9d31dc83e6f2f7897331dc3245ed3db21aeb8d98c17cf86465"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 3,
+      "decision_id": "b3cca03c6619516350ab6c937808a5308581ac9801409ab8d2de577985b4c1ca",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-003-b3cca03c6619516350ab6c937808a5308581ac9801409ab8d2de577985b4c1ca.json",
+      "source_file_sha256": "8c8587f4f20e48af92a0b99eb666d71e4e48fb7b0627ff61db616c04631dccf7"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 4,
+      "decision_id": "f32371706f92cb73b48d53eddf8c8931b77c9e85800e0f9a64a51704b75c0343",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-004-f32371706f92cb73b48d53eddf8c8931b77c9e85800e0f9a64a51704b75c0343.json",
+      "source_file_sha256": "9098e67b52fe2354139758f9e5581b5caacc26f8393b630ee1da9a3f524ed0c7"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 5,
+      "decision_id": "a12e490487aeb66da4e0d55805a1c6ccca6377156f473de01e520be41e03d6db",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-005-a12e490487aeb66da4e0d55805a1c6ccca6377156f473de01e520be41e03d6db.json",
+      "source_file_sha256": "52f9cf668f66f3742722efa1dcf67193667601efb2d3f322f0f34d1bf0245cf9"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 6,
+      "decision_id": "735936399526cba313b89c50b6a79841db9e9f2fb95fc404774445af45eb14ba",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-006-735936399526cba313b89c50b6a79841db9e9f2fb95fc404774445af45eb14ba.json",
+      "source_file_sha256": "edab6b250c3db519f2a9ac5cb19819bf9165a436846f55e041a64ecd987c318e"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 7,
+      "decision_id": "45885beb3a8afe5ad6684d5cc945a5c4dc62742a562ec3ddf74979a73be6ae59",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-007-45885beb3a8afe5ad6684d5cc945a5c4dc62742a562ec3ddf74979a73be6ae59.json",
+      "source_file_sha256": "abfa366ee9f23511e6cbc32d9b0dd13be0fb28c050fbaab9058e7a4e37fd4508"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p1",
+      "turn_index": 8,
+      "decision_id": "8205c7d090ccd6a3a27e6bde3424f5b600a6a38db3cb73fa09a5e53f04b06887",
+      "battle_id": "mcts-h2h-2026100103-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p1/turn-008-8205c7d090ccd6a3a27e6bde3424f5b600a6a38db3cb73fa09a5e53f04b06887.json",
+      "source_file_sha256": "080f877625d39d41aa768d08db9f8087c35755051845e3342401cb9bd8e95856"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "43e3efad7bc060a39e065eda8f6b1b0cf237eeaef783091725af562b336acef5",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-000-43e3efad7bc060a39e065eda8f6b1b0cf237eeaef783091725af562b336acef5.json",
+      "source_file_sha256": "7b1e82584b53a6e503fbfc6f0f57866457d4b126df4f62c50a400d6c9ea14053"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 1,
+      "decision_id": "ed3a69ef7e7010b72e8bfc97f438e975d943dacaf36500ce3f9310fa53c686bf",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-001-ed3a69ef7e7010b72e8bfc97f438e975d943dacaf36500ce3f9310fa53c686bf.json",
+      "source_file_sha256": "9e9508cf8653a87e480870f0ce104d720c8870f5d61f372c5764e26f8e9adb68"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 2,
+      "decision_id": "f3b3fd9090533d3b1611e48581907ddc3161561fc490a57f6faf1b94ff3270e3",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-002-f3b3fd9090533d3b1611e48581907ddc3161561fc490a57f6faf1b94ff3270e3.json",
+      "source_file_sha256": "bab79471efa2a828aab2fbbd01ab8aeb9fc09b8c36dcdb2f117ab4f387f5dcd6"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 3,
+      "decision_id": "d30330d95f91f06029445261fc060aee605117cc8e7b9054981e085c8d48d94b",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-003-d30330d95f91f06029445261fc060aee605117cc8e7b9054981e085c8d48d94b.json",
+      "source_file_sha256": "f7762ea181f0271df892980c2654658c8c2ac30b1757c5df3bcd6ba7985a8e5c"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 4,
+      "decision_id": "d8ea4194e892d33e9ffcd481f73f1be6307895cb862d6b95caa565f47b38cc17",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-004-d8ea4194e892d33e9ffcd481f73f1be6307895cb862d6b95caa565f47b38cc17.json",
+      "source_file_sha256": "14eca7edfe8eb56fcbca84236aa0f9fd836688075e7daf3094226e74040525db"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 5,
+      "decision_id": "40b0e13a09f42079e1622a05c0f66b7d676b3cd38dfcd0a42c0404f0952e6336",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-005-40b0e13a09f42079e1622a05c0f66b7d676b3cd38dfcd0a42c0404f0952e6336.json",
+      "source_file_sha256": "52e8d048edafb0176ad250814cc84528ab123f0af8c4d1cc6ddefda934215d60"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 6,
+      "decision_id": "55fe49f0104a6e2620d1734cda528811a07955aec491c75707679c674b910b19",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-006-55fe49f0104a6e2620d1734cda528811a07955aec491c75707679c674b910b19.json",
+      "source_file_sha256": "d7065fec826d39fe219c877c334dbf170b582d83db36a99c6b4190c6092fed11"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 7,
+      "decision_id": "1b00500f03a747f57c4e64f9394d4e2b5cf224984f896109468d814347f6130b",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-007-1b00500f03a747f57c4e64f9394d4e2b5cf224984f896109468d814347f6130b.json",
+      "source_file_sha256": "61c87955ea47828b46feb1d02fa546cc233f0175743f32683451af1ae1aeecce"
+    },
+    {
+      "seed": 2026100103,
+      "seat": "p2",
+      "turn_index": 8,
+      "decision_id": "361684f96843376a96581ff72886f1d7d660bb8320021347783c31d5759be356",
+      "battle_id": "mcts-h2h-2026100103-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100103-p2/turn-008-361684f96843376a96581ff72886f1d7d660bb8320021347783c31d5759be356.json",
+      "source_file_sha256": "1eb13a1861a37276f64a1ce64ca757bb0522562279ff4d68d908496eb0c2447b"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "8edcad9ee1127a42091272c2912cccfbb60f132e50207f0d50b43e5e63d8aa4f",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-000-8edcad9ee1127a42091272c2912cccfbb60f132e50207f0d50b43e5e63d8aa4f.json",
+      "source_file_sha256": "9f1c61ab5a9f537d76ac231d42c1fe16b2d3676d3eabbb9d20dd3639d7957f60"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 1,
+      "decision_id": "14f41ed0ef803d1086170ab7eb6b74d8e21e4d357e5c5509542e096220e86e25",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-001-14f41ed0ef803d1086170ab7eb6b74d8e21e4d357e5c5509542e096220e86e25.json",
+      "source_file_sha256": "5105cd2d71cce02ae940cda54edba721d8a03ee5e0b82514dbedc5486896090b"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 2,
+      "decision_id": "adeedbd6447594dd2861a3ec8820ad978fc7f3f174fdfe2c7c7f64f0b3e6196d",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-002-adeedbd6447594dd2861a3ec8820ad978fc7f3f174fdfe2c7c7f64f0b3e6196d.json",
+      "source_file_sha256": "eba7517a6f6bdd792911d6acc52fe05b1cf5d6f2151fce7ea26463b0c1d089f3"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 3,
+      "decision_id": "d144cfbcb7e3bcef90c6343bf356271ef46844219c7c1ae2e5c8fcc35cb77be9",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-003-d144cfbcb7e3bcef90c6343bf356271ef46844219c7c1ae2e5c8fcc35cb77be9.json",
+      "source_file_sha256": "4cacc5fbbed1425582caf8d3839c7e4bcdfe13aa9e0e8d3790af1cbca88ac4c9"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 4,
+      "decision_id": "d7f38467e0692efcfb68971972de251b7a517265ef1324498f81d77cd3a97815",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-004-d7f38467e0692efcfb68971972de251b7a517265ef1324498f81d77cd3a97815.json",
+      "source_file_sha256": "26d69b141d6c8107d79714bd8f9c636dc96ea41cfc37e7c9053b51d3f25203b5"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 5,
+      "decision_id": "9f7adfcb3817f9d70e74bafed7056c409165928964efa282783a748d44230e23",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-005-9f7adfcb3817f9d70e74bafed7056c409165928964efa282783a748d44230e23.json",
+      "source_file_sha256": "8ec31497b1b5e6b47478fe414fa8584d18ef0ecc7c2cfffeb4d5522bc6f586de"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 6,
+      "decision_id": "08599ae958c06ddaacfd85834873d61b12374d2e9cc5a32366d44e1072b2cd90",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-006-08599ae958c06ddaacfd85834873d61b12374d2e9cc5a32366d44e1072b2cd90.json",
+      "source_file_sha256": "5b812694069d3ea66da0b3a30ff0cfa921d34d476983fd28824e9075668a45fd"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 7,
+      "decision_id": "a46f1a20da265016f822941d938d408aa58df3f8d95c4c90f518a2595310a881",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-007-a46f1a20da265016f822941d938d408aa58df3f8d95c4c90f518a2595310a881.json",
+      "source_file_sha256": "a6dafba91cea8986c2978acb9c441cbe1f54d2b353d92e45050adf404772eb57"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p1",
+      "turn_index": 8,
+      "decision_id": "bf240b5ab5b81961e80489fdbe45a39966c4c9628a355b890145e99a929477c9",
+      "battle_id": "mcts-h2h-2026100104-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p1/turn-008-bf240b5ab5b81961e80489fdbe45a39966c4c9628a355b890145e99a929477c9.json",
+      "source_file_sha256": "d179173cc0e19cabdbdc1b19f3dd5aca9b8a2a819d31aff726daa5a47ea1a835"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "858fade3ac0460fe65593033d889ee0d06316855111d7bb588f33ec65600b0ca",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-000-858fade3ac0460fe65593033d889ee0d06316855111d7bb588f33ec65600b0ca.json",
+      "source_file_sha256": "4d9d360c8adcb361257d215169f9be51d7aed15bf93ad5e4a6010fe3b3e76ca1"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 1,
+      "decision_id": "63e7ec69ab9074d1ec14a2a1bb4c6ccb3649d1e2144bc758f0b22d84ed0aa219",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-001-63e7ec69ab9074d1ec14a2a1bb4c6ccb3649d1e2144bc758f0b22d84ed0aa219.json",
+      "source_file_sha256": "501861310ef4831697ad21a69b954bd7029d9f390846eaece987a511c32a7bb3"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 2,
+      "decision_id": "a09ff7af773c67e46c30c282894b35c3730aec9cbbacf2d127cf431a87b96aca",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-002-a09ff7af773c67e46c30c282894b35c3730aec9cbbacf2d127cf431a87b96aca.json",
+      "source_file_sha256": "fd7d1c13f0432278111e71647d5d26c355d42b29f2a6f37476fd4d0c2d3d1058"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 3,
+      "decision_id": "fcca2d5ba8f81fec4ddb31c549060a671ca5a4bef13d6cfb7b546521ff01ae0a",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-003-fcca2d5ba8f81fec4ddb31c549060a671ca5a4bef13d6cfb7b546521ff01ae0a.json",
+      "source_file_sha256": "187d2be7fc6c8ccb89ea5014065f9ad376fcbf133ebf8c2bfc23ac83a67e12ec"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 4,
+      "decision_id": "05c0c9ba18e53b25cca6b8332d9e564e992ac6cbad1893e6c5e0c369f8aa5580",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-004-05c0c9ba18e53b25cca6b8332d9e564e992ac6cbad1893e6c5e0c369f8aa5580.json",
+      "source_file_sha256": "1a5600be3f1248e10f6f7f0123b6e904fe49ae83f2fdc73bcbcc17f9f079dedf"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 6,
+      "decision_id": "3f9c11e4ff009f2532dab0cf042e7ab817442e92b171651b7513d328890bd8e2",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-006-3f9c11e4ff009f2532dab0cf042e7ab817442e92b171651b7513d328890bd8e2.json",
+      "source_file_sha256": "ae3f673512a336e2c68687662b24cad268d14daf06d77d5ec440937dd5275455"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 7,
+      "decision_id": "8b3f05805c56b00440abb65804c2d2668e54818b82540758be47d23ed4822711",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-007-8b3f05805c56b00440abb65804c2d2668e54818b82540758be47d23ed4822711.json",
+      "source_file_sha256": "4603c5215867a8749bf4348f0f752f3cf7674bcc45fe79a40f5048477d766b44"
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "turn_index": 8,
+      "decision_id": "ac64c24a5002c9956286c6e4e6181c5bf8e890be490ecd89a7a988438336df69",
+      "battle_id": "mcts-h2h-2026100104-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100104-p2/turn-008-ac64c24a5002c9956286c6e4e6181c5bf8e890be490ecd89a7a988438336df69.json",
+      "source_file_sha256": "af126e47123eacbde4480004c3dc365729196f41347bb3b86ee8f22b067bb43e"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "b2d776722d0d9082e0cdead5ae34b1db0ed16da9a730da15ec11d0ff679ed6d9",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-000-b2d776722d0d9082e0cdead5ae34b1db0ed16da9a730da15ec11d0ff679ed6d9.json",
+      "source_file_sha256": "44de1f12d4143f0ccf0a41497d231f3a2581b193611e6144c6c45399562db82a"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 1,
+      "decision_id": "22137bbc48ce463b9593af129c6f934ab67fe5f4871dd836d0e997ee4d08574d",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-001-22137bbc48ce463b9593af129c6f934ab67fe5f4871dd836d0e997ee4d08574d.json",
+      "source_file_sha256": "45fbd318e678a7e90cbe8eef8b78b9031cfaf6870604894f5cb3f3bf55d05075"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 2,
+      "decision_id": "7845d2e98bf87f98354d6a133c49d39ad8cde554882d115a1e81bba35f36660d",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-002-7845d2e98bf87f98354d6a133c49d39ad8cde554882d115a1e81bba35f36660d.json",
+      "source_file_sha256": "cf46eefdad9a4d63789d638af34fa57e9c9d165ee8b05edc04653407e91e8ccb"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 3,
+      "decision_id": "9141f76da5440175fe460677c77e8030434c5dd78ee92079a1e1afa28252c586",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-003-9141f76da5440175fe460677c77e8030434c5dd78ee92079a1e1afa28252c586.json",
+      "source_file_sha256": "f4aff10ade24e8b6d6c0e8ebb08c6410e5a9850170e25ecebbc576ba75d8012a"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 4,
+      "decision_id": "1a01d80bca8cf82138e156d132d87a119659dba4411f227bc4da3033be51d8a8",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-004-1a01d80bca8cf82138e156d132d87a119659dba4411f227bc4da3033be51d8a8.json",
+      "source_file_sha256": "5e8e5f387d5fc3ca96eddea53caf7af989be04a2c2be56e396fed734dc0b6807"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 5,
+      "decision_id": "57070f99649a06b2e895ec194f110e2f86407025f6f85dfda20f1e33733b7441",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-005-57070f99649a06b2e895ec194f110e2f86407025f6f85dfda20f1e33733b7441.json",
+      "source_file_sha256": "6a5e5942b3cc575ae4d4612b2f8c16b5ffd90f0c3702b5305037b9c72903051d"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 6,
+      "decision_id": "d59473668add4ea880c74085bdad0aea30eb27ab3b652933efc689b8e0580e95",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-006-d59473668add4ea880c74085bdad0aea30eb27ab3b652933efc689b8e0580e95.json",
+      "source_file_sha256": "f6f2627b3518cd16b75d46c04212fceaf66757aef5e3ae2a9fefb5a9a731253e"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 7,
+      "decision_id": "576abf1bbcfd8abb700eeb67c350aa2c244213acfcde2976db99e31a07d0caee",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-007-576abf1bbcfd8abb700eeb67c350aa2c244213acfcde2976db99e31a07d0caee.json",
+      "source_file_sha256": "0772de17c4d6d82dec81f25d765092e3614002a91072921bfc9fcf3bda006fa3"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p1",
+      "turn_index": 8,
+      "decision_id": "f5b2f3dd67a40d49da6fff7e07adbdf747276e97210feb07534b30ee8577aafa",
+      "battle_id": "mcts-h2h-2026100105-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p1/turn-008-f5b2f3dd67a40d49da6fff7e07adbdf747276e97210feb07534b30ee8577aafa.json",
+      "source_file_sha256": "af1829a905d46928acdf888c12d7ba34fc8430393148ac8f94393cf4892d765c"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "498be6934c7d285c59bc03a17761193bd7e52df0bbbadef4526ba6081bcdb0f7",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-000-498be6934c7d285c59bc03a17761193bd7e52df0bbbadef4526ba6081bcdb0f7.json",
+      "source_file_sha256": "36182e7d8cf2187c02f5bc0b85ad009175301bf90348d1817da7ce4ef4548505"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 1,
+      "decision_id": "5c3edb4798f152dd2c604c3a0442437819100bc1ac6a7890a53f0c168e8f724e",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-001-5c3edb4798f152dd2c604c3a0442437819100bc1ac6a7890a53f0c168e8f724e.json",
+      "source_file_sha256": "28226f7327a3ef73565aa0f5e8f10a418e02de2e1f63a07a3c9a160833930a41"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 2,
+      "decision_id": "e35aeb02752276a95c4c3a220654568c7e5c199b6a032738d3b443b0b4a22038",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-002-e35aeb02752276a95c4c3a220654568c7e5c199b6a032738d3b443b0b4a22038.json",
+      "source_file_sha256": "43f0f286d569eaae8e027f158227adae327d1aab81e0417d0dfae55fda07474c"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 3,
+      "decision_id": "dddb9836f810e24c8d4d1a0aa38498a10a44833a4cfb79421908cb499fbb3162",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-003-dddb9836f810e24c8d4d1a0aa38498a10a44833a4cfb79421908cb499fbb3162.json",
+      "source_file_sha256": "7948b5d96c6cbdc88e7c4fb9da6e93e198947bc902a44ee9ad2b1d61896aaedb"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 4,
+      "decision_id": "64d932c6bb4527e7c2648f7784ced37d363b9e44a15b751cccde6de54bf875a5",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-004-64d932c6bb4527e7c2648f7784ced37d363b9e44a15b751cccde6de54bf875a5.json",
+      "source_file_sha256": "8d1eb381de67770b374a13005969389aacfc090f937a9a7c97b006a7c7eb4cf1"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 5,
+      "decision_id": "e37bf0e89a6d886b9fed4b0b19833037e1a15a29d2a8a3719451c6d3e280a165",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-005-e37bf0e89a6d886b9fed4b0b19833037e1a15a29d2a8a3719451c6d3e280a165.json",
+      "source_file_sha256": "493952e1d61337f9e8a17a7d9b7ee164828a8e9ff1f6cd3eff39b9dfaa6a5b15"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 6,
+      "decision_id": "47b46fd096253447a8ce5b777250318fc088c6d5044ee9690b5b2f2efd9dd0ce",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-006-47b46fd096253447a8ce5b777250318fc088c6d5044ee9690b5b2f2efd9dd0ce.json",
+      "source_file_sha256": "985e2dd4281063b8e9bec6afa2dd29378104d67f23c4b4eca600754f006cedb2"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 7,
+      "decision_id": "05b9dec8fef911cc394d1f08f53bba043aab41304a8a48717b8aa602f0d3916e",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-007-05b9dec8fef911cc394d1f08f53bba043aab41304a8a48717b8aa602f0d3916e.json",
+      "source_file_sha256": "f229ed9b078d85b723db6c910d738b549606caca2928261dde67bd3ee2d6e52a"
+    },
+    {
+      "seed": 2026100105,
+      "seat": "p2",
+      "turn_index": 8,
+      "decision_id": "8817fd5a62b4e2d54f427998a723b868835b75d8cda63259ac7d8a7702a18e64",
+      "battle_id": "mcts-h2h-2026100105-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100105-p2/turn-008-8817fd5a62b4e2d54f427998a723b868835b75d8cda63259ac7d8a7702a18e64.json",
+      "source_file_sha256": "1987f1704688010a87f4a3bbecc186e352885764f1003bfe22b39d69774f46ba"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "bcd806ed71d6d079f0ac149d6d323cd9254c33faaebbd0e10bfa943e3744d4d6",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-000-bcd806ed71d6d079f0ac149d6d323cd9254c33faaebbd0e10bfa943e3744d4d6.json",
+      "source_file_sha256": "3dfcd0e938361f105b5a46d3983855145b3901711525cf37b7b527b58a9cd42a"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 1,
+      "decision_id": "897f28f18b7a4bf0753251eb89c79fed427151f82c03ebd19dc5c89a54e24992",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-001-897f28f18b7a4bf0753251eb89c79fed427151f82c03ebd19dc5c89a54e24992.json",
+      "source_file_sha256": "eade9d7a3f6465ab25e6ae43849593312b54afc0984007db1b845cfada14d7b6"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 2,
+      "decision_id": "468dd495ef3283800694627b9643d5e24337924a4e5ad1d42b13ae642d708f1f",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-002-468dd495ef3283800694627b9643d5e24337924a4e5ad1d42b13ae642d708f1f.json",
+      "source_file_sha256": "0c840525ddc4fed8da6560dcb16e67a0b14fe4456f54dff9febf27c506665083"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 3,
+      "decision_id": "a82e34f59509e1a1e7770d40b150d1cc1e75dab6a301923b788a7d331fc45c42",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-003-a82e34f59509e1a1e7770d40b150d1cc1e75dab6a301923b788a7d331fc45c42.json",
+      "source_file_sha256": "c221796c6b3841f65ae3c415c9f970b2a35de1e23584a772d0455cd99eeddaf8"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 4,
+      "decision_id": "5a9c5ddd0c687acb5f54234b6a3b29cab12fbb21f93dd83c038593a3bf28a4f1",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-004-5a9c5ddd0c687acb5f54234b6a3b29cab12fbb21f93dd83c038593a3bf28a4f1.json",
+      "source_file_sha256": "2415e226e9e1ed8d7b015fc9e6b0317862e2ae3cf7dcba72d239b25ab18eede5"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 5,
+      "decision_id": "137d2f3ac4e7a1a982200ec8873b423c3818b7321ed5cdebd29f8477dfad8ab2",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-005-137d2f3ac4e7a1a982200ec8873b423c3818b7321ed5cdebd29f8477dfad8ab2.json",
+      "source_file_sha256": "0a70ff3bd4bd5e893f39b960b308370fa6eb89fbffc945d040431121ed9f63e4"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 6,
+      "decision_id": "22f48594710ea8615a9a5c0a3e371f635e1c875504b8cc40bd51fcd7ffa19610",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-006-22f48594710ea8615a9a5c0a3e371f635e1c875504b8cc40bd51fcd7ffa19610.json",
+      "source_file_sha256": "bbb1aeea1812c77d913a86416dbddf5fa954c9b9a1039629849e69e443199dac"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 7,
+      "decision_id": "d0aee9ff9e06afe908e4f6baa4e9fee702eeeed20312b0305608fd2f6e945fdb",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-007-d0aee9ff9e06afe908e4f6baa4e9fee702eeeed20312b0305608fd2f6e945fdb.json",
+      "source_file_sha256": "55205aee5c3524a39b07f02775b4d3b3d8a074b10c6dbdf38e453f55e7116af9"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p1",
+      "turn_index": 8,
+      "decision_id": "5bf833b0baed2dead1095bdbd19f0bc8467c0315033dfe0fa9c7f247ccbf9196",
+      "battle_id": "mcts-h2h-2026100106-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p1/turn-008-5bf833b0baed2dead1095bdbd19f0bc8467c0315033dfe0fa9c7f247ccbf9196.json",
+      "source_file_sha256": "ba66065f69f61b801e1204c1156e5ba62838a255df0de6d726034c927e10d7a6"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "cfae55f9ab973a7a88fe686653118b98610364cf7630773bf498467d78e75074",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-000-cfae55f9ab973a7a88fe686653118b98610364cf7630773bf498467d78e75074.json",
+      "source_file_sha256": "ab4dfb68eb1f85750e3e21405ac5f60900607cde026624371ef0e471a8803fcf"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 1,
+      "decision_id": "908351954818674360e63d3275d9424094d558da541c16121c890fa817055b56",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-001-908351954818674360e63d3275d9424094d558da541c16121c890fa817055b56.json",
+      "source_file_sha256": "03a0efe0b610fd5a6ceab17511e7679a9c02416adb90e5ca638b558c183885cb"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 2,
+      "decision_id": "05d329b25c1341c9d390f8708028b74643b55511052a1b9fa3a4c167c2eea7bf",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-002-05d329b25c1341c9d390f8708028b74643b55511052a1b9fa3a4c167c2eea7bf.json",
+      "source_file_sha256": "5f7035d4443a9b45f83e7e5477bf69593eb107f44d3ca6451c548e7b7e56d901"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 4,
+      "decision_id": "51a1d6743ff9c473c8ce5273645499c5968a05df63a13176d6fcc5a7f7dbe8b2",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-004-51a1d6743ff9c473c8ce5273645499c5968a05df63a13176d6fcc5a7f7dbe8b2.json",
+      "source_file_sha256": "a11424da1fd108c3ad8ee22ec9b1a17696715a79f237792f87dc056f0cf05acd"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 5,
+      "decision_id": "70db06961abb48205e1f93b6216de40eaea8ea2251935af800f737a6efcf98a5",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-005-70db06961abb48205e1f93b6216de40eaea8ea2251935af800f737a6efcf98a5.json",
+      "source_file_sha256": "b203edcf61078f9816bc2297174d4be1f4d7ce24fb142a5720f065fdcbbd2c3d"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 6,
+      "decision_id": "8be3758fd85fd4fd99b75e6dcfb2ba0528c7ec077940bfbb28f5661b84aa6377",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-006-8be3758fd85fd4fd99b75e6dcfb2ba0528c7ec077940bfbb28f5661b84aa6377.json",
+      "source_file_sha256": "cf6f17f76f9657562acfd44fa3d53598fb35ba0a0b4ce775fec55a86fc22e6e9"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 7,
+      "decision_id": "4d789dd72807484611e73dbc4cc6074b68dea281be17c6f76d5430290e39ca7c",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-007-4d789dd72807484611e73dbc4cc6074b68dea281be17c6f76d5430290e39ca7c.json",
+      "source_file_sha256": "1ecdef365fa8b5b8b93a59f07eb4e35a3d008117d80197d04959a0a13ac0a408"
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "turn_index": 8,
+      "decision_id": "5871f9743deef802a7ecc0de5f2f9c21656088ae1cff6e331adb6f1d9b8856d1",
+      "battle_id": "mcts-h2h-2026100106-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100106-p2/turn-008-5871f9743deef802a7ecc0de5f2f9c21656088ae1cff6e331adb6f1d9b8856d1.json",
+      "source_file_sha256": "ff810ff446c734440e0b69de26c231f5999a0c6be27d25846b6d60f1d22ebb38"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 0,
+      "decision_id": "9084e5e51575fb2b6593ce3292a7b29d55441e0043c39bb49f8602c7c9f93b95",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-000-9084e5e51575fb2b6593ce3292a7b29d55441e0043c39bb49f8602c7c9f93b95.json",
+      "source_file_sha256": "38ebf2e3be8af0640757c576a002d0440c781095efc981ab9223e4ae82411586"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 1,
+      "decision_id": "a93bbee0674396ca4e5655186a9f87caf83bb3ba0a76486e94d37d36d1b683c7",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-001-a93bbee0674396ca4e5655186a9f87caf83bb3ba0a76486e94d37d36d1b683c7.json",
+      "source_file_sha256": "a4c345bdad0ad53ebfa26999146bfdee56db5f8a9269fb9c5f67f2455306ee0d"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 2,
+      "decision_id": "f5857063c42b30e8c57428e39d8a906ee15e6542a101f3d33ece91ab03777b74",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-002-f5857063c42b30e8c57428e39d8a906ee15e6542a101f3d33ece91ab03777b74.json",
+      "source_file_sha256": "5e8fc6f87041576d3f7d1102351eb14368a1a8abaad9ee0c72042c2add349a9c"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 3,
+      "decision_id": "d8df83e2af5f885f90ce24ef50731bf3316fca333b67c0b0733294a995665a07",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-003-d8df83e2af5f885f90ce24ef50731bf3316fca333b67c0b0733294a995665a07.json",
+      "source_file_sha256": "37433643cbca2a7ee366ff6fa5ae54d6f1a066c9f76ce3d0dcd609d82c8dcc27"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 4,
+      "decision_id": "0bc7393a225395e4981ee7f8e989b716aaf90ac743e110cd2bdcfaae0801cff2",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-004-0bc7393a225395e4981ee7f8e989b716aaf90ac743e110cd2bdcfaae0801cff2.json",
+      "source_file_sha256": "511ce4341ea93a96c6f7e0fc17ea6b9a4d146103a6be6628561f53c45be92f4b"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 5,
+      "decision_id": "4e93a56649507d9baae85df9a8023403c2d70f6dedb172ebd540e7c6c62da58c",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-005-4e93a56649507d9baae85df9a8023403c2d70f6dedb172ebd540e7c6c62da58c.json",
+      "source_file_sha256": "e08da1a1859824ee7f1958b480c3c5d78933474cced09c682df69d45b8f8d62e"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 6,
+      "decision_id": "5f79b93fb52e7c6df1b104eab2ce7a06cf437fdb364d32a1d1881e3582adc623",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-006-5f79b93fb52e7c6df1b104eab2ce7a06cf437fdb364d32a1d1881e3582adc623.json",
+      "source_file_sha256": "0807eef25e240c0062ac162dcd587aadc8ee1c79b4433545a1680041599e12e1"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 7,
+      "decision_id": "3577eb8c284f378670255f175f6d0e01dc26a1d33b25a3e9d9401a3ce8d324e3",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-007-3577eb8c284f378670255f175f6d0e01dc26a1d33b25a3e9d9401a3ce8d324e3.json",
+      "source_file_sha256": "d758d2caf711a339f6e238886ef37b55a08f3cdefa97f2d15a62a1fc7eee7de9"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p1",
+      "turn_index": 8,
+      "decision_id": "467b195d4b448e8f8b006f25d6a183b8584bd47ebd8f58508187bace344b21ae",
+      "battle_id": "mcts-h2h-2026100107-p1",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p1/turn-008-467b195d4b448e8f8b006f25d6a183b8584bd47ebd8f58508187bace344b21ae.json",
+      "source_file_sha256": "e5dd5484f958d4382e9d70fa723c00c0eb4407a3ecaf2be4257eab1004ce661f"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 0,
+      "decision_id": "a1bcd7626021a17d0dbdfeda8500c579725d98bce0bc2b2ecbe7d134042d8015",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-000-a1bcd7626021a17d0dbdfeda8500c579725d98bce0bc2b2ecbe7d134042d8015.json",
+      "source_file_sha256": "a61084c3937cfd540af371945ba92e19e669dedf351580fef5164ee5ac6d6681"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 1,
+      "decision_id": "8fa9ae322e3149025f173b46b4a574039054481d2d0d6c813c5fb5478de7f79a",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-001-8fa9ae322e3149025f173b46b4a574039054481d2d0d6c813c5fb5478de7f79a.json",
+      "source_file_sha256": "e66f803ca276e72dead426fcf07d81b4b81dff15064604d65c53cbf88dce1e11"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 3,
+      "decision_id": "5e76d850dd3fa8be506ae7e4cdef1f6a0f329bf9a9cf156e7ba2ce634398c7f2",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-003-5e76d850dd3fa8be506ae7e4cdef1f6a0f329bf9a9cf156e7ba2ce634398c7f2.json",
+      "source_file_sha256": "2525ce4fceb21e98e8d68f3d8b8bcbc17f7475559b8fcc9ad92965118781f578"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 4,
+      "decision_id": "e0559446fb9fb513c64d16f58260f74e1d077c29c1d53ad2f42ebe80b491f398",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-004-e0559446fb9fb513c64d16f58260f74e1d077c29c1d53ad2f42ebe80b491f398.json",
+      "source_file_sha256": "88b499b05e8d3703168faa0d7277ae29869e1adf2acd030098148ba5f7984d70"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 5,
+      "decision_id": "10057d161a22e900c1d79e869c1c96955673617d3cb4cf8ddd5a4d4155d02ee1",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-005-10057d161a22e900c1d79e869c1c96955673617d3cb4cf8ddd5a4d4155d02ee1.json",
+      "source_file_sha256": "271bca8600ceadcc26623878ed6776157c150f2c80a480b928e8053d9c9303c4"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 6,
+      "decision_id": "020e0b5095ebf0cc861d202fad3eb72c8429daa7c7b427d0516af12891bf86be",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-006-020e0b5095ebf0cc861d202fad3eb72c8429daa7c7b427d0516af12891bf86be.json",
+      "source_file_sha256": "763cbfa65b68d3b4c6646946b113e2d06bcaf9313a9f9b5a0a75b2d8d58dad17"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 7,
+      "decision_id": "c63c685b2aadebb55bb514dc872d00ff8e563468e84d0b2171f288fb6bba9cc7",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-007-c63c685b2aadebb55bb514dc872d00ff8e563468e84d0b2171f288fb6bba9cc7.json",
+      "source_file_sha256": "5ad77864882342ea41693bf312bfbe18ab1c29bff220512163c5cf86445e3ba9"
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "turn_index": 8,
+      "decision_id": "11299ead4489f57015108f11fe8534ef41a6959ab1e34f90fa468e0130e035ea",
+      "battle_id": "mcts-h2h-2026100107-p2",
+      "source_relative_path": "shards/s0/public-decision-records/seed-2026100107-p2/turn-008-11299ead4489f57015108f11fe8534ef41a6959ab1e34f90fa468e0130e035ea.json",
+      "source_file_sha256": "c29d37350737cc5fc36b5159db2f7bc9a233b2949875ddb7abd8f5f3194f755e"
+    }
+  ],
+  "uncaptured_prior_records": [
+    {
+      "seed": 2026100100,
+      "seat": "p1",
+      "uncaptured_prior_indices": [
+        6
+      ]
+    },
+    {
+      "seed": 2026100101,
+      "seat": "p2",
+      "uncaptured_prior_indices": [
+        6
+      ]
+    },
+    {
+      "seed": 2026100102,
+      "seat": "p1",
+      "uncaptured_prior_indices": [
+        2
+      ]
+    },
+    {
+      "seed": 2026100104,
+      "seat": "p2",
+      "uncaptured_prior_indices": [
+        5
+      ]
+    },
+    {
+      "seed": 2026100106,
+      "seat": "p2",
+      "uncaptured_prior_indices": [
+        3
+      ]
+    },
+    {
+      "seed": 2026100107,
+      "seat": "p2",
+      "uncaptured_prior_indices": [
+        2
+      ]
+    }
+  ],
+  "qualification_rules": {
+    "exact_source_file_hashes_required": true,
+    "full_live_public_observation_equality_required": true,
+    "source_owned_prefix_repairs_only": true,
+    "unknown_other_player_actions_refuse": true,
+    "missing_or_unsupported_root_disposition": "retain_refusal_in_the_original_roster_no_redraw",
+    "coverage_not_yet_proven": [
+      "switch_sensitive",
+      "hidden_set_uncertainty",
+      "immediate_tactics",
+      "longer_positional"
+    ]
+  },
+  "execution_status": "NOT_LAUNCHED",
+  "execution_prerequisites": [
+    "required_CI_and_review",
+    "source_bound_immutable_image_receipt",
+    "three_arm_full_context_harness",
+    "registered_fixed_work_and_matched_time_contract",
+    "registered_timing_analysis_and_compute_ceiling"
+  ],
+  "interpretation": "Selection identity only; not a complete run manifest, replay-validity result, timing result, or strength claim."
+}

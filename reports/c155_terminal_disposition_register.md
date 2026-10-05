@@ -335,6 +335,10 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1408 single-action prior underflow repair | `rust/pokezero-search/src/priors.rs`: a valid sole mapped action is masked certainty before globally-softmaxed `f32` mass can underflow; multi-action underflow remains fail-closed | `3e4378ce5d4bcb7b…` |
 | #1415 branch-prior fallback reason ledger | `rust/pokezero-search/src/model.rs` and `src/priors.rs`: six exhaustive interior-fallback causes are emitted and conserved, while valid finite low-mass legal priors remain accepted | `e3483c2b281fb346…` |
 | #1425 model-feature abort seam cleanup | `rust/pokezero-search/src/tree.rs`: make the feature-gated seam test self-initializing so CI can run it independently of unrelated test order | `7ea25b3c27d7e5a1…` |
+| #1503 opt-in own-policy opponent experiment | New `policy_opponent.rs`, `policy_request.rs`, and `policy_bridge.rs`, plus traversal/model/encoder wiring; full masked policy sampling and private-safe reached-node requests, including singleton certification and separate provider-call/evaluation counts | `4bf56184eeddb642…` |
+| #1503 completed joint-action measurement | `tree.rs` finalized-backup ledger and two behavioral tests; `model.rs` explicit default-off receipt flag; `priors.rs` fixture initialization. Native node-local pairs are counted once per compute invocation, without belief-multiplicity reweighting; explicit option labels and stable report-sort indices bind displayed marginals | `2b019d6667a5bd36…` |
+| #1503 qualified Pain Split HP projection | `policy_bridge.rs` distinguishes optional public `-sethp` qualifiers from a second HP owner, retaining strict malformed-owner refusal; the Python projection follows the same grammar. Historical profile image and receipts remain bound to the prior source | `a547a1c37b2d4650…` |
+| #1503 refused-position adapter repairs | `policy_request.rs` certifies committed-action WAIT during replacement instead of resampling; two phase regression tests. `policy_bridge.rs` retains private-safe refusal witnesses. Original study receipts remain unchanged | `369883e836b7fdfc…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -785,9 +789,10 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure. The workflow holds **37** lines containing the unittest
-invocation, of which **one is a comment**, so there are **36 executable** invocation sites at this
-head; the scan resolves **36** of them and leaves **none** unresolved.
+rather than inherited from #1205's figure: there are **39 executable** invocation sites at this
+head; the scan resolves **39** of them and leaves **none** unresolved. No invocation-carrying
+comment remains. The own-policy integration, inherited-selector parser, and frozen-root roster
+gates are included; the counts were re-derived from executable workflow bodies.
 
 (Was 36/1/35. #1384 added the guarded opponent request-order source pins. Re-derived from the
 merged workflow and scanner rather than incremented.)
@@ -930,7 +935,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 406 |
+| `base.expected_counter_artifacts` | 407 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 78 |
 | `base.section3_rows` | 82 |
@@ -952,9 +957,9 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.hashed_crate_sources` | 12 |
-| `t1.hashed_input_files` | 96 |
-| `t1.head_fingerprint` | 0f1cbda30a85f74f |
+| `t1.hashed_crate_sources` | 15 |
+| `t1.hashed_input_files` | 99 |
+| `t1.head_fingerprint` | 369883e836b7fdfc |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

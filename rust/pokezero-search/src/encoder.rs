@@ -666,6 +666,8 @@ impl Layout {
 }
 
 struct SpeciesEntry {
+    #[cfg(feature = "model")]
+    display_name: String,
     types: Vec<String>,
     base_stats: HashMap<String, i64>,
 }
@@ -847,6 +849,8 @@ impl Tables {
                 species.insert(
                     key.clone(),
                     SpeciesEntry {
+                        #[cfg(feature = "model")]
+                        display_name: str_or_empty(get(entry, "name")),
                         types: string_list(get(entry, "types")),
                         base_stats,
                     },
@@ -901,6 +905,27 @@ impl Tables {
 
     pub(crate) fn move_max_pp(&self, id: &str) -> Option<i64> {
         self.move_info(id).map(|info| info.max_pp)
+    }
+
+    #[cfg(feature = "model")]
+    pub(crate) fn registered_move_max_pp(&self) -> HashMap<String, i64> {
+        self.moves.iter().map(|(id, info)| (id.clone(), info.max_pp)).collect()
+    }
+
+    #[cfg(feature = "model")]
+    pub(crate) fn registered_species_display(&self, name: &str) -> Option<String> {
+        if let Some(info) = self.species_info(name) {
+            return (!info.display_name.is_empty()).then(|| info.display_name.clone());
+        }
+        let id = normalize_identifier(name);
+        if let Some(form) = id.strip_prefix("unown") {
+            if form.len() == 1 && form.as_bytes()[0].is_ascii_alphabetic() {
+                return Some(format!("Unown-{}", form.to_uppercase()));
+            }
+            if form == "question" { return Some("Unown-Question".into()); }
+            if form == "exclamation" { return Some("Unown-Exclamation".into()); }
+        }
+        None
     }
 
     /// `CategoryVocabulary.encode`: pad 0 for empty, direct row lookup, else
