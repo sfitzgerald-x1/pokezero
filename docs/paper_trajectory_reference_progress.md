@@ -35,7 +35,23 @@ simulator serialization. The unchanged one-snapshot tanh champion provides its
 own masked policy and signed critic in one canonical model forward. Real
 asymmetric request boundaries do not invent WAIT actions. Capped games refuse.
 
-Verification so far: 31 focused tests pass without skips. A local fixed-team
+The fresh-world factory now uses the pinned server's exact known-species
+generator for every trajectory, rejecting up to ten inconsistent sets and
+recording forced completion. Unknown species come from newly generated parties,
+not the cached observation catalog. The known-species generator uses empty team
+context; unknown draws retain their generated party context. These are explicit
+choices where the thesis leaves context unspecified. Known public gender is
+assigned after draws when the Gen 3 server delegates it to the battle constructor;
+generic public Hidden Power does not reveal or force its unknown type.
+
+Public-root reconstruction uses only the actor's opening request and public
+belief ledger. Exact maximum HP carried by the retained source conditions the
+draw, rather than being changed after sampling. This corpus's exact opponent HP
+is an information deviation from percentage-only server observations and must
+be shared and disclosed across comparison arms. Pending Baton Pass commitments
+still refuse: the existing deferred-prior argmax shortcut is not policy sampling.
+
+Verification so far: 53 focused tests pass without skips. A local fixed-team
 real Showdown/champion smoke completed eight trajectories and 11 simulator
 transitions, using 27 neural forwards and retaining nine nodes. It exercises
 the adapter, NOT fresh hidden sampling, matched timing or strength. An initial
@@ -43,13 +59,36 @@ smoke failed because pre-merge main did not emit distribution metadata; the
 adapter now consumes the canonical model logits and critic directly. The failed
 run contributes no accepted experiment evidence.
 
+A subsequent real champion smoke used eight distinct sampled teams, validated
+the exact player-known root for every one, and completed eight trajectories in
+0.442 seconds, with 25 neural forwards. It exposed and fixed a bridge readiness
+bug: a non-request RNG-reset message could advertise a restored cached boundary
+before choices had run. A real-simulator regression now proves a move actually
+executes after materialization and reseeding.
+
+The bounded correctness preflight kept all 32 original source identities and
+verified their canonical source bytes again after execution. Thirty positions
+completed four fresh-world trajectories each; positions 29 and 31 refused
+because the Showdown materializer cannot restore their sleep counters. Five of
+240 sampled known sets required forced completion. These are correctness
+counts, not matched timing or strength evidence. Earlier diagnostic passes and
+their failures are preserved outside the repository; no source roots were
+replaced. The latest preflight took 5.584 seconds including its live prefix
+replays, not including model loading.
+
+The broader 119-test simulator/replay/scenario/telemetry suite exited 1 with one
+scenario provenance error: its committed fixture expects source hash
+`f9e35e1fddae5064`, while the pinned runtime is `f5a5265143d423af`. The same
+isolated test fails on the pre-reference repair worktree. This pre-existing
+runtime/fixture mismatch is not treated as successful verification or repaired
+by changing the fixture's attestation.
+
 ## Work still required before comparison
 
-1. Exact pinned Showdown generator for unknown Pokémon and known-species sets,
-   at most ten known-trait rejection attempts and explicit forced-completion
-   accounting. Reusing a fixed world or a cached catalog is not equivalent.
-2. Validate sampled worlds against the retained player-known public root and
-   certify replacements/committed actions without looking at live private data.
+1. Restore the two retained Rest-sleep roots from their public timer provenance,
+   with simulator regression tests; keep their earlier refusals intact.
+2. Certify pending committed actions without looking at live private data and
+   audit public inference constraints and sampler accounting independently.
 3. Incremental worker-statistics exchange without double-counting old samples.
    Current execution is single-worker, not the paper's 20-worker protocol.
 4. Register one justified alpha/beta choice (the thesis does not publish its

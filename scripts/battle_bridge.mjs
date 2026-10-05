@@ -116,6 +116,7 @@ function recordBoundaryLines(battle, stream, lines) {
     return;
   }
   if (!["p1", "p2"].includes(stream)) return;
+  let receivedRequest = false;
   for (const line of lines) {
     if (!line.startsWith("|request|")) continue;
     const request = JSON.parse(line.slice("|request|".length));
@@ -123,9 +124,13 @@ function recordBoundaryLines(battle, stream, lines) {
     if (sideId === stream) {
       battle.boundaryRequests[stream] = request;
       battle.boundaryRequestGeneration = battle.boundaryGeneration;
+      receivedRequest = true;
     }
   }
-  if (battle.boundaryRequests.p1 && battle.boundaryRequests.p2) {
+  // Materialize/restore populate the cache directly. A subsequent message
+  // (for example >reseed) must not advertise that old cache as a NEW boundary
+  // ahead of the next choices command and its actual request streams.
+  if (receivedRequest && battle.boundaryRequests.p1 && battle.boundaryRequests.p2) {
     const requested = actionableRequestedPlayers(battle);
     // Showdown can first emit a pair of wait-only requests while it finishes
     // an interrupted turn. Do not consume the one readiness latch for that
@@ -575,6 +580,39 @@ function generateScenarioTeam(command) {
       evs: set.evs || {},
       ivs: set.ivs || {},
     })),
+    nodeProcMs: elapsedNodeProcMs(startedAt),
+  });
+}
+
+function generateReferenceSet(command) {
+  const startedAt = process.hrtime.bigint();
+  if (!Number.isSafeInteger(command.seed) || command.seed < 0) {
+    throw new Error("Reference set generation requires a nonnegative safe integer seed.");
+  }
+  if (typeof command.species !== "string" || !command.species.trim()) {
+    throw new Error("Reference set generation requires a species name.");
+  }
+  if (!Teams || typeof Teams.getGenerator !== "function") {
+    throw new Error("Pokemon Showdown does not expose Teams.getGenerator.");
+  }
+  const parts = deriveSeed(String(command.seed), "reference-known-set").split(",").map(Number);
+  // A new pinned-server generator for EACH draw: do not condition by rejecting
+  // whole parties or sample the observation encoder's cached set catalog.
+  const generator = Teams.getGenerator("gen3randombattle", parts);
+  const species = generator.dex.species.get(command.species);
+  if (!species.exists || !generator.randomSets?.[species.id]) {
+    throw new Error("Reference species has no Gen 3 random-battle generator set.");
+  }
+  const set = generator.randomSet(species, {}, false);
+  emit({
+    type: "reference_set_generated",
+    seed: command.seed,
+    set: {
+      species: set.species || set.name || "",
+      moves: Array.isArray(set.moves) ? set.moves : [],
+      ability: set.ability || "", item: set.item || "", level: set.level || 100,
+      nature: set.nature || "", gender: set.gender || "", evs: set.evs || {}, ivs: set.ivs || {},
+    },
     nodeProcMs: elapsedNodeProcMs(startedAt),
   });
 }
@@ -1821,6 +1859,9 @@ async function handleCommand(command) {
       break;
     case "scenario_generate_team":
       generateScenarioTeam(command);
+      break;
+    case "reference_generate_set":
+      generateReferenceSet(command);
       break;
     case "reseed":
       await reseedBattle(command);

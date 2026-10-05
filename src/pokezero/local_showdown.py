@@ -564,6 +564,28 @@ class LocalShowdownEnv:
             raise LocalShowdownError(f"Bridge emitted malformed scenario team: {event!r}")
         return tuple(_json_clone_mapping(row) for row in rows)
 
+    def generate_reference_set(self, *, seed: int, species: str) -> Mapping[str, Any]:
+        """One exact pinned Gen 3 server set for a known species, not a cached variant.
+
+        This stateless command reads no live battle or private request. Each
+        call creates a new server generator with empty team context; that
+        context is an explicit reference-implementation choice.
+        """
+        if type(seed) is not int or not 0 <= seed <= 2**53 - 1:
+            raise ValueError("reference set seed must be a nonnegative JavaScript-safe integer.")
+        if not isinstance(species, str) or not species.strip():
+            raise ValueError("reference set generation requires a species name.")
+        if self._process is None or self._process.poll() is not None:
+            self.reset(seed=seed)
+        event = self._bridge_request_event(
+            {"type": "reference_generate_set", "seed": seed, "species": species},
+            "reference_set_generated",
+        )
+        row = event.get("set")
+        if not isinstance(row, Mapping) or event.get("seed") != seed:
+            raise LocalShowdownError("Bridge emitted malformed reference set evidence.")
+        return _json_clone_mapping(row)
+
     def _reset(
         self,
         *,
