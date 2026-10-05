@@ -105,7 +105,8 @@ class PublicRootWorldFactory:
                 ability = None
             known.append(KnownSetTraits(mon.species, mon.revealed_moves, ability, item,
                 _level(details.get(mon.species.casefold())),
-                mon.gender or _gender(details.get(mon.species.casefold())), _maximum_hp(mon.condition)))
+                mon.gender or _gender(details.get(mon.species.casefold())), _maximum_hp(mon.condition),
+                mon.ruled_out_abilities, mon.ruled_out_items))
         self.known = tuple(known)
         self.env, self.state, self.evaluator = env, state, evaluator
         self.own_team = own_team

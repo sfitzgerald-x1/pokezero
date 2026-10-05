@@ -935,6 +935,10 @@ def _public_action_candidates(value: Any) -> list[dict[str, Any]]:
             pokemon = candidate.get("pokemon")
             if isinstance(pokemon, Mapping) and isinstance(pokemon.get("species"), str):
                 public_candidate["switched_species"] = pokemon["species"]
+            elif isinstance(candidate.get("switched_species"), str):
+                # Rehydrated public observations already carry this sanitized
+                # semantic identity. A second capture must not erase it.
+                public_candidate["switched_species"] = candidate["switched_species"]
         candidates.append(public_candidate)
     return candidates
 

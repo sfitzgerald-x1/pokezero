@@ -5,7 +5,7 @@ fresh determinization per trajectory, first-new-state leaves, sampled chance,
 own-policy opponent sampling, and maximum-visit selection. A simulator adapter
 must supply public/player-known state identities, exact randbats sampling and
 private-safe inference. Those obligations are NOT established by this kernel.
-Single-worker execution is an explicit deviation from the paper's 20 workers.
+This kernel is one worker; paper_reference_parallel supplies the process pool.
 No production policy imports this module.
 """
 
@@ -161,6 +161,24 @@ class SearchResult:
     world_draws: int
     root_visits: tuple[int, ...]
     root_means: tuple[float | None, ...]
+    elapsed_seconds: float
+    deadline_exhausted: bool
+    deadline_overrun_seconds: float
+
+
+@dataclass(frozen=True)
+class BatchResult:
+    """Worker work receipt, never a decision or a stale-action fallback.
+
+    A shared deadline can expire before an individual worker finishes any
+    trajectory. Only the coordinator can decide whether aggregate NEW work
+    suffices. An empty batch is not a simulator failure and does not poison a
+    worker, but ordinary single-worker ``search`` still refuses zero work.
+    """
+
+    trajectories: int
+    transitions: int
+    world_draws: int
     elapsed_seconds: float
     deadline_exhausted: bool
     deadline_overrun_seconds: float
@@ -374,14 +392,44 @@ class TrajectorySearch:
                sample_world: Callable[[random.Random], World], seed: int,
                trajectories: int, deadline_seconds: float | None = None,
                clock: Callable[[], float] = time.perf_counter) -> SearchResult:
+        result = self._run_batch(root, battle_id=battle_id, evaluate_root=evaluate_root,
+            sample_world=sample_world, seed=seed, trajectories=trajectories,
+            deadline_seconds=deadline_seconds, deadline_at=None, clock=clock,
+            require_complete=True)
+        assert isinstance(result, SearchResult)
+        return result
+
+    def search_batch(self, root: DecisionState, *, battle_id: str,
+                     evaluate_root: Callable[[DecisionState], Evaluation],
+                     sample_world: Callable[[random.Random], World], seed: int,
+                     trajectories: int, deadline_at: float | None = None,
+                     clock: Callable[[], float] = time.perf_counter) -> BatchResult:
+        """At most one exchange batch, using the coordinator's absolute clock."""
+        result = self._run_batch(root, battle_id=battle_id, evaluate_root=evaluate_root,
+            sample_world=sample_world, seed=seed, trajectories=trajectories,
+            deadline_seconds=None, deadline_at=deadline_at, clock=clock,
+            require_complete=False)
+        assert isinstance(result, BatchResult)
+        return result
+
+    def _run_batch(self, root: DecisionState, *, battle_id: str,
+                   evaluate_root: Callable[[DecisionState], Evaluation],
+                   sample_world: Callable[[random.Random], World], seed: int,
+                   trajectories: int, deadline_seconds: float | None,
+                   deadline_at: float | None, clock: Callable[[], float],
+                   require_complete: bool) -> BatchResult | SearchResult:
         started = clock()  # Includes root inference, determinization, simulator and cleanup.
         if (battle_id != self._battle_id or not self._usable
                 or type(seed) is not int or not 0 <= seed < 2**64
                 or type(trajectories) is not int or trajectories <= 0
                 or (deadline_seconds is not None and (type(deadline_seconds) not in (int, float)
-                    or not math.isfinite(deadline_seconds) or deadline_seconds <= 0))):
+                    or not math.isfinite(deadline_seconds) or deadline_seconds <= 0))
+                or (deadline_at is not None and (type(deadline_at) not in (int, float)
+                    or not math.isfinite(deadline_at)))
+                or (deadline_seconds is not None and deadline_at is not None)):
             raise ReferenceRefusal("invalid battle/work/deadline contract; reset battle before reuse")
-        deadline = None if deadline_seconds is None else started + deadline_seconds
+        deadline = deadline_at if deadline_at is not None else (
+            None if deadline_seconds is None else started + deadline_seconds)
         expired = lambda: deadline is not None and clock() >= deadline
         completed = transitions = draws = 0
         try:
@@ -395,7 +443,7 @@ class TrajectorySearch:
             self._local_statistics = {key: row for key, row in self._local_statistics.items()
                                      if row.state.faint_count >= self._faint_floor}
             node = self._existing(root)
-            if node is None:
+            if node is None and not expired():
                 node = self._node_from_evaluation(root, evaluate_root(root))
                 self.nodes[root.key] = node
                 self._discovered(node)
@@ -415,17 +463,21 @@ class TrajectorySearch:
                     world.close()
                 if not backed:
                     break
-            if completed == 0:
+            if completed == 0 and require_complete:
                 raise ReferenceRefusal("zero complete trajectories; no stale-statistics or raw-policy fallback")
-            action_index = max(range(len(root.actions)), key=lambda i: (node.visits[i], -i))
+            if require_complete:
+                node = self.nodes[root.key]
+                action_index = max(range(len(root.actions)), key=lambda i: (node.visits[i], -i))
             elapsed = clock() - started
             if not math.isfinite(elapsed) or elapsed < 0:
                 raise ReferenceRefusal("invalid decision clock")
-            return SearchResult(root.actions[action_index], completed, transitions, draws,
-                tuple(node.visits), tuple(total / count if count else None
-                    for total, count in zip(node.totals, node.visits)), elapsed,
-                deadline is not None and started + elapsed >= deadline,
-                0.0 if deadline_seconds is None else max(0.0, elapsed - deadline_seconds))
+            exhausted = deadline is not None and started + elapsed >= deadline
+            overrun = 0.0 if deadline is None else max(0.0, started + elapsed - deadline)
+            if require_complete:
+                return SearchResult(root.actions[action_index], completed, transitions, draws,
+                    tuple(node.visits), tuple(q / n if n else None
+                        for q, n in zip(node.totals, node.visits)), elapsed, exhausted, overrun)
+            return BatchResult(completed, transitions, draws, elapsed, exhausted, overrun)
         except Exception:
             # A simulator/cleanup/inference refusal cannot leave a reusable successful tree.
             self._usable = False

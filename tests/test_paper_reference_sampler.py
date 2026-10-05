@@ -88,6 +88,29 @@ class ReferenceSamplingTests(unittest.TestCase):
         self.assertEqual(draw.team[0].item, "Leftovers")
         self.assertFalse(draw.known[0].forced)
 
+    def test_public_negative_items_and_abilities_reject_server_draws(self):
+        excluded = set_row(item="Lum Berry")
+        excluded["ability"] = "Thick Fat"
+        generator = Generator(draws=[excluded, set_row()])
+        draw = self.sampler(generator).draw((KnownSetTraits("Snorlax",
+            ruled_out_abilities=("Thick Fat",), ruled_out_items=("Lum Berry",)),), random.Random(4))
+        self.assertEqual(len(draw.known[0].seeds), 2)
+        self.assertFalse(draw.known[0].forced)
+        self.assertEqual((draw.team[0].ability, draw.team[0].item), ("Immunity", "Leftovers"))
+
+    def test_tenth_draw_cannot_force_or_redraw_away_negative_public_evidence(self):
+        generator = Generator()
+        with self.assertRaisesRegex(ReferenceRefusal, "trait/exclusion"):
+            self.sampler(generator).draw((KnownSetTraits("Snorlax",
+                ruled_out_items=("Leftovers",)),), random.Random(4))
+        self.assertEqual(sum(c[0] == "set" for c in generator.calls), 10)
+        self.assertFalse(any(c[0] == "party" for c in generator.calls))
+        for kwargs in ({"item": "Leftovers", "ruled_out_items": ("Leftovers",)},
+                {"ability": "Immunity", "ruled_out_abilities": ("Immunity",)},
+                {"ruled_out_items": ["Leftovers"]}, {"ruled_out_abilities": ("",)}):
+            with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ReferenceRefusal, "exclusions"):
+                KnownSetTraits("Snorlax", **kwargs)
+
     def test_generic_public_hidden_power_accepts_typed_generator_set_without_forcing_type(self):
         row = set_row(moves=["hiddenpowerfire", "rest", "icebeam", "sleeptalk"])
         draw = self.sampler(Generator(draws=[row])).draw((KnownSetTraits("Snorlax", ("Hidden Power",)),), random.Random(0))

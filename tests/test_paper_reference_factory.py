@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import random
+import pickle
 import unittest
 
 from _showdown_root import requires_showdown, showdown_root
@@ -9,6 +10,7 @@ from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from pokezero.mcts_eval.paper_reference import Evaluation, ReferenceRefusal, Terminal
 from pokezero.mcts_eval.paper_reference_factory import PublicRootWorldFactory
 from pokezero.mcts_eval.paper_reference_showdown import decision_state
+from pokezero.mcts_eval.paper_reference_runtime import PublicRootRequest
 from pokezero.randbat import load_gen3_randbat_source_cached
 
 
@@ -75,6 +77,25 @@ class PublicRootFactoryTests(unittest.TestCase):
         self.sampled._belief_set_source = self.source
         with self.assertRaisesRegex(ReferenceRefusal, "opening party"):
             self.factory(state=replace(self.public, self_initial_request={}))
+
+    def test_worker_transport_strips_catalog_and_nonpublic_metadata_not_public_evidence(self):
+        observation = replace(self.observation, metadata={**self.observation.metadata,
+            "private_canary": "must-not-cross-processes"})
+        request = PublicRootRequest.capture(self.public, observation)
+        self.assertIs(self.public.belief_engine.set_source, self.source)
+        self.assertNotIn("private_canary", request.observation.metadata)
+        self.assertIsNone(request.state.belief_engine.set_source)
+        wire = pickle.dumps(request)
+        restored = pickle.loads(wire)
+        self.assertEqual(restored.set_source_hash, self.source.metadata.source_hash)
+        self.assertEqual(decision_state(restored.observation, player="p1"),
+                         decision_state(self.observation, player="p1"))
+        self.assertEqual(restored.state.belief_engine.snapshot(), self.public.belief_engine.snapshot())
+        restored.state.belief_engine.set_source = self.source
+        factory = self.factory(state=restored.state, observation=restored.observation)
+        world = factory(random.Random(1))
+        world.close()
+        self.assertEqual(factory.receipts[0]["status"], "ROOT_VALIDATED")
 
 
 if __name__ == "__main__":

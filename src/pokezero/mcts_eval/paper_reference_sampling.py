@@ -43,6 +43,8 @@ class KnownSetTraits:
     level: int | None = None
     gender: str | None = None
     max_hp: int | None = None
+    ruled_out_abilities: tuple[str, ...] = ()
+    ruled_out_items: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.species, str) or not _id(self.species):
@@ -61,6 +63,13 @@ class KnownSetTraits:
             raise ReferenceRefusal("known gender is invalid")
         if self.max_hp is not None and (type(self.max_hp) is not int or not 1 <= self.max_hp <= 1000):
             raise ReferenceRefusal("known maximum HP is invalid")
+        for excluded, positive in ((self.ruled_out_abilities, self.ability),
+                                   (self.ruled_out_items, self.item)):
+            if (not isinstance(excluded, tuple)
+                    or any(not isinstance(v, str) or not _id(v) for v in excluded)
+                    or len({_id(v) for v in excluded}) != len(excluded)
+                    or (positive is not None and _id(positive) in {_id(v) for v in excluded})):
+                raise ReferenceRefusal("invalid or contradictory public original-set exclusions")
 
 
 class ServerGenerator(Protocol):
@@ -121,6 +130,8 @@ def _matches(candidate: FixturePokemon, traits: KnownSetTraits, source: Gen3Rand
         and all(_move_known_matches(canonical_move_id(m), candidate.moves) for m in traits.moves)
         and (traits.ability is None or _id(candidate.ability or "") == _id(traits.ability))
         and (traits.item is None or _id(candidate.item or "") == _id(traits.item))
+        and _id(candidate.ability or "") not in {_id(v) for v in traits.ruled_out_abilities}
+        and _id(candidate.item or "") not in {_id(v) for v in traits.ruled_out_items}
         and (traits.level is None or candidate.level == traits.level)
         and (traits.gender is None or (candidate.gender or "N") == traits.gender)
         and (traits.max_hp is None or _maximum_hp(candidate, source) == traits.max_hp))
@@ -207,7 +218,9 @@ class PaperHiddenTeamSampler:
                     raise ReferenceRefusal("forced known-set spread cannot be reconstructed")
                 candidate = replace(candidate, evs=spread["evs"], ivs=spread["ivs"])
                 if not _matches(candidate, traits, self.set_source):
-                    raise ReferenceRefusal("forced completion lost a public original-set trait")
+                    # Negative facts cannot be invented away or silently
+                    # discarded. No eleventh draw or catalog fallback.
+                    raise ReferenceRefusal("tenth-draw forced completion violates a public original-set trait/exclusion")
             team.append(candidate)
             receipts.append(KnownDrawReceipt(traits.species, tuple(seeds), forced,
                 hashlib.sha256(pack_team((candidate,)).encode()).hexdigest(), assigned_gender))

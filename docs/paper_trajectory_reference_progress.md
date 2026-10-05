@@ -1,7 +1,8 @@
 # Trajectory reference implementation progress
 
-This opt-in implementation is unfinished. It is not imported by production
-policies and is not a paper reproduction or a playing-strength result.
+This opt-in implementation now includes twenty persistent worker processes.
+The comparison remains unfinished. Production policies do not import it, and
+implementation tests are not a paper reproduction or a playing-strength result.
 
 The goal is an actual comparison of Wang's inference-search semantics with raw
 policy and incumbent search, using the unchanged champion and retained frozen
@@ -51,13 +52,19 @@ is an information deviation from percentage-only server observations and must
 be shared and disclosed across comparison arms. Pending Baton Pass commitments
 still refuse: the existing deferred-prior argmax shortcut is not policy sampling.
 
-Verification so far: 69 focused tests pass without skips. A local fixed-team
+Verification so far: 79 focused tests pass without skips. A local fixed-team
 real Showdown/champion smoke completed eight trajectories and 11 simulator
 transitions, using 27 neural forwards and retaining nine nodes. It exercises
 the adapter, NOT fresh hidden sampling, matched timing or strength. An initial
 smoke failed because pre-merge main did not emit distribution metadata; the
 adapter now consumes the canonical model logits and critic directly. The failed
 run contributes no accepted experiment evidence.
+
+The focused suite plus timing-corpus regressions passes 101 tests without skips.
+The incumbent's model-enabled native extension was built in an isolated local
+environment; the existing repair environment was not reinstalled or changed.
+Its TorchScript parity suite passes eleven CPU tests with zero output difference;
+one CUDA-only check is skipped because this laptop has no CUDA device.
 
 A subsequent real champion smoke used eight distinct sampled teams, validated
 the exact player-known root for every one, and completed eight trajectories in
@@ -82,7 +89,7 @@ review reproduced the collision, then confirmed that the repaired guard refuses
 before resetting the destination world. The earlier two-root refusal receipt is
 preserved; neither position was replaced.
 
-The latest all-root preflight completed 128 trajectories in 6.101 seconds,
+The latest all-root preflight completed 128 trajectories in 6.223 seconds,
 including live prefix replays but excluding model loading. Five of 252 sampled
 known sets required forced completion. These are correctness counts, not matched
 timing or strength evidence. All earlier diagnostic receipts remain unchanged.
@@ -95,9 +102,41 @@ already-counted values. Remote priors are recomputed on first local encounter,
 without treating a remotely expanded node as a new leaf. Real faint counts prune
 both shared and local statistics. Ten protocol tests include two logical workers
 exchanging after ten rollouts and regression tests for issues found and verified
-by an independent reviewer. This is protocol verification only: the actual
-20-process execution layer and resource-matched timing comparison are not yet
-implemented or qualified.
+by an independent reviewer.
+
+The actual process runner now keeps twenty spawned workers alive across
+decisions, exchanging after ten trajectories. Each has its own warm champion,
+simulator and priors. The coordinator includes public-root preparation,
+serialization, communication and acknowledgements in its clock; an outer
+comparison timer must additionally include observation capture and final
+Showdown choice validation. Pool startup is measured separately. Empty deadline
+batches have no selected action, and a decision with zero new completed work
+refuses even if its tree contains historical visits. Failed workers are not
+replaced or retried. Isolated process groups let bounded cleanup reach a stopped
+simulator child after its Python parent exits.
+
+An actual twenty-process champion smoke completed 200 fresh trajectories in
+2.263 seconds. A separate fresh-tree one-second run completed 270 trajectories
+and took 1.031 seconds including transport and cleanup; its 31-millisecond
+overrun is reported, not declared a strict one-second pass. Startup took 3.613
+seconds. This laptop has 18 physical cores and 36 GiB memory, so twenty workers
+are slightly oversubscribed. This is one-position engineering evidence, not a
+resource-matched comparison or a strength result.
+
+Independent review found two transport issues that are now fixed: a second
+sanitization erased already-public switch identities, and terminating only a
+Python worker could leave its stopped simulator child alive. Real root
+round-trip and stopped-child regressions cover both. A precision-only test
+failure reconstructed signed totals from rounded means; the test now checks
+the authoritative master totals instead. Earlier failed runs are not counted
+as successful verification.
+
+Seven retained roots contain public negative item evidence. The exact-server
+sampler now rejects ruled-out original abilities and items within the same ten
+draws, including after forced completion of the tenth draw. It never silently
+discards exclusions, invents an allowed trait, or takes an eleventh draw. All
+32 retained roots still complete the four-trajectory correctness preflight;
+none was redrawn. Independent review confirmed this exclusion accounting.
 
 The broader 119-test simulator/replay/scenario/telemetry suite exited 1 with one
 scenario provenance error: its committed fixture expects source hash
@@ -112,14 +151,13 @@ known scenario-source mismatch) pass without skips in 34.621 seconds. The
 
 ## Work still required before comparison
 
-1. Certify pending committed actions without looking at live private data and
-   audit public inference constraints and sampler accounting independently.
-2. Build and verify the actual 20-worker execution layer using the tested exchange
-   protocol. Current simulator execution remains single-worker.
-3. Register one justified alpha/beta choice (the thesis does not publish its
+1. Keep unsupported pending committed actions as named refusals; all retained
+   comparison roots are simultaneous. Do not use a private commitment or the
+   materializer's argmax shortcut to claim support.
+2. Register one justified alpha/beta choice (the thesis does not publish its
    selected numbers), the current Gen 3/champion representation deviation,
    resource accounting, fixed work and full decision-boundary deadlines.
-4. Run the retained all-root raw/incumbent/reference comparison under a new
+3. Run the retained all-root raw/incumbent/reference comparison under a new
    bounded manifest, preserving failures and source-battle clustering. Use
    continuations/action quality and bounded matchups to judge improvement,
    not just changed actions or a successful implementation test.
