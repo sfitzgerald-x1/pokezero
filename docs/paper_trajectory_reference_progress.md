@@ -1,7 +1,9 @@
 # Trajectory reference implementation progress
 
 This opt-in implementation now includes twenty persistent worker processes.
-The full comparison remains unfinished. Production policies do not import it, and
+The bounded comparison is executed; see
+[comparison results](paper_trajectory_reference_comparison_20261005.md).
+It found no demonstrated action-quality gain. Production policies do not import it, and
 implementation tests are not a paper reproduction or a playing-strength result.
 
 ## First registered comparison and bounded repair
@@ -27,8 +29,11 @@ or relaxed exclusion is permitted. The strict tenth-template rule remains the
 default. This variant is an adaptation for exact HP and hard public constraints,
 not an exact paper reproduction or a posterior-conditioned generator. Receipts
 identify attempted seeds, mismatched fields and the selected template. A fresh
-registered execution will repair only the 22 refused reference cells; it will
-not rerun completed controls or erase the strict variant's failure.
+registered execution repaired only the 22 refused reference cells; all completed.
+It reran no completed controls and preserved the strict variant's failure. Eight
+additional terminal games and 88 reused outcomes completed the conditional audit.
+The repaired panel has no positive first-action benefit; the stage decision is
+STOP_NO_DEMONSTRATED_ACTION_GAIN, not a whole-policy inferiority conclusion.
 
 The adapted sampler, worker diagnostics and retained regression suites pass
 146 tests without skips. Independent review confirmed the default-off boundary
@@ -181,23 +186,25 @@ After these changes, the 109 simulator/replay/telemetry tests (excluding that
 known scenario-source mismatch) pass without skips in 34.621 seconds. The
 119-test result remains a failure, not a green full-suite claim.
 
-## Work still required to finish comparison
+## Comparison disposition
 
-1. Keep unsupported pending committed actions as named refusals; all retained
+1. Keep unsupported pending committed actions as named refusals; the retained
    roster has 31 simultaneous roots and one actor-only faint replacement. Do not use a private commitment or the
    materializer's argmax shortcut to claim support.
 2. Preserve the first registration's alpha 0.5/beta 1 choice (the thesis does
    not publish its selected numbers), Gen 3/champion deviation and resource
    accounting. Both outer clocks include the full decision boundary, but the
    incumbent and reference have different internal stopping-clock scopes.
-3. Register and run only the 22 refused reference cells with the bounded
-   completion adaptation. Reuse pinned same-action terminal continuations;
-   run new continuations only for newly selected actions. Keep old and repaired
-   timing cohorts separate and disclose that this is conditional action quality,
-   not a live persistent-policy matchup or full paper reproduction.
+3. Preserve the completed narrow repair and readout. Old and repaired timing
+   cohorts remain separate. This is conditional action quality, not a live
+   persistent-policy matchup or full paper reproduction. The positive benefit
+   condition for a larger game pilot was not met; do not expand samples to
+   obtain a favorable result.
 
 No fresh cluster cohort, training job, promotion or production change has been
-submitted by this work. The full comparison goal remains active and incomplete.
+submitted by this work. The bounded comparison is complete; PR closeout still
+requires green required CI. Full paper training, live persistent-policy strength
+and external-opponent superiority remain untested and are not claimed.
 
 Source: Jett Wang, *Winning at Pokémon Random Battles Using Reinforcement
 Learning*, MIT (2024), pages 21-22 and 26-28,
