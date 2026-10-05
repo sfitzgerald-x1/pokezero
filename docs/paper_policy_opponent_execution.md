@@ -10,6 +10,13 @@ been changed. The current study disposition is **PARK_UNRESOLVED**; the
 [October 4 readout](paper_policy_opponent_profile_readout_20261004.md) supersedes
 the historical pre-launch status entries below.
 
+The owner's subsequent request to fix the nine refused positions is implemented
+as a narrow adapter repair, not a renewed experiment. All nine exact frozen
+positions now complete local candidate fixed-work searches with zero fallbacks
+or invalid actions. The readout's repair addendum preserves the original study
+and explains Baton Pass commitment handling, sampled-own-party switch identity,
+and verified public faint-before-action replay. Default search remains unchanged.
+
 ## Implemented native foundation
 
 `policy_opponent.rs` samples a fixed full legal distribution independently of

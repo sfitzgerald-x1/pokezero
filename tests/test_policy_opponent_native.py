@@ -103,8 +103,15 @@ class NativePolicyOpponentSearchTest(_EncodedSearchFixture, unittest.TestCase):
         for index in (23, 24, 25):
             opponent_fields[index] = "NONE;true;0"
         trapped["state_str"] = ",".join(subject_fields) + "/" + ",".join(opponent_fields)
-        with self.assertRaisesRegex(ValueError, "native and private-knowledge legal surfaces differ"):
+        with self.assertRaisesRegex(ValueError, "native and private-knowledge legal surfaces differ") as caught:
             self.run_search(failure, position=trapped, max_depth=1)
+        diagnostic = json.loads(caught.exception.policy_opponent_diagnostic)
+        self.assertEqual(diagnostic["schema"], "policy-opponent-refusal-v1")
+        self.assertTrue(diagnostic["diagnostic_only_not_policy_input"])
+        self.assertEqual(diagnostic["node_depth"], 0)
+        self.assertEqual(diagnostic["public_branch_lines"], [])
+        self.assertNotEqual(diagnostic["native_action_indices"], diagnostic["private_action_indices"])
+        self.assertNotIn("SHADOWTAG", diagnostic["sampled_own_side"])
         # A provider exception cannot poison subsequent searches or the model.
         self.assertEqual(self.run_search()["iterations"], 64)
 

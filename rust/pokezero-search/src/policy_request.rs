@@ -72,6 +72,22 @@ pub(crate) fn sampled_side_request(
     max_pp: &HashMap<String, i64>,
     root: bool,
 ) -> PyResult<Value> {
+    sampled_side_request_in_phase(side, slot, species, order, options, max_pp, root, false)
+}
+
+/// The replacement phase is public request-boundary information, not an
+/// opposing ability/item/legal mask. A saved move resumes after Baton Pass;
+/// its owner is NOT requested to choose that move again at the switch boundary.
+pub(crate) fn sampled_side_request_in_phase(
+    side: &Side,
+    slot: &str,
+    species: &[String],
+    order: &[String],
+    options: &[MoveChoice],
+    max_pp: &HashMap<String, i64>,
+    root: bool,
+    opponent_replacing: bool,
+) -> PyResult<Value> {
     if slot != "p1" && slot != "p2" {
         return Err(refusal("unknown seat"));
     }
@@ -136,10 +152,24 @@ pub(crate) fn sampled_side_request(
     let recharging = side
         .volatile_statuses
         .contains(&PokemonVolatileStatus::MUSTRECHARGE);
+    if opponent_replacing && !force_switch {
+        let commitment_matches = options.len() == 1
+            && match options[0] {
+                MoveChoice::None => true,
+                MoveChoice::Move(index) => {
+                    side.get_active_immutable().moves[&index].id
+                        == side.switch_out_move_second_saved_move
+                        && side.switch_out_move_second_saved_move != Choices::NONE
+                }
+                _ => false,
+            };
+        if !commitment_matches {
+            return Err(refusal("replacement wait does not match saved commitment"));
+        }
+    }
     let waiting = !force_switch
-        && !recharging
-        && options.len() == 1
-        && matches!(options[0], MoveChoice::None);
+        && (opponent_replacing
+            || (!recharging && options.len() == 1 && matches!(options[0], MoveChoice::None)));
     let mut own_move_options = Vec::new();
     if !force_switch && !recharging && !waiting {
         if let Some(index) = side.active_is_charging_move() {
@@ -235,6 +265,7 @@ pub(crate) fn sampled_side_request(
     let mut native_legal = HashSet::new();
     for option in options {
         let index = match option {
+            MoveChoice::Move(_) | MoveChoice::None if waiting => None,
             MoveChoice::Move(index) => Some(
                 index
                     .serialize()
@@ -288,9 +319,29 @@ pub(crate) fn sampled_side_request(
         }
     }
     if native_legal != private_legal {
-        return Err(refusal(
-            "native and private-knowledge legal surfaces differ",
-        ));
+        // A refusal is not a policy input. Retain the two already-derived
+        // action surfaces for diagnosis without sending opposing hidden state
+        // to the provider or silently changing either legal mask.
+        let mut native_labels: Vec<_> = native_legal.iter().copied().collect();
+        let mut private_labels: Vec<_> = private_legal.iter().copied().collect();
+        native_labels.sort_unstable();
+        private_labels.sort_unstable();
+        let diagnostic = json!({"schema": "policy-opponent-refusal-v1",
+            "kind": "legal_surface_mismatch", "seat": slot, "root": root,
+            "native_action_indices": native_labels, "private_action_indices": private_labels,
+            "native_options": options.iter().map(|option| format!("{option:?}")).collect::<Vec<_>>(),
+            "request_order": ordered, "active_index": active,
+            "force_switch": force_switch, "waiting": waiting, "recharging": recharging,
+            "own_volatile_statuses": format!("{:?}", side.volatile_statuses),
+            "own_last_used_move": format!("{:?}", side.last_used_move),
+            "diagnostic_only_not_policy_input": true});
+        let error = refusal("native and private-knowledge legal surfaces differ");
+        Python::attach(|py| {
+            error
+                .value(py)
+                .setattr("policy_opponent_diagnostic", diagnostic.to_string())
+        })?;
+        return Err(error);
     }
     Ok(json!({"request": request, "self_move_states": move_states, "native_action_indices": map}))
 }
@@ -313,12 +364,12 @@ pub fn sampled_policy_request(
     } else {
         state.get_all_options()
     };
-    let (side, options) = match slot {
-        "p1" => (&state.side_one, one),
-        "p2" => (&state.side_two, two),
+    let (side, options, opponent_replacing) = match slot {
+        "p1" => (&state.side_one, one, state.side_two.force_switch),
+        "p2" => (&state.side_two, two, state.side_one.force_switch),
         _ => return Err(refusal("unknown seat")),
     };
-    sampled_side_request(
+    sampled_side_request_in_phase(
         side,
         slot,
         &species,
@@ -326,6 +377,7 @@ pub fn sampled_policy_request(
         &options,
         &max_pp,
         root,
+        opponent_replacing,
     )
     .map(|v| v.to_string())
 }
@@ -531,6 +583,74 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result["native_action_indices"], json!([1]));
+    }
+
+    #[test]
+    fn replacement_phase_waits_for_a_saved_move_without_resampling_it() {
+        let mut state = fixture();
+        state.side_one.switch_out_move_second_saved_move = Choices::EMBER;
+        let options = [MoveChoice::Move(PokemonMoveIndex::M0)];
+        let result = sampled_side_request_in_phase(
+            &state.side_one,
+            "p1",
+            &names(),
+            &names(),
+            &options,
+            &pp(),
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(result["request"]["wait"], true);
+        assert_eq!(result["native_action_indices"], json!([null]));
+        assert!(result["request"].get("active").is_none());
+    }
+
+    #[test]
+    fn replacement_phase_does_not_accept_an_uncommitted_move() {
+        pyo3::Python::initialize();
+        let state = fixture();
+        assert!(sampled_side_request_in_phase(
+            &state.side_one,
+            "p1",
+            &names(),
+            &names(),
+            &[MoveChoice::Move(PokemonMoveIndex::M0)],
+            &pp(),
+            false,
+            true,
+        )
+        .is_err());
+        let wait = sampled_side_request_in_phase(
+            &state.side_one,
+            "p1",
+            &names(),
+            &names(),
+            &[MoveChoice::None],
+            &pp(),
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(wait["native_action_indices"], json!([null]));
+        let mut forced = state;
+        forced.side_one.force_switch = true;
+        let replacing = sampled_side_request_in_phase(
+            &forced.side_one,
+            "p1",
+            &names(),
+            &names(),
+            &[
+                MoveChoice::Switch(PokemonIndex::P1),
+                MoveChoice::Switch(PokemonIndex::P2),
+            ],
+            &pp(),
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(replacing["native_action_indices"], json!([4, 5]));
+        assert_eq!(replacing["request"]["forceSwitch"], json!([true]));
     }
 
     #[test]

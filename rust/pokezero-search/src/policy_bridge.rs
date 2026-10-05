@@ -148,7 +148,12 @@ impl PolicyOpponentBridge {
                 self.opponent_side_one,
                 meta.as_ref(),
             )?;
-            let bundle = crate::policy_request::sampled_side_request(
+            let opponent_replacing = if self.opponent_side_one {
+                state.side_two.force_switch
+            } else {
+                state.side_one.force_switch
+            };
+            let bundle = crate::policy_request::sampled_side_request_in_phase(
                 &own,
                 slot,
                 species,
@@ -156,7 +161,28 @@ impl PolicyOpponentBridge {
                 options,
                 &self.max_pp,
                 parent.is_none(),
-            )?;
+                opponent_replacing,
+            )
+            .map_err(|error| {
+                Python::attach(|py| {
+                    if let Ok(raw) = error.value(py).getattr("policy_opponent_diagnostic") {
+                        if let Ok(raw) = raw.extract::<String>() {
+                            if let Ok(mut witness) = serde_json::from_str::<serde_json::Value>(&raw)
+                            {
+                                witness["node_depth"] = json!(node.depth);
+                                witness["public_branch_lines"] = json!(lines);
+                                // Own sampled request/PP only, never State or
+                                // the opposing private team. No callback runs.
+                                witness["sampled_own_side"] = json!(own.serialize());
+                                let _ = error
+                                    .value(py)
+                                    .setattr("policy_opponent_diagnostic", witness.to_string());
+                            }
+                        }
+                    }
+                });
+                error
+            })?;
             let payload = json!({"native_request_bundle": bundle, "public_branch_lines": lines,
                 "opponent_slot": slot})
             .to_string();

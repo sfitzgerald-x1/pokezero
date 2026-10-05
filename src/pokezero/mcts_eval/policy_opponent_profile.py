@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import hashlib
+import json
 import math
 import random
 import time
@@ -26,6 +27,28 @@ from .source_root_replay import SourceRootReplayError, source_bound_replay_prefi
 ARMS = ("raw_policy", "incumbent_mcts", "own_policy_opponent_mcts")
 MODES = ("fixed_work", "matched_deadline")
 SEED_DOMAIN = b"pokezero.paper-policy-opponent-profile.rng.v1\0"
+
+
+def refusal_diagnostic(error: BaseException) -> dict[str, Any] | None:
+    """Retain a native refusal witness across the engine's exception wrapper.
+
+    Diagnostics never enter policy context or alter acceptance. Search failures
+    still refuse; this records the failing node instead of losing its evidence.
+    """
+    seen: set[int] = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        raw = getattr(error, "policy_opponent_diagnostic", None)
+        if isinstance(raw, str):
+            try:
+                payload = json.loads(raw)
+            except (TypeError, ValueError):
+                payload = None
+            if (isinstance(payload, dict) and payload.get("schema") == "policy-opponent-refusal-v1"
+                    and payload.get("diagnostic_only_not_policy_input") is True):
+                return payload
+        error = error.__cause__
+    return None
 
 
 def _unsigned_seed(value: Any) -> int:
@@ -348,6 +371,12 @@ def profile_root(
                         None if decision_started is None else clock() - decision_started,
                     "phase": phase, "type": type(error).__name__, "reason": str(error),
                     **({"telemetry": telemetry} if telemetry is not None else {})}
+                diagnostic = refusal_diagnostic(error)
+                if diagnostic is not None:
+                    rows[arm]["diagnostic"] = {
+                        **diagnostic, "decision_id": record.decision_id,
+                        "decision_seed": decision_seed, "opponent_seed": opponent_seed,
+                    }
             finally:
                 if decider is not None:
                     try:

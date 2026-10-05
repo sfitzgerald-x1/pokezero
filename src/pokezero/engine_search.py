@@ -3901,7 +3901,7 @@ class OpponentRequestOrderResolution:
 
 
 def opponent_request_order_resolution(
-    context, party_species
+    context, party_species, *, sampled_own_party: bool = False,
 ) -> OpponentRequestOrderResolution:
     """Resolve the opponent request order and retain the fail-closed reason.
 
@@ -3923,6 +3923,13 @@ def opponent_request_order_resolution(
     and reconciles them against the next observed active, so it sees those
     rounds; it is also the code that already handles Roar/Whirlwind drags and
     same-chunk faint replacements.
+
+    The opt-in own-policy callback instead knows its hypothesized sampled
+    party, not the historical opponent's hidden slot order. With
+    `sampled_own_party=True`, seed the walk from that hypothesis and resolve
+    public switch/drag species against it. Never reuse request-local switch
+    indexes from a different replay world. The default public-only walk and
+    incumbent-prior path remain unchanged.
 
     Fails closed rather than guessing: the walk returns None when the public
     data is inconsistent, and sets `active_position` to None when it loses
@@ -3951,7 +3958,8 @@ def opponent_request_order_resolution(
     opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
     try:
         walk = _public_opponent_team_index_walk(
-            context, opponent_slot=opponent_slot, team_size=len(party)
+            context, opponent_slot=opponent_slot, team_size=len(party),
+            **({"sampled_party_species": party} if sampled_own_party else {}),
         )
     except Exception:  # noqa: BLE001 - never break search over telemetry
         return OpponentRequestOrderResolution(None, "public_order_walk_error")
@@ -7091,6 +7099,7 @@ class EngineMctsPolicy:
             opponent_order_resolution = opponent_request_order_resolution(
                 context,
                 world.party_species["p2" if context.player_id == "p1" else "p1"],
+                **({"sampled_own_party": True} if config.policy_opponent else {}),
             )
             ctx_payload: dict[str, Any] = {
                 "p1": list(world.party_species["p1"]),

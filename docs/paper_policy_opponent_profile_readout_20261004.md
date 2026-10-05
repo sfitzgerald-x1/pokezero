@@ -8,6 +8,12 @@ completed as a diagnostic, not as a strength PASS. Preserve its original roots
 and successful comparator cells; do not redraw refused roots or automatically
 reset the shared budget for a repaired cohort.
 
+**Later scoped repair qualification:** following the owner's explicit request
+to fix the nine refused positions, all nine now complete locally at the original
+fixed-work budget. See the addendum below. The original immutable study remains
+23/32 and PARK_UNRESOLVED; this does not retroactively change its receipts or
+authorize a restarted study, continuations, strength claims, or deployment.
+
 ## Authoritative execution
 
 - Cluster/namespace: OLFUSA/scott; Job
@@ -123,6 +129,9 @@ their own source-scoped diagnosis, not weakening the privacy guard.
 
 ## Source-only disposition of remaining refusals
 
+The following is the historical pre-repair disposition. The later explicitly
+requested local repair and qualification are recorded separately below.
+
 This disposition reads the frozen source and existing receipts; it does not
 replay a battle, execute native search, qualify a recovery or reset the study.
 
@@ -228,3 +237,52 @@ reopen evaluation should first resolve the specific legality/order defects,
 qualify any corrected source, preserve old successful evidence and all refused
 identities, and preregister a new bounded path explicitly; it must not be an
 automatic restart of this expired study.
+
+## Owner-requested adapter repair addendum
+
+October 4, 2026, after the historical stop decision. No historical source,
+checkpoint, Kubernetes object, or shared artifact was altered or replaced.
+
+- The five HP refusals recover with the already-reviewed Pain Split qualifier
+  fix, now tested on those exact frozen positions rather than only unit fixtures.
+- Both legality refusals reproduce at depth 1 after Scyther/Volbeat uses Baton
+  Pass. The native single move is the other player's saved commitment, not a
+  fresh choice. The adapter now certifies a WAIT request during replacement,
+  checks the saved move identity, and does not resample it. Hidden trapping and
+  uncommitted/legal-surface mismatches still refuse.
+- The Whirlwind case evolves the policy opponent's **sampled own party** through
+  public switch/drag species. It no longer tries to infer that hypothesis's slots
+  from another replay world's numeric switch labels. Actual unrevealed opponent
+  order is not used. The default public-only/incumbent path remains unchanged;
+  impossible switch-to-self, missing species, and duplicate parties still refuse.
+- The source gap is a publicly witnessed cancellation: Rayquaza's Extreme Speed
+  knocks out Absol before it acts. A retained turn-anchored public-window delta
+  certifies that event, without recovering the hidden selected move. Sampled
+  replay uses a legal move representative and must reproduce the cancellation;
+  a surviving/acting opponent, switch representative, wrong round, or conflicting
+  public move fails closed. Original source bytes remain unchanged.
+- Future legal disagreements retain a labelled failing-node witness through
+  exception wrapping: depth, public suffix, own sampled side and both legal
+  label sets. The witness never enters policy inference.
+
+Local qualification used the frozen 32-root roster and source-file hashes, the
+unchanged iteration-9375 champion, clean pinned Showdown, original root/chance/
+opponent RNG domains, and 4 worlds × 256 simulations, batch 16, depth 2. All
+ordinals **00, 01, 03, 07, 09, 11, 19, 21, 27** completed 1,024 iterations each
+(9,216 total), four worlds each, zero fallbacks and zero invalid actions. This is
+nine repaired candidate fixed-work cells on the laptop, not a replacement
+32-root three-arm/deadline study, action-quality test, or runtime speed comparison.
+Observed wall times include local preparation and are not decision-latency claims.
+
+Both native consumers were rebuilt; the model-feature crate has 295 passing
+tests and one pre-existing ignored test. The new 15-test repair suite covers
+positive cancellation replay, refusal controls, sampled-order identity, and
+diagnostic propagation. The native replacement-phase tests distinguish committed
+WAIT, uncommitted refusal, and a player who must actually choose a replacement.
+Independent review additionally identified the impossible switch-to-self seam;
+it is now refused and covered alongside legitimate switch-then-drag-back.
+
+The specific nine failure seams are locally repaired, but the expired study's
+stage decision remains unchanged. Matched-deadline/all-root comparisons and
+policy-consistent continuations have not been rerun. Local correctness recovery
+does not establish complete paper fidelity or a playing-strength improvement.
