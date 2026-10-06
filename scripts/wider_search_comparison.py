@@ -75,8 +75,16 @@ def register(args):
                 and (path.suffix == '.rs' or path.name in ('Cargo.toml', 'Cargo.lock'))):
             expected = [value for original, value in receipt['source_hashes'].items()
                 if original.endswith('/' + relative)]
-            if len(expected) != 1 or expected[0] != sha(path):
+            if expected and (len(expected) != 1 or expected[0] != sha(path)):
                 raise RuntimeError('compiled binary source binding differs: ' + relative)
+            if not expected:
+                # The retained receipt hashes Cargo and src/*.rs, not build.rs.
+                # Check and pin that additional input against the unchanged
+                # repair checkout; do not claim it was in the earlier receipt.
+                original = compiled_source_root / relative
+                if not original.is_file() or sha(original) != sha(path):
+                    raise RuntimeError('supplementary build input differs: ' + relative)
+                hashes[str(original)] = sha(original)
         if relative.startswith('third_party/'):
             original = compiled_source_root / relative
             if not original.is_file() or sha(original) != sha(path):
@@ -95,6 +103,7 @@ def register(args):
         registered_games=4*len(seeds), checkpoint=str(args.checkpoint), checkpoint_sha256=sha(args.checkpoint),
         showdown_root=str(args.showdown_root), showdown_commit=git('rev-parse', 'HEAD', root=args.showdown_root),
         set_source_hash=source.metadata.source_hash, native_package=str(native), input_hashes=hashes,
+        native_binding='immutable repaired binary and historical Cargo/src receipt; supplementary build/engine inputs byte-checked and pinned against preserved repair checkout',
         nominal_decision_seconds=10., per_decision_safety_seconds=120,
         max_boundaries=200, per_game_wall_seconds=2400.,
         qualification_required_before_confirmation=True,
