@@ -88,7 +88,7 @@ def verify(m, *, source_root=REPO):
     if recovery:
         old = json.loads(Path(recovery['original_registration']).read_text())
         if recovery.get('kind') in ('native-semantic-repair', 'native-and-reference-trapping-repair',
-                                    'native-and-reference-faint-repair'):
+                                    'native-and-reference-faint-repair', 'native-and-reference-substitute-repair'):
             from pokezero.mcts_eval.wider_native_recovery import verify_historical
             verify_historical(recovery['original_registration'])
         else:
@@ -184,7 +184,8 @@ def register(args):
             '64 independent clusters may be insufficient for a modest advantage; no equivalence inference',
             'qualification outcomes never enter confirmation; refusal halts, no raw fallback or redraw'])
     recovery_modes = (args.recover_from, args.native_recover_from, args.trapping_recover_from,
-                      args.pending_qualification_recover_from, getattr(args, 'faint_recover_from', None))
+                      args.pending_qualification_recover_from, getattr(args, 'faint_recover_from', None),
+                      getattr(args, 'substitute_recover_from', None))
     if sum(value is not None for value in recovery_modes) > 1:
         raise RuntimeError('only one explicitly registered recovery mode is permitted')
     if args.recover_from is not None:
@@ -258,6 +259,21 @@ def register(args):
             recovery_claim_rule='full 64-seed roster and all score assignments for all five historical repair clusters')
         m['limitations'].append(recovery['disclosure'])
         m['limitations'].append('accepted Q/N/M/F, worker draw positions and original wall allowance retained; no refused work restored')
+    if getattr(args, 'substitute_recover_from', None) is not None:
+        if args.qualification or not all((args.repair_probe, args.trapping_retained_audit,
+                args.qualification_readout, args.native_qualification_audit, args.conditioning_qualification_audit)):
+            raise RuntimeError('Substitute recovery needs exact-root proof and both full qualification audits')
+        from pokezero.mcts_eval.wider_substitute_recovery import prepare
+        from search_followthrough_diagnostic import restore_reference_checkpoint
+        recovery = prepare(args.substitute_recover_from, args.repair_probe, args.trapping_retained_audit,
+            args.qualification_readout, args.native_qualification_audit,
+            args.conditioning_qualification_audit, m, repo=REPO, git=git, sha=sha, verify=verify,
+            bound_rows=bound_rows, step_files=step_files, restore_reference_checkpoint=restore_reference_checkpoint)
+        m.update(schema='pokezero.wider-search.mixed-substitute-repair.v6', repair_retention=recovery,
+            retained_input_hashes=recovery['input_hashes'],
+            recovery_claim_rule='full64 seed roster and all387420489 score assignments across9 historical clusters')
+        m['limitations'].append(recovery['disclosure'])
+        m['limitations'].append('all accepted Q/N/M/F,20 worker positions, original prefix and wall charge retained')
     verify(m)
     args.output.mkdir(exist_ok=False)
     save(args.output/'registration.json', m)
@@ -304,7 +320,7 @@ def validate_qualification(path, confirmation):
     registration = json.loads((path.parent/'registration.json').read_text())
     recovery = confirmation.get('repair_retention')
     if recovery is not None and recovery.get('kind') in ('native-semantic-repair', 'native-and-reference-trapping-repair',
-                                                       'native-and-reference-faint-repair'):
+                                                       'native-and-reference-faint-repair', 'native-and-reference-substitute-repair'):
         if str(path) != recovery['qualification_readout']:
             raise RuntimeError('native repair qualification path drift')
         from pokezero.mcts_eval.wider_native_recovery import validate_native_qualification
@@ -517,6 +533,9 @@ def run(args, m):
                                     if recovery.get('kind') == 'native-and-reference-faint-repair':
                                         from pokezero.mcts_eval.wider_faint_recovery import validate_resumed_draw
                                         validate_resumed_draw(worker_zero, probe)
+                                    elif recovery.get('kind') == 'native-and-reference-substitute-repair':
+                                        from pokezero.mcts_eval.wider_substitute_recovery import validate_resumed_draw
+                                        validate_resumed_draw(worker_zero, probe)
                                     elif worker_zero and (worker_zero[0]['packed_team_sha256'] != probe['draw']['packed_team_sha256']
                                             or worker_zero[0]['materialization_seed'] != probe['draw']['materialization_seed']):
                                         raise RuntimeError('recovered first hidden draw differs from exact failed-draw qualification')
@@ -588,6 +607,9 @@ def readout(args, m):
         elif m['repair_retention'].get('kind') in ('native-and-reference-trapping-repair', 'native-and-reference-faint-repair'):
             from pokezero.mcts_eval.wider_trapping_recovery import add_mixed_sensitivity
             add_mixed_sensitivity(result, m)
+        elif m['repair_retention'].get('kind') == 'native-and-reference-substitute-repair':
+            from pokezero.mcts_eval.wider_substitute_recovery import add_substitute_sensitivity
+            add_substitute_sensitivity(result, m)
         else:
             from pokezero.mcts_eval.wider_recovery import add_recovery_sensitivity
             add_recovery_sensitivity(result, m, sha=sha)
@@ -619,6 +641,7 @@ def main():
     parser.add_argument('--pending-qualification-recover-from', type=Path)
     parser.add_argument('--pending-retained-audit', type=Path)
     parser.add_argument('--faint-recover-from', type=Path)
+    parser.add_argument('--substitute-recover-from', type=Path)
     parser.add_argument('--conditioning-qualification-audit', type=Path)
     args = parser.parse_args()
     if args.mode == 'register':
