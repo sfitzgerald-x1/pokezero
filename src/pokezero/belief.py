@@ -1947,6 +1947,14 @@ class PublicBattleBeliefEngine:
             # Record the proc for the Early Bird Rest-wake guard (Fix C), before
             # the already-confirmed early return below so it fires on every proc.
             self._shed_skin_activated_this_turn.add(belief.key)
+        if belief.transformed or belief.key in self._running_ability:
+            # An effect identifies the CURRENT ability, not the original set.
+            # Trace acquisition already records the borrowed copy separately;
+            # a later Flash Fire activation must not turn it into an impossible
+            # Porygon2/Gardevoir set trait (or a false conflict with known Trace).
+            # Transform has the same distinction. Switch-out clears the running
+            # copy, so later unborrowed effects can still reveal native abilities.
+            return
         if _normalize_identifier(belief.revealed_ability or "") == _normalize_identifier(ability_name):
             return
         if belief.revealed_ability:
