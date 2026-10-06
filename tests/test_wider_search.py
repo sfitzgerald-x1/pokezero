@@ -95,6 +95,51 @@ class WiderSearchTests(unittest.TestCase):
             play_game(env, subject="p1", decision_id="test", selector=refuse, opponent=None,
                 emit=lambda row: None, max_boundaries=10, wall_seconds=60)
 
+    def test_replayed_prefix_keeps_boundary_rng_and_selection_counts(self):
+        class Env:
+            boundary = 2
+            def terminal(self):
+                return None if self.boundary == 2 else SimpleNamespace(capped=False, winner='p1')
+            def requested_players(self):
+                return ('p1',)
+            def observe(self, actor):
+                return SimpleNamespace(legal_action_mask=(True,))
+            def reseed_simulator_rng(self, seed):
+                self.chance = seed
+            def step(self, actions):
+                self.boundary += 1
+        from pokezero.mcts_eval.followthrough import continuation_seed
+        emitted, calls = [], []
+        def select(observation, boundary, seed):
+            calls.append((boundary, seed))
+            return 0, {'selector': 'search'}
+        result = play_game(Env(), subject='p1', decision_id='same', selector=select,
+            opponent=None, emit=emitted.append, max_boundaries=10, wall_seconds=60,
+            start_boundary=2, prior_selections=1, elapsed_before_resume=12.)
+        self.assertEqual(calls, [(2, continuation_seed('same', 0, 2, 'search'))])
+        self.assertEqual(emitted[0]['chance_seed'], continuation_seed('same', 0, 2, 'chance'))
+        self.assertEqual(result['boundaries'], 3)
+        self.assertEqual(result['own_decisions'], 2)
+        self.assertGreaterEqual(result['elapsed_seconds'], 12.)
+
+    def test_recovery_cannot_reset_whole_game_caps(self):
+        env = SimpleNamespace(terminal=lambda: None)
+        result = play_game(env, subject='p1', decision_id='same', selector=None,
+            opponent=None, emit=None, max_boundaries=10, wall_seconds=60,
+            start_boundary=2, prior_selections=1, elapsed_before_resume=61.)
+        self.assertEqual(result['status'], 'CAPPED')
+        self.assertIsNone(result['signed_outcome'])
+        self.assertEqual(result['boundaries'], 2)
+
+    def test_invalid_retained_prefix_positions_refuse(self):
+        for start, count, elapsed in ((-1, 0, 0.), (11, 1, 0.), (2, 3, 0.),
+                                      (2, True, 0.), (0, 1, 0.), (2, 1, float('nan'))):
+            with self.subTest(start=start, count=count, elapsed=elapsed):
+                with self.assertRaisesRegex(ValueError, 'prefix'):
+                    play_game(None, subject='p1', decision_id='same', selector=None,
+                        opponent=None, emit=None, max_boundaries=10, wall_seconds=60,
+                        start_boundary=start, prior_selections=count, elapsed_before_resume=elapsed)
+
 
 class QualificationEvidenceTests(unittest.TestCase):
     def setUp(self):
@@ -152,3 +197,83 @@ class QualificationEvidenceTests(unittest.TestCase):
         (self.root/(identity+'.json')).unlink()
         with self.assertRaisesRegex(RuntimeError, 'qualification incomplete'):
             self.validate()
+
+    def test_registered_prefix_combines_losslessly_without_copying_or_duplicate_boundaries(self):
+        from pokezero.mcts_eval.wider_recovery import combined_steps
+        identity = 'resumed'
+        (self.root/identity).mkdir()
+        self.write('prefix.json', {'boundary': 0})
+        self.write(identity+'/boundary-001.json', {'boundary': 1})
+        prefix = {'boundary-000.json': str(self.root/'prefix.json')}
+        # Filenames remain part of the invariant, so use a separate parent.
+        retained = self.root/'retained'
+        retained.mkdir()
+        path = retained/'boundary-000.json'
+        path.write_text(json.dumps({'boundary': 0}))
+        prefix = {path.name: str(path)}
+        m = dict(retained_input_hashes={str(path): self.driver.sha(path)},
+            repair_retention={'resume': {'identity': identity, 'prefix_steps': prefix}})
+        cell = {'identity': identity, 'retained_prefix_steps': prefix}
+        paths = combined_steps(self.root, cell, m, sha=self.driver.sha, step_files=self.driver.step_files)
+        self.assertEqual([p.name for p in paths], ['boundary-000.json', 'boundary-001.json'])
+        self.assertFalse((self.root/identity/path.name).exists())
+        self.write(identity+'/boundary-000.json', {'boundary': 0})
+        with self.assertRaisesRegex(RuntimeError, 'duplicate'):
+            combined_steps(self.root, cell, m, sha=self.driver.sha, step_files=self.driver.step_files)
+
+    def test_prefix_registration_or_hash_drift_cannot_be_hidden(self):
+        from pokezero.mcts_eval.wider_recovery import combined_steps
+        (self.root/'resumed').mkdir()
+        self.write('boundary-000.json', {'boundary': 0})
+        path = self.root/'boundary-000.json'
+        prefix = {path.name: str(path)}
+        cell = {'identity': 'resumed', 'retained_prefix_steps': prefix}
+        with self.assertRaisesRegex(RuntimeError, 'unregistered'):
+            combined_steps(self.root, cell, {}, sha=self.driver.sha, step_files=self.driver.step_files)
+        m = dict(retained_input_hashes={str(path): 'wrong'},
+            repair_retention={'resume': {'identity': 'resumed', 'prefix_steps': prefix}})
+        with self.assertRaisesRegex(RuntimeError, 'drift'):
+            combined_steps(self.root, cell, m, sha=self.driver.sha, step_files=self.driver.step_files)
+
+
+class RecoverySensitivityTests(unittest.TestCase):
+    def apply(self, data):
+        from pokezero.mcts_eval.wider_recovery import add_recovery_sensitivity
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)/'retained-refusal.json'
+            path.write_text(json.dumps({'seed': 0}))
+            registration = dict(seeds=list(range(64)),
+                repair_retention={'resume': {'result_path': str(path)}})
+            result = analyze(registration['seeds'], data)
+            add_recovery_sensitivity(result, registration, sha=lambda path: 'retained-hash')
+            return result
+
+    def test_incomplete_roster_cannot_enter_recovery_inference(self):
+        result = self.apply(rows(list(range(64)))[:-1])
+        self.assertFalse(result['inferential_test_allowed'])
+        self.assertEqual(result['recovery_sensitivity']['status'], 'INCOMPLETE_NO_INFERENCE')
+
+    def test_strong_advantage_survives_every_recovered_seed_score(self):
+        result = self.apply(rows(list(range(64))))
+        sensitivity = result['recovery_sensitivity']
+        self.assertTrue(result['statistically_supported_advantage'])
+        self.assertTrue(sensitivity['all_scores_support_advantage'])
+        self.assertEqual([row['contrast'] for row in sensitivity['possible_recovered_seed_contrasts']],
+                         [quarter/4 for quarter in range(-4, 5)])
+        self.assertAlmostEqual(sensitivity['minimum_bounded_mean_lower'],
+            result['bounded_mean_confidence_interval'][0]-2/64)
+
+    def test_marginal_advantage_cannot_depend_on_recovered_cluster(self):
+        data = rows(list(range(64)))
+        for row in data:
+            if row['seed'] >= 22:
+                row['signed_outcome'] = 1
+        result = self.apply(data)
+        self.assertTrue(result['preregistered_full_roster_advantage'])
+        self.assertFalse(result['statistically_supported_advantage'])
+        self.assertLess(result['recovery_sensitivity']['minimum_bounded_mean_lower'], 0.)
+
+    def test_null_is_not_equivalence_or_advantage_after_sensitivity(self):
+        result = self.apply(rows(list(range(64)), 1, 1))
+        self.assertFalse(result['statistically_supported_advantage'])
+        self.assertFalse(result['recovery_sensitivity']['all_scores_support_advantage'])

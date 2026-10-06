@@ -30,23 +30,32 @@ def game_identity(seed: int, seat: str, arm: str) -> str:
 
 
 def play_game(env: Any, *, subject: str, decision_id: str, selector: Any,
-              opponent: Any, emit: Any, max_boundaries: int, wall_seconds: float) -> dict:
+              opponent: Any, emit: Any, max_boundaries: int, wall_seconds: float,
+              start_boundary: int = 0, prior_selections: int = 0,
+              elapsed_before_resume: float = 0.) -> dict:
     from .followthrough import continuation_seed, sampled_opponent
     if subject not in SEATS or max_boundaries <= 0 or wall_seconds <= 0:
         raise ValueError("invalid whole-game bounds")
-    started, selections = time.perf_counter(), 0
-    for boundary in range(max_boundaries + 1):
+    if (type(start_boundary) is not int or not 0 <= start_boundary <= max_boundaries
+            or type(prior_selections) is not int or not 0 <= prior_selections <= start_boundary
+            or type(elapsed_before_resume) not in (int, float)
+            or not math.isfinite(elapsed_before_resume) or elapsed_before_resume < 0
+            or start_boundary == 0 and (prior_selections or elapsed_before_resume)):
+        raise ValueError('invalid retained whole-game prefix')
+    started, selections = time.perf_counter(), prior_selections
+    elapsed = lambda: elapsed_before_resume + time.perf_counter() - started
+    for boundary in range(start_boundary, max_boundaries + 1):
         terminal = env.terminal()
         if terminal is not None:
             return dict(status="CAPPED" if terminal.capped else "COMPLETE",
                 winner=terminal.winner, signed_outcome=None if terminal.capped else
                 0 if terminal.winner is None else 1 if terminal.winner == subject else -1,
                 boundaries=boundary, own_decisions=selections,
-                elapsed_seconds=time.perf_counter() - started)
-        if boundary == max_boundaries or time.perf_counter() - started >= wall_seconds:
+                elapsed_seconds=elapsed())
+        if boundary == max_boundaries or elapsed() >= wall_seconds:
             return dict(status="CAPPED", signed_outcome=None, boundaries=boundary,
                 own_decisions=selections, reason="registered_whole_game_safety_cap",
-                elapsed_seconds=time.perf_counter() - started)
+                elapsed_seconds=elapsed())
         requested = tuple(env.requested_players())
         if not requested:
             raise RuntimeError("nonterminal game has no requested actor")

@@ -47,8 +47,8 @@ def git(*args, root=REPO):
     return subprocess.check_output(['git', '-C', str(root), *args], text=True).strip()
 
 
-def verify(m):
-    if git('rev-parse', 'HEAD') != m['source_commit'] or git('status', '--porcelain'):
+def verify(m, *, source_root=REPO):
+    if git('rev-parse', 'HEAD', root=source_root) != m['source_commit'] or git('status', '--porcelain', root=source_root):
         raise RuntimeError('source must remain pinned and clean')
     for path, digest in m['input_hashes'].items():
         if sha(path) != digest:
@@ -63,6 +63,17 @@ def verify(m):
         raise RuntimeError('wrong native package imported')
     if load_gen3_randbat_source_cached(m['showdown_root']).metadata.source_hash != m['set_source_hash']:
         raise RuntimeError('set-source binding drift')
+    for path, digest in m.get('retained_input_hashes', {}).items():
+        if sha(path) != digest:
+            raise RuntimeError('retained evidence binding drift: '+path)
+    recovery = m.get('repair_retention')
+    if recovery:
+        old = json.loads(Path(recovery['original_registration']).read_text())
+        verify(old, source_root=Path(old['source_root']))
+        repair = recovery['audited_repair_source_root']
+        if (git('rev-parse', 'HEAD', root=repair) != recovery['audited_repair_source_commit']
+                or git('status', '--porcelain', root=repair)):
+            raise RuntimeError('audited repair source drift')
 
 
 def register(args):
@@ -148,6 +159,20 @@ def register(args):
             'same champion opponent; not Foul Play or unrestricted all-opponent superiority',
             '64 independent clusters may be insufficient for a modest advantage; no equivalence inference',
             'qualification outcomes never enter confirmation; refusal halts, no raw fallback or redraw'])
+    if args.recover_from is not None:
+        if args.qualification or not all((args.repair_certificate, args.repair_probe, args.qualification_readout)):
+            raise RuntimeError('compatible recovery requires confirmation and all qualification certificates')
+        from pokezero.mcts_eval.wider_recovery import prepare
+        from search_followthrough_diagnostic import restore_reference_checkpoint
+        recovery = prepare(args.recover_from, args.repair_certificate, args.repair_probe,
+            args.qualification_readout, m, repo=REPO, bound_rows=bound_rows, git=git,
+            sha=sha, verify=verify, restore_reference_checkpoint=restore_reference_checkpoint)
+        m.update(schema='pokezero.wider-search.compatible-repair.v2', repair_retention=recovery,
+                 retained_input_hashes=recovery['input_hashes'],
+                 recovery_claim_rule='a positive advantage must satisfy the original full-roster rule AND survive all nine possible score contrasts for the recovered seed cluster')
+        m['limitations'].append(recovery['disclosure'])
+        m['limitations'].append('accepted-prefix worker ordinals and aggregate restored; priors recomputed in fresh processes; operational cap charged from the preserved filesystem wall-clock envelope')
+        validate_qualification(args.qualification_readout, m)
     verify(m)
     args.output.mkdir(exist_ok=False)
     save(args.output/'registration.json', m)
@@ -159,14 +184,29 @@ def timeout(*args):
 
 def bound_rows(output, m):
     rows = []
+    recovery = m.get('repair_retention', {})
+    retained_groups = {}
+    for identity, binding in recovery.get('retained_complete', {}).items():
+        path = Path(binding['path'])
+        if (output/(identity+'.json')).exists() or sha(path) != binding['sha256']:
+            raise RuntimeError('retained complete game duplicate or drift')
+        if binding['registration'] not in retained_groups:
+            old = json.loads(Path(binding['registration']).read_text())
+            retained_groups[binding['registration']] = bound_rows(path.parent, old)
+        retained = [row for row in retained_groups[binding['registration']] if row['identity'] == identity]
+        if len(retained) != 1 or retained[0]['status'] != 'COMPLETE':
+            raise RuntimeError('retained complete game missing')
+        rows.append(retained[0])
     for path in sorted(output.glob('seed-*.json')):
         row = json.loads(path.read_text())
         if row['registration_sha256'] != sha(output/'registration.json'):
             raise RuntimeError('result registration binding drift')
-        actual = {p.name: sha(p) for p in step_files(output/path.stem)}
+        from pokezero.mcts_eval.wider_recovery import combined_steps
+        files = combined_steps(output, row, m, sha=sha, step_files=step_files)
+        actual = {p.name: sha(p) for p in files}
         if actual != row['step_hashes'] or not actual:
             raise RuntimeError('durable decision evidence drift or missing evidence')
-        for step in step_files(output/path.stem):
+        for step in files:
             data = gzip.decompress(step.read_bytes()) if step.name.endswith('.json.gz') else step.read_bytes()
             json.loads(data)
         rows.append(row)
@@ -177,12 +217,15 @@ def validate_qualification(path, confirmation):
     if path.name != 'READOUT.json':
         raise RuntimeError('qualification requires the canonical durable readout')
     registration = json.loads((path.parent/'registration.json').read_text())
-    verify(registration)
+    recovery = confirmation.get('repair_retention')
+    verify(registration, source_root=Path(registration.get('source_root', REPO)))
+    compatible = (recovery is not None and str(path) == recovery['qualification_readout']
+                  and registration['source_commit'] == recovery['original_source_commit'])
     if (registration['phase'] != 'QUALIFICATION_NOT_STRENGTH'
             or registration['seeds'] != [study_seed(i, qualification=True) for i in range(2)]
             or registration['registered_games'] != 8
-            or registration['source_commit'] != confirmation['source_commit']
-            or registration['input_hashes'] != confirmation['input_hashes']):
+            or not compatible and (registration['source_commit'] != confirmation['source_commit']
+                or registration['input_hashes'] != confirmation['input_hashes'])):
         raise RuntimeError('qualification roster or source/input binding differs')
     recomputed = analyze(registration['seeds'], bound_rows(path.parent, registration))
     recomputed.update(source_commit=registration['source_commit'], input_hashes=registration['input_hashes'],
@@ -191,7 +234,12 @@ def validate_qualification(path, confirmation):
     if (json.loads(path.read_text()) != recomputed
             or recomputed['status'] != 'QUALIFICATION_COMPLETE_NOT_STRENGTH'):
         raise RuntimeError('qualification incomplete or readout does not derive from durable evidence')
-    return {'readout_sha256': sha(path), 'registration_sha256': sha(path.parent/'registration.json')}
+    result = {'readout_sha256': sha(path), 'registration_sha256': sha(path.parent/'registration.json')}
+    if compatible:
+        result.update(mode='retained qualification with explicit constructor noninterference and recovery qualification',
+                      original_source_commit=registration['source_commit'],
+                      disclosure=recovery['disclosure'])
+    return result
 
 
 def run(args, m):
@@ -241,6 +289,10 @@ def run(args, m):
                 order = ARMS if (ordinal + SEATS.index(subject)) % 2 else tuple(reversed(ARMS))
                 for arm in order:
                     identity = game_identity(seed, subject, arm)
+                    recovery = m.get('repair_retention', {})
+                    if identity in recovery.get('retained_complete', {}):
+                        print(json.dumps(dict(identity=identity, status='RETAINED_COMPLETE_NOT_RERUN')), flush=True)
+                        continue
                     path = args.output/(identity+'.json')
                     if path.exists():
                         row = json.loads(path.read_text())
@@ -253,6 +305,32 @@ def run(args, m):
                     battle_id = 'wider-search:' + identity
                     trajectory = BattleTrajectory(battle_id, 'gen3randombattle', seed)
                     native.reset()
+                    resume = recovery.get('resume') if recovery.get('resume', {}).get('identity') == identity else None
+                    if resume:
+                        from pokezero.mcts_eval.wider_recovery import read_step
+                        from search_followthrough_diagnostic import restore_reference_checkpoint
+                        for name, retained in sorted(resume['prefix_steps'].items()):
+                            row = read_step(retained)
+                            if (name != f"boundary-{row['boundary']:03d}.json.gz"
+                                    or set(row['actions']) != set(live.requested_players())):
+                                raise RuntimeError('retained prefix request boundary drift')
+                            for actor, action in row['actions'].items():
+                                observation = live.observe(actor)
+                                if not observation.legal_action_mask[action]:
+                                    raise RuntimeError('retained played action is no longer legal')
+                                if actor == subject:
+                                    trajectory.append(TrajectoryStep(player_id=subject, turn_index=row['boundary'],
+                                        observation=observation, legal_action_mask=tuple(observation.legal_action_mask),
+                                        action_index=action))
+                            live.reseed_simulator_rng(row['chance_seed'])
+                            live.step(row['actions'])
+                        checkpoint = read_step(resume['checkpoint_step'])['evidence'][subject]['search_evidence']['statistics_checkpoint']
+                        pool.restore_statistics(restore_reference_checkpoint(checkpoint),
+                            worker_ordinals=tuple(resume['worker_ordinals']), decision_id=resume['decision_id'])
+                        save(args.output/'RECOVERY_RECEIPT.json', dict(identity=identity,
+                            boundary=resume['start_boundary'], worker_ordinals=resume['worker_ordinals'],
+                            decision_id=resume['decision_id'], checkpoint_sha256=sha(resume['checkpoint_step']),
+                            failed_partial_work_restored=False, private_priors_restored=False))
 
                     def select(observation, boundary, rng_seed):
                         signal.alarm(m['per_decision_safety_seconds'])
@@ -297,6 +375,13 @@ def run(args, m):
                                         or not all(d['status'] == 'ROOT_VALIDATED' and d['released'] for d in draws)
                                         or len(set(measured.worker_pids)) != 20):
                                     raise RuntimeError('reference world/worker/release witness failed')
+                                if resume and boundary == resume['start_boundary']:
+                                    probe = json.loads(Path(recovery['exact_failed_draw_certificate']).read_text())
+                                    worker_zero = [draw for receipt in measured.worker_receipts if receipt['worker'] == 0
+                                                   for draw in receipt['evidence']['draws']]
+                                    if worker_zero and (worker_zero[0]['packed_team_sha256'] != probe['draw']['packed_team_sha256']
+                                            or worker_zero[0]['materialization_seed'] != probe['draw']['materialization_seed']):
+                                        raise RuntimeError('recovered first hidden draw differs from exact failed-draw qualification')
                                 evidence = asdict(measured)
                                 evidence['statistics_checkpoint'] = reference_statistics_checkpoint(pool._master.snapshot())
                             trajectory.append(TrajectoryStep(player_id=subject, turn_index=boundary,
@@ -313,14 +398,21 @@ def run(args, m):
 
                     result = dict(identity=identity, seed=seed, subject=subject, arm=arm,
                         registration_sha256=sha(args.output/'registration.json'))
+                    if resume:
+                        result.update(retained_prefix_steps=resume['prefix_steps'], recovery=resume['recovery'])
                     try:
                         result.update(play_game(live, subject=subject, decision_id=f'wider-search:{seed}:{subject}',
                             selector=select, opponent=evaluator, emit=emit,
-                            max_boundaries=m['max_boundaries'], wall_seconds=m['per_game_wall_seconds']))
+                            max_boundaries=m['max_boundaries'], wall_seconds=m['per_game_wall_seconds'],
+                            start_boundary=resume['start_boundary'] if resume else 0,
+                            prior_selections=resume['prior_selections'] if resume else 0,
+                            elapsed_before_resume=resume['elapsed_before_resume'] if resume else 0.))
                     except Exception as error:
                         result.update(status='REFUSED', signed_outcome=None,
                             error=f'{type(error).__name__}: {error}', failure_evidence=getattr(error, 'evidence', None))
-                    result['step_hashes'] = {p.name: sha(p) for p in step_files(steps)}
+                    from pokezero.mcts_eval.wider_recovery import combined_steps
+                    result['step_hashes'] = {p.name: sha(p) for p in
+                        combined_steps(args.output, result, m, sha=sha, step_files=step_files)}
                     save(path, result)
                     print(json.dumps({key: result.get(key) for key in ('identity', 'status', 'signed_outcome', 'error')}), flush=True)
                     if result['status'] != 'COMPLETE':
@@ -340,6 +432,12 @@ def readout(args, m):
     rows = bound_rows(args.output, m)
     result = analyze(m['seeds'], rows)
     result.update(source_commit=m['source_commit'], input_hashes=m['input_hashes'], phase=m['phase'])
+    if 'repair_retention' in m:
+        result.update(literal_homogeneous_source=False, recovery_disclosure=m['repair_retention']['disclosure'],
+            retained_complete_games=sorted(m['repair_retention']['retained_complete']),
+            recovered_game=m['repair_retention']['resume']['identity'])
+        from pokezero.mcts_eval.wider_recovery import add_recovery_sensitivity
+        add_recovery_sensitivity(result, m, sha=sha)
     if m['phase'] == 'QUALIFICATION_NOT_STRENGTH':
         result['statistically_supported_advantage'] = False
         result['inferential_test_allowed'] = False
@@ -356,6 +454,9 @@ def main():
     parser.add_argument('--native-binding', type=Path)
     parser.add_argument('--qualification', action='store_true')
     parser.add_argument('--qualification-readout', type=Path)
+    parser.add_argument('--recover-from', type=Path)
+    parser.add_argument('--repair-certificate', type=Path)
+    parser.add_argument('--repair-probe', type=Path)
     args = parser.parse_args()
     if args.mode == 'register':
         if not all((args.checkpoint, args.showdown_root, args.native_binding)):

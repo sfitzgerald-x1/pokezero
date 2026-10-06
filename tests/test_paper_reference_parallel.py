@@ -7,9 +7,10 @@ import sys
 import time
 import unittest
 
-from pokezero.mcts_eval.paper_reference import Evaluation, ReferenceConfig, ReferenceRefusal
+from pokezero.mcts_eval.paper_reference import Evaluation, ReferenceConfig, ReferenceRefusal, _rng
 from pokezero.mcts_eval.paper_reference_parallel import (
     ParallelRefusal, ParallelTrajectorySearch, PreparedDecision,
+    _worker_seed,
 )
 from test_paper_reference import ROOT, ToyWorld, searcher
 
@@ -37,6 +38,20 @@ class ToyRuntime:
 
     def close(self):
         pass
+
+
+class RngWitnessRuntime(ToyRuntime):
+    def prepare(self, request):
+        draws = []
+        def world(rng):
+            draws.append(rng.getrandbits(64))
+            return ToyWorld(root=request.root, value=1.)
+        def evidence():
+            result = {'hidden_rng_witness': tuple(draws)}
+            draws.clear()
+            return result
+        return PreparedDecision(request.root, lambda state: Evaluation((.5, .5), 0.),
+                                world, evidence)
 
 
 class StoppedChildRuntime(ToyRuntime):
@@ -80,6 +95,51 @@ class UnserializableEvidenceRuntime(RefusedBatchRuntime):
 
 
 class ParallelReferenceTests(unittest.TestCase):
+    def test_recovery_preserves_accepted_draw_positions_and_decision_identity(self):
+        with ParallelTrajectorySearch(ReferenceConfig(.5, 1), RngWitnessRuntime, workers=2) as old:
+            old.search(Request(), ROOT, battle_id='retained', seed=1, trajectories_per_worker=3)
+            checkpoint = old._master.snapshot()
+        with ParallelTrajectorySearch(ReferenceConfig(.5, 1), RngWitnessRuntime, workers=2) as fresh:
+            fresh.restore_statistics(checkpoint, worker_ordinals=(3, 3), decision_id=17)
+            result = fresh.search(Request(), ROOT, battle_id='retained', seed=2, trajectories_per_worker=2)
+            self.assertEqual(result.decision_id, 18)
+            self.assertEqual(sum(result.result.root_visits), 10)
+            for receipt in result.worker_receipts:
+                worker = receipt['worker']
+                self.assertEqual(receipt['evidence']['hidden_rng_witness'], tuple(
+                    _rng(_worker_seed(2, worker), ordinal, 'hidden').getrandbits(64)
+                    for ordinal in (3, 4)))
+            reset = fresh.search(Request(), ROOT, battle_id='new', seed=3, trajectories_per_worker=1)
+            for receipt in reset.worker_receipts:
+                self.assertEqual(receipt['evidence']['hidden_rng_witness'], (
+                    _rng(_worker_seed(3, receipt['worker']), 0, 'hidden').getrandbits(64),))
+
+    def test_invalid_recovery_positions_refuse_without_mutating_fresh_pool(self):
+        with ParallelTrajectorySearch(ReferenceConfig(.5, 1), ToyRuntime, workers=2) as old:
+            old.search(Request(), ROOT, battle_id='retained', seed=1, trajectories_per_worker=1)
+            checkpoint = old._master.snapshot()
+        with ParallelTrajectorySearch(ReferenceConfig(.5, 1), ToyRuntime, workers=2) as fresh:
+            for positions, decision in (((1,), 0), ((-1, 1), 0), ((True, 1), 0),
+                                        ([1, 1], 0), ((1, 1), -1), (None, 2)):
+                with self.subTest(positions=positions, decision=decision):
+                    with self.assertRaisesRegex(ReferenceRefusal, 'positions'):
+                        fresh.restore_statistics(checkpoint, worker_ordinals=positions, decision_id=decision)
+                    self.assertIsNone(fresh._master)
+
+    def test_worker_ordinal_recovery_is_once_only_and_cannot_overwrite_played_work(self):
+        worker = searcher()
+        for ordinal in (-1, True, 1.5):
+            with self.assertRaisesRegex(ReferenceRefusal, 'recovery'):
+                worker.restore_draw_ordinal(ordinal)
+        worker.restore_draw_ordinal(0)
+        with self.assertRaisesRegex(ReferenceRefusal, 'fresh'):
+            worker.restore_draw_ordinal(0)
+        worker.reset_battle('another')
+        worker.search(ROOT, battle_id='another', evaluate_root=lambda state: Evaluation((.5, .5), 0.),
+            sample_world=lambda rng: ToyWorld(), seed=1, trajectories=1)
+        with self.assertRaisesRegex(ReferenceRefusal, 'fresh'):
+            worker.restore_draw_ordinal(1)
+
     def test_accepted_aggregate_checkpoint_is_imported_once_and_not_reexported_as_own_work(self):
         with ParallelTrajectorySearch(ReferenceConfig(.5,1),ToyRuntime,workers=2) as old:
             old.search(Request(),ROOT,battle_id='retained',seed=1,trajectories_per_worker=10)

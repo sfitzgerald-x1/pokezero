@@ -82,6 +82,16 @@ def _worker(connection, index, runtime_factory, config):
             command = connection.recv()
             if command[0] == "close":
                 break
+            if command[0] == "restore":
+                if battle_id is not None or sequence != 0:
+                    raise ReferenceRefusal('worker recovery requires unused processes')
+                _, snapshot, ordinal = command
+                battle_id = snapshot.battle_id
+                search.reset_battle(battle_id)
+                search.merge_statistics(snapshot)
+                search.restore_draw_ordinal(ordinal)
+                connection.send(('restored', index, ordinal))
+                continue
             if command[0] != "start":
                 raise ReferenceRefusal("worker received an out-of-order decision command")
             _, decision, request, root, snapshot, seed, limit, deadline = command
@@ -210,20 +220,43 @@ class ParallelTrajectorySearch:
         self.last_evidence["errors"] = errors
         raise ParallelRefusal(message, self.last_evidence)
 
-    def restore_statistics(self, snapshot: MasterSnapshot) -> None:
+    def restore_statistics(self, snapshot: MasterSnapshot, *,
+                           worker_ordinals: tuple[int, ...] | None = None,
+                           decision_id: int = 0) -> None:
         """Fresh-pool aggregate recovery, imported exactly once, never OWN work.
 
-        Old processes/RNG/P caches are NOT resurrected. A separate contribution
+        Old processes/P caches are NOT resurrected. Explicit draw ordinals can
+        preserve the accepted-prefix RNG domains in fresh processes. A contribution
         holds the accepted checkpoint while fresh workers export only new work.
         Failed/unplayed partial batches must not be present in the checkpoint.
         """
         if (self._closed or self._poisoned or self._master is not None or self._decision_id != 0
                 or not isinstance(snapshot, MasterSnapshot)):
             raise ReferenceRefusal('statistics recovery requires a fresh, unused pool')
+        if (type(decision_id) is not int or decision_id < 0
+                or worker_ordinals is not None and (
+                    not isinstance(worker_ordinals, tuple) or len(worker_ordinals) != self.workers
+                    or any(type(value) is not int or value < 0 for value in worker_ordinals))
+                or worker_ordinals is None and decision_id != 0):
+            raise ReferenceRefusal('invalid accepted-prefix worker/decision recovery positions')
         master = StatisticsMaster(snapshot.battle_id)
         master.advance_real_faints(snapshot.faint_floor)
         master.accept(WorkerUpdate(snapshot.battle_id, 'retained-accepted-history', 1, snapshot.rows))
         self._master = master
+        if worker_ordinals is not None:
+            try:
+                for index, connection in enumerate(self._connections):
+                    connection.send(('restore', master.snapshot(), worker_ordinals[index]))
+                pending = set(range(self.workers))
+                while pending:
+                    for index, message in self._receive(pending):
+                        if message != ('restored', index, worker_ordinals[index]):
+                            self._fail('worker accepted-prefix recovery failed', [message])
+                        pending.remove(index)
+                self._decision_id = decision_id
+            except BaseException:
+                self._poisoned = True
+                raise
 
     def _receive(self, pending):
         ready = wait([self._connections[i] for i in sorted(pending)], timeout=self.transport_timeout)

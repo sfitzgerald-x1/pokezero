@@ -210,6 +210,7 @@ class TrajectorySearch:
         self._master_version = -1
         self._exported_statistics = None
         self._last_master_snapshot = None
+        self._draw_recovered = False
 
     def reset_battle(self, battle_id: str) -> None:
         if not isinstance(battle_id, str) or not battle_id:
@@ -223,6 +224,7 @@ class TrajectorySearch:
         self._master_version = -1
         self._exported_statistics = None
         self._last_master_snapshot = None
+        self._draw_recovered = False
 
     def export_statistics(self, *, worker_id: str, sequence: int):
         from .paper_reference_exchange import WorkerUpdate
@@ -240,6 +242,19 @@ class TrajectorySearch:
                 raise ReferenceRefusal("same export sequence has different own evidence")
         self._exported_statistics = message
         return message
+
+    def restore_draw_ordinal(self, ordinal: int) -> None:
+        """Restore only the accepted-prefix draw position in a fresh worker.
+
+        No failed partial work, local priors or private sampled world is restored.
+        Imported Q/N/M/F may already be present; it remains shared, not OWN work.
+        """
+        if (type(ordinal) is not int or ordinal < 0 or self._battle_id is None
+                or not self._usable or self._draw_recovered or self._ordinal != 0 or self.nodes
+                or self._local_statistics or self._exported_statistics is not None):
+            raise ReferenceRefusal('draw recovery requires a fresh bound worker and nonnegative ordinal')
+        self._ordinal = ordinal
+        self._draw_recovered = True
 
     def merge_statistics(self, snapshot) -> None:
         from .paper_reference_exchange import MasterSnapshot, _nonregressing
