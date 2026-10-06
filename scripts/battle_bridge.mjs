@@ -7,6 +7,7 @@ import process from "node:process";
 import readline from "node:readline";
 import {referenceRestState, bindReferenceRestSources, referenceInducedSleepState} from "./battle_bridge_reference_rest.mjs";
 import {applyReferenceTurnClocks, applyReferenceRechargePP} from "./battle_bridge_reference_turn_clocks.mjs";
+import {refreshReferenceTrapping} from "./battle_bridge_reference_trapping.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -520,6 +521,9 @@ function materializeBattle(command) {
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
+  if (command.referenceTurnClocks === true) {
+    refreshReferenceTrapping(battle.battleStream.battle, publicState);
+  }
   restoreDeferredOpponentActions(battle.battleStream.battle, publicState);
   battle.boundaryGeneration += 1;
   battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
