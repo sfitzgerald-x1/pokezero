@@ -53,6 +53,24 @@ def verify(m, *, source_root=REPO):
     for path, digest in m['input_hashes'].items():
         if sha(path) != digest:
             raise RuntimeError('source/input binding drift: ' + path)
+    if m.get('native_build_receipt'):
+        receipt = json.loads(Path(m['native_build_receipt']).read_text())
+        for path, digest in receipt['source_hashes'].items():
+            if sha(path) != digest:
+                raise RuntimeError('native build/runtime receipt input drift: '+path)
+        if receipt.get('python_engine_package'):
+            import poke_engine
+            if Path(poke_engine.__file__).parent != Path(receipt['python_engine_package']):
+                raise RuntimeError('wrong Python engine package imported')
+        if receipt.get('python_executable'):
+            import sys
+            if Path(sys.executable).resolve() != Path(receipt['python_executable']).resolve():
+                raise RuntimeError('wrong model Python runtime imported')
+        if receipt.get('torch_version'):
+            import torch
+            if (torch.__version__ != receipt['torch_version']
+                    or str(Path(torch.__file__)) not in receipt['source_hashes']):
+                raise RuntimeError('wrong receipt-bound model library imported')
     if (git('rev-parse', 'HEAD', root=m['showdown_root']) != m['showdown_commit']
             or git('status', '--porcelain', root=m['showdown_root'])):
         raise RuntimeError('pinned simulator drift')
@@ -69,7 +87,11 @@ def verify(m, *, source_root=REPO):
     recovery = m.get('repair_retention')
     if recovery:
         old = json.loads(Path(recovery['original_registration']).read_text())
-        verify(old, source_root=Path(old['source_root']))
+        if recovery.get('kind') == 'native-semantic-repair':
+            from pokezero.mcts_eval.wider_native_recovery import verify_historical
+            verify_historical(recovery['original_registration'])
+        else:
+            verify(old, source_root=Path(old['source_root']))
         repair = recovery['audited_repair_source_root']
         if (git('rev-parse', 'HEAD', root=repair) != recovery['audited_repair_source_commit']
                 or git('status', '--porcelain', root=repair)):
@@ -131,6 +153,7 @@ def register(args):
         registered_games=4*len(seeds), checkpoint=str(args.checkpoint), checkpoint_sha256=sha(args.checkpoint),
         showdown_root=str(args.showdown_root), showdown_commit=git('rev-parse', 'HEAD', root=args.showdown_root),
         set_source_hash=source.metadata.source_hash, native_package=str(native), input_hashes=hashes,
+        native_build_receipt=str(args.native_binding),
         native_binding='immutable repaired binary and historical Cargo/src receipt; supplementary build/engine inputs byte-checked and pinned against preserved repair checkout',
         nominal_decision_seconds=10., per_decision_safety_seconds=120,
         max_boundaries=200, per_game_wall_seconds=2400.,
@@ -173,6 +196,21 @@ def register(args):
         m['limitations'].append(recovery['disclosure'])
         m['limitations'].append('accepted-prefix worker ordinals and aggregate restored; priors recomputed in fresh processes; operational cap charged from the preserved filesystem wall-clock envelope')
         validate_qualification(args.qualification_readout, m)
+    if args.native_recover_from is not None:
+        if args.recover_from is not None or args.qualification or not all((
+                args.native_repair_certificate, args.retained_audit, args.qualification_readout,
+                args.native_qualification_audit)):
+            raise RuntimeError('native recovery requires a new native qualification with full replay audit, repair certificate, and retained audits')
+        from pokezero.mcts_eval.wider_native_recovery import prepare
+        recovery = prepare(args.native_recover_from, args.native_repair_certificate,
+            args.retained_audit, args.qualification_readout, m, repo=REPO, git=git, sha=sha,
+            verify=verify, bound_rows=bound_rows, step_files=step_files,
+            qualification_audit_path=args.native_qualification_audit)
+        m.update(schema='pokezero.wider-search.native-repair.v3', repair_retention=recovery,
+            retained_input_hashes=recovery['input_hashes'],
+            recovery_claim_rule='original full-roster rule plus worst-case scores for every historically touched cluster')
+        m['limitations'].append(recovery['disclosure'])
+        m['limitations'].append('incumbent private caches are fresh after accepted-action prefix replay; the full historical wall-clock envelope is charged against the unchanged game cap')
     verify(m)
     args.output.mkdir(exist_ok=False)
     save(args.output/'registration.json', m)
@@ -218,6 +256,12 @@ def validate_qualification(path, confirmation):
         raise RuntimeError('qualification requires the canonical durable readout')
     registration = json.loads((path.parent/'registration.json').read_text())
     recovery = confirmation.get('repair_retention')
+    if recovery is not None and recovery.get('kind') == 'native-semantic-repair':
+        if str(path) != recovery['qualification_readout']:
+            raise RuntimeError('native repair qualification path drift')
+        from pokezero.mcts_eval.wider_native_recovery import validate_native_qualification
+        return validate_native_qualification(path, confirmation, repo=REPO, git=git,
+            sha=sha, verify=verify, bound_rows=bound_rows)
     verify(registration, source_root=Path(registration.get('source_root', REPO)))
     compatible = (recovery is not None and str(path) == recovery['qualification_readout']
                   and registration['source_commit'] == recovery['original_source_commit'])
@@ -324,12 +368,17 @@ def run(args, m):
                                         action_index=action))
                             live.reseed_simulator_rng(row['chance_seed'])
                             live.step(row['actions'])
-                        checkpoint = read_step(resume['checkpoint_step'])['evidence'][subject]['search_evidence']['statistics_checkpoint']
-                        pool.restore_statistics(restore_reference_checkpoint(checkpoint),
-                            worker_ordinals=tuple(resume['worker_ordinals']), decision_id=resume['decision_id'])
+                        checkpoint_sha256 = None
+                        if arm == 'paper_reference':
+                            checkpoint = read_step(resume['checkpoint_step'])['evidence'][subject]['search_evidence']['statistics_checkpoint']
+                            pool.restore_statistics(restore_reference_checkpoint(checkpoint),
+                                worker_ordinals=tuple(resume['worker_ordinals']), decision_id=resume['decision_id'])
+                            checkpoint_sha256 = sha(resume['checkpoint_step'])
+                        elif recovery.get('kind') != 'native-semantic-repair':
+                            raise RuntimeError('incumbent prefix recovery requires native semantic repair registration')
                         save(args.output/'RECOVERY_RECEIPT.json', dict(identity=identity,
                             boundary=resume['start_boundary'], worker_ordinals=resume['worker_ordinals'],
-                            decision_id=resume['decision_id'], checkpoint_sha256=sha(resume['checkpoint_step']),
+                            decision_id=resume['decision_id'], checkpoint_sha256=checkpoint_sha256,
                             failed_partial_work_restored=False, private_priors_restored=False))
 
                     def select(observation, boundary, rng_seed):
@@ -356,9 +405,13 @@ def run(args, m):
                                     model_evals=after['model_evals']-before['model_evals'],
                                     engine_mcts=dict(decision.metadata.get('engine_mcts', {})))
                                 if sum(observation.legal_action_mask) > 1:
-                                    validate_selection(evidence, arm='incumbent_mcts', mode='matched_deadline',
-                                        config=search_cfg, mask=observation.legal_action_mask, opponent_seed=rng_seed,
-                                        deadline_ms=10000, native_batch_guard_ms=64)
+                                    try:
+                                        validate_selection(evidence, arm='incumbent_mcts', mode='matched_deadline',
+                                            config=search_cfg, mask=observation.legal_action_mask, opponent_seed=rng_seed,
+                                            deadline_ms=10000, native_batch_guard_ms=64)
+                                    except Exception as error:
+                                        error.evidence = evidence
+                                        raise
                                 elif evidence['fallbacks'] or evidence['prior_fallbacks']:
                                     raise RuntimeError('forced request fell back')
                             else:
@@ -436,8 +489,12 @@ def readout(args, m):
         result.update(literal_homogeneous_source=False, recovery_disclosure=m['repair_retention']['disclosure'],
             retained_complete_games=sorted(m['repair_retention']['retained_complete']),
             recovered_game=m['repair_retention']['resume']['identity'])
-        from pokezero.mcts_eval.wider_recovery import add_recovery_sensitivity
-        add_recovery_sensitivity(result, m, sha=sha)
+        if m['repair_retention'].get('kind') == 'native-semantic-repair':
+            from pokezero.mcts_eval.wider_native_recovery import add_sensitivity
+            add_sensitivity(result, m)
+        else:
+            from pokezero.mcts_eval.wider_recovery import add_recovery_sensitivity
+            add_recovery_sensitivity(result, m, sha=sha)
     if m['phase'] == 'QUALIFICATION_NOT_STRENGTH':
         result['statistically_supported_advantage'] = False
         result['inferential_test_allowed'] = False
@@ -457,6 +514,10 @@ def main():
     parser.add_argument('--recover-from', type=Path)
     parser.add_argument('--repair-certificate', type=Path)
     parser.add_argument('--repair-probe', type=Path)
+    parser.add_argument('--native-recover-from', type=Path)
+    parser.add_argument('--native-repair-certificate', type=Path)
+    parser.add_argument('--native-qualification-audit', type=Path)
+    parser.add_argument('--retained-audit', type=Path, action='append')
     args = parser.parse_args()
     if args.mode == 'register':
         if not all((args.checkpoint, args.showdown_root, args.native_binding)):
