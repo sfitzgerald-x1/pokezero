@@ -70,6 +70,61 @@ class ReferenceSamplingTests(unittest.TestCase):
         self.assertEqual(len(draw.known[0].seeds), 2)
         self.assertFalse(draw.known[0].forced)
 
+    def test_extended_conditioning_is_opt_in_and_only_after_ten_incompatible_templates(self):
+        wrong = set_row(moves=['hiddenpowerflying', 'rest', 'sleeptalk', 'earthquake'])
+        wrong['ivs']['hp'] = 30
+        source = SimpleNamespace(species_metadata={'snorlax': {'baseStats': {'hp': 160}}}, move_metadata={})
+        traits = KnownSetTraits('Snorlax', max_hp=387)
+        generator = Generator(draws=[wrong] * 10 + [set_row()])
+        with self.assertRaisesRegex(ReferenceRefusal, 'max_hp'):
+            PaperHiddenTeamSampler(generator, set_source=source).draw((traits,), random.Random(1))
+        self.assertEqual(sum(c[0] == 'set' for c in generator.calls), 10)
+        generator = Generator(draws=[wrong] * 10 + [set_row()])
+        draw = PaperHiddenTeamSampler(generator, set_source=source,
+            allow_earlier_compatible_template=True, max_known_set_draws=128).draw((traits,), random.Random(1))
+        receipt = draw.known[0]
+        self.assertEqual(len(receipt.seeds), 11)
+        self.assertTrue(receipt.extended_conditioning_used)
+        self.assertFalse(receipt.forced)
+        self.assertEqual(draw.team[0].evs['hp'], 85)
+        self.assertEqual(draw.team[0].ivs['hp'], 31)
+
+    def test_extended_limit_never_relaxes_public_facts_or_draws_unknown_party_on_failure(self):
+        generator = Generator()
+        source = SimpleNamespace(species_metadata={'snorlax': {'baseStats': {'hp': 160}}}, move_metadata={})
+        sampler = PaperHiddenTeamSampler(generator, set_source=source, max_known_set_draws=12)
+        with self.assertRaisesRegex(ReferenceRefusal, 'max_hp') as refused:
+            sampler.draw((KnownSetTraits('Snorlax', max_hp=1),), random.Random(1))
+        self.assertEqual(len(refused.exception.sampling_diagnostic['draw_seeds']), 12)
+        self.assertEqual(refused.exception.sampling_diagnostic['max_known_set_draws'], 12)
+        self.assertFalse(any(c[0] == 'party' for c in generator.calls))
+
+    def test_extended_projection_is_disclosed_and_preserves_both_hp_and_revealed_move(self):
+        wrong = set_row(moves=['hiddenpowerflying', 'rest', 'sleeptalk', 'earthquake'])
+        wrong['ivs']['hp'] = 30
+        source = SimpleNamespace(species_metadata={'snorlax': {'baseStats': {'hp': 160}}}, move_metadata={})
+        draw = PaperHiddenTeamSampler(Generator(draws=[wrong]*10+[set_row()]), set_source=source,
+            max_known_set_draws=12).draw((KnownSetTraits('Snorlax', ('Surf',), max_hp=387),), random.Random(1))
+        self.assertTrue(draw.known[0].forced)
+        self.assertEqual(draw.known[0].completion_template_attempt, 11)
+        self.assertTrue(draw.known[0].extended_conditioning_used)
+        self.assertIn('surf', draw.team[0].moves)
+        self.assertEqual(draw.team[0].ivs['hp'], 31)
+
+    def test_extended_limit_does_not_change_already_valid_ten_draw_completion(self):
+        traits = KnownSetTraits('Snorlax', ('Hidden Power Ice', 'Surf'), item='', gender='F')
+        source = SimpleNamespace(species_metadata={}, move_metadata={})
+        original = PaperHiddenTeamSampler(Generator(), set_source=source).draw((traits,), random.Random(7))
+        repaired = PaperHiddenTeamSampler(Generator(), set_source=source,
+            max_known_set_draws=128).draw((traits,), random.Random(7))
+        self.assertEqual(original.team, repaired.team)
+        self.assertEqual(original.unknown_party_seeds, repaired.unknown_party_seeds)
+        self.assertEqual(original.known[0].seeds, repaired.known[0].seeds)
+        self.assertFalse(repaired.known[0].extended_conditioning_used)
+        for limit in (True, 9, 257, 10.0):
+            with self.assertRaisesRegex(ReferenceRefusal, 'draw limit'):
+                PaperHiddenTeamSampler(Generator(), set_source=source, max_known_set_draws=limit)
+
     def test_tenth_failed_draw_forces_traits_and_recomputes_hidden_power_ivs(self):
         generator = Generator()
         traits = KnownSetTraits("Snorlax", ("Hidden Power Ice", "Surf", "Thunderbolt", "Psychic"),
@@ -224,6 +279,39 @@ class ReferenceSamplingTests(unittest.TestCase):
 
 
 class ReferenceSetBridgeTests(unittest.TestCase):
+    @requires_showdown()
+    def test_actual_sharpedo_hp_refusal_accepts_fresh_server_completion_without_redraw(self):
+        seeds = [3726200491,114545999,2798862989,2282470002,2263223372,
+            3557889994,1479084924,399490629,71705304,3237726611,3128127397]
+        class Rng:
+            def __init__(self):
+                self.index = 0
+            def getrandbits(self, width):
+                if self.index < len(seeds):
+                    value = seeds[self.index]
+                else:
+                    value = 12345 + self.index
+                self.index += 1
+                return value
+        env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown_root()))
+        try:
+            source = load_gen3_randbat_source_cached(showdown_root())
+            traits = KnownSetTraits('Sharpedo', ('Hydro Pump',), level=85, gender='M',
+                max_hp=256, ruled_out_items=('leftovers',))
+            with self.assertRaisesRegex(ReferenceRefusal, 'max_hp'):
+                PaperHiddenTeamSampler(env, set_source=source,
+                    allow_earlier_compatible_template=True).draw((traits,), Rng())
+            draw = PaperHiddenTeamSampler(env, set_source=source,
+                allow_earlier_compatible_template=True, max_known_set_draws=128).draw((traits,), Rng())
+            self.assertEqual(draw.known[0].seeds, tuple(seeds))
+            self.assertTrue(draw.known[0].extended_conditioning_used)
+            self.assertFalse(draw.known[0].forced)
+            self.assertEqual(draw.team[0].ivs['hp'], 31)
+            self.assertEqual(draw.team[0].evs['hp'], 77)
+            self.assertIn('hydropump', draw.team[0].moves)
+        finally:
+            env.close()
+
     @requires_showdown()
     def test_actual_failed_crawdaunt_seed_sequence_uses_latest_valid_projection(self):
         seeds = [2166772986,2550812790,3896514086,1979801838,2971343644,
