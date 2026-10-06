@@ -1003,11 +1003,11 @@ jobs:
           python -m unittest \
             tests.test_paper_reference tests.test_paper_reference_exchange \
             tests.test_paper_reference_parallel tests.test_paper_reference_factory \
-            tests.test_paper_reference_sampler tests.test_paper_reference_rest tests.test_paper_reference_items \
+            tests.test_paper_reference_sampler tests.test_paper_reference_rest tests.test_paper_reference_items tests.test_paper_reference_encore \
             tests.test_paper_reference_showdown tests.test_battle_bridge_boundary_requests \
             tests.test_mcts_eval_timing_corpus tests.test_followthrough -v 2>&1 \
             | tee /tmp/paper-reference.log
-          grep -qE 'Ran 124 tests' /tmp/paper-reference.log
+          grep -qE 'Ran 129 tests' /tmp/paper-reference.log
           grep -qE '^OK$' /tmp/paper-reference.log
           if grep -qE '^OK \(.*skipped=' /tmp/paper-reference.log; then
             echo "::error::the paper trajectory reference contracts must not skip"

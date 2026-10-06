@@ -36,7 +36,8 @@ def sampled_opponent(evaluator: Any, observation: Any, seed: int) -> tuple[int, 
 
 def play_continuation(env: Any, *, subject: str, first_action: int, decision_id: str,
         replicate: int, subject_selector: Callable, opponent_evaluator: Any,
-        emit: Callable, max_boundaries: int = 200, wall_seconds: float = 3600.) -> dict[str, Any]:
+        emit: Callable, max_boundaries: int = 200, wall_seconds: float = 3600.,
+        start_boundary: int = 0, prior_selections: int = 0) -> dict[str, Any]:
     """Search every subsequent own request, including one-sided switch requests.
 
     ``subject_selector`` receives only observation/boundary/search-seed. Its
@@ -47,10 +48,14 @@ def play_continuation(env: Any, *, subject: str, first_action: int, decision_id:
         raise ValueError("invalid frozen first intervention")
     if max_boundaries <= 0 or wall_seconds <= 0:
         raise ValueError("invalid continuation safety cap")
+    if (type(start_boundary) is not int or not 0 <= start_boundary < max_boundaries
+            or type(prior_selections) is not int or not 0 <= prior_selections < max_boundaries
+            or start_boundary == 0 and prior_selections != 0):
+        raise ValueError('invalid replayed continuation prefix')
     started = time.perf_counter()
-    selections = 0
-    first_applied = False
-    for boundary in range(max_boundaries + 1):
+    selections = prior_selections
+    first_applied = start_boundary > 0
+    for boundary in range(start_boundary, max_boundaries + 1):
         terminal = env.terminal()
         if terminal is not None:
             return {"status": "CAPPED" if terminal.capped else "COMPLETE",

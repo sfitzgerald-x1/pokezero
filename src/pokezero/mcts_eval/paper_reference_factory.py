@@ -20,7 +20,7 @@ from .paper_reference_sampling import KnownSetTraits, PaperHiddenTeamSampler
 from .paper_reference_showdown import ChampionEvaluator, ShowdownTrajectoryWorld, decision_state
 from ..determinization import _self_team_from_metadata_result, player_belief_view_from_payload
 from ..env import BattleStartOverride
-from ..local_showdown import LocalShowdownEnv, PublicBattleMaterializationState
+from ..local_showdown import LocalShowdownEnv, PublicBattleMaterializationState, _public_reference_encore
 from ..public_decision_corpus import _public_belief_view
 from ..randbat import Gen3RandbatSource, canonical_gen3_randbat_species_id
 from ..showdown import _pokemon_metadata, _self_team_from_request
@@ -134,8 +134,16 @@ class PublicRootWorldFactory:
                 opponent: pack_team(draw.team)}, observation_format_id="gen3randombattle")
             seed = hidden_rng.getrandbits(32)
             evidence["materialization_seed"] = seed
+            durations, conditioning = {}, {}
+            for side in ('p1', 'p2'):
+                certificate = _public_reference_encore(self.state, side)
+                if certificate is not None:
+                    durations[side] = hidden_rng.choice(certificate['remaining_candidates'])
+                    conditioning[side] = {**certificate, 'sampled_remaining': durations[side]}
+            evidence['encore_conditioning'] = conditioning
             self.env.materialize_public_world(state=self.state, start_override=override, seed=seed,
-                reference_rest_sleep=True, reference_consumed_items=True)
+                reference_rest_sleep=True, reference_consumed_items=True,
+                reference_encore_durations=durations)
             if decision_state(self.env.observe(self.state.player_id), player=self.state.player_id) != self.root:
                 raise ReferenceRefusal("fresh sampled world does not preserve exact player-known root")
             evidence["status"] = "ROOT_VALIDATED"

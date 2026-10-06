@@ -80,6 +80,19 @@ class UnserializableEvidenceRuntime(RefusedBatchRuntime):
 
 
 class ParallelReferenceTests(unittest.TestCase):
+    def test_accepted_aggregate_checkpoint_is_imported_once_and_not_reexported_as_own_work(self):
+        with ParallelTrajectorySearch(ReferenceConfig(.5,1),ToyRuntime,workers=2) as old:
+            old.search(Request(),ROOT,battle_id='retained',seed=1,trajectories_per_worker=10)
+            checkpoint=old._master.snapshot()
+        with ParallelTrajectorySearch(ReferenceConfig(.5,1),ToyRuntime,workers=2) as fresh:
+            fresh.restore_statistics(checkpoint)
+            with self.assertRaisesRegex(ReferenceRefusal,'fresh'):
+                fresh.restore_statistics(checkpoint)
+            result=fresh.search(Request(),ROOT,battle_id='retained',seed=2,trajectories_per_worker=10)
+            self.assertEqual(sum(result.result.root_visits),40)
+            self.assertEqual(result.result.trajectories,20)
+            self.assertEqual(next(r.count for r in fresh._master.snapshot().rows if r.state==ROOT),40)
+
     def test_actual_twenty_persistent_processes_exchange_every_ten_without_double_counts(self):
         with ParallelTrajectorySearch(ReferenceConfig(.5, 1), ToyRuntime) as pool:
             first = pool.search(Request(), ROOT, battle_id="b1", seed=1, trajectories_per_worker=12)

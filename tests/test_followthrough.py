@@ -35,6 +35,18 @@ def opponent(obs):
 
 
 class FollowThroughTests(unittest.TestCase):
+    def test_resume_does_not_reapply_first_action_or_relabel_rng_boundaries(self):
+        env=Env();env.boundary=2
+        rows=[]
+        result=play_continuation(env,subject='p1',first_action=0,decision_id='root',replicate=0,
+            subject_selector=lambda *args:(1,{}),opponent_evaluator=opponent,emit=rows.append,
+            start_boundary=2,prior_selections=0)
+        self.assertEqual([r['boundary'] for r in rows],[2,3])
+        self.assertTrue(result['first_action_applied'])
+        self.assertEqual(result['followthrough_decisions'],2)
+        self.assertEqual(env.actions[0]['p1'],1)
+        self.assertEqual(rows[0]['chance_seed'],continuation_seed('root',0,2,'chance'))
+
     def test_fixed_first_action_then_search_on_every_own_request_only(self):
         calls, rows = [], []
         def search(obs, boundary, seed):

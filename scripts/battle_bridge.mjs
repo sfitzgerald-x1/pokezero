@@ -489,7 +489,8 @@ function materializeBattle(command) {
   // public branch-point payload from it, then let Showdown deserialize that payload directly.
   const snapshot = State.serializeBattle(battle.battleStream.battle);
   applyPublicState(snapshot, publicState, command.referenceRestSleep === true,
-    command.referenceConsumedItems === true, battle.battleStream.battle.dex);
+    command.referenceConsumedItems === true, battle.battleStream.battle.dex,
+    command.referenceEncoreDurations);
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
@@ -1009,7 +1010,13 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
   };
 }
 
-function applyPublicState(snapshot, publicState, referenceRestSleep = false, referenceConsumedItems = false, dex = null) {
+function applyPublicState(snapshot, publicState, referenceRestSleep = false, referenceConsumedItems = false, dex = null,
+  referenceEncoreDurations = null) {
+  if (referenceEncoreDurations !== null && (!referenceEncoreDurations ||
+      typeof referenceEncoreDurations !== 'object' || Array.isArray(referenceEncoreDurations) || dex.gen !== 3 ||
+      Object.keys(referenceEncoreDurations).some(k => !['p1', 'p2'].includes(k)))) {
+    throw new Error('Materialize refuses invalid reference Encore opt-in.');
+  }
   if (!Number.isInteger(publicState.turn) || publicState.turn < 1) {
     throw new Error("Materialize requires a positive integer turn.");
   }
@@ -1142,6 +1149,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
         publicSide,
         Boolean(row.active),
         serializedSide.pokemon,
+        referenceEncoreDurations,
       );
       if (row.currentItem !== undefined) {
         applyKnownCurrentItem(serializedSide.pokemon[index], row.currentItem, sideId, row.species);
@@ -1165,8 +1173,12 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
         pokemon.ateBerry = state.ateBerry;
         pokemon.itemKnockedOff = false;
       }
-      serializedSide.pokemon[index].lastMove = null;
-      serializedSide.pokemon[index].lastMoveUsed = null;
+      const last = row.active && referenceEncoreDurations !== null ? normalizeId(publicSide.lastUsedMove) : '';
+      if (last && last !== 'switch' && !serializedSide.pokemon[index].moveSlots.some(m => normalizeId(m.id) === last)) {
+        throw new Error('Materialize cannot preserve a disclosed last move absent from the sampled set.');
+      }
+      serializedSide.pokemon[index].lastMove = last && last !== 'switch' ? `[Move:${last}]` : null;
+      serializedSide.pokemon[index].lastMoveUsed = serializedSide.pokemon[index].lastMove;
       serializedSide.pokemon[index].attackedBy = [];
       serializedSide.pokemon[index].lastDamage = 0;
       serializedSide.pokemon[index].activeMoveActions = 0;
@@ -1563,6 +1575,7 @@ function publicSubstituteHp(pokemon, publicSide, sideId, sidePokemon) {
 
 function applyPublicVolatiles(
   pokemon, rawVolatiles, sideId, leechSeedSourceSides, publicSide, isActive, sidePokemon,
+  referenceEncoreDurations = null,
 ) {
   if (!Array.isArray(rawVolatiles)) {
     throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
@@ -1574,6 +1587,21 @@ function applyPublicVolatiles(
       throw new Error(`Materialize received invalid volatile effect for ${sideId}.`);
     }
     const volatile = normalizeId(rawVolatile);
+    if (volatile === 'encore' && referenceEncoreDurations !== null) {
+      const certificate = publicSide.referenceEncore;
+      const duration = referenceEncoreDurations[sideId];
+      const move = normalizeId(certificate?.move);
+      if (seen.has(volatile) || !isActive || !certificate || !Number.isInteger(duration) ||
+          !Array.isArray(certificate.remaining_candidates) || !certificate.remaining_candidates.includes(duration) ||
+          !pokemon.moveSlots.some(m => normalizeId(m.id) === move && m.pp > 0)) {
+        throw new Error('Materialize refuses invalid public Encore conditioning.');
+      }
+      seen.add(volatile);
+      pokemon.volatiles.encore = {id: 'encore', effectOrder: 0, target: `[Pokemon:${sideId}a]`,
+        source: `[Pokemon:${sideId === 'p1' ? 'p2' : 'p1'}a]`,
+        sourceSlot: `${sideId === 'p1' ? 'p2' : 'p1'}a`, move, duration};
+      continue;
+    }
     if (volatile === "leechseed") {
       const sourceSide = leechSeedSourceSides?.[sideId];
       if (!["p1", "p2"].includes(sourceSide) || sourceSide === sideId) {

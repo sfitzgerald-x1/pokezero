@@ -44,6 +44,41 @@ def reference_statistics_checkpoint(snapshot):
             totals=row.totals, count=row.count) for row in snapshot.rows])
 
 
+def restore_reference_checkpoint(value):
+    from pokezero.mcts_eval.paper_reference import DecisionState
+    from pokezero.mcts_eval.paper_reference_exchange import MasterSnapshot, Statistics
+    return MasterSnapshot(value['battle_id'], value['version'], value['faint_floor'],
+        tuple(Statistics(DecisionState(bytes.fromhex(row['key_hex']), tuple(row['actions']), row['faint_count']),
+            tuple(row['visits']), tuple(row['totals']), row['count']) for row in value['rows']),
+        tuple((worker, sequence) for worker, sequence in value['acknowledged']))
+
+
+def register_resume(previous, inputs):
+    identity = 'root-03-paper_reference-search-r0'
+    result_path = previous / (identity + '.json')
+    result = json.loads(result_path.read_text())
+    if result['status'] != 'REFUSED' or result['planner'] != 'paper_reference':
+        raise RuntimeError('only the explicitly refused paper continuation can resume')
+    paths = sorted((previous / identity).glob('boundary-*.json'))
+    rows = [json.loads(p.read_text()) for p in paths]
+    if not rows or [r['boundary'] for r in rows] != list(range(len(rows))):
+        raise RuntimeError('resume requires a complete played prefix')
+    if rows[0]['actions'][result['subject']] != result['first_action']:
+        raise RuntimeError('resume first action drift')
+    for path in paths:
+        if sha(path) != result['step_hashes'].get(path.name):
+            raise RuntimeError('resume prefix hash drift')
+        inputs[str(path)] = sha(path)
+    latest = next(p for p, r in reversed(list(zip(paths, rows))) if result['subject'] in r['actions'])
+    checkpoint = json.loads(latest.read_text())['evidence'][result['subject']]['search_evidence']['statistics_checkpoint']
+    restore_reference_checkpoint(checkpoint)  # Validate before registration.
+    inputs[str(result_path)] = sha(result_path)
+    return {identity: dict(result_path=str(result_path), checkpoint_step=str(latest),
+        prefix_steps={p.name: str(p) for p in paths}, start_boundary=len(rows),
+        prior_selections=sum(result['subject'] in r['actions'] for r in rows[1:]),
+        recovery='accepted aggregate Q/N/M/F only; fresh processes/P caches/RNG sessions; failed partial work excluded')}
+
+
 def retained_cells(previous, roots, inputs):
     """Link only complete, identity-matched cells; preserve refusals as history.
 
@@ -57,7 +92,7 @@ def retained_cells(previous, roots, inputs):
     inputs[str(path)] = sha(path)
     inputs.update(old['source_hashes'])
     inputs.update(old['retained_input_hashes'])
-    retained, refused = {}, []
+    retained, refused = dict(old.get('retained_cells', {})), list(old.get('preserved_noncomplete_history', []))
     for cell_path in sorted(previous.glob('root-*.json')):
         cell = json.loads(cell_path.read_text())
         expected = next((r for r in roots if r['ordinal'] == cell['ordinal']), None)
@@ -110,6 +145,7 @@ def register(args):
             'first_choices': {'deep_incumbent': cells['deep_incumbent']['choice'],
                 'paper_reference': cells['paper_reference_10s']['choice']}})
     retained, refused = retained_cells(args.reuse_complete_from, roots, inputs) if args.reuse_complete_from else ({}, [])
+    resumes = register_resume(args.resume_refused_from, inputs) if args.resume_refused_from else {}
     args.output.mkdir(parents=True, exist_ok=False)
     modules = [*sorted((REPO / 'src/pokezero').rglob('*.py')), Path(__file__),
         *sorted((REPO / 'scripts').glob('battle_bridge*.mjs'))]
@@ -118,6 +154,7 @@ def register(args):
         original=original, roots=roots, replicates=[0, 1], planners=list(PLANNERS),
         search_game_denominator=12, raw_control_game_denominator=12,
         retained_cells=retained, preserved_noncomplete_history=refused,
+        resume_cells=resumes,
         source_hashes={str(path): sha(path) for path in modules}, retained_input_hashes=inputs,
         nominal_decision_seconds=10., max_boundaries=200, global_admission_seconds=7200,
         per_game_wall_seconds=2400, per_decision_safety_seconds=120,
@@ -127,6 +164,7 @@ def register(args):
         reference=dict(workers=20, batch=10, alpha=.5, beta=1.,
             allow_earlier_compatible_template=True, max_known_set_draws=128,
             public_consumed_item_history=True,
+            conditional_public_encore=True,
             checkpoint_aggregate_statistics_after_each_accepted_decision=True,
             persistent_tree_within_continuation=True, historical_tree_resurrected=False),
         incumbent=dict(depth=6, sims=4096, batch=16, worlds=4, model_priors=True,
@@ -145,6 +183,8 @@ def register(args):
         whole_policy_strength_qualified=False, no_retraining_or_cluster_mutation=True)
     if retained or refused:
         manifest['limitations'].append('completed cells retained across disclosed materializer repair; only refused/unattempted cells rerun')
+    if resumes:
+        manifest['limitations'].append('paper continuation resumes after a disclosed Encore/last-move repair, preserving prior actions and accepted aggregate statistics; not a homogeneous-source rerun')
     save(args.output / 'registration.json', manifest)
     print(json.dumps({'status': 'REGISTERED', 'roots': ORDINALS, 'search_games': 12,
         'raw_controls': 12, 'output': str(args.output)}), flush=True)
@@ -263,6 +303,24 @@ def run(args, m):
                         battle_id = f'followthrough:{identity}'
                         trajectory = BattleTrajectory(battle_id, record.format_id, record.seed)
                         first = lookup[root['first_choices'][planner]]
+                        resume = m.get('resume_cells', {}).get(identity)
+                        if resume:
+                            if planner != 'paper_reference' or mode != 'search':
+                                raise RuntimeError('invalid resume planner')
+                            for name, path in resume['prefix_steps'].items():
+                                row = json.loads(Path(path).read_text())
+                                if set(row['actions']) != set(live.requested_players()):
+                                    raise RuntimeError('resume request boundary drift')
+                                for player, action in row['actions'].items():
+                                    if not live.observe(player).legal_action_mask[action]:
+                                        raise RuntimeError('resume played action is no longer legal')
+                                live.reseed_simulator_rng(row['chance_seed'])
+                                live.step(row['actions'])
+                            row = json.loads(Path(resume['checkpoint_step']).read_text())
+                            checkpoint = restore_reference_checkpoint(row['evidence'][subject]['search_evidence']['statistics_checkpoint'])
+                            if checkpoint.battle_id != battle_id:
+                                raise RuntimeError('resume checkpoint battle drift')
+                            pool.restore_statistics(checkpoint)
                         if mode == 'search' and planner == 'deep_incumbent':
                             native.reset()
                             native.warm_public_prefix_for_replay(battle_id=battle_id, player_id=subject,
@@ -341,11 +399,19 @@ def run(args, m):
                             first_choice=root['first_choices'][planner], subject=subject,
                             registration_sha256=sha(args.output / 'registration.json'),
                             root_validation=root_validation)
+                        if resume:
+                            result['retained_prefix_steps'] = resume['prefix_steps']
+                            result['recovery'] = resume['recovery']
                         try:
                             result.update(play_continuation(live, subject=subject, first_action=first,
                                 decision_id=record.decision_id, replicate=replicate, subject_selector=select,
                                 opponent_evaluator=evaluator, emit=emit, max_boundaries=m['max_boundaries'],
-                                wall_seconds=m['per_game_wall_seconds']))
+                                wall_seconds=m['per_game_wall_seconds'],
+                                start_boundary=resume['start_boundary'] if resume else 0,
+                                prior_selections=resume['prior_selections'] if resume else 0))
+                            if resume:
+                                result['resumed_phase_elapsed_seconds'] = result['elapsed_seconds']
+                                result['elapsed_seconds'] = None  # Do not invent total pre-failure wall time.
                         except Exception as error:
                             result.update(status='REFUSED', signed_outcome=None,
                                 error=f'{type(error).__name__}: {error}',
@@ -384,10 +450,15 @@ def readout(args, m):
                 or cell['first_choice'] != root['first_choices'][cell['planner']]
                 or cell['registration_sha256'] != registration_sha):
             raise RuntimeError('continuation roster/provenance drift')
-        for name, digest in cell['step_hashes'].items():
-            if sha(step_dir / name) != digest:
+        decision_steps = {name: (step_dir / name, digest) for name, digest in cell['step_hashes'].items()}
+        for name, path in cell.get('retained_prefix_steps', {}).items():
+            if name in decision_steps or path not in m['retained_input_hashes']:
+                raise RuntimeError('resume prefix duplication/unregistered evidence')
+            decision_steps[name] = (Path(path), m['retained_input_hashes'][path])
+        for name, (step_path, digest) in decision_steps.items():
+            if sha(step_path) != digest:
                 raise RuntimeError('continuation decision evidence drift')
-            row = json.loads((step_dir / name).read_text())
+            row = json.loads(step_path.read_text())
             subject = cell['subject']
             if row['boundary'] == 0:
                 if row['actions'][subject] != cell['first_action']:
@@ -401,6 +472,8 @@ def readout(args, m):
                 if player != subject and row['evidence'][player]['selector'] != 'champion_full_masked_policy_sample':
                     raise RuntimeError('shared explicit opponent drift')
         cells.append(cell)
+        if cell['status'] == 'COMPLETE' and len(decision_steps) != cell['boundaries']:
+            raise RuntimeError('complete game lacks every played boundary')
     expected = m['search_game_denominator'] + m['raw_control_game_denominator']
     complete = len(cells) == expected and all(c['status'] == 'COMPLETE' for c in cells)
     lookup = {(c['ordinal'], c['replicate'], c['planner'], c['mode']): c for c in cells}
@@ -439,6 +512,7 @@ def main():
     parser.add_argument('--parent-registration', type=Path)
     parser.add_argument('--parent-output', type=Path)
     parser.add_argument('--reuse-complete-from', type=Path)
+    parser.add_argument('--resume-refused-from', type=Path)
     parser.add_argument('--raw-only', action='store_true')
     args = parser.parse_args()
     if args.phase == 'register':
