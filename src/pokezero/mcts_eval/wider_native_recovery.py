@@ -279,7 +279,7 @@ def worst_case_statistics(differences, uncertain_indices, *, alpha=.05, max_unce
     n = len(differences)
     listed_indices = list(uncertain_indices)
     indices = set(listed_indices)
-    require(type(max_uncertain) is int and 1 <= max_uncertain <= 5
+    require(type(max_uncertain) is int and 1 <= max_uncertain <= 9
             and n > 0 and 0 < alpha < 1 and 1 <= len(indices) <= max_uncertain
             and len(indices) == len(listed_indices)
             and all(type(i) is int and 0 <= i < n for i in indices), 'invalid sensitivity roster')
