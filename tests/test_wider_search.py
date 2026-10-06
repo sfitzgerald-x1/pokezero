@@ -1,6 +1,12 @@
 from types import SimpleNamespace
+import importlib.util
+import gzip
 import itertools
+import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from pokezero.mcts_eval.wider_search import ARMS, SEATS, analyze, exact_signflip_p, game_identity, play_game, study_seed
 from pokezero.mcts_eval.paper_reference import Evaluation
@@ -88,3 +94,61 @@ class WiderSearchTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "search refused"):
             play_game(env, subject="p1", decision_id="test", selector=refuse, opponent=None,
                 emit=lambda row: None, max_boundaries=10, wall_seconds=60)
+
+
+class QualificationEvidenceTests(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('wider_driver',
+            Path(__file__).resolve().parents[1]/'scripts/wider_search_comparison.py')
+        self.driver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.driver)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.seeds = [study_seed(i, qualification=True) for i in range(2)]
+        self.registration = dict(phase='QUALIFICATION_NOT_STRENGTH', seeds=self.seeds,
+            registered_games=8, source_commit='pinned', input_hashes={'checkpoint': 'pinned'})
+        self.write('registration.json', self.registration)
+        for row in rows(self.seeds):
+            cell = self.root/row['identity']
+            cell.mkdir()
+            self.write(row['identity']+'/boundary-000.json', {'actions': {'p1': 0, 'p2': 0}})
+            row.update(registration_sha256=self.driver.sha(self.root/'registration.json'),
+                step_hashes={'boundary-000.json': self.driver.sha(cell/'boundary-000.json')})
+            self.write(row['identity']+'.json', row)
+        result = analyze(self.seeds, self.driver.bound_rows(self.root, self.registration))
+        result.update(source_commit='pinned', input_hashes=self.registration['input_hashes'],
+            phase=self.registration['phase'], statistically_supported_advantage=False,
+            inferential_test_allowed=False, status='QUALIFICATION_COMPLETE_NOT_STRENGTH')
+        self.write('READOUT.json', result)
+
+    def write(self, name, value):
+        (self.root/name).write_text(json.dumps(value))
+
+    def validate(self):
+        with patch.object(self.driver, 'verify'):
+            return self.driver.validate_qualification(self.root/'READOUT.json', self.registration)
+
+    def test_canonical_qualification_rederives_and_retains_readout_hash(self):
+        self.assertEqual(self.validate()['readout_sha256'], self.driver.sha(self.root/'READOUT.json'))
+
+    def test_full_statistics_compress_losslessly_and_never_overwrite(self):
+        value = {'statistics_checkpoint': {'Q': {'node': .33333}, 'N': {'node': 7},
+            'M': {'a': 4}, 'F': ['trajectory']}, 'receipts': [1, 2, 3]}
+        path = self.root/'retained.json.gz'
+        self.driver.save_step(path, value)
+        self.assertEqual(json.loads(gzip.decompress(path.read_bytes())), value)
+        with self.assertRaises(FileExistsError):
+            self.driver.save_step(path, value)
+
+    def test_changed_boundary_evidence_cannot_hide_behind_complete_readout(self):
+        identity = game_identity(self.seeds[0], 'p1', ARMS[0])
+        self.write(identity+'/boundary-000.json', {'actions': {'p1': 1, 'p2': 0}})
+        with self.assertRaisesRegex(RuntimeError, 'durable decision evidence drift'):
+            self.validate()
+
+    def test_readout_label_alone_cannot_qualify_missing_games(self):
+        identity = game_identity(self.seeds[0], 'p1', ARMS[0])
+        (self.root/(identity+'.json')).unlink()
+        with self.assertRaisesRegex(RuntimeError, 'qualification incomplete'):
+            self.validate()

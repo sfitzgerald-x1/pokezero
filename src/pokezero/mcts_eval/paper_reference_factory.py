@@ -157,7 +157,8 @@ class PublicRootWorldFactory:
             evidence['induced_sleep_conditioning'] = sleep_conditioning
             self.env.materialize_public_world(state=self.state, start_override=override, seed=seed,
                 reference_rest_sleep=True, reference_consumed_items=True,
-                reference_encore_durations=durations, reference_induced_sleep=sleep_draws)
+                reference_encore_durations=durations, reference_induced_sleep=sleep_draws,
+                reference_turn_clocks=True)
             if decision_state(self.env.observe(self.state.player_id), player=self.state.player_id) != self.root:
                 raise ReferenceRefusal("fresh sampled world does not preserve exact player-known root")
             evidence["status"] = "ROOT_VALIDATED"

@@ -6,6 +6,7 @@ import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
 import {referenceRestState, bindReferenceRestSources, referenceInducedSleepState} from "./battle_bridge_reference_rest.mjs";
+import {applyReferenceTurnClocks, applyReferenceRechargePP} from "./battle_bridge_reference_turn_clocks.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -491,7 +492,7 @@ function materializeBattle(command) {
   const snapshot = State.serializeBattle(battle.battleStream.battle);
   applyPublicState(snapshot, publicState, command.referenceRestSleep === true,
     command.referenceConsumedItems === true, battle.battleStream.battle.dex,
-    command.referenceEncoreDurations, command.referenceInducedSleep);
+    command.referenceEncoreDurations, command.referenceInducedSleep, command.referenceTurnClocks === true);
   // Packed-team shells use customgame. Restore canonical PUBLIC format rules,
   // not the source world's private state; clearing pseudoWeather also cleared
   // Sleep Clause's event handler in earlier reference materializations.
@@ -1036,7 +1037,7 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
 }
 
 function applyPublicState(snapshot, publicState, referenceRestSleep = false, referenceConsumedItems = false, dex = null,
-  referenceEncoreDurations = null, referenceInducedSleep = null) {
+  referenceEncoreDurations = null, referenceInducedSleep = null, referenceTurnClocks = false) {
   if (referenceEncoreDurations !== null && (!referenceEncoreDurations ||
       typeof referenceEncoreDurations !== 'object' || Array.isArray(referenceEncoreDurations) || dex.gen !== 3 ||
       Object.keys(referenceEncoreDurations).some(k => !['p1', 'p2'].includes(k)))) {
@@ -1223,6 +1224,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
     // ordering that a real switch produces; changing only `side.active` leaves the
     // sampled lead in slot zero and exposes the wrong request to the policy.
     const active = moveActivePokemonToFront(serializedSide, activeIndex);
+    if (referenceTurnClocks) applyReferenceTurnClocks(active, publicSide, sideId, dex.gen);
     active.activeTurns = Math.max(1, Number(active.activeTurns) || 1);
     serializedSide.active = [`[Pokemon:${sideId}a]`];
     // The acting request is private, but a fainted public active with a surviving
@@ -1254,6 +1256,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
     serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
     delete serializedSide.activeRequest;
   }
+  if (referenceTurnClocks) applyReferenceRechargePP(snapshot, publicState);
 }
 
 function restoreDeferredOpponentActions(simulatorBattle, publicState) {

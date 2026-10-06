@@ -7,6 +7,7 @@ on the laptop; never deploy, retrain, merge PRs, redraw or overwrite a result.
 from dataclasses import asdict
 from datetime import datetime, timezone
 import argparse
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -28,6 +29,18 @@ def save(path, value):
     with Path(path).open('x') as stream:
         json.dump(value, stream, indent=2, sort_keys=True)
         stream.write('\n')
+
+
+def save_step(path, value):
+    # Q/N/M/F and per-world receipts are losslessly retained. Compression keeps
+    # a full fixed roster feasible without deleting or thinning decision data.
+    data = json.dumps(value, sort_keys=True).encode()
+    with path.open('xb') as stream:
+        stream.write(gzip.compress(data, compresslevel=3, mtime=0))
+
+
+def step_files(root):
+    return sorted(path for path in root.iterdir() if path.is_file())
 
 
 def git(*args, root=REPO):
@@ -111,6 +124,7 @@ def register(args):
         nominal_decision_seconds=10., per_decision_safety_seconds=120,
         max_boundaries=200, per_game_wall_seconds=2400.,
         qualification_required_before_confirmation=True,
+        durable_evidence='lossless gzip JSON per boundary; every file hash bound by terminal game',
         opponent='same immutable champion; full masked policy sample at every requested opponent decision',
         initial_state='fresh Gen3 random battle; same generated teams/seed for each arm and candidate seat',
         first_action='selected by respective search, not a historical frozen intervention',
@@ -143,6 +157,43 @@ def timeout(*args):
     raise TimeoutError('registered decision safety cap; no raw fallback')
 
 
+def bound_rows(output, m):
+    rows = []
+    for path in sorted(output.glob('seed-*.json')):
+        row = json.loads(path.read_text())
+        if row['registration_sha256'] != sha(output/'registration.json'):
+            raise RuntimeError('result registration binding drift')
+        actual = {p.name: sha(p) for p in step_files(output/path.stem)}
+        if actual != row['step_hashes'] or not actual:
+            raise RuntimeError('durable decision evidence drift or missing evidence')
+        for step in step_files(output/path.stem):
+            data = gzip.decompress(step.read_bytes()) if step.name.endswith('.json.gz') else step.read_bytes()
+            json.loads(data)
+        rows.append(row)
+    return rows
+
+
+def validate_qualification(path, confirmation):
+    if path.name != 'READOUT.json':
+        raise RuntimeError('qualification requires the canonical durable readout')
+    registration = json.loads((path.parent/'registration.json').read_text())
+    verify(registration)
+    if (registration['phase'] != 'QUALIFICATION_NOT_STRENGTH'
+            or registration['seeds'] != [study_seed(i, qualification=True) for i in range(2)]
+            or registration['registered_games'] != 8
+            or registration['source_commit'] != confirmation['source_commit']
+            or registration['input_hashes'] != confirmation['input_hashes']):
+        raise RuntimeError('qualification roster or source/input binding differs')
+    recomputed = analyze(registration['seeds'], bound_rows(path.parent, registration))
+    recomputed.update(source_commit=registration['source_commit'], input_hashes=registration['input_hashes'],
+        phase=registration['phase'], statistically_supported_advantage=False, inferential_test_allowed=False,
+        status='QUALIFICATION_COMPLETE_NOT_STRENGTH' if not recomputed['missing_seed_clusters'] else 'QUALIFICATION_INCOMPLETE')
+    if (json.loads(path.read_text()) != recomputed
+            or recomputed['status'] != 'QUALIFICATION_COMPLETE_NOT_STRENGTH'):
+        raise RuntimeError('qualification incomplete or readout does not derive from durable evidence')
+    return {'readout_sha256': sha(path), 'registration_sha256': sha(path.parent/'registration.json')}
+
+
 def run(args, m):
     import torch
     from pokezero.collection import env_config_with_policy_spec_masks
@@ -163,11 +214,8 @@ def run(args, m):
     if m['phase'] != 'QUALIFICATION_NOT_STRENGTH':
         if args.qualification_readout is None:
             raise RuntimeError('confirmation requires completed disjoint qualification')
-        qualification = json.loads(args.qualification_readout.read_text())
-        if (qualification.get('status') != 'QUALIFICATION_COMPLETE_NOT_STRENGTH'
-                or qualification.get('source_commit') != m['source_commit']
-                or qualification.get('input_hashes') != m['input_hashes']):
-            raise RuntimeError('qualification incomplete or binding differs')
+        qualification = validate_qualification(args.qualification_readout, m)
+        save(args.output/'QUALIFICATION_BINDING.json', qualification)
     torch.set_num_threads(1)
     torch.set_num_interop_threads(1)
     evaluator = ChampionEvaluator(load_transformer_policy(Path(m['checkpoint']), device='cpu',
@@ -259,7 +307,7 @@ def run(args, m):
                             signal.alarm(0)
 
                     def emit(row):
-                        save(steps/f"boundary-{row['boundary']:03d}.json", row)
+                        save_step(steps/f"boundary-{row['boundary']:03d}.json.gz", row)
                         print(json.dumps(dict(identity=identity, boundary=row['boundary'],
                             actions=row['actions'], decision_seconds=row['evidence'].get(subject, {}).get('elapsed_seconds'))), flush=True)
 
@@ -272,7 +320,7 @@ def run(args, m):
                     except Exception as error:
                         result.update(status='REFUSED', signed_outcome=None,
                             error=f'{type(error).__name__}: {error}', failure_evidence=getattr(error, 'evidence', None))
-                    result['step_hashes'] = {p.name: sha(p) for p in steps.glob('*.json')}
+                    result['step_hashes'] = {p.name: sha(p) for p in step_files(steps)}
                     save(path, result)
                     print(json.dumps({key: result.get(key) for key in ('identity', 'status', 'signed_outcome', 'error')}), flush=True)
                     if result['status'] != 'COMPLETE':
@@ -289,15 +337,7 @@ def run(args, m):
 
 def readout(args, m):
     verify(m)
-    rows = []
-    for path in sorted(args.output.glob('seed-*.json')):
-        row = json.loads(path.read_text())
-        if row['registration_sha256'] != sha(args.output/'registration.json'):
-            raise RuntimeError('result registration binding drift')
-        actual = {p.name: sha(p) for p in (args.output/path.stem).glob('*.json')}
-        if actual != row['step_hashes']:
-            raise RuntimeError('durable decision evidence drift')
-        rows.append(row)
+    rows = bound_rows(args.output, m)
     result = analyze(m['seeds'], rows)
     result.update(source_commit=m['source_commit'], input_hashes=m['input_hashes'], phase=m['phase'])
     if m['phase'] == 'QUALIFICATION_NOT_STRENGTH':

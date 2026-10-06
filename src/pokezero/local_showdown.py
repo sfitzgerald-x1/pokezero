@@ -398,6 +398,11 @@ class PublicBattleMaterializationState:
     self_request: Mapping[str, Any]
     self_move_states: Mapping[str, tuple[Mapping[str, Any], ...]] = field(default_factory=dict)
     self_initial_request: Mapping[str, Any] = field(default_factory=dict)
+    # An ordinary PP snapshot predates the Hyper Beam use when the next request
+    # contains only Recharge. This certificate carries the public use/target,
+    # not the true target's hidden ability or an oracle PP count. Pressure cost
+    # is conditioned on the target in each sampled world.
+    self_recharge_pp_charge: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def deferred_opponent_action_player(self) -> PlayerId | None:
@@ -755,6 +760,9 @@ class LocalShowdownEnv:
                 initial_request=self._first_requests.get(player) or request,
             ),
             self_initial_request=_json_clone_mapping(self._first_requests.get(player) or request),
+            self_recharge_pp_charge=_reference_recharge_pp_charge(
+                replay, player, request, self._request_history[player],
+            ),
         )
 
     def materialize_public_world(
@@ -769,6 +777,7 @@ class LocalShowdownEnv:
         reference_consumed_items: bool = False,
         reference_encore_durations: Mapping[str, int] | None = None,
         reference_induced_sleep: Mapping[str, Mapping[str, int]] | None = None,
+        reference_turn_clocks: bool = False,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
@@ -776,6 +785,10 @@ class LocalShowdownEnv:
             raise LocalShowdownError("Reference Rest opt-in must be boolean.")
         if not isinstance(reference_consumed_items, bool):
             raise LocalShowdownError("Reference consumed-item opt-in must be boolean.")
+        if type(reference_turn_clocks) is not bool:
+            raise LocalShowdownError("Reference turn-clock opt-in must be boolean.")
+        if reference_turn_clocks and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference turn clocks require Gen 3.")
         if reference_consumed_items and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
             raise LocalShowdownError("Reference consumed items require Gen 3.")
         if reference_consumed_items and state.observation_format_id == "gen3customgame":
@@ -799,6 +812,7 @@ class LocalShowdownEnv:
                 "referenceInducedSleep": dict(reference_induced_sleep) if reference_induced_sleep is not None else None,
                 "referenceRulesFormat": state.observation_format_id if reference_induced_sleep is not None else None,
                 "referenceConsumedItems": reference_consumed_items,
+                "referenceTurnClocks": reference_turn_clocks,
                 "referenceEncoreDurations": dict(reference_encore_durations) if reference_encore_durations is not None else None,
                 "publicState": _public_materialization_payload(
                     state,
@@ -807,6 +821,7 @@ class LocalShowdownEnv:
                     reference_consumed_items=reference_consumed_items,
                     reference_encore=reference_encore_durations is not None,
                     reference_induced_sleep=reference_induced_sleep is not None,
+                    reference_turn_clocks=reference_turn_clocks,
                 ),
             },
             "materialized",
@@ -817,6 +832,8 @@ class LocalShowdownEnv:
         direct_requests = _json_clone_requests(requests)
         if not direct_requests:
             raise LocalShowdownError("Direct materialization produced no actionable request boundary.")
+        if reference_turn_clocks:
+            _validate_reference_actor_request(direct_requests.get(state.player_id), state.self_request)
         # The bridge rebuilds its team in active-first order to construct the sampled world.  Its
         # generated actor request can therefore reorder the player's own party tokens even though
         # the player-visible request at this decision boundary is already known.  Keep that exact
@@ -1705,7 +1722,12 @@ class LocalShowdownEnv:
                     if side_id == stream:
                         self._latest_requests[stream] = request
                         self._first_requests.setdefault(stream, request)
-                        self._request_history[stream].append(_json_clone_mapping(request))
+                        # Anchor actor-known PP to public chronology. Do not put
+                        # this internal marker into the live/encoded request.
+                        self._sync_incremental_state()
+                        retained = _json_clone_mapping(request)
+                        retained["_pokezero_public_event_cursor"] = len(self._parser.public_events)
+                        self._request_history[stream].append(retained)
                         self._lines.append(line)
         return False
 
@@ -2330,6 +2352,32 @@ def _json_clone_request_history(
     }
 
 
+def _validate_reference_actor_request(actual: Mapping[str, Any] | None, expected: Mapping[str, Any]) -> None:
+    """Known actor requests cannot conceal different sampled simulator legality.
+
+    The retained request still supplies encoder identity, but first require the
+    simulator's independently generated active move/PP/disable/lock boundary.
+    Never compare an actual opponent request or use one to repair the world.
+    """
+    def signature(request: Mapping[str, Any] | None) -> tuple[Any, ...]:
+        if not isinstance(request, Mapping):
+            raise LocalShowdownError("Reference actor boundary has no generated request.")
+        active = request.get("active", [])
+        if not isinstance(active, list) or len(active) > 1:
+            raise LocalShowdownError("Reference actor boundary has malformed active rows.")
+        moves, flags = (), ()
+        if active:
+            row = active[0]
+            if not isinstance(row, Mapping) or not isinstance(row.get("moves"), list):
+                raise LocalShowdownError("Reference actor boundary has malformed moves.")
+            moves = tuple((move.get("id"), move.get("pp"), move.get("maxpp"), bool(move.get("disabled")))
+                for move in row["moves"])
+            flags = tuple(bool(row.get(name)) for name in ("trapped", "maybeTrapped"))
+        return (tuple(bool(v) for v in request.get("forceSwitch", [])), bool(request.get("wait")), moves, flags)
+    if signature(actual) != signature(expected):
+        raise LocalShowdownError("Reference generated actor boundary differs from retained move/PP/legality request.")
+
+
 def _public_materialization_payload(
     state: PublicBattleMaterializationState,
     *,
@@ -2338,6 +2386,7 @@ def _public_materialization_payload(
     reference_consumed_items: bool = False,
     reference_encore: bool = False,
     reference_induced_sleep: bool = False,
+    reference_turn_clocks: bool = False,
 ) -> dict[str, Any]:
     # A live action request is a protocol boundary: the preceding action has
     # finished even if the omniscient stream reached the request before its
@@ -2438,6 +2487,7 @@ def _public_materialization_payload(
             # the mon did, so the proxy inverts permanently the first time a holder is kept
             # from moving by sleep, paralysis, flinch, freeze, recharge or a switch.
             "truantPhase": replay.truant_phase.get(player),
+            **({"mustRecharge": bool(replay.must_recharge.get(player, False))} if reference_turn_clocks else {}),
             # Live in-battle retype of the ACTIVE mon, which the species token cannot
             # express. The parser has produced this since the v3 obs work but only the
             # OBSERVATION path consumed it (`_apply_live_type_override`); the world was
@@ -2522,6 +2572,7 @@ def _public_materialization_payload(
         "selfRequestKind": _request_materialization_kind(state.self_request),
         "selfActiveMoves": _request_active_moves(state.self_request),
         "selfActiveRequestState": _request_active_materialization_state(state.self_request),
+        **({"selfRechargePPCharge": dict(state.self_recharge_pp_charge)} if reference_turn_clocks else {}),
         # The actor's request history retains exact PP state for Pokemon that were previously
         # active. If a used benched Pokemon has no such request-known snapshot, fail closed.
         "selfBenchedMoveHistory": _has_self_benched_move_history(state),
@@ -3384,6 +3435,57 @@ def _request_active_materialization_state(request: Mapping[str, Any]) -> dict[st
         for name in ("trapped", "maybeTrapped", "maybeDisabled", "maybeLocked")
         if bool(active_row.get(name))
     }
+
+
+def _reference_recharge_pp_charge(
+    replay: ShowdownReplayState,
+    player: PlayerId,
+    request: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Certify exactly one unreported Hyper Beam use from actor/public inputs.
+
+    Gen 3 Pressure's switch-in disclosure is private to its holder. Never
+    inspect that disclosure or infer a true opponent ability here: the sampled
+    world applies the conditional 1/2 PP charge. A fresh ordinary PP request
+    supersedes the certificate, so repeated captures cannot double-debit it.
+    Unsupported/truncated chronology is recorded as a refusal certificate for
+    the opt-in reference materializer, without changing production encoding.
+    """
+    if not replay.must_recharge.get(player):
+        return {}
+    identity = _request_active_pokemon_identity(request)
+    latest = next((row for row in reversed(history)
+                   if _request_active_pokemon_identity(row) == identity and _request_active_moves(row)), None)
+    if latest is None:
+        return {"refusal": "Recharge has no retained ordinary actor PP snapshot."}
+    cursor = latest.get("_pokezero_public_event_cursor")
+    if type(cursor) is not int or not 0 <= cursor <= len(replay.public_events):
+        return {"refusal": "Recharge actor PP snapshot lacks a public chronology anchor."}
+    active_species: dict[str, str] = {}
+    charges = []
+    for index, event in enumerate(replay.public_events):
+        parts = event.raw_line.split("|")
+        if event.event_type in {"switch", "drag", "replace"} and len(parts) >= 4:
+            active_species[parts[2][:2]] = parts[3].split(",", 1)[0]
+        if index < cursor or event.event_type != "move" or event.actor_slot != player:
+            continue
+        if event.actor_ident is None or _materialization_identity(event.actor_ident) != identity:
+            continue
+        if len(parts) < 5 or _normalize_identifier(parts[3]) != "hyperbeam" or any(
+            part.strip().startswith("[from]") for part in parts[5:]
+        ):
+            return {"refusal": "Recharge PP suffix is not a single direct Hyper Beam use."}
+        target_side = parts[4][:2]
+        species = active_species.get(target_side)
+        if target_side not in PLAYER_IDS or target_side == player or not species:
+            return {"refusal": "Recharge PP target lacks public occupancy provenance."}
+        charges.append({"move": "hyperbeam", "targetSide": target_side, "targetSpecies": species})
+    if len(charges) != 1:
+        return {"refusal": "Recharge requires exactly one unreported Hyper Beam charge."}
+    if "hyperbeam" not in {move["id"] for move in _request_active_moves(latest)}:
+        return {"refusal": "Recharge copied PP bank is not certified by an ordinary actor request."}
+    return charges[0]
 
 
 def actor_move_states_from_request_history(
