@@ -69,6 +69,10 @@ def register(args):
     compiled_source_root = Path(next(path for path in receipt['source_hashes']
         if path.endswith('/rust/pokezero-search/Cargo.toml'))).parents[2]
     for relative in git('ls-files', 'src', 'scripts', 'rust/pokezero-search', 'third_party', 'pyproject.toml').splitlines():
+        if relative == 'third_party/foul-play':
+            # Gitlink for an unrelated opponent implementation, not a loaded
+            # file or native build input in this champion-only comparison.
+            continue
         path = REPO / relative
         hashes[str(path)] = sha(path)
         if (relative.startswith('rust/pokezero-search/')
