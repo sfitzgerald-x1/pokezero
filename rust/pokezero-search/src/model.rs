@@ -2504,6 +2504,7 @@ impl NativeLeafModel {
             Some(crate::policy_bridge::PolicyOpponentBridge::new(
                 callback, !leaf_ctx.self_is_side_one(), policy_opponent_request_order.expect("validated sampled order"),
                 leaf_ctx.tables.registered_move_max_pp(),
+                leaf_ctx.tables.registered_move_base_pp(),
                 if leaf_ctx.self_is_side_one() { root_state.side_two.clone() } else { root_state.side_one.clone() },
                 policy_display_ctx,
             ))
