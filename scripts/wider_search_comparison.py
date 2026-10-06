@@ -402,6 +402,22 @@ def run(args, m):
                     from pokezero.mcts_eval.paper_reference_pending import (
                         FaintReplacementTransition, PendingPolicyTransition, requires_faint_encore_replay)
                     previous_public_transition = [None]
+                    from pokezero.mcts_eval.paper_reference_substitute import SubstituteHistoryTracker
+                    substitute_history = SubstituteHistoryTracker()
+
+                    def pending_for(public):
+                        substitute = substitute_history.certificate(public)
+                        if substitute is not None:
+                            return substitute
+                        pending = previous_public_transition[0] if public.deferred_opponent_action_player is not None else None
+                        if requires_faint_encore_replay(public):
+                            previous = previous_public_transition[0]
+                            if previous is None:
+                                raise RuntimeError('forced Encore replacement lacks its public prior root')
+                            pending = FaintReplacementTransition(previous.before_state,
+                                previous.before_observation, previous.own_action, previous.set_source_hash,
+                                previous.prior_transition)
+                        return pending
                     native.reset()
                     resume = recovery.get('resume') if recovery.get('resume', {}).get('identity') == identity else None
                     if resume:
@@ -418,12 +434,18 @@ def run(args, m):
                                     raise RuntimeError('retained played action is no longer legal')
                                 if actor == subject:
                                     public = live.public_materialization_state(subject)
+                                    public_request = PublicRootRequest.capture(public, observation,
+                                        pending_transition=pending_for(public)) if arm == 'paper_reference' else None
+                                    if public_request is not None:
+                                        substitute_history.accept_own(public_request, action)
                                     if not public.self_request.get('forceSwitch') and public.deferred_opponent_action_player is None:
                                         previous_public_transition[0] = PendingPolicyTransition.capture(
-                                            PublicRootRequest.capture(public, observation), action)
+                                            public_request or PublicRootRequest.capture(public, observation), action)
                                     trajectory.append(TrajectoryStep(player_id=subject, turn_index=row['boundary'],
                                         observation=observation, legal_action_mask=tuple(observation.legal_action_mask),
                                         action_index=action))
+                            if arm == 'paper_reference' and subject not in row['actions']:
+                                substitute_history.accept_opponent_only()
                             live.reseed_simulator_rng(row['chance_seed'])
                             live.step(row['actions'])
                         checkpoint_sha256 = None
@@ -474,13 +496,7 @@ def run(args, m):
                                     raise RuntimeError('forced request fell back')
                             else:
                                 public = live.public_materialization_state(subject)
-                                pending = previous_public_transition[0] if public.deferred_opponent_action_player is not None else None
-                                if requires_faint_encore_replay(public):
-                                    previous = previous_public_transition[0]
-                                    if previous is None:
-                                        raise RuntimeError('forced Encore replacement lacks its public prior root')
-                                    pending = FaintReplacementTransition(previous.before_state,
-                                        previous.before_observation, previous.own_action, previous.set_source_hash)
+                                pending = pending_for(public)
                                 request = PublicRootRequest.capture(public, observation, pending_transition=pending)
                                 remaining = 10 - (time.perf_counter() - begun)
                                 if remaining <= 0:
@@ -506,9 +522,10 @@ def run(args, m):
                                         raise RuntimeError('recovered first hidden draw differs from exact failed-draw qualification')
                                 evidence = asdict(measured)
                                 evidence['statistics_checkpoint'] = reference_statistics_checkpoint(pool._master.snapshot())
+                                substitute_history.accept_own(request, index)
                                 if not public.self_request.get('forceSwitch') and public.deferred_opponent_action_player is None:
                                     previous_public_transition[0] = PendingPolicyTransition.capture(
-                                        PublicRootRequest.capture(public, observation), index)
+                                        request, index)
                             trajectory.append(TrajectoryStep(player_id=subject, turn_index=boundary,
                                 observation=observation, legal_action_mask=tuple(observation.legal_action_mask), action_index=index))
                             return index, dict(selector=arm, elapsed_seconds=time.perf_counter()-begun,
@@ -518,6 +535,8 @@ def run(args, m):
 
                     def emit(row):
                         save_step(steps/f"boundary-{row['boundary']:03d}.json.gz", row)
+                        if arm == 'paper_reference' and subject not in row['actions']:
+                            substitute_history.accept_opponent_only()
                         print(json.dumps(dict(identity=identity, boundary=row['boundary'],
                             actions=row['actions'], decision_seconds=row['evidence'].get(subject, {}).get('elapsed_seconds'))), flush=True)
 

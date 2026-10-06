@@ -23,13 +23,16 @@ class PendingPolicyTransition:
     before_observation: Any
     own_action: int
     set_source_hash: str
+    prior_transition: Any = None
 
     @classmethod
     def capture(cls, public_request, own_action):
-        if public_request.pending_transition is not None:
+        from .paper_reference_substitute import SubstituteHistoryTransition
+        if (public_request.pending_transition is not None
+                and not isinstance(public_request.pending_transition, SubstituteHistoryTransition)):
             raise ReferenceRefusal('pending certificate cannot recursively reuse a pending root')
         return cls(public_request.state, public_request.observation, own_action,
-                   public_request.set_source_hash)
+                   public_request.set_source_hash, public_request.pending_transition)
 
 
 @dataclass(frozen=True)
@@ -105,7 +108,9 @@ def condition_pending_world(factory, hidden_rng, evidence, *, max_attempts=128):
         observation=transition.before_observation, evaluator=factory.evaluator,
         set_source=factory.set_source,
         allow_earlier_compatible_template=factory.allow_earlier_compatible_template,
-        max_known_set_draws=factory.max_known_set_draws)
+        max_known_set_draws=factory.max_known_set_draws,
+        **({'pending_transition': transition.prior_transition}
+           if getattr(transition, 'prior_transition', None) is not None else {}))
     if prior.known != factory.known:
         raise ReferenceRefusal('pending transition introduces unconditioned opponent-team evidence')
     subject = factory.state.player_id

@@ -98,14 +98,20 @@ class _ShowdownRuntime:
         state = replace(public_request.state, belief_engine=engine)
         observation = public_request.observation
         pending = public_request.pending_transition
-        if pending is not None:
+        def bind_pending(pending, depth=0):
+            if pending is None:
+                return None
+            if depth > 200:
+                raise ReferenceRefusal('pending transport exceeds bounded ancestry')
             if (not isinstance(pending, PendingPolicyTransition) or pending.before_state.replay.requests
                     or pending.before_state.belief_engine.set_source is not None
                     or pending.set_source_hash != self.source.metadata.source_hash):
                 raise ReferenceRefusal('worker received private or unbound pending transport')
             previous_engine = pending.before_state.belief_engine.clone()
             previous_engine.set_source = self.source
-            pending = replace(pending, before_state=replace(pending.before_state, belief_engine=previous_engine))
+            return replace(pending, before_state=replace(pending.before_state, belief_engine=previous_engine),
+                           prior_transition=bind_pending(pending.prior_transition, depth+1))
+        pending = bind_pending(pending)
         root = decision_state(observation, player=state.player_id)
         factory = PublicRootWorldFactory(env=self.env, state=state, observation=observation,
             evaluator=self.evaluator, set_source=self.source,

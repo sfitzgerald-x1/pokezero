@@ -64,7 +64,11 @@ class PublicRootWorldFactory:
         if state.replay.requests:
             raise ReferenceRefusal("public root must strip replay request payloads")
         from .paper_reference_pending import requires_faint_encore_replay, validate_transition
-        if state.deferred_opponent_action_player is not None or requires_faint_encore_replay(state):
+        from .paper_reference_substitute import (SubstituteHistoryTransition,
+            requires_substitute_replay, validate_substitute_transition)
+        if isinstance(pending_transition, SubstituteHistoryTransition) or requires_substitute_replay(state):
+            validate_substitute_transition(pending_transition, state, observation, set_source.metadata.source_hash)
+        elif state.deferred_opponent_action_player is not None or requires_faint_encore_replay(state):
             validate_transition(pending_transition, state, observation, set_source.metadata.source_hash)
         elif pending_transition is not None:
             raise ReferenceRefusal('nonpending public root cannot carry a pending certificate')
@@ -134,6 +138,9 @@ class PublicRootWorldFactory:
         self.receipts.append(evidence)
         try:
             if self.pending_transition is not None:
+                from .paper_reference_substitute import SubstituteHistoryTransition, condition_substitute_world
+                if isinstance(self.pending_transition, SubstituteHistoryTransition):
+                    return condition_substitute_world(self, hidden_rng, evidence)
                 from .paper_reference_pending import condition_pending_world
                 return condition_pending_world(self, hidden_rng, evidence)
             draw = self.sampler.draw(self.known, hidden_rng)
