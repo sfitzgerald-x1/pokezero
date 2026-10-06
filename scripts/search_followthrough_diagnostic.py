@@ -35,6 +35,53 @@ def git(*args):
     return subprocess.check_output(['git', '-C', str(REPO), *args], text=True).strip()
 
 
+def reference_statistics_checkpoint(snapshot):
+    """Auditable Q/N/M/F after an accepted decision, without latent world state."""
+    return dict(battle_id=snapshot.battle_id, version=snapshot.version,
+        faint_floor=snapshot.faint_floor, acknowledged=snapshot.acknowledged,
+        rows=[dict(key_hex=row.state.key.hex(), actions=row.state.actions,
+            faint_count=row.state.faint_count, visits=row.visits,
+            totals=row.totals, count=row.count) for row in snapshot.rows])
+
+
+def retained_cells(previous, roots, inputs):
+    """Link only complete, identity-matched cells; preserve refusals as history.
+
+    A new registration can repair the SAME refused question, never drop it or
+    overwrite the earlier files. No incomplete search tree is claimed restored.
+    """
+    path = previous / 'registration.json'
+    old = json.loads(path.read_text())
+    if old['roots'] != roots or old['replicates'] != [0, 1] or old['planners'] != list(PLANNERS):
+        raise RuntimeError('retained continuation roster drift')
+    inputs[str(path)] = sha(path)
+    inputs.update(old['source_hashes'])
+    inputs.update(old['retained_input_hashes'])
+    retained, refused = {}, []
+    for cell_path in sorted(previous.glob('root-*.json')):
+        cell = json.loads(cell_path.read_text())
+        expected = next((r for r in roots if r['ordinal'] == cell['ordinal']), None)
+        identity = f"root-{cell['ordinal']:02d}-{cell['planner']}-{cell['mode']}-r{cell['replicate']}"
+        if (expected is None or cell['identity'] != identity or cell_path.stem != identity
+                or cell['decision_id'] != expected['decision_id']
+                or cell['first_choice'] != expected['first_choices'][cell['planner']]
+                or cell['mode'] not in ('raw', 'search') or cell['replicate'] not in (0, 1)
+                or cell['registration_sha256'] != sha(path)):
+            raise RuntimeError('retained cell provenance drift')
+        inputs[str(cell_path)] = sha(cell_path)
+        for name, digest in cell['step_hashes'].items():
+            if Path(name).name != name or sha(previous / identity / name) != digest:
+                raise RuntimeError('retained decision evidence drift')
+            inputs[str(previous / identity / name)] = digest
+        if cell['status'] == 'COMPLETE':
+            retained[identity] = {'path': str(cell_path), 'sha256': sha(cell_path),
+                'registration_sha256': sha(path), 'step_dir': str(previous / identity)}
+        else:
+            refused.append({'identity': identity, 'path': str(cell_path), 'sha256': sha(cell_path),
+                'status': cell['status'], 'error': cell.get('error')})
+    return retained, refused
+
+
 def register(args):
     if git('status', '--porcelain'):
         raise RuntimeError('commit reviewed source before registration')
@@ -62,12 +109,15 @@ def register(args):
         roots.append({'ordinal': ordinal, 'decision_id': original['decision_ids'][ordinal],
             'first_choices': {'deep_incumbent': cells['deep_incumbent']['choice'],
                 'paper_reference': cells['paper_reference_10s']['choice']}})
+    retained, refused = retained_cells(args.reuse_complete_from, roots, inputs) if args.reuse_complete_from else ({}, [])
     args.output.mkdir(parents=True, exist_ok=False)
-    modules = [*sorted((REPO / 'src/pokezero').rglob('*.py')), Path(__file__)]
+    modules = [*sorted((REPO / 'src/pokezero').rglob('*.py')), Path(__file__),
+        *sorted((REPO / 'scripts').glob('battle_bridge*.mjs'))]
     manifest = dict(schema='pokezero.fixed-action-followthrough.v1', identity=args.output.name,
         registered_at=datetime.now(timezone.utc).isoformat(), source_commit=git('rev-parse', 'HEAD'),
         original=original, roots=roots, replicates=[0, 1], planners=list(PLANNERS),
         search_game_denominator=12, raw_control_game_denominator=12,
+        retained_cells=retained, preserved_noncomplete_history=refused,
         source_hashes={str(path): sha(path) for path in modules}, retained_input_hashes=inputs,
         nominal_decision_seconds=10., max_boundaries=200, global_admission_seconds=7200,
         per_game_wall_seconds=2400, per_decision_safety_seconds=120,
@@ -76,6 +126,8 @@ def register(args):
         first_action='fixed to historical selected Showdown choice; never reselected/redrawn',
         reference=dict(workers=20, batch=10, alpha=.5, beta=1.,
             allow_earlier_compatible_template=True, max_known_set_draws=128,
+            public_consumed_item_history=True,
+            checkpoint_aggregate_statistics_after_each_accepted_decision=True,
             persistent_tree_within_continuation=True, historical_tree_resurrected=False),
         incumbent=dict(depth=6, sims=4096, batch=16, worlds=4, model_priors=True,
             use_opponent_priors=False, leaf_eval='model', early_stop=False,
@@ -91,6 +143,8 @@ def register(args):
             'opponent is not Foul Play; caps/refusals remain missing, never dropped'],
         hardware={'accelerator': 'cpu', 'logical_cpus': os.cpu_count()},
         whole_policy_strength_qualified=False, no_retraining_or_cluster_mutation=True)
+    if retained or refused:
+        manifest['limitations'].append('completed cells retained across disclosed materializer repair; only refused/unattempted cells rerun')
     save(args.output / 'registration.json', manifest)
     print(json.dumps({'status': 'REGISTERED', 'roots': ORDINALS, 'search_games': 12,
         'raw_controls': 12, 'output': str(args.output)}), flush=True)
@@ -192,6 +246,8 @@ def run(args, m):
                     modes = ('raw',) if args.raw_only else ('raw', 'search')
                     for mode in modes:
                         identity = f'root-{ordinal:02d}-{planner}-{mode}-r{replicate}'
+                        if identity in m.get('retained_cells', {}):
+                            continue
                         result_path = args.output / (identity + '.json')
                         if result_path.exists():
                             existing = json.loads(result_path.read_text())
@@ -261,6 +317,7 @@ def run(args, m):
                                     if len(draws) != measured.result.world_draws or len(set(measured.worker_pids)) != 20:
                                         raise RuntimeError('reference world/worker denominator drift')
                                     evidence = asdict(measured)
+                                    evidence['statistics_checkpoint'] = reference_statistics_checkpoint(pool._master.snapshot())
                                 return index, dict(selector=planner, searched_every_later_own_request=True,
                                     elapsed_seconds=time.perf_counter()-begun, seed=seed, search_evidence=evidence)
                             finally:
@@ -311,16 +368,22 @@ def run(args, m):
 
 def readout(args, m):
     cells = []
-    for path in sorted(args.output.glob('root-*.json')):
+    sources = [(p, args.output / p.stem, sha(args.output / 'registration.json'))
+        for p in sorted(args.output.glob('root-*.json'))]
+    for retained in m.get('retained_cells', {}).values():
+        path = Path(retained['path'])
+        if sha(path) != retained['sha256']:
+            raise RuntimeError('retained complete cell changed')
+        sources.append((path, Path(retained['step_dir']), retained['registration_sha256']))
+    for path, step_dir, registration_sha in sources:
         cell = json.loads(path.read_text())
         root = next((r for r in m['roots'] if r['ordinal'] == cell['ordinal']), None)
         if (root is None or cell['decision_id'] != root['decision_id']
                 or cell['planner'] not in PLANNERS or cell['mode'] not in ('raw', 'search')
                 or cell['replicate'] not in m['replicates']
                 or cell['first_choice'] != root['first_choices'][cell['planner']]
-                or cell['registration_sha256'] != sha(args.output / 'registration.json')):
+                or cell['registration_sha256'] != registration_sha):
             raise RuntimeError('continuation roster/provenance drift')
-        step_dir = args.output / cell['identity']
         for name, digest in cell['step_hashes'].items():
             if sha(step_dir / name) != digest:
                 raise RuntimeError('continuation decision evidence drift')
@@ -360,7 +423,8 @@ def readout(args, m):
         aggregate={key: statistics.mean(c[key] for c in contrasts) for key in (
             'reference_minus_incumbent_search', 'reference_minus_incumbent_raw',
             'reference_followthrough_gain', 'incumbent_followthrough_gain')} if complete else None,
-        source_hashes={str(p): sha(p) for p in args.output.glob('root-*.json')},
+        source_hashes={str(p): sha(p) for p, _, _ in sources},
+        preserved_noncomplete_history=m.get('preserved_noncomplete_history', []),
         whole_policy_strength_qualified=False, no_superiority_or_equivalence_claim=True,
         limitations=m['limitations'])
     path = args.output / ('READOUT.json' if complete else f'PARTIAL-READOUT-{len(cells):02d}.json')
@@ -374,6 +438,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--parent-registration', type=Path)
     parser.add_argument('--parent-output', type=Path)
+    parser.add_argument('--reuse-complete-from', type=Path)
     parser.add_argument('--raw-only', action='store_true')
     args = parser.parse_args()
     if args.phase == 'register':

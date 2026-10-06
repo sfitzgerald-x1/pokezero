@@ -135,7 +135,7 @@ class PublicRootWorldFactory:
             seed = hidden_rng.getrandbits(32)
             evidence["materialization_seed"] = seed
             self.env.materialize_public_world(state=self.state, start_override=override, seed=seed,
-                reference_rest_sleep=True)
+                reference_rest_sleep=True, reference_consumed_items=True)
             if decision_state(self.env.observe(self.state.player_id), player=self.state.player_id) != self.root:
                 raise ReferenceRefusal("fresh sampled world does not preserve exact player-known root")
             evidence["status"] = "ROOT_VALIDATED"
