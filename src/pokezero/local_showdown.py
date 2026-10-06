@@ -791,8 +791,6 @@ class LocalShowdownEnv:
             raise LocalShowdownError("Reference turn clocks require Gen 3.")
         if reference_consumed_items and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
             raise LocalShowdownError("Reference consumed items require Gen 3.")
-        if reference_consumed_items and state.observation_format_id == "gen3customgame":
-            _validate_reference_rest_names(state)
         if reference_rest_sleep and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
             raise LocalShowdownError("Reference Rest requires the Gen 3 public ledger.")
         if reference_rest_sleep and state.observation_format_id == "gen3customgame":
@@ -2858,10 +2856,13 @@ def _public_consumed_item_history(
     Item loss is not merely an empty current item: Recycle needs lastItem. The
     consumed/ate flags persist on the bench; nextTurn clears usedItemThisTurn
     only for the active Pokemon. Unknown item operations remain blocked.
-    Random-battle species names (or validated nickname-free custom fixtures)
-    provide identities; duplicate species are separately refused by the caller.
+    Protocol names are not species (Deoxys-Attack is named Deoxys). Bind an
+    event actor to the species disclosed in its preceding switch details;
+    truncated identity histories cannot certify consumption. Duplicate species
+    are separately refused by the caller.
     """
     consumed: dict[str, dict[str, Any]] = {}
+    actors: dict[str, str] = {}
     active = None
     for event in state.replay.public_events:
         parts = event.raw_line.split("|")
@@ -2874,10 +2875,21 @@ def _public_consumed_item_history(
             continue
         if len(parts) < 3 or parts[2][:2] != player:
             continue
-        identity = _materialization_identifier(parts[2].partition(":")[2])
+        actor = parts[2]
         if kind in {"switch", "drag", "replace"}:
+            identity = (_materialization_identifier(parts[3].split(",", 1)[0])
+                        if len(parts) >= 4 else "")
+            previous = actors.pop(actor, None)
+            if not identity and previous is not None:
+                consumed.pop(previous, None)
+            if identity:
+                actors[actor] = identity
             active = identity
+            continue
         if kind not in {"-item", "-enditem"}:
+            continue
+        identity = actors.get(actor)
+        if identity is None:
             continue
         consumed.pop(identity, None)
         if kind != "-enditem" or len(parts) < 4:
