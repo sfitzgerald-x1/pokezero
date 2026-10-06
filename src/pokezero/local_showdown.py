@@ -768,6 +768,7 @@ class LocalShowdownEnv:
         reference_rest_sleep: bool = False,
         reference_consumed_items: bool = False,
         reference_encore_durations: Mapping[str, int] | None = None,
+        reference_induced_sleep: Mapping[str, Mapping[str, int]] | None = None,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
@@ -795,6 +796,8 @@ class LocalShowdownEnv:
                 "type": "materialize",
                 "battleId": self._battle_token,
                 "referenceRestSleep": reference_rest_sleep,
+                "referenceInducedSleep": dict(reference_induced_sleep) if reference_induced_sleep is not None else None,
+                "referenceRulesFormat": state.observation_format_id if reference_induced_sleep is not None else None,
                 "referenceConsumedItems": reference_consumed_items,
                 "referenceEncoreDurations": dict(reference_encore_durations) if reference_encore_durations is not None else None,
                 "publicState": _public_materialization_payload(
@@ -803,6 +806,7 @@ class LocalShowdownEnv:
                     deferred_opponent_action_priors=deferred_opponent_action_priors,
                     reference_consumed_items=reference_consumed_items,
                     reference_encore=reference_encore_durations is not None,
+                    reference_induced_sleep=reference_induced_sleep is not None,
                 ),
             },
             "materialized",
@@ -2333,6 +2337,7 @@ def _public_materialization_payload(
     deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
     reference_consumed_items: bool = False,
     reference_encore: bool = False,
+    reference_induced_sleep: bool = False,
 ) -> dict[str, Any]:
     # A live action request is a protocol boundary: the preceding action has
     # finished even if the omniscient stream reached the request before its
@@ -2479,6 +2484,14 @@ def _public_materialization_payload(
         for priors in deferred_priors.values()
     ):
         raise ValueError("Direct materialization received invalid deferred opponent move priors.")
+    if reference_induced_sleep:
+        from .mcts_eval.paper_reference_sleep import induced_sleep_certificates
+        certificates = induced_sleep_certificates(state)
+        for side, public_side in sides.items():
+            for row in public_side['pokemon']:
+                key = side + ':' + _normalize_identifier(row['species'])
+                if key in certificates and 'slp' in str(row.get('condition', '')).split():
+                    row['referenceInducedSleep'] = certificates[key]
     return {
         "turn": replay.turn_number,
         "weather": replay.weather,

@@ -89,6 +89,54 @@ class FollowThroughTests(unittest.TestCase):
 
 
 class RetainedContinuationTests(unittest.TestCase):
+    def test_recursive_completed_cell_keeps_its_registration_hash(self):
+        driver = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+            'scripts/search_followthrough_diagnostic.py'))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prefix = root/'prefix.json'; prefix.write_text('{}')
+            roots = [{'ordinal':3,'decision_id':'d','first_choices':{'paper_reference':'move 1'}}]
+            registration = root/'registration.json'
+            registration.write_text(json.dumps(dict(roots=roots,replicates=[0,1],
+                planners=['deep_incumbent','paper_reference'],source_hashes={},
+                retained_input_hashes={str(prefix):driver['sha'](prefix)})))
+            identity='root-03-paper_reference-search-r0'
+            (root/(identity+'.json')).write_text(json.dumps(dict(identity=identity,ordinal=3,
+                decision_id='d',planner='paper_reference',mode='search',replicate=0,first_choice='move 1',
+                status='COMPLETE',step_hashes={},registration_sha256=driver['sha'](registration),
+                retained_prefix_steps={'boundary-000.json':str(prefix)})))
+            retained,_=driver['retained_cells'](root,roots,{})
+            self.assertEqual(retained[identity]['registration_sha256'],driver['sha'](registration))
+
+    def test_first_boundary_resume_has_no_invented_checkpoint_and_checks_recursive_prefix(self):
+        driver = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+            'scripts/search_followthrough_diagnostic.py'))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            identity = 'root-08-paper_reference-search-r0'
+            (root / identity).mkdir()
+            step = root / identity / 'boundary-000.json'
+            step.write_text(json.dumps(dict(boundary=0, actions={'p1':4, 'p2':2})))
+            registration = root / 'registration.json'
+            registration.write_text(json.dumps(dict(retained_input_hashes={})))
+            cell = dict(status='REFUSED', planner='paper_reference', subject='p1', first_action=4,
+                step_hashes={step.name:driver['sha'](step)})
+            (root / (identity+'.json')).write_text(json.dumps(cell))
+            resume = driver['register_resume'](root, {}, identity)[identity]
+            self.assertEqual(resume['start_boundary'], 1)
+            self.assertEqual(resume['prior_selections'], 0)
+            self.assertIsNone(resume['checkpoint_step'])
+            retained = root / 'original-boundary-000.json'
+            step.rename(retained)
+            cell['step_hashes'] = {}
+            cell['retained_prefix_steps'] = {'boundary-000.json':str(retained)}
+            (root / (identity+'.json')).write_text(json.dumps(cell))
+            registration.write_text(json.dumps(dict(retained_input_hashes={str(retained):driver['sha'](retained)})))
+            self.assertEqual(driver['register_resume'](root, {}, identity)[identity]['start_boundary'], 1)
+            retained.write_text('{}')
+            with self.assertRaisesRegex(RuntimeError,'retained prefix drift'):
+                driver['register_resume'](root, {}, identity)
+
     def test_statistics_checkpoint_is_json_safe_and_retains_all_q_n_m_f(self):
         from pokezero.mcts_eval.paper_reference import DecisionState
         from pokezero.mcts_eval.paper_reference_exchange import MasterSnapshot, Statistics
