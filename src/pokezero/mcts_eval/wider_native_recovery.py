@@ -20,6 +20,7 @@ from pokezero.mcts_eval.wider_search import ARMS, SEATS, analyze, game_identity,
 
 KIND = 'native-semantic-repair'
 OPERATIONAL_CHANGES = {'scripts/wider_search_comparison.py',
+                       'src/pokezero/mcts_eval/wider_faint_recovery.py',
                        'src/pokezero/mcts_eval/wider_native_recovery.py',
                        'src/pokezero/mcts_eval/wider_trapping_recovery.py',
                        'src/pokezero/mcts_eval/wider_pending_qualification.py'}
