@@ -348,6 +348,11 @@ def run(args, m):
                     live.reset(seed=seed)
                     battle_id = 'wider-search:' + identity
                     trajectory = BattleTrajectory(battle_id, 'gen3randombattle', seed)
+                    # Only the actor's previous public root and own played action
+                    # can certify a pending Baton Pass. Never retain live opponent
+                    # action indices or requests in the worker transport.
+                    from pokezero.mcts_eval.paper_reference_pending import PendingPolicyTransition
+                    previous_public_transition = [None]
                     native.reset()
                     resume = recovery.get('resume') if recovery.get('resume', {}).get('identity') == identity else None
                     if resume:
@@ -363,6 +368,10 @@ def run(args, m):
                                 if not observation.legal_action_mask[action]:
                                     raise RuntimeError('retained played action is no longer legal')
                                 if actor == subject:
+                                    public = live.public_materialization_state(subject)
+                                    if not public.self_request.get('forceSwitch') and public.deferred_opponent_action_player is None:
+                                        previous_public_transition[0] = PendingPolicyTransition.capture(
+                                            PublicRootRequest.capture(public, observation), action)
                                     trajectory.append(TrajectoryStep(player_id=subject, turn_index=row['boundary'],
                                         observation=observation, legal_action_mask=tuple(observation.legal_action_mask),
                                         action_index=action))
@@ -415,7 +424,9 @@ def run(args, m):
                                 elif evidence['fallbacks'] or evidence['prior_fallbacks']:
                                     raise RuntimeError('forced request fell back')
                             else:
-                                request = PublicRootRequest.capture(live.public_materialization_state(subject), observation)
+                                public = live.public_materialization_state(subject)
+                                pending = previous_public_transition[0] if public.deferred_opponent_action_player is not None else None
+                                request = PublicRootRequest.capture(public, observation, pending_transition=pending)
                                 remaining = 10 - (time.perf_counter() - begun)
                                 if remaining <= 0:
                                     raise TimeoutError('reference deadline expired during public capture')
@@ -437,6 +448,9 @@ def run(args, m):
                                         raise RuntimeError('recovered first hidden draw differs from exact failed-draw qualification')
                                 evidence = asdict(measured)
                                 evidence['statistics_checkpoint'] = reference_statistics_checkpoint(pool._master.snapshot())
+                                if not public.self_request.get('forceSwitch') and public.deferred_opponent_action_player is None:
+                                    previous_public_transition[0] = PendingPolicyTransition.capture(
+                                        PublicRootRequest.capture(public, observation), index)
                             trajectory.append(TrajectoryStep(player_id=subject, turn_index=boundary,
                                 observation=observation, legal_action_mask=tuple(observation.legal_action_mask), action_index=index))
                             return index, dict(selector=arm, elapsed_seconds=time.perf_counter()-begun,

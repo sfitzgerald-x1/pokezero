@@ -4,8 +4,8 @@ Never accepts a live environment, simulator snapshot, opponent request, or
 historical numeric opponent action. The actor's opening request and public
 belief ledger are the only team inputs. Every call samples and materializes a
 new hypothetical world and checks exact actor/public observation identity.
-Pending Baton Pass commitments currently refuse explicitly: choosing argmax
-from the materializer's deferred-prior shortcut is NOT paper policy sampling.
+Pending Baton Pass commitments require a public-only previous-root certificate
+and joint champion-policy/chance conditioning, never the deferred-prior argmax.
 """
 
 from __future__ import annotations
@@ -60,11 +60,14 @@ class PublicRootWorldFactory:
     def __init__(self, *, env: LocalShowdownEnv, state: PublicBattleMaterializationState,
                  observation: Any, evaluator: ChampionEvaluator, set_source: Gen3RandbatSource,
                  allow_earlier_compatible_template: bool = False,
-                 max_known_set_draws: int = 10) -> None:
+                 max_known_set_draws: int = 10, pending_transition: Any = None) -> None:
         if state.replay.requests:
             raise ReferenceRefusal("public root must strip replay request payloads")
         if state.deferred_opponent_action_player is not None:
-            raise ReferenceRefusal("pending committed opponent action needs a sampled-policy certificate")
+            from .paper_reference_pending import validate_transition
+            validate_transition(pending_transition, state, observation, set_source.metadata.source_hash)
+        elif pending_transition is not None:
+            raise ReferenceRefusal('nonpending public root cannot carry a pending certificate')
         if state.observation_format_id != "gen3randombattle":
             raise ReferenceRefusal("reference factory supports only public Gen 3 random-battle roots")
         if env.belief_set_source_hash != set_source.metadata.source_hash:
@@ -112,6 +115,10 @@ class PublicRootWorldFactory:
                 mon.ruled_out_abilities, mon.ruled_out_items))
         self.known = tuple(known)
         self.env, self.state, self.evaluator = env, state, evaluator
+        self.set_source = set_source
+        self.pending_transition = pending_transition
+        self.allow_earlier_compatible_template = allow_earlier_compatible_template
+        self.max_known_set_draws = max_known_set_draws
         self.own_team = own_team
         self.sampler = PaperHiddenTeamSampler(env, set_source=set_source,
             allow_earlier_compatible_template=allow_earlier_compatible_template,
@@ -126,6 +133,9 @@ class PublicRootWorldFactory:
         evidence: dict[str, Any] = {"ordinal": len(self.receipts), "status": "STARTED"}
         self.receipts.append(evidence)
         try:
+            if self.pending_transition is not None:
+                from .paper_reference_pending import condition_pending_world
+                return condition_pending_world(self, hidden_rng, evidence)
             draw = self.sampler.draw(self.known, hidden_rng)
             evidence.update(packed_team_sha256=draw.packed_team_sha256,
                 known_draws=[asdict(row) for row in draw.known], forced_sets=draw.forced_sets,

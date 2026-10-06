@@ -8,6 +8,7 @@ from .paper_reference import ReferenceRefusal
 from .paper_reference_parallel import PreparedDecision
 from .paper_reference_factory import PublicRootWorldFactory
 from .paper_reference_showdown import ChampionEvaluator, decision_state
+from .paper_reference_pending import PendingPolicyTransition
 from ..local_showdown import PublicBattleMaterializationState
 from ..public_decision_corpus import PublicObservation, _public_belief_view
 
@@ -17,9 +18,10 @@ class PublicRootRequest:
     state: PublicBattleMaterializationState
     observation: Any
     set_source_hash: str
+    pending_transition: PendingPolicyTransition | None = None
 
     @classmethod
-    def capture(cls, state, observation):
+    def capture(cls, state, observation, *, pending_transition=None):
         if (not isinstance(state, PublicBattleMaterializationState) or state.replay.requests
                 or state.belief_engine.set_source is None):
             raise ReferenceRefusal("reference transport requires public-only, source-bound state")
@@ -30,7 +32,7 @@ class PublicRootRequest:
         engine.set_source = None
         sanitized = PublicObservation.from_observation(observation).to_observation(
             belief_view=_public_belief_view(observation.metadata))
-        return cls(replace(state, belief_engine=engine), sanitized, source_hash)
+        return cls(replace(state, belief_engine=engine), sanitized, source_hash, pending_transition)
 
 
 @dataclass(frozen=True)
@@ -95,11 +97,20 @@ class _ShowdownRuntime:
         engine.set_source = self.source
         state = replace(public_request.state, belief_engine=engine)
         observation = public_request.observation
+        pending = public_request.pending_transition
+        if pending is not None:
+            if (not isinstance(pending, PendingPolicyTransition) or pending.before_state.replay.requests
+                    or pending.before_state.belief_engine.set_source is not None
+                    or pending.set_source_hash != self.source.metadata.source_hash):
+                raise ReferenceRefusal('worker received private or unbound pending transport')
+            previous_engine = pending.before_state.belief_engine.clone()
+            previous_engine.set_source = self.source
+            pending = replace(pending, before_state=replace(pending.before_state, belief_engine=previous_engine))
         root = decision_state(observation, player=state.player_id)
         factory = PublicRootWorldFactory(env=self.env, state=state, observation=observation,
             evaluator=self.evaluator, set_source=self.source,
             allow_earlier_compatible_template=self.allow_earlier_compatible_template,
-            max_known_set_draws=self.max_known_set_draws)
+            max_known_set_draws=self.max_known_set_draws, pending_transition=pending)
         receipt_index, forward_index = 0, self.evaluator.forwards
 
         def evidence():
