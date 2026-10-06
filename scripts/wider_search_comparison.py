@@ -211,6 +211,18 @@ def register(args):
             recovery_claim_rule='original full-roster rule plus worst-case scores for every historically touched cluster')
         m['limitations'].append(recovery['disclosure'])
         m['limitations'].append('incumbent private caches are fresh after accepted-action prefix replay; the full historical wall-clock envelope is charged against the unchanged game cap')
+    if args.pending_qualification_recover_from is not None:
+        if not args.qualification or args.recover_from or args.native_recover_from or not all((
+                args.repair_probe, args.pending_retained_audit)):
+            raise RuntimeError('pending recovery requires disjoint qualification, exact probe and retained audit')
+        from pokezero.mcts_eval.wider_pending_qualification import prepare
+        from search_followthrough_diagnostic import restore_reference_checkpoint
+        recovery = prepare(args.pending_qualification_recover_from, args.repair_probe,
+            args.pending_retained_audit, m, repo=REPO, git=git, sha=sha, verify=verify,
+            bound_rows=bound_rows, step_files=step_files, restore_reference_checkpoint=restore_reference_checkpoint)
+        m.update(schema='pokezero.wider-search.pending-qualification-repair.v1', repair_retention=recovery,
+            retained_input_hashes=recovery['input_hashes'])
+        m['limitations'].append(recovery['disclosure'])
     verify(m)
     args.output.mkdir(exist_ok=False)
     save(args.output/'registration.json', m)
@@ -503,7 +515,9 @@ def readout(args, m):
         result.update(literal_homogeneous_source=False, recovery_disclosure=m['repair_retention']['disclosure'],
             retained_complete_games=sorted(m['repair_retention']['retained_complete']),
             recovered_game=m['repair_retention']['resume']['identity'])
-        if m['repair_retention'].get('kind') == 'native-semantic-repair':
+        if m['phase'] == 'QUALIFICATION_NOT_STRENGTH':
+            pass  # Qualification outcomes NEVER enter a significance claim.
+        elif m['repair_retention'].get('kind') == 'native-semantic-repair':
             from pokezero.mcts_eval.wider_native_recovery import add_sensitivity
             add_sensitivity(result, m)
         else:
@@ -532,6 +546,8 @@ def main():
     parser.add_argument('--native-repair-certificate', type=Path)
     parser.add_argument('--native-qualification-audit', type=Path)
     parser.add_argument('--retained-audit', type=Path, action='append')
+    parser.add_argument('--pending-qualification-recover-from', type=Path)
+    parser.add_argument('--pending-retained-audit', type=Path)
     args = parser.parse_args()
     if args.mode == 'register':
         if not all((args.checkpoint, args.showdown_root, args.native_binding)):
