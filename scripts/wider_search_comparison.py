@@ -71,7 +71,8 @@ def register(args):
     for relative in git('ls-files', 'src', 'scripts', 'rust/pokezero-search', 'third_party', 'pyproject.toml').splitlines():
         path = REPO / relative
         hashes[str(path)] = sha(path)
-        if relative.startswith('rust/pokezero-search/'):
+        if (relative.startswith('rust/pokezero-search/')
+                and (path.suffix == '.rs' or path.name in ('Cargo.toml', 'Cargo.lock'))):
             expected = [value for original, value in receipt['source_hashes'].items()
                 if original.endswith('/' + relative)]
             if len(expected) != 1 or expected[0] != sha(path):
