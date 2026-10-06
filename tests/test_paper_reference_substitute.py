@@ -6,6 +6,7 @@ from unittest import mock
 
 from pokezero.mcts_eval.paper_reference import ReferenceRefusal
 from pokezero.mcts_eval.paper_reference_substitute import (
+    MAX_SUBSTITUTE_REJECTION_ATTEMPTS,
     SubstituteHistoryTransition, condition_substitute_world,
     requires_substitute_replay, validate_substitute_transition,
 )
@@ -112,6 +113,49 @@ class SubstituteSamplingTests(unittest.TestCase):
         with patches[0], patches[1], patches[2], self.assertRaisesRegex(ReferenceRefusal, 'explicit rejection cap'):
             condition_substitute_world(factory, rng, {}, max_attempts=2)
         self.assertTrue(all(w.closed for w in worlds))
+
+    def test_default_continues_original_proposals_after_attempt_128(self):
+        factory, rng, worlds, patches = self.fixture([False] * 128 + [True])
+        evidence = {}
+        with patches[0], patches[1], patches[2]:
+            world = condition_substitute_world(factory, rng, evidence)
+        witness = evidence['substitute_policy_conditioning']
+        self.assertEqual(witness['attempts'], 129)
+        self.assertEqual(witness['max_attempts'], 2048)
+        self.assertEqual([r['attempt'] for r in witness['rejected']], list(range(128)))
+        self.assertTrue(all(w.closed for w in worlds[:-1]))
+        self.assertEqual(witness['sampled_substitute_hp'], {'p1': 55})
+        self.assertFalse(witness['live_opponent_action_used'])
+        self.assertFalse(witness['live_hidden_hp_used'])
+        world.close()
+        self.assertTrue(evidence['released'])
+
+    def test_early_accepted_draw_is_identical_except_declared_limit(self):
+        witnesses = []
+        for limit in (128, MAX_SUBSTITUTE_REJECTION_ATTEMPTS):
+            factory, rng, worlds, patches = self.fixture([False, True])
+            evidence = {}
+            with patches[0], patches[1], patches[2]:
+                world = condition_substitute_world(factory, rng, evidence, max_attempts=limit)
+            world.close()
+            witness = dict(evidence['substitute_policy_conditioning'])
+            self.assertEqual(witness.pop('max_attempts'), limit)
+            witnesses.append(witness)
+        self.assertEqual(witnesses[0], witnesses[1])
+
+    def test_extended_limit_still_refuses_and_releases_every_rejection(self):
+        factory, rng, worlds, patches = self.fixture([False] * MAX_SUBSTITUTE_REJECTION_ATTEMPTS)
+        with patches[0], patches[1], patches[2], self.assertRaisesRegex(ReferenceRefusal, 'explicit rejection cap'):
+            condition_substitute_world(factory, rng, {})
+        self.assertTrue(all(w.closed for w in worlds))
+
+    def test_invalid_limit_refuses_before_sampling(self):
+        for limit in (True, 0, -1, 2.0, MAX_SUBSTITUTE_REJECTION_ATTEMPTS + 1):
+            factory, rng, worlds, patches = self.fixture([True])
+            with self.subTest(limit=limit), patches[0], patches[1], patches[2], \
+                    self.assertRaisesRegex(ReferenceRefusal, 'invalid Substitute rejection limit'):
+                condition_substitute_world(factory, rng, {}, max_attempts=limit)
+            self.assertFalse(any(w.closed for w in worlds))
 
 
 if __name__ == '__main__':

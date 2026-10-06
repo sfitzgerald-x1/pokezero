@@ -13,6 +13,12 @@ from ..local_showdown import PublicBattleMaterializationState
 from ..public_decision_corpus import PublicObservation, _public_belief_view
 
 
+# Continue the original proposal stream, rather than retrying/redrawing after a
+# 128-attempt exhaustion. Exact public-root matching and the conditional law are
+# unchanged; this is still a finite, fail-closed operational bound.
+MAX_SUBSTITUTE_REJECTION_ATTEMPTS = 2048
+
+
 def requires_substitute_replay(state):
     return any(getattr(state.replay, 'substitute_health_state', {}).get(side) == 'unknown'
                and 'substitute' in getattr(state.replay, 'volatiles', {}).get(side, ())
@@ -91,8 +97,10 @@ def validate_substitute_transition(transition, current, observation, source_hash
     return decision_state(observation, player=current.player_id)
 
 
-def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=128):
+def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=MAX_SUBSTITUTE_REJECTION_ATTEMPTS):
     from .paper_reference_factory import PublicRootWorldFactory
+    if type(max_attempts) is not int or not 1 <= max_attempts <= MAX_SUBSTITUTE_REJECTION_ATTEMPTS:
+        raise ReferenceRefusal('invalid Substitute rejection limit')
     transition = factory.pending_transition
     prior = PublicRootWorldFactory(env=factory.env, state=transition.before_state,
         observation=transition.before_observation, evaluator=factory.evaluator,
@@ -164,7 +172,8 @@ def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=12
                              if k not in ('ordinal', 'status', 'released')})
             evidence.update(status='ROOT_VALIDATED', substitute_policy_conditioning=dict(
                 algorithm='joint hidden-team/champion-policy/chance rejection on exact public history',
-                attempts=attempt+1, rejected=rejected, steps=simulated, sampled_substitute_hp=hp,
+                attempts=attempt+1, max_attempts=max_attempts, rejected=rejected,
+                steps=simulated, sampled_substitute_hp=hp,
                 prior_actor_root_key=prior.root.key.hex(), current_actor_root_key=factory.root.key.hex(),
                 live_opponent_action_used=False, live_hidden_hp_used=False))
             prior_release = world.release
