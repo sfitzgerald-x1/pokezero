@@ -3268,77 +3268,16 @@ def _request_materialization_rows(
 def _apply_struggle_only_move_state(
     rows: list[dict[str, Any]], request: Mapping[str, Any]
 ) -> None:
-    """At a Struggle-only request, say so on the ACTIVE row: nothing is usable.
+    """Restore current active-slot unusability from a substituted Struggle request.
 
-    THE DEFECT THIS CLOSES. These rows are the only source of
-    ``sides[self].pokemon[].moves``, and their move state comes from
-    ``actor_move_states_from_request_history``, which retains the most recent request
-    per own Pokemon. That fold skips a request whose ``_request_active_moves`` is empty,
-    and Showdown's Struggle branch is exactly that -- so the row stayed pinned to the last
-    pp-BEARING request and advertised a usable move at a boundary where Showdown offers
-    only Struggle, while ``selfActiveMoves`` (built from the CURRENT request one call
-    later) correctly reported ``[]``. One payload, two views of the same request, built
-    from two different requests. Measured live: ``sunnyday pp1 disabled:false`` against
-    ``selfActiveMoves: []``.
+    The pseudo-move has no PP fields; historical PP-bearing requests can still
+    advertise usable real slots. Disable only copies on the active payload row,
+    never historical snapshots or benched moves. PP counters stay unchanged.
 
-    WHY HERE AND NOT IN THE FOLD, which is where this fix was first written and which was
-    WRONG. Showdown clears ``moveSlot.disabled`` on switch-out and recomputes it every
-    turn, so unusability is a property of ONE BOUNDARY, not of a Pokemon. The fold is a
-    per-identity historical accumulator whose entries outlive the request that produced
-    them: a marking written there rides the mon onto the bench and is never refreshed
-    until it is active again with a pp-bearing request. Measured on the fold version --
-    Bulbasaur Taunted into Struggle, then switched out -- the benched row read
-    ``sunnyday 8/8 disabled, growth 64/64 disabled``: full PP and no legal move in any
-    searched line, where ``origin/main`` correctly read both enabled. Applying the verdict
-    at the payload boundary instead keeps it exactly as durable as the request it came
-    from, and confines it to the one row the request describes.
-
-    That placement also removes two defects of the fold version for free: duplicate idents
-    (``attract_snorlax``'s two p2 Blisseys share a retained entry, so one Blissey's
-    Struggle marked the other's moveset) and the ``no retained snapshot`` case, both of
-    which are keyed by identity in the fold and by ``active`` here.
-
-    WHY MARKING IS A RESTORATION AND NOT A GUESS. ``Pokemon.getMoves``
-    (``sim/pokemon.ts:1017-1042``) folds ``moveSlot.pp <= 0`` into ``disabled`` for every
-    slot and returns ``hasValidMove ? moves : []``. An empty return therefore MEANS
-    Showdown computed ``disabled`` for every slot and every one came back true;
-    ``getMoveRequestData`` (``:1104``) then discards that list and substitutes the Struggle
-    row. This writes back the verdict Showdown had already reached. PP is left pinned --
-    the Struggle request carries none -- but no consumer can now read it as selectable.
-
-    WHAT THE ENGINE DOES WITH IT, and the case this does NOT fix.
-    ``Pokemon::add_available_moves`` (poke-engine 0.0.47 ``genx/state.rs``) requires
-    ``!disabled && pp > 0``, so it contributes nothing and ``get_all_options`` falls
-    through to ``add_switches``. With a live bench that is exactly the option set the
-    Struggle request also offers. With NO legal switch -- a trapped mon, or the archetypal
-    last-mon PP stall -- ``add_switches`` adds nothing either and the engine pushes
-    ``MoveChoice::None``. When this was written ``engine_search._map_choices`` translated
-    that token only to ``recharge`` and so could not map onto a request offering
-    ``struggle``, and the decision still missed -- not a regression (the pre-fix stale move
-    failed to map on the same decision), but not fixed here either.
-
-    CLOSED SINCE: ``_map_choices`` now also resolves the forced-no-move token to the
-    request's substituted ``struggle`` candidate, admitted on the same fact this module
-    checks one function down in ``_request_reports_only_struggle`` -- that the pseudo-move
-    is the request's ONLY move.
-
-    BOTH ROUTES ARE NOW CLOSED. The Taunt route used to fail EARLIER than the mapping, on
-    the unsupported ``taunt`` volatile (``no_worlds_constructed``), so it never reached it;
-    ``engine_world._SUPPORTED_VOLATILES`` now admits ``taunt`` with its counter seeded, so a
-    Taunt-induced Struggle-only request builds a world, the engine's own Status filter
-    empties the taunted side's options, and the resulting ``MoveChoice::None`` lands on
-    ``struggle`` through exactly the translation above. Captured on a lone all-status
-    Blissey vs a Taunting Smeargle: 12 decisions with ``legal == ['struggle']``, 12
-    ``no_worlds_constructed`` refusals before, 0 refusals and 48/48 worlds searched after,
-    with all 12 Struggle-only decisions still present.
-
-    ONE SHAPE STILL REFUSES, deliberately. At a mid-turn REPLACEMENT boundary the engine
-    runs the deferred residual on the replacement ply, so the counter the world must seed
-    depends on how old the Taunt is -- and both ages are reachable and disagree. ``taunt``
-    is withdrawn from ``_SUPPORTED_VOLATILES`` there, so that boundary keeps refusing with
-    the same ``volatile_unsupported`` it refused with before this change.
+    Native gen3 options now synthesize a distinct Struggle action before adding
+    switches. Its damage/recoil path is separate from recharge/replacement None.
+    This helper does not manufacture a move slot or relabel a no-op.
     """
-
     if not _request_reports_only_struggle(request):
         return
     for row in rows:

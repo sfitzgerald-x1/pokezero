@@ -1741,3 +1741,11 @@ poke-engine-gen3-empty-move-option.patch
 # move neither attacks nor spends PP, recharge survives replacement, and
 # apply/reverse returns to the exact pre-boundary state.
 poke-engine-gen3-deferred-recharge-option.patch
+
+# All unusable moves require a real synthetic Struggle action, including when
+# live switches exist. It is not `None` (recharge/replacement wait), and must
+# neither overwrite a real PP slot nor create a Choice Band lock. Preserve its
+# identity in last-move state; use the normal typeless damage/recoil path.
+# Regression: rust/pokezero-search/tests/gen3_struggle_surface.rs plus native
+# sampled-policy and leaf action-map tests.
+poke-engine-gen3-synthetic-struggle.patch

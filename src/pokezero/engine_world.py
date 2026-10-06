@@ -1838,6 +1838,8 @@ def _build_side_spec(
             # (`Pokemon.clearVolatile()`), and Encore correctly fails against it. The engine
             # has a distinct variant for exactly this.
             last_used_move = "switch:0"
+        elif last_used_move_id == "struggle":
+            last_used_move = "move:struggle"
         else:
             index = _resolve_encored_move_index(
                 party[active_index].moves,

@@ -72,7 +72,7 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use poke_engine::choices::{Boost, Choice, Choices, MoveCategory, MoveTarget};
+use poke_engine::choices::{Boost, Choice, Choices, MoveCategory, MoveTarget, MOVES};
 use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::damage_calc::type_effectiveness_modifier;
 use poke_engine::engine::generate_instructions::{
@@ -629,6 +629,7 @@ fn build_choice(state: &State, side: SideReference, mc: &MoveChoice) -> Choice {
             c.move_index = *move_index;
             c
         }
+        MoveChoice::Struggle => MOVES.get(&Choices::STRUGGLE).unwrap().clone(),
         MoveChoice::None => Choice::default(),
     }
 }
@@ -1360,7 +1361,7 @@ fn render_action_phase(
     match mc {
         MoveChoice::Switch(_) => render_switch_phase(sim, side, segment, ctx, out),
         MoveChoice::None => render_none_phase(sim, side, segment, ctx, out),
-        MoveChoice::Move(_) => render_move_phase(
+        MoveChoice::Move(_) | MoveChoice::Struggle => render_move_phase(
             sim,
             side,
             mutated_choice,
@@ -2844,7 +2845,11 @@ fn render_move_phase(
     // `move_id` is the discriminator: it survives the `before_move` mutation and
     // is re-resolved by `change_move_id` for Transform, so it agrees on every
     // non-callee path and disagrees on exactly the callee path.
-    let rebuilt = build_choice(sim.state, side, &MoveChoice::Move(choice.move_index));
+    let rebuilt = build_choice(sim.state, side, &if choice.move_id == Choices::STRUGGLE {
+        MoveChoice::Struggle
+    } else {
+        MoveChoice::Move(choice.move_index)
+    });
     let expectation_choice = if rebuilt.move_id == choice.move_id {
         rebuilt
     } else {
