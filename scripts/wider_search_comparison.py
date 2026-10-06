@@ -382,7 +382,8 @@ def run(args, m):
                     # Only the actor's previous public root and own played action
                     # can certify a pending Baton Pass. Never retain live opponent
                     # action indices or requests in the worker transport.
-                    from pokezero.mcts_eval.paper_reference_pending import PendingPolicyTransition
+                    from pokezero.mcts_eval.paper_reference_pending import (
+                        FaintReplacementTransition, PendingPolicyTransition, requires_faint_encore_replay)
                     previous_public_transition = [None]
                     native.reset()
                     resume = recovery.get('resume') if recovery.get('resume', {}).get('identity') == identity else None
@@ -457,6 +458,12 @@ def run(args, m):
                             else:
                                 public = live.public_materialization_state(subject)
                                 pending = previous_public_transition[0] if public.deferred_opponent_action_player is not None else None
+                                if requires_faint_encore_replay(public):
+                                    previous = previous_public_transition[0]
+                                    if previous is None:
+                                        raise RuntimeError('forced Encore replacement lacks its public prior root')
+                                    pending = FaintReplacementTransition(previous.before_state,
+                                        previous.before_observation, previous.own_action, previous.set_source_hash)
                                 request = PublicRootRequest.capture(public, observation, pending_transition=pending)
                                 remaining = 10 - (time.perf_counter() - begun)
                                 if remaining <= 0:

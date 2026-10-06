@@ -32,6 +32,17 @@ class PendingPolicyTransition:
                    public_request.set_source_hash)
 
 
+@dataclass(frozen=True)
+class FaintReplacementTransition(PendingPolicyTransition):
+    """Replay a public faint interruption, retaining its actual residual queue."""
+
+
+def requires_faint_encore_replay(state):
+    return (bool(state.self_request.get('forceSwitch'))
+            and state.deferred_opponent_action_player is None
+            and any('encore' in state.replay.volatiles.get(side, ()) for side in ('p1', 'p2')))
+
+
 def public_history(state):
     return tuple(event.raw_line for event in state.replay.public_events
         if event.raw_line not in ('', '|')
@@ -54,14 +65,27 @@ def validate_transition(transition, current, observation, set_source_hash):
     if sanitized.metadata != transition.before_observation.metadata:
         raise ReferenceRefusal('pending certificate contains nonpublic observation metadata')
     action = transition.own_action
+    old, now = public_history(before), public_history(current)
+    suffix = now[len(old):]
+    if isinstance(transition, FaintReplacementTransition):
+        active_party = [row for row in current.self_request.get('side', {}).get('pokemon', ())
+                        if row.get('active')]
+        if (not requires_faint_encore_replay(current) or len(active_party) != 1
+                or str(active_party[0].get('condition', '')).split() != ['0', 'fnt']
+                or type(action) is not int or not 0 <= action < len(transition.before_observation.legal_action_mask)
+                or not transition.before_observation.legal_action_mask[action]
+                or not old or now[:len(old)] != old or not suffix
+                or any(line.startswith(('|turn|', '|upkeep')) for line in suffix)
+                or not any(line == '|faint|' + active_party[0]['ident'].replace(':', 'a:', 1)
+                           for line in suffix)):
+            raise ReferenceRefusal('faint certificate does not bind an exact pre-upkeep replacement')
+        return decision_state(observation, player=current.player_id)
     active = before.self_request.get('active', [])
     moves = active[0].get('moves', []) if len(active) == 1 else []
     if (type(action) is not int or not 0 <= action < min(4, len(moves))
             or not transition.before_observation.legal_action_mask[action]
             or re.sub('[^a-z0-9]', '', str(moves[action].get('id', '')).lower()) != 'batonpass'):
         raise ReferenceRefusal('pending certificate must bind the actor-known prior Baton Pass action')
-    old, now = public_history(before), public_history(current)
-    suffix = now[len(old):]
     if (not old or now[:len(old)] != old or not suffix
             or any(line.startswith('|turn|') for line in suffix)
             or len([line for line in suffix if line.startswith('|move|')]) != 1
@@ -107,7 +131,9 @@ def condition_pending_world(factory, hidden_rng, evidence, *, max_attempts=128):
             observed = factory.env.observe(subject)
             if (decision_state(observed, player=subject) != factory.root
                     or public_history(actual) != public_history(factory.state)
-                    or actual.deferred_opponent_action_player != opponent):
+                    or actual.deferred_opponent_action_player != (
+                        factory.state.deferred_opponent_action_player
+                        if isinstance(transition, FaintReplacementTransition) else opponent)):
                 rejected.append(dict(attempt=attempt, reason='different actor/public transition'))
                 continue
             evidence.update({k: v for k, v in prior.receipts[-1].items()
@@ -119,6 +145,8 @@ def condition_pending_world(factory, hidden_rng, evidence, *, max_attempts=128):
                 chance_seed=chance_seed, own_prior_action=transition.own_action,
                 prior_actor_root_key=prior.root.key.hex(), current_actor_root_key=factory.root.key.hex(),
                 live_opponent_action_used=False))
+            if isinstance(transition, FaintReplacementTransition):
+                evidence['pending_policy_conditioning']['transition_kind'] = 'pre-upkeep-faint-replacement'
             prior_release = world.release
             def release():
                 prior_release()

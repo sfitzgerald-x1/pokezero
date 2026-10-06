@@ -7,7 +7,8 @@ from unittest import mock
 from pokezero.local_showdown import PublicBattleMaterializationState
 from pokezero.mcts_eval.paper_reference import DecisionState, ReferenceRefusal
 from pokezero.mcts_eval.paper_reference_pending import (
-    PendingPolicyTransition, condition_pending_world, validate_transition,
+    FaintReplacementTransition, PendingPolicyTransition, condition_pending_world,
+    requires_faint_encore_replay, validate_transition,
 )
 
 
@@ -146,6 +147,55 @@ class ConditionalSamplingTests(unittest.TestCase):
         with patches[0], patches[1], patches[2], self.assertRaisesRegex(ReferenceRefusal, 'explicit rejection cap'):
             condition_pending_world(factory, rng, {}, max_attempts=2)
         self.assertTrue(all(world.closed for world in worlds))
+
+    def test_faint_replacement_retains_actual_queue_without_inventing_deferred_opponent(self):
+        factory, rng, prior, worlds, patches = self.fixture([True])
+        factory.pending_transition = FaintReplacementTransition('public-before', 'public-observation', 1, 'sets')
+        factory.state.deferred_opponent_action_player = None
+        factory.env.public_materialization_state = lambda player: SimpleNamespace(
+            deferred_opponent_action_player=None, match=True)
+        evidence = {}
+        with patches[0], patches[1], patches[2]:
+            world = condition_pending_world(factory, rng, evidence)
+        self.assertEqual(evidence['pending_policy_conditioning']['transition_kind'],
+                         'pre-upkeep-faint-replacement')
+        self.assertFalse(evidence['pending_policy_conditioning']['live_opponent_action_used'])
+        self.assertEqual(factory.env.plays, [{'p1': 1, 'p2': 5}])
+        world.close()
+        self.assertTrue(evidence['released'])
+
+
+class FaintCertificateTests(unittest.TestCase):
+    validate = CertificateTests.validate
+    test_private_request_and_nonpublic_metadata_are_rejected = (
+        CertificateTests.test_private_request_and_nonpublic_metadata_are_rejected)
+
+    def setUp(self):
+        CertificateTests.setUp(self)
+        self.current = replace(self.current, replay=SimpleNamespace(requests={}, pending_baton_pass=set(),
+            volatiles={'p2': ['encore']}, public_events=[SimpleNamespace(raw_line=line) for line in
+                ['|turn|1', '|move|p1a: Aipom|Thunderbolt|p2a: Slowbro',
+                 '|move|p2a: Slowbro|Surf|p1a: Aipom', '|faint|p1a: Aipom']]),
+            self_request={'forceSwitch': [True], 'side': {'pokemon': [
+                {'ident': 'p1: Aipom', 'condition': '0 fnt', 'active': True}]}})
+        self.certificate = FaintReplacementTransition(self.before, self.observation, 0, 'sets')
+
+    def test_public_faint_certifies_only_the_exact_pre_upkeep_replacement(self):
+        self.assertTrue(requires_faint_encore_replay(self.current))
+        self.assertEqual(self.validate(), 'exact-root')
+        for changed in (replace(self.certificate, own_action=True),
+                        replace(self.certificate, own_action=3),
+                        replace(self.certificate, set_source_hash='different')):
+            with self.subTest(changed=changed), self.assertRaises(ReferenceRefusal):
+                self.validate(changed)
+
+    def test_missing_faint_or_post_upkeep_cannot_fabricate_a_clock(self):
+        for lines in (['|turn|1'], ['|turn|1', '|faint|p1a: Other'],
+                      ['|turn|1', '|faint|p1a: Aipom', '|upkeep'],
+                      ['|turn|2', '|faint|p1a: Aipom']):
+            self.current.replay.public_events = [SimpleNamespace(raw_line=x) for x in lines]
+            with self.subTest(lines=lines), self.assertRaisesRegex(ReferenceRefusal, 'pre-upkeep replacement'):
+                self.validate()
 
 
 if __name__ == '__main__':

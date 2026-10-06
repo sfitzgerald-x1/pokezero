@@ -63,8 +63,8 @@ class PublicRootWorldFactory:
                  max_known_set_draws: int = 10, pending_transition: Any = None) -> None:
         if state.replay.requests:
             raise ReferenceRefusal("public root must strip replay request payloads")
-        if state.deferred_opponent_action_player is not None:
-            from .paper_reference_pending import validate_transition
+        from .paper_reference_pending import requires_faint_encore_replay, validate_transition
+        if state.deferred_opponent_action_player is not None or requires_faint_encore_replay(state):
             validate_transition(pending_transition, state, observation, set_source.metadata.source_hash)
         elif pending_transition is not None:
             raise ReferenceRefusal('nonpending public root cannot carry a pending certificate')
