@@ -119,6 +119,14 @@ def bind_qualification_audit(audit_path, qualification_path, *, sha):
         require(row['status'] == 'HASHES_REQUESTS_OPPONENT_POLICY_SEARCH_WITNESSES_AND_TERMINAL_REPLAY_VALID'
                 and row['result_sha256'] == sha(path), 'qualification semantic result drift')
         inputs[str(path)] = sha(path)
+        cell = json.loads(path.read_text())
+        files = sorted((study/row['identity']).iterdir())
+        require(cell['identity'] == row['identity'] and cell['status'] == 'COMPLETE'
+                and cell['registration_sha256'] == sha(registration_path)
+                and files and all(p.is_file() for p in files)
+                and {p.name: sha(p) for p in files} == cell['step_hashes'],
+                'qualification semantic decision evidence drift')
+        inputs.update({str(p): sha(p) for p in files})
     return inputs
 
 

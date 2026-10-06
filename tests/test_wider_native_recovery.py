@@ -308,7 +308,12 @@ class QualificationSemanticAuditBindingTests(unittest.TestCase):
                 for arm in ('deep_incumbent','paper_reference'):
                     identity = game_identity(seed, seat, arm)
                     path = self.study/(identity+'.json')
-                    path.write_text(json.dumps(dict(identity=identity, status='COMPLETE')))
+                    (self.study/identity).mkdir()
+                    step = self.study/identity/'boundary-000.json.gz'
+                    step.write_bytes(b'bound immutable step')
+                    path.write_text(json.dumps(dict(identity=identity, status='COMPLETE',
+                        registration_sha256=NativeRecoveryPreparationTests.sha(self.study/'registration.json'),
+                        step_hashes={step.name: NativeRecoveryPreparationTests.sha(step)})))
                     self.audit['games'].append(dict(identity=identity,
                         result_sha256=NativeRecoveryPreparationTests.sha(path),
                         status='HASHES_REQUESTS_OPPONENT_POLICY_SEARCH_WITNESSES_AND_TERMINAL_REPLAY_VALID'))
@@ -322,7 +327,7 @@ class QualificationSemanticAuditBindingTests(unittest.TestCase):
 
     def test_complete_replay_audit_binds_all_eight_result_hashes(self):
         inputs = self.bind()
-        self.assertEqual(len(inputs), 10)
+        self.assertEqual(len(inputs), 18)
         self.assertIn(str(self.observer), inputs)
         self.assertIn(str(self.audit_path), inputs)
 
@@ -349,6 +354,14 @@ class QualificationSemanticAuditBindingTests(unittest.TestCase):
     def test_a_changed_result_or_incomplete_replay_cannot_qualify(self):
         self.audit['games'][0]['result_sha256'] = 'wrong'
         with self.assertRaisesRegex(RuntimeError, 'semantic result drift'):
+            self.bind()
+
+    def test_qualification_decision_evidence_is_pinned_not_only_terminal_files(self):
+        identity = self.audit['games'][0]['identity']
+        step = self.study/identity/'boundary-000.json.gz'
+        self.assertIn(str(step), self.bind())
+        step.write_bytes(b'changed after semantic replay')
+        with self.assertRaisesRegex(RuntimeError, 'semantic decision evidence drift'):
             self.bind()
 
 
