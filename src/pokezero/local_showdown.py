@@ -766,11 +766,18 @@ class LocalShowdownEnv:
         deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
         deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
         reference_rest_sleep: bool = False,
+        reference_consumed_items: bool = False,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
         if not isinstance(reference_rest_sleep, bool):
             raise LocalShowdownError("Reference Rest opt-in must be boolean.")
+        if not isinstance(reference_consumed_items, bool):
+            raise LocalShowdownError("Reference consumed-item opt-in must be boolean.")
+        if reference_consumed_items and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference consumed items require Gen 3.")
+        if reference_consumed_items and state.observation_format_id == "gen3customgame":
+            _validate_reference_rest_names(state)
         if reference_rest_sleep and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
             raise LocalShowdownError("Reference Rest requires the Gen 3 public ledger.")
         if reference_rest_sleep and state.observation_format_id == "gen3customgame":
@@ -787,10 +794,12 @@ class LocalShowdownEnv:
                 "type": "materialize",
                 "battleId": self._battle_token,
                 "referenceRestSleep": reference_rest_sleep,
+                "referenceConsumedItems": reference_consumed_items,
                 "publicState": _public_materialization_payload(
                     state,
                     deferred_opponent_actions=deferred_opponent_actions,
                     deferred_opponent_action_priors=deferred_opponent_action_priors,
+                    reference_consumed_items=reference_consumed_items,
                 ),
             },
             "materialized",
@@ -2319,6 +2328,7 @@ def _public_materialization_payload(
     *,
     deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
     deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
+    reference_consumed_items: bool = False,
 ) -> dict[str, Any]:
     # A live action request is a protocol boundary: the preceding action has
     # finished even if the omniscient stream reached the request before its
@@ -2346,6 +2356,7 @@ def _public_materialization_payload(
             rows,
             belief_snapshot.side(player),
             blockers,
+            consumed_items=_public_consumed_item_history(state, player) if reference_consumed_items else None,
         )
         _apply_traced_ability_materialization_state(rows, replay.traced_ability.get(player))
         _apply_rest_sleep_provenance(rows, replay, player)
@@ -2729,15 +2740,17 @@ def _apply_public_item_materialization_state(
     rows: list[dict[str, Any]],
     beliefs: Sequence[RevealedPokemonBelief],
     blockers: set[str],
+    *,
+    consumed_items: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> None:
     """Attach only protocol-confirmed live item state to direct-world rows.
 
     A sampled set's item describes the battle-start assignment. Trick can publicly replace
     that item later, so starting the sampled world alone silently recreates the old holder.
     The belief engine records an audited ``current_public_item`` only for the corresponding
-    protocol surface. Removals and unaudited mutations intentionally remain blockers: this
-    constructor has no complete item-history representation, and guessing would create a
-    mechanically false world.
+    protocol surface. Removals remain blockers by default. The reference-only
+    consumption ledger can discharge a positive, unmutated berry/White Herb
+    consumption, with history; unknown mutations and other removals still refuse.
     """
 
     rows_by_species: dict[str, list[dict[str, Any]]] = {}
@@ -2755,6 +2768,10 @@ def _apply_public_item_materialization_state(
             blockers.add(f"item-state-ambiguous:{species or 'unknown'}")
             continue
         if belief.item_removed:
+            consumed = (consumed_items or {}).get(_materialization_identifier(species))
+            if not belief.item_mutated and consumed is not None:
+                matching_rows[0]["consumedItemState"] = dict(consumed)
+                continue
             blockers.add(f"item-state-removed:{species}")
             continue
         current_item = belief.current_public_item
@@ -2762,6 +2779,46 @@ def _apply_public_item_materialization_state(
             blockers.add(f"item-state-unconfirmed:{species}")
             continue
         matching_rows[0]["currentItem"] = current_item
+
+
+def _public_consumed_item_history(
+    state: PublicBattleMaterializationState, player: PlayerId,
+) -> dict[str, dict[str, Any]]:
+    """Gen 3 berry/White Herb history, from public lines only; no guessed removals.
+
+    Item loss is not merely an empty current item: Recycle needs lastItem. The
+    consumed/ate flags persist on the bench; nextTurn clears usedItemThisTurn
+    only for the active Pokemon. Unknown item operations remain blocked.
+    Random-battle species names (or validated nickname-free custom fixtures)
+    provide identities; duplicate species are separately refused by the caller.
+    """
+    consumed: dict[str, dict[str, Any]] = {}
+    active = None
+    for event in state.replay.public_events:
+        parts = event.raw_line.split("|")
+        if len(parts) < 2:
+            continue
+        kind = parts[1]
+        if kind == "turn":
+            if active in consumed:
+                consumed[active]["usedItemThisTurn"] = False
+            continue
+        if len(parts) < 3 or parts[2][:2] != player:
+            continue
+        identity = _materialization_identifier(parts[2].partition(":")[2])
+        if kind in {"switch", "drag", "replace"}:
+            active = identity
+        if kind not in {"-item", "-enditem"}:
+            continue
+        consumed.pop(identity, None)
+        if kind != "-enditem" or len(parts) < 4:
+            continue
+        item = _materialization_identifier(parts[3])
+        tags = parts[4:]
+        berry = item.endswith("berry") and tags == ["[eat]"]
+        if berry or (item == "whiteherb" and not any(tags)):
+            consumed[identity] = {"id": item, "usedItemThisTurn": True, "ateBerry": berry}
+    return consumed
 
 
 def _mark_legacy_rest_refund_pending(row: dict[str, Any]) -> None:

@@ -1,5 +1,9 @@
 """Follow-through must not degrade to first-action-only or silent raw fallback."""
 from types import SimpleNamespace
+from pathlib import Path
+import json
+import runpy
+import tempfile
 import unittest
 
 from pokezero.mcts_eval.followthrough import continuation_seed, play_continuation
@@ -70,6 +74,69 @@ class FollowThroughTests(unittest.TestCase):
                 emit=lambda row: None, max_boundaries=limit)
             self.assertEqual(result['status'], 'CAPPED')
             self.assertIsNone(result['signed_outcome'])
+
+
+class RetainedContinuationTests(unittest.TestCase):
+    def test_statistics_checkpoint_is_json_safe_and_retains_all_q_n_m_f(self):
+        from pokezero.mcts_eval.paper_reference import DecisionState
+        from pokezero.mcts_eval.paper_reference_exchange import MasterSnapshot, Statistics
+        driver = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+            'scripts/search_followthrough_diagnostic.py'))
+        state = DecisionState(b'public-key', ('move:0', 'move:1'), 2)
+        snapshot = MasterSnapshot('b', 3, 2, (Statistics(state, (2, 1), (-1., 1.), 3),), (('0', 1),))
+        row = json.loads(json.dumps(driver['reference_statistics_checkpoint'](snapshot)))
+        self.assertEqual(bytes.fromhex(row['rows'][0]['key_hex']), state.key)
+        self.assertEqual(row['rows'][0]['visits'], [2, 1])
+        self.assertEqual(row['rows'][0]['totals'], [-1., 1.])
+        self.assertEqual((row['rows'][0]['count'], row['rows'][0]['faint_count']), (3, 2))
+        self.assertEqual(row['faint_floor'], 2)
+
+    def test_only_complete_cells_are_reused_and_refusal_stays_in_history(self):
+        driver = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+            'scripts/search_followthrough_diagnostic.py'))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roots = [{'ordinal': 3, 'decision_id': 'd', 'first_choices':
+                {'deep_incumbent': 'move 1', 'paper_reference': 'move 2'}}]
+            registration = root / 'registration.json'
+            registration.write_text(json.dumps(dict(roots=roots, replicates=[0,1],
+                planners=['deep_incumbent', 'paper_reference'], source_hashes={}, retained_input_hashes={})))
+            for planner, status in [('deep_incumbent', 'COMPLETE'), ('paper_reference', 'REFUSED')]:
+                identity = f'root-03-{planner}-search-r0'
+                (root / f'{identity}.json').write_text(json.dumps(dict(identity=identity,
+                    ordinal=3, decision_id='d', planner=planner, mode='search', replicate=0,
+                    first_choice=roots[0]['first_choices'][planner], status=status, step_hashes={},
+                    registration_sha256=driver['sha'](registration), error=None)))
+            inputs = {}
+            retained, history = driver['retained_cells'](root, roots, inputs)
+            self.assertEqual(list(retained), ['root-03-deep_incumbent-search-r0'])
+            self.assertEqual([row['identity'] for row in history], ['root-03-paper_reference-search-r0'])
+            self.assertEqual(len(inputs), 3)
+            # Same denominator/question, never a replacement position or action.
+            cell = root / 'root-03-deep_incumbent-search-r0.json'
+            row = json.loads(cell.read_text()); row['first_choice'] = 'move 4'
+            cell.write_text(json.dumps(row))
+            with self.assertRaisesRegex(RuntimeError, 'provenance drift'):
+                driver['retained_cells'](root, roots, {})
+
+    def test_retained_step_hash_mismatch_refuses(self):
+        driver = runpy.run_path(str(Path(__file__).resolve().parents[1] /
+            'scripts/search_followthrough_diagnostic.py'))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            roots = [{'ordinal': 3, 'decision_id': 'd', 'first_choices': {'deep_incumbent':'move 1'}}]
+            registration = root / 'registration.json'
+            registration.write_text(json.dumps(dict(roots=roots, replicates=[0,1],
+                planners=['deep_incumbent', 'paper_reference'], source_hashes={}, retained_input_hashes={})))
+            identity = 'root-03-deep_incumbent-search-r0'
+            (root/identity).mkdir()
+            (root/identity/'boundary-000.json').write_text('{}')
+            (root/f'{identity}.json').write_text(json.dumps(dict(identity=identity, ordinal=3,
+                decision_id='d', planner='deep_incumbent', mode='search', replicate=0,
+                first_choice='move 1', status='COMPLETE', registration_sha256=driver['sha'](registration),
+                step_hashes={'boundary-000.json':'wrong'})))
+            with self.assertRaisesRegex(RuntimeError, 'decision evidence drift'):
+                driver['retained_cells'](root, roots, {})
 
 
 if __name__ == '__main__':

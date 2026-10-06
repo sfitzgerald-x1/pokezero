@@ -488,7 +488,8 @@ function materializeBattle(command) {
   // This template belongs to the already belief-sampled search world. We construct a new
   // public branch-point payload from it, then let Showdown deserialize that payload directly.
   const snapshot = State.serializeBattle(battle.battleStream.battle);
-  applyPublicState(snapshot, publicState, command.referenceRestSleep === true);
+  applyPublicState(snapshot, publicState, command.referenceRestSleep === true,
+    command.referenceConsumedItems === true, battle.battleStream.battle.dex);
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
@@ -1008,7 +1009,7 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
   };
 }
 
-function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
+function applyPublicState(snapshot, publicState, referenceRestSleep = false, referenceConsumedItems = false, dex = null) {
   if (!Number.isInteger(publicState.turn) || publicState.turn < 1) {
     throw new Error("Materialize requires a positive integer turn.");
   }
@@ -1144,6 +1145,25 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
       );
       if (row.currentItem !== undefined) {
         applyKnownCurrentItem(serializedSide.pokemon[index], row.currentItem, sideId, row.species);
+      }
+      if (row.consumedItemState !== undefined) {
+        if (!referenceConsumedItems || row.currentItem !== undefined) {
+          throw new Error("Materialize refuses unaudited consumed-item state.");
+        }
+        const state = row.consumedItemState;
+        const item = dex.items.get(state?.id);
+        if (dex.gen !== 3 || !item.exists ||
+            typeof state.usedItemThisTurn !== "boolean" || typeof state.ateBerry !== "boolean" ||
+            !(item.isBerry && state.ateBerry || item.id === "whiteherb" && !state.ateBerry)) {
+          throw new Error("Materialize refuses invalid consumed-item history.");
+        }
+        const pokemon = serializedSide.pokemon[index];
+        pokemon.item = "";
+        pokemon.itemState = {id: "", effectOrder: 0, target: pokemon.itemState.target};
+        pokemon.lastItem = item.id;
+        pokemon.usedItemThisTurn = state.usedItemThisTurn;
+        pokemon.ateBerry = state.ateBerry;
+        pokemon.itemKnockedOff = false;
       }
       serializedSide.pokemon[index].lastMove = null;
       serializedSide.pokemon[index].lastMoveUsed = null;
