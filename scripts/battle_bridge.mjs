@@ -1260,6 +1260,21 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
     serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
     delete serializedSide.activeRequest;
   }
+  if (referenceTurnClocks) {
+    // Public construction permutes both parties into active-first / actor-known
+    // order. Item and ability states inherited from the sampled opening shell
+    // still name the old positional owner (and newly set items initially name
+    // slot a). Bind these intrinsic callbacks only AFTER both permutations.
+    // Their source, duration, item/ability identity and effect order are intact;
+    // public cross-Pokemon volatile/status sources are deliberately untouched.
+    for (const side of snapshot.sides) {
+      for (const [index, pokemon] of side.pokemon.entries()) {
+        const owner = `[Pokemon:${side.id}${'abcdef'[index]}]`;
+        pokemon.itemState.target = owner;
+        pokemon.abilityState.target = owner;
+      }
+    }
+  }
   if (referenceTurnClocks) applyReferenceRechargePP(snapshot, publicState);
 }
 
