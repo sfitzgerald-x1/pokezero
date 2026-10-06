@@ -87,7 +87,7 @@ def verify(m, *, source_root=REPO):
     recovery = m.get('repair_retention')
     if recovery:
         old = json.loads(Path(recovery['original_registration']).read_text())
-        if recovery.get('kind') == 'native-semantic-repair':
+        if recovery.get('kind') in ('native-semantic-repair', 'native-and-reference-trapping-repair'):
             from pokezero.mcts_eval.wider_native_recovery import verify_historical
             verify_historical(recovery['original_registration'])
         else:
@@ -182,6 +182,10 @@ def register(args):
             'same champion opponent; not Foul Play or unrestricted all-opponent superiority',
             '64 independent clusters may be insufficient for a modest advantage; no equivalence inference',
             'qualification outcomes never enter confirmation; refusal halts, no raw fallback or redraw'])
+    recovery_modes = (args.recover_from, args.native_recover_from, args.trapping_recover_from,
+                      args.pending_qualification_recover_from)
+    if sum(value is not None for value in recovery_modes) > 1:
+        raise RuntimeError('only one explicitly registered recovery mode is permitted')
     if args.recover_from is not None:
         if args.qualification or not all((args.repair_certificate, args.repair_probe, args.qualification_readout)):
             raise RuntimeError('compatible recovery requires confirmation and all qualification certificates')
@@ -211,6 +215,21 @@ def register(args):
             recovery_claim_rule='original full-roster rule plus worst-case scores for every historically touched cluster')
         m['limitations'].append(recovery['disclosure'])
         m['limitations'].append('incumbent private caches are fresh after accepted-action prefix replay; the full historical wall-clock envelope is charged against the unchanged game cap')
+    if args.trapping_recover_from is not None:
+        if args.qualification or not all((args.repair_probe, args.trapping_retained_audit,
+                args.qualification_readout, args.native_qualification_audit)):
+            raise RuntimeError('trapping recovery requires exact draw proof and full historical/new qualification audits')
+        from pokezero.mcts_eval.wider_trapping_recovery import prepare
+        from search_followthrough_diagnostic import restore_reference_checkpoint
+        recovery = prepare(args.trapping_recover_from, args.repair_probe, args.trapping_retained_audit,
+            args.qualification_readout, args.native_qualification_audit, m,
+            repo=REPO, git=git, sha=sha, verify=verify, bound_rows=bound_rows, step_files=step_files,
+            restore_reference_checkpoint=restore_reference_checkpoint)
+        m.update(schema='pokezero.wider-search.mixed-trapping-repair.v4', repair_retention=recovery,
+            retained_input_hashes=recovery['input_hashes'],
+            recovery_claim_rule='full 64-seed roster plus all possible scores for every historical native/reference repair cluster')
+        m['limitations'].append(recovery['disclosure'])
+        m['limitations'].append('accepted Q/N/M/F and all worker draw positions restored; original prefix and historical wall cap retained; no refused-decision work restored')
     if args.pending_qualification_recover_from is not None:
         if not args.qualification or args.recover_from or args.native_recover_from or not all((
                 args.repair_probe, args.pending_retained_audit)):
@@ -268,7 +287,7 @@ def validate_qualification(path, confirmation):
         raise RuntimeError('qualification requires the canonical durable readout')
     registration = json.loads((path.parent/'registration.json').read_text())
     recovery = confirmation.get('repair_retention')
-    if recovery is not None and recovery.get('kind') == 'native-semantic-repair':
+    if recovery is not None and recovery.get('kind') in ('native-semantic-repair', 'native-and-reference-trapping-repair'):
         if str(path) != recovery['qualification_readout']:
             raise RuntimeError('native repair qualification path drift')
         from pokezero.mcts_eval.wider_native_recovery import validate_native_qualification
@@ -520,6 +539,9 @@ def readout(args, m):
         elif m['repair_retention'].get('kind') == 'native-semantic-repair':
             from pokezero.mcts_eval.wider_native_recovery import add_sensitivity
             add_sensitivity(result, m)
+        elif m['repair_retention'].get('kind') == 'native-and-reference-trapping-repair':
+            from pokezero.mcts_eval.wider_trapping_recovery import add_mixed_sensitivity
+            add_mixed_sensitivity(result, m)
         else:
             from pokezero.mcts_eval.wider_recovery import add_recovery_sensitivity
             add_recovery_sensitivity(result, m, sha=sha)
@@ -545,6 +567,8 @@ def main():
     parser.add_argument('--native-recover-from', type=Path)
     parser.add_argument('--native-repair-certificate', type=Path)
     parser.add_argument('--native-qualification-audit', type=Path)
+    parser.add_argument('--trapping-recover-from', type=Path)
+    parser.add_argument('--trapping-retained-audit', type=Path)
     parser.add_argument('--retained-audit', type=Path, action='append')
     parser.add_argument('--pending-qualification-recover-from', type=Path)
     parser.add_argument('--pending-retained-audit', type=Path)

@@ -11,11 +11,84 @@ from pathlib import Path
 from .followthrough import continuation_seed
 from .wider_native_recovery import CONTRACT_KEYS
 from .wider_recovery import read_step, require
-from .wider_search import ARMS, SEATS, game_identity, study_seed
+from .wider_search import ARMS, SEATS, analyze, game_identity, study_seed
 
 KIND = 'public-pending-qualification-repair'
 BASE_AUDIT_HASH = 'df7748a6c812a913cd5314128860c1a84ea166c4357315722304664508557b7e'
 VALID = 'HASHES_REQUESTS_OPPONENT_POLICY_SEARCH_WITNESSES_AND_TERMINAL_REPLAY_VALID'
+PENDING_AUDIT_HASH = 'c001226a6b517fd12198fe91fd3d663d2a69be3b4cbb05ed40cfe07da6001ed2'
+
+
+def validate_complete(path, current, *, repo, git, sha, verify, bound_rows):
+    """Qualification is operational evidence only, including disclosed retention."""
+    from .wider_native_recovery import bind_qualified_source
+    path = Path(path)
+    require(path.name == 'READOUT.json', 'qualification requires canonical READOUT.json')
+    registered = json.loads((path.parent / 'registration.json').read_text())
+    verify(registered, source_root=Path(registered['source_root']))
+    require(registered['phase'] == 'QUALIFICATION_NOT_STRENGTH' and registered['registered_games'] == 8
+        and registered['seeds'] == [study_seed(i, qualification=True) for i in range(2)]
+        and registered['repair_retention']['kind'] == KIND, 'pending qualification roster drift')
+    bindings = bind_qualified_source(registered, current, repo=repo, git=git, sha=sha)
+    result = analyze(registered['seeds'], bound_rows(path.parent, registered))
+    recovery = registered['repair_retention']
+    result.update(source_commit=registered['source_commit'], input_hashes=registered['input_hashes'],
+        phase=registered['phase'], literal_homogeneous_source=False, recovery_disclosure=recovery['disclosure'],
+        retained_complete_games=sorted(recovery['retained_complete']), recovered_game=recovery['resume']['identity'],
+        statistically_supported_advantage=False, inferential_test_allowed=False,
+        status='QUALIFICATION_COMPLETE_NOT_STRENGTH' if not result['missing_seed_clusters'] else 'QUALIFICATION_INCOMPLETE')
+    require(result == json.loads(path.read_text()) and result['complete_games'] == 8
+        and result['status'] == 'QUALIFICATION_COMPLETE_NOT_STRENGTH',
+        'pending qualification incomplete or readout differs from durable evidence')
+    return dict(mode='complete mixed-source disjoint qualification; accepted evidence retained, no strength inference',
+        readout_sha256=sha(path), registration_sha256=sha(path.parent / 'registration.json'),
+        qualified_source_commit=registered['source_commit'], semantic_input_hashes=bindings,
+        disclosure=recovery['disclosure'])
+
+
+def bind_complete_audit(audit_path, qualification_path, *, sha):
+    """Require independent full terminal replay and public pending-world binding."""
+    from .wider_recovery import combined_steps
+    audit_path, study = Path(audit_path), Path(qualification_path).parent
+    m = json.loads((study / 'registration.json').read_text())
+    audit = json.loads(audit_path.read_text())
+    observer = audit_path.with_name('validate_pending_qualification_r7.py')
+    require(sha(observer) == audit['observer_sha256'] == PENDING_AUDIT_HASH
+        and audit['original_observer_sha256'] == BASE_AUDIT_HASH
+        and audit['schema'] == 'pokezero.wider-search.pending-qualification-read-only-audit.v1'
+        and audit['source_commit'] == m['source_commit']
+        and audit['registration_sha256'] == sha(study / 'registration.json')
+        and audit['phase'] == 'QUALIFICATION_NOT_STRENGTH' and audit['strength_inference'] is False
+        and audit['registered_games'] == audit['audited_complete_games'] == len(audit['games']) == 8
+        and audit['complete_roster_valid'] is True and audit['literal_homogeneous_source'] is False,
+        'complete pending qualification audit binding drift')
+    expected = {game_identity(seed, seat, arm) for seed in m['seeds'] for seat in SEATS for arm in ARMS}
+    require(len(expected) == 8 and {r['identity'] for r in audit['games']} == expected,
+            'complete pending qualification audit roster drift')
+    old_audit = Path(m['repair_retention']['historical_semantic_audit'])
+    require(audit['retained_original_audit_sha256'] == sha(old_audit)
+        == m['retained_input_hashes'][str(old_audit)], 'original-source semantic audit drift')
+    inputs = {str(p): sha(p) for p in (audit_path, observer, old_audit)}
+    for record in audit['games']:
+        identity = record['identity']
+        retained = m['repair_retention']['retained_complete'].get(identity)
+        path = Path(retained['path']) if retained else study / (identity + '.json')
+        registration = Path(retained['registration']) if retained else study / 'registration.json'
+        require(record['status'] == VALID and record['result_sha256'] == sha(path)
+            and record['result_path'] == str(path) and record['registration_path'] == str(registration)
+            and record['historical_original_source_proof_retained'] is bool(retained),
+            'qualification terminal replay result binding drift')
+        cell = json.loads(path.read_text())
+        registered = json.loads(registration.read_text())
+        files = combined_steps(path.parent, cell, registered, sha=sha, step_files=lambda d: sorted(d.iterdir()))
+        require(cell['identity'] == identity and cell['status'] == 'COMPLETE'
+            and cell['registration_sha256'] == sha(registration) and files
+            and {p.name: sha(p) for p in files} == cell['step_hashes'], 'qualification boundary inventory drift')
+        if identity == m['repair_retention']['resume']['identity']:
+            require(record['pending_draws_independently_bound'] > 0,
+                    'resumed pending decision lacks independent conditional receipt audit')
+        inputs.update({str(p): sha(p) for p in (path, registration, *files)})
+    return inputs
 
 
 def resume_prefix(row, path, steps, old, probe, *, sha, restore_reference_checkpoint):

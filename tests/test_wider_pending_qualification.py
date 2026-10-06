@@ -12,6 +12,7 @@ from pokezero.mcts_eval.followthrough import continuation_seed
 from pokezero.mcts_eval.wider_native_recovery import CONTRACT_KEYS
 from pokezero.mcts_eval.wider_pending_qualification import prepare, VALID
 from pokezero.mcts_eval.wider_search import ARMS, SEATS, game_identity, study_seed
+from pokezero.mcts_eval.wider_search import analyze
 
 
 class PendingQualificationRetentionTests(unittest.TestCase):
@@ -150,6 +151,126 @@ class PendingQualificationRetentionTests(unittest.TestCase):
         self.probe['strength_inference'] = True
         with self.assertRaisesRegex(RuntimeError, 'clean pending witness'):
             self.prepare()
+
+
+class CompletePendingQualificationTests(unittest.TestCase):
+    setUpBase = PendingQualificationRetentionTests.setUp
+    write = staticmethod(PendingQualificationRetentionTests.write)
+    sha = staticmethod(PendingQualificationRetentionTests.sha)
+
+    def setUp(self):
+        self.setUpBase()
+        self.study = self.root / 'qualification'
+        self.study.mkdir()
+        retained = {row['identity']: dict(path=str(self.previous / (row['identity'] + '.json')),
+            registration=str(self.registration)) for row in self.rows[:5]}
+        self.m = dict(self.old, source_commit='new-commit', input_hashes={},
+            repair_retention=dict(kind='public-pending-qualification-repair', retained_complete=retained,
+                resume={'identity': self.refused['identity'], 'prefix_steps': {}}, disclosure='explicit mixed-source qualification',
+                historical_semantic_audit=str(self.audit_path)), retained_input_hashes={})
+        self.write(self.study / 'registration.json', self.m)
+        self.complete_rows, self.audit_records = [], []
+        for identity in self.ids:
+            retained_binding = retained.get(identity)
+            path = Path(retained_binding['path']) if retained_binding else self.study / (identity + '.json')
+            reg = self.registration if retained_binding else self.study / 'registration.json'
+            directory = path.parent / identity
+            directory.mkdir(exist_ok=True)
+            if not (directory / 'boundary-000.json.gz').exists():
+                self.write(directory / 'boundary-000.json.gz', {'boundary': 0})
+            cell = dict(identity=identity, seed=int(identity.split('-')[1]), subject=identity.split('-')[2],
+                arm=identity.split('-', 3)[3], status='COMPLETE', signed_outcome=0,
+                registration_sha256=self.sha(reg), step_hashes={p.name: self.sha(p) for p in directory.iterdir()})
+            self.write(path, cell)
+            self.complete_rows.append(cell)
+            self.audit_records.append(dict(identity=identity, result_sha256=self.sha(path),
+                status=VALID, result_path=str(path), registration_path=str(reg),
+                historical_original_source_proof_retained=bool(retained_binding),
+                pending_draws_independently_bound=1 if identity == self.refused['identity'] else 0))
+        self.readout_path = self.study / 'READOUT.json'
+        self.value = analyze(self.m['seeds'], self.complete_rows)
+        self.value.update(source_commit='new-commit', input_hashes={}, phase='QUALIFICATION_NOT_STRENGTH',
+            literal_homogeneous_source=False, recovery_disclosure=self.m['repair_retention']['disclosure'],
+            retained_complete_games=sorted(retained), recovered_game=self.refused['identity'],
+            statistically_supported_advantage=False, inferential_test_allowed=False,
+            status='QUALIFICATION_COMPLETE_NOT_STRENGTH')
+
+    def validate(self):
+        from pokezero.mcts_eval.wider_pending_qualification import validate_complete
+        self.write(self.readout_path, self.value)
+        self.write(self.study / 'registration.json', self.m)
+        with mock.patch('pokezero.mcts_eval.wider_native_recovery.bind_qualified_source',
+                        return_value={'qualified_source': 'bound'}):
+            return validate_complete(self.readout_path, self.old, repo=self.current, git=mock.Mock(),
+                sha=self.sha, verify=mock.Mock(), bound_rows=lambda *args: self.complete_rows)
+
+    def test_complete_mixed_qualification_is_never_a_strength_result(self):
+        result = self.validate()
+        self.assertEqual(result['qualified_source_commit'], 'new-commit')
+        self.assertIn('no strength inference', result['mode'])
+        self.assertEqual(result['readout_sha256'], self.sha(self.readout_path))
+
+    def test_forged_readout_or_missing_game_cannot_qualify(self):
+        self.value['statistically_supported_advantage'] = True
+        with self.assertRaisesRegex(RuntimeError, 'incomplete or readout differs'):
+            self.validate()
+        self.value['statistically_supported_advantage'] = False
+        self.complete_rows.pop()
+        with self.assertRaisesRegex(RuntimeError, 'incomplete or readout differs'):
+            self.validate()
+
+    def test_changed_qualification_roster_is_not_admitted(self):
+        self.m['seeds'] = self.m['seeds'][:1]
+        with self.assertRaisesRegex(RuntimeError, 'roster drift'):
+            self.validate()
+
+    def bind(self, *, changed=None):
+        from pokezero.mcts_eval.wider_pending_qualification import bind_complete_audit
+        self.write(self.audit_path, {'historical original-source proof': True})
+        self.m['retained_input_hashes'][str(self.audit_path)] = self.sha(self.audit_path)
+        # The current registration is rewritten only in this synthetic fixture;
+        # its freshly generated result bindings must follow that fixture version.
+        self.write(self.study / 'registration.json', self.m)
+        for record in self.audit_records:
+            if not record['historical_original_source_proof_retained']:
+                path = Path(record['result_path'])
+                cell = json.loads(path.read_text())
+                cell['registration_sha256'] = self.sha(self.study / 'registration.json')
+                self.write(path, cell)
+                record['result_sha256'] = self.sha(path)
+        observer = self.root / 'validate_pending_qualification_r7.py'
+        observer.write_text('independent full pending audit')
+        audit = dict(schema='pokezero.wider-search.pending-qualification-read-only-audit.v1',
+            observer_sha256=self.sha(observer), original_observer_sha256=self.sha(self.observer),
+            source_commit='new-commit', registration_sha256=self.sha(self.study / 'registration.json'),
+            phase='QUALIFICATION_NOT_STRENGTH', strength_inference=False, registered_games=8,
+            audited_complete_games=8, games=self.audit_records, complete_roster_valid=True,
+            literal_homogeneous_source=False, retained_original_audit_sha256=self.sha(self.audit_path))
+        if changed:
+            changed(audit)
+        path = self.root / 'full-audit.json'
+        self.write(path, audit)
+        with mock.patch('pokezero.mcts_eval.wider_pending_qualification.PENDING_AUDIT_HASH', self.sha(observer)), \
+             mock.patch('pokezero.mcts_eval.wider_pending_qualification.BASE_AUDIT_HASH', self.sha(self.observer)):
+            return bind_complete_audit(path, self.readout_path, sha=self.sha)
+
+    def test_all_eight_independent_audit_results_and_boundaries_are_bound(self):
+        result = self.bind()
+        self.assertIn(str(self.study / 'registration.json'), result)
+        self.assertEqual(len([p for p in result if p.endswith('boundary-000.json.gz')]), 8)
+
+    def test_partial_duplicate_wrong_hash_or_unconditioned_pending_audit_refuses(self):
+        changes = [lambda a: a.update(audited_complete_games=7),
+            lambda a: a['games'].__setitem__(-1, a['games'][0]),
+            lambda a: a['games'][0].update(result_sha256='wrong'),
+            lambda a: next(r for r in a['games'] if r['identity'] == self.refused['identity']).update(
+                pending_draws_independently_bound=0),
+            lambda a: a.update(literal_homogeneous_source=True)]
+        original = json.loads(json.dumps(self.audit_records))
+        for change in changes:
+            self.audit_records = json.loads(json.dumps(original))
+            with self.subTest(change=change), self.assertRaises(RuntimeError):
+                self.bind(changed=change)
 
 
 if __name__ == '__main__':

@@ -20,7 +20,9 @@ from pokezero.mcts_eval.wider_search import ARMS, SEATS, analyze, game_identity,
 
 KIND = 'native-semantic-repair'
 OPERATIONAL_CHANGES = {'scripts/wider_search_comparison.py',
-                       'src/pokezero/mcts_eval/wider_native_recovery.py'}
+                       'src/pokezero/mcts_eval/wider_native_recovery.py',
+                       'src/pokezero/mcts_eval/wider_trapping_recovery.py',
+                       'src/pokezero/mcts_eval/wider_pending_qualification.py'}
 CONTRACT_KEYS = ('seeds', 'registered_games', 'checkpoint_sha256', 'showdown_commit',
     'set_source_hash', 'nominal_decision_seconds', 'per_decision_safety_seconds',
     'max_boundaries', 'per_game_wall_seconds', 'opponent', 'initial_state',
@@ -34,8 +36,12 @@ def verify_historical(manifest_path):
     manifest = json.loads(manifest_path.read_text())
     root = Path(manifest['source_root'])
     environment = dict(os.environ)
-    environment['PYTHONPATH'] = os.pathsep.join((manifest['native_package'],
-                                                str(root/'src'), str(root/'scripts')))
+    packages = [manifest['native_package']]
+    if manifest.get('native_build_receipt'):
+        receipt = json.loads(Path(manifest['native_build_receipt']).read_text())
+        if receipt.get('python_engine_package'):
+            packages.append(str(Path(receipt['python_engine_package']).parent))
+    environment['PYTHONPATH'] = os.pathsep.join((*packages, str(root/'src'), str(root/'scripts')))
     subprocess.run([sys.executable, '-c',
         'import json,sys; from pathlib import Path; from wider_search_comparison import verify; '
         'm=json.loads(Path(sys.argv[1]).read_text()); verify(m,source_root=Path(m["source_root"]))',
@@ -67,6 +73,9 @@ def validate_native_qualification(path, current, *, repo, git, sha, verify, boun
     path = Path(path)
     require(path.name == 'READOUT.json', 'qualification requires canonical READOUT.json')
     registered = json.loads((path.parent/'registration.json').read_text())
+    if registered.get('repair_retention', {}).get('kind') == 'public-pending-qualification-repair':
+        from .wider_pending_qualification import validate_complete
+        return validate_complete(path, current, repo=repo, git=git, sha=sha, verify=verify, bound_rows=bound_rows)
     verify(registered, source_root=Path(registered['source_root']))
     require(registered['phase'] == 'QUALIFICATION_NOT_STRENGTH'
             and registered['seeds'] == [study_seed(i, qualification=True) for i in range(2)]
@@ -100,6 +109,9 @@ def bind_qualification_audit(audit_path, qualification_path, *, sha):
     audit = json.loads(audit_path.read_text())
     registration_path = study/'registration.json'
     m = json.loads(registration_path.read_text())
+    if m.get('repair_retention', {}).get('kind') == 'public-pending-qualification-repair':
+        from .wider_pending_qualification import bind_complete_audit
+        return bind_complete_audit(audit_path, qualification_path, sha=sha)
     observer = audit_path.with_name('validate_games.py')
     require(sha(observer) == QUALIFICATION_OBSERVER_HASH
             and audit['observer_sha256'] == QUALIFICATION_OBSERVER_HASH
@@ -256,7 +268,7 @@ def prepare(previous, certificate_path, audit_paths, qualification_path, current
         disclosure='native semantic repair: preserve complete games and accepted prefixes, not homogeneous repaired-source evidence; bound every historically touched seed cluster at all possible paired scores')
 
 
-def worst_case_statistics(differences, uncertain_indices, *, alpha=.05):
+def worst_case_statistics(differences, uncertain_indices, *, alpha=.05, max_uncertain=4):
     """Exact p and conservative CI over every possible historical score vector.
 
     Statistics are invariant to permutation of the uncertain contrasts. Enumerate
@@ -266,7 +278,8 @@ def worst_case_statistics(differences, uncertain_indices, *, alpha=.05):
     n = len(differences)
     listed_indices = list(uncertain_indices)
     indices = set(listed_indices)
-    require(n > 0 and 0 < alpha < 1 and 1 <= len(indices) <= 4
+    require(type(max_uncertain) is int and 1 <= max_uncertain <= 5
+            and n > 0 and 0 < alpha < 1 and 1 <= len(indices) <= max_uncertain
             and len(indices) == len(listed_indices)
             and all(type(i) is int and 0 <= i < n for i in indices), 'invalid sensitivity roster')
     quarters = []
@@ -319,7 +332,7 @@ def worst_case_statistics(differences, uncertain_indices, *, alpha=.05):
         all_scores_support_advantage=maximum_p <= alpha and minimum_lower > 0)
 
 
-def add_sensitivity(result, registration):
+def add_sensitivity(result, registration, *, max_uncertain=4):
     uncertain = registration['repair_retention']['uncertain_seed_clusters']
     require(len(uncertain) == len(set(uncertain))
             and set(uncertain) <= set(registration['seeds']), 'historical sensitivity seed drift')
@@ -331,7 +344,7 @@ def add_sensitivity(result, registration):
     rows = result['contrasts']
     require([row['seed'] for row in rows] == registration['seeds'], 'sensitivity full-roster drift')
     indices = [registration['seeds'].index(seed) for seed in uncertain]
-    bounds = worst_case_statistics([row['difference'] for row in rows], indices)
+    bounds = worst_case_statistics([row['difference'] for row in rows], indices, max_uncertain=max_uncertain)
     # The repair was diagnosed using historical games. Also show the conditional
     # fresh-source evidence, on the untouched seeds, rather than pretending all
     # 64 seeds were measured under an implementation fixed in advance. This is
