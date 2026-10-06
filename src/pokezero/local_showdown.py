@@ -767,6 +767,7 @@ class LocalShowdownEnv:
         deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
         reference_rest_sleep: bool = False,
         reference_consumed_items: bool = False,
+        reference_encore_durations: Mapping[str, int] | None = None,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
@@ -795,11 +796,13 @@ class LocalShowdownEnv:
                 "battleId": self._battle_token,
                 "referenceRestSleep": reference_rest_sleep,
                 "referenceConsumedItems": reference_consumed_items,
+                "referenceEncoreDurations": dict(reference_encore_durations) if reference_encore_durations is not None else None,
                 "publicState": _public_materialization_payload(
                     state,
                     deferred_opponent_actions=deferred_opponent_actions,
                     deferred_opponent_action_priors=deferred_opponent_action_priors,
                     reference_consumed_items=reference_consumed_items,
+                    reference_encore=reference_encore_durations is not None,
                 ),
             },
             "materialized",
@@ -2329,6 +2332,7 @@ def _public_materialization_payload(
     deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
     deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
     reference_consumed_items: bool = False,
+    reference_encore: bool = False,
 ) -> dict[str, Any]:
     # A live action request is a protocol boundary: the preceding action has
     # finished even if the omniscient stream reached the request before its
@@ -2418,6 +2422,7 @@ def _public_materialization_payload(
             # duration, the move-slot lock, and the same-turn redirect the engine already
             # implements -- silently never happens.
             "lastUsedMove": replay.last_used_move.get(player) or "",
+            **({"referenceEncore": _public_reference_encore(state, player)} if reference_encore else {}),
             # gen3 Truant loaf parity for the active mon: True = loafs on its next move
             # attempt, False = acts, None = no holder OR a genuinely unknown phase. Unknown
             # includes a truncated prefix and a full-prefix Trace acquisition whose residual
@@ -2819,6 +2824,57 @@ def _public_consumed_item_history(
         if berry or (item == "whiteherb" and not any(tags)):
             consumed[identity] = {"id": item, "usedItemThisTurn": True, "ateBerry": berry}
     return consumed
+
+
+def _public_reference_encore(state: PublicBattleMaterializationState, player: PlayerId) -> dict[str, Any] | None:
+    """Public lock and conditional support; never reads a hidden duration.
+
+    Gen 3 rolls 3..6, adds one tick if the target already acted, then pays a
+    tick at residual. Only ordinary, post-upkeep move boundaries are supported;
+    an ambiguous mid-turn boundary is not assigned a fabricated clock.
+    """
+    if "encore" not in state.replay.volatiles.get(player, ()):
+        return None
+    if state.observation_format_id != "gen3randombattle" and state.observation_format_id != "gen3customgame":
+        raise LocalShowdownError("Reference Encore requires Gen 3.")
+    if state.self_request.get('forceSwitch') or state.deferred_opponent_action_player is not None:
+        raise LocalShowdownError("Reference Encore needs an ordinary post-upkeep boundary.")
+    acted, moves, active = set(), {}, {}
+    lock = None
+    for event in state.replay.public_events:
+        parts = event.raw_line.split('|')
+        kind = parts[1] if len(parts) > 1 else ''
+        if kind == 'turn':
+            acted.clear()
+        elif kind == 'upkeep' and lock is not None:
+            lock['paid_residuals'] += 1
+        elif len(parts) >= 3:
+            side = parts[2][:2]
+            if kind in {'switch', 'drag', 'replace'}:
+                active[side] = parts[2]
+                moves.pop(side, None)
+                if side == player:
+                    lock = None
+            elif kind == 'move' and len(parts) >= 4:
+                moves[side] = _materialization_identifier(parts[3])
+                acted.add(side)
+            elif kind == 'cant':
+                acted.add(side)
+            elif kind == '-start' and side == player and len(parts) >= 4 and parts[3] == 'Encore':
+                move = moves.get(side)
+                if move is None or parts[2] != active.get(side):
+                    raise LocalShowdownError("Reference Encore lacks a public locked move/identity.")
+                lock = {'move': move, 'after_target_acted': side in acted, 'paid_residuals': 0}
+            elif side == player and (kind == 'faint' or kind == '-end' and len(parts) >= 4 and parts[3] == 'Encore'):
+                lock = None
+    if lock is None or lock['paid_residuals'] != state.replay.encore_elapsed.get(player):
+        raise LocalShowdownError("Reference Encore lacks a complete residual ledger.")
+    offset = int(lock['after_target_acted'])
+    remaining = [d + offset - lock['paid_residuals'] for d in range(3, 7)
+        if d + offset > lock['paid_residuals']]
+    if not remaining:
+        raise LocalShowdownError("Reference Encore has impossible surviving duration.")
+    return {**lock, 'remaining_candidates': remaining}
 
 
 def _mark_legacy_rest_refund_pending(row: dict[str, Any]) -> None:
