@@ -88,6 +88,33 @@ pub(crate) fn sampled_side_request_in_phase(
     root: bool,
     opponent_replacing: bool,
 ) -> PyResult<Value> {
+    sampled_side_request_with_pp(
+        side,
+        slot,
+        species,
+        order,
+        options,
+        max_pp,
+        root,
+        opponent_replacing,
+        None,
+    )
+}
+
+/// Base PP is needed only after Transform: Gen 3 gives copied slots five
+/// CURRENT PP, but MAX PP uses the transformer's ORIGINAL slot PP Ups. Empty
+/// original slots have no PP Ups. Never infer this from remaining PP.
+pub(crate) fn sampled_side_request_with_pp(
+    side: &Side,
+    slot: &str,
+    species: &[String],
+    order: &[String],
+    options: &[MoveChoice],
+    max_pp: &HashMap<String, i64>,
+    root: bool,
+    opponent_replacing: bool,
+    base_pp: Option<&HashMap<String, i64>>,
+) -> PyResult<Value> {
     if slot != "p1" && slot != "p2" {
         return Err(refusal("unknown seat"));
     }
@@ -115,10 +142,35 @@ pub(crate) fn sampled_side_request_in_phase(
     {
         return Err(refusal("ambiguous sampled party/order identity"));
     }
+    let active = side
+        .active_index
+        .serialize()
+        .parse::<usize>()
+        .map_err(|_| refusal("invalid active party index"))?;
+    if active >= party.len() || ordered[0] != normalized[active] {
+        return Err(refusal("request order must identify current active first"));
+    }
     // Check display identity against the engine instead of trusting an arbitrary
     // label. Gen 3 Unown cosmetic forms intentionally share the engine's base id.
-    for ((_, mon), name) in party.iter().zip(&normalized) {
-        let engine = key(&format!("{:?}", mon.id));
+    // Transform changes the effective native id, NOT the private party's ident
+    // or details. Its own saved snapshot certifies that original identity; no
+    // opposing Side or target's unrevealed request is needed here.
+    for ((physical, mon), name) in party.iter().zip(&normalized) {
+        let transformed = mon.pre_transform.is_some();
+        if transformed
+            != (*physical == active
+                && side
+                    .volatile_statuses
+                    .contains(&PokemonVolatileStatus::TRANSFORMED))
+        {
+            return Err(refusal("inconsistent own Transform snapshot/volatile"));
+        }
+        let original_id = mon
+            .pre_transform
+            .as_ref()
+            .map(|snapshot| snapshot.id)
+            .unwrap_or(mon.id);
+        let engine = key(&format!("{:?}", original_id));
         let cosmetic_unown = engine == "unown"
             && (name == "unown"
                 || name == "unownexclamation"
@@ -129,20 +181,9 @@ pub(crate) fn sampled_side_request_in_phase(
         if *name != engine && !cosmetic_unown {
             return Err(refusal("sampled species identity mismatch"));
         }
-        if mon.pre_transform.is_some() {
-            return Err(refusal("Transform request observer not implemented"));
-        }
         if mon.maxhp <= 0 || mon.hp < 0 || mon.hp > mon.maxhp {
             return Err(refusal("invalid sampled HP"));
         }
-    }
-    let active = side
-        .active_index
-        .serialize()
-        .parse::<usize>()
-        .map_err(|_| refusal("invalid active party index"))?;
-    if active >= party.len() || ordered[0] != normalized[active] {
-        return Err(refusal("request order must identify current active first"));
     }
     if options.is_empty() {
         return Err(refusal("empty native option surface"));
@@ -203,9 +244,47 @@ pub(crate) fn sampled_side_request_in_phase(
                 continue;
             }
             let (id, display, known) = move_names(mv.id)?;
-            let maximum = *max_pp
+            let registered_maximum = *max_pp
                 .get(&id)
                 .ok_or_else(|| refusal("missing registered move max PP"))?;
+            let maximum = if let Some(snapshot) = &mon.pre_transform {
+                let base =
+                    base_pp.ok_or_else(|| refusal("missing registered Transform base PP"))?;
+                let copied_base = *base
+                    .get(&id)
+                    .filter(|pp| **pp > 0)
+                    .ok_or_else(|| refusal("missing copied move base PP"))?;
+                if i64::from(mv.pp) > copied_base.min(5) {
+                    return Err(refusal("invalid copied move PP"));
+                }
+                let original = snapshot.moves[index].0;
+                let pp_ups = if original == Choices::NONE {
+                    false
+                } else {
+                    let (original_id, _, _) = move_names(original)?;
+                    let original_base = *base
+                        .get(&original_id)
+                        .filter(|pp| **pp > 0)
+                        .ok_or_else(|| refusal("missing original move base PP"))?;
+                    let original_max = *max_pp
+                        .get(&original_id)
+                        .ok_or_else(|| refusal("missing original move max PP"))?;
+                    if original_max == original_base {
+                        false
+                    } else if original_max == original_base * 8 / 5 {
+                        true
+                    } else {
+                        return Err(refusal("unsupported original slot PP Ups"));
+                    }
+                };
+                if pp_ups {
+                    registered_maximum
+                } else {
+                    copied_base
+                }
+            } else {
+                registered_maximum
+            };
             if maximum <= 0 || i64::from(mv.pp) < 0 || i64::from(mv.pp) > maximum {
                 return Err(refusal("invalid sampled move PP"));
             }
@@ -349,7 +428,7 @@ pub(crate) fn sampled_side_request_in_phase(
 /// Diagnostic bridge. Production uses the same Side-only constructor in the
 /// reached-node provider; full state/other-side context never enters Python.
 #[pyfunction]
-#[pyo3(signature = (state_str, slot, species, request_order, max_pp, root = true))]
+#[pyo3(signature = (state_str, slot, species, request_order, max_pp, root = true, base_pp = None))]
 pub fn sampled_policy_request(
     state_str: &str,
     slot: &str,
@@ -357,6 +436,7 @@ pub fn sampled_policy_request(
     request_order: Vec<String>,
     max_pp: HashMap<String, i64>,
     root: bool,
+    base_pp: Option<HashMap<String, i64>>,
 ) -> PyResult<String> {
     let state = crate::parse_state(state_str)?;
     let (one, two) = if root {
@@ -369,7 +449,7 @@ pub fn sampled_policy_request(
         "p2" => (&state.side_two, two, state.side_one.force_switch),
         _ => return Err(refusal("unknown seat")),
     };
-    sampled_side_request_in_phase(
+    sampled_side_request_with_pp(
         side,
         slot,
         &species,
@@ -378,6 +458,7 @@ pub fn sampled_policy_request(
         &max_pp,
         root,
         opponent_replacing,
+        base_pp.as_ref(),
     )
     .map(|v| v.to_string())
 }
@@ -714,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_order_pp_and_transform_refuse() {
+    fn incomplete_order_pp_and_inconsistent_transform_refuse() {
         pyo3::Python::initialize();
         let mut state = fixture();
         assert!(bundle(&state, &names()[..2]).is_err());
@@ -736,5 +817,91 @@ mod tests {
         let before_transform = PreTransform::capture(state.side_one.get_active_immutable());
         state.side_one.get_active().pre_transform = Some(Box::new(before_transform));
         assert!(bundle(&state, &names()).is_err());
+    }
+
+    #[test]
+    fn transformed_request_keeps_original_party_identity_and_original_slot_pp_ups() {
+        let mut state = fixture();
+        let snapshot = PreTransform::capture(state.side_one.get_active_immutable());
+        let original_hp = state.side_one.get_active_immutable().hp;
+        state.side_one.get_active().pre_transform = Some(Box::new(snapshot));
+        state
+            .side_one
+            .volatile_statuses
+            .insert(PokemonVolatileStatus::TRANSFORMED);
+        state.side_one.get_active().id = FromStr::from_str("SQUIRTLE").unwrap();
+        state
+            .side_one
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::WATERGUN);
+        state.side_one.get_active().moves.m0.pp = 3;
+        // The original second slot is empty: its copied move starts at five
+        // current PP but receives no PP Ups in Gen 3's MAX-PP field.
+        state
+            .side_one
+            .get_active()
+            .replace_move(PokemonMoveIndex::M1, Choices::EMBER);
+        state.side_one.get_active().moves.m1.pp = 5;
+        state.side_one.get_active().attack = 87;
+        let base_pp = HashMap::from([("ember".into(), 25), ("watergun".into(), 25)]);
+        let value = sampled_side_request_with_pp(
+            &state.side_one,
+            "p1",
+            &names(),
+            &names(),
+            &state.root_get_all_options().0,
+            &pp(),
+            true,
+            false,
+            Some(&base_pp),
+        )
+        .unwrap();
+        let row = &value["request"]["side"]["pokemon"][0];
+        assert_eq!(row["ident"], "p1: Charmander");
+        assert!(row["details"]
+            .as_str()
+            .unwrap()
+            .starts_with("Charmander, L"));
+        assert!(row["condition"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("{original_hp}/")));
+        assert_eq!(row["moves"][0], "watergun");
+        assert_eq!(row["stats"]["atk"], 87);
+        assert_eq!(value["request"]["active"][0]["moves"][0]["pp"], 3);
+        assert_eq!(value["request"]["active"][0]["moves"][0]["maxpp"], 40);
+        assert_eq!(value["request"]["active"][0]["moves"][1]["maxpp"], 25);
+        assert_eq!(value["self_move_states"]["charmander"][0]["maxpp"], 40);
+        assert_eq!(value["self_move_states"]["bulbasaur"][0]["maxpp"], 40);
+        // A copied bank cannot claim boosted/original PP, or relabel the
+        // private party as the Transform target (already present on this team).
+        Python::initialize();
+        state.side_one.get_active().moves.m0.pp = 6;
+        let error = sampled_side_request_with_pp(
+            &state.side_one,
+            "p1",
+            &names(),
+            &names(),
+            &state.root_get_all_options().0,
+            &pp(),
+            true,
+            false,
+            Some(&base_pp),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("invalid copied move PP"));
+        state.side_one.get_active().moves.m0.pp = 3;
+        let mut wrong = names();
+        wrong[0] = "Squirtle".into();
+        assert!(sampled_side_request(
+            &state.side_one,
+            "p1",
+            &wrong,
+            &wrong,
+            &state.root_get_all_options().0,
+            &pp(),
+            true
+        )
+        .is_err());
     }
 }

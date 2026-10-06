@@ -4,6 +4,7 @@ from copy import deepcopy
 import json
 from pathlib import Path
 import unittest
+import os
 
 from pokezero.policy_opponent_view import (
     PolicyOpponentViewError, build_policy_opponent_view_from_native_bundle,
@@ -95,6 +96,75 @@ class PolicyOpponentRequestTest(unittest.TestCase):
                     one = one.replace("TACKLE;false;32", "THUNDERBOLT;false;32", 1)
                 changed = json.loads(pokezero_search.sampled_policy_request(f"{one}/{two}", slot, [species], [species], maximum))
                 self.assertEqual(native, changed)
+
+    @unittest.skipUnless(pokezero_search is not None and os.environ.get("POKEZERO_SHOWDOWN_ROOT"),
+                         "requires native constructor and pinned Showdown checkout")
+    def test_gen3_transform_request_matches_live_private_pp_and_restores_on_switch(self):
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.engine_world import world_battle_spec
+        from pokezero.env import BattleStartOverride
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+        from pokezero.poke_engine_adapter import build_poke_engine_state
+        from pokezero.showdown_fixture import FixturePokemon, pack_team
+        import poke_engine
+
+        root = Path(os.environ["POKEZERO_SHOWDOWN_ROOT"])
+        dex = load_showdown_dex_cached(root)
+        maximum = {name: info.max_pp for name, info in dex.moves.items()}
+        base = {name: info.pp for name, info in dex.moves.items()}
+        ditto = FixturePokemon(species="Ditto", moves=("Transform",), ability="Limber", level=100)
+        gengar = FixturePokemon(species="Gengar", moves=("Substitute", "Thunderbolt", "Explosion", "Ice Punch"),
+                                ability="Levitate", level=74)
+        bench = FixturePokemon(species="Swampert", moves=("Surf",), ability="Torrent", level=84)
+
+        def choose(env, slot, kind, wanted):
+            candidates = env.observe(slot).metadata["action_candidates"]
+            return next(c["action_index"] for c in candidates if c.get("legal") and c["kind"] == kind
+                        and wanted in str(c).lower())
+
+        for slot in ("p1", "p2"):
+            foe = "p2" if slot == "p1" else "p1"
+            override = BattleStartOverride(player_teams={
+                slot: pack_team((ditto, bench)), foe: pack_team((gengar, bench))})
+            env = LocalShowdownEnv(LocalShowdownConfig(showdown_root=root))
+            try:
+                env.reset_with_start_override(seed=99001, start_override=override)
+                env.step({slot: choose(env, slot, "move", "transform"),
+                          foe: choose(env, foe, "move", "thunderbolt")})
+                materialization = env.public_materialization_state(slot)
+                world = world_battle_spec(materialization, override, dex=dex, transformed_slots={slot: "Gengar"})
+                native_state = build_poke_engine_state(world.spec, module=poke_engine)
+                native = json.loads(pokezero_search.sampled_policy_request(native_state.to_string(), slot,
+                    [dex.species_info(name).name for name in world.party_species[slot]],
+                    ["Ditto", "Swampert"], maximum, base_pp=base))
+                actual = materialization.self_request
+                self.assertEqual(native["request"]["side"]["pokemon"][0]["ident"], f"{slot}: Ditto")
+                # Gen 3 does NOT set maxpp=5. Slot 0 retains Ditto's PP Ups;
+                # formerly empty slots use the copied move's unboosted base PP.
+                for supplied, expected in zip(native["request"]["active"][0]["moves"], actual["active"][0]["moves"]):
+                    self.assertEqual((supplied["id"], supplied["pp"], supplied["maxpp"]),
+                                     (expected["id"], expected["pp"], expected["maxpp"]))
+                copied_pp = [m["maxpp"] for m in native["request"]["active"][0]["moves"]]
+                self.assertEqual(copied_pp, [16, 15, 5, 15])
+                view = build_policy_opponent_view_from_native_bundle(native_request_bundle=native,
+                    **arguments(tuple(event.raw_line for event in materialization.replay.public_events), slot))
+                self.assertEqual(view.materialization.self_move_states["ditto"][0]["pp"], 5)
+                self.assertEqual(view.materialization.self_move_states["ditto"][1]["maxpp"], 15)
+                env.step({slot: choose(env, slot, "switch", "swampert"),
+                          foe: choose(env, foe, "move", "thunderbolt")})
+                materialization = env.public_materialization_state(slot)
+                world = world_battle_spec(materialization, override, dex=dex)
+                native_state = build_poke_engine_state(world.spec, module=poke_engine)
+                native = json.loads(pokezero_search.sampled_policy_request(native_state.to_string(), slot,
+                    [dex.species_info(name).name for name in world.party_species[slot]],
+                    ["Swampert", "Ditto"], maximum, base_pp=base))
+                self.assertEqual(native["self_move_states"]["ditto"][0]["id"], "transform")
+                self.assertEqual(native["self_move_states"]["ditto"][0]["maxpp"], 16)
+                # The standalone constructor does not apply branch charges:
+                # the production bridge repairs original PP BEFORE this seam.
+                # Native bank/charge regressions cover that repair separately.
+            finally:
+                env.close()
 
 
 if __name__ == "__main__":
