@@ -53,27 +53,35 @@ def restore_reference_checkpoint(value):
         tuple((worker, sequence) for worker, sequence in value['acknowledged']))
 
 
-def register_resume(previous, inputs):
-    identity = 'root-03-paper_reference-search-r0'
+def register_resume(previous, inputs, identity='root-03-paper_reference-search-r0'):
     result_path = previous / (identity + '.json')
     result = json.loads(result_path.read_text())
     if result['status'] != 'REFUSED' or result['planner'] != 'paper_reference':
         raise RuntimeError('only the explicitly refused paper continuation can resume')
-    paths = sorted((previous / identity).glob('boundary-*.json'))
+    paths_by_name = {p.name: p for p in (previous / identity).glob('boundary-*.json')}
+    registration = json.loads((previous / 'registration.json').read_text())
+    for name, path in result.get('retained_prefix_steps', {}).items():
+        if name in paths_by_name or sha(path) != registration['retained_input_hashes'].get(path):
+            raise RuntimeError('resume retained prefix drift')
+        paths_by_name[name] = Path(path)
+    paths = [p for _, p in sorted(paths_by_name.items())]
     rows = [json.loads(p.read_text()) for p in paths]
     if not rows or [r['boundary'] for r in rows] != list(range(len(rows))):
         raise RuntimeError('resume requires a complete played prefix')
     if rows[0]['actions'][result['subject']] != result['first_action']:
         raise RuntimeError('resume first action drift')
     for path in paths:
-        if sha(path) != result['step_hashes'].get(path.name):
+        expected = result['step_hashes'].get(path.name) or registration['retained_input_hashes'].get(str(path))
+        if sha(path) != expected:
             raise RuntimeError('resume prefix hash drift')
         inputs[str(path)] = sha(path)
-    latest = next(p for p, r in reversed(list(zip(paths, rows))) if result['subject'] in r['actions'])
-    checkpoint = json.loads(latest.read_text())['evidence'][result['subject']]['search_evidence']['statistics_checkpoint']
-    restore_reference_checkpoint(checkpoint)  # Validate before registration.
+    latest = next((p for p, r in reversed(list(zip(paths, rows)))
+        if r['boundary'] > 0 and result['subject'] in r['actions']), None)
+    if latest is not None:
+        checkpoint = json.loads(latest.read_text())['evidence'][result['subject']]['search_evidence']['statistics_checkpoint']
+        restore_reference_checkpoint(checkpoint)  # Validate before registration.
     inputs[str(result_path)] = sha(result_path)
-    return {identity: dict(result_path=str(result_path), checkpoint_step=str(latest),
+    return {identity: dict(result_path=str(result_path), checkpoint_step=str(latest) if latest else None,
         prefix_steps={p.name: str(p) for p in paths}, start_boundary=len(rows),
         prior_selections=sum(result['subject'] in r['actions'] for r in rows[1:]),
         recovery='accepted aggregate Q/N/M/F only; fresh processes/P caches/RNG sessions; failed partial work excluded')}
@@ -108,6 +116,10 @@ def retained_cells(previous, roots, inputs):
             if Path(name).name != name or sha(previous / identity / name) != digest:
                 raise RuntimeError('retained decision evidence drift')
             inputs[str(previous / identity / name)] = digest
+        for name, prefix_path in cell.get('retained_prefix_steps', {}).items():
+            if name in cell['step_hashes'] or sha(prefix_path) != old['retained_input_hashes'].get(prefix_path):
+                raise RuntimeError('retained recursive prefix drift')
+            inputs[prefix_path] = sha(prefix_path)
         if cell['status'] == 'COMPLETE':
             retained[identity] = {'path': str(cell_path), 'sha256': sha(cell_path),
                 'registration_sha256': sha(path), 'step_dir': str(previous / identity)}
@@ -145,7 +157,7 @@ def register(args):
             'first_choices': {'deep_incumbent': cells['deep_incumbent']['choice'],
                 'paper_reference': cells['paper_reference_10s']['choice']}})
     retained, refused = retained_cells(args.reuse_complete_from, roots, inputs) if args.reuse_complete_from else ({}, [])
-    resumes = register_resume(args.resume_refused_from, inputs) if args.resume_refused_from else {}
+    resumes = register_resume(args.resume_refused_from, inputs, args.resume_identity) if args.resume_refused_from else {}
     args.output.mkdir(parents=True, exist_ok=False)
     modules = [*sorted((REPO / 'src/pokezero').rglob('*.py')), Path(__file__),
         *sorted((REPO / 'scripts').glob('battle_bridge*.mjs'))]
@@ -165,6 +177,7 @@ def register(args):
             allow_earlier_compatible_template=True, max_known_set_draws=128,
             public_consumed_item_history=True,
             conditional_public_encore=True,
+            conditional_induced_sleep=True, canonical_public_format_rules=True,
             checkpoint_aggregate_statistics_after_each_accepted_decision=True,
             persistent_tree_within_continuation=True, historical_tree_resurrected=False),
         incumbent=dict(depth=6, sims=4096, batch=16, worlds=4, model_priors=True,
@@ -183,8 +196,9 @@ def register(args):
         whole_policy_strength_qualified=False, no_retraining_or_cluster_mutation=True)
     if retained or refused:
         manifest['limitations'].append('completed cells retained across disclosed materializer repair; only refused/unattempted cells rerun')
+        manifest['limitations'].append('retained earlier paper-search cells did not restore canonical format rule handlers; historical diagnostic only, not qualified under the induced-sleep/rule repair')
     if resumes:
-        manifest['limitations'].append('paper continuation resumes after a disclosed Encore/last-move repair, preserving prior actions and accepted aggregate statistics; not a homogeneous-source rerun')
+        manifest['limitations'].append('paper continuation resumes after a disclosed public-state materializer repair, preserving prior actions and any accepted aggregate statistics; not a homogeneous-source rerun')
     save(args.output / 'registration.json', manifest)
     print(json.dumps({'status': 'REGISTERED', 'roots': ORDINALS, 'search_games': 12,
         'raw_controls': 12, 'output': str(args.output)}), flush=True)
@@ -316,11 +330,12 @@ def run(args, m):
                                         raise RuntimeError('resume played action is no longer legal')
                                 live.reseed_simulator_rng(row['chance_seed'])
                                 live.step(row['actions'])
-                            row = json.loads(Path(resume['checkpoint_step']).read_text())
-                            checkpoint = restore_reference_checkpoint(row['evidence'][subject]['search_evidence']['statistics_checkpoint'])
-                            if checkpoint.battle_id != battle_id:
-                                raise RuntimeError('resume checkpoint battle drift')
-                            pool.restore_statistics(checkpoint)
+                            if resume['checkpoint_step'] is not None:
+                                row = json.loads(Path(resume['checkpoint_step']).read_text())
+                                checkpoint = restore_reference_checkpoint(row['evidence'][subject]['search_evidence']['statistics_checkpoint'])
+                                if checkpoint.battle_id != battle_id:
+                                    raise RuntimeError('resume checkpoint battle drift')
+                                pool.restore_statistics(checkpoint)
                         if mode == 'search' and planner == 'deep_incumbent':
                             native.reset()
                             native.warm_public_prefix_for_replay(battle_id=battle_id, player_id=subject,
@@ -513,6 +528,7 @@ def main():
     parser.add_argument('--parent-output', type=Path)
     parser.add_argument('--reuse-complete-from', type=Path)
     parser.add_argument('--resume-refused-from', type=Path)
+    parser.add_argument('--resume-identity', default='root-03-paper_reference-search-r0')
     parser.add_argument('--raw-only', action='store_true')
     args = parser.parse_args()
     if args.phase == 'register':

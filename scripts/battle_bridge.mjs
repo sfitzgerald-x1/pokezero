@@ -5,7 +5,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
-import {referenceRestState, bindReferenceRestSources} from "./battle_bridge_reference_rest.mjs";
+import {referenceRestState, bindReferenceRestSources, referenceInducedSleepState} from "./battle_bridge_reference_rest.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -33,11 +33,12 @@ if (!showdownRoot) {
 }
 
 let BattleStream;
+let Battle;
 let getPlayerStreams;
 let State;
 let Teams;
 try {
-  ({ BattleStream, getPlayerStreams, Teams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
+  ({ Battle, BattleStream, getPlayerStreams, Teams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
   ({ State } = require(path.join(showdownRoot, "dist", "sim", "state.js")));
 } catch (error) {
   emit({
@@ -490,7 +491,31 @@ function materializeBattle(command) {
   const snapshot = State.serializeBattle(battle.battleStream.battle);
   applyPublicState(snapshot, publicState, command.referenceRestSleep === true,
     command.referenceConsumedItems === true, battle.battleStream.battle.dex,
-    command.referenceEncoreDurations);
+    command.referenceEncoreDurations, command.referenceInducedSleep);
+  // Packed-team shells use customgame. Restore canonical PUBLIC format rules,
+  // not the source world's private state; clearing pseudoWeather also cleared
+  // Sleep Clause's event handler in earlier reference materializations.
+  if (command.referenceRulesFormat !== null && command.referenceRulesFormat !== undefined) {
+    if (!['gen3randombattle','gen3customgame'].includes(command.referenceRulesFormat) ||
+        command.referenceRestSleep !== true || command.referenceInducedSleep === null) {
+      throw new Error('Reference rules require an explicit Gen 3 sleep opt-in.');
+    }
+    const template = new Battle({formatid:command.referenceRulesFormat, seed:[1,2,3,4]});
+    snapshot.formatid = command.referenceRulesFormat;
+    snapshot.field.pseudoWeather = State.serializeWithRefs(template.field.pseudoWeather, template);
+  }
+  for (const side of snapshot.sides) {
+    for (const [index, pokemon] of side.pokemon.entries()) {
+      const source = pokemon.statusState?.referenceInducedSource;
+      if (!source) continue;
+      const sourceSide = snapshot.sides[source.side === 'p1' ? 0 : 1];
+      const matches = sourceSide.pokemon.map((p, i) => sameSpecies(p, source.name) ? i : -1).filter(i => i >= 0);
+      if (matches.length !== 1) throw new Error('Induced sleep source cannot be matched to sampled party.');
+      pokemon.statusState.source = `[Pokemon:${source.side}${'abcdef'[matches[0]]}]`;
+      pokemon.statusState.target = `[Pokemon:${side.id}${'abcdef'[index]}]`;
+      delete pokemon.statusState.referenceInducedSource;
+    }
+  }
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
@@ -1011,7 +1036,7 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
 }
 
 function applyPublicState(snapshot, publicState, referenceRestSleep = false, referenceConsumedItems = false, dex = null,
-  referenceEncoreDurations = null) {
+  referenceEncoreDurations = null, referenceInducedSleep = null) {
   if (referenceEncoreDurations !== null && (!referenceEncoreDurations ||
       typeof referenceEncoreDurations !== 'object' || Array.isArray(referenceEncoreDurations) || dex.gen !== 3 ||
       Object.keys(referenceEncoreDurations).some(k => !['p1', 'p2'].includes(k)))) {
@@ -1137,6 +1162,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
         row.species,
         publicSide.toxicStage,
         referenceRestSleep ? row : null,
+        referenceInducedSleep?.[sideId + ':' + normalizeId(row.species)],
       );
       serializedSide.pokemon[index].boosts = row.active
         ? normalizedBoosts(publicSide.boosts)
@@ -1681,7 +1707,7 @@ function applyPublicVolatiles(
   }
 }
 
-function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, referenceRow = null) {
+function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, referenceRow = null, inducedDraw = null) {
   if (typeof condition !== "string" || !condition.trim()) {
     throw new Error(`Materialize is missing a condition for ${sideId} ${species}.`);
   }
@@ -1709,7 +1735,9 @@ function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, 
   pokemon.fainted = fainted;
   pokemon.status = status;
   pokemon.statusState = {id: status, effectOrder: 0};
-  if (status === "slp") pokemon.statusState = referenceRestState(referenceRow, pokemon.ability);
+  if (status === "slp") pokemon.statusState = referenceRow?.referenceInducedSleep
+    ? referenceInducedSleepState(referenceRow.referenceInducedSleep, pokemon.ability, inducedDraw)
+    : referenceRestState(referenceRow, pokemon.ability);
   if (status === "tox") {
     if (!Number.isInteger(toxicStage) || toxicStage < 0 || toxicStage > 15) {
       throw new Error(`Materialize requires a valid toxic stage for ${sideId} ${species}.`);
