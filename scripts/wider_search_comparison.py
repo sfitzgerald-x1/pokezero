@@ -4,7 +4,7 @@ Qualification uses disjoint seeds and never enters the confirmatory analysis.
 The confirmatory roster is fixed at 64 seed clusters (256 games). Run sequentially
 on the laptop; never deploy, retrain, merge PRs, redraw or overwrite a result.
 """
-from dataclasses import asdict
+from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 import argparse
 import gzip
@@ -25,10 +25,21 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def evidence_json_default(value):
+    # Failure receipts contain the same BatchResult dataclasses converted by
+    # asdict(measured) on successful decisions. Serialize their full fields;
+    # never stringify/omit an unsupported diagnostic or admit it as search work.
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    raise TypeError(f'unsupported evidence type: {type(value).__name__}')
+
+
 def save(path, value):
+    # Validate/serialize before opening a create-only output. A bad diagnostic
+    # must not leave a truncated canonical terminal that hides its own error.
+    encoded = json.dumps(value, indent=2, sort_keys=True, default=evidence_json_default)
     with Path(path).open('x') as stream:
-        json.dump(value, stream, indent=2, sort_keys=True)
-        stream.write('\n')
+        stream.write(encoded + '\n')
 
 
 def save_step(path, value):
