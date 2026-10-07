@@ -32,6 +32,8 @@ from .paper_reference_pending import public_history
 SCHEMA = 'pokezero.constant-chance-substitute.v1'
 REST_TAIL_SCHEMA = 'pokezero.constant-chance-substitute.rest-tail.v2'
 JOINT_TAIL_SCHEMA = 'pokezero.constant-chance-prefix-joint-tail.v3'
+WAKE_REST_SCHEMA = 'pokezero.constant-chance-substitute.wake-rest-expiry.v4'
+WAKE_JOINT_SCHEMA = 'pokezero.constant-chance-wake-rest-prefix-joint-tail.v5'
 SOURCE_HASH = 'f5a5265143d423af'
 MAX_CHANCE_ATTEMPTS = 2048
 COMPILED_TREE_FILES = 500
@@ -74,10 +76,14 @@ class ConstantChancePlan:
     @property
     def receipt(self):
         stages = len(self.own_actions)
-        return dict(schema=SCHEMA if stages == 3 else REST_TAIL_SCHEMA, public_stages=stages,
+        if stages not in (3, 4, 5):
+            raise ReferenceRefusal('uncertified constant-chance stage count')
+        schema = {3: SCHEMA, 4: REST_TAIL_SCHEMA, 5: WAKE_REST_SCHEMA}[stages]
+        return dict(schema=schema, public_stages=stages,
                     chance_predicate='same seed predicate across certified active support',
                     policy='full legal champion distribution, one draw per stage',
-                    zero_likelihood_filter=('Encore expires before the three observed no-end residuals'
+                    zero_likelihood_filter=('Encore must expire at the fifth residual, not earlier or later'
+                        if stages == 5 else 'Encore expires before the three observed no-end residuals'
                         if stages == 3 else 'Encore expires before the four observed no-end residuals'),
                     sub_hp='actual accepted private chance state; never uniform/replaced',
                     max_wrap_damage=12, initial_sub_hp=66,
@@ -89,7 +95,8 @@ class ConstantChancePlan:
         if candidate.get('kind') != 'move' or not candidate.get('legal'):
             return False
         move = candidate.get('move_id')
-        return move == ('wrap', 'rest')[stage] if stage < 2 else move in {'wrap', 'rest', 'toxic', 'encore'}
+        return (move == ('wrap', 'rest')[stage] if stage < 2 else move == 'rest'
+            if stage == 4 else move in {'wrap', 'rest', 'toxic', 'encore'})
 
 
 @dataclass(frozen=True)
@@ -114,7 +121,8 @@ class StagedPrefixJointPlan:
 
     @property
     def receipt(self):
-        return dict(schema=JOINT_TAIL_SCHEMA, public_stages=len(self.own_actions),
+        return dict(schema=WAKE_JOINT_SCHEMA if len(self.prefix.own_actions) == 5 else JOINT_TAIL_SCHEMA,
+            public_stages=len(self.own_actions),
             certified_prefix_stages=len(self.prefix.own_actions), prefix_law_certificate=self.prefix.receipt,
             suffix='original joint full-policy/chance draw; mismatch rejects entire fresh proposal',
             suffix_chance_draws_per_request=1, suffix_chance_conditioning=False,
@@ -158,7 +166,7 @@ def build_constant_chance_plan(factory):
     """Public-only eligibility; unsupported programs do NOT lose positions."""
     transition = factory.pending_transition
     actions = (transition.own_action, *transition.continuation_actions)
-    if len(actions) not in (3, 4) or any(type(a) is not int for a in actions) or len(set(actions)) != 1:
+    if len(actions) not in (3, 4, 5) or any(type(a) is not int for a in actions) or len(set(actions)) != 1:
         return None
     subject = factory.state.player_id
     opponent = 'p2' if subject == 'p1' else 'p1'
@@ -180,20 +188,25 @@ def _certify_public_plan(factory, actions, histories, before):
     for stage, lines in enumerate(stages):
         moves = [line for line in lines if line.startswith('|move|')]
         required = ['|move|'+own_id+'|Psychic|'+opp_id]
-        if stage < 2:
+        if stage < 2 or stage == 4:
             target = own_id if stage == 0 else opp_id
-            required.append('|move|'+opp_id+'|'+('Wrap', 'Rest')[stage]+'|'+target)
-        if moves != required or any('|-end|'+own_id+'|Encore' == line for line in lines):
+            required.append('|move|'+opp_id+'|'+('Wrap' if stage == 0 else 'Rest')+'|'+target)
+        encore_ends = [line for line in lines if line == '|-end|'+own_id+'|Encore']
+        if moves != required or len(encore_ends) != (1 if stage == 4 else 0):
             return None
         if stage == 0 and '|-activate|'+own_id+'|Substitute|[damage]' not in lines:
             return None
         if stage == 1 and '|-status|'+opp_id+'|slp|[from] move: Rest' not in lines:
             return None
-        if stage >= 2 and '|cant|'+opp_id+'|slp' not in lines:
+        if stage in (2, 3) and '|cant|'+opp_id+'|slp' not in lines:
+            return None
+        if stage == 4 and ('|-curestatus|'+opp_id+'|slp|[msg]' not in lines
+                or '|-status|'+opp_id+'|slp|[from] move: Rest' not in lines
+                or any(line.startswith('|cant|') for line in lines)):
             return None
         if any(line.startswith(('|switch|', '|drag|', '|faint|', '|-boost|', '|-unboost|',
                                 '|-weather|', '|-start|', '|-end|', '|-sidestart|', '|-sideend|'))
-               for line in lines):
+               for line in lines if not (stage == 4 and line == '|-end|'+own_id+'|Encore')):
             return None
     if factory.set_source.metadata.source_hash != SOURCE_HASH:
         raise ReferenceRefusal('constant-chance source certificate drift')
@@ -224,7 +237,7 @@ def build_staged_prefix_joint_plan(factory):
     histories = _program_histories(before, current, len(actions))
     if histories is None:
         return None
-    for stages in (4, 3):
+    for stages in (5, 4, 3):
         if len(actions) <= stages:
             continue
         prefix_actions = actions[:stages]
@@ -284,7 +297,7 @@ def validate_active_support(plan, snapshot, stage):
     opponent PP are intentionally unrestricted and remain in champion priors.
     """
     stages = len(plan.own_actions)
-    if stages not in (3, 4) or len(plan.expected_histories) != stages or not 0 <= stage < stages:
+    if stages not in (3, 4, 5) or len(plan.expected_histories) != stages or not 0 <= stage < stages:
         raise ReferenceRefusal('constant-chance stage outside certified Rest program')
     battle = snapshot.bridge_snapshot['battle']
     if battle.get('formatid') != 'gen3randombattle' or battle.get('gameType') != 'singles':
@@ -335,7 +348,11 @@ def validate_active_support(plan, snapshot, stage):
           or opp['statusState'].get('startTime') != 3 or opp['statusState'].get('skippedTime') != 0
           or opp['statusState'].get('source') != '[Pokemon:'+plan.opponent+'a]'):
         raise ReferenceRefusal('constant-chance Rest-source timer support drift')
-    return encore['duration'] > stages-stage
+    # In the five-stage public program Encore ends at the fifth residual.
+    # With Psychic PP strictly above the remaining uses, neither PP exhaustion
+    # nor an earlier expiry can produce that history. Duration != 5-stage is
+    # therefore a zero-likelihood latent timer, not an unsupported team.
+    return encore['duration'] == 5-stage if stages == 5 else encore['duration'] > stages-stage
 
 
 def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048):

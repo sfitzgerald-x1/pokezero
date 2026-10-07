@@ -13,6 +13,7 @@ from pokezero.mcts_eval.paper_reference_staged_chance import (
     ConstantChancePlan, build_constant_chance_plan, validate_active_support, sample_staged_path,
     verify_compiled_tree, SCHEMA, REST_TAIL_SCHEMA,
     StagedPrefixJointPlan, build_staged_prefix_joint_plan, JOINT_TAIL_SCHEMA,
+    WAKE_REST_SCHEMA, WAKE_JOINT_SCHEMA,
 )
 
 MODULE = 'pokezero.mcts_eval.paper_reference_staged_chance'
@@ -166,6 +167,8 @@ class JointPlanTests(PlanTests):
         factory.state.history += ('|move|p1a: Lugia|Psychic|p2a: Shuckle',
             '|-curestatus|p2a: Shuckle|slp', '|move|p2a: Shuckle|Rest|p2a: Shuckle',
             '|-end|p1a: Lugia|Encore', '|upkeep', '|turn|17')
+        # This legacy fixture omits the exact wake-source and new Rest status
+        # lines; it remains a four-stage prefix plus uncertified joint suffix.
         self.assertIsNone(self.build(factory))
         plan = self.build_joint(factory)
         self.assertEqual(plan.prefix.receipt['schema'], REST_TAIL_SCHEMA)
@@ -193,6 +196,52 @@ class JointPlanTests(PlanTests):
         factory.state.history += ('|move|p1a: Lugia|Recover|p1a: Lugia', '|turn|16')
         factory.state.history = tuple(line.replace('|Wrap|', '|Toxic|') for line in factory.state.history)
         self.assertIsNone(self.build_joint(factory))
+
+
+class WakeRestPlanTests(PlanTests):
+    def wake_factory(self):
+        factory = self.rest_tail_factory()
+        factory.pending_transition.continuation_actions = (3,3,3,3)
+        factory.state.history += ('|move|p1a: Lugia|Psychic|p2a: Shuckle',
+            '|-curestatus|p2a: Shuckle|slp|[msg]', '|move|p2a: Shuckle|Rest|p2a: Shuckle',
+            '|-status|p2a: Shuckle|slp|[from] move: Rest',
+            '|-end|p1a: Lugia|Encore', '|upkeep', '|turn|17')
+        return factory
+
+    def test_five_stage_wake_rest_expiry_has_new_certificate(self):
+        plan = self.build(self.wake_factory())
+        self.assertEqual(plan.own_actions, (3,)*5)
+        self.assertEqual(plan.receipt['schema'], WAKE_REST_SCHEMA)
+        self.assertIn('fifth residual', plan.receipt['zero_likelihood_filter'])
+        self.assertTrue(plan.compatible_move(4,dict(kind='move',legal=True,move_id='rest')))
+        for move in ('wrap','encore','toxic'):
+            self.assertFalse(plan.compatible_move(4,dict(kind='move',legal=True,move_id=move)))
+
+    def test_wake_program_refuses_to_certify_missing_or_different_public_events(self):
+        edits = [lambda h:tuple(x for x in h if x!='|-end|p1a: Lugia|Encore'),
+            lambda h:tuple(x for x in h if x!='|-curestatus|p2a: Shuckle|slp|[msg]'),
+            lambda h:tuple(x.replace('|Rest|p2a: Shuckle','|Wrap|p1a: Lugia') for x in h),
+            lambda h:(*h[:-1],'|-boost|p2a: Shuckle|def|1',h[-1]),
+            lambda h:(*h[:-1],'|-end|p1a: Lugia|Substitute',h[-1]),
+            lambda h:(*h[:-1],'|cant|p2a: Shuckle|slp',h[-1])]
+        for edit in edits:
+            factory=self.wake_factory()
+            factory.state.history=edit(factory.state.history)
+            self.assertIsNone(self.build(factory))
+
+    def test_longer_program_uses_five_certified_stages_and_keeps_joint_suffix(self):
+        factory=self.wake_factory()
+        factory.pending_transition.continuation_actions=(3,3,3,3,0)
+        factory.state.history+=('|move|p1a: Lugia|Substitute|p1a: Lugia',
+            '|-fail|p1a: Lugia|move: Substitute','|cant|p2a: Shuckle|slp','|turn|18')
+        with mock.patch(MODULE+'.public_history',side_effect=lambda s:s.history), \
+             mock.patch(MODULE+'.ENGINE_HASHES',{}),mock.patch(MODULE+'.verify_compiled_tree'):
+            plan=build_staged_prefix_joint_plan(factory)
+        self.assertEqual(plan.receipt['schema'],WAKE_JOINT_SCHEMA)
+        self.assertEqual(plan.receipt['certified_prefix_stages'],5)
+        self.assertEqual(plan.receipt['public_stages'],6)
+        self.assertFalse(plan.receipt['suffix_chance_conditioning'])
+        self.assertEqual(plan.own_actions,(3,3,3,3,3,0))
 
 
 class SupportTests(unittest.TestCase):
@@ -247,6 +296,29 @@ class SupportTests(unittest.TestCase):
         own['moveSlots'][3]['pp']=4
         with self.assertRaisesRegex(ReferenceRefusal,'PP expiry'):
             validate_active_support(plan,snapshot,0)
+
+    def test_fifth_stage_wake_requires_exact_expiry_not_survival_only(self):
+        plan=ConstantChancePlan('p1','p2',(3,)*5,tuple((str(i),) for i in range(5)))
+        for stage in range(5):
+            for duration in range(1,7):
+                snapshot=support_snapshot(stage)
+                own=snapshot.bridge_snapshot['battle']['sides'][0]['pokemon'][0]
+                own['volatiles']['encore']['duration']=duration
+                self.assertEqual(validate_active_support(plan,snapshot,stage),duration==5-stage)
+        snapshot=support_snapshot(4)
+        opp=snapshot.bridge_snapshot['battle']['sides'][1]['pokemon'][0]
+        opp['statusState']['time']=2
+        with self.assertRaisesRegex(ReferenceRefusal,'Rest-source'):
+            validate_active_support(plan,snapshot,4)
+
+    def test_fifth_stage_pp_exhaustion_is_not_silently_treated_as_timer_expiry(self):
+        plan=ConstantChancePlan('p1','p2',(3,)*5,tuple((str(i),) for i in range(5)))
+        for stage in range(5):
+            snapshot=support_snapshot(stage)
+            own=snapshot.bridge_snapshot['battle']['sides'][0]['pokemon'][0]
+            own['moveSlots'][3]['pp']=5-stage
+            with self.assertRaisesRegex(ReferenceRefusal,'PP expiry'):
+                validate_active_support(plan,snapshot,stage)
 
     def test_unknown_benches_slot_order_and_opponent_PP_remain_in_full_policy(self):
         snapshot=support_snapshot(1)
@@ -374,6 +446,59 @@ class KernelTests(unittest.TestCase):
         self.assertEqual([s['chance_attempts'] for s in witness['steps']],[2,1,1,1])
         world.close()
         self.assertTrue(evidence['released'])
+
+    def test_five_stage_kernel_never_forces_rest_or_discards_switch_probability(self):
+        factory,prior,_,rng,worlds=self.fixture()
+        plan=ConstantChancePlan('p1','p2',(3,)*5,tuple((str(i),) for i in range(5)))
+        factory.state.history=plan.expected_histories[-1]
+        def step(actions):
+            factory.env.history=plan.expected_histories[factory.env.stage]
+            if factory.env.seed==10:
+                factory.env.history=('rejected chance',)
+            factory.env.stage+=1
+        factory.env.step=step
+        factory.env.observe=lambda player:NS(legal_action_mask=(True,)*4,metadata=dict(action_candidates=[
+            dict(action_index=0,kind='switch',legal=True),
+            dict(action_index=1,kind='move',legal=True,move_id='wrap' if factory.env.stage==0 else 'rest')]))
+        rng.choices.side_effect=[[0],[1],[1],[1],[1],[1]]
+        rng.getrandbits.side_effect=[10,11,12,13,14,15]
+        evidence={}
+        with mock.patch(MODULE+'.validate_active_support',return_value=True), \
+             mock.patch(MODULE+'.public_history',side_effect=lambda s:s.history), \
+             mock.patch('pokezero.mcts_eval.paper_reference_showdown.decision_state',return_value=factory.root):
+            world=sample_staged_path(factory,prior,plan,rng,evidence)
+        self.assertEqual(prior.call_count,2)
+        self.assertEqual(rng.choices.call_count,6)
+        self.assertTrue(all(c.kwargs['weights']==(.9,.1) for c in rng.choices.call_args_list))
+        witness=evidence['substitute_policy_conditioning']
+        self.assertEqual(witness['algorithm'],WAKE_REST_SCHEMA)
+        self.assertEqual([s['chance_attempts'] for s in witness['steps']],[2,1,1,1,1])
+        self.assertEqual([s['chance_seed'] for s in witness['steps']],[11,12,13,14,15])
+        self.assertTrue(worlds[0].closed)
+        world.close()
+        self.assertTrue(evidence['released'])
+
+    def test_five_stage_finite_law_keeps_exact_timer_and_hidden_dependent_suffix(self):
+        chance=(Fraction(1,8),Fraction(1,16),Fraction(1,256),Fraction(1,256),Fraction(1,16))
+        common,retry=Fraction(1),Fraction(1)
+        for c in chance:
+            common*=c
+            retry*=1-(1-c)**7
+        joint,accelerated,wrong_timer,wrong_suffix={},{},{},{}
+        for theta in range(3):
+            for duration in (4,5,6):
+                policy=Fraction(theta+1,4)*Fraction(theta+duration,12)
+                suffix=Fraction(1+theta,5)
+                key=(theta,duration)
+                base=policy if duration==5 else Fraction(0)
+                joint[key]=base*common*suffix
+                accelerated[key]=base*retry*suffix
+                wrong_timer[key]=policy*retry*suffix
+                wrong_suffix[key]=base*retry
+        normalize=lambda x:{k:v/sum(x.values()) for k,v in x.items()}
+        self.assertEqual(normalize(joint),normalize(accelerated))
+        self.assertNotEqual(normalize(joint),normalize(wrong_timer))
+        self.assertNotEqual(normalize(joint),normalize(wrong_suffix))
 
     def test_deadline_closes_unfinished_world_and_cannot_accept_work(self):
         factory,prior,plan,rng,worlds=self.fixture()
