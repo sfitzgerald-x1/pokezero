@@ -224,11 +224,10 @@
       "status": "KILLED"
     },
     {
-      "detail": "2 failed, 144 passed",
+      "detail": "1 failed, 145 passed",
       "family": "A4 instrumentation",
       "killers": [
-        "tests/test_mcts_acceptance_report.py::ModelPathDepthInstrumentationTest::test_every_registered_leaf_eval_path_accumulates_reached_depth_once",
-        "tests/test_rollout_model_priors.py::RolloutModelPriorsConfigTest::test_the_seam_is_refused_off_the_model_path"
+        "tests/test_mcts_acceptance_report.py::ModelPathDepthInstrumentationTest::test_every_registered_leaf_eval_path_accumulates_reached_depth_once"
       ],
       "name": "a4_unregister_a_leaf_eval_path",
       "status": "KILLED"
@@ -772,7 +771,7 @@
   ],
   "survived": 0,
   "targets": {
-    "engine_search.py": "a5b6f6caf9b7f9050ba972101dff1ef87dfbf91d5b1ee8a4dc5cfa86e84adb2e",
+    "engine_search.py": "796b2e43acdd8c2e184f70030cdcaeb6e6782c83d0fd3671f6b534669f7103fa",
     "foulplay_bridge.py": "23a01559c64687e0586350f09344f20899f55056f6be79d020f4b4816e656e83",
     "foulplay_paired_eval.py": "3f1a2373df28d9e2b0aadbff43d7db89bcdad17363de9dd7a33c8ab9398d1152",
     "foulplay_power_report.py": "5dc9061189a247d17166d700247f0eb0643221ccc3d3cb697b965f85984e7a6a",
