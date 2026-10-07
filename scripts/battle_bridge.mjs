@@ -10,6 +10,7 @@ import {referenceRestState, bindReferenceRestSources, referenceInducedSleepState
 import {applyReferenceTurnClocks, applyReferenceRechargePP} from "./battle_bridge_reference_turn_clocks.mjs";
 import {refreshReferenceTrapping} from "./battle_bridge_reference_trapping.mjs";
 import {bindReferenceAttract} from "./battle_bridge_reference_attract.mjs";
+import {bindReferenceYawn} from "./battle_bridge_reference_yawn.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -572,7 +573,7 @@ function materializeBattle(command) {
   applyPublicState(snapshot, publicState, command.referenceRestSleep === true,
     command.referenceConsumedItems === true, battle.battleStream.battle.dex,
     command.referenceEncoreDurations, command.referenceInducedSleep, command.referenceTurnClocks === true,
-    command.referenceAttract === true);
+    command.referenceAttract === true, command.referenceYawn === true);
   // Packed-team shells use customgame. Restore canonical PUBLIC format rules,
   // not the source world's private state; clearing pseudoWeather also cleared
   // Sleep Clause's event handler in earlier reference materializations.
@@ -1123,7 +1124,7 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
 
 function applyPublicState(snapshot, publicState, referenceRestSleep = false, referenceConsumedItems = false, dex = null,
   referenceEncoreDurations = null, referenceInducedSleep = null, referenceTurnClocks = false,
-  referenceAttract = false) {
+  referenceAttract = false, referenceYawn = false) {
   if (referenceEncoreDurations !== null && (!referenceEncoreDurations ||
       typeof referenceEncoreDurations !== 'object' || Array.isArray(referenceEncoreDurations) || dex.gen !== 3 ||
       Object.keys(referenceEncoreDurations).some(k => !['p1', 'p2'].includes(k)))) {
@@ -1264,6 +1265,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
         serializedSide.pokemon,
         referenceEncoreDurations,
         referenceAttract,
+        referenceYawn,
       );
       if (row.currentItem !== undefined) {
         applyKnownCurrentItem(serializedSide.pokemon[index], row.currentItem, sideId, row.species);
@@ -1360,6 +1362,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
   }
   if (referenceTurnClocks) applyReferenceRechargePP(snapshot, publicState);
   if (referenceAttract) bindReferenceAttract(snapshot, publicState, dex.gen);
+  if (referenceYawn) bindReferenceYawn(snapshot, publicState, dex.gen);
 }
 
 function restoreDeferredOpponentActions(simulatorBattle, publicState) {
@@ -1709,6 +1712,7 @@ function applyPublicVolatiles(
   pokemon, rawVolatiles, sideId, leechSeedSourceSides, publicSide, isActive, sidePokemon,
   referenceEncoreDurations = null,
   referenceAttract = false,
+  referenceYawn = false,
 ) {
   if (!Array.isArray(rawVolatiles)) {
     throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
@@ -1720,6 +1724,11 @@ function applyPublicVolatiles(
       throw new Error(`Materialize received invalid volatile effect for ${sideId}.`);
     }
     const volatile = normalizeId(rawVolatile);
+    if (volatile === 'yawn' && referenceYawn) {
+      if (seen.has(volatile) || !isActive) throw new Error('Reference Yawn requires one active target.');
+      seen.add(volatile);
+      continue;
+    }
     if (volatile === 'attract' && referenceAttract) {
       if (seen.has(volatile) || !isActive) throw new Error('Reference Attract requires one active target.');
       seen.add(volatile);

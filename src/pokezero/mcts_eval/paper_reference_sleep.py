@@ -9,9 +9,11 @@ from ..local_showdown import LocalShowdownError
 
 
 def induced_sleep_certificates(state):
+    from ..reference_yawn import yawn_expiry_sleep_sources
+    delayed_sources = yawn_expiry_sleep_sources(state, error=LocalShowdownError)
     ledgers = {}
     last_move = None
-    for event in state.replay.public_events:
+    for index, event in enumerate(state.replay.public_events):
         parts = event.raw_line.split('|')
         if len(parts) < 2:
             continue
@@ -34,11 +36,14 @@ def induced_sleep_certificates(state):
             if any('move: Rest' == p.replace('[from] ', '') for p in parts[4:]):
                 ledgers.pop(key, None)
                 continue
-            if (not last_move or not last_move[0].startswith(('p2' if match[1] == 'p1' else 'p1') + 'a: ')
+            delayed = delayed_sources.get(index)
+            if delayed is None and (not last_move or not last_move[0].startswith(('p2' if match[1] == 'p1' else 'p1') + 'a: ')
                     or last_move[2] != ident or not any(p == '[from] move: ' + last_move[1] for p in parts[4:])):
                 raise LocalShowdownError('Induced sleep needs an explicit public opposing move source.')
+            source_player = delayed[0] if delayed is not None else last_move[0][:2]
+            source_name = (delayed[1] if delayed is not None else last_move[0]).split(': ', 1)[1]
             ledgers[key] = dict(attempts=0, refunded=0, skipped=0, pending=False,
-                survival=[], source_player=last_move[0][:2], source_name=last_move[0].split(': ', 1)[1])
+                survival=[], source_player=source_player, source_name=source_name)
         elif kind in ('-curestatus', 'faint'):
             if kind == 'faint' or len(parts) > 3 and parts[3] == 'slp':
                 ledgers.pop(key, None)

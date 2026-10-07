@@ -779,6 +779,7 @@ class LocalShowdownEnv:
         reference_induced_sleep: Mapping[str, Mapping[str, int]] | None = None,
         reference_turn_clocks: bool = False,
         reference_attract: bool = False,
+        reference_yawn: bool = False,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
@@ -790,6 +791,10 @@ class LocalShowdownEnv:
             raise LocalShowdownError("Reference turn-clock opt-in must be boolean.")
         if type(reference_attract) is not bool:
             raise LocalShowdownError("Reference Attract opt-in must be boolean.")
+        if type(reference_yawn) is not bool:
+            raise LocalShowdownError("Reference Yawn opt-in must be boolean.")
+        if reference_yawn and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference Yawn requires Gen 3.")
         if reference_attract and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
             raise LocalShowdownError("Reference Attract requires Gen 3.")
         if reference_turn_clocks and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
@@ -817,6 +822,7 @@ class LocalShowdownEnv:
                 "referenceConsumedItems": reference_consumed_items,
                 "referenceTurnClocks": reference_turn_clocks,
                 "referenceAttract": reference_attract,
+                "referenceYawn": reference_yawn,
                 "referenceEncoreDurations": dict(reference_encore_durations) if reference_encore_durations is not None else None,
                 "publicState": _public_materialization_payload(
                     state,
@@ -827,6 +833,7 @@ class LocalShowdownEnv:
                     reference_induced_sleep=reference_induced_sleep is not None,
                     reference_turn_clocks=reference_turn_clocks,
                     reference_attract=reference_attract,
+                    reference_yawn=reference_yawn,
                 ),
             },
             "materialized",
@@ -2529,6 +2536,7 @@ def _public_materialization_payload(
     reference_induced_sleep: bool = False,
     reference_turn_clocks: bool = False,
     reference_attract: bool = False,
+    reference_yawn: bool = False,
 ) -> dict[str, Any]:
     # A live action request is a protocol boundary: the preceding action has
     # finished even if the omniscient stream reached the request before its
@@ -2631,6 +2639,7 @@ def _public_materialization_payload(
             "truantPhase": replay.truant_phase.get(player),
             **({"mustRecharge": bool(replay.must_recharge.get(player, False))} if reference_turn_clocks else {}),
             **({"referenceAttract": _public_reference_attract(state, player)} if reference_attract else {}),
+            **({"referenceYawn": _public_reference_yawn(state, player)} if reference_yawn else {}),
             # Live in-battle retype of the ACTIVE mon, which the species token cannot
             # express. The parser has produced this since the v3 obs work but only the
             # OBSERVATION path consumed it (`_apply_live_type_override`); the world was
@@ -3045,6 +3054,11 @@ def _public_consumed_item_history(
         if berry or (item == "whiteherb" and not any(tags)):
             consumed[identity] = {"id": item, "usedItemThisTurn": True, "ateBerry": berry}
     return consumed
+
+
+def _public_reference_yawn(state: PublicBattleMaterializationState, player: PlayerId) -> dict[str, Any] | None:
+    from .reference_yawn import public_yawn_certificate
+    return public_yawn_certificate(state, player, error=LocalShowdownError)
 
 
 def _public_reference_attract(state: PublicBattleMaterializationState, player: PlayerId) -> dict[str, Any] | None:
