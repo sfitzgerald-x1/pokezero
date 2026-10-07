@@ -1,9 +1,42 @@
 # Guided MCTS diagnosis: branch-prior and override evidence
 
-**Status: updated, 2026-09-29.** This records model-leaf evidence and the
+**Status: updated, 2026-10-01.** This records model-leaf evidence and the
 completed branch-prior/override audits. It is not a strength claim. The newer
 source-root results below supersede the earlier small-sample conclusion that
 the value head is the leading explanation.
+
+## October 1: exact 200-pair recovery and practical pilot — both parked
+
+The original deep/full-work comparison is now sealed in the canonical
+observer-recovery artifact (revision 7, September 29).
+It retains all **195** immutable original completed pairs and the five proven
+observer-only replays, without substituting any result. The fan-in completed
+cleanly with zero container restarts and verifies zero candidate or incumbent
+root-prior fallbacks. Three retained original pairs have the exact registered
+interior branch-only signatures (candidate counts 12, 2, and 34); the durable
+manifest records both the expected and observed ledger and rejects any other
+fallback signature.
+
+The recovered score is 55.0%, with a paired 95% margin-over-neutral interval
+of **+0.875 to +9.0 percentage points**. Its lower bound misses the registered
++5pp strength gate. The earlier artifact that replaced three original pairs is
+therefore not the canonical recovery for this question; this exact 195+5
+artifact is valid evidence but does not promote the deep/full-work candidate.
+
+The separate practical one-second guided-MCTS pilot also finished cleanly and
+is non-promotable: guided MCTS minus raw policy was -0.375pp (95% interval
+-3.625 to +3.0pp), while the MCTS decision p95 was 1.0744s against the frozen
+1.2s limit. That establishes that this practical candidate meets latency but
+does not demonstrate a usable strength gain.
+
+Finally, the historical root-action replay audit found that a one-second
+wall-clock MCTS choice is not a replay-stable address: some saved historical
+``model_override`` roots rerun as a non-override under the same visible seed,
+source, and configuration. Those historical reruns cannot identify a causal
+action effect and are parked. The next actual search intervention must write
+the selected root boundary, allocation/Q/visit ledger, and held-out
+continuation plan during the same execution that produces the action; it must
+not infer that boundary by rerunning an old wall-clock search.
 
 ## September 29: held-out rollout-leaf continuation result — do not promote
 
