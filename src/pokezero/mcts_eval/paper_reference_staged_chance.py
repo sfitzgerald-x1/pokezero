@@ -31,6 +31,7 @@ from .paper_reference_pending import public_history
 
 SCHEMA = 'pokezero.constant-chance-substitute.v1'
 REST_TAIL_SCHEMA = 'pokezero.constant-chance-substitute.rest-tail.v2'
+JOINT_TAIL_SCHEMA = 'pokezero.constant-chance-prefix-joint-tail.v3'
 SOURCE_HASH = 'f5a5265143d423af'
 MAX_CHANCE_ATTEMPTS = 2048
 COMPILED_TREE_FILES = 500
@@ -91,6 +92,35 @@ class ConstantChancePlan:
         return move == ('wrap', 'rest')[stage] if stage < 2 else move in {'wrap', 'rest', 'toxic', 'encore'}
 
 
+@dataclass(frozen=True)
+class StagedPrefixJointPlan:
+    """A certified constant-chance prefix followed by ordinary joint rejection.
+
+    The suffix has no constant-likelihood claim. Its original full-policy and
+    one chance draw per request are retained. Any suffix mismatch rejects the
+    entire fresh anchor/prefix proposal, not just chance at the suffix stage.
+    """
+    prefix: ConstantChancePlan
+    own_actions: tuple[int | None, ...]
+    expected_histories: tuple[tuple[str, ...], ...]
+
+    @property
+    def subject(self):
+        return self.prefix.subject
+
+    @property
+    def opponent(self):
+        return self.prefix.opponent
+
+    @property
+    def receipt(self):
+        return dict(schema=JOINT_TAIL_SCHEMA, public_stages=len(self.own_actions),
+            certified_prefix_stages=len(self.prefix.own_actions), prefix_law_certificate=self.prefix.receipt,
+            suffix='original joint full-policy/chance draw; mismatch rejects entire fresh proposal',
+            suffix_chance_draws_per_request=1, suffix_chance_conditioning=False,
+            live_opponent_action_used=False, live_hidden_hp_used=False)
+
+
 def _program_histories(before, current, stages=3):
     if current[:len(before)] != before:
         return None
@@ -136,6 +166,12 @@ def build_constant_chance_plan(factory):
     histories = _program_histories(before, current, len(actions))
     if histories is None:
         return None
+    return _certify_public_plan(factory, actions, histories, before)
+
+
+def _certify_public_plan(factory, actions, histories, before):
+    subject = factory.state.player_id
+    opponent = 'p2' if subject == 'p1' else 'p1'
     previous, stages = before, []
     for history in histories:
         stages.append(history[len(previous):])
@@ -172,6 +208,71 @@ def build_constant_chance_plan(factory):
         if hashlib.sha256((root/path).read_bytes()).hexdigest() != digest:
             raise ReferenceRefusal('constant-chance effective engine certificate drift: '+path)
     return ConstantChancePlan(subject, opponent, actions, histories)
+
+
+def build_staged_prefix_joint_plan(factory):
+    """Public-only dispatch; the suffix is never forced or locally conditioned.
+
+    Truncating the *proof's public program*, not a world or observation, permits
+    reuse of an already certified three/four-stage likelihood factor. Prefer
+    the longest eligible prefix. No seed, opponent action, or hidden state is
+    consulted. Non-turn-aligned histories retain the original joint kernel.
+    """
+    transition = factory.pending_transition
+    actions = (transition.own_action, *transition.continuation_actions)
+    before, current = public_history(transition.before_state), public_history(factory.state)
+    histories = _program_histories(before, current, len(actions))
+    if histories is None:
+        return None
+    for stages in (4, 3):
+        if len(actions) <= stages:
+            continue
+        prefix_actions = actions[:stages]
+        if any(type(a) is not int for a in prefix_actions) or len(set(prefix_actions)) != 1:
+            continue
+        prefix = _certify_public_plan(factory, prefix_actions, histories[:stages], before)
+        if prefix is not None:
+            return StagedPrefixJointPlan(prefix, actions, histories)
+    return None
+
+
+def _joint_suffix(factory, plan, rng):
+    """Original joint kernel on the suffix, without any chance retry or pruning."""
+    steps = []
+    for stage in range(len(plan.prefix.own_actions), len(plan.own_actions)):
+        factory.check_sampling_deadline()
+        own_action = plan.own_actions[stage]
+        requested = set(factory.env.requested_players())
+        if (plan.subject in requested) != (own_action is not None):
+            return None
+        actions = {}
+        if own_action is not None:
+            mask = factory.env.observe(plan.subject).legal_action_mask
+            if not 0 <= own_action < len(mask) or not mask[own_action]:
+                return None
+            actions[plan.subject] = own_action
+        legal, probabilities, opponent_action = (), (), None
+        if plan.opponent in requested:
+            legal, evaluation = factory.evaluator(factory.env.observe(plan.opponent))
+            probabilities = tuple(evaluation.priors)
+            if (not legal or len(legal) != len(probabilities) or sum(probabilities) <= 0
+                    or any(not math.isfinite(p) or p < 0 for p in probabilities)):
+                raise ReferenceRefusal('joint suffix full champion policy invalid')
+            opponent_action = rng.choices(legal, weights=probabilities, k=1)[0]
+            actions[plan.opponent] = opponent_action
+        if not requested or set(actions) != requested:
+            return None
+        chance_seed = rng.getrandbits(64)
+        factory.env.reseed_simulator_rng(chance_seed)
+        factory.env.step(actions)
+        steps.append(dict(own_action=own_action, opponent_action=opponent_action,
+            opponent_legal=list(legal), opponent_priors=list(probabilities), chance_seed=chance_seed,
+            chance_draws=1, conditioning='original joint suffix'))
+        if (factory.env.terminal() is not None
+                or public_history(factory.env.public_materialization_state(plan.subject))
+                    != plan.expected_histories[stage]):
+            return None
+    return steps
 
 
 def validate_active_support(plan, snapshot, stage):
@@ -242,6 +343,7 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
     from .paper_reference_showdown import decision_state
     if type(max_attempts) is not int or not 1 <= max_attempts <= 2048:
         raise ReferenceRefusal('invalid constant-chance rejection limit')
+    prefix = plan.prefix if isinstance(plan, StagedPrefixJointPlan) else plan
     rejected = []
     for attempt in range(max_attempts):
         factory.check_sampling_deadline()
@@ -249,11 +351,11 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
         world, accepted = prior(rng), False
         try:
             initial = factory.env.snapshot()
-            if not validate_active_support(plan, initial, 0):
+            if not validate_active_support(prefix, initial, 0):
                 rejected.append(dict(attempt=attempt, reason='deterministic zero-likelihood Encore expiry'))
                 continue
             steps, valid = [], True
-            for stage, own_action in enumerate(plan.own_actions):
+            for stage, own_action in enumerate(prefix.own_actions):
                 factory.check_sampling_deadline()
                 if set(factory.env.requested_players()) != {plan.subject,plan.opponent}:
                     raise ReferenceRefusal('constant-chance simultaneous request support drift')
@@ -268,12 +370,12 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
                     raise ReferenceRefusal('constant-chance full champion policy invalid')
                 opponent_action = rng.choices(legal,weights=probabilities,k=1)[0]
                 candidates = {row['action_index']:row for row in observation.metadata['action_candidates']}
-                if not plan.compatible_move(stage,candidates[opponent_action]):
+                if not prefix.compatible_move(stage,candidates[opponent_action]):
                     rejected.append(dict(attempt=attempt,reason='full policy choice incompatible',stage=stage))
                     valid = False
                     break
                 snapshot = factory.env.snapshot()
-                if not validate_active_support(plan,snapshot,stage):
+                if not validate_active_support(prefix,snapshot,stage):
                     raise ReferenceRefusal('accepted prefix lost eligible Encore support')
                 matched = False
                 for chance_attempt in range(MAX_CHANCE_ATTEMPTS):
@@ -284,7 +386,7 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
                     factory.env.step({plan.subject:own_action,plan.opponent:opponent_action})
                     if (factory.env.terminal() is None
                             and public_history(factory.env.public_materialization_state(plan.subject))
-                            == plan.expected_histories[stage]):
+                            == prefix.expected_histories[stage]):
                         steps.append(dict(own_action=own_action,opponent_action=opponent_action,
                             opponent_move=candidates[opponent_action]['move_id'],
                             opponent_legal=list(legal),opponent_priors=list(probabilities),
@@ -297,6 +399,12 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
                     break
             if not valid:
                 continue
+            if isinstance(plan, StagedPrefixJointPlan):
+                suffix = _joint_suffix(factory, plan, rng)
+                if suffix is None:
+                    rejected.append(dict(attempt=attempt, reason='different joint suffix public transition/request'))
+                    continue
+                steps.extend(suffix)
             factory.check_sampling_deadline()
             current = factory.env.public_materialization_state(plan.subject)
             if (decision_state(factory.env.observe(plan.subject),player=plan.subject) != factory.root

@@ -12,6 +12,7 @@ from pokezero.mcts_eval.paper_reference import ReferenceRefusal, SamplingDeadlin
 from pokezero.mcts_eval.paper_reference_staged_chance import (
     ConstantChancePlan, build_constant_chance_plan, validate_active_support, sample_staged_path,
     verify_compiled_tree, SCHEMA, REST_TAIL_SCHEMA,
+    StagedPrefixJointPlan, build_staged_prefix_joint_plan, JOINT_TAIL_SCHEMA,
 )
 
 MODULE = 'pokezero.mcts_eval.paper_reference_staged_chance'
@@ -149,6 +150,49 @@ class PlanTests(unittest.TestCase):
         receipt=plan.receipt
         receipt['engine_hashes']['unexpected']='mutated'
         self.assertNotIn('unexpected',plan.receipt['engine_hashes'])
+
+
+class JointPlanTests(PlanTests):
+    def build_joint(self, factory):
+        with mock.patch(MODULE+'.public_history',side_effect=lambda s:s.history), \
+             mock.patch(MODULE+'.ENGINE_HASHES',{'engine':hashlib.sha256(b'pinned').hexdigest()}), \
+             mock.patch(MODULE+'.verify_compiled_tree'), \
+             mock.patch.object(Path,'read_bytes',return_value=b'pinned'):
+            return build_staged_prefix_joint_plan(factory)
+
+    def test_four_stage_prefix_survives_awakening_and_encore_end_in_joint_suffix(self):
+        factory = self.rest_tail_factory()
+        factory.pending_transition.continuation_actions = (3,3,3,3)
+        factory.state.history += ('|move|p1a: Lugia|Psychic|p2a: Shuckle',
+            '|-curestatus|p2a: Shuckle|slp', '|move|p2a: Shuckle|Rest|p2a: Shuckle',
+            '|-end|p1a: Lugia|Encore', '|upkeep', '|turn|17')
+        self.assertIsNone(self.build(factory))
+        plan = self.build_joint(factory)
+        self.assertEqual(plan.prefix.receipt['schema'], REST_TAIL_SCHEMA)
+        self.assertEqual(plan.receipt['schema'], JOINT_TAIL_SCHEMA)
+        self.assertEqual(plan.receipt['certified_prefix_stages'], 4)
+        self.assertEqual(plan.receipt['public_stages'], 5)
+        self.assertFalse(plan.receipt['suffix_chance_conditioning'])
+        self.assertEqual(plan.prefix.own_actions, (3,)*4)
+        self.assertEqual(plan.own_actions, (3,)*5)
+
+    def test_later_different_own_action_does_not_become_a_constant_likelihood_claim(self):
+        factory = self.factory()
+        factory.pending_transition.continuation_actions = (3,3,0)
+        factory.state.history += ('|move|p1a: Lugia|Recover|p1a: Lugia', '|upkeep', '|turn|16')
+        plan = self.build_joint(factory)
+        self.assertEqual(plan.prefix.receipt['schema'], SCHEMA)
+        self.assertEqual(plan.own_actions, (3,3,3,0))
+        self.assertEqual(plan.receipt['certified_prefix_stages'], 3)
+
+    def test_no_certified_prefix_or_history_action_count_mismatch_keeps_joint_dispatch(self):
+        factory = self.factory()
+        self.assertIsNone(self.build_joint(factory))
+        factory.pending_transition.continuation_actions = (3,3,3)
+        self.assertIsNone(self.build_joint(factory))
+        factory.state.history += ('|move|p1a: Lugia|Recover|p1a: Lugia', '|turn|16')
+        factory.state.history = tuple(line.replace('|Wrap|', '|Toxic|') for line in factory.state.history)
+        self.assertIsNone(self.build_joint(factory))
 
 
 class SupportTests(unittest.TestCase):
@@ -369,6 +413,76 @@ class KernelTests(unittest.TestCase):
                 staged[theta,private]=p*factors
         self.assertEqual({k:v/sum(joint.values()) for k,v in joint.items()},
             {k:v/sum(staged.values()) for k,v in staged.items()})
+
+
+class JointKernelTests(KernelTests):
+    def joint_fixture(self):
+        factory, prior, prefix, rng, worlds = self.fixture()
+        plan = StagedPrefixJointPlan(prefix, (3,)*4, prefix.expected_histories + (('four',),))
+        factory.state.history = ('four',)
+        def step(actions):
+            factory.env.history = plan.expected_histories[factory.env.stage]
+            if factory.env.seed == 999:
+                factory.env.history = ('different suffix',)
+            factory.env.stage += 1
+        factory.env.step = step
+        return factory, prior, plan, rng, worlds
+
+    def test_suffix_mismatch_redraws_whole_anchor_and_never_retries_suffix_chance(self):
+        factory, prior, plan, rng, worlds = self.joint_fixture()
+        rng.choices.side_effect = [[1],[1],[1],[0]] * 2
+        rng.getrandbits.side_effect = [11,12,13,999,21,22,23,24]
+        evidence = {}
+        with mock.patch(MODULE+'.validate_active_support',return_value=True), \
+             mock.patch(MODULE+'.public_history',side_effect=lambda s:s.history), \
+             mock.patch('pokezero.mcts_eval.paper_reference_showdown.decision_state',return_value=factory.root):
+            world = sample_staged_path(factory, prior, plan, rng, evidence)
+        self.assertEqual(prior.call_count, 2)
+        self.assertTrue(worlds[0].closed)
+        self.assertEqual(rng.getrandbits.call_count, 8)
+        self.assertTrue(all(call.kwargs['weights'] == (.9,.1) for call in rng.choices.call_args_list))
+        certificate = evidence['substitute_policy_conditioning']
+        self.assertEqual(certificate['algorithm'], JOINT_TAIL_SCHEMA)
+        self.assertEqual(certificate['steps'][-1]['opponent_action'], 0)  # switch mass stays legal in suffix
+        self.assertEqual(certificate['steps'][-1]['chance_draws'], 1)
+        self.assertNotIn('chance_attempts', certificate['steps'][-1])
+        self.assertEqual(certificate['rejected'][0]['reason'], 'different joint suffix public transition/request')
+        self.assertEqual(certificate['law_certificate']['prefix_law_certificate']['schema'], SCHEMA)
+        world.close()
+        self.assertTrue(evidence['released'])
+
+    def test_deadline_during_suffix_closes_anchor_and_cannot_claim_accepted_tail(self):
+        factory, prior, plan, rng, worlds = self.joint_fixture()
+        rng.choices.side_effect = [[1],[1],[1]]
+        rng.getrandbits.side_effect = [11,12,13]
+        def clock():
+            if factory.env.stage >= 3:
+                raise SamplingDeadlineExceeded('joint suffix clock')
+        factory.check_sampling_deadline.side_effect = clock
+        evidence = {}
+        with mock.patch(MODULE+'.validate_active_support',return_value=True), \
+             mock.patch(MODULE+'.public_history',side_effect=lambda s:s.history), \
+             self.assertRaisesRegex(SamplingDeadlineExceeded,'joint suffix clock'):
+            sample_staged_path(factory, prior, plan, rng, evidence)
+        self.assertTrue(worlds[0].closed)
+        self.assertNotIn('substitute_policy_conditioning', evidence)
+
+    def test_exact_posterior_keeps_hidden_dependent_suffix_likelihood(self):
+        joint, accelerated, incorrectly_conditioned = {}, {}, {}
+        prefix_chance = Fraction(1,8)*Fraction(1,16)*Fraction(1,256)*Fraction(1,256)
+        retry_factor = Fraction(1)
+        for c in (Fraction(1,8),Fraction(1,16),Fraction(1,256),Fraction(1,256)):
+            retry_factor *= 1-(1-c)**7
+        for theta in range(3):
+            for private in range(2):
+                policy = Fraction(theta+1,4)*Fraction(private+1,3)
+                suffix = Fraction(theta+private+1,7)
+                joint[theta,private] = policy*prefix_chance*suffix
+                accelerated[theta,private] = policy*retry_factor*suffix
+                incorrectly_conditioned[theta,private] = policy*retry_factor
+        normalize = lambda x:{k:v/sum(x.values()) for k,v in x.items()}
+        self.assertEqual(normalize(joint), normalize(accelerated))
+        self.assertNotEqual(normalize(joint), normalize(incorrectly_conditioned))
 
 
 if __name__=='__main__':
