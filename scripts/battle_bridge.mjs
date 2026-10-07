@@ -9,6 +9,7 @@ import {retryPublicSuffix, samePublicSuffix} from "./battle_bridge_conditioning_
 import {referenceRestState, bindReferenceRestSources, referenceInducedSleepState} from "./battle_bridge_reference_rest.mjs";
 import {applyReferenceTurnClocks, applyReferenceRechargePP} from "./battle_bridge_reference_turn_clocks.mjs";
 import {refreshReferenceTrapping} from "./battle_bridge_reference_trapping.mjs";
+import {bindReferenceAttract} from "./battle_bridge_reference_attract.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -570,7 +571,8 @@ function materializeBattle(command) {
   const snapshot = State.serializeBattle(battle.battleStream.battle);
   applyPublicState(snapshot, publicState, command.referenceRestSleep === true,
     command.referenceConsumedItems === true, battle.battleStream.battle.dex,
-    command.referenceEncoreDurations, command.referenceInducedSleep, command.referenceTurnClocks === true);
+    command.referenceEncoreDurations, command.referenceInducedSleep, command.referenceTurnClocks === true,
+    command.referenceAttract === true);
   // Packed-team shells use customgame. Restore canonical PUBLIC format rules,
   // not the source world's private state; clearing pseudoWeather also cleared
   // Sleep Clause's event handler in earlier reference materializations.
@@ -581,6 +583,8 @@ function materializeBattle(command) {
     }
     const template = new Battle({formatid:command.referenceRulesFormat, seed:[1,2,3,4]});
     snapshot.formatid = command.referenceRulesFormat;
+    // A customgame shell's debug flag is not part of the canonical format.
+    snapshot.debugMode = template.debugMode;
     snapshot.field.pseudoWeather = State.serializeWithRefs(template.field.pseudoWeather, template);
   }
   for (const side of snapshot.sides) {
@@ -1118,7 +1122,8 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
 }
 
 function applyPublicState(snapshot, publicState, referenceRestSleep = false, referenceConsumedItems = false, dex = null,
-  referenceEncoreDurations = null, referenceInducedSleep = null, referenceTurnClocks = false) {
+  referenceEncoreDurations = null, referenceInducedSleep = null, referenceTurnClocks = false,
+  referenceAttract = false) {
   if (referenceEncoreDurations !== null && (!referenceEncoreDurations ||
       typeof referenceEncoreDurations !== 'object' || Array.isArray(referenceEncoreDurations) || dex.gen !== 3 ||
       Object.keys(referenceEncoreDurations).some(k => !['p1', 'p2'].includes(k)))) {
@@ -1258,6 +1263,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
         Boolean(row.active),
         serializedSide.pokemon,
         referenceEncoreDurations,
+        referenceAttract,
       );
       if (row.currentItem !== undefined) {
         applyKnownCurrentItem(serializedSide.pokemon[index], row.currentItem, sideId, row.species);
@@ -1353,6 +1359,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, ref
     }
   }
   if (referenceTurnClocks) applyReferenceRechargePP(snapshot, publicState);
+  if (referenceAttract) bindReferenceAttract(snapshot, publicState, dex.gen);
 }
 
 function restoreDeferredOpponentActions(simulatorBattle, publicState) {
@@ -1701,6 +1708,7 @@ function publicSubstituteHp(pokemon, publicSide, sideId, sidePokemon) {
 function applyPublicVolatiles(
   pokemon, rawVolatiles, sideId, leechSeedSourceSides, publicSide, isActive, sidePokemon,
   referenceEncoreDurations = null,
+  referenceAttract = false,
 ) {
   if (!Array.isArray(rawVolatiles)) {
     throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
@@ -1712,6 +1720,13 @@ function applyPublicVolatiles(
       throw new Error(`Materialize received invalid volatile effect for ${sideId}.`);
     }
     const volatile = normalizeId(rawVolatile);
+    if (volatile === 'attract' && referenceAttract) {
+      if (seen.has(volatile) || !isActive) throw new Error('Reference Attract requires one active target.');
+      seen.add(volatile);
+      // The cross-Pokemon source is bound only after BOTH party permutations.
+      // Never install a source-free Attract or use a sampled opening lead.
+      continue;
+    }
     if (volatile === 'encore' && referenceEncoreDurations !== null) {
       const certificate = publicSide.referenceEncore;
       const duration = referenceEncoreDurations[sideId];

@@ -778,6 +778,7 @@ class LocalShowdownEnv:
         reference_encore_durations: Mapping[str, int] | None = None,
         reference_induced_sleep: Mapping[str, Mapping[str, int]] | None = None,
         reference_turn_clocks: bool = False,
+        reference_attract: bool = False,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
@@ -787,6 +788,10 @@ class LocalShowdownEnv:
             raise LocalShowdownError("Reference consumed-item opt-in must be boolean.")
         if type(reference_turn_clocks) is not bool:
             raise LocalShowdownError("Reference turn-clock opt-in must be boolean.")
+        if type(reference_attract) is not bool:
+            raise LocalShowdownError("Reference Attract opt-in must be boolean.")
+        if reference_attract and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference Attract requires Gen 3.")
         if reference_turn_clocks and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
             raise LocalShowdownError("Reference turn clocks require Gen 3.")
         if reference_consumed_items and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
@@ -811,6 +816,7 @@ class LocalShowdownEnv:
                 "referenceRulesFormat": state.observation_format_id if reference_induced_sleep is not None else None,
                 "referenceConsumedItems": reference_consumed_items,
                 "referenceTurnClocks": reference_turn_clocks,
+                "referenceAttract": reference_attract,
                 "referenceEncoreDurations": dict(reference_encore_durations) if reference_encore_durations is not None else None,
                 "publicState": _public_materialization_payload(
                     state,
@@ -820,6 +826,7 @@ class LocalShowdownEnv:
                     reference_encore=reference_encore_durations is not None,
                     reference_induced_sleep=reference_induced_sleep is not None,
                     reference_turn_clocks=reference_turn_clocks,
+                    reference_attract=reference_attract,
                 ),
             },
             "materialized",
@@ -2521,6 +2528,7 @@ def _public_materialization_payload(
     reference_encore: bool = False,
     reference_induced_sleep: bool = False,
     reference_turn_clocks: bool = False,
+    reference_attract: bool = False,
 ) -> dict[str, Any]:
     # A live action request is a protocol boundary: the preceding action has
     # finished even if the omniscient stream reached the request before its
@@ -2622,6 +2630,7 @@ def _public_materialization_payload(
             # from moving by sleep, paralysis, flinch, freeze, recharge or a switch.
             "truantPhase": replay.truant_phase.get(player),
             **({"mustRecharge": bool(replay.must_recharge.get(player, False))} if reference_turn_clocks else {}),
+            **({"referenceAttract": _public_reference_attract(state, player)} if reference_attract else {}),
             # Live in-battle retype of the ACTIVE mon, which the species token cannot
             # express. The parser has produced this since the v3 obs work but only the
             # OBSERVATION path consumed it (`_apply_live_type_override`); the world was
@@ -3036,6 +3045,69 @@ def _public_consumed_item_history(
         if berry or (item == "whiteherb" and not any(tags)):
             consumed[identity] = {"id": item, "usedItemThisTurn": True, "ateBerry": berry}
     return consumed
+
+
+def _public_reference_attract(state: PublicBattleMaterializationState, player: PlayerId) -> dict[str, Any] | None:
+    """Certify the surviving source from public move/Cute Charm chronology only.
+
+    No hidden state, guessed source, timer, immobilization roll or RNG is read.
+    A switch invalidates the old relationship even when the same name returns.
+    The materializer binds both Pokemon AFTER sampled party permutations.
+    """
+    if "attract" not in state.replay.volatiles.get(player, ()):
+        return None
+    if state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+        raise LocalShowdownError("Reference Attract requires Gen 3.")
+    active: dict[str, dict[str, str]] = {}
+    last_move = None
+    lock = None
+    for event in state.replay.public_events:
+        parts = event.raw_line.split("|")
+        kind = parts[1] if len(parts) > 1 else ""
+        if kind in {"turn", "upkeep"}:
+            last_move = None
+        if len(parts) < 3:
+            continue
+        actor, side = parts[2], parts[2][:2]
+        if kind in {"switch", "drag", "replace"} and side in PLAYER_IDS:
+            if lock is not None and side in {player, lock["sourceSide"]}:
+                lock = None
+            active[side] = {"ident": actor, "species": parts[3].split(",", 1)[0]} if len(parts) >= 4 else {}
+            last_move = None
+        elif kind == "move":
+            last_move = parts if len(parts) >= 5 and "[miss]" not in parts[5:] else None
+        elif kind in {"-miss", "-fail", "-immune"}:
+            if last_move is not None and actor in {last_move[2], last_move[4]}:
+                last_move = None
+        elif kind == "faint" and side in PLAYER_IDS:
+            # Mid-turn force-switch frontiers need a separate replay certificate.
+            # A formerly active source must not be revived from an old start.
+            if lock is not None and side in {player, lock["sourceSide"]}:
+                lock = None
+            active.pop(side, None)
+            if last_move is not None and actor in {last_move[2], last_move[4]}:
+                last_move = None
+        elif kind == "-end" and side == player and len(parts) >= 4 and _normalize_identifier(parts[3]) == "attract":
+            lock = None
+        elif kind == "-start" and side == player and len(parts) >= 4 and _normalize_identifier(parts[3]) == "attract":
+            lock = None
+            tags = [part.strip() for part in parts[4:] if part.strip()]
+            sources = [tag[5:] for tag in tags if tag.startswith("[of] ")]
+            cause = None
+            source = None
+            if len(tags) == 2 and len(sources) == 1 and "[from] ability: Cute Charm" in tags:
+                source, cause = sources[0], "cutecharm"
+            elif not tags and last_move is not None and _normalize_identifier(last_move[3]) == "attract" and last_move[4] == actor:
+                source, cause = last_move[2], "attract"
+            source_side = source[:2] if isinstance(source, str) else ""
+            if (source_side in PLAYER_IDS and source_side != player
+                    and active.get(player, {}).get("ident") == actor
+                    and active.get(source_side, {}).get("ident") == source):
+                lock = dict(sourceSide=source_side, sourceIdent=source, targetIdent=actor,
+                    sourceSpecies=active[source_side]["species"], targetSpecies=active[player]["species"], cause=cause)
+    if lock is None:
+        raise LocalShowdownError("Reference Attract lacks an unambiguous surviving public source.")
+    return lock
 
 
 def _public_reference_encore(state: PublicBattleMaterializationState, player: PlayerId) -> dict[str, Any] | None:
