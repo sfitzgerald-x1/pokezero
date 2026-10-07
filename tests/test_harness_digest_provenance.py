@@ -133,6 +133,10 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/poke_engine_adapter.py",
         "src/pokezero/poke_engine_backend.py",
         "src/pokezero/policy.py",
+        # engine_search's opt-in opponent model imports both modules. They
+        # belong to the measuring instrument even when its default is off.
+        "src/pokezero/policy_opponent.py",
+        "src/pokezero/policy_opponent_view.py",
         "src/pokezero/promotion.py",
         "src/pokezero/public_action_capture.py",
         "src/pokezero/public_decision_corpus.py",

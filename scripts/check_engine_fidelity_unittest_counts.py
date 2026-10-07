@@ -90,8 +90,59 @@ def _guards() -> list[CountGuard]:
     return guards
 
 
+def _class_test_methods(
+    module: str, class_name: str, visiting: frozenset[tuple[str, str]] = frozenset()
+) -> set[str]:
+    """Resolve explicit test classes and their fixture bases without importing them.
+
+    Same-module bases and explicit imports from test modules are supported.
+    Unknown/dynamic bases refuse: treating them as empty could silently shrink
+    an inherited suite. Overrides are counted once, just as unittest does.
+    """
+    identity = (module, class_name)
+    if identity in visiting:
+        raise ValueError(f"cyclic test-class inheritance at {module}.{class_name}")
+    path = TESTS / f"{module}.py"
+    tree = ast.parse(path.read_text(), filename=str(path))
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
+    if class_name not in classes:
+        raise ValueError(f"unknown test class {module}.{class_name}")
+    imports = {
+        alias.asname or alias.name: (node.module.removeprefix("tests."), alias.name)
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module
+        and node.module.removeprefix("tests.").startswith("test_")
+        for alias in node.names if alias.name != "*"
+    }
+    node = classes[class_name]
+    methods: set[str] = set()
+    for base in node.bases:
+        spelling = ast.unparse(base)
+        if spelling in {"object", "unittest.TestCase"}:
+            continue
+        if isinstance(base, ast.Name) and base.id in classes:
+            inherited = _class_test_methods(module, base.id, visiting | {identity})
+        elif isinstance(base, ast.Name) and base.id in imports:
+            inherited = _class_test_methods(*imports[base.id], visiting | {identity})
+        else:
+            raise ValueError(f"unsupported test-class base {spelling!r} in {module}.{class_name}")
+        methods.update(inherited)
+    for member in node.body:
+        if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if member.name.startswith("test_"):
+                methods.add(member.name)
+        elif isinstance(member, (ast.Assign, ast.AnnAssign)):
+            targets = member.targets if isinstance(member, ast.Assign) else [member.target]
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id.startswith("test_"):
+                    # Callable aliases and dynamic replacements cannot be counted
+                    # faithfully from this restricted AST contract.
+                    raise ValueError(f"dynamic test member {module}.{class_name}.{target.id}")
+    return methods
+
+
 def _test_count(target: str) -> int:
-    """Count an explicit unittest module or selected test method from its AST."""
+    """Count an explicit unittest module, class, or selected method from its AST."""
 
     pieces = target.split(".")
     if len(pieces) < 2 or pieces[0] != "tests":
@@ -109,18 +160,15 @@ def _test_count(target: str) -> int:
             for node in ast.walk(tree)
         )
 
-    selected = pieces[-1]
-    matches = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == selected
-    ]
-    if len(matches) != 1:
-        raise ValueError(
-            f"selected target {target!r} matched {len(matches)} test methods in "
-            f"{path.relative_to(ROOT)}"
-        )
-    if not selected.startswith("test_"):
+    if len(pieces) not in {3, 4}:
+        raise ValueError(f"unsupported unittest target {target!r}")
+    methods = _class_test_methods(module, pieces[2])
+    if len(pieces) == 3:
+        if not methods:
+            raise ValueError(f"selected class {target!r} has no unittest test methods")
+        return len(methods)
+    selected = pieces[3]
+    if selected not in methods:
         raise ValueError(f"selected target {target!r} is not a unittest test method")
     return 1
 

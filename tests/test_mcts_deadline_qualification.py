@@ -179,6 +179,17 @@ class DeadlineQualificationTest(unittest.TestCase):
                 [_record(0, prefix=False), _record(1, prefix=False)], requirements=self.requirements
             )
 
+    def test_registered_full_work_contract_allows_zero_prefixes(self) -> None:
+        requirements = DeadlineQualificationRequirements(
+            expected_decisions=2,
+            require_native_prefix=False,
+        )
+        summary = validate_deadline_qualification(
+            [_record(0, prefix=False), _record(1, prefix=False)], requirements=requirements
+        )
+        self.assertEqual(summary["native_prefix_count"], 0)
+        self.assertFalse(summary["requirements"]["require_native_prefix"])
+
     def test_fallback_is_not_recast_as_a_deadline_record(self) -> None:
         record = copy.deepcopy(_record(0, prefix=True))
         record["engine_mcts"]["fallback"] = "model_time_budget_no_completed_worlds"

@@ -311,6 +311,23 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--model-priors",
+        action="store_true",
+        help=(
+            "Enable own-policy priors for an explicitly labelled profile. The default "
+            "remains the neutral-prior deadline-qualification contract."
+        ),
+    )
+    parser.add_argument(
+        "--allow-zero-native-prefix",
+        action="store_true",
+        help=(
+            "Permit a qualification with no partial native deadline prefix. This is only "
+            "for a separately registered full-work contract; all normal deadline "
+            "qualifications retain the default prefix requirement."
+        ),
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Reuse only independently revalidated, durable decision units for this exact manifest.",
@@ -337,6 +354,14 @@ def _frozen_manifest(
 ) -> dict[str, Any]:
     return {
         "schema_version": DEADLINE_QUALIFICATION_SCHEMA_VERSION,
+        # A prior-enabled profile must never be mistaken for the neutral-prior
+        # timing qualification, even though both reuse the same durable
+        # decision and deadline validators.
+        "measurement_variant": (
+            "own_policy_prior_deadline_profile"
+            if args.model_priors
+            else "neutral_prior_deadline_qualification"
+        ),
         "source_receipt": dict(source_receipt),
         "active_source": dict(active_source),
         "corpus_path": str(Path(args.corpus).resolve()),
@@ -352,10 +377,9 @@ def _frozen_manifest(
             "batch": args.batch,
             "worlds": args.worlds,
             "early_stop": False,
-            # This is a deadline-mechanics qualification, not a prior-policy
-            # study.  Freeze both selection-prior toggles off exactly as the
-            # predeclared contract requires.
-            "model_priors": False,
+            # The neutral-prior qualification remains the default.  An
+            # explicit own-prior profile is recorded here, never inferred.
+            "model_priors": args.model_priors,
             "use_opponent_priors": False,
             "model_decision_time_ms": args.deadline_ms,
             "model_native_batch_guard_ms": args.native_batch_guard_ms,
@@ -572,6 +596,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         worlds=args.worlds,
         model_world_workers=args.model_world_workers,
         expected_decisions=16,
+        require_native_prefix=not args.allow_zero_native_prefix,
     )
     corpus_file_sha256 = sha256_file(args.corpus)
     if corpus_file_sha256 != args.expected_corpus_file_sha256:
@@ -621,7 +646,7 @@ def _run(args: argparse.Namespace, *, ownership: dict[str, bool]) -> dict[str, A
         model_decision_time_ms=args.deadline_ms,
         model_native_batch_guard_ms=args.native_batch_guard_ms,
         model_world_workers=args.model_world_workers,
-        model_priors=False,
+        model_priors=args.model_priors,
         use_opponent_priors=False,
     )
     try:

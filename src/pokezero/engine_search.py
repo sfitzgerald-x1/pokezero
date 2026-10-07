@@ -41,8 +41,9 @@ import time
 import warnings
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from queue import Queue
+from threading import Lock
 from types import MappingProxyType
 from typing import Any, Mapping, Optional, Sequence
 
@@ -89,6 +90,86 @@ class EngineSearchFallbackWarning(UserWarning):
 
 class EngineSearchFallbackError(RuntimeError):
     """Raised instead of falling back when ``strict_fallbacks`` is set."""
+
+
+def validate_native_joint_action_witness(report: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate finalized, node-local pairs; never infer them from arm visits.
+
+    A pair count summed over native trees is incidence, not a union of actions
+    across different sampled worlds. A collapsed world's belief multiplicity
+    must not reweight this compute receipt.
+    """
+    witness = report.get("joint_action_witness")
+    if not isinstance(witness, Mapping):
+        raise EngineSearchWitnessError("native joint-action witness missing")
+    if (witness.get("schema") != "completed-joint-actions-v1"
+            or witness.get("scope") != "single_native_tree"
+            or witness.get("basis") != "finalized_backups_not_reservations"):
+        raise EngineSearchWitnessError("native joint-action schema/scope/basis mismatch")
+    fields = ("root_completed_traversals", "root_distinct_pairs", "root_side_one_options",
+              "root_side_two_options", "tree_distinct_node_pairs", "tree_completed_selections")
+    if (any(type(witness.get(field)) is not int or witness[field] < 0 for field in fields)
+            or type(report.get("iterations")) is not int or report["iterations"] < 0
+            or witness["root_completed_traversals"] != report["iterations"]
+            or min(witness["root_side_one_options"], witness["root_side_two_options"]) <= 0):
+        raise EngineSearchWitnessError("native joint-action counts/iterations malformed")
+    pairs = witness.get("root_pairs")
+    if not isinstance(pairs, list) or len(pairs) != witness["root_distinct_pairs"]:
+        raise EngineSearchWitnessError("native joint-action pair coverage malformed")
+    marginals = [[0] * witness[f"root_{side}_options"] for side in ("side_one", "side_two")]
+    keys = []
+    completed = 0
+    for row in pairs:
+        if (not isinstance(row, Mapping)
+                or any(type(row.get(field)) is not int for field in
+                       ("side_one_option", "side_two_option", "completed_visits"))
+                or row["completed_visits"] <= 0):
+            raise EngineSearchWitnessError("native joint-action pair row malformed")
+        key = (row["side_one_option"], row["side_two_option"])
+        for seat, index in enumerate(key):
+            if not 0 <= index < len(marginals[seat]):
+                raise EngineSearchWitnessError("native joint-action option out of range")
+            marginals[seat][index] += row["completed_visits"]
+        keys.append(key)
+        completed += row["completed_visits"]
+    if (keys != sorted(set(keys)) or completed != report["iterations"]
+            or not witness["root_distinct_pairs"] <= witness["tree_distinct_node_pairs"] <= witness["tree_completed_selections"]
+            or witness["tree_completed_selections"] < completed
+            or (completed == 0) != (witness["tree_completed_selections"] == 0)):
+        raise EngineSearchWitnessError("native joint-action completed work does not conserve")
+    for seat, side in enumerate(("side_one", "side_two")):
+        visits = witness.get(f"root_{side}_visits")
+        if (not isinstance(visits, list) or len(visits) != len(marginals[seat])
+                or any(type(count) is not int or count < 0 for count in visits)
+                or visits != marginals[seat]):
+            raise EngineSearchWitnessError("native joint-action marginals differ from completed arm visits")
+        moves = witness.get(f"root_{side}_moves")
+        order = witness.get(f"root_{side}_report_order")
+        if (not isinstance(moves, list) or len(moves) != len(visits)
+                or any(not isinstance(move, str) or not move for move in moves)
+                or not isinstance(order, list) or any(type(index) is not int for index in order)
+                or order != sorted(range(len(visits)), key=lambda index: -visits[index])):
+            raise EngineSearchWitnessError("native joint-action option identity/report order malformed")
+        # Reports are visit-sorted, not native-option-ordered. Explicit indices
+        # retain identity even for duplicate display labels and tied visits.
+        if side in report:
+            arms = report[side]
+            if (not isinstance(arms, list) or len(arms) != len(order)
+                    or any(not isinstance(row, Mapping) or row.get("move") != moves[index]
+                           or type(row.get("visits")) is not int or row["visits"] != visits[index]
+                           for row, index in zip(arms, order))):
+                raise EngineSearchWitnessError("native joint-action marginals differ from reported root arms")
+    return dict(witness)
+
+
+def policy_opponent_world_seed(config: Any, context: Any, record: Mapping[str, Any]) -> int:
+    """Versioned deterministic stream split; consumes no decision/chance draws."""
+    payload = json.dumps([
+        "pokezero-own-policy-opponent-v1", config.policy_opponent_seed,
+        context.battle_id, context.decision_round_index, context.player_id,
+        record["seed"],
+    ], separators=(",", ":")).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
 
 
 class EngineSearchWitnessError(RuntimeError):
@@ -789,6 +870,12 @@ class EngineMctsConfig:
     # RESIDUAL but did not clear as harmless against an EXTERNAL opponent,
     # whose non-uniform policy is exactly what uniform play mismodels.
     use_opponent_priors: bool = False
+    # Isolated paper-semantics experiment: sample the reached opponent's OWN
+    # policy, not its auxiliary head or opposing PUCT. Never enabled implicitly.
+    policy_opponent: bool = False
+    policy_opponent_seed: int | None = None
+    # Opt-in measurement only: finalized node-local joint action backups.
+    record_joint_actions: bool = False
     # First-play urgency for UNVISITED arms in the native PUCT selection.
     # None = the flat 0.5 the crate has always used (`MoveStats::mean` at zero
     # visits); a float r prices an unvisited arm at
@@ -900,6 +987,24 @@ class EngineMctsConfig:
     fold_cross_check: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.policy_opponent) is not bool:
+            raise ValueError("policy_opponent must be a boolean.")
+        if type(self.record_joint_actions) is not bool or (self.record_joint_actions and (
+                self.leaf_eval != "model" or not self.strict_fallbacks)):
+            raise ValueError("record_joint_actions must be boolean and requires model leaves with strict_fallbacks.")
+        if self.policy_opponent:
+            if (type(self.policy_opponent_seed) is not int
+                    or not 0 <= self.policy_opponent_seed < 2**64):
+                raise ValueError("policy_opponent requires an explicit unsigned 64-bit seed.")
+            if (self.leaf_eval != "model" or not self.model_priors
+                    or self.use_opponent_priors or self.rollout_leaf_eval
+                    or self.rollout_leaf_shadow):
+                raise ValueError("policy_opponent requires model leaves and subject priors, without auxiliary opponent priors or rollout leaves.")
+            if (not self.strict_fallbacks or self.early_stop
+                    or self.depth_min is not None or self.worlds_min is not None):
+                raise ValueError("policy_opponent requires strict_fallbacks and a fixed allocation without early stopping.")
+        elif self.policy_opponent_seed is not None:
+            raise ValueError("policy_opponent_seed requires policy_opponent=True.")
         if self.worlds <= 0 or self.search_time_ms <= 0 or self.threads <= 0:
             raise ValueError("worlds, search_time_ms, and threads must be positive.")
         if self.model_world_workers <= 0:
@@ -1769,6 +1874,12 @@ class EngineMctsStats:
     choices_unmapped_causes: Counter = field(default_factory=Counter)
     # Model-mode telemetry (zero on the hp_fraction path).
     model_evals: int = 0
+    # Actual native invocations, never multiplied by duplicate belief weight.
+    policy_opponent_invocations: int = 0
+    policy_opponent_evals: int = 0
+    policy_opponent_provider_calls: int = 0
+    policy_opponent_samples: int = 0
+    policy_opponent_wall_seconds: float = 0.0
     # Native per-phase search wall (crate-measured, never derived by
     # subtraction): leaf encoding, model forwards, and tree work. These are the
     # inputs to the depth/throughput study's phase attribution
@@ -2212,6 +2323,13 @@ class EngineMctsStats:
             "unmapped_choices": dict(self.unmapped_choices),
             "choices_unmapped_causes": dict(self.choices_unmapped_causes),
             "model_evals": self.model_evals,
+            **({"policy_opponent": {
+                "native_invocations": self.policy_opponent_invocations,
+                "evaluations": self.policy_opponent_evals,
+                "provider_calls": self.policy_opponent_provider_calls,
+                "samples": self.policy_opponent_samples,
+                "seconds": self.policy_opponent_wall_seconds,
+            }} if self.policy_opponent_invocations else {}),
             "encode_wall_seconds": self.encode_wall_seconds,
             "model_wall_seconds": self.model_wall_seconds,
             "tree_wall_seconds": self.tree_wall_seconds,
@@ -3783,7 +3901,7 @@ class OpponentRequestOrderResolution:
 
 
 def opponent_request_order_resolution(
-    context, party_species
+    context, party_species, *, sampled_own_party: bool = False,
 ) -> OpponentRequestOrderResolution:
     """Resolve the opponent request order and retain the fail-closed reason.
 
@@ -3805,6 +3923,13 @@ def opponent_request_order_resolution(
     and reconciles them against the next observed active, so it sees those
     rounds; it is also the code that already handles Roar/Whirlwind drags and
     same-chunk faint replacements.
+
+    The opt-in own-policy callback instead knows its hypothesized sampled
+    party, not the historical opponent's hidden slot order. With
+    `sampled_own_party=True`, seed the walk from that hypothesis and resolve
+    public switch/drag species against it. Never reuse request-local switch
+    indexes from a different replay world. The default public-only walk and
+    incumbent-prior path remain unchanged.
 
     Fails closed rather than guessing: the walk returns None when the public
     data is inconsistent, and sets `active_position` to None when it loses
@@ -3833,7 +3958,8 @@ def opponent_request_order_resolution(
     opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
     try:
         walk = _public_opponent_team_index_walk(
-            context, opponent_slot=opponent_slot, team_size=len(party)
+            context, opponent_slot=opponent_slot, team_size=len(party),
+            **({"sampled_party_species": party} if sampled_own_party else {}),
         )
     except Exception:  # noqa: BLE001 - never break search over telemetry
         return OpponentRequestOrderResolution(None, "public_order_walk_error")
@@ -4550,6 +4676,9 @@ class EngineMctsPolicy:
         # dispatcher. Separate handles avoid assuming one libtorch module is
         # safe to enter concurrently merely because it is inference-only.
         self._native_model_world_workers: tuple[Any, ...] | None = None
+        self._policy_opponent_model: Any | None = None
+        self._policy_opponent_result: Any | None = None
+        self._policy_opponent_inference_lock = Lock()
         if self._config.leaf_eval == "model":
             from pathlib import Path  # noqa: PLC0415 — model-mode-only dependency
 
@@ -4581,6 +4710,21 @@ class EngineMctsPolicy:
             self._tables_json = _latch_encoder_tables_to_model_config(
                 tables_path.read_text(encoding="utf-8"), self._model_config
             )
+            if self._config.policy_opponent:
+                from .neural_policy import FreshValueHeadWarning, load_transformer_checkpoint
+                with warnings.catch_warnings():
+                    warnings.simplefilter("error", FreshValueHeadWarning)
+                    model, result = load_transformer_checkpoint(
+                        checkpoint_path, map_location=self._config.model_device
+                    )
+                if result.model_config != self._model_config:
+                    raise ValueError("policy opponent checkpoint changed during initialization")
+                expected = result.belief_set_source_hash
+                actual = getattr(getattr(set_source, "metadata", None), "source_hash", None)
+                if expected is None or actual != expected:
+                    raise ValueError("policy opponent requires the checkpoint-bound belief source")
+                model.eval()
+                self._policy_opponent_model, self._policy_opponent_result = model, result
 
     def reset(self) -> None:
         """Clear state that belongs to one played battle, preserving telemetry and artifacts.
@@ -4621,6 +4765,8 @@ class EngineMctsPolicy:
     # Policy protocol (context-free path): uniform legal. Only reached if the
     # rollout driver cannot supply a context, which the bench never does.
     def select_action(self, observation, *, rng: random.Random) -> PolicyDecision:
+        if self._config.policy_opponent:
+            raise EngineSearchFallbackError("policy opponent requires a complete public context")
         legal = legal_action_indices(observation.legal_action_mask)
         return PolicyDecision(action_index=rng.choice(legal), policy_id=self.policy_id)
 
@@ -4628,9 +4774,20 @@ class EngineMctsPolicy:
         self, context: PolicyContext, *, rng: random.Random
     ) -> PolicyDecision:
         started = time.perf_counter()
-        decision = self._search(context, rng=rng)
-        self.stats.decisions += 1
-        self.stats.decision_wall_seconds += time.perf_counter() - started
+        completed = False
+        try:
+            decision = self._search(context, rng=rng)
+            completed = True
+        finally:
+            # A refused experimental decision still spent wall time.
+            if completed or self._config.policy_opponent:
+                self.stats.decisions += 1
+                self.stats.decision_wall_seconds += time.perf_counter() - started
+        if self._config.policy_opponent:
+            decision = replace(decision,
+                metadata={**dict(decision.metadata or {}),
+                          "policy_opponent_decision_elapsed_ms": (time.perf_counter() - started) * 1000.0},
+            )
         return decision
 
     def warm_model_runtime(self) -> None:
@@ -4777,6 +4934,10 @@ class EngineMctsPolicy:
                 self.stats.world_failure_reasons[
                     f"belief_sample: {sample_failure or 'unknown'}"
                 ] += 1
+                if self._config.policy_opponent:
+                    raise EngineSearchWitnessError(
+                        f"policy opponent belief draw refused: {sample_failure or 'unknown'}"
+                    )
                 continue
             try:
                 world = world_battle_spec(
@@ -4797,14 +4958,16 @@ class EngineMctsPolicy:
                     rng=rng,
                 )
                 state = build_poke_engine_state(world.spec, module=self._module)
-            except PokeEngineAttractUnsupportedError:
+            except PokeEngineAttractUnsupportedError as error:
                 # Upstream accepts ATTRACT but ignores its 50% Gen 3
                 # immobilization. The adapter proves the local patch before it
                 # permits a world; classify a missing patch as an attributed
                 # fallback instead of silently searching an optimistic state.
                 self.stats.world_failure_reasons["attract_patch_unavailable"] += 1
+                if self._config.policy_opponent or self._config.record_joint_actions:
+                    raise EngineSearchWitnessError("policy opponent Attract world refused") from error
                 continue
-            except PokeEngineMoveTrapUnsupportedError:
+            except PokeEngineMoveTrapUnsupportedError as error:
                 # Same shape, newly reachable. `require_move_trap_support` has always guarded
                 # the TRAPPED volatile, but until the move trap was routed into the payload no
                 # production world ever carried one, so the raise had no live caller and would
@@ -4813,6 +4976,8 @@ class EngineMctsPolicy:
                 # hand the trapped seat its switch options back, so declining is correct --
                 # but declining is a fallback, not a crashed run.
                 self.stats.world_failure_reasons["move_trap_patch_unavailable"] += 1
+                if self._config.policy_opponent or self._config.record_joint_actions:
+                    raise EngineSearchWitnessError("policy opponent move-trap world refused") from error
                 continue
             except PokeEngineUnavailableError as error:
                 # BACKSTOP for the whole capability-probe family, because the specific handler
@@ -4837,9 +5002,13 @@ class EngineMctsPolicy:
                 self.stats.world_failure_reasons[
                     f"engine_capability_unavailable: {type(error).__name__}"
                 ] += 1
+                if self._config.policy_opponent or self._config.record_joint_actions:
+                    raise EngineSearchWitnessError("policy opponent engine world refused") from error
                 continue
             except EngineWorldUnsupported as error:
                 self.stats.world_failure_reasons[_world_failure_key(error)] += 1
+                if self._config.policy_opponent or self._config.record_joint_actions:
+                    raise EngineSearchWitnessError(f"policy opponent world construction refused: {error}") from error
                 continue
             worlds.append((world, state))
             self._notify_world_observer(context, world, state)
@@ -5999,6 +6168,58 @@ class EngineMctsPolicy:
         return decision
 
 
+    def _policy_opponent_native_kwargs(
+        self, context: PolicyContext, record: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """Build one tree's private-safe provider without advancing decision RNG.
+
+        Seed derivation is domain-separated from native chance randomness.
+        Every invocation owns its callback and vocabulary OOV tracker; neither
+        histories nor inferred rows can leak between parallel worlds.
+        """
+        if not self._config.policy_opponent:
+            return {}
+        from .policy_opponent import make_policy_opponent_callback
+
+        result, model = self._policy_opponent_result, self._policy_opponent_model
+        if result is None or model is None:
+            raise EngineSearchWitnessError("policy opponent own-head runtime is missing")
+        replay = context.public_materialization_state.replay
+        order = record.get("_policy_opponent_request_order")
+        if not order:
+            raise EngineSearchWitnessError("policy opponent sampled request order is missing")
+        policy_seed = policy_opponent_world_seed(self._config, context, record)
+        # The category tokens are checkpoint-bound. This allocates a fresh
+        # tracker but does not infer vocabulary from a different runtime Dex.
+        from .category_vocab import CategoryVocabulary
+        vocab_tables = json.loads(self._tables_json)["vocab"]
+        tokens = tuple(result.model_config.category_vocab)
+        if (tuple(vocab_tables["tokens"]) != tokens
+                or vocab_tables["oov_buckets"] != result.model_config.category_oov_buckets
+                or any(vocab_tables["index"].get(token.strip().lower()) != index
+                       for index, token in enumerate(tokens, 1))):
+            raise EngineSearchWitnessError("policy opponent native vocabulary differs from checkpoint")
+        aliases = {}
+        for alias, row in vocab_tables["index"].items():
+            if type(row) is not int or not 1 <= row <= len(tokens):
+                raise EngineSearchWitnessError("policy opponent native vocabulary alias is invalid")
+            aliases[alias] = tokens[row - 1]
+        vocab = CategoryVocabulary(
+            tokens=tokens, aliases=aliases,
+            oov_buckets=result.model_config.category_oov_buckets,
+        )
+        callback = make_policy_opponent_callback(
+            public_lines=replay.public_lines, hp_visibility=replay.hp_visibility,
+            opponent_slot="p2" if context.player_id == "p1" else "p1",
+            battle_id=context.battle_id, battle_seed=context.seed,
+            format_id=context.format_id, set_source=self._set_source,
+            model=model, result=result, category_vocab=vocab, dex=self._dex,
+            device=self._config.model_device, inference_lock=self._policy_opponent_inference_lock,
+        )
+        return {"policy_opponent_callback": callback,
+                "policy_opponent_seed": policy_seed,
+                "policy_opponent_request_order": list(order)}
+
     def _search_model(
         self,
         context: PolicyContext,
@@ -6086,6 +6307,8 @@ class EngineMctsPolicy:
         # allocation and then contributes several belief rows; preserving the
         # distinction is necessary to audit a deadline prefix honestly.
         native_time_budget_invocations: list[dict[str, Any]] = []
+        policy_opponent_invocations: list[dict[str, Any]] = []
+        joint_action_invocations: list[dict[str, Any]] = []
         native_batch_guard_seconds = config.model_native_batch_guard_ms / 1000.0
         time_budget_duration_seconds = (
             config.model_decision_time_ms / 1000.0
@@ -6221,10 +6444,13 @@ class EngineMctsPolicy:
                         depth=depth,
                         time_budget_ms=time_budget_ms,
                     )
+                    policy_kwargs = self._policy_opponent_native_kwargs(context, record)
+                    if config.record_joint_actions:
+                        policy_kwargs["record_joint_actions"] = True
                     native_invocation_started = time_budget_ms is not None
                     if (
                         decision_deadline is not None
-                        and config.model_native_batch_guard_ms > 0
+                        and (config.model_native_batch_guard_ms > 0 or config.policy_opponent)
                     ):
                         # Argument construction is inside the outer decision
                         # clock.  Re-check at the actual call seam so it cannot
@@ -6242,7 +6468,7 @@ class EngineMctsPolicy:
                         search_args[-1] = time_budget_ms
                         native_invocation_started = True
                     report = json.loads(
-                        native.search_batched_multi_encoded(*search_args)
+                        native.search_batched_multi_encoded(*search_args, **policy_kwargs)
                     )
                 else:
                     completed, payload = prefetched.completed, prefetched.payload
@@ -6262,6 +6488,48 @@ class EngineMctsPolicy:
                     # rejects the whole decision.  The dispatch mode may change
                     # throughput, never that failure boundary.
                     report = payload
+                if config.record_joint_actions:
+                    joint = validate_native_joint_action_witness(report)
+                    joint_action_invocations.append({
+                        "world_seed": record["seed"], "belief_multiplicity": weight,
+                        "witness": joint,
+                    })
+                if config.policy_opponent:
+                    # No healthy sibling may hide an absent or malformed mode
+                    # witness, nor a uniform subject-prior fallback at a child.
+                    expected_seed = policy_opponent_world_seed(config, context, record)
+                    if (report.get("policy_opponent_mode") != "own_policy_callback"
+                            or type(report.get("policy_opponent_seed")) is not int
+                            or report["policy_opponent_seed"] != expected_seed
+                            or report.get("model_priors") is not True
+                            or type(report.get("prior_fallbacks")) is not int
+                            or report["prior_fallbacks"] != 0):
+                        raise EngineSearchWitnessError("policy opponent native mode/seed/prior witness mismatch")
+                    requested_work = int(config.search_sims if sims is None else sims)
+                    if time_budget_ms is None and (
+                            type(report.get("iterations")) is not int
+                            or report["iterations"] != requested_work
+                            or type(report.get("requested_iterations")) is not int
+                            or report["requested_iterations"] != requested_work
+                            or type(report.get("remaining_iterations")) is not int
+                            or report["remaining_iterations"] != 0):
+                        raise EngineSearchWitnessError("policy opponent fixed-work witness mismatch")
+                    for key in ("policy_opponent_evals", "policy_opponent_provider_calls", "policy_opponent_samples"):
+                        if type(report.get(key)) is not int or report[key] < 0:
+                            raise EngineSearchWitnessError(f"policy opponent invalid {key}")
+                    if report["policy_opponent_evals"] > report["policy_opponent_provider_calls"]:
+                        raise EngineSearchWitnessError("policy opponent evaluations exceed certified provider calls")
+                    duration = report.get("policy_opponent_s")
+                    if (isinstance(duration, bool) or not isinstance(duration, (float, int))
+                            or not math.isfinite(duration) or duration < 0):
+                        raise EngineSearchWitnessError("policy opponent invalid duration")
+                    policy_opponent_invocations.append({
+                        "world_seed": record["seed"], "policy_seed": expected_seed,
+                        "belief_multiplicity": weight,
+                        "evaluations": report["policy_opponent_evals"],
+                        "provider_calls": report["policy_opponent_provider_calls"],
+                        "samples": report["policy_opponent_samples"], "seconds": duration,
+                    })
                 if time_budget_ms is not None:
                     # A native wheel that accepts the new positional but does
                     # not witness its use is not a timed search. Refuse it
@@ -6481,6 +6749,11 @@ class EngineMctsPolicy:
                 # ... and everything ELSE the world observed before it aborted, which
                 # this seam used to discard wholesale.
                 self._absorb_aborted_lossy_subcases(error)
+                if config.policy_opponent or config.record_joint_actions:
+                    finalize_time_budget()
+                    raise EngineSearchWitnessError(
+                        f"{'policy opponent' if config.policy_opponent else 'joint-action measurement'} world refused (chance seed={record['seed']}): {reason}"
+                    ) from error
                 return None
             # Invocation-level counters reflect actual compute. A stopped
             # world that is conservatively replayed at full budget counts both
@@ -6493,6 +6766,12 @@ class EngineMctsPolicy:
                 report.get("time_budget_exhausted", False)
             )
             self.stats.model_evals += int(report["model_evals"])
+            if config.policy_opponent:
+                self.stats.policy_opponent_invocations += 1
+                self.stats.policy_opponent_evals += report["policy_opponent_evals"]
+                self.stats.policy_opponent_provider_calls += report["policy_opponent_provider_calls"]
+                self.stats.policy_opponent_samples += report["policy_opponent_samples"]
+                self.stats.policy_opponent_wall_seconds += report["policy_opponent_s"]
             # Reached depth, same accumulation the hp_fraction path already does.
             # Without this the model path -- the one every strength campaign runs
             # -- reports nothing about whether the depth CAP was ever binding, so
@@ -6820,6 +7099,7 @@ class EngineMctsPolicy:
             opponent_order_resolution = opponent_request_order_resolution(
                 context,
                 world.party_species["p2" if context.player_id == "p1" else "p1"],
+                **({"sampled_own_party": True} if config.policy_opponent else {}),
             )
             ctx_payload: dict[str, Any] = {
                 "p1": list(world.party_species["p1"]),
@@ -6859,6 +7139,13 @@ class EngineMctsPolicy:
                 record["_opponent_request_order_status"] = (
                     opponent_order_resolution.status
                 )
+            if config.policy_opponent:
+                if opponent_order_resolution.order is None:
+                    raise EngineSearchWitnessError(
+                        "policy opponent public request order refused: "
+                        + opponent_order_resolution.status
+                    )
+                record["_policy_opponent_request_order"] = opponent_order_resolution.order
             # CONCENTRATE duplicate belief completions instead of skipping them.
             #
             # Two worlds with the same serialized state, context and seat are one
@@ -7009,7 +7296,9 @@ class EngineMctsPolicy:
                         )
                     return _ParallelWorldPrefetch(
                         completed=True,
-                        payload=json.loads(handle.search_batched_multi_encoded(*search_args)),
+                        payload=json.loads(handle.search_batched_multi_encoded(
+                            *search_args, **self._policy_opponent_native_kwargs(context, _record),
+                            **({"record_joint_actions": True} if config.record_joint_actions else {}))),
                         native_invocation_started=True,
                     )
                 except Exception as error:  # preserve serial refusal taxonomy
@@ -7054,6 +7343,9 @@ class EngineMctsPolicy:
                             depth=None,
                             time_budget_ms=time_budget_ms,
                         )
+                        policy_kwargs = self._policy_opponent_native_kwargs(context, record)
+                        if config.record_joint_actions:
+                            policy_kwargs["record_joint_actions"] = True
                     except Exception as error:
                         # No native call occurred.  Keep the planned budget out
                         # of the invocation ledger, just like serial argument
@@ -7086,7 +7378,7 @@ class EngineMctsPolicy:
                     try:
                         return _ParallelWorldPrefetch(
                             completed=True,
-                            payload=json.loads(handle.search_batched_multi_encoded(*search_args)),
+                            payload=json.loads(handle.search_batched_multi_encoded(*search_args, **policy_kwargs)),
                             time_budget_ms=time_budget_ms,
                             native_invocation_started=True,
                         )
@@ -7443,6 +7735,15 @@ class EngineMctsPolicy:
         metadata = {
             "engine_mcts": {
                 "leaf_eval": "model",
+                **({"joint_actions": {
+                    "scope": "per_native_invocation_without_belief_reweighting",
+                    "native_invocations": joint_action_invocations,
+                }} if config.record_joint_actions else {}),
+                **({"policy_opponent": {
+                    "mode": "own_policy_callback", "seed_root": config.policy_opponent_seed,
+                    "seed_derivation": "sha256-domain-separated-v1",
+                    "native_invocations": policy_opponent_invocations,
+                }} if config.policy_opponent else {}),
                 "worlds_searched": worlds_searched_here,
                 # Per-decision denominator. A decision that searched 1 of 4
                 # constructed worlds is NOT a fallback and so is invisible in

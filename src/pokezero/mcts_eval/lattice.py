@@ -44,6 +44,51 @@ PreparedDecision = Callable[[], dict[str, Any]]
 PreparedDecider = Callable[[TimingDecisionRecord, SearchConfig], PreparedDecision]
 
 
+def _decode_decision_rng_state(
+    value: Mapping[str, Any],
+) -> tuple[int, tuple[int, ...], float | None]:
+    """Decode the JSON-safe state emitted by the source decision witness.
+
+    The caller is still responsible for binding the witness to its source
+    record and policy provenance. This narrow decoder only establishes that
+    the serialized state is a valid Python ``random.Random`` state before it
+    is supplied to native search. It deliberately refuses permissive mappings
+    so a malformed or hand-edited witness cannot quietly fall back to an
+    invented per-root seed.
+    """
+
+    if set(value) != {"algorithm", "state_version", "internal_state", "gauss_next"}:
+        raise ContractError("decision RNG witness has an unsupported shape")
+    if value.get("algorithm") != "python-random-mt19937":
+        raise ContractError("decision RNG witness uses an unsupported algorithm")
+    version = value.get("state_version")
+    internal = value.get("internal_state")
+    gauss_next = value.get("gauss_next")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or not isinstance(internal, Sequence)
+        or isinstance(internal, (str, bytes))
+        or len(internal) < 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in internal)
+        or (
+            gauss_next is not None
+            and (
+                isinstance(gauss_next, bool)
+                or not isinstance(gauss_next, (int, float))
+                or not math.isfinite(float(gauss_next))
+            )
+        )
+    ):
+        raise ContractError("decision RNG witness has an invalid state")
+    state = (version, tuple(internal), gauss_next)
+    try:
+        random.Random().setstate(state)
+    except (TypeError, ValueError) as error:
+        raise ContractError("decision RNG witness is not replayable") from error
+    return state
+
+
 @dataclass(frozen=True)
 class _PublicReplayStep:
     """One ephemeral replay action with only the actor's public observation.
@@ -200,6 +245,19 @@ def time_lattice_cell(
     )
 
 
+def _policy_opponent_config_kwargs(enabled: bool, seed: int | None) -> dict[str, Any]:
+    """Explicit experimental arm; leave incumbent configuration shape intact."""
+    if type(enabled) is not bool:
+        raise ValueError("policy_opponent must be a boolean")
+    if not enabled:
+        if seed is not None:
+            raise ValueError("policy_opponent_seed requires policy_opponent")
+        return {}
+    if type(seed) is not int or not 0 <= seed < 2**64:
+        raise ValueError("policy_opponent requires an explicit unsigned 64-bit seed")
+    return {"policy_opponent": True, "policy_opponent_seed": seed, "strict_fallbacks": True}
+
+
 class _LiveEngineTimingDecider:
     """Replay one corpus record into the genuine model-backed engine policy.
 
@@ -242,6 +300,9 @@ class _LiveEngineTimingDecider:
         model_priors: bool = True,
         use_opponent_priors: bool = False,
         override_telemetry: bool = False,
+        policy_opponent: bool = False,
+        policy_opponent_seed: int | None = None,
+        record_joint_actions: bool = False,
         rollout_leaf_eval: bool = False,
         rollout_count: int = 32,
         rollout_max_plies: int = 200,
@@ -256,6 +317,9 @@ class _LiveEngineTimingDecider:
         from ..local_showdown import LocalShowdownConfig, LocalShowdownEnv
         from ..randbat import load_gen3_randbat_source_cached
 
+        opponent_kwargs = _policy_opponent_config_kwargs(policy_opponent, policy_opponent_seed)
+        if policy_opponent and (not model_priors or use_opponent_priors or rollout_leaf_eval):
+            raise ValueError("policy opponent profile requires subject priors, no auxiliary opponent priors or rollout leaves")
         if model_decision_time_ms is not None and model_decision_time_ms <= 0:
             raise ValueError("model_decision_time_ms must be positive when set")
         if (
@@ -277,7 +341,7 @@ class _LiveEngineTimingDecider:
             raise ValueError("model_world_workers must be positive")
         if not all(
             isinstance(value, bool)
-            for value in (model_priors, use_opponent_priors, override_telemetry)
+            for value in (model_priors, use_opponent_priors, override_telemetry, record_joint_actions)
         ):
             raise ValueError(
                 "model_priors, use_opponent_priors, and override_telemetry must be booleans"
@@ -297,6 +361,9 @@ class _LiveEngineTimingDecider:
         # for the already-supported root-allocation witness without widening the
         # default replay contract.
         self._override_telemetry = override_telemetry
+        self._record_joint_actions = record_joint_actions
+        self._policy_opponent_kwargs = {**opponent_kwargs,
+            **({"strict_fallbacks": True} if record_joint_actions else {})}
         # The source-root leaf ablation uses the existing model-prior rollout
         # seam.  Keep every knob explicit here, rather than letting a caller
         # bolt an unregistered leaf value onto the timing adapter.  Production
@@ -358,6 +425,7 @@ class _LiveEngineTimingDecider:
                 model_priors=self._model_priors,
                 use_opponent_priors=self._use_opponent_priors,
                 override_telemetry=self._override_telemetry,
+                record_joint_actions=getattr(self, "_record_joint_actions", False),
                 early_stop=False,
                 model_decision_time_ms=self._model_decision_time_ms,
                 model_native_batch_guard_ms=self._model_native_batch_guard_ms,
@@ -369,6 +437,7 @@ class _LiveEngineTimingDecider:
                 rollout_seed=self._rollout_seed,
                 rollout_threads=self._rollout_threads,
                 rollout_threads_cpu_budget_ack=self._rollout_threads_cpu_budget_ack,
+                **getattr(self, "_policy_opponent_kwargs", {}),
             ),
             policy_id=f"mcts-timing-{config.config_id}",
             annotation_source=self._annotation_source,
@@ -488,6 +557,8 @@ class _LiveEngineTimingDecider:
         *,
         public_action_rounds: Sequence[Any],
         decision_rng_seed: int,
+        decision_rng_state: tuple[object, object, object] | Mapping[str, Any] | None = None,
+        source_requested_players: Sequence[str] | None = None,
     ) -> PreparedDecision:
         """Replay one source-captured public root without inventing a corpus line.
 
@@ -509,6 +580,26 @@ class _LiveEngineTimingDecider:
             )
         if isinstance(decision_rng_seed, bool) or not isinstance(decision_rng_seed, int):
             raise ContractError(f"{record.decision_id}: decision RNG seed must be an integer")
+        requested_players: tuple[str, ...] | None = None
+        if source_requested_players is not None:
+            if isinstance(source_requested_players, (str, bytes)):
+                raise ContractError(f"{record.decision_id}: source request boundary is malformed")
+            requested_players = tuple(source_requested_players)
+            if requested_players not in {(record.acting_player,), ("p1", "p2")}:
+                raise ContractError(f"{record.decision_id}: source request boundary is unsupported")
+        decision_rng = random.Random(decision_rng_seed)
+        if decision_rng_state is not None:
+            try:
+                state = (
+                    _decode_decision_rng_state(decision_rng_state)
+                    if isinstance(decision_rng_state, Mapping)
+                    else decision_rng_state
+                )
+                decision_rng.setstate(state)
+            except (TypeError, ValueError) as error:
+                raise ContractError(
+                    f"{record.decision_id}: decision RNG state is not replayable"
+                ) from error
         candidates = record.observation.acting_player_state.get("action_candidates")
         if not isinstance(candidates, Sequence) or isinstance(candidates, (str, bytes)):
             raise ContractError(f"{record.decision_id}: source root has no action candidates")
@@ -538,6 +629,8 @@ class _LiveEngineTimingDecider:
             expected_event_prefix=None,
             expected_public_observation=record.observation,
             expected_belief_view=record.public_belief_view,
+            decision_rng=decision_rng,
+            source_requested_players=requested_players,
         )
 
     def _prepare_replay(
@@ -548,6 +641,8 @@ class _LiveEngineTimingDecider:
         expected_event_prefix: Sequence[str] | None,
         expected_public_observation: Any | None,
         expected_belief_view: Mapping[str, Any] | None,
+        decision_rng: random.Random | None = None,
+        source_requested_players: tuple[str, ...] | None = None,
     ) -> PreparedDecision:
         """Replay a public prefix, with an optional raw-line integrity witness."""
         from ..policy import PolicyContext
@@ -630,15 +725,37 @@ class _LiveEngineTimingDecider:
                 format_id=self._FORMAT_ID,
                 seed=record.battle_seed,
                 observation=observation,
-                requested_players=tuple(replayed.requested_players),
+                # A source-root record may have been selected at a simultaneous
+                # request boundary even though materialising its public prefix
+                # leaves only the acting seat requesting locally.  The source
+                # boundary is a public, recorded part of the decision context;
+                # replay it exactly when supplied rather than silently changing
+                # the MCTS input.
+                requested_players=(
+                    source_requested_players
+                    if source_requested_players is not None
+                    else tuple(replayed.requested_players)
+                ),
                 trajectory=trajectory,  # type: ignore[arg-type]  # public-only runtime history
                 requested_legal_action_masks={record.seat: legal_mask},
                 requested_observations={record.seat: observation},
                 public_materialization_state=public_state,
             )
+            # Source-root records are captured through ``PublicOnlyMctsPolicy``.
+            # Reuse that exact sanitizer at replay rather than relying on this
+            # adapter's structurally similar public trajectory.  Keeping the
+            # collection and replay selection contexts identical is required
+            # for an RNG witness to be meaningful.  Timing-corpus replay keeps
+            # its established context unchanged.
+            if expected_public_observation is not None:
+                from .head_to_head import public_only_context
+
+                context = public_only_context(context)
             before = self._snapshot_stats(policy)
+            selection_rng = decision_rng or random.Random(record.bot_rng_seed)
             decision = policy.select_action_with_context(
-                context, rng=random.Random(record.bot_rng_seed)
+                context,
+                rng=selection_rng,
             )
             after = self._snapshot_stats(policy)
             action_index = int(decision.action_index)
@@ -682,6 +799,8 @@ class _LiveEngineTimingDecider:
                 "engine_mcts": dict(
                     (getattr(decision, "metadata", {}) or {}).get("engine_mcts", {})
                 ),
+                **({"raw_policy": dict(decision.metadata["raw_policy"])}
+                   if "raw_policy" in (getattr(decision, "metadata", {}) or {}) else {}),
             }
 
         return timed_decision

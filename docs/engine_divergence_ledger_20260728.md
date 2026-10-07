@@ -2494,6 +2494,17 @@ namespace only:
 | fidelity differential, final holdout — the span C141 **actually swept** | `19,200,060`–`19,200,259` | `reports/artifacts/c141_final_holdout_sweep.json` | **CONSUMED** — 200 games, 16,274 boundaries measured, 2 divergent. Overruns the registered end by **60 seeds** |
 | fidelity differential, final holdout — the registered head C141 **did not reach** | `19,200,000`–`19,200,059` | the first 60 seeds of the registered block | **unswept, and contaminated.** No committed artifact covers these 60 seeds; 60 games were run over them before the guard existed |
 | fidelity differential, final holdout — C151 **RATIFIED replacement window** | `19,300,000`–`19,300,199` | the terminal one-shot measurement, re-registered on virgin seeds because the `19,200,000` block is burned | **RATIFIED (owner scott, 2026-08-08) and NOT YET SWEPT.** One sweep, ever, and only once the precondition holds: ledger terminal and engine fingerprint declared frozen for the claim. `reports/c151_final_holdout_rereg_prediction.md` is frozen as to window, protocol and preconditions; the trigger has not fired |
+| gameplay-root reuse | `2,026,100,100`–`2,026,100,107` | `docs/paper_policy_opponent_roster_20261004.json`, frozen selection from completed practical pilot s0, both seats at indices 0 and 9 | selection only, NOT_LAUNCHED; not a differential sweep or new strength measurement |
+
+**October 4 namespace amendment.** The dated gameplay seeds above exceed the
+fidelity floor numerically but serve a different purpose. The roster binds its
+historical source terminal and individual record bytes. Its exact file SHA-256 is
+`fa76bc9966bba48f0dd474a2450b4c362e49ac1452db18c39b084a256d30ff7a`.
+The seed-registry checker parses it, classifies only this exact path and byte hash
+as gameplay selection, and refuses changed bytes. Copies and new schemas remain
+subject to the normal shape-agnostic containment check. The roster's own gate
+separately verifies selection structure. No fidelity band is widened, no reserved
+window is consumed, and selection does not certify replay eligibility or strength.
 
 **C151 — the owner ratified a replacement window, burned the old block, and deferred the
 sweep.** Ratified **2026-08-08** by **scott**, in these words:
