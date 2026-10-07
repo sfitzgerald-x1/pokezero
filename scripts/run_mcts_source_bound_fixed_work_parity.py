@@ -206,6 +206,31 @@ def _validate_row(payload: Mapping[str, Any], *, record: Any, args: argparse.Nam
     for field in ("total_iterations", "model_evals"):
         if serial.get(field) != parallel.get(field):
             raise FixedWorkParityError(f"{record.decision_id}: fixed-work {field} differs by dispatch mode")
+    if _semantic_engine_metadata(serial["engine_mcts"]) != _semantic_engine_metadata(parallel["engine_mcts"]):
+        raise FixedWorkParityError(
+            f"{record.decision_id}: fixed-work semantic engine metadata differs by dispatch mode"
+        )
+
+
+def _semantic_engine_metadata(value: object) -> dict[str, Any]:
+    """Keep every stable public tree witness while removing dispatch mechanics.
+
+    The two arms intentionally differ in how native model requests are
+    scheduled.  That receipt is useful evidence that the parallel arm ran, but
+    it cannot be part of semantic parity.  Everything else emitted under the
+    decision's public ``engine_mcts`` metadata is compared exactly: in
+    particular the folded root-choice surface, completed-world count and
+    early-stop witness.  This makes an unchanged selected action insufficient
+    to pass if parallel dispatch changed the observed root state.
+    """
+
+    if not isinstance(value, Mapping):
+        raise FixedWorkParityError("fixed-work arm has malformed engine metadata")
+    return {
+        str(key): child
+        for key, child in value.items()
+        if str(key) != "world_parallelism"
+    }
 
 
 def _new_decider(contract: Any, args: argparse.Namespace, *, workers: int) -> Any:

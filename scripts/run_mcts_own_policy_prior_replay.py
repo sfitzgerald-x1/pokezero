@@ -112,6 +112,10 @@ def _receipt_and_source(path: str) -> tuple[dict[str, Any], dict[str, Any]]:
     schema = receipt.get("schema_version")
     if schema not in {"pokezero.b2-source-image-receipt.v7", SOURCE_BOUND_RECEIPT_SCHEMA}:
         raise DeadlineQualificationError("source receipt schema is not supported for own-policy replay")
+    if schema == SOURCE_BOUND_RECEIPT_SCHEMA:
+        # Reuse the strict file, path and digest checks rather than accepting
+        # a partial receipt merely because its runner hash matches.
+        receipt = common._source_receipt(path)
     if receipt.get("complete") is not True:
         raise DeadlineQualificationError("source receipt is not complete")
     image = receipt.get("immutable_image")

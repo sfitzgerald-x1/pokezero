@@ -564,6 +564,28 @@ class LocalShowdownEnv:
             raise LocalShowdownError(f"Bridge emitted malformed scenario team: {event!r}")
         return tuple(_json_clone_mapping(row) for row in rows)
 
+    def generate_reference_set(self, *, seed: int, species: str) -> Mapping[str, Any]:
+        """One exact pinned Gen 3 server set for a known species, not a cached variant.
+
+        This stateless command reads no live battle or private request. Each
+        call creates a new server generator with empty team context; that
+        context is an explicit reference-implementation choice.
+        """
+        if type(seed) is not int or not 0 <= seed <= 2**53 - 1:
+            raise ValueError("reference set seed must be a nonnegative JavaScript-safe integer.")
+        if not isinstance(species, str) or not species.strip():
+            raise ValueError("reference set generation requires a species name.")
+        if self._process is None or self._process.poll() is not None:
+            self.reset(seed=seed)
+        event = self._bridge_request_event(
+            {"type": "reference_generate_set", "seed": seed, "species": species},
+            "reference_set_generated",
+        )
+        row = event.get("set")
+        if not isinstance(row, Mapping) or event.get("seed") != seed:
+            raise LocalShowdownError("Bridge emitted malformed reference set evidence.")
+        return _json_clone_mapping(row)
+
     def _reset(
         self,
         *,
@@ -743,9 +765,16 @@ class LocalShowdownEnv:
         seed: int,
         deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
         deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
+        reference_rest_sleep: bool = False,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
+        if not isinstance(reference_rest_sleep, bool):
+            raise LocalShowdownError("Reference Rest opt-in must be boolean.")
+        if reference_rest_sleep and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference Rest requires the Gen 3 public ledger.")
+        if reference_rest_sleep and state.observation_format_id == "gen3customgame":
+            _validate_reference_rest_names(state)
         if state.format_id != state.observation_format_id:
             raise LocalShowdownError("Direct materialization requires matching source observation format.")
         if state.replay.winner is not None:
@@ -757,6 +786,7 @@ class LocalShowdownEnv:
             {
                 "type": "materialize",
                 "battleId": self._battle_token,
+                "referenceRestSleep": reference_rest_sleep,
                 "publicState": _public_materialization_payload(
                     state,
                     deferred_opponent_actions=deferred_opponent_actions,
@@ -2769,6 +2799,34 @@ def _mark_legacy_rest_refund_pending(row: dict[str, Any]) -> None:
     """
 
     row["restSleepRefundPending"] = True
+
+
+def _validate_reference_rest_names(state: PublicBattleMaterializationState) -> None:
+    """Curated fixtures must satisfy the random-battle nickname assumption.
+
+    Rest attempt keys use public ident names, while materialization rows use
+    species. In custom games a nickname can equal another species, silently
+    swapping its timer. Reject ANY such naming before reconstructing the rows.
+    Only actor requests and public switch disclosures are inspected.
+    """
+    disclosed = set()
+    for event in state.replay.public_events:
+        parts = event.raw_line.split("|")
+        if len(parts) >= 4 and parts[1] in {"switch", "drag", "replace"}:
+            name = parts[2].partition(":")[2].strip()
+            species = parts[3].partition(",")[0].strip()
+            if not name or _normalize_identifier(name) != _normalize_identifier(species):
+                raise LocalShowdownError("Reference Rest refuses custom-game nicknames.")
+            disclosed.add(f"{parts[2][:2]}:{_normalize_identifier(species)}")
+    request = state.self_initial_request or state.self_request
+    for row in request.get("side", {}).get("pokemon", ()):
+        name = str(row.get("ident", "")).partition(":")[2].strip()
+        species = str(row.get("details", "")).partition(",")[0].strip()
+        if not name or _normalize_identifier(name) != _normalize_identifier(species):
+            raise LocalShowdownError("Reference Rest refuses custom-game nicknames.")
+        disclosed.add(f"{state.player_id}:{_normalize_identifier(species)}")
+    if any(key not in disclosed for key in state.replay.rest_sleep_counts):
+        raise LocalShowdownError("Reference Rest lacks a public nickname-free sleeper identity.")
 
 
 def _apply_rest_sleep_provenance(

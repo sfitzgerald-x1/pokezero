@@ -24,7 +24,7 @@ def public_action_round_from_protocol_lines(
     identifiers against its own legal request during replay.
     """
 
-    actions = public_action_identifiers_from_protocol_lines(lines)
+    actions = public_action_identifiers_from_protocol_lines(lines, cancellation_players=requested_players)
     for player_id in requested_players:
         actions.setdefault(
             str(player_id),
@@ -37,6 +37,8 @@ def public_action_round_from_protocol_lines(
 
 def public_action_identifiers_from_protocol_lines(
     lines: Sequence[str],
+    *,
+    cancellation_players: Sequence[str] = (),
 ) -> dict[str, PublicActionIdentifier]:
     """Project public move, switch, and no-effect events to stable identifiers."""
 
@@ -48,6 +50,11 @@ def public_action_identifiers_from_protocol_lines(
         event_type = parts[1]
         player_id = _protocol_player_id(parts[2])
         if player_id is None:
+            continue
+        existing = actions.get(player_id)
+        if existing is not None and existing.event_id == "faint-before-action":
+            # A subsequent forced replacement is not this actor's cancelled
+            # decision. It belongs to a separate request round.
             continue
         if event_type == "move" and len(parts) >= 4:
             if _called_move_line(parts):
@@ -73,6 +80,12 @@ def public_action_identifiers_from_protocol_lines(
                 kind="event",
                 event_id=f"cant:{reason or 'unknown'}",
             )
+        elif event_type == "faint" and player_id in cancellation_players and player_id not in actions:
+            # This actor never emitted a move/switch/cant in this exact round.
+            # Retain the cancellation, not an invented selected move. Replay
+            # must verify it again in its sampled world before accepting it.
+            actions[player_id] = PublicActionIdentifier(
+                kind="event", event_id="faint-before-action")
     return actions
 
 

@@ -35,6 +35,8 @@ jobs:
             scripts/vendor_poke_engine_src.sh
             scripts/engine_behavioral_probes.py
             scripts/check_engine_fidelity_unittest_counts.py
+            scripts/*policy_opponent*.py
+            docs/paper_policy_opponent_roster_*.json
             scripts/engine_build_fingerprint.py
             scripts/verify_poke_engine_source.py
             third_party/poke-engine-base-source.json
@@ -112,6 +114,7 @@ jobs:
             tests/test_leaf_encoder.py
             tests/test_roll_enumeration_scope.py
             src/pokezero/engine_search.py
+            src/pokezero/policy_opponent*.py
             src/pokezero/foulplay_bridge.py
             scripts/foulplay_paired_eval.py
             scripts/foulplay_budget_calibration.py
@@ -124,6 +127,10 @@ jobs:
             scripts/mutate_rollout_leaf_witness.py
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
             tests/test_model_priors_search.py
+            tests/test_policy_opponent*.py
+            tests/test_paper_reference*.py
+            tests/test_mcts_eval_timing_corpus.py
+            tests/test_engine_fidelity_counts.py
             tests/conftest.py
             tests/test_rollout_model_priors.py
             tests/test_mcts_acceptance_report.py
@@ -195,6 +202,20 @@ jobs:
 
       - name: Verify exact unittest-count guards against source
         run: python scripts/check_engine_fidelity_unittest_counts.py
+
+      - name: Verify inherited unittest-count parser contracts
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_engine_fidelity_counts -v 2>&1 | tee /tmp/fidelity-counts.log
+          grep -qE 'Ran 8 tests' /tmp/fidelity-counts.log
+          grep -qE '^OK$' /tmp/fidelity-counts.log
+
+      - name: Verify frozen policy-opponent root selection
+        run: |
+          set -o pipefail
+          PYTHONPATH=src python -m unittest tests.test_policy_opponent_roster tests.test_policy_opponent_source_prefixes tests.test_policy_opponent_live_replay tests.test_policy_opponent_registration tests.test_policy_opponent_root_launcher -v 2>&1 | tee /tmp/policy-roster.log
+          grep -qE 'Ran 37 tests' /tmp/policy-roster.log
+          grep -qE '^OK$' /tmp/policy-roster.log
 
   mass-gate:
     needs: [changes, unittest-count-guards]
@@ -945,6 +966,54 @@ jobs:
           fi
           python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
 
+      - name: Private-safe own-policy opponent contracts on the model wheel
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+          PYTHONPATH: src:tests
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tests.test_policy_opponent_engine tests.test_policy_opponent \
+            tests.test_policy_opponent_view tests.test_policy_opponent_request \
+            tests.test_policy_opponent_profile tests.test_policy_opponent_refusal_repairs \
+            tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
+            tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
+            | tee /tmp/policy-opponent.log
+          grep -qE 'Ran 83 tests' /tmp/policy-opponent.log
+          grep -qE '^OK$' /tmp/policy-opponent.log
+          if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
+            echo "::error::the own-policy opponent contracts must not skip"
+            exit 1
+          fi
+          export LD_LIBRARY_PATH="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          LIBTORCH_USE_PYTORCH=1 \
+            cargo test --release --features model --lib policy_bridge::tests \
+            --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/policy-opponent-bridge.log
+          grep -qE '^test result: ok\. 7 passed; 0 failed' /tmp/policy-opponent-bridge.log
+
+      - name: Paper trajectory reference contracts on the model wheel
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+          PYTHONPATH: src:tests
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tests.test_paper_reference tests.test_paper_reference_exchange \
+            tests.test_paper_reference_parallel tests.test_paper_reference_factory \
+            tests.test_paper_reference_sampler tests.test_paper_reference_rest \
+            tests.test_paper_reference_showdown tests.test_battle_bridge_boundary_requests \
+            tests.test_mcts_eval_timing_corpus -v 2>&1 \
+            | tee /tmp/paper-reference.log
+          grep -qE 'Ran 109 tests' /tmp/paper-reference.log
+          grep -qE '^OK$' /tmp/paper-reference.log
+          if grep -qE '^OK \(.*skipped=' /tmp/paper-reference.log; then
+            echo "::error::the paper trajectory reference contracts must not skip"
+            exit 1
+          fi
+
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
 
@@ -993,8 +1062,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_seed_registry_coverage -v 2>&1 \
             | tee /tmp/seedregistry.log
-          if ! grep -qE 'Ran 41 tests' /tmp/seedregistry.log; then
-            echo "::error::expected 41 seed-registry pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 45 tests' /tmp/seedregistry.log; then
+            echo "::error::expected 45 seed-registry pins; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/seedregistry.log; then

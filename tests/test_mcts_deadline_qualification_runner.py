@@ -78,6 +78,14 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             self.assertTrue(runner._parse_args(args + ["--model-priors"]).model_priors)
             self.assertFalse(runner._parse_args(args + ["--no-model-priors"]).model_priors)
 
+    def test_zero_native_prefix_exception_is_explicitly_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = _arguments(Path(temporary) / "out")
+            self.assertFalse(runner._parse_args(base).allow_zero_native_prefix)
+            self.assertTrue(
+                runner._parse_args(base + ["--allow-zero-native-prefix"]).allow_zero_native_prefix
+            )
+
     def test_native_batch_guard_must_fit_the_frozen_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             args = _arguments(Path(temporary) / "out") + [
@@ -143,12 +151,15 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             self.assertEqual(active["tree_status"], "explicit_commit_without_git")
             self.assertEqual(active["execution_tree_sha256"], receipt["execution_tree_sha256"])
 
-    def test_reviewed_engine_source_pin_matches_the_checked_in_mechanism(self) -> None:
-        """A source edit cannot leave the runner's qualification pin stale."""
-        self.assertEqual(
-            runner.sha256_file(runner.ROOT / "src" / "pokezero" / "engine_search.py"),
-            runner.REVIEWED_ENGINE_SEARCH_SHA256,
-        )
+    def test_historical_gate_refuses_unreviewed_engine_source(self) -> None:
+        """Current-source profiles must not relabel the historical mechanism."""
+        with (
+            mock.patch.object(runner, "sha256_file", return_value="0" * 64),
+            mock.patch.object(runner, "assert_fresh") as freshness,
+        ):
+            with self.assertRaisesRegex(runner.DeadlineQualificationError, "reviewed deadline mechanism"):
+                runner._deadline_mechanics_evidence({})
+        freshness.assert_not_called()
 
     def test_stale_installed_native_engine_is_refused(self) -> None:
         receipt = {
@@ -296,6 +307,10 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             terminal = json.loads((out_root / "PASS.json").read_text())
             self.assertEqual(terminal["state"], "PASS")
             self.assertEqual(terminal["marker"], "DEADLINE_QUALIFICATION_PASS")
+            self.assertEqual(
+                terminal["manifest"]["measurement_variant"],
+                "own_policy_prior_deadline_profile",
+            )
             self.assertEqual(terminal["summary"]["decision_count"], 16)
             self.assertEqual(terminal["summary"]["native_prefix_count"], 1)
             self.assertTrue(terminal["manifest"]["search_config"]["model_priors"])

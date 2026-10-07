@@ -16,9 +16,10 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import random
 import sys
 import time
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +72,12 @@ MANIFEST_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-manifest.v1"
 PROGRESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-progress.v1"
 COMPLETE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-complete.v1"
 PUBLIC_DECISION_EVIDENCE_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-public-decision.v1"
+DECISION_RNG_WITNESS_SCHEMA_VERSION = "pokezero.mcts-guided-vs-raw-decision-rng-witness.v1"
+DECISION_RNG_CAPTURE_CONTRACT_KEY = "decision_rng_witness"
+DECISION_DEADLINE_RECEIPT_SCHEMA_VERSION = (
+    "pokezero.mcts-guided-vs-raw-decision-deadline-receipt.v1"
+)
+DECISION_DEADLINE_RECEIPT_CONTRACT_KEY = "decision_deadline_receipt"
 BRANCH_PRIOR_LEDGER_EVIDENCE_SCHEMA_VERSION = (
     "pokezero.mcts-guided-vs-raw-branch-prior-ledger.v5"
 )
@@ -91,6 +98,17 @@ RAW_SELECTOR = {
     "family_gated_selection": False,
     "search": False,
 }
+
+
+def _fresh_two_seat_policy_factory(
+    policy_for_player: Callable[[str], Any],
+) -> Callable[[], Mapping[str, Any]]:
+    """Return fresh policies for each independently evaluated continuation."""
+
+    def factory() -> Mapping[str, Any]:
+        return {"p1": policy_for_player("p1"), "p2": policy_for_player("p2")}
+
+    return factory
 REGISTERED_ENGINE_CONFIG = {
     # ``EngineMctsConfig`` materializes this fail-closed default even when a
     # source-bound manifest correctly omits it.  Register the realized value,
@@ -119,6 +137,9 @@ REGISTERED_ENGINE_CONFIG = {
     "model_priors": True,
     "model_world_workers": 1,
     "override_telemetry": True,
+    "policy_opponent": False,
+    "policy_opponent_seed": None,
+    "record_joint_actions": False,
     "rollout_branch_on_damage": False,
     "rollout_count": 32,
     "rollout_leaf_eval": False,
@@ -140,14 +161,48 @@ REGISTERED_ENGINE_CONFIG = {
     "worlds": 4,
     "worlds_min": None,
 }
-# This is the sole practical-budget execution candidate admitted after the
-# source-bound parity profile: it keeps the one-second guided-MCTS semantics
-# intact while allowing two of the four materialized worlds to evaluate in
-# parallel.  A separate constant, rather than a tunable worker range, keeps
-# the strength runner fail-closed against an accidental search sweep.
+# The practical parallel candidate preserves the registered one-second search
+# semantics while evaluating two of its four materialized worlds concurrently.
+# It is a separately named fixed configuration so evidence collection cannot
+# silently become a worker-count sweep.
 REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG = {
     **REGISTERED_ENGINE_CONFIG,
     "model_world_workers": 2,
+}
+# Four model worlds remain within the same practical one-second tail budget
+# only when native batches are capped at eight.  This is a separately named
+# exact configuration, established by the source-bound r9 profile; it is not
+# a permission to vary parallelism or batch size in an evidence run.
+REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG = {
+    **REGISTERED_ENGINE_CONFIG,
+    "model_world_workers": 4,
+    "search_batch": 8,
+}
+# The practical s24 profile is independently latency-qualified at the same
+# four-world, batch-eight geometry.  It is an exact registered configuration,
+# not a knob range: full-game evidence must not silently turn this causal
+# candidate into another simulation budget.
+REGISTERED_PRACTICAL_WORLD4_BATCH8_S24_ENGINE_CONFIG = {
+    **REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
+    "search_sims": 24,
+}
+# The s24 profile proved latency-safe but its source-bound full-game collector
+# exposed native deadline truncation.  This lower exact budget is therefore a
+# separate replacement candidate, not a fallback or range: it preserves the
+# qualified one-second, four-world, batch-eight semantics while leaving enough
+# per-world headroom for every registered native iteration to complete.
+REGISTERED_PRACTICAL_WORLD4_BATCH8_S16_ENGINE_CONFIG = {
+    **REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
+    "search_sims": 16,
+}
+# The full-game s16 collector showed that two eight-simulation native batches
+# can overrun the one-second whole-decision contract on a tail position.  This
+# is the one bounded replacement: exactly one native batch per world.  It is a
+# separately named configuration so no later evidence can silently trade
+# fixed work for deadline-truncated work.
+REGISTERED_PRACTICAL_WORLD4_BATCH8_S8_ENGINE_CONFIG = {
+    **REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
+    "search_sims": 8,
 }
 # The sidecar is intentionally not a general-purpose MCTS evaluator: it may
 # only certify a configuration whose search semantics have been registered in
@@ -211,6 +266,10 @@ REGISTERED_DEEP_MODEL_LEAF_SHADOW_ENGINE_CONFIG = {
 REGISTERED_ENGINE_CONFIGS = (
     REGISTERED_ENGINE_CONFIG,
     REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG,
+    REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG,
+    REGISTERED_PRACTICAL_WORLD4_BATCH8_S24_ENGINE_CONFIG,
+    REGISTERED_PRACTICAL_WORLD4_BATCH8_S16_ENGINE_CONFIG,
+    REGISTERED_PRACTICAL_WORLD4_BATCH8_S8_ENGINE_CONFIG,
     REGISTERED_DEEP_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_ENGINE_CONFIG,
     REGISTERED_DEEP_OPPONENT_PRIOR_SELECTIVE_ORDER_ENGINE_CONFIG,
@@ -242,6 +301,95 @@ def _load_manifest(path: str | Path) -> Mapping[str, Any]:
             f"{MANIFEST_SCHEMA_VERSION!r}."
         )
     return manifest
+
+
+def _resolve_decision_rng_capture_contract(
+    out_root: Path, *, capture_requested: bool
+) -> Mapping[str, bool] | None:
+    """Freeze decision-RNG witness capture for one durable scorer root.
+
+    A scorer can resume after some games have been written.  Its witness mode
+    therefore cannot be a transient launcher flag: switching it would make a
+    mixed root look complete while only some decisions have replay witnesses.
+    New roots record an explicit contract; old roots from before this feature
+    remain resumable only in their original no-witness mode.
+    """
+
+    runtime_manifest = out_root / "manifest.json"
+    if not runtime_manifest.exists():
+        return {"capture_required": capture_requested}
+    try:
+        payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HeadToHeadError(
+            f"cannot read extant runtime manifest for RNG-witness resume validation: {error}"
+        ) from error
+    payload = _mapping(payload, label="extant runtime manifest")
+    if payload.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise HeadToHeadError("extant runtime manifest has an unsupported schema.")
+    contract = payload.get(DECISION_RNG_CAPTURE_CONTRACT_KEY)
+    if contract is None:
+        if capture_requested:
+            raise HeadToHeadError(
+                "cannot upgrade a legacy durable root to decision-RNG witness capture; "
+                "start a fresh root so every completed decision has a witness."
+            )
+        # Old roots had no capture mode.  Preserve their byte-identical
+        # runtime manifest and only allow their original no-witness resume.
+        return None
+    contract = _mapping(contract, label="runtime manifest decision_rng_witness")
+    if set(contract) != {"capture_required"} or not isinstance(
+        contract["capture_required"], bool
+    ):
+        raise HeadToHeadError("runtime manifest has an invalid decision-RNG witness contract.")
+    if contract["capture_required"] is not capture_requested:
+        raise HeadToHeadError(
+            "decision-RNG witness capture mode differs from the immutable runtime manifest."
+        )
+    return {"capture_required": capture_requested}
+
+
+def _resolve_decision_deadline_receipt_contract(
+    out_root: Path, *, capture_requested: bool
+) -> Mapping[str, bool] | None:
+    """Freeze per-decision deadline receipt capture for one durable scorer root.
+
+    Deadline receipts make it possible to distinguish complete native work from
+    a deadline prefix. They are evidence, not a runtime option, so a resumed
+    root may not add or remove them after any decision has been committed.
+    """
+
+    runtime_manifest = out_root / "manifest.json"
+    if not runtime_manifest.exists():
+        return {"capture_required": capture_requested}
+    try:
+        payload = json.loads(runtime_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise HeadToHeadError(
+            "cannot read extant runtime manifest for deadline-receipt resume validation: "
+            f"{error}"
+        ) from error
+    payload = _mapping(payload, label="extant runtime manifest")
+    if payload.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise HeadToHeadError("extant runtime manifest has an unsupported schema.")
+    contract = payload.get(DECISION_DEADLINE_RECEIPT_CONTRACT_KEY)
+    if contract is None:
+        if capture_requested:
+            raise HeadToHeadError(
+                "cannot upgrade a legacy durable root to decision-deadline receipt capture; "
+                "start a fresh root so every completed decision has a receipt."
+            )
+        return None
+    contract = _mapping(contract, label="runtime manifest decision_deadline_receipt")
+    if set(contract) != {"capture_required"} or not isinstance(
+        contract["capture_required"], bool
+    ):
+        raise HeadToHeadError("runtime manifest has an invalid decision-deadline receipt contract.")
+    if contract["capture_required"] is not capture_requested:
+        raise HeadToHeadError(
+            "decision-deadline receipt capture mode differs from the immutable runtime manifest."
+        )
+    return {"capture_required": capture_requested}
 
 
 def _hex(value: object, *, label: str, length: int) -> str:
@@ -609,6 +757,42 @@ def _public_decision_path(
     return (
         out_root
         / "public-decision-records"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
+    )
+
+
+def _decision_rng_witness_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+) -> Path:
+    """Canonical immutable location for one source decision's RNG boundary."""
+
+    return (
+        out_root
+        / "decision-rng-witnesses"
+        / f"seed-{seed}-{candidate_seat}"
+        / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
+    )
+
+
+def _decision_deadline_receipt_path(
+    out_root: Path,
+    *,
+    seed: int,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+) -> Path:
+    """Canonical immutable location for one native-deadline receipt."""
+
+    if record.seed != seed or record.acting_player != candidate_seat:
+        raise HeadToHeadError("decision deadline receipt does not match its public decision identity.")
+    return (
+        out_root
+        / "decision-deadline-receipts"
         / f"seed-{seed}-{candidate_seat}"
         / f"turn-{record.turn_index:03d}-{record.decision_id}.json"
     )
@@ -1762,6 +1946,226 @@ def _public_decision_payload(
     }
 
 
+def _serializable_rng_state(value: object) -> dict[str, Any]:
+    """Encode Python's MT state without unsafe pickle deserialization.
+
+    The witness is intentionally a state snapshot, not a seed: the source
+    rollout maintains one RNG per player and that state has already advanced
+    by the time a later MCTS decision samples its belief worlds.
+    """
+
+    if not isinstance(value, tuple) or len(value) != 3:
+        raise HeadToHeadError("guided decision RNG state is not a Python Random state tuple.")
+    version, internal_state, gauss_next = value
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or not isinstance(internal_state, tuple)
+        or len(internal_state) < 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in internal_state)
+        or (gauss_next is not None and (
+            isinstance(gauss_next, bool)
+            or not isinstance(gauss_next, (int, float))
+            or not math.isfinite(float(gauss_next))
+        ))
+    ):
+        raise HeadToHeadError("guided decision RNG state has an unsupported shape.")
+    return {
+        "algorithm": "python-random-mt19937",
+        "state_version": version,
+        "internal_state": list(internal_state),
+        "gauss_next": gauss_next,
+    }
+
+
+def _decision_rng_witness_payload(
+    *,
+    candidate: MctsPolicySpec,
+    incumbent: MctsPolicySpec,
+    candidate_seat: str,
+    record: PublicDecisionRecord,
+    rng_state: object,
+) -> dict[str, Any]:
+    return {
+        "schema_version": DECISION_RNG_WITNESS_SCHEMA_VERSION,
+        "seed": record.seed,
+        "candidate_seat": candidate_seat,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "public_decision": {
+            "decision_id": record.decision_id,
+            "battle_id": record.battle_id,
+            "acting_player": record.acting_player,
+            "turn_index": record.turn_index,
+            "recorded_action_index": record.recorded_action_index,
+        },
+        "rng_state": _serializable_rng_state(rng_state),
+    }
+
+
+def _validated_decision_deadline_receipt(value: object) -> dict[str, Any]:
+    """Retain only complete native-work/deadline accounting for one action."""
+
+    receipt = _mapping(value, label="guided decision deadline receipt")
+    expected = {
+        "scope", "requested_ms", "native_batch_guard_ms", "deadline_elapsed_ms",
+        "deadline_overshoot_ms", "exhausted", "worlds_budget_skipped", "native_invocations",
+    }
+    if set(receipt) != expected or receipt.get("scope") != "whole_model_decision":
+        raise HeadToHeadError("guided decision deadline receipt has an unsupported schema.")
+    requested_ms = _nonnegative_int(receipt.get("requested_ms"), label="deadline requested_ms")
+    if requested_ms <= 0:
+        raise HeadToHeadError("deadline requested_ms must be positive.")
+    guard_ms = _nonnegative_int(receipt.get("native_batch_guard_ms"), label="deadline native_batch_guard_ms")
+    elapsed_ms = _finite_number(receipt.get("deadline_elapsed_ms"), label="deadline elapsed")
+    overshoot_ms = _finite_number(receipt.get("deadline_overshoot_ms"), label="deadline overshoot")
+    if elapsed_ms < 0 or overshoot_ms < 0:
+        raise HeadToHeadError("deadline durations must be non-negative.")
+    if abs(overshoot_ms - max(0.0, elapsed_ms - requested_ms)) > 0.001:
+        raise HeadToHeadError("deadline overshoot does not match requested and elapsed time.")
+    exhausted = receipt.get("exhausted")
+    if not isinstance(exhausted, bool):
+        raise HeadToHeadError("deadline exhaustion must be boolean.")
+    skipped = _nonnegative_int(receipt.get("worlds_budget_skipped"), label="deadline skipped worlds")
+    raw_invocations = receipt.get("native_invocations")
+    if not isinstance(raw_invocations, list) or not raw_invocations:
+        raise HeadToHeadError("deadline receipt requires at least one native invocation.")
+    invocations: list[dict[str, Any]] = []
+    any_native_exhausted = False
+    common = {"status", "world_seed", "multiplicity", "requested_iterations", "time_budget_ms"}
+    for raw in raw_invocations:
+        invocation = _mapping(raw, label="deadline native invocation")
+        status = invocation.get("status")
+        if status == "completed":
+            required = common | {"completed_iterations", "remaining_iterations", "time_budget_elapsed_ms", "time_budget_batch_overshoot_ms", "time_budget_exhausted", "root_visits"}
+            if set(invocation) != required:
+                raise HeadToHeadError("completed deadline invocation has unsupported fields.")
+            completed = _nonnegative_int(invocation.get("completed_iterations"), label="completed native iterations")
+            remaining = _nonnegative_int(invocation.get("remaining_iterations"), label="remaining native iterations")
+            native_elapsed = _finite_number(invocation.get("time_budget_elapsed_ms"), label="native elapsed")
+            native_overshoot = _finite_number(invocation.get("time_budget_batch_overshoot_ms"), label="native overshoot")
+            if native_elapsed < 0 or native_overshoot < 0:
+                raise HeadToHeadError("native deadline durations must be non-negative.")
+            native_exhausted = invocation.get("time_budget_exhausted")
+            if not isinstance(native_exhausted, bool):
+                raise HeadToHeadError("native deadline exhaustion must be boolean.")
+            root_visits = _mapping(invocation.get("root_visits"), label="native root visits")
+            if set(root_visits) != {"side_one", "side_two"}:
+                raise HeadToHeadError("native root visits have an unsupported schema.")
+            normalized_visits = {
+                side: _nonnegative_int(root_visits[side], label=f"native {side} visits")
+                for side in ("side_one", "side_two")
+            }
+            if any(count != completed for count in normalized_visits.values()):
+                raise HeadToHeadError("native root visits do not equal completed iterations.")
+            time_budget_ms = _nonnegative_int(invocation.get("time_budget_ms"), label="native time budget")
+            requested_iterations = _nonnegative_int(invocation.get("requested_iterations"), label="requested native iterations")
+            if time_budget_ms <= 0 or requested_iterations != completed + remaining:
+                raise HeadToHeadError("native deadline iteration accounting is invalid.")
+            if native_exhausted and native_elapsed + 0.001 < time_budget_ms:
+                raise HeadToHeadError("native deadline exhaustion precedes its time budget.")
+            if abs(native_overshoot - max(0.0, native_elapsed - time_budget_ms)) > 0.001:
+                raise HeadToHeadError("native deadline overshoot does not match elapsed time.")
+            if remaining and not native_exhausted:
+                raise HeadToHeadError("unfinished native work lacks an exhaustion witness.")
+            normalized = {
+                "status": status,
+                "world_seed": _nonnegative_int(invocation.get("world_seed"), label="world seed"),
+                "multiplicity": _nonnegative_int(invocation.get("multiplicity"), label="world multiplicity"),
+                "requested_iterations": requested_iterations,
+                "completed_iterations": completed,
+                "remaining_iterations": remaining,
+                "time_budget_ms": time_budget_ms,
+                "time_budget_elapsed_ms": native_elapsed,
+                "time_budget_batch_overshoot_ms": native_overshoot,
+                "time_budget_exhausted": native_exhausted,
+                "root_visits": normalized_visits,
+            }
+            any_native_exhausted = any_native_exhausted or native_exhausted
+        elif status == "refused":
+            required = common | {"refusal"}
+            if set(invocation) != required or not isinstance(invocation.get("refusal"), str):
+                raise HeadToHeadError("refused deadline invocation has unsupported fields.")
+            time_budget_ms = _nonnegative_int(invocation.get("time_budget_ms"), label="native time budget")
+            if time_budget_ms <= 0:
+                raise HeadToHeadError("refused native invocation has no positive time budget.")
+            normalized = {
+                "status": status,
+                "world_seed": _nonnegative_int(invocation.get("world_seed"), label="world seed"),
+                "multiplicity": _nonnegative_int(invocation.get("multiplicity"), label="world multiplicity"),
+                "requested_iterations": _nonnegative_int(invocation.get("requested_iterations"), label="requested native iterations"),
+                "time_budget_ms": time_budget_ms,
+                "refusal": invocation["refusal"],
+            }
+            any_native_exhausted = True
+        else:
+            raise HeadToHeadError("deadline native invocation has an unknown status.")
+        if normalized["multiplicity"] <= 0:
+            raise HeadToHeadError("deadline native invocation multiplicity must be positive.")
+        invocations.append(normalized)
+    if exhausted != bool(skipped or any_native_exhausted or elapsed_ms + 0.001 >= requested_ms):
+        raise HeadToHeadError("deadline exhaustion disagrees with its invocation receipt.")
+    return {
+        "scope": "whole_model_decision", "requested_ms": requested_ms,
+        "native_batch_guard_ms": guard_ms, "deadline_elapsed_ms": elapsed_ms,
+        "deadline_overshoot_ms": overshoot_ms, "exhausted": exhausted,
+        "worlds_budget_skipped": skipped, "native_invocations": invocations,
+    }
+
+
+def _decision_deadline_receipt_payload(
+    *, candidate: MctsPolicySpec, incumbent: MctsPolicySpec, candidate_seat: str,
+    record: PublicDecisionRecord, time_budget: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": DECISION_DEADLINE_RECEIPT_SCHEMA_VERSION,
+        "seed": record.seed, "candidate_seat": candidate_seat,
+        "candidate_provenance_sha256": candidate.provenance_sha256,
+        "raw_provenance_sha256": incumbent.provenance_sha256,
+        "public_decision": {
+            "decision_id": record.decision_id, "battle_id": record.battle_id,
+            "acting_player": record.acting_player, "turn_index": record.turn_index,
+            "recorded_action_index": record.recorded_action_index,
+        },
+        "time_budget": _validated_decision_deadline_receipt(time_budget),
+    }
+
+
+def _validated_serialized_rng_state(value: Any) -> tuple[int, tuple[int, ...], float | None]:
+    """Fail closed on a JSON witness that cannot restore Python's RNG state."""
+
+    if not isinstance(value, Mapping) or set(value) != {
+        "algorithm", "state_version", "internal_state", "gauss_next"
+    }:
+        raise HeadToHeadError("decision RNG witness has an unsupported state shape.")
+    version = value.get("state_version")
+    internal_state = value.get("internal_state")
+    gauss_next = value.get("gauss_next")
+    if (
+        value.get("algorithm") != "python-random-mt19937"
+        or isinstance(version, bool)
+        or not isinstance(version, int)
+        or not isinstance(internal_state, list)
+        or len(internal_state) < 2
+        or any(isinstance(item, bool) or not isinstance(item, int) for item in internal_state)
+        or (
+            gauss_next is not None
+            and (
+                isinstance(gauss_next, bool)
+                or not isinstance(gauss_next, (int, float))
+                or not math.isfinite(float(gauss_next))
+            )
+        )
+    ):
+        raise HeadToHeadError("decision RNG witness has an invalid state.")
+    state = (version, tuple(internal_state), gauss_next)
+    try:
+        random.Random().setstate(state)
+    except (TypeError, ValueError) as error:
+        raise HeadToHeadError("decision RNG witness is not replayable.") from error
+    return state
+
+
 def _public_decision_writer(
     out_root: Path,
     *,
@@ -1770,6 +2174,8 @@ def _public_decision_writer(
     seed: int,
     candidate_seat: str,
     guided_policy: PublicOnlyMctsPolicy,
+    capture_decision_rng_state: bool = False,
+    capture_decision_deadline_receipt: bool = False,
 ):
     """Persist guided decisions as individually immutable public replay units."""
 
@@ -1792,6 +2198,35 @@ def _public_decision_writer(
                 record=record,
             ),
         )
+        if capture_decision_rng_state:
+            rng_state = guided_policy.latest_decision_rng_state
+            if rng_state is None:
+                raise HeadToHeadError("guided decision lacks a capturable pre-selection RNG state.")
+            _write_immutable_json(
+                _decision_rng_witness_path(
+                    out_root, seed=seed, candidate_seat=candidate_seat, record=record
+                ),
+                _decision_rng_witness_payload(
+                    candidate=candidate,
+                    incumbent=incumbent,
+                    candidate_seat=candidate_seat,
+                    record=record,
+                    rng_state=rng_state,
+                ),
+            )
+        if capture_decision_deadline_receipt:
+            metadata = _mapping(guided_policy.latest_decision_metadata, label="guided decision metadata")
+            engine_mcts = _mapping(metadata.get("engine_mcts"), label="guided engine MCTS metadata")
+            time_budget = _mapping(engine_mcts.get("time_budget"), label="guided decision time budget")
+            _write_immutable_json(
+                _decision_deadline_receipt_path(
+                    out_root, seed=seed, candidate_seat=candidate_seat, record=record
+                ),
+                _decision_deadline_receipt_payload(
+                    candidate=candidate, incumbent=incumbent, candidate_seat=candidate_seat,
+                    record=record, time_budget=time_budget,
+                ),
+            )
         ledger_path = _branch_prior_ledger_path(
             out_root, seed=seed, candidate_seat=candidate_seat, record=record
         )
@@ -1946,27 +2381,6 @@ def _sealed_override_audit_writer(
         )
 
     return pre_step_write, public_decision_write
-
-
-def _fresh_continuation_policy_factory_builder(policy_builder: Any):
-    """Adapt a history-aware policy builder to the continuation factory API.
-
-    The sealed controller supplies trusted source histories first, while each
-    continuation rollout must allocate a fresh pair of mutable policies later.
-    Keeping those calls separate prevents a shared history buffer from leaking
-    between the paired continuation arms.
-    """
-
-    if not callable(policy_builder):
-        raise HeadToHeadError("sealed override continuation policy builder must be callable.")
-
-    def build(observation_histories: Mapping[str, tuple[Any, ...]]):
-        def fresh() -> Mapping[str, Any]:
-            return policy_builder(observation_histories)
-
-        return fresh
-
-    return build
 
 
 def _sealed_root_action_audit_path(
@@ -2237,6 +2651,87 @@ def _validate_public_decision_evidence(out_root: Path, game: Any) -> tuple[Publi
     if len(decision_ids) != len(records) or len(turn_indices) != len(records):
         raise HeadToHeadError("public decision evidence contains duplicate guided decision identities.")
     return tuple(records)
+
+
+def _validate_decision_rng_witness_evidence(out_root: Path, game: Any) -> None:
+    """Require one valid, source-bound RNG witness for every guided decision."""
+
+    records = _validate_public_decision_evidence(out_root, game)
+    root = out_root / "decision-rng-witnesses" / f"seed-{game.seed}-{game.candidate_seat}"
+    paths = sorted(root.glob("turn-*.json")) if root.is_dir() else []
+    if len(paths) != len(records):
+        raise HeadToHeadError("decision RNG witness count differs from public decision evidence.")
+    expected_paths = {
+        _decision_rng_witness_path(
+            out_root, seed=game.seed, candidate_seat=game.candidate_seat, record=record
+        ): record
+        for record in records
+    }
+    if set(paths) != set(expected_paths):
+        raise HeadToHeadError("decision RNG witness paths do not bind public decision evidence.")
+    for path, record in expected_paths.items():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read decision RNG witness {path}: {error}") from error
+        expected = {
+            "schema_version": DECISION_RNG_WITNESS_SCHEMA_VERSION,
+            "seed": record.seed,
+            "candidate_seat": game.candidate_seat,
+            "candidate_provenance_sha256": game.candidate.provenance_sha256,
+            "raw_provenance_sha256": game.incumbent.provenance_sha256,
+            "public_decision": {
+                "decision_id": record.decision_id,
+                "battle_id": record.battle_id,
+                "acting_player": record.acting_player,
+                "turn_index": record.turn_index,
+                "recorded_action_index": record.recorded_action_index,
+            },
+        }
+        if not isinstance(payload, Mapping) or {key: payload.get(key) for key in expected} != expected:
+            raise HeadToHeadError("decision RNG witness does not bind its public decision.")
+        if set(payload) != {*expected, "rng_state"}:
+            raise HeadToHeadError("decision RNG witness has an unsupported wrapper shape.")
+        _validated_serialized_rng_state(payload.get("rng_state"))
+
+
+def _validate_decision_deadline_receipt_evidence(out_root: Path, game: Any) -> None:
+    """Require one source-bound deadline/work receipt for every guided action."""
+
+    records = _validate_public_decision_evidence(out_root, game)
+    root = out_root / "decision-deadline-receipts" / f"seed-{game.seed}-{game.candidate_seat}"
+    paths = sorted(root.glob("turn-*.json")) if root.is_dir() else []
+    if len(paths) != len(records):
+        raise HeadToHeadError("deadline receipt count differs from public decision evidence.")
+    expected_paths = {
+        _decision_deadline_receipt_path(
+            out_root, seed=game.seed, candidate_seat=game.candidate_seat, record=record
+        ): record
+        for record in records
+    }
+    if set(paths) != set(expected_paths):
+        raise HeadToHeadError("deadline receipt paths do not bind public decision evidence.")
+    for path, record in expected_paths.items():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HeadToHeadError(f"cannot read decision deadline receipt {path}: {error}") from error
+        expected = {
+            "schema_version": DECISION_DEADLINE_RECEIPT_SCHEMA_VERSION,
+            "seed": record.seed, "candidate_seat": game.candidate_seat,
+            "candidate_provenance_sha256": game.candidate.provenance_sha256,
+            "raw_provenance_sha256": game.incumbent.provenance_sha256,
+            "public_decision": {
+                "decision_id": record.decision_id, "battle_id": record.battle_id,
+                "acting_player": record.acting_player, "turn_index": record.turn_index,
+                "recorded_action_index": record.recorded_action_index,
+            },
+        }
+        if not isinstance(payload, Mapping) or {key: payload.get(key) for key in expected} != expected:
+            raise HeadToHeadError("deadline receipt does not bind its public decision.")
+        if set(payload) != {*expected, "time_budget"}:
+            raise HeadToHeadError("deadline receipt has an unsupported wrapper shape.")
+        _validated_decision_deadline_receipt(payload.get("time_budget"))
 
 
 def _validate_sealed_override_audit_evidence(out_root: Path, game: Any) -> None:
@@ -2678,6 +3173,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--capture-decision-rng-state",
+        action="store_true",
+        help="persist a replayable pre-selection RNG witness beside each guided public decision",
+    )
+    parser.add_argument(
+        "--capture-decision-deadline-receipt",
+        action="store_true",
+        help="persist native iteration and deadline accounting beside each guided public decision",
+    )
     return parser
 
 
@@ -2685,6 +3190,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     out_root = _durable_output_root(args.out_dir)
     _require_durable_launcher_handoff(out_root, runner_script=Path(__file__))
+    decision_rng_capture_contract = _resolve_decision_rng_capture_contract(
+        out_root, capture_requested=args.capture_decision_rng_state
+    )
+    decision_deadline_receipt_contract = _resolve_decision_deadline_receipt_contract(
+        out_root, capture_requested=args.capture_decision_deadline_receipt
+    )
+    capture_decision_rng_state = args.capture_decision_rng_state
+    capture_decision_deadline_receipt = args.capture_decision_deadline_receipt
     manifest = _load_manifest(args.manifest)
     seeds = _seeds(manifest)
     study = _validated_study(manifest, seeds=seeds)
@@ -2784,7 +3297,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def continuation_policy_factory(
         observation_histories: Mapping[str, tuple[Any, ...]],
-    ) -> Mapping[str, Any]:
+    ) -> Callable[[], Mapping[str, Any]]:
         """Allocate two clean raw policies after a fixed source action.
 
         Both continuation arms use this factory, so the only variable between
@@ -2814,7 +3327,7 @@ def main(argv: list[str] | None = None) -> int:
                 policy_id=incumbent.policy_id,
             )
 
-        return {"p1": raw_policy("p1"), "p2": raw_policy("p2")}
+        return _fresh_two_seat_policy_factory(raw_policy)
 
     def root_action_continuation_policy_factories(
         subject_seat: str,
@@ -2889,21 +3402,23 @@ def main(argv: list[str] | None = None) -> int:
         hide_opponent_legal_action_masks=True,
     )
 
-    _write_immutable_json(
-        out_root / "manifest.json",
-        {
-            "schema_version": MANIFEST_SCHEMA_VERSION,
-            "declared_manifest": manifest,
-            "active_source": source,
-            "active_engine_fingerprint": engine_fingerprint,
-            "active_checkpoint_sha256": checkpoint_sha256,
-            "active_showdown_source": showdown,
-            "candidate": candidate.to_payload(),
-            "raw": incumbent.to_payload(),
-            "study": study,
-            "seeds": list(seeds),
-        },
-    )
+    runtime_manifest = {
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "declared_manifest": manifest,
+        "active_source": source,
+        "active_engine_fingerprint": engine_fingerprint,
+        "active_checkpoint_sha256": checkpoint_sha256,
+        "active_showdown_source": showdown,
+        "candidate": candidate.to_payload(),
+        "raw": incumbent.to_payload(),
+        "study": study,
+        "seeds": list(seeds),
+    }
+    if decision_rng_capture_contract is not None:
+        runtime_manifest[DECISION_RNG_CAPTURE_CONTRACT_KEY] = decision_rng_capture_contract
+    if decision_deadline_receipt_contract is not None:
+        runtime_manifest[DECISION_DEADLINE_RECEIPT_CONTRACT_KEY] = decision_deadline_receipt_contract
+    _write_immutable_json(out_root / "manifest.json", runtime_manifest)
 
     raw_adapters: dict[tuple[int, str], DeterministicRawPolicyAdapter] = {}
 
@@ -2918,7 +3433,8 @@ def main(argv: list[str] | None = None) -> int:
                 config=candidate_config,
                 policy_id=candidate.policy_id,
                 annotation_source=annotations,
-            )
+            ),
+            capture_decision_rng_state=capture_decision_rng_state,
         )
         raw_adapter = DeterministicRawPolicyAdapter(
             load_transformer_policy(
@@ -2941,6 +3457,8 @@ def main(argv: list[str] | None = None) -> int:
             seed=seed,
             candidate_seat=candidate_seat,
             guided_policy=guided,
+            capture_decision_rng_state=capture_decision_rng_state,
+            capture_decision_deadline_receipt=capture_decision_deadline_receipt,
         )
         public_sink = public_decision_writer
         sealed_sink = None
@@ -2953,9 +3471,7 @@ def main(argv: list[str] | None = None) -> int:
                 incumbent=incumbent,
                 candidate_seat=candidate_seat,
                 env_factory=lambda: LocalShowdownEnv(env_config),
-                continuation_policy_factory_builder=(
-                    _fresh_continuation_policy_factory_builder(continuation_policy_factory)
-                ),
+                continuation_policy_factory_builder=continuation_policy_factory,
                 continuation_rollout_config=continuation_rollout_config,
                 max_continuation_decision_rounds=(
                     sealed_override_audit.max_continuation_decision_rounds
@@ -3016,6 +3532,10 @@ def main(argv: list[str] | None = None) -> int:
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
             _validate_public_decision_evidence(out_root, game)
+            if capture_decision_rng_state:
+                _validate_decision_rng_witness_evidence(out_root, game)
+            if capture_decision_deadline_receipt:
+                _validate_decision_deadline_receipt_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
             if sealed_root_action_audit is not None:
@@ -3026,6 +3546,10 @@ def main(argv: list[str] | None = None) -> int:
         def on_game(game: Any) -> None:
             _validate_completed_game(game)
             _validate_public_decision_evidence(out_root, game)
+            if capture_decision_rng_state:
+                _validate_decision_rng_witness_evidence(out_root, game)
+            if capture_decision_deadline_receipt:
+                _validate_decision_deadline_receipt_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
             if sealed_root_action_audit is not None:
@@ -3062,6 +3586,10 @@ def main(argv: list[str] | None = None) -> int:
             _validate_completed_game(game)
             _validate_raw_witness(out_root, game)
             _validate_public_decision_evidence(out_root, game)
+            if capture_decision_rng_state:
+                _validate_decision_rng_witness_evidence(out_root, game)
+            if capture_decision_deadline_receipt:
+                _validate_decision_deadline_receipt_evidence(out_root, game)
             if sealed_override_audit is not None:
                 _validate_sealed_override_audit_evidence(out_root, game)
             if sealed_root_action_audit is not None:
@@ -3102,6 +3630,10 @@ def main(argv: list[str] | None = None) -> int:
         "summary_sha256": _sha256_bytes((json.dumps(summary, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")),
         "raw_selector": RAW_SELECTOR,
     }
+    if decision_rng_capture_contract is not None:
+        complete[DECISION_RNG_CAPTURE_CONTRACT_KEY] = decision_rng_capture_contract
+    if decision_deadline_receipt_contract is not None:
+        complete[DECISION_DEADLINE_RECEIPT_CONTRACT_KEY] = decision_deadline_receipt_contract
     _write_immutable_json(out_root / "COMPLETE.json", complete)
     print(json.dumps(complete, sort_keys=True), flush=True)
     return 0

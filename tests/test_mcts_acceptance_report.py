@@ -14,6 +14,7 @@ Runs on shard fixtures — no cluster, no checkpoint, no torch.
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 import re
@@ -27,6 +28,63 @@ REPORT = REPO_ROOT / "scripts" / "mcts_acceptance_report.py"
 
 #: The reached-depth accumulation, as it appears on every leaf-eval search path.
 _DEPTH_ACCUMULATION = r"depth_reached_histogram\[reached\] \+= "
+
+
+def _stats_assignment_field(target: ast.AST) -> str | None:
+    if isinstance(target, ast.Subscript):
+        target = target.value
+    if (isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Attribute)
+            and target.value.attr == "stats"
+            and isinstance(target.value.value, ast.Name)
+            and target.value.value.id == "self"):
+        return target.attr
+    return None
+
+
+def _method_stats_assignments(source: str, method: str) -> dict[str, list[ast.AST]]:
+    """Locate syntactic assignments in a method and directly referenced closures.
+
+    This is a source instrumentation guard, not proof that a runtime branch ran.
+    Comments, reads, valueless annotations, and uncalled closures cannot stand in
+    for writes. Native/runtime tests separately verify executed depth evidence.
+    """
+    tree = ast.parse(source)
+    functions = [node for node in ast.walk(tree)
+                 if isinstance(node, ast.FunctionDef) and node.name == method]
+    if len(functions) != 1:
+        return {}
+    def scope_nodes(function):
+        pending = list(function.body)
+        while pending:
+            node = pending.pop()
+            yield node
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                pending.extend(ast.iter_child_nodes(node))
+
+    fields: dict[str, list[ast.AST]] = {}
+    pending_functions = [functions[0]]
+    seen = set()
+    while pending_functions:
+        function = pending_functions.pop()
+        if id(function) in seen:
+            continue
+        seen.add(id(function))
+        nodes = list(scope_nodes(function))
+        closures = {node.name: node for node in nodes if isinstance(node, ast.FunctionDef)}
+        for node in nodes:
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                closure = closures.get(node.func.id)
+                if closure is not None:
+                    pending_functions.append(closure)
+            targets = node.targets if isinstance(node, ast.Assign) else (
+                [node.target] if isinstance(node, ast.AugAssign)
+                or isinstance(node, ast.AnnAssign) and node.value is not None else [])
+            for target in targets:
+                field = _stats_assignment_field(target)
+                if field is not None:
+                    fields.setdefault(field, []).append(node)
+    return fields
 
 
 def _depth_accumulation_sites(source: str, method: str) -> int:
@@ -216,22 +274,43 @@ class ModelPathDepthInstrumentationTest(unittest.TestCase):
 
     def test_model_path_accumulates_reached_depth(self) -> None:
         source = (REPO_ROOT / "src" / "pokezero" / "engine_search.py").read_text()
-        # The two accumulation sites must both exist: the hp_fraction path and
-        # the model path. Locate them by their neighbouring model-only counter.
-        self.assertIn("self.stats.model_evals += int(report[\"model_evals\"])", source)
-        model_block = source.split("self.stats.model_evals += int(report[\"model_evals\"])")[1][:900]
+        # Opponent telemetry can legitimately sit between model_evals and depth.
+        # Inspect the method structurally, not the next 900 source characters.
+        assignments = _method_stats_assignments(source, "_search_model")
+        self.assertIn("model_evals", assignments)
+        padded = source.replace(
+            'self.stats.model_evals += int(report["model_evals"])',
+            'self.stats.model_evals += int(report["model_evals"])\n'
+            '            # ' + 'unrelated telemetry padding ' * 80,
+        )
         for field in (
             "depth_reached_samples",
             "depth_reached_sum",
             "depth_reached_max",
             "depth_reached_histogram",
         ):
-            self.assertIn(
-                field,
-                model_block,
-                f"model path does not accumulate {field}; a depth ladder run on "
-                "leaf_eval='model' would carry no reached-depth evidence",
-            )
+            with self.subTest(field=field):
+                self.assertIn(field, assignments,
+                    f"model path does not accumulate {field}; a depth ladder run "
+                    "on leaf_eval='model' would carry no reached-depth evidence")
+                self.assertIn(field, _method_stats_assignments(padded, "_search_model"))
+                lines = source.splitlines(keepends=True)
+                for node in assignments[field]:
+                    for index in range(node.lineno - 1, node.end_lineno):
+                        lines[index] = "\n"
+                removed = "".join(lines)
+                self.assertNotIn(field, _method_stats_assignments(removed, "_search_model"),
+                    "mentions in comments/reads must not replace an actual depth write")
+        # Independent review reproduced a false positive for valueless typed
+        # declarations. Neither they nor a never-called closure updates stats.
+        declarations = "def _search_model(self):\n" + "".join(
+            f"    self.stats.{field}: int\n" for field in assignments)
+        self.assertEqual(_method_stats_assignments(declarations, "_search_model"), {})
+        closure = "def _search_model(self):\n    def unused():\n" + "".join(
+            f"        self.stats.{field} += 1\n" for field in assignments)
+        self.assertEqual(_method_stats_assignments(closure, "_search_model"), {})
+        referenced = closure + "    unused()\n"
+        self.assertEqual(set(_method_stats_assignments(referenced, "_search_model")), set(assignments))
 
     def test_every_registered_leaf_eval_path_accumulates_reached_depth_once(self) -> None:
         """ONE SITE PER REGISTERED LEAF-EVAL PATH, derived rather than counted.
