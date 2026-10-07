@@ -25,7 +25,7 @@ from .paper_reference import (
     BatchResult, DecisionState, Evaluation, ReferenceConfig, ReferenceRefusal,
     SearchResult, TrajectorySearch, World,
 )
-from .paper_reference_exchange import StatisticsMaster, WorkerUpdate
+from .paper_reference_exchange import MasterSnapshot, StatisticsMaster, WorkerUpdate
 
 
 @dataclass
@@ -209,6 +209,21 @@ class ParallelTrajectorySearch:
         self._poisoned = True
         self.last_evidence["errors"] = errors
         raise ParallelRefusal(message, self.last_evidence)
+
+    def restore_statistics(self, snapshot: MasterSnapshot) -> None:
+        """Fresh-pool aggregate recovery, imported exactly once, never OWN work.
+
+        Old processes/RNG/P caches are NOT resurrected. A separate contribution
+        holds the accepted checkpoint while fresh workers export only new work.
+        Failed/unplayed partial batches must not be present in the checkpoint.
+        """
+        if (self._closed or self._poisoned or self._master is not None or self._decision_id != 0
+                or not isinstance(snapshot, MasterSnapshot)):
+            raise ReferenceRefusal('statistics recovery requires a fresh, unused pool')
+        master = StatisticsMaster(snapshot.battle_id)
+        master.advance_real_faints(snapshot.faint_floor)
+        master.accept(WorkerUpdate(snapshot.battle_id, 'retained-accepted-history', 1, snapshot.rows))
+        self._master = master
 
     def _receive(self, pending):
         ready = wait([self._connections[i] for i in sorted(pending)], timeout=self.transport_timeout)
