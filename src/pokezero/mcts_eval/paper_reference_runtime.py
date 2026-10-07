@@ -13,6 +13,15 @@ from ..local_showdown import PublicBattleMaterializationState
 from ..public_decision_corpus import PublicObservation, _public_belief_view
 
 
+def validated_conditioning_batch_size(value, *, staged):
+    """Reject unregistered/meaningless batching before a worker is spawned."""
+    if type(staged) is not bool or type(value) is not int or not 1 <= value <= 16:
+        raise ReferenceRefusal('conditioning batch size requires an integer 1..16 and boolean staged gate')
+    if value != 1 and not staged:
+        raise ReferenceRefusal('conditioning batching requires explicit staged conditioning')
+    return value
+
+
 @dataclass(frozen=True)
 class PublicRootRequest:
     state: PublicBattleMaterializationState
@@ -45,6 +54,11 @@ class ShowdownWorkerFactory:
     allow_earlier_compatible_template: bool = False
     max_known_set_draws: int = 10
     staged_substitute_conditioning: bool = False
+    conditioning_batch_size: int = 1
+
+    def __post_init__(self):
+        validated_conditioning_batch_size(self.conditioning_batch_size,
+            staged=self.staged_substitute_conditioning)
 
     def __call__(self, index):
         return _ShowdownRuntime(self, index)
@@ -77,6 +91,7 @@ class _ShowdownRuntime:
         self.allow_earlier_compatible_template = binding.allow_earlier_compatible_template
         self.max_known_set_draws = binding.max_known_set_draws
         self.staged_substitute_conditioning = binding.staged_substitute_conditioning
+        self.conditioning_batch_size = binding.conditioning_batch_size
         try:
             # Warm bridge startup belongs to the separately measured pool startup.
             # This synthetic startup battle contributes NO trajectory/statistics.
@@ -120,6 +135,9 @@ class _ShowdownRuntime:
             allow_earlier_compatible_template=self.allow_earlier_compatible_template,
             max_known_set_draws=self.max_known_set_draws, pending_transition=pending,
             staged_substitute_conditioning=getattr(self, 'staged_substitute_conditioning', False))
+        factory.conditioning_batch_size = validated_conditioning_batch_size(
+            getattr(self, 'conditioning_batch_size', 1),
+            staged=getattr(self, 'staged_substitute_conditioning', False))
         receipt_index, forward_index = 0, self.evaluator.forwards
 
         def evidence():

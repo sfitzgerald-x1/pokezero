@@ -58,6 +58,14 @@ def staged_conditioning_enabled(registration):
     return value
 
 
+def registered_conditioning_batch_size(registration):
+    """Historical registrations keep size1; new batching is explicit and bound."""
+    from pokezero.mcts_eval.paper_reference_runtime import validated_conditioning_batch_size
+    return validated_conditioning_batch_size(
+        registration.get('reference', {}).get('conditioning_batch_size', 1),
+        staged=staged_conditioning_enabled(registration))
+
+
 def validate_reference_measurement(measured):
     """Cancelled attempts retain RNG ownership but never qualify as search work.
 
@@ -165,6 +173,9 @@ def verify(m, *, source_root=REPO):
 
 def register(args):
     staged = getattr(args, 'staged_substitute_conditioning', False)
+    conditioning_batch = registered_conditioning_batch_size(dict(reference=dict(
+        staged_substitute_conditioning=staged,
+        conditioning_batch_size=getattr(args, 'conditioning_batch_size', 1))))
     guarded_recovery = getattr(args, 'guarded_staged_recover_from', None)
     rest_tail_recovery = getattr(args, 'rest_tail_recover_from', None)
     prefix_joint_recovery = getattr(args, 'prefix_joint_tail_recover_from', None)
@@ -281,6 +292,7 @@ def register(args):
             '64 independent clusters may be insufficient for a modest advantage; no equivalence inference',
             'qualification outcomes never enter confirmation; refusal halts, no raw fallback or redraw'])
     m['reference']['staged_substitute_conditioning'] = staged
+    m['reference']['conditioning_batch_size'] = conditioning_batch
     if staged:
         m['reference']['staged_kernel'] = 'pokezero.constant-chance-substitute.v1'
         m['limitations'].append('guarded constant-chance replay program explicitly opted in; unsupported public programs keep joint conditioning; deadline-induced sample-selection effects are not proven away')
@@ -597,7 +609,8 @@ def run(args, m):
         pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1.), ShowdownWorkerFactory(
             m['checkpoint'], m['checkpoint_sha256'], m['showdown_root'], m['set_source_hash'],
             allow_earlier_compatible_template=True, max_known_set_draws=128,
-            staged_substitute_conditioning=staged_conditioning_enabled(m)))
+            staged_substitute_conditioning=staged_conditioning_enabled(m),
+            conditioning_batch_size=registered_conditioning_batch_size(m)))
         print(json.dumps(dict(status='POOL_READY', startup_seconds=pool.startup_seconds)), flush=True)
         for ordinal, seed in enumerate(m['seeds']):
             for subject in SEATS:
@@ -853,6 +866,8 @@ def main():
     parser.add_argument('--qualification', action='store_true')
     parser.add_argument('--staged-substitute-conditioning', action='store_true',
         help='Explicit default-off guarded replay kernel; technical qualification only until recovery is validated')
+    parser.add_argument('--conditioning-batch-size', type=int, default=1,
+        help='Explicit ordered conditioning transport batch (1..16, default1); requires staged conditioning')
     parser.add_argument('--qualification-readout', type=Path)
     parser.add_argument('--recover-from', type=Path)
     parser.add_argument('--repair-certificate', type=Path)
