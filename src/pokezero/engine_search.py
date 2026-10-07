@@ -1014,6 +1014,20 @@ class EngineMctsConfig:
                 "model_world_workers must be <= worlds: one worker cannot improve a "
                 "single belief world."
             )
+        # This composition has a stronger contract than the generic leaf-mode
+        # registry: when the rollout leaf seam is requested, every non-model
+        # mode is invalid, including an unregistered spelling. Check it first so
+        # a configuration cannot obscure that safety refusal behind a registry
+        # error.
+        if self.rollout_leaf_eval and self.leaf_eval != "model":
+            raise ValueError(
+                "rollout_leaf_eval=True requires leaf_eval='model': the rollout "
+                "seam with MODEL PRIORS lives on the encoded search path "
+                "(_search_ladder -> search_batched_multi_encoded), and the "
+                f"campaign's surviving config is priors ON. Got leaf_eval="
+                f"{self.leaf_eval!r}. For the uniform-priors sequential arm use "
+                "leaf_eval='rollout_crate' instead."
+            )
         # AGAINST THE REGISTRY, not against a second copy of the same literals. A
         # leaf-eval mode is selectable if and only if it is registered in
         # `LEAF_EVAL_SEARCH_METHODS`, which is what lets the instrumentation guard
@@ -1092,20 +1106,9 @@ class EngineMctsConfig:
                 "one replaces the leaf value and the other must preserve it."
             )
         if self.rollout_leaf_eval:
-            # The seam only exists on the model path. Silently ignoring the flag
-            # on any other `leaf_eval` is how a cell gets banked as "oracle-leaf
-            # with model priors" having actually run the handcrafted leaf -- the
-            # exact class of failure this program lost two artifacts to, where an
-            # input was ABSENT rather than wrong. Refuse.
-            if self.leaf_eval != "model":
-                raise ValueError(
-                    "rollout_leaf_eval=True requires leaf_eval='model': the rollout "
-                    "seam with MODEL PRIORS lives on the encoded search path "
-                    "(_search_ladder -> search_batched_multi_encoded), and the "
-                    f"campaign's surviving config is priors ON. Got leaf_eval="
-                    f"{self.leaf_eval!r}. For the uniform-priors sequential arm use "
-                    "leaf_eval='rollout_crate' instead."
-                )
+            # The model-path requirement was checked before generic leaf-mode
+            # validation above; the remaining contract is that the model priors
+            # are actually present on that path.
             if not self.model_priors:
                 # The WHOLE REASON this composition exists. The sequential
                 # `leaf_eval="rollout_crate"` seam already prices rollout leaves
@@ -3951,14 +3954,19 @@ def opponent_request_order_resolution(
     party = [normalize_id(str(name)) for name in party_species]
     if not party:
         return OpponentRequestOrderResolution(None, "empty_party")
-    if len(set(party)) != len(party):
+    canonical_party = [canonical_gen3_randbat_species_id(name) for name in party]
+    if len(set(party)) != len(party) or len(set(canonical_party)) != len(canonical_party):
         # Slot swaps are resolved by species name downstream, so a duplicated
-        # species makes the mapping ambiguous.
+        # species — including two cosmetic forms of the same Gen 3 randbat
+        # species — makes the public mapping ambiguous.
         return OpponentRequestOrderResolution(None, "duplicate_party")
     opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
     try:
         walk = _public_opponent_team_index_walk(
-            context, opponent_slot=opponent_slot, team_size=len(party),
+            context,
+            opponent_slot=opponent_slot,
+            team_size=len(party),
+            party_index_by_species={species: index for index, species in enumerate(canonical_party)},
             **({"sampled_party_species": party} if sampled_own_party else {}),
         )
     except Exception:  # noqa: BLE001 - never break search over telemetry
