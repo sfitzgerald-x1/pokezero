@@ -151,7 +151,8 @@ def verify(m, *, source_root=REPO):
                                     'native-and-reference-substitute-tail-repair',
                                     'native-and-reference-guarded-staged-repair',
                                     'native-and-reference-rest-tail-repair',
-                                    'native-and-reference-prefix-joint-tail-repair'):
+                                    'native-and-reference-prefix-joint-tail-repair',
+                                    'native-and-reference-wake-rest-transport-repair'):
             from pokezero.mcts_eval.wider_native_recovery import verify_historical
             verify_historical(recovery['original_registration'])
         else:
@@ -167,10 +168,11 @@ def register(args):
     guarded_recovery = getattr(args, 'guarded_staged_recover_from', None)
     rest_tail_recovery = getattr(args, 'rest_tail_recover_from', None)
     prefix_joint_recovery = getattr(args, 'prefix_joint_tail_recover_from', None)
-    if sum(value is not None for value in (guarded_recovery, rest_tail_recovery, prefix_joint_recovery)) > 1:
+    wake_rest_recovery = getattr(args, 'wake_rest_transport_recover_from', None)
+    if sum(value is not None for value in (guarded_recovery, rest_tail_recovery, prefix_joint_recovery, wake_rest_recovery)) > 1:
         raise RuntimeError('choose exactly one preserved staged recovery source')
     if staged and not args.qualification and all(value is None for value in (
-            guarded_recovery, rest_tail_recovery, prefix_joint_recovery)):
+            guarded_recovery, rest_tail_recovery, prefix_joint_recovery, wake_rest_recovery)):
         raise RuntimeError('staged confirmation requires fresh technical qualification and explicit all8-qualified guarded recovery')
     if guarded_recovery is not None and (args.qualification or not staged):
         raise RuntimeError('guarded staged recovery requires confirmation and explicit staged opt-in')
@@ -178,6 +180,13 @@ def register(args):
         raise RuntimeError('Rest tail recovery requires confirmation and explicit staged opt-in')
     if prefix_joint_recovery is not None and (args.qualification or not staged):
         raise RuntimeError('prefix/joint-tail recovery requires confirmation and explicit staged opt-in')
+    if wake_rest_recovery is not None and (args.qualification or not staged):
+        raise RuntimeError('wake/Rest transport recovery requires confirmation and explicit staged opt-in')
+    if wake_rest_recovery is not None and any(getattr(args, name, None) is not None for name in (
+            'recover_from', 'native_recover_from', 'trapping_recover_from',
+            'pending_qualification_recover_from', 'faint_recover_from',
+            'substitute_recover_from', 'substitute_tail_recover_from')):
+        raise RuntimeError('choose exactly one recovery source')
     if git('status', '--porcelain'):
         raise RuntimeError('commit reviewed source before registration')
     import pokezero_search
@@ -432,6 +441,24 @@ def register(args):
             recovery_claim_rule='full64/256 roster and all387420489 score assignments across9 outcome-blind historical clusters')
         m['limitations'].append(recovery['disclosure'])
         m['limitations'].append('all17 accepted boundaries/checkpoint394 and original20 RNG positions retained; failed395 and all diagnostics never restored; cumulative failed active wall charged')
+    if wake_rest_recovery is not None:
+        if any(value is not None for value in recovery_modes):
+            raise RuntimeError('choose exactly one recovery source')
+        if not all((args.staged_audit_dir, args.qualification_readout,
+                args.native_qualification_audit, args.conditioning_qualification_audit)):
+            raise RuntimeError('wake/Rest transport recovery needs fresh complete all8 and independent v4/v5 audits')
+        from pokezero.mcts_eval.wider_wake_rest_transport_recovery import prepare
+        from search_followthrough_diagnostic import restore_reference_checkpoint
+        m['conditioning_limits'] = dict(substitute=2048, pending=128, compatible_template=128)
+        recovery = prepare(wake_rest_recovery, args.staged_audit_dir, args.qualification_readout,
+            args.native_qualification_audit, args.conditioning_qualification_audit, m,
+            repo=REPO, git=git, sha=sha, verify=verify, bound_rows=bound_rows,
+            step_files=step_files, restore_reference_checkpoint=restore_reference_checkpoint)
+        m.update(schema='pokezero.wider-search.mixed-wake-rest-transport-repair.v11', repair_retention=recovery,
+            retained_input_hashes=recovery['input_hashes'],
+            recovery_claim_rule='full64/256 roster and all387420489 score assignments across9 outcome-blind historical clusters')
+        m['limitations'].append(recovery['disclosure'])
+        m['limitations'].append('all21 accepted boundaries/checkpoint398 and original20 RNG positions retained; failed399 and all diagnostics never restored; cumulative failed active wall charged')
     verify(m)
     args.output.mkdir(exist_ok=False)
     save(args.output/'registration.json', m)
@@ -477,6 +504,10 @@ def validate_qualification(path, confirmation):
         raise RuntimeError('qualification requires the canonical durable readout')
     registration = json.loads((path.parent/'registration.json').read_text())
     recovery = confirmation.get('repair_retention')
+    if recovery is not None and recovery.get('kind') == 'native-and-reference-wake-rest-transport-repair':
+        from pokezero.mcts_eval.wider_wake_rest_transport_recovery import validate_qualification as validate_wake_rest
+        return validate_wake_rest(path, confirmation, recovery, repo=REPO, git=git,
+            sha=sha, verify=verify, bound_rows=bound_rows)
     if recovery is not None and recovery.get('kind') == 'native-and-reference-prefix-joint-tail-repair':
         from pokezero.mcts_eval.wider_prefix_joint_tail_recovery import validate_qualification as validate_prefix_joint
         return validate_prefix_joint(path, confirmation, recovery, repo=REPO, git=git,
@@ -720,6 +751,9 @@ def run(args, m):
                                     elif recovery.get('kind') == 'native-and-reference-prefix-joint-tail-repair':
                                         from pokezero.mcts_eval.wider_prefix_joint_tail_recovery import validate_resumed_workers
                                         validate_resumed_workers(measured.worker_receipts, probe)
+                                    elif recovery.get('kind') == 'native-and-reference-wake-rest-transport-repair':
+                                        from pokezero.mcts_eval.wider_wake_rest_transport_recovery import validate_resumed_workers
+                                        validate_resumed_workers(measured.worker_receipts, probe)
                                     elif worker_zero and (worker_zero[0]['packed_team_sha256'] != probe['draw']['packed_team_sha256']
                                             or worker_zero[0]['materialization_seed'] != probe['draw']['materialization_seed']):
                                         raise RuntimeError('recovered first hidden draw differs from exact failed-draw qualification')
@@ -795,7 +829,8 @@ def readout(args, m):
                                                  'native-and-reference-substitute-tail-repair',
                                                  'native-and-reference-guarded-staged-repair',
                                                  'native-and-reference-rest-tail-repair',
-                                                 'native-and-reference-prefix-joint-tail-repair'):
+                                                 'native-and-reference-prefix-joint-tail-repair',
+                                                 'native-and-reference-wake-rest-transport-repair'):
             from pokezero.mcts_eval.wider_substitute_recovery import add_substitute_sensitivity
             add_substitute_sensitivity(result, m)
         else:
@@ -837,6 +872,7 @@ def main():
     parser.add_argument('--guarded-staged-recover-from', type=Path)
     parser.add_argument('--rest-tail-recover-from', type=Path)
     parser.add_argument('--prefix-joint-tail-recover-from', type=Path)
+    parser.add_argument('--wake-rest-transport-recover-from', type=Path)
     parser.add_argument('--staged-audit-dir', type=Path)
     parser.add_argument('--conditioning-qualification-audit', type=Path)
     args = parser.parse_args()
