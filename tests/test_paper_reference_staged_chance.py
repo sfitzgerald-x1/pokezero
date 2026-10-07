@@ -184,7 +184,7 @@ class KernelTests(unittest.TestCase):
             prior.receipts.append(dict(ordinal=len(worlds)-1,status='ROOT_VALIDATED',packed_team_sha256=str(len(worlds))))
             return world
         prior.side_effect=draw
-        rng=NS(choices=mock.Mock(side_effect=[[0],[1],[1],[1]]),
+        rng=NS(getstate=lambda:(3,(1,2,3),None),choices=mock.Mock(side_effect=[[0],[1],[1],[1]]),
                getrandbits=mock.Mock(side_effect=[10,11,12,13]))
         return factory,prior,plan,rng,worlds
 
@@ -205,6 +205,7 @@ class KernelTests(unittest.TestCase):
         witness=evidence['substitute_policy_conditioning']
         self.assertEqual([s['chance_attempts'] for s in witness['steps']],[2,1,1])
         self.assertEqual([s['chance_seed'] for s in witness['steps']],[11,12,13])
+        self.assertEqual(witness['anchor_rng_state'],(3,(1,2,3),None))
         self.assertEqual(witness['sampled_substitute_hp'],{'p1':66})
         world.close()
         self.assertTrue(evidence['released'])

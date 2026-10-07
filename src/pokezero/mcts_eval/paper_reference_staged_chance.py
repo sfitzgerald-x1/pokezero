@@ -208,6 +208,7 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
     rejected = []
     for attempt in range(max_attempts):
         factory.check_sampling_deadline()
+        anchor_rng_state = rng.getstate()
         world, accepted = prior(rng), False
         try:
             initial = factory.env.snapshot()
@@ -269,6 +270,7 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
             evidence.update(status='ROOT_VALIDATED',substitute_policy_conditioning=dict(
                 algorithm=SCHEMA,attempts=attempt+1,max_attempts=max_attempts,
                 max_chance_attempts=MAX_CHANCE_ATTEMPTS,rejected=rejected,steps=steps,
+                anchor_rng_state=anchor_rng_state,
                 sampled_substitute_hp=hp,law_certificate=plan.receipt,
                 prior_actor_root_key=prior.root.key.hex(),current_actor_root_key=factory.root.key.hex(),
                 live_opponent_action_used=False,live_hidden_hp_used=False))
