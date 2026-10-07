@@ -41,6 +41,8 @@ from pokezero.mcts_eval.timing_corpus import (  # noqa: E402
 
 
 SCHEMA_VERSION = "pokezero.mcts-own-policy-prior-replay.v1"
+SOURCE_BOUND_RECEIPT_SCHEMA = "pokezero.mcts-deadline-source-receipt.v1"
+SOURCE_BOUND_RECEIPT_RUNNER = "scripts/run_mcts_own_policy_prior_replay.py"
 EXPECTED_DECISIONS = 16
 EXPECTED_SEAT_COUNT = 8
 ORDERS = (("guided", "uniform"), ("uniform", "guided"))
@@ -95,22 +97,35 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def _receipt_and_source(path: str) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Bind the fresh B2 image, active source tree, and installed native engine.
+    """Bind the active source tree and installed engine to the executing image.
 
     The deadline qualification's receipt deliberately pins an older reviewed
     deadline mechanism.  This study changes the engine telemetry contract, so
     borrowing that receipt would either reject valid new source or, worse,
-    imply that it reviewed source it did not.  The B2 image receipt is the
-    correct source of image identity and native-build provenance here.
+    imply that it reviewed source it did not.  Historical B2 receipts remain
+    supported for their frozen studies.  A current-source receipt is accepted
+    only when it names this runner and the active clean tree exactly matches
+    its immutable image binding.
     """
 
     receipt = dict(common._read_json(Path(path).expanduser().resolve()))
-    if receipt.get("schema_version") != "pokezero.b2-source-image-receipt.v7":
-        raise DeadlineQualificationError("source receipt schema is not the supported B2 image receipt")
+    schema = receipt.get("schema_version")
+    if schema not in {"pokezero.b2-source-image-receipt.v7", SOURCE_BOUND_RECEIPT_SCHEMA}:
+        raise DeadlineQualificationError("source receipt schema is not supported for own-policy replay")
+    if schema == SOURCE_BOUND_RECEIPT_SCHEMA:
+        # Reuse the strict file, path and digest checks rather than accepting
+        # a partial receipt merely because its runner hash matches.
+        receipt = common._source_receipt(path)
     if receipt.get("complete") is not True:
         raise DeadlineQualificationError("source receipt is not complete")
     image = receipt.get("immutable_image")
-    digest = receipt.get("image_digest")
+    digest = (
+        receipt.get("image_digest")
+        if schema == "pokezero.b2-source-image-receipt.v7"
+        else image.rsplit("@", 1)[-1]
+        if isinstance(image, str) and "@" in image
+        else None
+    )
     if (
         not isinstance(image, str)
         or not isinstance(digest, str)
@@ -123,16 +138,31 @@ def _receipt_and_source(path: str) -> tuple[dict[str, Any], dict[str, Any]]:
     if not common._is_lower_hex(commit, 40):
         raise DeadlineQualificationError("source receipt source_commit is invalid")
     runtime = receipt.get("model_runtime")
-    if not isinstance(runtime, Mapping):
-        raise DeadlineQualificationError("source receipt omits model runtime provenance")
-    if runtime.get("source") != {"commit": commit, "tree_status": "clean_tracked_checkout"}:
-        raise DeadlineQualificationError("source receipt model runtime source differs from image commit")
-    fingerprint = runtime.get("engine_fingerprint")
+    if schema == "pokezero.b2-source-image-receipt.v7":
+        if not isinstance(runtime, Mapping):
+            raise DeadlineQualificationError("source receipt omits model runtime provenance")
+        if runtime.get("source") != {"commit": commit, "tree_status": "clean_tracked_checkout"}:
+            raise DeadlineQualificationError("source receipt model runtime source differs from image commit")
+        fingerprint = runtime.get("engine_fingerprint")
+    else:
+        source_files = receipt.get("source_files_sha256")
+        if (
+            not isinstance(source_files, Mapping)
+            or source_files.get(SOURCE_BOUND_RECEIPT_RUNNER)
+            != sha256_file(ROOT / SOURCE_BOUND_RECEIPT_RUNNER)
+        ):
+            raise DeadlineQualificationError("source-bound receipt does not bind this own-policy replay runner")
+        fingerprint = receipt.get("engine_fingerprint")
     if not common._is_lower_hex(fingerprint, 64):
         raise DeadlineQualificationError("source receipt model runtime fingerprint is invalid")
     active = common._active_source_provenance()
     if active["commit"] != commit:
         raise DeadlineQualificationError("active source commit differs from immutable image receipt")
+    if (
+        schema == SOURCE_BOUND_RECEIPT_SCHEMA
+        and active.get("execution_tree_sha256") != receipt.get("execution_tree_sha256")
+    ):
+        raise DeadlineQualificationError("active source tree differs from source-bound image receipt")
     try:
         common.assert_fresh()
         installed = common.compute_fingerprint()

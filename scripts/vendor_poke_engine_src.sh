@@ -13,11 +13,19 @@
 # can never drift (they did once — see that file's header). Per-patch rationale
 # lives there and in docs/engine_fidelity_findings.md.
 #
-# Requires: uv, rsync, git. Usage: scripts/vendor_poke_engine_src.sh [venv-python]
+# Requires: curl, rsync, git. Usage: scripts/vendor_poke_engine_src.sh [venv-python]
 set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="${1:-$REPO/.venv/bin/python}"
 VERSION="0.0.47"
+# Keep the acquisition bounded and independent of the Python environment.  The
+# source-only image builder deliberately uses a minimal interpreter with no
+# ``pip`` module; routing this through ``uv run ... pip download`` can leave a
+# build blocked indefinitely while uv tries to provision or resolve tooling.
+# This immutable PyPI file is still verified against
+# third_party/poke-engine-base-source.json immediately below, so the URL alone
+# is never trusted as provenance.
+SDIST_URL="https://files.pythonhosted.org/packages/26/87/06d1660f95aa507e9c0934e32e571c700ff9770a1e926341e9eac1c7a72a/poke_engine-0.0.47.tar.gz"
 DEST="$REPO/third_party/poke-engine-src"
 # Portable temp dir: `mktemp -d -t NAME` is BSD syntax that GNU coreutils rejects
 # ("too few X's in template"), which broke vendoring inside the Linux image.
@@ -26,8 +34,10 @@ DL_DIR="$(mktemp -d "${TMPDIR:-/tmp}/poke-engine-src.XXXXXX")"
 trap 'rm -rf "$DL_DIR"' EXIT
 
 echo "[1/3] fetch poke-engine==$VERSION sdist"
-uv run --python "$PYTHON" pip download "poke-engine==$VERSION" --no-deps --no-binary :all: -d "$DL_DIR" >/dev/null
 ARCHIVE="$DL_DIR/poke_engine-$VERSION.tar.gz"
+curl --fail --location --silent --show-error \
+  --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 \
+  --output "$ARCHIVE" "$SDIST_URL"
 "$PYTHON" "$REPO/scripts/verify_poke_engine_source.py" \
   "$ARCHIVE" --expected-version "$VERSION"
 tar xzf "$ARCHIVE" -C "$DL_DIR"

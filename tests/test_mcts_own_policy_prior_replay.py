@@ -203,14 +203,14 @@ class RootAllocationTest(unittest.TestCase):
         self.assertTrue(captured["model_priors"])
         self.assertFalse(captured["use_opponent_priors"])
 
-    def test_runner_refuses_the_old_deadline_specific_receipt_schema(self) -> None:
+    def test_runner_refuses_an_unrecognized_receipt_schema(self) -> None:
         runner = _runner()
         with mock.patch.object(
             runner.common,
             "_read_json",
-            return_value={"schema_version": "pokezero.mcts-deadline-source-receipt.v1"},
+            return_value={"schema_version": "not-a-supported-receipt"},
         ):
-            with self.assertRaisesRegex(DeadlineQualificationError, "B2 image receipt"):
+            with self.assertRaisesRegex(DeadlineQualificationError, "not supported"):
                 runner._receipt_and_source("/does/not/matter.json")
 
     def test_runner_binds_active_source_and_native_fingerprint_to_b2_receipt(self) -> None:
@@ -238,6 +238,57 @@ class RootAllocationTest(unittest.TestCase):
             actual_receipt, actual_active = runner._receipt_and_source("/does/not/matter.json")
         self.assertEqual(actual_receipt, receipt)
         self.assertEqual(actual_active, active)
+
+    def test_runner_binds_current_source_receipt_to_its_runner_and_tree(self) -> None:
+        runner = _runner()
+        commit = "a" * 40
+        fingerprint = "b" * 64
+        active = {"commit": commit, "execution_tree_sha256": "d" * 64}
+        receipt = {
+            "schema_version": runner.SOURCE_BOUND_RECEIPT_SCHEMA,
+            "complete": True,
+            "immutable_image": "registry.example/pokezero@sha256:" + "c" * 64,
+            "source_commit": commit,
+            "execution_tree_sha256": active["execution_tree_sha256"],
+            "engine_fingerprint": fingerprint,
+            "source_files_sha256": {
+                relative: runner.common.sha256_file(runner.ROOT / relative)
+                for relative in (*runner.common.REQUIRED_RECEIPT_FILES, runner.SOURCE_BOUND_RECEIPT_RUNNER)
+            },
+        }
+        with (
+            mock.patch.object(runner.common, "_read_json", return_value=receipt),
+            mock.patch.object(runner.common, "_receipt_path", return_value=Path("/receipt.json")),
+            mock.patch.object(runner.common, "_active_source_provenance", return_value=active),
+            mock.patch.object(runner.common, "assert_fresh"),
+            mock.patch.object(runner.common, "compute_fingerprint", return_value={"fingerprint": fingerprint}),
+        ):
+            actual_receipt, actual_active = runner._receipt_and_source("/does/not/matter.json")
+        self.assertEqual(actual_receipt, receipt)
+        self.assertEqual(actual_active, active)
+
+        malformed_receipts = [
+            ({**receipt, "execution_tree_sha256": None}, "execution_tree_sha256"),
+            ({**receipt, "source_files_sha256": {
+                runner.SOURCE_BOUND_RECEIPT_RUNNER: receipt["source_files_sha256"][runner.SOURCE_BOUND_RECEIPT_RUNNER],
+            }}, "required executable"),
+            ({**receipt, "source_files_sha256": {
+                **receipt["source_files_sha256"],
+                "src/pokezero/engine_search.py": "0" * 64,
+            }}, "file drift"),
+            ({**receipt, "execution_tree_sha256": "f" * 64}, "active source tree differs"),
+        ]
+        for malformed, message in malformed_receipts:
+            with (
+                self.subTest(message=message),
+                mock.patch.object(runner.common, "_read_json", return_value=malformed),
+                mock.patch.object(runner.common, "_receipt_path", return_value=Path("/receipt.json")),
+                mock.patch.object(runner.common, "_active_source_provenance", return_value=active),
+                mock.patch.object(runner.common, "assert_fresh") as freshness,
+            ):
+                with self.assertRaisesRegex(DeadlineQualificationError, message):
+                    runner._receipt_and_source("/receipt.json")
+                freshness.assert_not_called()
 
 
 if __name__ == "__main__":
