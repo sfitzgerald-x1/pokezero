@@ -17,7 +17,9 @@ damage/crit assumption, forced champion action, or uniform Substitute HP is used
 
 The first certificate is a move/state program, NOT a study-seed whitelist:
 Lugia Psychic against the source-fixed Shuckle set; fresh Substitute, surviving
-Encore, then Wrap / Rest / Rest-blocked sleep. Other programs remain joint.
+Encore, then Wrap / Rest / one or two Rest-blocked sleep turns. Other programs
+remain joint. The fourth turn has a distinct certificate; the historical
+three-turn certificate is not relabeled.
 Scientific use still requires independent observation and fresh qualification.
 """
 from dataclasses import dataclass
@@ -28,6 +30,7 @@ from .paper_reference import ReferenceRefusal
 from .paper_reference_pending import public_history
 
 SCHEMA = 'pokezero.constant-chance-substitute.v1'
+REST_TAIL_SCHEMA = 'pokezero.constant-chance-substitute.rest-tail.v2'
 SOURCE_HASH = 'f5a5265143d423af'
 MAX_CHANCE_ATTEMPTS = 2048
 COMPILED_TREE_FILES = 500
@@ -69,10 +72,12 @@ class ConstantChancePlan:
 
     @property
     def receipt(self):
-        return dict(schema=SCHEMA, public_stages=3,
+        stages = len(self.own_actions)
+        return dict(schema=SCHEMA if stages == 3 else REST_TAIL_SCHEMA, public_stages=stages,
                     chance_predicate='same seed predicate across certified active support',
                     policy='full legal champion distribution, one draw per stage',
-                    zero_likelihood_filter='Encore expires before the three observed no-end residuals',
+                    zero_likelihood_filter=('Encore expires before the three observed no-end residuals'
+                        if stages == 3 else 'Encore expires before the four observed no-end residuals'),
                     sub_hp='actual accepted private chance state; never uniform/replaced',
                     max_wrap_damage=12, initial_sub_hp=66,
                     engine_hashes=dict(ENGINE_HASHES), set_source_hash=SOURCE_HASH,
@@ -86,11 +91,11 @@ class ConstantChancePlan:
         return move == ('wrap', 'rest')[stage] if stage < 2 else move in {'wrap', 'rest', 'toxic', 'encore'}
 
 
-def _program_histories(before, current):
+def _program_histories(before, current, stages=3):
     if current[:len(before)] != before:
         return None
     ends = [i+1 for i in range(len(before), len(current)) if current[i].startswith('|turn|')]
-    if len(ends) != 3 or ends[-1] != len(current):
+    if len(ends) != stages or ends[-1] != len(current):
         return None
     return tuple(current[:end] for end in ends)
 
@@ -123,12 +128,12 @@ def build_constant_chance_plan(factory):
     """Public-only eligibility; unsupported programs do NOT lose positions."""
     transition = factory.pending_transition
     actions = (transition.own_action, *transition.continuation_actions)
-    if len(actions) != 3 or any(type(a) is not int for a in actions) or len(set(actions)) != 1:
+    if len(actions) not in (3, 4) or any(type(a) is not int for a in actions) or len(set(actions)) != 1:
         return None
     subject = factory.state.player_id
     opponent = 'p2' if subject == 'p1' else 'p1'
     before, current = public_history(transition.before_state), public_history(factory.state)
-    histories = _program_histories(before, current)
+    histories = _program_histories(before, current, len(actions))
     if histories is None:
         return None
     previous, stages = before, []
@@ -148,7 +153,7 @@ def build_constant_chance_plan(factory):
             return None
         if stage == 1 and '|-status|'+opp_id+'|slp|[from] move: Rest' not in lines:
             return None
-        if stage == 2 and '|cant|'+opp_id+'|slp' not in lines:
+        if stage >= 2 and '|cant|'+opp_id+'|slp' not in lines:
             return None
         if any(line.startswith(('|switch|', '|drag|', '|faint|', '|-boost|', '|-unboost|',
                                 '|-weather|', '|-start|', '|-end|', '|-sidestart|', '|-sideend|'))
@@ -177,6 +182,9 @@ def validate_active_support(plan, snapshot, stage):
     rejection. Bench identity/order, move-slot permutations and positive legal
     opponent PP are intentionally unrestricted and remain in champion priors.
     """
+    stages = len(plan.own_actions)
+    if stages not in (3, 4) or len(plan.expected_histories) != stages or not 0 <= stage < stages:
+        raise ReferenceRefusal('constant-chance stage outside certified Rest program')
     battle = snapshot.bridge_snapshot['battle']
     if battle.get('formatid') != 'gen3randombattle' or battle.get('gameType') != 'singles':
         raise ReferenceRefusal('constant-chance format support drift')
@@ -215,18 +223,18 @@ def validate_active_support(plan, snapshot, stage):
     if encore.get('move') != 'psychic' or type(encore.get('duration')) is not int:
         raise ReferenceRefusal('constant-chance Encore support drift')
     psychic = next(slot for slot in own['moveSlots'] if slot['id']=='psychic')
-    if psychic['pp'] <= 3-stage:
+    if psychic['pp'] <= stages-stage:
         raise ReferenceRefusal('constant-chance public Psychic PP expiry outside certificate')
     if type(sub.get('hp')) is not int or not 1 <= sub['hp'] <= 66 or (stage==0 and sub['hp']!=66):
         raise ReferenceRefusal('constant-chance fresh/retained Substitute support drift')
     if stage < 2:
         if opp['status']:
             raise ReferenceRefusal('constant-chance awake prefix support drift')
-    elif (opp['status'] != 'slp' or opp['statusState'].get('time') != 3
+    elif (opp['status'] != 'slp' or opp['statusState'].get('time') != 5-stage
           or opp['statusState'].get('startTime') != 3 or opp['statusState'].get('skippedTime') != 0
           or opp['statusState'].get('source') != '[Pokemon:'+plan.opponent+'a]'):
         raise ReferenceRefusal('constant-chance Rest-source timer support drift')
-    return encore['duration'] > 3-stage
+    return encore['duration'] > stages-stage
 
 
 def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048):
@@ -300,7 +308,7 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
                   if 'substitute' in side['pokemon'][0]['volatiles']}
             evidence.update({k:v for k,v in prior.receipts[-1].items() if k not in ('ordinal','status','released')})
             evidence.update(status='ROOT_VALIDATED',substitute_policy_conditioning=dict(
-                algorithm=SCHEMA,attempts=attempt+1,max_attempts=max_attempts,
+                algorithm=plan.receipt['schema'],attempts=attempt+1,max_attempts=max_attempts,
                 max_chance_attempts=MAX_CHANCE_ATTEMPTS,rejected=rejected,steps=steps,
                 anchor_rng_state=anchor_rng_state,
                 sampled_substitute_hp=hp,law_certificate=plan.receipt,

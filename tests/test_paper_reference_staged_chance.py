@@ -11,7 +11,7 @@ from unittest import mock
 from pokezero.mcts_eval.paper_reference import ReferenceRefusal, SamplingDeadlineExceeded
 from pokezero.mcts_eval.paper_reference_staged_chance import (
     ConstantChancePlan, build_constant_chance_plan, validate_active_support, sample_staged_path,
-    verify_compiled_tree,
+    verify_compiled_tree, SCHEMA, REST_TAIL_SCHEMA,
 )
 
 MODULE = 'pokezero.mcts_eval.paper_reference_staged_chance'
@@ -30,8 +30,8 @@ def support_snapshot(stage=0):
     for row in (own,opp):
         row['storedStats']['def']=row['storedStats'].pop('def_')
     own['volatiles']=dict(encore=dict(move='psychic',duration=5-stage),substitute=dict(hp=66 if stage==0 else 61))
-    if stage==2:
-        opp.update(status='slp',statusState=dict(time=3,startTime=3,skippedTime=0,source='[Pokemon:p2a]'))
+    if stage>=2:
+        opp.update(status='slp',statusState=dict(time=5-stage,startTime=3,skippedTime=0,source='[Pokemon:p2a]'))
     return NS(bridge_snapshot=dict(battle=dict(formatid='gen3randombattle',gameType='singles',
         field=dict(weather='',terrain='',pseudoWeather=dict(sleepclausemod={})),sides=[
             dict(id='p1',pokemon=[own],sideConditions={}),
@@ -68,6 +68,39 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(plan.own_actions,(3,3,3))
         self.assertEqual(len(plan.expected_histories),3)
         self.assertNotIn('seed',plan.__dict__)
+
+    def rest_tail_factory(self):
+        factory=self.factory()
+        factory.pending_transition.continuation_actions=(3,3,3)
+        factory.state.history+=('|move|p1a: Lugia|Psychic|p2a: Shuckle',
+            '|cant|p2a: Shuckle|slp','|upkeep','|turn|16')
+        return factory
+
+    def test_second_rest_blocked_turn_has_distinct_dynamic_certificate(self):
+        original=self.build(self.factory())
+        extended=self.build(self.rest_tail_factory())
+        self.assertEqual(original.receipt['schema'],SCHEMA)
+        self.assertEqual(original.receipt['public_stages'],3)
+        self.assertEqual(extended.own_actions,(3,)*4)
+        self.assertEqual(len(extended.expected_histories),4)
+        self.assertEqual(extended.receipt['schema'],REST_TAIL_SCHEMA)
+        self.assertEqual(extended.receipt['public_stages'],4)
+
+    def test_awakening_move_switch_or_encore_expiry_not_claimed_as_rest_tail(self):
+        for replacement in ('|-curestatus|p2a: Shuckle|slp',
+                            '|move|p2a: Shuckle|Wrap|p1a: Lugia',
+                            '|switch|p2a: Shuckle|other',
+                            '|-end|p1a: Lugia|Encore'):
+            factory=self.rest_tail_factory()
+            factory.state.history=tuple(replacement if line=='|cant|p2a: Shuckle|slp'
+                and i>len(self.factory().state.history) else line
+                for i,line in enumerate(factory.state.history))
+            self.assertIsNone(self.build(factory),replacement)
+        factory=self.rest_tail_factory()
+        factory.pending_transition.continuation_actions=(3,3,3,3)
+        factory.state.history+=('|move|p1a: Lugia|Psychic|p2a: Shuckle',
+            '|cant|p2a: Shuckle|slp','|upkeep','|turn|17')
+        self.assertIsNone(self.build(factory))
 
     def test_unsupported_public_program_retains_joint_dispatch(self):
         factory=self.factory()
@@ -147,6 +180,29 @@ class SupportTests(unittest.TestCase):
         opp['statusState']['source']='[Pokemon:p1a]'
         with self.assertRaisesRegex(ReferenceRefusal,'Rest-source'):
             validate_active_support(self.plan,snapshot,2)
+
+    def test_four_stage_rest_timer_and_encore_survival_are_exact(self):
+        plan=ConstantChancePlan('p1','p2',(3,)*4,(('one',),('two',),('three',),('four',)))
+        for stage in range(4):
+            snapshot=support_snapshot(stage)
+            own=snapshot.bridge_snapshot['battle']['sides'][0]['pokemon'][0]
+            own['volatiles']['encore']['duration']=5-stage
+            self.assertTrue(validate_active_support(plan,snapshot,stage))
+            own['volatiles']['encore']['duration']=4-stage
+            self.assertFalse(validate_active_support(plan,snapshot,stage))
+        for wrong in (1,3,4):
+            snapshot=support_snapshot(3)
+            snapshot.bridge_snapshot['battle']['sides'][1]['pokemon'][0]['statusState']['time']=wrong
+            with self.assertRaisesRegex(ReferenceRefusal,'Rest-source'):
+                validate_active_support(plan,snapshot,3)
+
+    def test_four_stage_PP_expiry_refuses_without_rejecting_latent_team(self):
+        plan=ConstantChancePlan('p1','p2',(3,)*4,(('one',),('two',),('three',),('four',)))
+        snapshot=support_snapshot()
+        own=snapshot.bridge_snapshot['battle']['sides'][0]['pokemon'][0]
+        own['moveSlots'][3]['pp']=4
+        with self.assertRaisesRegex(ReferenceRefusal,'PP expiry'):
+            validate_active_support(plan,snapshot,0)
 
     def test_unknown_benches_slot_order_and_opponent_PP_remain_in_full_policy(self):
         snapshot=support_snapshot(1)
@@ -237,6 +293,34 @@ class KernelTests(unittest.TestCase):
         world.close()
         self.assertTrue(evidence['released'])
 
+    def test_four_stage_kernel_retains_full_policy_and_exact_private_tail(self):
+        factory,prior,_,rng,worlds=self.fixture()
+        plan=ConstantChancePlan('p1','p2',(3,)*4,(('one',),('two',),('three',),('four',)))
+        factory.state.history=('four',)
+        def step(actions):
+            factory.env.history=plan.expected_histories[factory.env.stage]
+            if factory.env.seed==10:
+                factory.env.history=('rejected chance',)
+            factory.env.stage+=1
+        factory.env.step=step
+        rng.choices.side_effect=[[0],[1],[1],[1],[1]]
+        rng.getrandbits.side_effect=[10,11,12,13,14]
+        evidence={}
+        with mock.patch(MODULE+'.validate_active_support',return_value=True), \
+             mock.patch(MODULE+'.public_history',side_effect=lambda s:s.history), \
+             mock.patch('pokezero.mcts_eval.paper_reference_showdown.decision_state',return_value=factory.root):
+            world=sample_staged_path(factory,prior,plan,rng,evidence)
+        self.assertEqual(prior.call_count,2)
+        self.assertEqual(rng.choices.call_count,5)
+        self.assertTrue(all(c.kwargs['weights']==(.9,.1) for c in rng.choices.call_args_list))
+        witness=evidence['substitute_policy_conditioning']
+        self.assertEqual(witness['algorithm'],REST_TAIL_SCHEMA)
+        self.assertEqual(witness['law_certificate']['public_stages'],4)
+        self.assertEqual([s['chance_seed'] for s in witness['steps']],[11,12,13,14])
+        self.assertEqual([s['chance_attempts'] for s in witness['steps']],[2,1,1,1])
+        world.close()
+        self.assertTrue(evidence['released'])
+
     def test_deadline_closes_unfinished_world_and_cannot_accept_work(self):
         factory,prior,plan,rng,worlds=self.fixture()
         factory.check_sampling_deadline.side_effect=[None,SamplingDeadlineExceeded('clock')]
@@ -266,6 +350,25 @@ class KernelTests(unittest.TestCase):
         def normalized(rows):
             return {k:v/sum(rows.values()) for k,v in rows.items()}
         self.assertEqual(normalized(joint),normalized(staged))
+
+    def test_four_stage_finite_retries_do_not_remove_switch_policy_mass(self):
+        joint,staged={},{}
+        chance=(Fraction(1,8),Fraction(1,16),Fraction(1,256),Fraction(1,256))
+        factors=Fraction(1)
+        for c in chance:
+            factors*=1-(1-c)**7
+        for theta in range(3):
+            for private in range(2):
+                # Full legal policy mass varies with hidden state at both sleep
+                # requests; the incompatible switch mass remains a rejection.
+                p=Fraction(theta+1,4)*Fraction(private+1,3)*Fraction(theta+2,5)
+                p*=Fraction(private+2,4)
+                joint[theta,private]=p
+                for c in chance:
+                    joint[theta,private]*=c
+                staged[theta,private]=p*factors
+        self.assertEqual({k:v/sum(joint.values()) for k,v in joint.items()},
+            {k:v/sum(staged.values()) for k,v in staged.items()})
 
 
 if __name__=='__main__':
