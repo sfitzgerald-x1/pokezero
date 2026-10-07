@@ -25,6 +25,7 @@ Scientific use still requires independent observation and fresh qualification.
 from dataclasses import dataclass
 import hashlib
 import math
+import random
 
 from .paper_reference import ReferenceRefusal
 from .paper_reference_pending import public_history
@@ -64,6 +65,50 @@ ENGINE_HASHES.update({
     'dist/data/mods/gen4/scripts.js': 'ccb990587bd46b5e4843d748c4b76c43ad30134fc517506517294ace1d47680d',
     'dist/data/mods/gen4/conditions.js': '8ba336b9823d9b806ca6259640fd8cc58666c22b7389b35b34c72937ae46357e',
 })
+
+
+def _condition_chance_trials(factory, snapshot, actions, expected, rng, *, subject):
+    """Transport-only retries; batching is explicitly opt-in, default one.
+
+    Speculative seeds come from a private copy. Only seeds actually attempted by
+    the bridge advance the original stream, including a deadline-partial batch.
+    Neither the policy draw nor the posterior predicate/retry cap changes.
+    """
+    size = getattr(factory, 'conditioning_batch_size', 1)
+    if type(size) is not int or not 1 <= size <= 16:
+        raise ReferenceRefusal('invalid explicit conditioning transport batch size')
+    attempts = 0
+    while attempts < MAX_CHANCE_ATTEMPTS:
+        factory.check_sampling_deadline()
+        if size == 1:
+            seed = rng.getrandbits(64)
+            factory.env.step_from_search_snapshot_for_conditioning(snapshot, actions, chance_seed=seed)
+            attempts += 1
+            if (factory.env.terminal() is None and public_history(
+                    factory.env.public_materialization_state(subject)) == expected):
+                return seed, attempts
+            continue
+        deadline = getattr(factory, 'sampling_deadline_at', None)
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise ReferenceRefusal('batched conditioning requires the original finite decision deadline')
+        speculative = random.Random()
+        speculative.setstate(rng.getstate())
+        seeds = [speculative.getrandbits(64) for _ in range(min(size, MAX_CHANCE_ATTEMPTS-attempts))]
+        result = factory.env.conditioning_batch_from_search_snapshot(snapshot, actions,
+            chance_seeds=seeds, expected_history=expected, deadline_at=deadline)
+        consumed = result['consumed']
+        if type(consumed) is not int or not 0 <= consumed <= len(seeds):
+            raise ReferenceRefusal('conditioning batch consumed-count drift')
+        for seed in seeds[:consumed]:
+            if rng.getrandbits(64) != seed:
+                raise ReferenceRefusal('conditioning batch original RNG stream drift')
+        attempts += consumed
+        factory.check_sampling_deadline()
+        if result['deadline_reached'] or consumed == 0:
+            raise ReferenceRefusal('conditioning batch deadline disagrees with original clock')
+        if result['matched']:
+            return seeds[consumed-1], attempts
+    return None
 
 
 @dataclass(frozen=True)
@@ -400,21 +445,16 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
                 # transporting its full simulator state for every rejected trial.
                 search_snapshot = factory.env.snapshot_for_search()
                 try:
-                    for chance_attempt in range(MAX_CHANCE_ATTEMPTS):
-                        factory.check_sampling_deadline()
-                        seed = rng.getrandbits(64)
-                        factory.env.step_from_search_snapshot_for_conditioning(
-                            search_snapshot, {plan.subject:own_action,plan.opponent:opponent_action},
-                            chance_seed=seed)
-                        if (factory.env.terminal() is None
-                                and public_history(factory.env.public_materialization_state(plan.subject))
-                                == prefix.expected_histories[stage]):
-                            steps.append(dict(own_action=own_action,opponent_action=opponent_action,
-                                opponent_move=candidates[opponent_action]['move_id'],
-                                opponent_legal=list(legal),opponent_priors=list(probabilities),
-                                chance_seed=seed,chance_attempts=chance_attempt+1))
-                            matched = True
-                            break
+                    match = _condition_chance_trials(factory, search_snapshot,
+                        {plan.subject:own_action,plan.opponent:opponent_action},
+                        prefix.expected_histories[stage], rng, subject=plan.subject)
+                    if match is not None:
+                        seed, chance_attempts = match
+                        steps.append(dict(own_action=own_action,opponent_action=opponent_action,
+                            opponent_move=candidates[opponent_action]['move_id'],
+                            opponent_legal=list(legal),opponent_priors=list(probabilities),
+                            chance_seed=seed,chance_attempts=chance_attempts))
+                        matched = True
                 finally:
                     factory.env.release_search_snapshot(search_snapshot)
                 if not matched:
@@ -442,7 +482,9 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
             evidence.update(status='ROOT_VALIDATED',substitute_policy_conditioning=dict(
                 algorithm=plan.receipt['schema'],attempts=attempt+1,max_attempts=max_attempts,
                 max_chance_attempts=MAX_CHANCE_ATTEMPTS,rejected=rejected,steps=steps,
-                chance_transport='bridge-resident restore/reseed/step; lazy observations',
+                chance_transport=('bridge-resident restore/reseed/step; lazy observations'
+                    if getattr(factory, 'conditioning_batch_size', 1) == 1 else
+                    f'ordered bridge batch size {factory.conditioning_batch_size}; production-parser rejection audit'),
                 anchor_rng_state=anchor_rng_state,
                 sampled_substitute_hp=hp,law_certificate=plan.receipt,
                 prior_actor_root_key=prior.root.key.hex(),current_actor_root_key=factory.root.key.hex(),

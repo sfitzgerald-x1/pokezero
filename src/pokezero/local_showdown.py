@@ -1235,6 +1235,119 @@ class LocalShowdownEnv:
             raise LocalShowdownError(f"Bridge emitted malformed search snapshot release event: {event!r}")
         return released
 
+    def conditioning_batch_from_search_snapshot(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+        *,
+        chance_seeds: Sequence[int],
+        expected_history: Sequence[str],
+        deadline_at: float,
+    ) -> Mapping[str, Any]:
+        """Try a bounded ordered prefix of explicit seeds in one bridge exchange.
+
+        This opt-in API does not draw RNG or change retry limits. The caller must
+        consume only the returned number of seeds and check its original deadline
+        before accepting a world. Every rejection is independently checked with
+        the production parser; an uncertain bridge projection stops, never skips,
+        a trial. Only the final consumed trial changes Python's hypothetical state.
+        No live battle is permitted and no observations are eagerly constructed.
+        """
+        if self._battle_token is None or not self._search_snapshot_permitted:
+            raise LocalShowdownError("Conditioning batches require a sampled search world.")
+        snapshot_id = snapshot.bridge_snapshot.get("snapshot_id")
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ValueError("Conditioning batch requires a bridge-resident search handle.")
+        if (snapshot.format_id != self._format_id
+                or snapshot.observation_format_id != self._observation_format_id):
+            raise ValueError("Conditioning batch snapshot format differs from this battle.")
+        seeds = tuple(chance_seeds)
+        if not 1 <= len(seeds) <= 16 or any(type(seed) is not int for seed in seeds):
+            raise ValueError("Conditioning batch requires 1..16 explicit integer seeds.")
+        if type(deadline_at) not in (int, float) or not math.isfinite(deadline_at):
+            raise ValueError("Conditioning batch requires a finite original deadline.")
+        remaining = deadline_at - time.perf_counter()
+        if remaining <= 0:
+            return dict(consumed=0, matched=False, deadline_reached=True, step=None)
+
+        def history(parser_or_replay):
+            return tuple(event.raw_line for event in parser_or_replay.public_events
+                if event.raw_line not in ("", "|", "|message|The battle's RNG was reset."))
+
+        expected = tuple(expected_history)
+        if any(not isinstance(line, str) for line in expected):
+            raise ValueError("Conditioning history must contain public protocol strings.")
+        base = history(snapshot.replay)
+        if expected[:len(base)] != base:
+            raise ValueError("Conditioning history does not extend the retained public prefix.")
+        # Read requested players from the paired snapshot, never the current
+        # shell (which may be terminal or at a different one-sided request).
+        requested = requested_players_from_requests(snapshot.latest_requests)
+        cache = snapshot.search_choice_cache
+        if (not requested or not cache or any(player not in cache for player in requested)
+                or any(type(actions.get(player)) is not int for player in requested)):
+            raise ValueError("Conditioning batch requires cached legal integer actions for every retained request.")
+        try:
+            choices = {player: cache[player][actions[player]] for player in requested}
+        except KeyError as exc:
+            raise ValueError("Conditioning batch action is not legal in the retained snapshot.") from exc
+        remaining = deadline_at - time.perf_counter()
+        if remaining <= 0:
+            return dict(consumed=0, matched=False, deadline_reached=True, step=None)
+        event = self._bridge_request_event({
+            "type": "restore_search_conditioning_batch",
+            "battleId": self._battle_token, "snapshotId": snapshot_id,
+            "choices": choices, "seeds": [showdown_seed_from_int(seed) for seed in seeds],
+            "expectedSuffix": list(expected[len(base):]), "initialTurn": snapshot.replay.turn_number,
+            "remainingMs": remaining * 1000,
+            "waitMs": self.config.read_timeout_seconds * 1000,
+        }, "conditioning_batch")
+        trials, events = event.get("trials"), event.get("events")
+        if (not isinstance(trials, list) or not isinstance(events, list)
+                or len(trials) > len(seeds)
+                or any(type(event.get(key)) is not bool for key in ("matched", "uncertain", "deadlineReached"))):
+            raise LocalShowdownError("Malformed conditioning batch receipt.")
+        matched = False
+        for index, trial in enumerate(trials):
+            if (not isinstance(trial, Mapping) or type(trial.get("index")) is not int
+                    or trial["index"] != index or not isinstance(trial.get("publicLines"), list)
+                    or any(not isinstance(line, str) for line in trial["publicLines"])
+                    or any(type(trial.get(key)) is not bool for key in ("terminal", "matched", "uncertain"))):
+                raise LocalShowdownError("Malformed ordered conditioning trial receipt.")
+            parser = _ReplayParser.from_snapshot(snapshot.replay)
+            parser.feed(trial["publicLines"])
+            matched = not trial["terminal"] and history(parser) == expected
+            if trial["matched"] != matched and not trial["uncertain"]:
+                raise LocalShowdownError("Bridge conditioning predicate disagrees with production parser.")
+            if index < len(trials) - 1 and (matched or trial["uncertain"]):
+                raise LocalShowdownError("Conditioning batch continued past its first candidate.")
+        if not trials:
+            if events or not event["deadlineReached"] or event["matched"] or event["uncertain"]:
+                raise LocalShowdownError("Empty conditioning batch lacks deadline evidence.")
+            return dict(consumed=0, matched=False, deadline_reached=True, step=None)
+        last = trials[-1]
+        if event["matched"] != last["matched"] or event["uncertain"] != last["uncertain"]:
+            raise LocalShowdownError("Conditioning batch final predicate receipt drift.")
+        if len(trials) < len(seeds) and not (event["matched"] or event["uncertain"] or event["deadlineReached"]):
+            raise LocalShowdownError("Conditioning batch stopped without a candidate or deadline.")
+        boundaries = [row for row in events if isinstance(row, Mapping) and row.get("type") in ("ready", "terminal")]
+        public_lines = [line for row in events if isinstance(row, Mapping)
+            and row.get("type") == "stream" and row.get("stream") == "omniscient"
+            for line in row.get("lines", ())]
+        if (len(boundaries) != 1 or (boundaries[0]["type"] == "terminal") != last["terminal"]
+                or public_lines != last["publicLines"]
+                or any(not isinstance(row, Mapping) or row.get("battleId") != self._battle_token
+                    or row.get("type") not in ("stream", "choice_ack", "ready", "terminal") for row in events)):
+            raise LocalShowdownError("Conditioning batch final stream/boundary receipt drift.")
+        self._restore_local_snapshot_state(snapshot)
+        self._latest_requests = {}
+        for row in events:
+            self._apply_event(row)
+        result = StepResult(observations={}, rewards=self._rewards(),
+            terminal=self.terminal(), requested_players=self.requested_players())
+        return dict(consumed=len(trials), matched=matched,
+            deadline_reached=event["deadlineReached"] or time.perf_counter() >= deadline_at, step=result)
+
     def _restore_local_snapshot_state(self, snapshot: LocalShowdownSnapshot) -> None:
         self._battle_id = snapshot.battle_id
         self._format_id = snapshot.format_id

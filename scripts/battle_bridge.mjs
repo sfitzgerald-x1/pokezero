@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
+import {retryPublicSuffix, samePublicSuffix} from "./battle_bridge_conditioning_batch.mjs";
 import {referenceRestState, bindReferenceRestSources, referenceInducedSleepState} from "./battle_bridge_reference_rest.mjs";
 import {applyReferenceTurnClocks, applyReferenceRechargePP} from "./battle_bridge_reference_turn_clocks.mjs";
 import {refreshReferenceTrapping} from "./battle_bridge_reference_trapping.mjs";
@@ -64,6 +65,17 @@ function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
+function emitForBattle(battle, payload) {
+  const capture = battle.conditioningCapture;
+  if (!capture) return emit(payload);
+  capture.events.push(payload);
+  if (payload.type === "error" || payload.type === "stream_end") {
+    capture.reject(new Error(payload.message || "Conditioning stream ended unexpectedly."));
+  } else if (payload.type === "ready" || payload.type === "terminal") {
+    capture.resolve(payload);
+  }
+}
+
 function battleIdOf(command) {
   return command.battleId == null ? DEFAULT_BATTLE_ID : String(command.battleId);
 }
@@ -87,7 +99,7 @@ function emitStreamChunk(battle, stream, chunk) {
     .split("\n")
     .filter(line => line.length > 0);
   if (lines.length > 0) {
-    emit({ type: "stream", battleId: battle.battleId, stream, lines });
+    emitForBattle(battle, { type: "stream", battleId: battle.battleId, stream, lines });
     recordBoundaryLines(battle, stream, lines);
   }
 }
@@ -98,9 +110,9 @@ function listenToStream(battle, name, stream) {
       for await (const chunk of stream) {
         emitStreamChunk(battle, name, chunk);
       }
-      emit({ type: "stream_end", battleId: battle.battleId, stream: name });
+      emitForBattle(battle, { type: "stream_end", battleId: battle.battleId, stream: name });
     } catch (error) {
-      emit({ type: "error", battleId: battle.battleId, stream: name, message: error.message });
+      emitForBattle(battle, { type: "error", battleId: battle.battleId, stream: name, message: error.message });
     }
   })();
 }
@@ -189,7 +201,7 @@ function scheduleReady(battle, requested = actionableRequestedPlayers(battle)) {
       battle.readyScheduled = false;
       return;
     }
-    emit({
+    emitForBattle(battle, {
       type: "ready",
       battleId: battle.battleId,
       requested: currentRequested,
@@ -206,7 +218,7 @@ function scheduleTerminal(battle) {
   const procMs = nodeProcMs(battle);
   setImmediate(() => {
     if (battle.readyEpoch !== terminalEpoch || !battle.terminalScheduled) return;
-    emit({ type: "terminal", battleId: battle.battleId, nodeProcMs: procMs });
+    emitForBattle(battle, { type: "terminal", battleId: battle.battleId, nodeProcMs: procMs });
   });
 }
 
@@ -466,6 +478,64 @@ async function restoreSearchAndSendChoices(command) {
     await battle.streams.omniscient.write(`>reseed ${command.seed}`);
   }
   await submitChoices(battle, command.choices, startedAt);
+}
+
+async function restoreSearchConditioningBatch(command) {
+  const battle = requireBattle(command);
+  const startedAt = process.hrtime.bigint();
+  if (battle.conditioningCapture) throw new Error("Conditioning batch already active.");
+  if (!Array.isArray(command.seeds) || command.seeds.length < 1 || command.seeds.length > 16 ||
+      command.seeds.some(seed => typeof seed !== "string" || !seed.trim())) {
+    throw new Error("Conditioning batch requires 1..16 explicit seeds.");
+  }
+  if (!Array.isArray(command.expectedSuffix) || command.expectedSuffix.some(line => typeof line !== "string") ||
+      !Number.isSafeInteger(command.initialTurn) || command.initialTurn < 0 ||
+      !Number.isFinite(command.remainingMs) || command.remainingMs <= 0 ||
+      !Number.isFinite(command.waitMs) || command.waitMs <= 0) {
+    throw new Error("Invalid conditioning batch predicate or deadline.");
+  }
+  const trials = [];
+  let events = [];
+  let matched = false;
+  let uncertain = false;
+  let deadlineReached = false;
+  for (let index = 0; index < command.seeds.length; index++) {
+    if (elapsedNodeProcMs(startedAt) >= command.remainingMs) {
+      deadlineReached = true;
+      break;
+    }
+    let resolve, reject;
+    const boundary = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+    // Attach immediately: a stream can fail while the write promise is pending.
+    void boundary.catch(() => {});
+    const capture = {events: [], resolve, reject};
+    battle.conditioningCapture = capture;
+    const timeout = setTimeout(() => reject(new Error(
+      `Conditioning trial ${index} boundary timed out: ${capture.events.map(event =>
+        `${event.type}:${event.stream || ''}`).join(',')}.`)), command.waitMs);
+    try {
+      await restoreSearchAndSendChoices({...command, seed: command.seeds[index]});
+      const terminal = (await boundary).type === "terminal";
+      // Drain the boundary's final stream callbacks before replacing capture.
+      await new Promise(ok => setImmediate(ok));
+      events = capture.events;
+      const publicLines = events.filter(event => event.type === "stream" && event.stream === "omniscient")
+        .flatMap(event => event.lines);
+      if (events.some(event => event.type === "stream" && event.lines.some(line => line.startsWith("|error|")))) {
+        throw new Error("Showdown rejected a conditioning batch choice.");
+      }
+      const suffix = retryPublicSuffix(publicLines, command.initialTurn);
+      matched = !terminal && samePublicSuffix(suffix, command.expectedSuffix);
+      uncertain = !terminal && suffix === null;
+      trials.push({index, publicLines, terminal, matched, uncertain});
+    } finally {
+      clearTimeout(timeout);
+      delete battle.conditioningCapture;
+    }
+    if (matched || uncertain) break;
+  }
+  emit({type: "conditioning_batch", battleId: battle.battleId,
+    trials, events, matched, uncertain, deadlineReached, nodeProcMs: elapsedNodeProcMs(startedAt)});
 }
 
 function releaseSearchSnapshot(command) {
@@ -1900,7 +1970,7 @@ async function submitChoices(battle, choices, receivedAt) {
       throw new Error(`Choice for ${player} must be a non-empty string.`);
     }
     await battle.streams[player].write(choice);
-    emit({ type: "choice_ack", battleId: battle.battleId, player, choice });
+    emitForBattle(battle, { type: "choice_ack", battleId: battle.battleId, player, choice });
   }
 }
 
@@ -1956,6 +2026,9 @@ async function handleCommand(command) {
       break;
     case "restore_search_choices":
       await restoreSearchAndSendChoices(command);
+      break;
+    case "restore_search_conditioning_batch":
+      await restoreSearchConditioningBatch(command);
       break;
     case "release_search_snapshot":
       releaseSearchSnapshot(command);
