@@ -251,18 +251,44 @@ class RootAllocationTest(unittest.TestCase):
             "source_commit": commit,
             "execution_tree_sha256": active["execution_tree_sha256"],
             "engine_fingerprint": fingerprint,
-            "source_files_sha256": {runner.SOURCE_BOUND_RECEIPT_RUNNER: "e" * 64},
+            "source_files_sha256": {
+                relative: runner.common.sha256_file(runner.ROOT / relative)
+                for relative in (*runner.common.REQUIRED_RECEIPT_FILES, runner.SOURCE_BOUND_RECEIPT_RUNNER)
+            },
         }
         with (
             mock.patch.object(runner.common, "_read_json", return_value=receipt),
+            mock.patch.object(runner.common, "_receipt_path", return_value=Path("/receipt.json")),
             mock.patch.object(runner.common, "_active_source_provenance", return_value=active),
-            mock.patch.object(runner, "sha256_file", return_value="e" * 64),
             mock.patch.object(runner.common, "assert_fresh"),
             mock.patch.object(runner.common, "compute_fingerprint", return_value={"fingerprint": fingerprint}),
         ):
             actual_receipt, actual_active = runner._receipt_and_source("/does/not/matter.json")
         self.assertEqual(actual_receipt, receipt)
         self.assertEqual(actual_active, active)
+
+        malformed_receipts = [
+            ({**receipt, "execution_tree_sha256": None}, "execution_tree_sha256"),
+            ({**receipt, "source_files_sha256": {
+                runner.SOURCE_BOUND_RECEIPT_RUNNER: receipt["source_files_sha256"][runner.SOURCE_BOUND_RECEIPT_RUNNER],
+            }}, "required executable"),
+            ({**receipt, "source_files_sha256": {
+                **receipt["source_files_sha256"],
+                "src/pokezero/engine_search.py": "0" * 64,
+            }}, "file drift"),
+            ({**receipt, "execution_tree_sha256": "f" * 64}, "active source tree differs"),
+        ]
+        for malformed, message in malformed_receipts:
+            with (
+                self.subTest(message=message),
+                mock.patch.object(runner.common, "_read_json", return_value=malformed),
+                mock.patch.object(runner.common, "_receipt_path", return_value=Path("/receipt.json")),
+                mock.patch.object(runner.common, "_active_source_provenance", return_value=active),
+                mock.patch.object(runner.common, "assert_fresh") as freshness,
+            ):
+                with self.assertRaisesRegex(DeadlineQualificationError, message):
+                    runner._receipt_and_source("/receipt.json")
+                freshness.assert_not_called()
 
 
 if __name__ == "__main__":

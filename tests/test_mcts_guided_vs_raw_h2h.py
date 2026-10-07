@@ -6,7 +6,7 @@ import fcntl
 import importlib.util
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 import random
 import sys
@@ -311,6 +311,24 @@ class RawAdapterTest(unittest.TestCase):
         self.assertGreaterEqual(adapter.stats.decision_wall_seconds, 0.0)
 
 
+class SealedContinuationFactoryTest(unittest.TestCase):
+    def test_returns_fresh_mappings_for_each_continuation_arm(self) -> None:
+        created: list[str] = []
+
+        def policy_for_player(player_id: str) -> object:
+            created.append(player_id)
+            return object()
+
+        factory = RUNNER._fresh_two_seat_policy_factory(policy_for_player)
+        first = factory()
+        second = factory()
+        self.assertEqual(set(first), {"p1", "p2"})
+        self.assertEqual(set(second), {"p1", "p2"})
+        self.assertIsNot(first["p1"], second["p1"])
+        self.assertIsNot(first["p2"], second["p2"])
+        self.assertEqual(created, ["p1", "p2", "p1", "p2"])
+
+
 class StudyShapeTest(unittest.TestCase):
     def test_registered_study_requires_exact_pair_and_game_counts(self) -> None:
         manifest = {
@@ -426,25 +444,6 @@ class SealedOverrideAuditContractTest(unittest.TestCase):
         }
         with self.assertRaisesRegex(Exception, "registered deterministic raw selector"):
             RUNNER._sealed_override_audit_config(manifest)
-
-    def test_continuation_policy_builder_returns_a_fresh_callable_factory(self) -> None:
-        histories = {"p1": ("p1-prefix",), "p2": ("p2-prefix",)}
-        allocations: list[dict[str, tuple[str, ...]]] = []
-
-        def policy_builder(observation_histories: object) -> dict[str, object]:
-            copied = {player: tuple(history) for player, history in observation_histories.items()}
-            allocations.append(copied)
-            return {"p1": object(), "p2": object()}
-
-        factory_builder = RUNNER._fresh_continuation_policy_factory_builder(policy_builder)
-        factory = factory_builder(histories)
-        self.assertTrue(callable(factory))
-        first = factory()
-        second = factory()
-        self.assertEqual(set(first), {"p1", "p2"})
-        self.assertEqual(set(second), {"p1", "p2"})
-        self.assertIsNot(first["p1"], second["p1"])
-        self.assertEqual(allocations, [histories, histories])
 
     def test_root_action_audit_contract_requires_fixed_trials_and_predeclared_roots(self) -> None:
         self.assertIsNone(RUNNER._sealed_root_action_audit_config({}, seeds=(19,)))
@@ -846,6 +845,26 @@ class DecisionRngCaptureContractTest(unittest.TestCase):
 
 
 class GuidedConfigTest(unittest.TestCase):
+    def test_every_registered_config_accepts_realized_engine_defaults(self) -> None:
+        for registered in RUNNER.REGISTERED_ENGINE_CONFIGS:
+            with self.subTest(config=registered):
+                realized = asdict(ENGINE_SEARCH.EngineMctsConfig(
+                    **registered,
+                    model_path="/model.pt",
+                    checkpoint_path="/checkpoint.pt",
+                    tables_path="/tables.json",
+                ))
+                RUNNER._require_registered_candidate_config(realized)
+                for key, value in (
+                    ("policy_opponent", True),
+                    ("policy_opponent_seed", 1),
+                    ("record_joint_actions", True),
+                ):
+                    with self.subTest(knob=key):
+                        drifted = {**realized, key: value}
+                        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+                            RUNNER._require_registered_candidate_config(drifted)
+
     def test_guided_configuration_is_exact_not_a_budget_lookalike(self) -> None:
         config = dict(RUNNER.REGISTERED_ENGINE_CONFIG)
         RUNNER._require_registered_candidate_config(config)
