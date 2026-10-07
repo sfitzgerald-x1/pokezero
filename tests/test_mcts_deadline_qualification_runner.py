@@ -71,11 +71,12 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 runner._parse_args(args[:-1] + ["5"])
 
-    def test_model_priors_are_opt_in(self) -> None:
+    def test_model_priors_are_explicit_and_default_to_legacy_contract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            base = _arguments(Path(temporary) / "out")
-            self.assertFalse(runner._parse_args(base).model_priors)
-            self.assertTrue(runner._parse_args(base + ["--model-priors"]).model_priors)
+            args = _arguments(Path(temporary) / "out")
+            self.assertFalse(runner._parse_args(args).model_priors)
+            self.assertTrue(runner._parse_args(args + ["--model-priors"]).model_priors)
+            self.assertFalse(runner._parse_args(args + ["--no-model-priors"]).model_priors)
 
     def test_zero_native_prefix_exception_is_explicitly_opt_in(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

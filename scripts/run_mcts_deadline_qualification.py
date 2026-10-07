@@ -302,20 +302,21 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--worlds", type=int, default=4)
     parser.add_argument(
+        "--model-priors",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Use the model policy as the candidate-side MCTS selection prior. "
+            "Disabled by default to preserve the original deadline-mechanics contract."
+        ),
+    )
+    parser.add_argument(
         "--model-world-workers",
         type=int,
         default=1,
         help=(
             "Concurrent CPU model-world workers. A timed run records and "
             "independently validates remaining-budget dispatch for this value."
-        ),
-    )
-    parser.add_argument(
-        "--model-priors",
-        action="store_true",
-        help=(
-            "Enable own-policy priors for an explicitly labelled profile. The default "
-            "remains the neutral-prior deadline-qualification contract."
         ),
     )
     parser.add_argument(

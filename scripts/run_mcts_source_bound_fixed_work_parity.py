@@ -46,12 +46,16 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sims", type=int, default=256)
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--worlds", type=int, default=4)
-    parser.add_argument("--parallel-workers", type=int, default=2)
     parser.add_argument(
         "--model-priors",
-        action="store_true",
-        help="Use the candidate's own policy priors in both fixed-work arms.",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Use the model policy as the candidate-side MCTS selection prior. "
+            "Disabled by default to preserve the original fixed-work contract."
+        ),
     )
+    parser.add_argument("--parallel-workers", type=int, default=2)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
     for name in ("depth", "sims", "batch", "worlds", "parallel_workers"):
