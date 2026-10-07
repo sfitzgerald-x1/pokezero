@@ -150,11 +150,23 @@ class DeadlineQualificationRunnerSafetyTest(unittest.TestCase):
             self.assertEqual(active["tree_status"], "explicit_commit_without_git")
             self.assertEqual(active["execution_tree_sha256"], receipt["execution_tree_sha256"])
 
-    def test_reviewed_engine_source_pin_matches_the_checked_in_mechanism(self) -> None:
-        """A source edit cannot leave the runner's qualification pin stale."""
+    def test_historical_gate_refuses_unreviewed_engine_source(self) -> None:
+        """Current-source profiles must not relabel the historical mechanism."""
+        with (
+            mock.patch.object(runner, "sha256_file", return_value="0" * 64),
+            mock.patch.object(runner, "assert_fresh") as freshness,
+        ):
+            with self.assertRaisesRegex(runner.DeadlineQualificationError, "reviewed deadline mechanism"):
+                runner._deadline_mechanics_evidence({})
+        freshness.assert_not_called()
+
+    def test_historical_gate_keeps_the_reviewed_python_source_pin(self) -> None:
+        # Independently verified from engine_search.py at 14bbcfb7, not from
+        # today's file or the runner's own constant. Keep this historical
+        # expectation when the current-source qualification path evolves.
         self.assertEqual(
-            runner.sha256_file(runner.ROOT / "src" / "pokezero" / "engine_search.py"),
             runner.REVIEWED_ENGINE_SEARCH_SHA256,
+            "cd080fc3de46bd8b8cfdcf1d80c3b4382a210472149816788c62284414860d7a",
         )
 
     def test_stale_installed_native_engine_is_refused(self) -> None:
