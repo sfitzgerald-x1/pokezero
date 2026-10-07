@@ -148,7 +148,8 @@ def verify(m, *, source_root=REPO):
         old = json.loads(Path(recovery['original_registration']).read_text())
         if recovery.get('kind') in ('native-semantic-repair', 'native-and-reference-trapping-repair',
                                     'native-and-reference-faint-repair', 'native-and-reference-substitute-repair',
-                                    'native-and-reference-substitute-tail-repair'):
+                                    'native-and-reference-substitute-tail-repair',
+                                    'native-and-reference-guarded-staged-repair'):
             from pokezero.mcts_eval.wider_native_recovery import verify_historical
             verify_historical(recovery['original_registration'])
         else:
@@ -161,8 +162,11 @@ def verify(m, *, source_root=REPO):
 
 def register(args):
     staged = getattr(args, 'staged_substitute_conditioning', False)
-    if staged and not args.qualification:
-        raise RuntimeError('staged conditioning first requires a fresh technical qualification; no confirmation adapter is qualified yet')
+    guarded_recovery = getattr(args, 'guarded_staged_recover_from', None)
+    if staged and not args.qualification and guarded_recovery is None:
+        raise RuntimeError('staged confirmation requires fresh technical qualification and explicit all8-qualified guarded recovery')
+    if guarded_recovery is not None and (args.qualification or not staged):
+        raise RuntimeError('guarded staged recovery requires confirmation and explicit staged opt-in')
     if git('status', '--porcelain'):
         raise RuntimeError('commit reviewed source before registration')
     import pokezero_search
@@ -263,7 +267,7 @@ def register(args):
     recovery_modes = (args.recover_from, args.native_recover_from, args.trapping_recover_from,
                       args.pending_qualification_recover_from, getattr(args, 'faint_recover_from', None),
                       getattr(args, 'substitute_recover_from', None),
-                      getattr(args, 'substitute_tail_recover_from', None))
+                      getattr(args, 'substitute_tail_recover_from', None), guarded_recovery)
     if sum(value is not None for value in recovery_modes) > 1:
         raise RuntimeError('only one explicitly registered recovery mode is permitted')
     if args.recover_from is not None:
@@ -367,6 +371,22 @@ def register(args):
         m['limitations'].append(recovery['disclosure'])
         m['limitations'].append('original decision390 Q/N/M/F and20 worker positions retained; '
             'the failed active attempt is also charged against the original game wall allowance')
+    if guarded_recovery is not None:
+        if not all((args.staged_audit_dir, args.qualification_readout,
+                args.native_qualification_audit, args.conditioning_qualification_audit)):
+            raise RuntimeError('guarded staged recovery needs complete fresh all8 and independent proof/audit bindings')
+        from pokezero.mcts_eval.wider_guarded_staged_recovery import prepare
+        from search_followthrough_diagnostic import restore_reference_checkpoint
+        m['conditioning_limits'] = dict(substitute=2048, pending=128, compatible_template=128)
+        recovery = prepare(guarded_recovery, args.staged_audit_dir, args.qualification_readout,
+            args.native_qualification_audit, args.conditioning_qualification_audit, m,
+            repo=REPO, git=git, sha=sha, verify=verify, bound_rows=bound_rows,
+            step_files=step_files, restore_reference_checkpoint=restore_reference_checkpoint)
+        m.update(schema='pokezero.wider-search.mixed-guarded-staged-repair.v8', repair_retention=recovery,
+            retained_input_hashes=recovery['input_hashes'],
+            recovery_claim_rule='full64/256 roster and all387420489 score assignments across9 outcome-blind historical clusters')
+        m['limitations'].append(recovery['disclosure'])
+        m['limitations'].append('only15 accepted boundaries/checkpoint392 and original20 RNG positions restored; prior active failed wall retained; no diagnostic or failed work restored')
     verify(m)
     args.output.mkdir(exist_ok=False)
     save(args.output/'registration.json', m)
@@ -412,6 +432,10 @@ def validate_qualification(path, confirmation):
         raise RuntimeError('qualification requires the canonical durable readout')
     registration = json.loads((path.parent/'registration.json').read_text())
     recovery = confirmation.get('repair_retention')
+    if recovery is not None and recovery.get('kind') == 'native-and-reference-guarded-staged-repair':
+        from pokezero.mcts_eval.wider_guarded_staged_recovery import validate_qualification as validate_staged
+        return validate_staged(path, confirmation, recovery, repo=REPO, git=git,
+            sha=sha, verify=verify, bound_rows=bound_rows)
     if recovery is not None and recovery.get('kind') == 'native-and-reference-substitute-tail-repair':
         from pokezero.mcts_eval.wider_substitute_tail_recovery import validate_transfer
         return validate_transfer(path, confirmation, recovery, repo=REPO, git=git,
@@ -634,6 +658,9 @@ def run(args, m):
                                     elif recovery.get('kind') == 'native-and-reference-substitute-tail-repair':
                                         from pokezero.mcts_eval.wider_substitute_tail_recovery import validate_resumed_workers
                                         validate_resumed_workers(measured.worker_receipts, probe)
+                                    elif recovery.get('kind') == 'native-and-reference-guarded-staged-repair':
+                                        from pokezero.mcts_eval.wider_guarded_staged_recovery import validate_resumed_workers
+                                        validate_resumed_workers(measured.worker_receipts, probe)
                                     elif worker_zero and (worker_zero[0]['packed_team_sha256'] != probe['draw']['packed_team_sha256']
                                             or worker_zero[0]['materialization_seed'] != probe['draw']['materialization_seed']):
                                         raise RuntimeError('recovered first hidden draw differs from exact failed-draw qualification')
@@ -706,7 +733,8 @@ def readout(args, m):
             from pokezero.mcts_eval.wider_trapping_recovery import add_mixed_sensitivity
             add_mixed_sensitivity(result, m)
         elif m['repair_retention'].get('kind') in ('native-and-reference-substitute-repair',
-                                                 'native-and-reference-substitute-tail-repair'):
+                                                 'native-and-reference-substitute-tail-repair',
+                                                 'native-and-reference-guarded-staged-repair'):
             from pokezero.mcts_eval.wider_substitute_recovery import add_substitute_sensitivity
             add_substitute_sensitivity(result, m)
         else:
@@ -745,6 +773,8 @@ def main():
     parser.add_argument('--substitute-recover-from', type=Path)
     parser.add_argument('--substitute-tail-recover-from', type=Path)
     parser.add_argument('--tail-transfer-audit-dir', type=Path)
+    parser.add_argument('--guarded-staged-recover-from', type=Path)
+    parser.add_argument('--staged-audit-dir', type=Path)
     parser.add_argument('--conditioning-qualification-audit', type=Path)
     args = parser.parse_args()
     if args.mode == 'register':
