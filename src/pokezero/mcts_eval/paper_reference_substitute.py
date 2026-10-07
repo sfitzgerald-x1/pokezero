@@ -119,6 +119,15 @@ def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=MA
     # Public-only counters diagnose exhaustion without changing the proposal
     # stream, acceptance rule, accepted witness, or sampled-world ownership.
     prefix_counts, mismatches = Counter(), Counter()
+    if getattr(factory, 'staged_substitute_conditioning', False):
+        from .paper_reference_staged_chance import build_constant_chance_plan, sample_staged_path
+        plan = build_constant_chance_plan(factory)
+        if plan is not None:
+            return sample_staged_path(factory, prior, plan, hidden_rng, evidence, max_attempts=max_attempts)
+        # Explicitly disclosed original-kernel dispatch, not a raw-policy or
+        # unconditioned-world fallback. No positions or positive-likelihood
+        # hidden teams are dropped to make an optimization eligible.
+        evidence['constant_chance_dispatch'] = 'unsupported public program; original joint conditioning'
     for attempt in range(max_attempts):
         check_deadline()
         world, accepted = prior(hidden_rng), False

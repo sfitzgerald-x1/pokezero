@@ -44,6 +44,7 @@ class ShowdownWorkerFactory:
     # Explicit bounded completion adaptation; defaults preserve strict forcing.
     allow_earlier_compatible_template: bool = False
     max_known_set_draws: int = 10
+    staged_substitute_conditioning: bool = False
 
     def __call__(self, index):
         return _ShowdownRuntime(self, index)
@@ -75,6 +76,7 @@ class _ShowdownRuntime:
         self.source = source
         self.allow_earlier_compatible_template = binding.allow_earlier_compatible_template
         self.max_known_set_draws = binding.max_known_set_draws
+        self.staged_substitute_conditioning = binding.staged_substitute_conditioning
         try:
             # Warm bridge startup belongs to the separately measured pool startup.
             # This synthetic startup battle contributes NO trajectory/statistics.
@@ -116,7 +118,8 @@ class _ShowdownRuntime:
         factory = PublicRootWorldFactory(env=self.env, state=state, observation=observation,
             evaluator=self.evaluator, set_source=self.source,
             allow_earlier_compatible_template=self.allow_earlier_compatible_template,
-            max_known_set_draws=self.max_known_set_draws, pending_transition=pending)
+            max_known_set_draws=self.max_known_set_draws, pending_transition=pending,
+            staged_substitute_conditioning=getattr(self, 'staged_substitute_conditioning', False))
         receipt_index, forward_index = 0, self.evaluator.forwards
 
         def evidence():

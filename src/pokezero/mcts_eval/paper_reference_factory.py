@@ -62,7 +62,10 @@ class PublicRootWorldFactory:
     def __init__(self, *, env: LocalShowdownEnv, state: PublicBattleMaterializationState,
                  observation: Any, evaluator: ChampionEvaluator, set_source: Gen3RandbatSource,
                  allow_earlier_compatible_template: bool = False,
-                 max_known_set_draws: int = 10, pending_transition: Any = None) -> None:
+                 max_known_set_draws: int = 10, pending_transition: Any = None,
+                 staged_substitute_conditioning: bool = False) -> None:
+        if type(staged_substitute_conditioning) is not bool:
+            raise ReferenceRefusal('constant-chance conditioning requires an explicit boolean opt-in')
         if state.replay.requests:
             raise ReferenceRefusal("public root must strip replay request payloads")
         from .paper_reference_pending import requires_faint_encore_replay, validate_transition
@@ -125,6 +128,7 @@ class PublicRootWorldFactory:
         self.pending_transition = pending_transition
         self.allow_earlier_compatible_template = allow_earlier_compatible_template
         self.max_known_set_draws = max_known_set_draws
+        self.staged_substitute_conditioning = staged_substitute_conditioning
         self.own_team = own_team
         self.sampler = PaperHiddenTeamSampler(env, set_source=set_source,
             allow_earlier_compatible_template=allow_earlier_compatible_template,
