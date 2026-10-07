@@ -979,7 +979,7 @@ jobs:
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
             tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 82 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 83 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"
@@ -990,7 +990,7 @@ jobs:
             cargo test --release --features model --lib policy_bridge::tests \
             --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/policy-opponent-bridge.log
-          grep -qE '^test result: ok\. 4 passed; 0 failed' /tmp/policy-opponent-bridge.log
+          grep -qE '^test result: ok\. 7 passed; 0 failed' /tmp/policy-opponent-bridge.log
 
       - name: Paper trajectory reference contracts on the model wheel
         env:

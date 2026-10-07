@@ -683,6 +683,8 @@ struct MoveEntry {
     effect_chance: i64,
     self_hp_cost: f64,
     max_pp: i64,
+    #[cfg(feature = "model")]
+    base_pp: i64,
 }
 
 pub struct Tables {
@@ -873,6 +875,8 @@ impl Tables {
                         effect_chance: as_i64(get(entry, "effect_chance")),
                         self_hp_cost: as_f64(get(entry, "self_hp_cost")),
                         max_pp: as_i64(get(entry, "max_pp")),
+                        #[cfg(feature = "model")]
+                        base_pp: as_i64(get(entry, "pp")),
                     },
                 );
             }
@@ -910,6 +914,11 @@ impl Tables {
     #[cfg(feature = "model")]
     pub(crate) fn registered_move_max_pp(&self) -> HashMap<String, i64> {
         self.moves.iter().map(|(id, info)| (id.clone(), info.max_pp)).collect()
+    }
+
+    #[cfg(feature = "model")]
+    pub(crate) fn registered_move_base_pp(&self) -> HashMap<String, i64> {
+        self.moves.iter().map(|(id, info)| (id.clone(), info.base_pp)).collect()
     }
 
     #[cfg(feature = "model")]

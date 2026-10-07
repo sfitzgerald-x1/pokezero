@@ -4,7 +4,7 @@
 //! cross the boundary. Subject leaf/value/PUCT evaluation remains in model.rs.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use poke_engine::choices::Choices;
@@ -22,6 +22,92 @@ type BranchKey = (usize, usize);
 struct PublicPrefix {
     lines: Vec<String>,
     meta: crate::leaf::LeafMeta,
+    own_pp: OwnPpLedger,
+}
+
+type MoveCharges = HashMap<(usize, String, String), i64>;
+
+/// Original moves and Transform's temporary five-PP slots have separate banks.
+/// Native tracks every copied-slot decrement (<10 PP), but deliberately omits
+/// high-PP decrements. Retain only original-bank charges for root-base repair.
+#[derive(Clone, Default)]
+struct OwnPpLedger {
+    original_charges: MoveCharges,
+    transformed: HashSet<String>,
+    active: String,
+}
+
+fn identity(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+impl OwnPpLedger {
+    fn from_root(side: &Side, species: &[String]) -> Self {
+        let transformed = species
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| side.pokemon.pkmn[*index].pre_transform.is_some())
+            .map(|(_, name)| identity(name))
+            .collect();
+        let active = side
+            .active_index
+            .serialize()
+            .parse::<usize>()
+            .expect("native party index");
+        Self {
+            transformed,
+            active: identity(&species[active]),
+            ..Self::default()
+        }
+    }
+
+    fn advance(
+        &mut self,
+        before: &MoveCharges,
+        after: &MoveCharges,
+        lines: &[String],
+        side_one: bool,
+    ) -> PyResult<()> {
+        let seat = usize::from(!side_one);
+        // A successful Transform charges the initiating move before changing
+        // banks; a second Transform charges the already-copied bank. Classify
+        // this edge's charges using the PRE-edge transformation state.
+        for (key, total) in after {
+            if key.0 != seat {
+                continue;
+            }
+            let delta = total - before.get(key).copied().unwrap_or(0);
+            if delta < 0 {
+                return Err(PyValueError::new_err(
+                    "policy opponent: PP ledger regressed",
+                ));
+            }
+            if !self.transformed.contains(&key.1) {
+                *self.original_charges.entry(key.clone()).or_insert(0) += delta;
+            }
+        }
+        let slot = if side_one { "p1a: " } else { "p2a: " };
+        for line in lines {
+            let fields: Vec<_> = line.split('|').collect();
+            let Some(actor) = fields.get(2).and_then(|value| value.strip_prefix(slot)) else {
+                continue;
+            };
+            match fields.get(1).copied() {
+                Some("switch" | "drag" | "replace") => {
+                    self.transformed.remove(&self.active);
+                    self.active = identity(actor);
+                }
+                Some("-transform") => {
+                    self.transformed.insert(identity(actor));
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct PolicyOpponentBridge {
@@ -29,6 +115,7 @@ pub(crate) struct PolicyOpponentBridge {
     opponent_side_one: bool,
     root_order: Vec<String>,
     max_pp: HashMap<String, i64>,
+    base_pp: HashMap<String, i64>,
     root_own_side: Side,
     display_ctx: EventContext,
     // Immutable prefixes per branch; RefCell permits the leaf-pricing and
@@ -46,6 +133,7 @@ impl PolicyOpponentBridge {
         opponent_side_one: bool,
         root_order: Vec<String>,
         max_pp: HashMap<String, i64>,
+        base_pp: HashMap<String, i64>,
         root_own_side: Side,
         display_ctx: EventContext,
     ) -> Self {
@@ -63,6 +151,7 @@ impl PolicyOpponentBridge {
             opponent_side_one,
             root_order,
             max_pp,
+            base_pp,
             root_own_side,
             display_ctx,
             prefixes: RefCell::new(HashMap::new()),
@@ -81,26 +170,42 @@ impl PolicyOpponentBridge {
         meta: &crate::leaf::LeafMeta,
     ) -> PyResult<()> {
         let mut prefixes = self.prefixes.borrow_mut();
-        let mut prefix = match parent {
-            None => Vec::new(),
+        let species = &self.display_ctx.species[usize::from(!self.opponent_side_one)];
+        let (mut prefix, mut own_pp, before) = match parent {
+            None => (
+                Vec::new(),
+                OwnPpLedger::from_root(&self.root_own_side, species),
+                HashMap::new(),
+            ),
             Some(parent) => prefixes
                 .get(&parent)
-                .map(|prefix| prefix.lines.clone())
+                .map(|prefix| {
+                    (
+                        prefix.lines.clone(),
+                        prefix.own_pp.clone(),
+                        prefix.meta.move_charges.clone(),
+                    )
+                })
                 .ok_or_else(|| {
                     PyValueError::new_err("policy opponent: parent public prefix missing")
                 })?,
         };
+        let canonical = canonical_branch_species(lines, &self.display_ctx);
+        own_pp.advance(
+            &before,
+            &meta.move_charges,
+            &canonical,
+            self.opponent_side_one,
+        )?;
         // Project BEFORE invoking user/Python code, rather than letting a
         // callback see exact hidden HP and trusting it not to use those facts.
-        prefix.extend(project_public_hp(
-            &canonical_branch_species(lines, &self.display_ctx),
-            ctx.hp_percent,
-        )?);
+        prefix.extend(project_public_hp(&canonical, ctx.hp_percent)?);
         prefixes.insert(
             key,
             PublicPrefix {
                 lines: prefix,
                 meta: meta.clone(),
+                own_pp,
             },
         );
         Ok(())
@@ -115,13 +220,13 @@ impl PolicyOpponentBridge {
     ) -> PyResult<ActionDistribution> {
         let started = Instant::now();
         let result = (|| {
-            let (lines, meta) = match parent {
+            let (lines, own_pp) = match parent {
                 None => (Vec::new(), None),
                 Some(key) => self
                     .prefixes
                     .borrow()
                     .get(&key)
-                    .map(|prefix| (prefix.lines.clone(), Some(prefix.meta.clone())))
+                    .map(|prefix| (prefix.lines.clone(), Some(prefix.own_pp.clone())))
                     .ok_or_else(|| {
                         PyValueError::new_err("policy opponent: reached public prefix missing")
                     })?,
@@ -141,19 +246,47 @@ impl PolicyOpponentBridge {
                     &self.display_ctx.species[1],
                 )
             };
+            if let Some(ledger) = &own_pp {
+                for (index, name) in species.iter().enumerate() {
+                    if side.pokemon.pkmn[index].pre_transform.is_some()
+                        != ledger.transformed.contains(&identity(name))
+                    {
+                        return Err(PyValueError::new_err(
+                            "policy opponent: public Transform provenance mismatch",
+                        ));
+                    }
+                }
+            }
             let own = corrected_own_pp(
                 side,
                 &self.root_own_side,
                 species,
                 self.opponent_side_one,
-                meta.as_ref(),
-            )?;
+                own_pp.as_ref().map(|ledger| &ledger.original_charges),
+            )
+            .map_err(|error| {
+                Python::attach(|py| {
+                    if let Ok(raw) = error.value(py).getattr("policy_opponent_diagnostic") {
+                        if let Ok(raw) = raw.extract::<String>() {
+                            if let Ok(mut witness) = serde_json::from_str::<serde_json::Value>(&raw)
+                            {
+                                witness["node_depth"] = json!(node.depth);
+                                witness["public_branch_lines"] = json!(lines);
+                                let _ = error
+                                    .value(py)
+                                    .setattr("policy_opponent_diagnostic", witness.to_string());
+                            }
+                        }
+                    }
+                });
+                error
+            })?;
             let opponent_replacing = if self.opponent_side_one {
                 state.side_two.force_switch
             } else {
                 state.side_one.force_switch
             };
-            let bundle = crate::policy_request::sampled_side_request_in_phase(
+            let bundle = crate::policy_request::sampled_side_request_with_pp(
                 &own,
                 slot,
                 species,
@@ -162,6 +295,7 @@ impl PolicyOpponentBridge {
                 &self.max_pp,
                 parent.is_none(),
                 opponent_replacing,
+                Some(&self.base_pp),
             )
             .map_err(|error| {
                 Python::attach(|py| {
@@ -255,10 +389,10 @@ fn corrected_own_pp(
     root: &Side,
     species: &[String],
     side_one: bool,
-    meta: Option<&crate::leaf::LeafMeta>,
+    charges: Option<&MoveCharges>,
 ) -> PyResult<Side> {
     let mut own = side.clone();
-    let Some(meta) = meta else {
+    let Some(charges) = charges else {
         return Ok(own);
     };
     for (physical, name) in species.iter().enumerate() {
@@ -278,15 +412,46 @@ fn corrected_own_pp(
             if mv.id == Choices::NONE {
                 continue;
             }
-            let (id, _, _) = crate::policy_request::move_names(mv.id)?;
-            let base = &root.pokemon.pkmn[physical].moves[&slot];
-            if base.id != mv.id {
-                return Err(PyValueError::new_err(
-                    "policy opponent: changed private move identity",
-                ));
+            // A transformed own Pokemon legitimately changes both species and
+            // moves. Its copied slots start at five PP and native decrements
+            // every use, including Pressure. Never subtract original charges
+            // again, or treat Transform as a private-identity corruption.
+            if own.pokemon.pkmn[physical].pre_transform.is_some() {
+                if mv.pp > 5 {
+                    return Err(PyValueError::new_err(
+                        "policy opponent: invalid copied move PP",
+                    ));
+                }
+                own.pokemon.pkmn[physical].moves[&slot].pp = mv.pp.max(0);
+                continue;
             }
-            let charged = meta
-                .move_charges
+            let (id, _, _) = crate::policy_request::move_names(mv.id)?;
+            let root_mon = &root.pokemon.pkmn[physical];
+            let (base_id, base_pp) = root_mon
+                .pre_transform
+                .as_ref()
+                .map(|snapshot| snapshot.moves[index])
+                .unwrap_or((root_mon.moves[&slot].id, root_mon.moves[&slot].pp));
+            if base_id != mv.id {
+                let error = PyValueError::new_err("policy opponent: changed private move identity");
+                let witness = json!({
+                    "schema": "policy-opponent-refusal-v1",
+                    "kind": "private_move_identity_mismatch",
+                    "diagnostic_only_not_policy_input": true,
+                    "seat": if side_one { "p1" } else { "p2" },
+                    "species": name, "physical_index": physical, "move_index": index,
+                    "root_move": format!("{:?}", base_id),
+                    "branch_move": format!("{:?}", mv.id),
+                    "transformed": own.pokemon.pkmn[physical].pre_transform.is_some()
+                });
+                Python::attach(|py| {
+                    error
+                        .value(py)
+                        .setattr("policy_opponent_diagnostic", witness.to_string())
+                })?;
+                return Err(error);
+            }
+            let charged = charges
                 .get(&(usize::from(!side_one), species_key.clone(), id))
                 .copied()
                 .unwrap_or(0);
@@ -296,7 +461,7 @@ fn corrected_own_pp(
                 ));
             }
             own.pokemon.pkmn[physical].moves[&slot].pp =
-                (i64::from(base.pp) - charged).max(0) as i8;
+                (i64::from(base_pp) - charged).max(0) as i8;
         }
     }
     Ok(own)
@@ -492,8 +657,14 @@ mod tests {
                 ),
                 99,
             );
-            let high =
-                corrected_own_pp(root, root, &[species.into()], side_one, Some(&meta)).unwrap();
+            let high = corrected_own_pp(
+                root,
+                root,
+                &[species.into()],
+                side_one,
+                Some(&meta.move_charges),
+            )
+            .unwrap();
             assert_eq!(high.get_active_immutable().moves.m0.pp, 30);
             let mut low_root = root.clone();
             low_root.get_active().moves.m0.pp = 5;
@@ -504,12 +675,196 @@ mod tests {
                 &low_root,
                 &[species.into()],
                 side_one,
-                Some(&meta),
+                Some(&meta.move_charges),
             )
             .unwrap();
             assert_eq!(low.get_active_immutable().moves.m0.pp, 3);
             assert_eq!(root.get_active_immutable().moves.m0.pp, 32);
             assert_eq!(low_leaf.get_active_immutable().moves.m0.pp, 3);
         }
+    }
+
+    #[test]
+    fn transform_copied_pp_and_original_restoration_use_separate_banks() {
+        use poke_engine::state::{PokemonMoveIndex, PreTransform};
+        let state = crate::parse_state(include_str!("test_fixtures/minimal.state").trim()).unwrap();
+        for side_one in [true, false] {
+            let root = if side_one {
+                &state.side_one
+            } else {
+                &state.side_two
+            };
+            let name = if side_one { "Charmander" } else { "Squirtle" };
+            let original_move = if side_one { "ember" } else { "watergun" };
+            let mut copied = root.clone();
+            let snapshot = PreTransform::capture(copied.get_active_immutable());
+            copied.get_active().pre_transform = Some(Box::new(snapshot));
+            copied
+                .get_active()
+                .replace_move(PokemonMoveIndex::M0, Choices::THUNDERBOLT);
+            copied.get_active().moves.m0.pp = 3;
+            copied.get_active().moves.m1.pp = 5;
+            let charges = HashMap::from([
+                (
+                    (
+                        usize::from(!side_one),
+                        name.to_lowercase(),
+                        "thunderbolt".into(),
+                    ),
+                    9,
+                ),
+                (
+                    (
+                        usize::from(!side_one),
+                        name.to_lowercase(),
+                        original_move.into(),
+                    ),
+                    2,
+                ),
+            ]);
+            let corrected =
+                corrected_own_pp(&copied, root, &[name.into()], side_one, Some(&charges)).unwrap();
+            assert_eq!(
+                corrected.get_active_immutable().moves.m0.pp,
+                3,
+                "copied PP must not be double-charged"
+            );
+            assert_eq!(
+                copied.get_active_immutable().moves.m0.pp,
+                3,
+                "caller remains unchanged"
+            );
+            let restored =
+                corrected_own_pp(root, &copied, &[name.into()], side_one, Some(&charges)).unwrap();
+            assert_eq!(
+                restored.get_active_immutable().moves.m0.pp,
+                root.get_active_immutable().moves.m0.pp - 2
+            );
+            copied.get_active().moves.m0.pp = 6;
+            Python::initialize();
+            assert!(
+                corrected_own_pp(&copied, root, &[name.into()], side_one, Some(&charges)).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn original_charge_ledger_excludes_retransform_and_pressure_on_copied_bank() {
+        for side_one in [true, false] {
+            let seat = usize::from(!side_one);
+            let prefix = if side_one { "p1a" } else { "p2a" };
+            let mut ledger = OwnPpLedger {
+                active: "ditto".into(),
+                ..OwnPpLedger::default()
+            };
+            let transform = (seat, "ditto".into(), "transform".into());
+            let thunderbolt = (seat, "ditto".into(), "thunderbolt".into());
+            let mut counts = HashMap::from([(transform.clone(), 1)]);
+            ledger
+                .advance(
+                    &HashMap::new(),
+                    &counts,
+                    &[format!("|-transform|{prefix}: Ditto|p2a: Mew")],
+                    side_one,
+                )
+                .unwrap();
+            assert_eq!(ledger.original_charges[&transform], 1);
+            let previous = counts.clone();
+            counts.insert(transform.clone(), 2); // Copied Transform: a new temporary bank.
+            counts.insert(thunderbolt.clone(), 2); // A copied move paid Pressure.
+            counts.insert((1 - seat, "ditto".into(), "transform".into()), 99);
+            ledger
+                .advance(
+                    &previous,
+                    &counts,
+                    &[format!("|-transform|{prefix}: Ditto|p2a: Zapdos")],
+                    side_one,
+                )
+                .unwrap();
+            assert_eq!(ledger.original_charges[&transform], 1);
+            assert!(!ledger.original_charges.contains_key(&thunderbolt));
+            // Switching out restores the original bank. Subsequent original
+            // Transform uses cost that bank again, without counting copied uses.
+            ledger
+                .advance(
+                    &counts,
+                    &counts,
+                    &[format!("|switch|{prefix}: Squirtle|Squirtle|100/100")],
+                    side_one,
+                )
+                .unwrap();
+            assert!(!ledger.transformed.contains("ditto"));
+            ledger
+                .advance(
+                    &counts,
+                    &counts,
+                    &[format!("|switch|{prefix}: Ditto|Ditto|100/100")],
+                    side_one,
+                )
+                .unwrap();
+            let previous = counts.clone();
+            counts.insert(transform.clone(), 3);
+            ledger
+                .advance(
+                    &previous,
+                    &counts,
+                    &[format!("|-transform|{prefix}: Ditto|p2a: Gengar")],
+                    side_one,
+                )
+                .unwrap();
+            assert_eq!(ledger.original_charges[&transform], 2);
+            let mut sibling = ledger.clone();
+            sibling
+                .advance(
+                    &counts,
+                    &counts,
+                    &[format!("|drag|{prefix}: Squirtle|Squirtle|100/100")],
+                    side_one,
+                )
+                .unwrap();
+            assert!(
+                ledger.transformed.contains("ditto"),
+                "sibling must not mutate retained prefix"
+            );
+            assert!(!sibling.transformed.contains("ditto"));
+        }
+    }
+
+    #[test]
+    fn an_unexplained_private_move_change_still_refuses_with_own_only_witness() {
+        use poke_engine::state::PokemonMoveIndex;
+        Python::initialize();
+        let state = crate::parse_state(include_str!("test_fixtures/minimal.state").trim()).unwrap();
+        let root = &state.side_one;
+        let mut invalid = root.clone();
+        invalid
+            .get_active()
+            .replace_move(PokemonMoveIndex::M0, Choices::THUNDERBOLT);
+        let error = corrected_own_pp(
+            &invalid,
+            root,
+            &["Charmander".into()],
+            true,
+            Some(&HashMap::new()),
+        )
+        .unwrap_err();
+        Python::attach(|py| {
+            let raw: String = error
+                .value(py)
+                .getattr("policy_opponent_diagnostic")
+                .unwrap()
+                .extract()
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(value["kind"], "private_move_identity_mismatch");
+            assert_eq!(value["root_move"], "EMBER");
+            assert_eq!(value["branch_move"], "THUNDERBOLT");
+            assert_eq!(value["seat"], "p1");
+            assert_eq!(value["diagnostic_only_not_policy_input"], true);
+            assert!(
+                !raw.contains("Squirtle"),
+                "other seat must not enter the witness"
+            );
+        });
     }
 }
