@@ -138,7 +138,17 @@ def bind_fresh_audits(semantic_path,public_path,qualification_path,*,sha):
             and all(r['status']==status for r in audit['games']),'complete independently replayed all8 qualification required')
         if path==public_path:
             require(audit['schema']=='pokezero.wider-search.rest-tail-conditioning-audit.v4'
-                and audit['full_replay_audit_sha256']==sha(semantic_path),'distinct v2 public audit/semantic binding drift')
+                and audit['full_replay_audit_sha256']==sha(semantic_path)
+                and isinstance(audit.get('input_hashes'),dict),'distinct v2 public audit/semantic binding drift')
+        else:
+            # The immutable R31 semantic observer predates an explicit input
+            # inventory. Rebind all audited terminals and their complete step
+            # inventories below; do not require a field it never emitted or
+            # weaken the newer public observer's explicit input bindings.
+            require(audit['schema']=='pokezero.wider-search.read-only-audit.v1'
+                and audit['phase']=='QUALIFICATION_NOT_STRENGTH' and audit['registered_games']==8
+                and audit['canonical_observer_basis_sha256']=='df7748a6c812a913cd5314128860c1a84ea166c4357315722304664508557b7e',
+                'immutable semantic observer wire schema drift')
         inputs.update({str(path):sha(path),str(observer):observer_hash})
         for row in audit['games']:
             terminal=qualification_path.parent/(row['identity']+'.json')
@@ -149,7 +159,7 @@ def bind_fresh_audits(semantic_path,public_path,qualification_path,*,sha):
                 and files and all(p.is_file() for p in files)
                 and {p.name:sha(p) for p in files}==cell['step_hashes'],'audited all8 terminal/step binding drift')
             inputs.update({str(p):sha(p) for p in (terminal,*files)})
-        for filename,digest in audit['input_hashes'].items():
+        for filename,digest in audit.get('input_hashes',{}).items():
             require(sha(filename)==digest,'independent all8 audit input drift: '+filename)
             inputs[filename]=digest
     return inputs

@@ -122,6 +122,11 @@ class QualificationTests(unittest.TestCase):
                 audited_complete_games=8,complete_roster_valid=True,strength_inference=False,
                 games=[dict(identity=i,status=status,result_sha256='hash') for i in identities],input_hashes={})
         data[str(pub)].update(schema='pokezero.wider-search.rest-tail-conditioning-audit.v4',full_replay_audit_sha256='hash')
+        data[str(sem)].update(schema='pokezero.wider-search.read-only-audit.v1',
+            phase='QUALIFICATION_NOT_STRENGTH',registered_games=8,
+            canonical_observer_basis_sha256='df7748a6c812a913cd5314128860c1a84ea166c4357315722304664508557b7e')
+        # Match the actual pinned R31 observer, not an invented modern schema.
+        del data[str(sem)]['input_hashes']
         return root,sem,pub,data
 
     def bind(self,root,sem,pub,data):
@@ -139,6 +144,25 @@ class QualificationTests(unittest.TestCase):
         root,sem,pub,data=self.fixture()
         inputs=self.bind(root,sem,pub,data)
         self.assertIn(str(root/'registration.json'),inputs)
+
+    def test_legacy_semantic_inventory_is_rebound_from_every_terminal_and_step(self):
+        root,sem,pub,data=self.fixture()
+        self.assertNotIn('input_hashes',data[str(sem)])
+        inputs=self.bind(root,sem,pub,data)
+        for row in data[str(sem)]['games']:
+            self.assertIn(str(root/(row['identity']+'.json')),inputs)
+        self.assertIn('boundary-000.json.gz',inputs)
+
+    def test_public_inventory_and_legacy_semantic_wire_identity_cannot_be_omitted(self):
+        for mode in ('public_inventory','semantic_schema','semantic_phase','semantic_count','semantic_basis'):
+            root,sem,pub,data=self.fixture()
+            if mode=='public_inventory':del data[str(pub)]['input_hashes']
+            elif mode=='semantic_schema':data[str(sem)]['schema']='modern-invented-schema'
+            elif mode=='semantic_phase':data[str(sem)]['phase']='FIXED_64_SEED_CONFIRMATION'
+            elif mode=='semantic_count':data[str(sem)]['registered_games']=4
+            else:data[str(sem)]['canonical_observer_basis_sha256']='other'
+            with self.subTest(mode=mode),self.assertRaises(RuntimeError):
+                self.bind(root,sem,pub,data)
 
     def test_partial_old_source_or_v1_report_cannot_transfer(self):
         for mode in ('partial','old_source','v1','wrong_semantic','strength','incomplete','duplicate'):
