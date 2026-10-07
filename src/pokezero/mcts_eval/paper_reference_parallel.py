@@ -35,6 +35,8 @@ class PreparedDecision:
     sample_world: Callable[..., World]
     # Called after each batch; returns incremental evidence, not all old draws.
     evidence: Callable[[], Any] = lambda: None
+    # Worker-local clock binding only; no callable crosses the public transport.
+    set_sampling_deadline: Callable[[float | None], None] = lambda deadline: None
 
 
 class WorkerRuntime(Protocol):
@@ -106,6 +108,7 @@ def _worker(connection, index, runtime_factory, config):
             preparation_seconds = time.perf_counter() - prepared_at
             if not isinstance(prepared, PreparedDecision) or prepared.root != root:
                 raise ReferenceRefusal("worker prepared a different public/actor-known root")
+            prepared.set_sampling_deadline(deadline)
             while True:
                 phase = "trajectory_batch"
                 batch = search.search_batch(root, battle_id=battle_id,

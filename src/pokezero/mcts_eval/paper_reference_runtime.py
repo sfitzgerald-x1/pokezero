@@ -131,7 +131,7 @@ class _ShowdownRuntime:
                 raise ReferenceRefusal("worker root evaluation identity changed")
             return self.evaluator(observation)[1]
 
-        return PreparedDecision(root, evaluate_root, factory, evidence)
+        return PreparedDecision(root, evaluate_root, factory, evidence, factory.bind_sampling_deadline)
 
     def close(self):
         self.env.close()

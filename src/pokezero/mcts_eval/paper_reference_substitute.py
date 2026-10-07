@@ -109,6 +109,9 @@ def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=MA
         allow_earlier_compatible_template=factory.allow_earlier_compatible_template,
         max_known_set_draws=factory.max_known_set_draws,
         pending_transition=transition.prior_transition)
+    if getattr(factory, 'sampling_deadline_at', None) is not None:
+        prior.bind_sampling_deadline(factory.sampling_deadline_at)
+    check_deadline = getattr(factory, 'check_sampling_deadline', lambda: None)
     subject = factory.state.player_id
     opponent = 'p2' if subject == 'p1' else 'p1'
     expected_history = public_history(factory.state)
@@ -117,11 +120,13 @@ def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=MA
     # stream, acceptance rule, accepted witness, or sampled-world ownership.
     prefix_counts, mismatches = Counter(), Counter()
     for attempt in range(max_attempts):
+        check_deadline()
         world, accepted = prior(hidden_rng), False
         simulated = []
         try:
             valid = True
             for own_action in (transition.own_action, *transition.continuation_actions):
+                check_deadline()
                 requested = set(factory.env.requested_players())
                 actions = {}
                 if (subject in requested) != (own_action is not None):
@@ -165,6 +170,7 @@ def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=MA
                 rejected.append(dict(attempt=attempt, reason='different public transition/request'))
                 continue
             actual = factory.env.public_materialization_state(subject)
+            check_deadline()
             if (decision_state(factory.env.observe(subject), player=subject) != factory.root
                     or public_history(actual) != expected_history
                     or actual.deferred_opponent_action_player != factory.state.deferred_opponent_action_player):

@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import asdict
 import random
 import re
+import math
+import time
 from typing import Any
 
 from .paper_reference import ReferenceRefusal
@@ -129,6 +131,28 @@ class PublicRootWorldFactory:
             max_known_set_draws=max_known_set_draws)
         self.active = False
         self.receipts: list[dict[str, Any]] = []
+        self.sampling_deadline_at = None
+
+    def bind_sampling_deadline(self, deadline):
+        if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
+            raise ReferenceRefusal('invalid world-sampling deadline')
+        if self.active:
+            raise ReferenceRefusal('cannot change the deadline of an owned sampled world')
+        self.sampling_deadline_at = deadline
+
+    def check_sampling_deadline(self):
+        from .paper_reference import SamplingDeadlineExceeded
+        deadline = self.sampling_deadline_at
+        if deadline is not None:
+            checked = time.perf_counter()
+            if checked >= deadline:
+                error = SamplingDeadlineExceeded('unfinished sampled world reached the decision deadline')
+                error.sampling_diagnostic = dict(
+                    schema='pokezero.world-sampling-deadline.v1',
+                    deadline_at=deadline, checked_at=checked,
+                    accepted_world=False, backed_up=False,
+                )
+                raise error
 
     def __call__(self, hidden_rng: random.Random) -> ShowdownTrajectoryWorld:
         if self.active:
@@ -137,6 +161,7 @@ class PublicRootWorldFactory:
         evidence: dict[str, Any] = {"ordinal": len(self.receipts), "status": "STARTED"}
         self.receipts.append(evidence)
         try:
+            self.check_sampling_deadline()
             if self.pending_transition is not None:
                 from .paper_reference_substitute import SubstituteHistoryTransition, condition_substitute_world
                 if isinstance(self.pending_transition, SubstituteHistoryTransition):
@@ -178,12 +203,15 @@ class PublicRootWorldFactory:
                 reference_turn_clocks=True)
             if decision_state(self.env.observe(self.state.player_id), player=self.state.player_id) != self.root:
                 raise ReferenceRefusal("fresh sampled world does not preserve exact player-known root")
+            self.check_sampling_deadline()
             evidence["status"] = "ROOT_VALIDATED"
             return ShowdownTrajectoryWorld(self.env, subject=self.state.player_id, evaluator=self.evaluator,
                 release=lambda: self._release(evidence))
         except Exception as exc:
+            from .paper_reference import SamplingDeadlineExceeded
             self.active = False
-            evidence.update(status="REFUSED", error=f"{type(exc).__name__}: {exc}")
+            evidence.update(status='DEADLINE_CANCELLED' if isinstance(exc, SamplingDeadlineExceeded)
+                            else 'REFUSED', error=f"{type(exc).__name__}: {exc}")
             if getattr(exc, "sampling_diagnostic", None) is not None:
                 evidence["sampling_diagnostic"] = exc.sampling_diagnostic
             raise

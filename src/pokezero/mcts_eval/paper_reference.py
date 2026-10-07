@@ -23,6 +23,10 @@ class ReferenceRefusal(ValueError):
     """Invalid state, work, or inference is evidence of refusal, not a fallback."""
 
 
+class SamplingDeadlineExceeded(Exception):
+    """An unfinished world exhausted the explicit decision clock, not fidelity."""
+
+
 @dataclass(frozen=True)
 class DecisionState:
     # Adapter-owned public/own-private information identity, NEVER latent truth.
@@ -467,8 +471,15 @@ class TrajectorySearch:
                     break
                 ordinal = self._ordinal
                 self._ordinal += 1
-                world = sample_world(_rng(seed, ordinal, "hidden"))
                 draws += 1
+                try:
+                    world = sample_world(_rng(seed, ordinal, "hidden"))
+                except SamplingDeadlineExceeded:
+                    if not expired():
+                        raise ReferenceRefusal('sampler reported deadline expiry before the search deadline')
+                    # No world/trajectory was accepted. Keep completed local
+                    # work and the attempted RNG ordinal; never back up this draw.
+                    break
                 try:
                     steps, backed = self._trajectory(world, root, _rng(seed, ordinal, "opponent"),
                                                     _rng(seed, ordinal, "chance"), expired)

@@ -111,15 +111,20 @@ def condition_pending_world(factory, hidden_rng, evidence, *, max_attempts=128):
         max_known_set_draws=factory.max_known_set_draws,
         **({'pending_transition': transition.prior_transition}
            if getattr(transition, 'prior_transition', None) is not None else {}))
+    if getattr(factory, 'sampling_deadline_at', None) is not None:
+        prior.bind_sampling_deadline(factory.sampling_deadline_at)
+    check_deadline = getattr(factory, 'check_sampling_deadline', lambda: None)
     if prior.known != factory.known:
         raise ReferenceRefusal('pending transition introduces unconditioned opponent-team evidence')
     subject = factory.state.player_id
     opponent = 'p2' if subject == 'p1' else 'p1'
     rejected = []
     for attempt in range(max_attempts):
+        check_deadline()
         world = prior(hidden_rng)
         accepted = False
         try:
+            check_deadline()
             if set(factory.env.requested_players()) != {subject, opponent}:
                 raise ReferenceRefusal('pending certificate prior root is not simultaneous')
             legal, evaluated = factory.evaluator(factory.env.observe(opponent))
@@ -133,6 +138,7 @@ def condition_pending_world(factory, hidden_rng, evidence, *, max_attempts=128):
                 rejected.append(dict(attempt=attempt, reason='different public request/terminal'))
                 continue
             actual = factory.env.public_materialization_state(subject)
+            check_deadline()
             observed = factory.env.observe(subject)
             if (decision_state(observed, player=subject) != factory.root
                     or public_history(actual) != public_history(factory.state)
