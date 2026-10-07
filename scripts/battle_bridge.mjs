@@ -454,10 +454,17 @@ async function restoreSearchAndSendChoices(command) {
   if (!battle.battleStream?.battle) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
   }
+  if (command.seed !== undefined && (typeof command.seed !== "string" || !command.seed.trim())) {
+    throw new Error("Conditioning reseed requires a non-empty seed string.");
+  }
   // This command is restricted to retained search handles. It restores one
   // belief-sampled world and submits the branch action without serializing a
   // simulator state or touching a live battle.
   restoreSerializedBattle(battle, snapshot, { cloneSnapshot: true });
+  if (command.seed !== undefined) {
+    // Use the same simulator command as reseedBattle, including its public log.
+    await battle.streams.omniscient.write(`>reseed ${command.seed}`);
+  }
   await submitChoices(battle, command.choices, startedAt);
 }
 

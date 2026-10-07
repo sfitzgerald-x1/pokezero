@@ -1145,6 +1145,7 @@ class LocalShowdownEnv:
         actions: Mapping[PlayerId, int],
         *,
         observation_players: tuple[PlayerId, ...] | None = None,
+        chance_seed: int | None = None,
     ) -> StepResult:
         if self._battle_token is None:
             raise LocalShowdownError("Cannot restore before reset.")
@@ -1160,6 +1161,7 @@ class LocalShowdownEnv:
         snapshot_id = snapshot.bridge_snapshot.get("snapshot_id")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise ValueError("LocalShowdownSnapshot does not contain a bridge-resident search handle.")
+        seed = None if chance_seed is None else showdown_seed_from_int(chance_seed)
 
         # Choice conversion uses only the public snapshot paired with this sampled world. Do not
         # read the current search shell, which may hold a branch from a prior root visit.
@@ -1186,9 +1188,30 @@ class LocalShowdownEnv:
                 "battleId": self._battle_token,
                 "snapshotId": snapshot_id,
                 "choices": choices,
+                **({"seed": seed} if seed is not None else {}),
             },
             root_puct_branch_step=True,
             observation_players=observation_players,
+        )
+
+    def step_from_search_snapshot_for_conditioning(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+        *,
+        chance_seed: int,
+    ) -> StepResult:
+        """Replay one hypothetical chance trial without projecting unused observations.
+
+        Restore, explicit reseed, and choice submission share one bridge exchange.
+        The public parser, requests, rewards, and terminal state still advance normally;
+        callers can observe either player afterward. This is transport-only: callers
+        own the chance draws, retry limits, public-history predicate, and deadline.
+        """
+        if chance_seed is None:
+            raise ValueError("Conditioning requires an explicit chance seed.")
+        return self._step_from_search_snapshot(
+            snapshot, actions, observation_players=(), chance_seed=chance_seed,
         )
 
     def release_search_snapshot(self, snapshot: LocalShowdownSnapshot) -> bool:

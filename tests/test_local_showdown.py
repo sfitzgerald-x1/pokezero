@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import fields, replace
 import io
 import json
 import os
@@ -3161,6 +3161,89 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
             nested_state_normalization_seconds,
         )
 
+    def test_conditioning_transport_matches_full_restore_reseed_step_and_lazy_views(self) -> None:
+        config = integration_config()
+        assert config is not None
+        config = replace(config, set_belief_source=True,
+            feature_masks=ObservationFeatureMasks(tier2_investment=True))
+        start_override = BattleStartOverride(player_teams={
+            "p1": pack_team((FixturePokemon(species="Tauros", ability="Intimidate",
+                moves=("Body Slam", "Earthquake"), level=76),)),
+            "p2": pack_team((FixturePokemon(species="Snorlax", ability="Immunity",
+                moves=("Rest", "Body Slam"), level=71),)),
+        }, observation_format_id="gen3randombattle")
+
+        def normalized(value):
+            if isinstance(value, Mapping):
+                return {key: normalized(item) for key, item in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [normalized(item) for item in value
+                    if not (isinstance(item, str) and item.startswith("|t:|"))]
+            return value
+
+        def public_contract(state):
+            # Belief-engine clones intentionally have independent object identity.
+            return {field.name: (state.belief_engine.snapshot() if field.name == "belief_engine"
+                else getattr(state, field.name)) for field in fields(state)}
+
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=17, start_override=start_override)
+            env.step({"p1": 0, "p2": 1})  # Nonempty public/annotation history.
+            full = env.snapshot()
+            resident = env.snapshot_for_search()
+            for seed in (0, 1, 17, 101, 2**64-1):
+                for opponent_action in (0, 1):
+                    with self.subTest(seed=seed, opponent_action=opponent_action):
+                        actions = {"p1": 0, "p2": opponent_action}
+                        env.restore(full)
+                        env.reseed_simulator_rng(seed)
+                        expected = env.step(actions)
+                        expected_public = {p: public_contract(env.public_materialization_state(p)) for p in ("p1", "p2")}
+                        expected_hidden = normalized(env.snapshot().bridge_snapshot)
+                        before = env.root_puct_bridge_timing_snapshot()
+                        timing_before = env.root_puct_branch_step_timing_snapshot()
+                        actual = env.step_from_search_snapshot_for_conditioning(
+                            resident, actions, chance_seed=seed)
+                        after = env.root_puct_bridge_timing_snapshot()
+                        timing_after = env.root_puct_branch_step_timing_snapshot()
+                        self.assertEqual(actual.observations, {})
+                        self.assertEqual(actual.requested_players, expected.requested_players)
+                        self.assertEqual(actual.terminal, expected.terminal)
+                        self.assertEqual(actual.rewards, expected.rewards)
+                        self.assertEqual(after["bridge_round_trip_count"]-before["bridge_round_trip_count"], 1)
+                        self.assertEqual(timing_after["branch_observation_projection_count"]
+                            -timing_before["branch_observation_projection_count"], 0)
+                        self.assertEqual({p: env.observe(p) for p in actual.requested_players}, expected.observations)
+                        self.assertEqual({p: public_contract(env.public_materialization_state(p)) for p in ("p1", "p2")}, expected_public)
+                        self.assertEqual(normalized(env.snapshot().bridge_snapshot), expected_hidden)
+            self.assertTrue(env.release_search_snapshot(resident))
+            with self.assertRaisesRegex(LocalShowdownError, "Unknown search snapshot"):
+                env.step_from_search_snapshot_for_conditioning(resident, {"p1": 0, "p2": 0}, chance_seed=1)
+
+    def test_conditioning_transport_preserves_terminal_rewards(self) -> None:
+        config = integration_config()
+        assert config is not None
+        start_override = BattleStartOverride(player_teams={
+            "p1": pack_team((FixturePokemon(species="Mewtwo", ability="Pressure",
+                moves=("Psychic",), level=100),)),
+            "p2": pack_team((FixturePokemon(species="Magikarp", ability="Swift Swim",
+                moves=("Splash",), level=1),)),
+        })
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=17, start_override=start_override)
+            full, resident = env.snapshot(), env.snapshot_for_search()
+            env.restore(full)
+            env.reseed_simulator_rng(999)
+            expected = env.step({"p1": 0, "p2": 0})
+            actual = env.step_from_search_snapshot_for_conditioning(
+                resident, {"p1": 0, "p2": 0}, chance_seed=999)
+            self.assertIsNotNone(actual.terminal)
+            self.assertEqual(actual.terminal, expected.terminal)
+            self.assertEqual(actual.rewards, expected.rewards)
+            self.assertEqual(actual.requested_players, expected.requested_players)
+            self.assertEqual(actual.observations, {})
+            env.release_search_snapshot(resident)
+
     def test_search_snapshot_fast_path_reuses_choices_and_limits_zero_rollout_view(self) -> None:
         config = integration_config()
         assert config is not None
@@ -3479,6 +3562,8 @@ class LocalShowdownIntegrationTest(unittest.TestCase):
                 env.restore_search_snapshot(snapshot)
             with self.assertRaisesRegex(LocalShowdownError, "belief-sampled start override"):
                 env.step_from_search_snapshot(snapshot, {"p1": 0, "p2": 0})
+            with self.assertRaisesRegex(LocalShowdownError, "belief-sampled start override"):
+                env.step_from_search_snapshot_for_conditioning(snapshot, {"p1": 0, "p2": 0}, chance_seed=1)
 
             env.reset_with_start_override(seed=29, start_override=start_override)
             self.assertTrue(env.release_search_snapshot(snapshot))

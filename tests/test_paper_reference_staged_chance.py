@@ -289,6 +289,13 @@ class KernelTests(unittest.TestCase):
                 env.history=('rejected chance',)
             env.stage+=1
         env.step=step
+        env.snapshot_for_search=mock.Mock(side_effect=lambda:env.snapshot())
+        def conditioning_step(snapshot,actions,*,chance_seed):
+            env.restore(snapshot)
+            env.reseed_simulator_rng(chance_seed)
+            return env.step(actions)
+        env.step_from_search_snapshot_for_conditioning=mock.Mock(side_effect=conditioning_step)
+        env.release_search_snapshot=mock.Mock(return_value=True)
         env.requested_players=lambda:('p1','p2')
         env.observe=lambda player:NS(legal_action_mask=(True,)*4,metadata=dict(action_candidates=[
             dict(action_index=0,kind='switch',legal=True),
@@ -334,6 +341,9 @@ class KernelTests(unittest.TestCase):
         self.assertEqual([s['chance_seed'] for s in witness['steps']],[11,12,13])
         self.assertEqual(witness['anchor_rng_state'],(3,(1,2,3),None))
         self.assertEqual(witness['sampled_substitute_hp'],{'p1':66})
+        self.assertEqual(factory.env.snapshot_for_search.call_count,3)
+        self.assertEqual(factory.env.release_search_snapshot.call_count,3)
+        self.assertEqual(factory.env.step_from_search_snapshot_for_conditioning.call_count,4)
         world.close()
         self.assertTrue(evidence['released'])
 
@@ -381,6 +391,32 @@ class KernelTests(unittest.TestCase):
              self.assertRaisesRegex(ReferenceRefusal,'support'):
             sample_staged_path(factory,prior,plan,rng,{})
         self.assertEqual(prior.call_count,1)
+        self.assertTrue(worlds[0].closed)
+
+    def test_deadline_in_chance_loop_releases_handle_without_drawing_or_accepting(self):
+        factory,prior,plan,rng,worlds=self.fixture()
+        rng.choices.side_effect=[[1]]
+        factory.check_sampling_deadline.side_effect=[None,None,SamplingDeadlineExceeded('chance clock')]
+        evidence={}
+        with mock.patch(MODULE+'.validate_active_support',return_value=True), \
+             self.assertRaisesRegex(SamplingDeadlineExceeded,'chance clock'):
+            sample_staged_path(factory,prior,plan,rng,evidence)
+        self.assertEqual(factory.env.snapshot_for_search.call_count,1)
+        self.assertEqual(factory.env.release_search_snapshot.call_count,1)
+        rng.getrandbits.assert_not_called()
+        self.assertTrue(worlds[0].closed)
+        self.assertNotIn('substitute_policy_conditioning',evidence)
+
+    def test_chance_step_failure_releases_handle_and_closes_world_without_retry(self):
+        factory,prior,plan,rng,worlds=self.fixture()
+        rng.choices.side_effect=[[1]]
+        factory.env.step_from_search_snapshot_for_conditioning.side_effect=RuntimeError('transport failed')
+        with mock.patch(MODULE+'.validate_active_support',return_value=True), \
+             self.assertRaisesRegex(RuntimeError,'transport failed'):
+            sample_staged_path(factory,prior,plan,rng,{})
+        self.assertEqual(prior.call_count,1)
+        self.assertEqual(rng.getrandbits.call_count,1)
+        self.assertEqual(factory.env.release_search_snapshot.call_count,1)
         self.assertTrue(worlds[0].closed)
 
     def test_exact_finite_posterior_with_variable_policy_and_private_chance(self):
