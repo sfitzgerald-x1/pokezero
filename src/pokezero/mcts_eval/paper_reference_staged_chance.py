@@ -30,6 +30,8 @@ from .paper_reference_pending import public_history
 SCHEMA = 'pokezero.constant-chance-substitute.v1'
 SOURCE_HASH = 'f5a5265143d423af'
 MAX_CHANCE_ATTEMPTS = 2048
+COMPILED_TREE_FILES = 500
+COMPILED_TREE_SHA256 = '1ee403ea5274fe32bc30329ead814c4c117ff548f5f576242d7f0c3d108642b1'
 ENGINE_HASHES = {
     "dist/sim/battle.js": "3b2d22e90d30286c5b31c227cbb14d2812b92cdcd122a0e03040542eb5f0ded5",
     "dist/sim/battle-actions.js": "a88494530b8c454baa39501f0ec6526010cd721de6377750db876e598c6c9109",
@@ -73,7 +75,9 @@ class ConstantChancePlan:
                     zero_likelihood_filter='Encore expires before the three observed no-end residuals',
                     sub_hp='actual accepted private chance state; never uniform/replaced',
                     max_wrap_damage=12, initial_sub_hp=66,
-                    engine_hashes=ENGINE_HASHES, set_source_hash=SOURCE_HASH)
+                    engine_hashes=dict(ENGINE_HASHES), set_source_hash=SOURCE_HASH,
+                    compiled_tree=dict(files=COMPILED_TREE_FILES, sha256=COMPILED_TREE_SHA256,
+                        algorithm='sorted relative path + NUL + file SHA256 + newline; all dist JS/JSON'))
 
     def compatible_move(self, stage, candidate):
         if candidate.get('kind') != 'move' or not candidate.get('legal'):
@@ -89,6 +93,30 @@ def _program_histories(before, current):
     if len(ends) != 3 or ends[-1] != len(current):
         return None
     return tuple(current[:end] for end in ends)
+
+
+def verify_compiled_tree(root):
+    """Close over inherited handlers, Dex metadata, custom formats and generators.
+
+    The earlier selected-file manifest remains explanatory evidence, not the
+    dependency closure. Pin every compiled JS/JSON file and the complete path
+    roster so unlisted additions/removals cannot change the effective engine.
+    Checked once per prepared factory, not per chance retry or sampled world.
+    """
+    entries = []
+    for path in (root/'dist').rglob('*'):
+        if path.is_symlink():
+            raise ReferenceRefusal('constant-chance compiled tree contains an unbound symlink')
+        if path.is_file() and path.suffix in ('.js', '.json'):
+            entries.append(path)
+    entries.sort(key=lambda p:p.relative_to(root).as_posix())
+    fingerprint = hashlib.sha256()
+    for path in entries:
+        relative = path.relative_to(root).as_posix()
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        fingerprint.update((relative+'\0'+digest+'\n').encode())
+    if len(entries) != COMPILED_TREE_FILES or fingerprint.hexdigest() != COMPILED_TREE_SHA256:
+        raise ReferenceRefusal('constant-chance complete compiled engine/generator closure drift')
 
 
 def build_constant_chance_plan(factory):
@@ -134,6 +162,7 @@ def build_constant_chance_plan(factory):
             for v in variants):
         raise ReferenceRefusal('constant-chance generator support drift')
     root = factory.env.config.resolved_showdown_root()
+    verify_compiled_tree(root)
     for path, digest in ENGINE_HASHES.items():
         if hashlib.sha256((root/path).read_bytes()).hexdigest() != digest:
             raise ReferenceRefusal('constant-chance effective engine certificate drift: '+path)
@@ -220,6 +249,9 @@ def sample_staged_path(factory, prior, plan, rng, evidence, *, max_attempts=2048
                 factory.check_sampling_deadline()
                 if set(factory.env.requested_players()) != {plan.subject,plan.opponent}:
                     raise ReferenceRefusal('constant-chance simultaneous request support drift')
+                own_mask = factory.env.observe(plan.subject).legal_action_mask
+                if not 0 <= own_action < len(own_mask) or not own_mask[own_action]:
+                    raise ReferenceRefusal('constant-chance known actor action support drift')
                 observation = factory.env.observe(plan.opponent)
                 legal, evaluation = factory.evaluator(observation)
                 probabilities = tuple(evaluation.priors)

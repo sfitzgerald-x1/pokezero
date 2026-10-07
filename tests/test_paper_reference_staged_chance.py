@@ -3,6 +3,7 @@ from copy import deepcopy
 from fractions import Fraction
 import hashlib
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace as NS
 import unittest
 from unittest import mock
@@ -10,6 +11,7 @@ from unittest import mock
 from pokezero.mcts_eval.paper_reference import ReferenceRefusal, SamplingDeadlineExceeded
 from pokezero.mcts_eval.paper_reference_staged_chance import (
     ConstantChancePlan, build_constant_chance_plan, validate_active_support, sample_staged_path,
+    verify_compiled_tree,
 )
 
 MODULE = 'pokezero.mcts_eval.paper_reference_staged_chance'
@@ -57,6 +59,7 @@ class PlanTests(unittest.TestCase):
     def build(self,factory):
         with mock.patch(MODULE+'.public_history',side_effect=lambda s:s.history), \
              mock.patch(MODULE+'.ENGINE_HASHES',{'engine':hashlib.sha256(b'pinned').hexdigest()}), \
+             mock.patch(MODULE+'.verify_compiled_tree'), \
              mock.patch.object(Path,'read_bytes',return_value=b'pinned'):
             return build_constant_chance_plan(factory)
 
@@ -86,9 +89,33 @@ class PlanTests(unittest.TestCase):
             self.build(factory)
         with mock.patch(MODULE+'.public_history',side_effect=lambda s:s.history), \
              mock.patch(MODULE+'.ENGINE_HASHES',{'engine':'00'}), \
+             mock.patch(MODULE+'.verify_compiled_tree'), \
              mock.patch.object(Path,'read_bytes',return_value=b'pinned'), \
              self.assertRaisesRegex(ReferenceRefusal,'effective engine'):
             build_constant_chance_plan(self.factory())
+
+    def test_complete_compiled_roster_detects_unlisted_handler_addition_or_mutation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'dist').mkdir()
+            fixture=root/'dist'/'inherited.js'
+            fixture.write_bytes(b'original inherited handler')
+            digest=hashlib.sha256(b'dist/inherited.js\0'+hashlib.sha256(fixture.read_bytes()).hexdigest().encode()+b'\n').hexdigest()
+            with mock.patch(MODULE+'.COMPILED_TREE_FILES',1),mock.patch(MODULE+'.COMPILED_TREE_SHA256',digest):
+                verify_compiled_tree(root)
+                fixture.write_bytes(b'mutated inherited handler')
+                with self.assertRaisesRegex(ReferenceRefusal,'closure drift'):
+                    verify_compiled_tree(root)
+                fixture.write_bytes(b'original inherited handler')
+                (root/'dist'/'custom-formats.js').write_bytes(b'new unlisted handler')
+                with self.assertRaisesRegex(ReferenceRefusal,'closure drift'):
+                    verify_compiled_tree(root)
+
+    def test_receipt_cannot_mutate_global_explanatory_source_manifest(self):
+        plan=self.build(self.factory())
+        receipt=plan.receipt
+        receipt['engine_hashes']['unexpected']='mutated'
+        self.assertNotIn('unexpected',plan.receipt['engine_hashes'])
 
 
 class SupportTests(unittest.TestCase):
@@ -163,7 +190,7 @@ class KernelTests(unittest.TestCase):
             env.stage+=1
         env.step=step
         env.requested_players=lambda:('p1','p2')
-        env.observe=lambda player:NS(metadata=dict(action_candidates=[
+        env.observe=lambda player:NS(legal_action_mask=(True,)*4,metadata=dict(action_candidates=[
             dict(action_index=0,kind='switch',legal=True),
             dict(action_index=1,kind='move',legal=True,move_id=('wrap','rest','toxic')[min(env.stage,2)])]))
         env.terminal=lambda:None

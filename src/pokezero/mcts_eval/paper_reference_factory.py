@@ -136,6 +136,10 @@ class PublicRootWorldFactory:
         self.active = False
         self.receipts: list[dict[str, Any]] = []
         self.sampling_deadline_at = None
+        self.constant_chance_plan = None
+        if staged_substitute_conditioning and isinstance(pending_transition, SubstituteHistoryTransition):
+            from .paper_reference_staged_chance import build_constant_chance_plan
+            self.constant_chance_plan = build_constant_chance_plan(self)
 
     def bind_sampling_deadline(self, deadline):
         if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):

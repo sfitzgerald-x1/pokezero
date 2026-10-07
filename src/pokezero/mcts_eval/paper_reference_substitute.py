@@ -120,8 +120,8 @@ def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=MA
     # stream, acceptance rule, accepted witness, or sampled-world ownership.
     prefix_counts, mismatches = Counter(), Counter()
     if getattr(factory, 'staged_substitute_conditioning', False):
-        from .paper_reference_staged_chance import build_constant_chance_plan, sample_staged_path
-        plan = build_constant_chance_plan(factory)
+        from .paper_reference_staged_chance import sample_staged_path
+        plan = factory.constant_chance_plan
         if plan is not None:
             return sample_staged_path(factory, prior, plan, hidden_rng, evidence, max_attempts=max_attempts)
         # Explicitly disclosed original-kernel dispatch, not a raw-policy or
