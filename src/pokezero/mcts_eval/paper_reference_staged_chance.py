@@ -166,7 +166,10 @@ class StagedPrefixJointPlan:
 
     @property
     def receipt(self):
-        return dict(schema=WAKE_JOINT_SCHEMA if len(self.prefix.own_actions) == 5 else JOINT_TAIL_SCHEMA,
+        from .paper_reference_wake_wrap_chance import WakeWrapChancePlan, WAKE_WRAP_JOINT_SCHEMA
+        schema = (WAKE_WRAP_JOINT_SCHEMA if isinstance(self.prefix, WakeWrapChancePlan)
+            else WAKE_JOINT_SCHEMA if len(self.prefix.own_actions) == 5 else JOINT_TAIL_SCHEMA)
+        return dict(schema=schema,
             public_stages=len(self.own_actions),
             certified_prefix_stages=len(self.prefix.own_actions), prefix_law_certificate=self.prefix.receipt,
             suffix='original joint full-policy/chance draw; mismatch rejects entire fresh proposal',
@@ -341,6 +344,9 @@ def validate_active_support(plan, snapshot, stage):
     rejection. Bench identity/order, move-slot permutations and positive legal
     opponent PP are intentionally unrestricted and remain in champion priors.
     """
+    from .paper_reference_wake_wrap_chance import WakeWrapChancePlan, validate_wake_wrap_support
+    if isinstance(plan, WakeWrapChancePlan):
+        return validate_wake_wrap_support(plan, snapshot, stage)
     stages = len(plan.own_actions)
     if stages not in (3, 4, 5) or len(plan.expected_histories) != stages or not 0 <= stage < stages:
         raise ReferenceRefusal('constant-chance stage outside certified Rest program')

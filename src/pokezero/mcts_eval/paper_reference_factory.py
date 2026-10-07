@@ -139,7 +139,10 @@ class PublicRootWorldFactory:
         self.constant_chance_plan = None
         if staged_substitute_conditioning and isinstance(pending_transition, SubstituteHistoryTransition):
             from .paper_reference_staged_chance import build_constant_chance_plan, build_staged_prefix_joint_plan
-            self.constant_chance_plan = build_constant_chance_plan(self)
+            from .paper_reference_wake_wrap_chance import build_wake_wrap_plan
+            self.constant_chance_plan = build_wake_wrap_plan(self)
+            if self.constant_chance_plan is None:
+                self.constant_chance_plan = build_constant_chance_plan(self)
             if self.constant_chance_plan is None:
                 self.constant_chance_plan = build_staged_prefix_joint_plan(self)
 
