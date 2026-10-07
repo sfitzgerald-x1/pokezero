@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import random
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -354,6 +355,18 @@ class PublicContextTest(unittest.TestCase):
         self.assertIsNotNone(underlying.received_context)
         self.assertEqual(set(underlying.received_context.requested_observations), {"p1"})
         self.assertIsNone(underlying.received_context.trajectory.steps[1].observation)
+
+    def test_wrapper_retains_preselection_rng_state_outside_public_context(self) -> None:
+        rng = random.Random(17)
+        expected = rng.getstate()
+        wrapped = PublicOnlyMctsPolicy(_Policy("candidate"), capture_decision_rng_state=True)
+
+        wrapped.select_action_with_context(_context(), rng=rng)
+
+        self.assertEqual(wrapped.latest_decision_rng_state, expected)
+        default_wrapped = PublicOnlyMctsPolicy(_Policy("default"))
+        default_wrapped.select_action_with_context(_context(), rng=random.Random(17))
+        self.assertIsNone(default_wrapped.latest_decision_rng_state)
 
 
 class _Driver:

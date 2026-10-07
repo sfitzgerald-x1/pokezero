@@ -1881,6 +1881,9 @@ class TransformerSoftmaxPolicy:
     # Optional shared sink for a Root-PUCT fallback or leaf rollout. It records
     # the same encode/forward boundary as the evaluator closures.
     inference_timing: TransformerInferenceTimingAccumulator | None = None
+    # Diagnostic-only: expose the already-computed masked own-head row without
+    # another forward. Ordinary decisions retain their existing metadata shape.
+    record_policy_distribution: bool = False
     # Eval-only history-truncation probe (docs/history_truncation_probe_plan.md). When set,
     # the decision path masks the transition-history region down to the most-recent k tokens
     # before the forward — deliberately mismatched from the checkpoint's trained
@@ -1890,6 +1893,8 @@ class TransformerSoftmaxPolicy:
 
     def __post_init__(self) -> None:
         require_torch()
+        if type(self.record_policy_distribution) is not bool:
+            raise ValueError("record_policy_distribution must be a boolean.")
         if not 0.0 <= self.exploration_epsilon <= 1.0:
             raise ValueError("exploration_epsilon must be between 0 and 1.")
         if self.sampling_temperature <= 0.0:
@@ -2004,6 +2009,8 @@ class TransformerSoftmaxPolicy:
                 "exploration_epsilon": self.exploration_epsilon,
                 "sampling_temperature": self.sampling_temperature,
                 "family_gated_selection": self.family_gated_selection,
+                **({"policy_distribution": probability_values}
+                   if self.record_policy_distribution else {}),
                 **(
                     {"value_estimate_dropped": "non_finite"}
                     if value_estimate is None

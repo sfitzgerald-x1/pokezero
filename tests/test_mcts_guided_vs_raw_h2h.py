@@ -6,8 +6,9 @@ import fcntl
 import importlib.util
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+import random
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -156,6 +157,34 @@ def _guided_for_record(record: PublicDecisionRecord, *, fallbacks: int = 0):
             }
         },
     )
+
+
+def _time_budget_receipt(*, completed: int = 16, remaining: int = 0) -> dict[str, object]:
+    requested = completed + remaining
+    return {
+        "scope": "whole_model_decision",
+        "requested_ms": 1000,
+        "native_batch_guard_ms": 64,
+        "deadline_elapsed_ms": 1000.0 if remaining else 823.0,
+        "deadline_overshoot_ms": 0.0,
+        "exhausted": bool(remaining),
+        "worlds_budget_skipped": 0,
+        "native_invocations": [
+            {
+                "status": "completed",
+                "world_seed": 7,
+                "multiplicity": 1,
+                "requested_iterations": requested,
+                "completed_iterations": completed,
+                "remaining_iterations": remaining,
+                "time_budget_ms": 936,
+                "time_budget_elapsed_ms": 936.0 if remaining else 823.0,
+                "time_budget_batch_overshoot_ms": 0.0,
+                "time_budget_exhausted": bool(remaining),
+                "root_visits": {"side_one": completed, "side_two": completed},
+            }
+        ],
+    }
 
 
 def _terminal_model_rollout_shadow() -> dict[str, object]:
@@ -748,7 +777,94 @@ class DurableLauncherHandoffTest(unittest.TestCase):
             )
 
 
+class DecisionRngCaptureContractTest(unittest.TestCase):
+    def _write_runtime_manifest(self, root: Path, payload: dict[str, object]) -> None:
+        (root / "manifest.json").write_text(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )
+
+    def test_new_root_freezes_requested_capture_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                RUNNER._resolve_decision_rng_capture_contract(
+                    Path(directory), capture_requested=True
+                ),
+                {"capture_required": True},
+            )
+
+    def test_capture_mode_cannot_change_when_resuming(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_runtime_manifest(
+                root,
+                {
+                    "schema_version": RUNNER.MANIFEST_SCHEMA_VERSION,
+                    RUNNER.DECISION_RNG_CAPTURE_CONTRACT_KEY: {"capture_required": True},
+                },
+            )
+            with self.assertRaisesRegex(Exception, "differs from the immutable"):
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=False)
+            self.assertEqual(
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=True),
+                {"capture_required": True},
+            )
+
+    def test_legacy_root_can_resume_only_without_witness_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_runtime_manifest(
+                root, {"schema_version": RUNNER.MANIFEST_SCHEMA_VERSION}
+            )
+            self.assertIsNone(
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=False)
+            )
+            with self.assertRaisesRegex(Exception, "cannot upgrade a legacy"):
+                RUNNER._resolve_decision_rng_capture_contract(root, capture_requested=True)
+
+    def test_deadline_receipt_mode_cannot_change_when_resuming(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._write_runtime_manifest(
+                root,
+                {
+                    "schema_version": RUNNER.MANIFEST_SCHEMA_VERSION,
+                    RUNNER.DECISION_DEADLINE_RECEIPT_CONTRACT_KEY: {"capture_required": True},
+                },
+            )
+            with self.assertRaisesRegex(Exception, "differs from the immutable"):
+                RUNNER._resolve_decision_deadline_receipt_contract(
+                    root, capture_requested=False
+                )
+            self.assertEqual(
+                RUNNER._resolve_decision_deadline_receipt_contract(
+                    root, capture_requested=True
+                ),
+                {"capture_required": True},
+            )
+
+
 class GuidedConfigTest(unittest.TestCase):
+    def test_every_registered_config_accepts_realized_engine_defaults(self) -> None:
+        for registered in RUNNER.REGISTERED_ENGINE_CONFIGS:
+            with self.subTest(config=registered):
+                realized = asdict(ENGINE_SEARCH.EngineMctsConfig(
+                    **registered,
+                    model_path="/model.pt",
+                    checkpoint_path="/checkpoint.pt",
+                    tables_path="/tables.json",
+                ))
+                RUNNER._require_registered_candidate_config(realized)
+                for key, value in (
+                    ("policy_opponent", True),
+                    ("policy_opponent_seed", 1),
+                    ("record_joint_actions", True),
+                ):
+                    with self.subTest(knob=key):
+                        drifted = {**realized, key: value}
+                        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+                            RUNNER._require_registered_candidate_config(drifted)
+
     def test_guided_configuration_is_exact_not_a_budget_lookalike(self) -> None:
         config = dict(RUNNER.REGISTERED_ENGINE_CONFIG)
         RUNNER._require_registered_candidate_config(config)
@@ -759,6 +875,84 @@ class GuidedConfigTest(unittest.TestCase):
     def test_unlisted_engine_knob_cannot_drift(self) -> None:
         config = dict(RUNNER.REGISTERED_ENGINE_CONFIG)
         config["approximate_sleep_turns"] = False
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+    def test_registered_practical_parallel_configuration_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_PRACTICAL_PARALLEL_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {"model_world_workers": 2},
+            "the practical parallel candidate may differ only on fixed world parallelism",
+        )
+        self.assertEqual(set(config), set(baseline))
+        RUNNER._require_registered_candidate_config(config)
+        config["model_world_workers"] = 3
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+    def test_registered_practical_world4_batch8_configuration_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {"model_world_workers": 4, "search_batch": 8},
+            "the qualified practical candidate may differ only on its fixed world and batch profile",
+        )
+        self.assertEqual(set(config), set(baseline))
+        RUNNER._require_registered_candidate_config(config)
+        config["search_batch"] = 16
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+    def test_registered_practical_world4_batch8_s24_configuration_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_PRACTICAL_WORLD4_BATCH8_S24_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_ENGINE_CONFIG
+        self.assertEqual(
+            {
+                key: value
+                for key, value in config.items()
+                if baseline.get(key) != value
+            },
+            {"model_world_workers": 4, "search_batch": 8, "search_sims": 24},
+            "the qualified practical candidate may differ only on fixed world, batch, and simulation work",
+        )
+        self.assertEqual(set(config), set(baseline))
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 25
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+    def test_registered_practical_world4_batch8_s16_configuration_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_PRACTICAL_WORLD4_BATCH8_S16_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG
+        self.assertEqual(
+            {key: value for key, value in config.items() if baseline.get(key) != value},
+            {"search_sims": 16},
+        )
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 17
+        with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
+            RUNNER._require_registered_candidate_config(config)
+
+    def test_registered_practical_world4_batch8_s8_configuration_is_accepted_exactly(self) -> None:
+        config = dict(RUNNER.REGISTERED_PRACTICAL_WORLD4_BATCH8_S8_ENGINE_CONFIG)
+        baseline = RUNNER.REGISTERED_PRACTICAL_WORLD4_BATCH8_ENGINE_CONFIG
+        self.assertEqual(
+            {key: value for key, value in config.items() if baseline.get(key) != value},
+            {"search_sims": 8},
+        )
+        RUNNER._require_registered_candidate_config(config)
+        config["search_sims"] = 9
         with self.assertRaisesRegex(Exception, "registered guided-MCTS"):
             RUNNER._require_registered_candidate_config(config)
 
@@ -1334,6 +1528,103 @@ class PublicDecisionEvidenceTest(unittest.TestCase):
                 RUNNER._validate_public_decision_evidence(Path(directory), game),
                 (record,),
             )
+            self.assertFalse((Path(directory) / "decision-rng-witnesses").exists())
+
+    def test_writer_can_capture_a_replayable_rng_boundary_witness(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_record(record)
+        guided.latest_decision_rng_state = random.Random(23).getstate()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            RUNNER._public_decision_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+                capture_decision_rng_state=True,
+            )(record)
+            path = RUNNER._decision_rng_witness_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema_version"], RUNNER.DECISION_RNG_WITNESS_SCHEMA_VERSION)
+            self.assertEqual(payload["public_decision"]["decision_id"], record.decision_id)
+            self.assertEqual(payload["rng_state"]["algorithm"], "python-random-mt19937")
+            restored = random.Random()
+            state = payload["rng_state"]
+            restored.setstate((state["state_version"], tuple(state["internal_state"]), state["gauss_next"]))
+            self.assertEqual(restored.getstate(), guided.latest_decision_rng_state)
+
+    def test_rng_witness_validator_requires_each_guided_decision(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_record(record)
+        guided.latest_decision_rng_state = random.Random(23).getstate()
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            RUNNER._public_decision_writer(
+                Path(directory),
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+                capture_decision_rng_state=True,
+            )(record)
+            RUNNER._validate_decision_rng_witness_evidence(Path(directory), game)
+
+    def test_writer_captures_a_complete_deadline_receipt(self) -> None:
+        candidate = SimpleNamespace(provenance_sha256="guided-provenance")
+        incumbent = SimpleNamespace(provenance_sha256="raw-provenance")
+        record = _public_record()
+        guided = _guided_for_record(record)
+        guided.latest_decision_metadata["engine_mcts"]["time_budget"] = _time_budget_receipt(
+            completed=14, remaining=2
+        )
+        game = SimpleNamespace(
+            seed=record.seed,
+            candidate_seat="p1",
+            candidate=candidate,
+            incumbent=incumbent,
+            candidate_telemetry=SimpleNamespace(decisions=1),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            RUNNER._public_decision_writer(
+                root,
+                candidate=candidate,
+                incumbent=incumbent,
+                seed=record.seed,
+                candidate_seat="p1",
+                guided_policy=guided,
+                capture_decision_deadline_receipt=True,
+            )(record)
+            path = RUNNER._decision_deadline_receipt_path(
+                root, seed=record.seed, candidate_seat="p1", record=record
+            )
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                payload["schema_version"], RUNNER.DECISION_DEADLINE_RECEIPT_SCHEMA_VERSION
+            )
+            self.assertEqual(payload["time_budget"]["native_invocations"][0]["remaining_iterations"], 2)
+            RUNNER._validate_decision_deadline_receipt_evidence(root, game)
+
+    def test_deadline_receipt_refuses_unwitnessed_remaining_work(self) -> None:
+        receipt = _time_budget_receipt(completed=14, remaining=2)
+        receipt["native_invocations"][0]["time_budget_exhausted"] = False
+        with self.assertRaisesRegex(Exception, "unfinished native work"):
+            RUNNER._validated_decision_deadline_receipt(receipt)
 
     def test_writer_refuses_to_bind_one_decision_to_another_decision_metadata(self) -> None:
         candidate = SimpleNamespace(provenance_sha256="guided-provenance")

@@ -85,6 +85,7 @@ AND NOTHING HERE IS SKIPPED. Every JSON in the corpus must parse; see `_load_or_
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import tempfile
@@ -101,6 +102,13 @@ LEDGER = REPO / "docs" / "engine_divergence_ledger_20260728.md"
 # is the enforced registry for them. This module covers the fidelity-differential
 # namespace only, which the ledger opens at `19,000,000`.
 FIDELITY_SEED_FLOOR = 19_000_000
+
+# This reviewed, immutable selection reuses gameplay roots; it is NOT a
+# differential sweep or execution receipt. Do not turn this into a schema-wide
+# exemption: only the exact registered path AND bytes are classified separately.
+# Every other document retains the shape-agnostic fidelity coverage rule.
+GAMEPLAY_SELECTION = "docs/paper_policy_opponent_roster_20261004.json"
+GAMEPLAY_SELECTION_SHA256 = "fa76bc9966bba48f0dd474a2450b4c362e49ac1452db18c39b084a256d30ff7a"
 
 # The registered final-holdout block, and the 60 seeds of it that C141 did not reach.
 FINAL_HOLDOUT_REGISTERED = (19_200_000, 19_200_199)
@@ -317,6 +325,13 @@ def fidelity_intervals(root: Path = REPO) -> dict[str, list[tuple[int, int]]]:
 
     out: dict[str, list[tuple[int, int]]] = {}
     for path, document in _load_or_die(_json_files(root), root, "reports/ and docs/ corpus"):
+        relative = path.relative_to(root).as_posix()
+        if relative == GAMEPLAY_SELECTION:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != GAMEPLAY_SELECTION_SHA256:
+                raise AssertionError("registered gameplay selection bytes changed; re-audit namespace and provenance")
+            # Parsed above, byte-bound here, independently validated by the
+            # six-test roster gate. It cannot witness a fidelity measurement.
+            continue
         reaching = sorted(
             {
                 (low, high)
@@ -327,6 +342,43 @@ def fidelity_intervals(root: Path = REPO) -> dict[str, list[tuple[int, int]]]:
         if reaching:
             out[path.relative_to(root).as_posix()] = reaching
     return out
+
+
+class GameplaySelectionNamespaceTests(unittest.TestCase):
+    def test_registered_selection_is_not_a_fidelity_sweep_witness(self) -> None:
+        document = json.loads((REPO / GAMEPLAY_SELECTION).read_text())
+        self.assertEqual(set(_seed_intervals(document)),
+                         {(seed, seed) for seed in range(2026100100, 2026100108)})
+        self.assertEqual(document["execution_status"], "NOT_LAUNCHED")
+        self.assertEqual(document["source_cohort"], "mcts-guided-raw-df5-20260930-pilot-r3")
+        self.assertNotIn(GAMEPLAY_SELECTION, fidelity_intervals())
+        self.assertTrue(all(GAMEPLAY_SELECTION not in paths
+                            for paths in witnesses(fidelity_intervals()).values()))
+
+    def test_registered_selection_drift_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / GAMEPLAY_SELECTION
+            path.parent.mkdir(parents=True)
+            path.write_bytes((REPO / GAMEPLAY_SELECTION).read_bytes() + b"\n")
+            with self.assertRaisesRegex(AssertionError, "selection bytes changed"):
+                fidelity_intervals(root)
+
+    def test_schema_or_copy_at_another_path_cannot_hide_seeds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "docs/unregistered-copy.json"
+            path.parent.mkdir()
+            path.write_bytes((REPO / GAMEPLAY_SELECTION).read_bytes())
+            self.assertEqual(len(unregistered(fidelity_intervals(root))), 8)
+
+    def test_ledger_records_selection_as_reuse_not_measurement(self) -> None:
+        table = registry_table()
+        self.assertIn("gameplay-root reuse", table)
+        self.assertIn("`2,026,100,100`–`2,026,100,107`", table)
+        self.assertIn(GAMEPLAY_SELECTION, table)
+        self.assertIn("selection only, NOT_LAUNCHED", table)
+        self.assertEqual(len(REGISTERED_BANDS), 4)
 
 
 def unregistered(
