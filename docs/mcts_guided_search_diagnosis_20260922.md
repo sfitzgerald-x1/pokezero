@@ -7,8 +7,8 @@ the value head is the leading explanation.
 
 ## October 1: exact 200-pair recovery and practical pilot — both parked
 
-The original deep/full-work comparison is now sealed at
-`/shared/scott-experiment/mcts-rootarm-observer-recovery-finalized-20260929-r7`.
+The original deep/full-work comparison is now sealed in the canonical
+observer-recovery artifact (revision 7, September 29).
 It retains all **195** immutable original completed pairs and the five proven
 observer-only replays, without substituting any result. The fan-in completed
 cleanly with zero container restarts and verifies zero candidate or incumbent

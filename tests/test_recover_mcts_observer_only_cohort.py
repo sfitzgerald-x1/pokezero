@@ -159,6 +159,39 @@ def _fake_pair_games() -> dict[str, object]:
 
 
 class ObserverRecoveryTest(unittest.TestCase):
+    def test_registered_signature_is_not_allowed_on_replayed_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            seed = 2026093109
+            _write_terminal(root, seed, commit=NEW_COMMIT, original=False, candidate_branch_fallbacks=12)
+            with self.assertRaisesRegex(MODULE.RecoveryError, "unexpected candidate_branch_prior_fallbacks"):
+                MODULE._summary_evidence(
+                    _seed_dir(root, seed, original=False), seed=seed, label="replayed seed",
+                    allow_registered_retained_branch_fallbacks=False,
+                )
+
+    def test_registered_signature_requires_strict_consistent_accounting(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            seed = 2026093109
+            _write_terminal(root, seed, commit=OLD_COMMIT, original=True, candidate_branch_fallbacks=12)
+            directory = _seed_dir(root, seed, original=True)
+            summary = directory / "summary.json"
+            original = json.loads(summary.read_text())
+            for field, value in (
+                ("candidate_branch_prior_fallbacks", True),
+                ("candidate_prior_fallbacks", 13),
+                ("candidate_branch_prior_fallbacks", -1),
+                ("candidate_branch_prior_fallbacks", 12.0),
+            ):
+                with self.subTest(field=field, value=value):
+                    _write_json(summary, {**original, field: value})
+                    with self.assertRaises(MODULE.RecoveryError):
+                        MODULE._summary_evidence(
+                            directory, seed=seed, label="retained seed",
+                            allow_registered_retained_branch_fallbacks=True,
+                        )
+
     def _roots(
         self, directory: Path, *, retain_branch_only: bool = False
     ) -> tuple[Path, Path]:
