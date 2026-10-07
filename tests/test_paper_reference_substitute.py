@@ -1,5 +1,6 @@
 """Hidden Substitute HP is sampled only by public-history conditioning."""
 from dataclasses import replace
+import json
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -148,6 +149,25 @@ class SubstituteSamplingTests(unittest.TestCase):
         with patches[0], patches[1], patches[2], self.assertRaisesRegex(ReferenceRefusal, 'explicit rejection cap'):
             condition_substitute_world(factory, rng, {})
         self.assertTrue(all(w.closed for w in worlds))
+
+    def test_exhaustion_retains_json_safe_public_diagnostic_without_accepting_work(self):
+        factory, rng, worlds, patches = self.fixture([False, False])
+        evidence = {}
+        with patches[0], patches[1], patches[2], self.assertRaises(ReferenceRefusal) as refused:
+            condition_substitute_world(factory, rng, evidence, max_attempts=2)
+        diagnostic = json.loads(json.dumps(refused.exception.sampling_diagnostic))
+        self.assertEqual(diagnostic['attempts'], 2)
+        self.assertEqual(diagnostic['max_attempts'], 2)
+        self.assertEqual(diagnostic['accepted_worlds'], 0)
+        self.assertEqual(diagnostic['rejection_reasons'], {'different public transition/request': 2})
+        self.assertEqual(diagnostic['public_prefix_checks'], [{'matched_lines': 0, 'count': 2}])
+        self.assertEqual(diagnostic['first_public_mismatches'], [dict(
+            index=0, expected='observed', hypothetical='different', count=2)])
+        self.assertTrue(diagnostic['prefix_counts_are_intermediate_checks'])
+        self.assertFalse(diagnostic['live_opponent_action_used'])
+        self.assertFalse(diagnostic['live_hidden_hp_used'])
+        self.assertNotIn('substitute_policy_conditioning', evidence)
+        self.assertTrue(all(world.closed for world in worlds))
 
     def test_invalid_limit_refuses_before_sampling(self):
         for limit in (True, 0, -1, 2.0, MAX_SUBSTITUTE_REJECTION_ATTEMPTS + 1):

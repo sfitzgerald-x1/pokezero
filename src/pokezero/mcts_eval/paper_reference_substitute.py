@@ -4,6 +4,7 @@ This is bounded joint rejection, not uniform HP, true-state extraction, or a
 replay of the live opponent's choices/chance seeds. The anchor has reconstructible
 Substitute HP; every continuation stores ONLY the actor's known played action.
 """
+from collections import Counter
 from dataclasses import dataclass, replace
 
 from .paper_reference import ReferenceRefusal
@@ -112,6 +113,9 @@ def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=MA
     opponent = 'p2' if subject == 'p1' else 'p1'
     expected_history = public_history(factory.state)
     rejected = []
+    # Public-only counters diagnose exhaustion without changing the proposal
+    # stream, acceptance rule, accepted witness, or sampled-world ownership.
+    prefix_counts, mismatches = Counter(), Counter()
     for attempt in range(max_attempts):
         world, accepted = prior(hidden_rng), False
         simulated = []
@@ -149,6 +153,11 @@ def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=MA
                     valid = False
                     break
                 actual_history = public_history(factory.env.public_materialization_state(subject))
+                prefix = next((i for i, (left, right) in enumerate(zip(expected_history, actual_history))
+                               if left != right), min(len(expected_history), len(actual_history)))
+                prefix_counts[prefix] += 1
+                if prefix < min(len(expected_history), len(actual_history)):
+                    mismatches[(prefix, expected_history[prefix], actual_history[prefix])] += 1
                 if expected_history[:len(actual_history)] != actual_history:
                     valid = False
                     break
@@ -186,4 +195,17 @@ def condition_substitute_world(factory, hidden_rng, evidence, *, max_attempts=MA
         finally:
             if not accepted:
                 world.close()
-    raise ReferenceRefusal('Substitute public-history conditioning exhausted its explicit rejection cap')
+    error = ReferenceRefusal('Substitute public-history conditioning exhausted its explicit rejection cap')
+    error.sampling_diagnostic = dict(
+        schema='pokezero.substitute-rejection-diagnostic.v1',
+        attempts=max_attempts, max_attempts=max_attempts,
+        expected_public_history_lines=len(expected_history),
+        rejection_reasons=dict(Counter(row['reason'] for row in rejected)),
+        public_prefix_checks=[dict(matched_lines=k, count=v) for k, v in sorted(prefix_counts.items())],
+        first_public_mismatches=[dict(index=k[0], expected=k[1], hypothetical=k[2], count=v)
+                                 for k, v in mismatches.most_common()],
+        # Prefix counters measure intermediate checks, NOT complete-world draws.
+        prefix_counts_are_intermediate_checks=True,
+        accepted_worlds=0, live_opponent_action_used=False, live_hidden_hp_used=False,
+    )
+    raise error
