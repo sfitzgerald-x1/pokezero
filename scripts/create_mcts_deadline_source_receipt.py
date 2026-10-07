@@ -24,7 +24,15 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 SOURCE_RECEIPT_SCHEMA_VERSION = "pokezero.mcts-deadline-source-receipt.v1"
-B2_SOURCE_IMAGE_RECEIPT_SCHEMA_VERSION = "pokezero.b2-source-image-receipt.v7"
+# The source-image producer added runtime-build evidence in v8.  The identity
+# fields consumed below are unchanged, so accept exactly both known schemas
+# while retaining the full commit, digest, fingerprint, and clean-source checks.
+B2_SOURCE_IMAGE_RECEIPT_SCHEMA_VERSIONS = frozenset(
+    {
+        "pokezero.b2-source-image-receipt.v7",
+        "pokezero.b2-source-image-receipt.v8",
+    }
+)
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 SHA1 = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -174,7 +182,8 @@ def _execution_tree_sha256(source_root: Path, paths: Sequence[Path]) -> str:
 
 
 def _validate_b2_receipt(receipt: Mapping[str, Any], *, commit: str, fingerprint: str) -> None:
-    if receipt.get("schema_version") != B2_SOURCE_IMAGE_RECEIPT_SCHEMA_VERSION:
+    schema_version = receipt.get("schema_version")
+    if schema_version not in B2_SOURCE_IMAGE_RECEIPT_SCHEMA_VERSIONS:
         raise ReceiptError("source-image receipt schema is not supported")
     if receipt.get("complete") is not True:
         raise ReceiptError("source-image receipt is not complete")
@@ -192,7 +201,20 @@ def _validate_b2_receipt(receipt: Mapping[str, Any], *, commit: str, fingerprint
     if runtime.get("engine_fingerprint") != fingerprint:
         raise ReceiptError("source-image native fingerprint differs from the reviewed mechanism")
     source = runtime.get("source")
-    if source != {"commit": commit, "tree_status": "clean_tracked_checkout"}:
+    if not isinstance(source, Mapping):
+        raise ReceiptError("source-image runtime provenance differs from detached source")
+    expected_source = {"commit": commit, "tree_status": "clean_tracked_checkout"}
+    if schema_version == "pokezero.b2-source-image-receipt.v7":
+        if source != expected_source:
+            raise ReceiptError("source-image runtime provenance differs from detached source")
+        return
+    if (
+        set(source) != {*expected_source, "tree_sha256"}
+        or source.get("commit") != commit
+        or source.get("tree_status") != "clean_tracked_checkout"
+        or not isinstance(source.get("tree_sha256"), str)
+        or not SHA256.fullmatch(source["tree_sha256"])
+    ):
         raise ReceiptError("source-image runtime provenance differs from detached source")
 
 

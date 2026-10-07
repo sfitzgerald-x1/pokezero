@@ -110,6 +110,56 @@ def _payload(*, leaked_opponent: bool = False, capped: bool = False, source_hash
 
 
 class ContinuationContractTest(unittest.TestCase):
+    def test_changed_leaf_roots_replays_the_historical_fallback_ledger(self) -> None:
+        """The imported leaf validator must receive its required fallback witness."""
+
+        root = RUNNER.SourceRoot(1, "p1", 2)
+        target = root.to_dict()
+        manifest = {
+            "schema_version": RUNNER.ABLATION_SCHEMA_VERSION,
+            "targets": [target],
+        }
+        payload = {
+            "arms": {
+                "model_control_a": {"selection": {"root_action": "move 1", "total_iterations": 1}},
+                "model_control_b": {"selection": {"root_action": "move 1", "total_iterations": 1}},
+                "rollout_leaf": {"selection": {"root_action": "move 2", "total_iterations": 1}},
+            }
+        }
+        passed = {
+            "state": "PASS",
+            "root_count": 1,
+            "targets": [target],
+            "complete_root_sha256": RUNNER._sha256([payload]),
+        }
+        fallback = {"branch_prior_fallbacks": 0}
+        observed: list[object] = []
+
+        def read_json(path: Path) -> object:
+            return {
+                "MANIFEST.json": manifest,
+                "PASS.json": passed,
+                "SUMMARY.json": passed,
+                "COMPLETE.json": payload,
+            }[path.name]
+
+        def validate_leaf(_payload: object, **kwargs: object) -> None:
+            observed.append(kwargs["historical_fallback"])
+
+        with (
+            patch.object(RUNNER, "TARGETS", (root,)),
+            patch.object(RUNNER, "_read_json", side_effect=read_json),
+            patch.object(RUNNER, "_validate_leaf_completed_root", side_effect=validate_leaf),
+        ):
+            changed, _, _ = RUNNER._load_changed_leaf_roots(
+                Path("/leaf"),
+                {root: (RECORD, {})},
+                {root: fallback},
+            )
+
+        self.assertEqual(set(changed), {root})
+        self.assertEqual(observed, [fallback])
+
     def test_multireply_manifest_registers_only_its_executed_target(self) -> None:
         self.assertEqual(
             RUNNER.registered_continuation_targets(multireply=True),

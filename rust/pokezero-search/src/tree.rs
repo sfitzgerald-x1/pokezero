@@ -17,8 +17,10 @@
 //! eval), and every backed-up sample through a chance node is
 //! `sum_k p_k * mean_k` over the CURRENT branch means — the chance layer
 //! contributes zero sampling variance to the estimate. Sampling appears in
-//! exactly one place: which branch a later traversal descends to refine
-//! (weighted by the exact probabilities). See `docs/crate_search_design.md`.
+//! the legacy path only to choose which branch a later traversal refines
+//! (weighted by the exact probabilities). The policy-opponent seam additionally
+//! samples opponent actions from a separately seeded fixed distribution.
+//! See `docs/crate_search_design.md`.
 //!
 //! Damage-roll branching mirrors the engine's own MCTS policy
 //! (`third_party/poke-engine-src/src/mcts.rs`: `root || parent.root`, i.e.
@@ -149,6 +151,9 @@ fn debug_assert_probability_conservation(branches: &[ChanceBranch]) {
 pub(crate) struct Tree {
     pub decisions: Vec<DecisionNode>,
     pub chances: Vec<ChanceNode>,
+    /// Measurement-only completed backups, never collection reservations.
+    /// Absent unless explicitly requested by a native measurement caller.
+    pub joint_action_visits: Option<std::collections::BTreeMap<(usize, usize, usize), u64>>,
 }
 
 /// Whether the acting side's most-visited root arm is mathematically
@@ -208,7 +213,62 @@ impl Tree {
         Ok(Tree {
             decisions: vec![root],
             chances: Vec::new(),
+            joint_action_visits: None,
         })
+    }
+
+    /// Stable per-native-tree work receipt. Counts are not multiplied by belief
+    /// multiplicity and node-local option indices are not cross-world identities.
+    pub(crate) fn joint_action_witness(&self, completed: usize) -> PyResult<Option<String>> {
+        let Some(visits) = &self.joint_action_visits else { return Ok(None) };
+        let root = &self.decisions[0];
+        let mut root_pairs = Vec::new();
+        let mut root_completed = 0u64;
+        let mut tree_completed = 0u64;
+        for (&(node, i, j), &count) in visits {
+            let decision = self.decisions.get(node)
+                .ok_or_else(|| PyValueError::new_err("joint-action ledger has an unknown decision node"))?;
+            if count == 0 || i >= decision.s1_options.len() || j >= decision.s2_options.len() {
+                return Err(PyValueError::new_err("joint-action ledger has invalid options or zero completed visits"));
+            }
+            tree_completed += count;
+            if node == 0 {
+                root_completed += count;
+                root_pairs.push(serde_json::json!({
+                    "side_one_option": i, "side_two_option": j, "completed_visits": count
+                }));
+            }
+        }
+        let s1_visits: u64 = root.s1_stats.iter().map(|s| u64::from(s.visits)).sum();
+        let s2_visits: u64 = root.s2_stats.iter().map(|s| u64::from(s.visits)).sum();
+        if root_completed != completed as u64 || root_completed != s1_visits || root_completed != s2_visits {
+            return Err(PyValueError::new_err("joint-action completed backups disagree with root visits/iterations"));
+        }
+        // Mirror stats_to_json's stable visit sort, preserving native option
+        // identity even when two options share a display label.
+        let report_order = |stats: &[MoveStats]| {
+            let mut order: Vec<usize> = (0..stats.len()).collect();
+            order.sort_by(|&a, &b| stats[b].visits.cmp(&stats[a].visits));
+            order
+        };
+        Ok(Some(serde_json::json!({
+            "schema": "completed-joint-actions-v1",
+            "scope": "single_native_tree",
+            "basis": "finalized_backups_not_reservations",
+            "root_completed_traversals": root_completed,
+            "root_distinct_pairs": root_pairs.len(),
+            "root_pairs": root_pairs,
+            "root_side_one_options": root.s1_options.len(),
+            "root_side_two_options": root.s2_options.len(),
+            "root_side_one_visits": root.s1_stats.iter().map(|s| s.visits).collect::<Vec<_>>(),
+            "root_side_two_visits": root.s2_stats.iter().map(|s| s.visits).collect::<Vec<_>>(),
+            "root_side_one_moves": root.s1_stats.iter().map(|s| s.display.as_str()).collect::<Vec<_>>(),
+            "root_side_two_moves": root.s2_stats.iter().map(|s| s.display.as_str()).collect::<Vec<_>>(),
+            "root_side_one_report_order": report_order(&root.s1_stats),
+            "root_side_two_report_order": report_order(&root.s2_stats),
+            "tree_distinct_node_pairs": visits.len(),
+            "tree_completed_selections": tree_completed
+        }).to_string()))
     }
 }
 
@@ -504,6 +564,51 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
     counters: &mut SearchCounters,
     price: &mut F,
 ) -> Traversal {
+    traverse_inner(
+        tree, state, rng, cfg, counters, price, None,
+        &mut |_, _, _| {
+            unreachable!("adversarial traversal never requests a policy opponent")
+        },
+    )
+    .expect("adversarial traversal has no fallible policy provider")
+}
+
+type OpponentPolicyProvider<'a> = dyn FnMut(
+    &State, &DecisionNode, Option<(usize, usize)>,
+) -> PyResult<crate::policy_opponent::ActionDistribution> + 'a;
+
+/// Policy-opponent variant of the SAME chance traversal and backup path.
+/// The provider sees the engine state at this node plus the parent branch key
+/// needed to retrieve its evolved observation. It must return the opponent's
+/// own masked policy in native option order. Its result is cached per node.
+/// A missing/invalid observation aborts and restores state and reservations.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn traverse_with_policy_opponent<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
+    tree: &mut Tree,
+    state: &mut State,
+    chance_rng: &mut StdRng,
+    cfg: &MultiPlyConfig,
+    counters: &mut SearchCounters,
+    price: &mut F,
+    opponent: &mut crate::policy_opponent::PolicyOpponent,
+    provide: &mut OpponentPolicyProvider<'_>,
+) -> PyResult<Traversal> {
+    traverse_inner(
+        tree, state, chance_rng, cfg, counters, price, Some(opponent), provide,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn traverse_inner<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
+    tree: &mut Tree,
+    state: &mut State,
+    rng: &mut StdRng,
+    cfg: &MultiPlyConfig,
+    counters: &mut SearchCounters,
+    price: &mut F,
+    mut opponent: Option<&mut crate::policy_opponent::PolicyOpponent>,
+    provide: &mut OpponentPolicyProvider<'_>,
+) -> PyResult<Traversal> {
     let mut path: Vec<PathStep> = Vec::with_capacity(cfg.max_depth as usize + 1);
     let mut node_idx = 0usize;
     let end = loop {
@@ -512,24 +617,54 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
         // OCCUPANCY, counted on the same line as the max so the two can never disagree
         // about which traversals were seen.
         counters.depth_occupancy[(depth as usize).min(DEPTH_OCCUPANCY_SLOTS - 1)] += 1;
-        // --- decision node: decoupled per-side PUCT + virtual loss ---
+        // --- decision node: subject PUCT, opponent mode, then virtual loss ---
         let (i, j) = {
             let node = &tree.decisions[node_idx];
-            let i = select(
-                &node.s1_stats,
-                node.visits,
-                cfg.c_puct,
-                true,
-                cfg.fpu_reduction,
-            );
-            let j = select(
-                &node.s2_stats,
-                node.visits,
-                cfg.c_puct,
-                false,
-                cfg.fpu_reduction,
-            );
-            (i, j)
+            if let Some(sampler) = opponent.as_deref_mut() {
+                let parent = path.last().map(|step| {
+                    (step.chance, step.branch.expect("descended step"))
+                });
+                match sampler.select_joint(
+                    node_idx, node, cfg.c_puct, cfg.fpu_reduction,
+                    || provide(state, node, parent),
+                ) {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        // Every prior step descended (there is no ending step
+                        // yet), so reverse ALL applied branches, then remove
+                        // only this traversal's provisional reservations.
+                        for step in path.iter().rev() {
+                            if let Some(k) = step.branch {
+                                state.reverse_instructions(
+                                    &tree.chances[step.chance].branches[k].instructions,
+                                );
+                            }
+                            let reserved = &mut tree.decisions[step.decision];
+                            reserved.visits -= 1;
+                            reserved.s1_stats[step.i].visits -= 1;
+                            reserved.s2_stats[step.j].visits -= 1;
+                            reserved.s2_stats[step.j].total_value -= 1.0;
+                        }
+                        return Err(error);
+                    }
+                }
+            } else {
+                let i = select(
+                    &node.s1_stats,
+                    node.visits,
+                    cfg.c_puct,
+                    true,
+                    cfg.fpu_reduction,
+                );
+                let j = select(
+                    &node.s2_stats,
+                    node.visits,
+                    cfg.c_puct,
+                    false,
+                    cfg.fpu_reduction,
+                );
+                (i, j)
+            }
         };
         {
             let node = &mut tree.decisions[node_idx];
@@ -601,7 +736,7 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
     };
     // Restore the shared state (reverse the instructions applied downward).
     unapply_path(tree, state, &path);
-    Traversal { path, end }
+    Ok(Traversal { path, end })
 }
 
 /// Reverse the instruction lists applied while descending `path`.
@@ -931,6 +1066,9 @@ pub(crate) fn finalize(tree: &mut Tree, traversal: &Traversal, row_values: &[f32
         node.s1_stats[step.i].total_value += expectation;
         node.s2_stats[step.j].total_value += expectation - 1.0; // replace virtual loss
         value = expectation;
+        if let Some(visits) = &mut tree.joint_action_visits {
+            *visits.entry((step.decision, step.i, step.j)).or_default() += 1;
+        }
     }
     value
 }
@@ -1685,6 +1823,7 @@ mod tests {
     #[test]
     fn both_seats_priors_land_on_their_own_stats_at_child_creation() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
                 branches: vec![priored_branch(
@@ -1704,6 +1843,7 @@ mod tests {
     #[test]
     fn stored_side_flags_route_the_apply_when_the_searching_seat_is_side_two() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
                 branches: vec![priored_branch(
@@ -1722,6 +1862,7 @@ mod tests {
     #[test]
     fn an_opponent_only_branch_leaves_the_acting_seat_uniform() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
                 branches: vec![priored_branch(None, Some((false, vec![0.2, 0.8])))],
@@ -1735,6 +1876,7 @@ mod tests {
     #[test]
     fn a_branch_with_no_stored_priors_leaves_the_child_uniform() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
                 branches: vec![priored_branch(None, None)],
@@ -1780,6 +1922,70 @@ mod tests {
     /// Charmander (ember/tackle) vs Squirtle (watergun/tackle), 100 HP each —
     /// the crate's standard minimal fixture (`minimal_gen3_fixture`).
     const MINIMAL: &str = include_str!("test_fixtures/minimal.state");
+
+    #[test]
+    fn joint_action_ledger_counts_only_completed_backups() {
+        Python::initialize();
+        let mut state = parse_state(MINIMAL.trim()).unwrap();
+        let mut tree = Tree::from_root(&state).unwrap();
+        assert!(tree.joint_action_witness(0).unwrap().is_none());
+        tree.joint_action_visits = Some(Default::default());
+        let cfg = MultiPlyConfig {
+            max_depth: 2, c_puct: 1.4, deep_ko_split: true,
+            use_opponent_priors: false, fpu_reduction: None,
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+        let mut counters = SearchCounters::default();
+        let traversals: Vec<_> = (0..32).map(|_| traverse(
+            &mut tree, &mut state, &mut rng, &cfg, &mut counters,
+            &mut |_state, _seam| LeafPrice::Ready(0.5))).collect();
+        assert!(tree.joint_action_visits.as_ref().unwrap().is_empty(),
+            "collection and virtual visits must not count as completed work");
+        assert!(tree.joint_action_witness(32).is_err(),
+            "reserved arm visits must not be accepted without backups");
+        let mut expected = std::collections::BTreeMap::new();
+        for traversal in &traversals {
+            for step in &traversal.path {
+                *expected.entry((step.decision, step.i, step.j)).or_insert(0u64) += 1;
+            }
+            finalize(&mut tree, traversal, &[]);
+        }
+        assert_eq!(tree.joint_action_visits.as_ref().unwrap(), &expected);
+        let receipt: serde_json::Value = serde_json::from_str(
+            &tree.joint_action_witness(32).unwrap().unwrap()).unwrap();
+        assert_eq!(receipt["root_completed_traversals"], 32);
+        assert_eq!(receipt["tree_distinct_node_pairs"].as_u64().unwrap(), expected.len() as u64);
+        assert_eq!(receipt["root_distinct_pairs"].as_u64().unwrap(),
+            expected.keys().filter(|(node, _, _)| *node == 0).count() as u64);
+        assert_eq!(receipt["tree_completed_selections"].as_u64().unwrap(), expected.values().sum::<u64>());
+        assert!(tree.joint_action_witness(31).is_err());
+    }
+
+    #[test]
+    fn joint_action_ledger_cannot_change_search_choices_or_backups() {
+        let mut state = parse_state(MINIMAL.trim()).unwrap();
+        let cfg = MultiPlyConfig {
+            max_depth: 3, c_puct: 1.4, deep_ko_split: true,
+            use_opponent_priors: false, fpu_reduction: None,
+        };
+        let ordinary = multiply_search_with_eval(&mut state, 32, &cfg, 11, &HpFractionEval).unwrap();
+        let mut measured = Tree::from_root(&state).unwrap();
+        measured.joint_action_visits = Some(Default::default());
+        let mut rng = StdRng::seed_from_u64(11);
+        let mut counters = SearchCounters::default();
+        for _ in 0..32 {
+            let traversal = traverse(&mut measured, &mut state, &mut rng, &cfg, &mut counters,
+                &mut |leaf, _seam| LeafPrice::Ready(HpFractionEval.eval(leaf)));
+            finalize(&mut measured, &traversal, &[]);
+        }
+        assert_eq!(stats_to_json(&ordinary.tree.decisions[0].s1_stats, true),
+                   stats_to_json(&measured.decisions[0].s1_stats, true));
+        assert_eq!(stats_to_json(&ordinary.tree.decisions[0].s2_stats, true),
+                   stats_to_json(&measured.decisions[0].s2_stats, true));
+        assert_eq!(ordinary.tree.decisions.len(), measured.decisions.len());
+        assert_eq!(ordinary.tree.chances.len(), measured.chances.len());
+        assert!(measured.joint_action_witness(32).unwrap().is_some());
+    }
 
     /// The REAL panic, contained, end to end -- and the process survives it.
     ///
@@ -1838,6 +2044,81 @@ mod tests {
     /// the position is exactly mirror-symmetric. Used by the depth-parity
     /// pins below — see `depth_parity_invariance_on_a_mirrored_position`.
     const SYMMETRIC: &str = include_str!("test_fixtures/symmetric.state");
+
+    #[test]
+    fn policy_opponent_traversal_replays_and_restores_engine_state() {
+        fn run() -> (Vec<(u32, f32)>, Vec<(u32, f32)>, u64) {
+            let mut state = parse_state(SYMMETRIC.trim()).unwrap();
+            let original = state.serialize();
+            let mut tree = Tree::from_root(&state).unwrap();
+            let mut chance_rng = StdRng::seed_from_u64(123);
+            let mut opponent = crate::policy_opponent::PolicyOpponent::new(false, 456);
+            let cfg = MultiPlyConfig {
+                max_depth: 3, c_puct: 1.4, deep_ko_split: true,
+                use_opponent_priors: false, fpu_reduction: None,
+            };
+            let mut counters = SearchCounters::default();
+            let mut provided = 0;
+            for _ in 0..80 {
+                let traversal = traverse_with_policy_opponent(
+                    &mut tree, &mut state, &mut chance_rng, &cfg, &mut counters,
+                    &mut |s, _| LeafPrice::Ready(HpFractionEval.eval(s)), &mut opponent,
+                    &mut |_, node, _| {
+                        provided += 1;
+                        crate::policy_opponent::ActionDistribution::new(&vec![1.0; node.s2_stats.len()], node.s2_stats.len())
+                    },
+                ).unwrap();
+                assert_eq!(state.serialize(), original);
+                finalize(&mut tree, &traversal, &[]);
+            }
+            assert_eq!(tree.decisions[0].visits, 80);
+            assert!(provided > 0);
+            assert!(provided as u64 <= opponent.samples);
+            (tree.decisions[0].s1_stats.iter().map(|s| (s.visits, s.total_value)).collect(),
+             tree.decisions[0].s2_stats.iter().map(|s| (s.visits, s.total_value)).collect(), opponent.samples)
+        }
+        assert_eq!(run(), run());
+    }
+
+    #[test]
+    fn policy_provider_failure_inside_tree_restores_state_and_reservations() {
+        Python::initialize();
+        let mut state = parse_state(SYMMETRIC.trim()).unwrap();
+        let original = state.serialize();
+        let mut tree = Tree::from_root(&state).unwrap();
+        let mut chance_rng = StdRng::seed_from_u64(123);
+        let mut opponent = crate::policy_opponent::PolicyOpponent::new(false, 456);
+        let cfg = MultiPlyConfig {
+            max_depth: 3, c_puct: 1.4, deep_ko_split: true,
+            use_opponent_priors: false, fpu_reduction: None,
+        };
+        let mut counters = SearchCounters::default();
+        for _ in 0..200 {
+            let root_before: Vec<_> = tree.decisions[0].s1_stats.iter().chain(&tree.decisions[0].s2_stats)
+                .map(|s| (s.visits, s.total_value)).collect();
+            let visits_before = tree.decisions[0].visits;
+            let result = traverse_with_policy_opponent(
+                &mut tree, &mut state, &mut chance_rng, &cfg, &mut counters,
+                &mut |s, _| LeafPrice::Ready(HpFractionEval.eval(s)), &mut opponent,
+                &mut |_, node, parent| {
+                    if parent.is_some() { return Err(PyValueError::new_err("missing opponent observation at child")); }
+                    crate::policy_opponent::ActionDistribution::new(&vec![1.0; node.s2_stats.len()], node.s2_stats.len())
+                },
+            );
+            assert_eq!(state.serialize(), original);
+            match result {
+                Ok(traversal) => { finalize(&mut tree, &traversal, &[]); }
+                Err(_) => {
+                    assert_eq!(tree.decisions[0].visits, visits_before);
+                    let root_after: Vec<_> = tree.decisions[0].s1_stats.iter().chain(&tree.decisions[0].s2_stats)
+                        .map(|s| (s.visits, s.total_value)).collect();
+                    assert_eq!(root_before, root_after);
+                    return;
+                }
+            }
+        }
+        panic!("fixture never exercised a failing interior provider");
+    }
 
     /// Swap the two seats of a serialized engine state. The wire format is
     /// `side_one/side_two/weather/...`, so mirroring a position is a swap of
@@ -2385,6 +2666,7 @@ mod tests {
                 })
                 .collect();
             let mut tree = Tree {
+                joint_action_visits: None,
                 decisions: vec![root],
                 chances: vec![ChanceNode { branches }],
             };

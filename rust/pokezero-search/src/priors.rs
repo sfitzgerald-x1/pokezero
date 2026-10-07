@@ -1050,6 +1050,7 @@ mod tests {
     /// decision node with `s1_arms`/`s2_arms` arms.
     fn tree_with_child(s1_arms: usize, s2_arms: usize) -> Tree {
         Tree {
+            joint_action_visits: None,
             decisions: vec![decision(2, 2), decision(s1_arms, s2_arms)],
             chances: vec![ChanceNode {
                 branches: vec![branch(Some(1))],
@@ -1289,6 +1290,7 @@ mod tests {
         // branch 0 -> child decision 1 (2 arms each seat)
         // branch 1 -> child decision 2 (3 arms on side one, 2 on side two)
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![decision(2, 2), decision(2, 2), decision(3, 2)],
             chances: vec![ChanceNode {
                 branches: vec![branch(Some(1)), branch(Some(2))],
@@ -1373,6 +1375,7 @@ mod tests {
     #[test]
     fn each_branch_reads_its_own_batch_row() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![decision(2, 2), decision(2, 2), decision(2, 2)],
             chances: vec![ChanceNode {
                 branches: vec![branch(Some(1)), branch(Some(2))],
@@ -1412,6 +1415,7 @@ mod tests {
     #[test]
     fn a_childless_branch_stores_its_priors_for_later_and_counts_as_applied() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![decision(2, 2)],
             chances: vec![ChanceNode {
                 branches: vec![branch(None)],
@@ -1522,6 +1526,7 @@ mod tests {
     #[test]
     fn branch_fallback_reason_ledger_is_exhaustive_and_conserved() {
         let mut tree = Tree {
+            joint_action_visits: None,
             decisions: vec![decision(2, 2), decision(2, 2)],
             chances: vec![ChanceNode {
                 branches: vec![

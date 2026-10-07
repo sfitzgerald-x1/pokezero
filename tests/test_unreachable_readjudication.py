@@ -246,6 +246,7 @@ sys.path.insert(0, os.path.join(REPO, "scripts"))
 sys.path.insert(0, os.path.join(REPO, "tests"))
 
 import c154_unreachable_readjudication as c154  # noqa: E402
+import check_engine_fidelity_unittest_counts as fidelity_counts  # noqa: E402
 from test_ledger_table_uniformity import (  # noqa: E402
     _EXPECTED_UNREACHABLE_ROWS,
     _UNREACHABLE_HEADER,
@@ -1285,6 +1286,15 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
             and body.name.startswith("test")
         )
 
+    @classmethod
+    def _target_methods(cls, target: str) -> int:
+        # Keep the independent module arithmetic/assumption pins above, but
+        # resolve EACH selected target. A mixed module/class invocation must
+        # not silently drop its classes just because a module was also named.
+        if os.path.isfile(os.path.join(REPO, target.replace(".", "/") + ".py")):
+            return cls._methods(target)
+        return fidelity_counts._test_count(target)
+
     def test_every_ran_n_guard_equals_its_suites_test_count(self) -> None:
         # ⚠ THE FLOOR IS DERIVED, NOT TYPED, and #1205 names why: the previous form was
         # `>= 20` at a moment when the scan returned exactly 20, so it had ZERO margin and
@@ -1307,13 +1317,7 @@ class EveryWorkflowTestCountGuardMatchesItsModuleTests(unittest.TestCase):
         )
         for line, targets, stated in guards:
             with self.subTest(line=line, targets=targets):
-                modules = [t for t in targets if os.path.exists(
-                    os.path.join(REPO, t.replace(".", "/") + ".py"))]
-                if modules:
-                    derived = sum(self._methods(m) for m in modules)
-                else:
-                    # Individually named `Module.Class.test_method` paths.
-                    derived = len(targets)
+                derived = sum(self._target_methods(target) for target in targets)
                 self.assertEqual(
                     derived, stated,
                     f"{self.WORKFLOW}:{line} demands `Ran {stated} tests` from "

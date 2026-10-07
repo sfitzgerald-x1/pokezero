@@ -4,6 +4,9 @@ Persisted public prefixes never contain request-local opponent action indexes.
 This module resolves public move/species IDs after a belief world is sampled.
 It also handles a small, explicit set of public ``|cant|`` events whose chosen
 action has no effect, using a deterministic sampled-world legal representative.
+Public faint-before-action cancellations use only a legal move representative
+and are accepted only when replay reproduces the cancellation, never as a
+claim to have recovered the historical selected move.
 """
 
 from __future__ import annotations
@@ -101,7 +104,17 @@ def replay_public_action_rounds(
             actions[player] = action_index
             if canonicalization is not None:
                 canonicalizations.append(canonicalization)
+        cancellation_players = [player for player, identifier in action_round.actions.items()
+                                if identifier.kind == "event" and identifier.event_id == "faint-before-action"]
+        before_lines = len(env.protocol_lines) if cancellation_players else 0
         env.step(actions)
+        if cancellation_players:
+            from .public_action_capture import public_action_identifiers_from_protocol_lines
+            emitted = public_action_identifiers_from_protocol_lines(
+                env.protocol_lines[before_lines:], cancellation_players=cancellation_players)
+            for player in cancellation_players:
+                if emitted.get(player) != action_round.actions[player]:
+                    raise PublicReplayError("sampled_world_faint_before_action_not_reproduced")
         replay_actions[action_round.turn_index] = actions
         replay_observations[action_round.turn_index] = observations
     return PublicReplayMaterialization(
@@ -126,6 +139,19 @@ def resolve_public_action_identifier(
         index for index, legal in enumerate(observation.legal_action_mask) if bool(legal)
     )
     if identifier.kind == "event":
+        if identifier.event_id == "faint-before-action":
+            # Never use a switch (which can avoid the observed KO). This is an
+            # ephemeral representative, not a recovered historical move.
+            candidates = observation.metadata.get("action_candidates", ())
+            moves = [candidate["action_index"] for candidate in candidates
+                     if isinstance(candidate, Mapping) and candidate.get("kind") == "move"
+                     and type(candidate.get("action_index")) is int
+                     and candidate["action_index"] in legal_actions]
+            if not moves:
+                raise PublicReplayError("faint_before_action_has_no_legal_move_representative")
+            return min(moves), PublicEventCanonicalization(
+                turn_index, player_id, identifier.event_id,
+                resolution="sampled-world-lowest-legal-move-verified-public-cancellation")
         return _canonicalize_public_event(
             identifier,
             legal_actions=legal_actions,
@@ -167,7 +193,8 @@ def public_event_prefix_summary(public_action_rounds: Sequence[PublicResolvedAct
         for identifier in action_round.actions.values()
         if identifier.kind == "event"
     )
-    unsupported = tuple(event_id for event_id in event_ids if not _is_supported_cant_event(event_id))
+    unsupported = tuple(event_id for event_id in event_ids
+                        if event_id != "faint-before-action" and not _is_supported_cant_event(event_id))
     return {
         "public_event_count": len(event_ids),
         "public_event_ids": list(event_ids),

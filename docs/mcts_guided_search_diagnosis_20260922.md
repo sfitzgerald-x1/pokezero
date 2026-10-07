@@ -1,9 +1,48 @@
 # Guided MCTS diagnosis: branch-prior and override evidence
 
-**Status: updated, 2026-09-24.** This records model-leaf evidence and the
+**Status: updated, 2026-09-29.** This records model-leaf evidence and the
 completed branch-prior/override audits. It is not a strength claim. The newer
 source-root results below supersede the earlier small-sample conclusion that
 the value head is the leading explanation.
+
+## September 29: held-out rollout-leaf continuation result — do not promote
+
+The source-bound, replayable intervention completed seven preselected roots at
+the unchanged search configuration (own model priors, no opponent priors,
+depth 6, 4,096 simulations, batch 16, four worlds).  It compares the original
+model-leaf action with the rollout-leaf action only where the selected root
+action changed.  Every trial holds the opponent action fixed and uses a shared
+continuation RNG seed across the two subject actions.
+
+The run is terminal and structurally independently validated:
+
+- continuation run: `/shared/scott-experiment/mcts-replay-continuation-r3-e63248a2-20260929`
+  (`SOURCE_ROOT_LEAF_CONTINUATION_PASS`, 7 roots, 448 action outcomes);
+- independent validator: `/shared/scott-experiment/mcts-replay-continuation-r3-e63248a2-20260929-independent-validation`
+  (`SOURCE_ROOT_LEAF_CONTINUATION_INDEPENDENT_VALIDATION_PASS`);
+- source commit `e63248a2d1c4fdff8f9fcbaafd5b6a1656c0e6b1`, immutable image
+  `sha256:e8e4d75a07d86010e148fcdfca162fe8d9ca5ea6fd530743d735adf8541d49af`,
+  and no restart, cap, or missing-terminal evidence.
+
+Subject score is win = 1, draw = 0.5, loss = 0.  The table reports
+rollout-leaf minus model-leaf score; a positive cell would support the changed
+action.  The interval is a descriptive 100,000-draw percentile bootstrap over
+the **seven roots**, not an independent-game confidence interval.
+
+| Held-out target | Paired draws | Delta | Positive / negative / tied | Root-clustered 95% interval |
+| --- | ---: | ---: | ---: | ---: |
+| policy-consistent | 112 | +1.34 pp | 23 / 21 / 68 | -12.50 to +14.29 pp |
+| uniform-own sensitivity | 112 | -0.89 pp | 0 / 1 / 111 | -2.68 to +0.00 pp |
+| combined diagnostic | 224 | +0.22 pp | 23 / 22 / 179 | -6.25 to +6.70 pp |
+
+This is an integrity pass but a **causal-action non-promotion**.  The rollout
+leaf intervention changes selected actions, yet the held-out action-quality
+evidence is effectively neutral and its root-clustered interval includes
+material harm.  It therefore does not license a value-target study or the
+preregistered practical-budget strength pilot.  These selected roots and
+continuation policies are also not a global strength sample, so the result
+does not prove that raw policy or MCTS wins globally; it only parks this
+rollout-leaf candidate under the stated advancement rule.
 
 ## September 24 correction: actual raw-policy anchor and current decision
 
