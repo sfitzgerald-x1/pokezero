@@ -10,6 +10,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import math
 from pathlib import Path
 import random
 import signal
@@ -48,6 +49,53 @@ def save_step(path, value):
     data = json.dumps(value, sort_keys=True).encode()
     with path.open('xb') as stream:
         stream.write(gzip.compress(data, compresslevel=3, mtime=0))
+
+
+def staged_conditioning_enabled(registration):
+    value = registration.get('reference', {}).get('staged_substitute_conditioning', False)
+    if type(value) is not bool:
+        raise RuntimeError('staged conditioning opt-in must be a registered boolean')
+    return value
+
+
+def validate_reference_measurement(measured):
+    """Cancelled attempts retain RNG ownership but never qualify as search work.
+
+    The parallel engine separately checks the new root backup delta. Here the
+    whole-game driver checks every draw and batch, including cancelled-only
+    batches; it must not reject a valid completed decision for reaching its clock.
+    """
+    if len(set(measured.worker_pids)) != 20 or measured.result.trajectories <= 0:
+        raise RuntimeError('reference requires twenty workers and NEW complete trajectories')
+    count = completed = transitions = 0
+    for receipt in measured.worker_receipts:
+        batch, draws = receipt['batch'], receipt['evidence']['draws']
+        if len(draws) != batch.world_draws:
+            raise RuntimeError('reference batch/draw count drift')
+        valid = 0
+        for draw in draws:
+            if draw['status'] == 'ROOT_VALIDATED' and draw.get('released') is True:
+                valid += 1
+            elif draw['status'] == 'DEADLINE_CANCELLED':
+                diagnostic = draw.get('sampling_diagnostic', {})
+                checked, deadline = diagnostic.get('checked_at'), diagnostic.get('deadline_at')
+                if (diagnostic.get('schema') != 'pokezero.world-sampling-deadline.v1'
+                        or type(checked) not in (int, float) or type(deadline) not in (int, float)
+                        or not math.isfinite(checked) or not math.isfinite(deadline) or checked < deadline
+                        or diagnostic.get('accepted_world') is not False
+                        or diagnostic.get('backed_up') is not False
+                        or not batch.deadline_exhausted):
+                    raise RuntimeError('cancelled reference world lacks clock/zero-backup evidence')
+            else:
+                raise RuntimeError('refused or unreleased reference world cannot enter a decision')
+        if not 0 <= batch.trajectories <= valid or (valid == 0 and batch.transitions != 0):
+            raise RuntimeError('cancelled reference attempts counted as work')
+        count += len(draws)
+        completed += batch.trajectories
+        transitions += batch.transitions
+    if (count != measured.result.world_draws or completed != measured.result.trajectories
+            or transitions != measured.result.transitions):
+        raise RuntimeError('reference aggregate work receipt drift')
 
 
 def step_files(root):
@@ -112,6 +160,9 @@ def verify(m, *, source_root=REPO):
 
 
 def register(args):
+    staged = getattr(args, 'staged_substitute_conditioning', False)
+    if staged and not args.qualification:
+        raise RuntimeError('staged conditioning first requires a fresh technical qualification; no confirmation adapter is qualified yet')
     if git('status', '--porcelain'):
         raise RuntimeError('commit reviewed source before registration')
     import pokezero_search
@@ -157,6 +208,12 @@ def register(args):
     if len(binary) != 1 or sha(binary[0]) not in receipt['source_hashes'].values():
         raise RuntimeError('native binary absent from retained build evidence')
     source = load_gen3_randbat_source_cached(args.showdown_root)
+    if staged:
+        from pokezero.mcts_eval.paper_reference_staged_chance import verify_compiled_tree
+        verify_compiled_tree(args.showdown_root)
+        for path in sorted((args.showdown_root/'dist').rglob('*')):
+            if path.is_file() and path.suffix in ('.js', '.json'):
+                hashes[str(path)] = sha(path)
     seeds = [study_seed(i, qualification=args.qualification) for i in range(2 if args.qualification else 64)]
     if len(set(seeds)) != len(seeds):
         raise RuntimeError('seed collision; do not silently replace seeds')
@@ -199,6 +256,10 @@ def register(args):
             'same champion opponent; not Foul Play or unrestricted all-opponent superiority',
             '64 independent clusters may be insufficient for a modest advantage; no equivalence inference',
             'qualification outcomes never enter confirmation; refusal halts, no raw fallback or redraw'])
+    m['reference']['staged_substitute_conditioning'] = staged
+    if staged:
+        m['reference']['staged_kernel'] = 'pokezero.constant-chance-substitute.v1'
+        m['limitations'].append('guarded constant-chance replay program explicitly opted in; unsupported public programs keep joint conditioning; deadline-induced sample-selection effects are not proven away')
     recovery_modes = (args.recover_from, args.native_recover_from, args.trapping_recover_from,
                       args.pending_qualification_recover_from, getattr(args, 'faint_recover_from', None),
                       getattr(args, 'substitute_recover_from', None),
@@ -368,6 +429,7 @@ def validate_qualification(path, confirmation):
     if (registration['phase'] != 'QUALIFICATION_NOT_STRENGTH'
             or registration['seeds'] != [study_seed(i, qualification=True) for i in range(2)]
             or registration['registered_games'] != 8
+            or staged_conditioning_enabled(registration) != staged_conditioning_enabled(confirmation)
             or not compatible and (registration['source_commit'] != confirmation['source_commit']
                 or registration['input_hashes'] != confirmation['input_hashes'])):
         raise RuntimeError('qualification roster or source/input binding differs')
@@ -426,7 +488,8 @@ def run(args, m):
     try:
         pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1.), ShowdownWorkerFactory(
             m['checkpoint'], m['checkpoint_sha256'], m['showdown_root'], m['set_source_hash'],
-            allow_earlier_compatible_template=True, max_known_set_draws=128))
+            allow_earlier_compatible_template=True, max_known_set_draws=128,
+            staged_substitute_conditioning=staged_conditioning_enabled(m)))
         print(json.dumps(dict(status='POOL_READY', startup_seconds=pool.startup_seconds)), flush=True)
         for ordinal, seed in enumerate(m['seeds']):
             for subject in SEATS:
@@ -557,11 +620,7 @@ def run(args, m):
                                     battle_id=battle_id, seed=rng_seed,
                                     deadline_seconds=remaining)
                                 index = int(measured.result.action.split(':')[1])
-                                draws = [d for receipt in measured.worker_receipts for d in receipt['evidence']['draws']]
-                                if (not draws or len(draws) != measured.result.world_draws
-                                        or not all(d['status'] == 'ROOT_VALIDATED' and d['released'] for d in draws)
-                                        or len(set(measured.worker_pids)) != 20):
-                                    raise RuntimeError('reference world/worker/release witness failed')
+                                validate_reference_measurement(measured)
                                 if resume and boundary == resume['start_boundary']:
                                     probe = json.loads(Path(recovery['exact_failed_draw_certificate']).read_text())
                                     worker_zero = [draw for receipt in measured.worker_receipts if receipt['worker'] == 0
@@ -668,6 +727,8 @@ def main():
     parser.add_argument('--showdown-root', type=Path)
     parser.add_argument('--native-binding', type=Path)
     parser.add_argument('--qualification', action='store_true')
+    parser.add_argument('--staged-substitute-conditioning', action='store_true',
+        help='Explicit default-off guarded replay kernel; technical qualification only until recovery is validated')
     parser.add_argument('--qualification-readout', type=Path)
     parser.add_argument('--recover-from', type=Path)
     parser.add_argument('--repair-certificate', type=Path)

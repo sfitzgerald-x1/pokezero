@@ -177,6 +177,11 @@ class QualificationEvidenceTests(unittest.TestCase):
     def test_canonical_qualification_rederives_and_retains_readout_hash(self):
         self.assertEqual(self.validate()['readout_sha256'], self.driver.sha(self.root/'READOUT.json'))
 
+    def test_default_off_qualification_cannot_qualify_an_opt_in_kernel(self):
+        confirmation = dict(self.registration, reference=dict(staged_substitute_conditioning=True))
+        with patch.object(self.driver, 'verify'), self.assertRaisesRegex(RuntimeError, 'roster or source'):
+            self.driver.validate_qualification(self.root/'READOUT.json', confirmation)
+
     def test_full_statistics_compress_losslessly_and_never_overwrite(self):
         value = {'statistics_checkpoint': {'Q': {'node': .33333}, 'N': {'node': 7},
             'M': {'a': 4}, 'F': ['trajectory']}, 'receipts': [1, 2, 3]}
