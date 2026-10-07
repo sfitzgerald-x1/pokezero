@@ -20,6 +20,10 @@ pub mod model;
 // NOT feature-gated even though `model` is its only caller: the gather/apply
 // arithmetic is pure and must stay testable on a host without libtorch.
 pub(crate) mod priors;
+pub(crate) mod policy_opponent;
+pub(crate) mod policy_request;
+#[cfg(feature = "model")]
+pub(crate) mod policy_bridge;
 pub mod rollout;
 pub mod tree;
 
@@ -459,6 +463,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(envstep::env_options, m)?)?;
     m.add_function(wrap_pyfunction!(envstep::env_step, m)?)?;
     m.add_function(wrap_pyfunction!(envstep::env_battle_over, m)?)?;
+    m.add_function(wrap_pyfunction!(policy_request::sampled_policy_request, m)?)?;
     m.add_class::<encoder::NativeEncoder>()?;
     m.add_class::<leaf::PyLeafEncoder>()?;
     m.add_class::<fold::PyFoldState>()?;

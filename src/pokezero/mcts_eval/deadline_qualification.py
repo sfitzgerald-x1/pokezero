@@ -35,6 +35,7 @@ class DeadlineQualificationRequirements:
     worlds: int = 4
     model_world_workers: int = 1
     expected_decisions: int = 16
+    require_native_prefix: bool = True
 
     def __post_init__(self) -> None:
         if min(
@@ -58,8 +59,10 @@ class DeadlineQualificationRequirements:
             raise ValueError(
                 "deadline qualification model_world_workers must not exceed worlds."
             )
+        if type(self.require_native_prefix) is not bool:
+            raise ValueError("deadline qualification require_native_prefix must be a boolean.")
 
-    def to_payload(self) -> dict[str, int]:
+    def to_payload(self) -> dict[str, int | bool]:
         return asdict(self)
 
 
@@ -416,7 +419,7 @@ def validate_deadline_qualification(
     if len(set(identifiers)) != len(identifiers):
         raise DeadlineQualificationError("qualification has duplicate decision IDs")
     prefix_count = sum(int(row["native_prefixes"]) for row in normalized)
-    if not prefix_count:
+    if requirements.require_native_prefix and not prefix_count:
         raise DeadlineQualificationError(
             "qualification did not observe a nonzero, completed native deadline prefix"
         )
