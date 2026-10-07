@@ -159,8 +159,17 @@ def validate_wake_wrap_support(plan, snapshot, stage):
     substitute = next(slot for slot in own['moveSlots'] if slot['id'] == 'substitute')
     if substitute['pp'] <= 10-stage:
         raise ReferenceRefusal('Wake/Wrap Substitute PP/Encore expiry outside certificate')
-    if stage >= 6 and own.get('lastMove') != '[DataMove:substitute]':
-        raise ReferenceRefusal('Wake/Wrap failed Substitute last-move support drift')
+    if stage >= 6:
+        last_move = own.get('lastMove')
+        # Static reconstruction references a DataMove; a move actually played
+        # in the branch is an ActiveMove with a canonical Move reference. The
+        # pinned serializer preserves its per-use hit/damage receipt too.
+        canonical_failed_substitute = (last_move == '[DataMove:substitute]' or
+            isinstance(last_move, dict) and last_move.get('move') == '[Move:substitute]'
+            and set(last_move) <= {'move','hit','totalDamage','moveHitData'}
+            and last_move.get('hit') == 0 and last_move.get('totalDamage') is False)
+        if not canonical_failed_substitute:
+            raise ReferenceRefusal('Wake/Wrap failed Substitute last-move support drift')
     if stage < 8:
         timer = opp.get('statusState', {})
         if (opp['status'] != 'slp' or timer.get('time') != 8-stage or timer.get('startTime') != 3

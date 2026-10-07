@@ -50,7 +50,7 @@ def tail_snapshot(stage):
     own, opp = [side['pokemon'][0] for side in snapshot.bridge_snapshot['battle']['sides']]
     own['volatiles'] = dict(substitute=dict(hp=54 if stage < 8 else 42))
     own['hp'] = {5:246,6:262}.get(stage,264)
-    own['lastMove'] = '[DataMove:psychic]' if stage == 5 else '[DataMove:substitute]'
+    own['lastMove'] = '[DataMove:psychic]' if stage == 5 else dict(move='[Move:substitute]',hit=0,totalDamage=False)
     if stage == 9:
         own['volatiles']['encore'] = dict(move='substitute',duration=3)
     if stage < 8:
@@ -132,6 +132,19 @@ class WakeWrapSupportTests(unittest.TestCase):
             snapshot = tail_snapshot(9)
             snapshot.bridge_snapshot['battle']['sides'][0]['pokemon'][0]['volatiles']['encore']['duration']=duration
             self.assertTrue(validate_active_support(self.plan,snapshot,9))
+
+    def test_active_move_serialization_is_bound_not_treated_as_static_data_move(self):
+        for last_move in ('[DataMove:substitute]',dict(move='[Move:substitute]',hit=0,totalDamage=False)):
+            snapshot=tail_snapshot(8)
+            snapshot.bridge_snapshot['battle']['sides'][0]['pokemon'][0]['lastMove']=last_move
+            self.assertTrue(validate_active_support(self.plan,snapshot,8))
+        for last_move in (dict(move='[Move:recover]',hit=0,totalDamage=False),
+                          dict(move='[Move:substitute]',hit=0,totalDamage=9),
+                          dict(move='[Move:substitute]',hit=0,totalDamage=False,flags=dict(failencore=True))):
+            snapshot=tail_snapshot(8)
+            snapshot.bridge_snapshot['battle']['sides'][0]['pokemon'][0]['lastMove']=last_move
+            with self.assertRaisesRegex(ReferenceRefusal,'last-move'):
+                validate_active_support(self.plan,snapshot,8)
 
     def test_hidden_bench_order_positive_opponent_PP_and_policy_mass_not_restricted(self):
         for stage in range(5,10):
