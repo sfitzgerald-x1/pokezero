@@ -2,6 +2,7 @@
 import ast
 from copy import deepcopy
 import json
+import random
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace as NS
@@ -12,6 +13,7 @@ from pokezero.mcts_eval.followthrough import continuation_seed
 from pokezero.mcts_eval.wider_guarded_staged_recovery import (
     IDENTITY, KIND, PARENT, QUALIFIED, PUBLIC_OBSERVER, SEMANTIC_OBSERVER,
     RemoveStagedGuard, bind_fresh_audits, bind_proofs, resume_capture, validate_resumed_workers,
+    comparable_certificate, charge_unplayed_guard_attempt,
 )
 from pokezero.mcts_eval.wider_search import ARMS, SEATS, game_identity, study_seed
 from wider_search_comparison import register
@@ -28,6 +30,43 @@ def probe_fixture():
 
 
 class StagedGuardTests(unittest.TestCase):
+    def test_runtime_rng_tuple_matches_durable_json_arrays_without_mutation(self):
+        probe = probe_fixture()
+        actual = deepcopy(probe['measurement']['worker_receipts'])
+        for receipt in actual:
+            receipt['evidence']['draws'][0]['substitute_policy_conditioning']['anchor_rng_state'] = random.Random(receipt['worker']).getstate()
+        probe['measurement']['worker_receipts'] = json.loads(json.dumps(actual))
+        validate_resumed_workers(actual, probe)
+        self.assertIsInstance(actual[0]['evidence']['draws'][0]['substitute_policy_conditioning']['anchor_rng_state'], tuple)
+        for field in ('rng_word', 'rng_counter', 'gaussian_cache', 'certificate_field'):
+            changed = deepcopy(actual)
+            cert = changed[7]['evidence']['draws'][0]['substitute_policy_conditioning']
+            if field == 'certificate_field':
+                cert['attempts'] += 1
+            else:
+                state = list(cert['anchor_rng_state'])
+                words = list(state[1])
+                if field == 'rng_word': words[3] ^= 1
+                elif field == 'rng_counter': words[-1] -= 1
+                else: state[2] = .5
+                cert['anchor_rng_state'] = (state[0], tuple(words), state[2])
+            with self.subTest(field=field), self.assertRaisesRegex(RuntimeError, 'original stream'):
+                validate_resumed_workers(changed, probe)
+
+    def test_rng_canonicalization_rejects_invalid_types_shapes_and_numbers(self):
+        valid = dict(anchor_rng_state=random.Random(7).getstate())
+        for mode in ('version', 'bool_word', 'short_words', 'counter', 'nan_cache'):
+            state = list(valid['anchor_rng_state'])
+            words = list(state[1])
+            if mode == 'version': state[0] = 2
+            elif mode == 'bool_word': words[0] = True
+            elif mode == 'short_words': words.pop()
+            elif mode == 'counter': words[-1] = 625
+            else: state[2] = float('nan')
+            state[1] = tuple(words)
+            with self.subTest(mode=mode), self.assertRaisesRegex(RuntimeError, 'invalid anchor RNG'):
+                comparable_certificate(dict(anchor_rng_state=tuple(state)))
+
     def test_first_draw_all20_compared_without_diagnostic_statistics(self):
         probe = probe_fixture()
         validate_resumed_workers(probe['measurement']['worker_receipts'], probe)
@@ -168,6 +207,51 @@ class AcceptedPrefixTests(unittest.TestCase):
             capture, old, steps = self.fixture()
             with self.subTest(births=births), self.assertRaises(RuntimeError):
                 self.resume(capture, old, steps, births=births)
+
+
+class UnplayedGuardWallTests(unittest.TestCase):
+    def fixture(self):
+        resume = dict(worker_ordinals=list(range(20)), elapsed_before_resume=323.,
+            wall_clock_envelope=dict(additional_attempts=[dict(charged_seconds=12.)]), decision_id=392)
+        capture = dict(status='UNPLAYED_FIRST_DECISION_GUARD_REFUSAL_CAPTURED_ALL32_AND_ACCEPTED15_PRESERVED',
+            source_commit='07e199f39d56d9620b8149fa0059958c4b0c7b29', identity=IDENTITY,
+            completed_games_retained=32, accepted_prefix_boundaries=15, accepted_decision_id=392,
+            failed_decision_id=393, new_action_played=False, new_boundary_accepted=False,
+            failed_statistics_or_rng_restored=False, strength_inference=False,
+            original_worker_ordinals=list(range(20)), elapsed_before_failed_attempt=323.,
+            registration='/failed/registration.json', result_path='/failed/' + IDENTITY + '.json',
+            registration_sha256='hash', result_sha256='hash',
+            wall_clock_envelope=dict(start_birthtime=100., terminal_mtime=114., slack_seconds=1., charged_seconds=15.))
+        return resume, capture
+
+    def charge(self, resume, capture, wall=2400.):
+        with mock.patch.object(Path, 'stat', side_effect=[NS(st_birthtime=100.), NS(st_mtime=114.)]), \
+                mock.patch.object(Path, 'iterdir', return_value=iter(())):
+            return charge_unplayed_guard_attempt(resume, capture, sha=lambda p: 'hash', wall_seconds=wall)
+
+    def test_unplayed_attempt_charges_full_envelope_without_changing_accepted_state(self):
+        resume, capture = self.fixture()
+        result = self.charge(resume, capture)
+        self.assertEqual(result['elapsed_before_resume'], 338.)
+        self.assertEqual(result['worker_ordinals'], resume['worker_ordinals'])
+        self.assertEqual(result['decision_id'], 392)
+        self.assertEqual(resume['elapsed_before_resume'], 323.)
+        self.assertEqual([a['charged_seconds'] for a in result['wall_clock_envelope']['additional_attempts']], [12., 15.])
+
+    def test_action_prefix_rng_wall_or_capture_drift_cannot_be_erased(self):
+        for key, value in (('new_action_played', True), ('new_boundary_accepted', True),
+                ('failed_statistics_or_rng_restored', True), ('accepted_decision_id', 393),
+                ('elapsed_before_failed_attempt', 0.), ('original_worker_ordinals', [0] * 20),
+                ('result_sha256', 'other')):
+            resume, capture = self.fixture()
+            capture[key] = value
+            with self.subTest(key=key), self.assertRaises(RuntimeError): self.charge(resume, capture)
+        for key, value in (('charged_seconds', 0.), ('terminal_mtime', 115.), ('slack_seconds', 0.)):
+            resume, capture = self.fixture()
+            capture['wall_clock_envelope'][key] = value
+            with self.subTest(key=key), self.assertRaises(RuntimeError): self.charge(resume, capture)
+        resume, capture = self.fixture()
+        with self.assertRaisesRegex(RuntimeError, 'allowance exhausted'): self.charge(resume, capture, wall=338.)
 
 
 class FreshEightAuditTests(unittest.TestCase):

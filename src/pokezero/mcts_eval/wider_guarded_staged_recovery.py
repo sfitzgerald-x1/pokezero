@@ -27,6 +27,8 @@ PROOFS = {
     'probe_guarded_staged_original20_r29.json': '1b0ae1cba03826be3cc08a4dc3358879e63236a26e3bad181d6012dc57c79303',
     'validate_guarded_staged_original20_r30.json': '831dfa33094eaad3145d2d3cb95df0f4f42c819fc3157b354ce851e7a46cf643',
     'test_guarded_qualification_observers_r33.json': '609b0c62d90f73d658d593dd7ffbf5b86d13bdd564ded29c03fb9b8a76f8f802',
+    'capture_guarded_resume_failure_r54.json': '96d9497e2ef9ba0f02d6a61d7b3782710c679b0ade80edb62fcff7d50b17912b',
+    'probe_guarded_receipt_representation_r55.json': '1471ee8e49d860a49eca150f33ddc761440f5b495839a5ff08b2fbb588d56368',
 }
 
 
@@ -97,6 +99,21 @@ def bind_proofs(audit_dir, *, sha):
         and replay['checked_cancellations'] == 20 and replay['negative_controls'] == 3
         and replay['study_resumed'] is False and replay['strength_inference'] is False,
         'full original20 independent replay required')
+    representation = records['probe_guarded_receipt_representation_r55.json']
+    comparisons = representation['first_draw_comparison']
+    require(representation['source_commit'] == '07e199f39d56d9620b8149fa0059958c4b0c7b29'
+        and representation['raw_guard_error'] == 'resumed first accepted draw differs from exact original stream proof'
+        and representation['canonical_guard_error'] is None
+        and len(comparisons) == 20 and {r['worker'] for r in comparisons} == set(range(20))
+        and all(r['status'] == 'ROOT_VALIDATED' and r['accepted'] is True
+            and r['packed_team_equal'] is True and r['materialization_seed_equal'] is True
+            and r['canonical_certificate_equal'] is True and r['raw_certificate_equal'] is False
+            and {(d['path'], d['runtime_type'], d['durable_type']) for d in r['type_differences']}
+                == {('/anchor_rng_state', 'tuple', 'list'), ('/anchor_rng_state/1', 'tuple', 'list')}
+            for r in comparisons)
+        and representation['action_played'] is False and representation['game_resumed'] is False
+        and representation['diagnostic_checkpoint_or_rng_restored'] is False,
+        'all20 representation-only diagnostic required; no scientific witness relaxation')
     return records, inputs
 
 
@@ -296,8 +313,64 @@ def prepare(previous, audit_dir, qualification_path, semantic_path, public_path,
     inputs[str(registered)] = sha(registered)
     result['resume'] = resume_capture(capture, old, previous, sha=sha,
         restore_reference_checkpoint=restore_reference_checkpoint)
+    failed = records['capture_guarded_resume_failure_r54.json']
+    result['resume'] = charge_unplayed_guard_attempt(result['resume'], failed, sha=sha,
+        wall_seconds=old['per_game_wall_seconds'])
+    result['guard_representation_repair'] = dict(failed_capture=str(audit_dir / 'capture_guarded_resume_failure_r54.json'),
+        diagnostic=str(audit_dir / 'probe_guarded_receipt_representation_r55.json'),
+        algorithm_unchanged=True, only_normalized_fields=['anchor_rng_state outer tuple', 'anchor_rng_state state-vector tuple'])
+    result['disclosure'] += '; unplayed operational guard refusal retained and wall charged; '
+    result['disclosure'] += 'only RNG-state tuple/JSON-array representation normalized, every scientific field still compared'
     result['input_hashes'] = inputs
     return result
+
+
+def charge_unplayed_guard_attempt(resume, capture, *, sha, wall_seconds):
+    """An unplayed comparison failure cannot reset the original game allowance."""
+    require(capture['status'] == 'UNPLAYED_FIRST_DECISION_GUARD_REFUSAL_CAPTURED_ALL32_AND_ACCEPTED15_PRESERVED'
+        and capture['source_commit'] == '07e199f39d56d9620b8149fa0059958c4b0c7b29'
+        and capture['identity'] == IDENTITY and capture['completed_games_retained'] == 32
+        and capture['accepted_prefix_boundaries'] == 15 and capture['accepted_decision_id'] == 392
+        and capture['failed_decision_id'] == 393 and capture['new_action_played'] is False
+        and capture['new_boundary_accepted'] is False and capture['failed_statistics_or_rng_restored'] is False
+        and capture['strength_inference'] is False
+        and capture['original_worker_ordinals'] == resume['worker_ordinals']
+        and capture['elapsed_before_failed_attempt'] == resume['elapsed_before_resume'],
+        'exact unplayed guard refusal capture required')
+    registration, terminal = Path(capture['registration']), Path(capture['result_path'])
+    require(sha(registration) == capture['registration_sha256']
+        and sha(terminal) == capture['result_sha256'], 'failed guard terminal/registration binding drift')
+    directory = terminal.parent / IDENTITY
+    envelope = capture['wall_clock_envelope']
+    born, stopped = directory.stat().st_birthtime, terminal.stat().st_mtime
+    charge = stopped - born + 1.
+    require(born == envelope['start_birthtime'] and stopped == envelope['terminal_mtime']
+        and envelope['slack_seconds'] == 1. and charge == envelope['charged_seconds']
+        and math.isfinite(charge) and 0 < charge < 120
+        and not list(directory.iterdir()), 'unplayed attempt envelope/evidence inventory changed')
+    charged = resume['elapsed_before_resume'] + charge
+    require(math.isfinite(charged) and charged < wall_seconds, 'original game wall allowance exhausted')
+    wall = dict(resume['wall_clock_envelope'])
+    wall['additional_attempts'] = [*wall.get('additional_attempts', []),
+        dict(directory=str(directory), terminal=str(terminal), directory_birth=born, terminal_mtime=stopped,
+            margin_seconds=1., charged_seconds=charge, new_boundary_accepted=False,
+            reason='unplayed tuple-versus-JSON-array guard refusal; no failed RNG/statistics restored')]
+    return dict(resume, elapsed_before_resume=charged, wall_clock_envelope=wall)
+
+
+def comparable_certificate(certificate):
+    """Normalize only the documented Random.getstate tuple/JSON array boundary."""
+    if 'anchor_rng_state' not in certificate:
+        return certificate
+    state = certificate['anchor_rng_state']
+    require(type(state) in (tuple, list) and len(state) == 3
+        and type(state[0]) is int and state[0] == 3
+        and type(state[1]) in (tuple, list) and len(state[1]) == 625
+        and all(type(v) is int and 0 <= v <= 0xffffffff for v in state[1][:-1])
+        and type(state[1][-1]) is int and 0 <= state[1][-1] <= 624
+        and (state[2] is None or type(state[2]) is float and math.isfinite(state[2])),
+        'invalid anchor RNG-state receipt; normalization cannot repair changed values')
+    return dict(certificate, anchor_rng_state=[state[0], list(state[1]), state[2]])
 
 
 def validate_resumed_workers(receipts, probe):
@@ -327,7 +400,13 @@ def validate_resumed_workers(receipts, probe):
                 and diagnostic.get('accepted_world') is False and diagnostic.get('backed_up') is False,
                 'first cancellation is not accepted qualified work')
             continue
-        require(actual['status'] == 'ROOT_VALIDATED' and actual['released'] is True
-            and all(actual[k] == expected[worker][k] for k in ('packed_team_sha256',
-                'materialization_seed', 'substitute_policy_conditioning')),
-            'resumed first accepted draw differs from exact original stream proof')
+        reference = expected[worker]
+        matching = actual['status'] == 'ROOT_VALIDATED' and actual['released'] is True
+        matching = matching and all(actual[k] == reference[k] for k in ('packed_team_sha256', 'materialization_seed'))
+        matching = matching and comparable_certificate(actual['substitute_policy_conditioning']) \
+            == comparable_certificate(reference['substitute_policy_conditioning'])
+        if not matching:
+            error = RuntimeError('resumed first accepted draw differs from exact original stream proof')
+            error.evidence = dict(worker=worker, actual_first_draw=actual, expected_first_draw=reference,
+                failed_statistics_or_rng_restored=False)
+            raise error
