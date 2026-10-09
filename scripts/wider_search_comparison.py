@@ -66,6 +66,67 @@ def registered_conditioning_batch_size(registration):
         staged=staged_conditioning_enabled(registration))
 
 
+def registered_reference_configuration(registration):
+    """Bind experimental conditioning and dispatch to the actual game runtime.
+
+    Old registrations retain their original defaults. An explicit options map
+    cannot change the champion, source binding, worker count or search budget.
+    Constructing the immutable factory here validates flags without starting a
+    worker, loading a model or calling the simulator.
+    """
+    from dataclasses import fields
+    from pokezero.mcts_eval.paper_reference_runtime import ShowdownWorkerFactory
+    reference = registration.get('reference', {})
+    if type(reference) is not dict:
+        raise RuntimeError('registered reference settings must be an object')
+    extras = reference.get('conditioning_options', {})
+    allowed = {field.name: type(field.default) for field in fields(ShowdownWorkerFactory)
+        if field.name not in {'checkpoint', 'checkpoint_sha256', 'showdown_root', 'set_source_hash'}}
+    if type(extras) is not dict or set(extras) - allowed.keys():
+        raise RuntimeError('unknown or malformed registered conditioning options')
+    if any(type(value) is not allowed[key] for key,value in extras.items()):
+        raise RuntimeError('registered conditioning option type drift')
+    binding = reference.get('conditioning_options_binding')
+    if extras or binding is not None:
+        if (type(binding) is not dict or set(binding) != {'path', 'sha256'}
+                or type(binding['path']) is not str or not Path(binding['path']).is_absolute()
+                or registration.get('input_hashes', {}).get(binding['path']) != binding['sha256']):
+            raise RuntimeError('conditioning options lack an explicit raw-file input binding')
+        raw_options = Path(binding['path']).read_bytes()
+        if (hashlib.sha256(raw_options).hexdigest() != binding['sha256']
+                or json.loads(raw_options) != extras):
+            raise RuntimeError('raw and parsed conditioning options differ')
+    for key,value in (('allow_earlier_compatible_template', True), ('max_known_set_draws', 128)):
+        if type(reference.get(key, value)) is not type(value) or reference.get(key, value) != value:
+            raise RuntimeError('declared reference base settings drift')
+    options = dict(allow_earlier_compatible_template=True, max_known_set_draws=128,
+        staged_substitute_conditioning=staged_conditioning_enabled(registration),
+        conditioning_batch_size=registered_conditioning_batch_size(registration))
+    if any(key in options and value != options[key] for key,value in extras.items()):
+        raise RuntimeError('conditioning options disagree with registered base settings')
+    options.update(extras)
+    if options.get('history_particles', 0) and not options['staged_substitute_conditioning']:
+        raise RuntimeError('full-game history particles require explicit staged qualification and decoder binding')
+    ShowdownWorkerFactory('', '', '', '', **options)
+    width = reference.get('initial_dispatch_workers', 20)
+    if type(width) is not int or not 1 <= width <= 20:
+        raise RuntimeError('initial dispatch must be an integer in 1..20')
+    if any(type(reference.get(key, value)) is not int or reference.get(key, value) != value
+            for key,value in (('workers', 20), ('exchange_trajectories', 10))):
+        raise RuntimeError('registered worker count or exchange size drift')
+    return dict(factory_options=options, workers=20, batch_size=10,
+        initial_dispatch_workers=width)
+
+
+def validate_candidate_configuration_pair(qualification, confirmation):
+    """Historical repair transfer remains historical; new options cannot inherit it."""
+    references = [m.get('reference', {}) for m in (qualification, confirmation)]
+    if any(r.get('conditioning_options') or r.get('initial_dispatch_workers', 20) != 20
+            for r in references):
+        if registered_reference_configuration(qualification) != registered_reference_configuration(confirmation):
+            raise RuntimeError('candidate qualification/runtime configuration differs')
+
+
 def validate_reference_measurement(measured):
     """Cancelled attempts retain RNG ownership but never qualify as search work.
 
@@ -177,6 +238,16 @@ def register(args):
     conditioning_batch = registered_conditioning_batch_size(dict(reference=dict(
         staged_substitute_conditioning=staged,
         conditioning_batch_size=getattr(args, 'conditioning_batch_size', 1))))
+    conditioning_options_path = getattr(args, 'conditioning_options', None)
+    conditioning_options_path = (conditioning_options_path.resolve()
+        if conditioning_options_path is not None else None)
+    conditioning_options_bytes = (conditioning_options_path.read_bytes()
+        if conditioning_options_path is not None else None)
+    conditioning_options = (json.loads(conditioning_options_bytes)
+        if conditioning_options_bytes is not None else {})
+    if (conditioning_options_path is not None or getattr(args, 'initial_dispatch_workers', 20) != 20
+            ) and not args.qualification:
+        raise RuntimeError('experimental conditioning options require fresh full-game qualification first')
     guarded_recovery = getattr(args, 'guarded_staged_recover_from', None)
     rest_tail_recovery = getattr(args, 'rest_tail_recover_from', None)
     prefix_joint_recovery = getattr(args, 'prefix_joint_tail_recover_from', None)
@@ -302,9 +373,22 @@ def register(args):
             'qualification outcomes never enter confirmation; refusal halts, no raw fallback or redraw'])
     m['reference']['staged_substitute_conditioning'] = staged
     m['reference']['conditioning_batch_size'] = conditioning_batch
+    m['reference']['initial_dispatch_workers'] = getattr(args, 'initial_dispatch_workers', 20)
+    if conditioning_options_path is not None:
+        if conditioning_options_path.read_bytes() != conditioning_options_bytes:
+            raise RuntimeError('conditioning options changed during registration')
+        m['reference']['conditioning_options'] = conditioning_options
+        digest = hashlib.sha256(conditioning_options_bytes).hexdigest()
+        m['reference']['conditioning_options_binding'] = dict(path=str(conditioning_options_path), sha256=digest)
+        m['input_hashes'][str(conditioning_options_path)] = digest
+    registered_reference_configuration(m)
     if staged:
-        m['reference']['staged_kernel'] = 'pokezero.constant-chance-substitute.v1'
-        m['limitations'].append('guarded constant-chance replay program explicitly opted in; unsupported public programs keep joint conditioning; deadline-induced sample-selection effects are not proven away')
+        if conditioning_options.get('history_particles', 0):
+            m['reference']['staged_kernel'] = 'pokezero.weighted-history-particle-candidate.v1'
+            m['limitations'].append('explicit full-support proposal-guided history particles; finite SMC and cooperative-clock selection are not an exact posterior or proof of strength')
+        else:
+            m['reference']['staged_kernel'] = 'pokezero.constant-chance-substitute.v1'
+            m['limitations'].append('guarded constant-chance replay program explicitly opted in; unsupported public programs keep joint conditioning; deadline-induced sample-selection effects are not proven away')
     recovery_modes = (args.recover_from, args.native_recover_from, args.trapping_recover_from,
                       args.pending_qualification_recover_from, getattr(args, 'faint_recover_from', None),
                       getattr(args, 'substitute_recover_from', None),
@@ -542,6 +626,7 @@ def validate_qualification(path, confirmation):
     if path.name != 'READOUT.json':
         raise RuntimeError('qualification requires the canonical durable readout')
     registration = json.loads((path.parent/'registration.json').read_text())
+    validate_candidate_configuration_pair(registration, confirmation)
     recovery = confirmation.get('repair_retention')
     if recovery is not None and recovery.get('kind') == 'native-and-reference-wake-wrap-batch8-repair':
         from pokezero.mcts_eval.wider_wake_wrap_recovery import validate_qualification as validate_wake_wrap
@@ -637,11 +722,12 @@ def run(args, m):
     pool = None
     signal.signal(signal.SIGALRM, timeout)
     try:
+        reference_configuration = registered_reference_configuration(m)
         pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1.), ShowdownWorkerFactory(
             m['checkpoint'], m['checkpoint_sha256'], m['showdown_root'], m['set_source_hash'],
-            allow_earlier_compatible_template=True, max_known_set_draws=128,
-            staged_substitute_conditioning=staged_conditioning_enabled(m),
-            conditioning_batch_size=registered_conditioning_batch_size(m)))
+            **reference_configuration['factory_options']),
+            workers=reference_configuration['workers'], batch_size=reference_configuration['batch_size'],
+            initial_dispatch_workers=reference_configuration['initial_dispatch_workers'])
         print(json.dumps(dict(status='POOL_READY', startup_seconds=pool.startup_seconds)), flush=True)
         for ordinal, seed in enumerate(m['seeds']):
             for subject in SEATS:
@@ -667,7 +753,8 @@ def run(args, m):
                     # can certify a pending Baton Pass. Never retain live opponent
                     # action indices or requests in the worker transport.
                     from pokezero.mcts_eval.paper_reference_pending import (
-                        FaintReplacementTransition, PendingPolicyTransition, requires_faint_encore_replay)
+                        FaintReplacementTransition, PendingPolicyTransition, requires_faint_encore_replay,
+                        requires_baton_interruption_replay)
                     previous_public_transition = [None]
                     from pokezero.mcts_eval.paper_reference_substitute import SubstituteHistoryTracker
                     substitute_history = SubstituteHistoryTracker()
@@ -676,7 +763,9 @@ def run(args, m):
                         substitute = substitute_history.certificate(public)
                         if substitute is not None:
                             return substitute
-                        pending = previous_public_transition[0] if public.deferred_opponent_action_player is not None else None
+                        pending = previous_public_transition[0] if (
+                            public.deferred_opponent_action_player is not None
+                            or requires_baton_interruption_replay(public)) else None
                         if requires_faint_encore_replay(public):
                             previous = previous_public_transition[0]
                             if previous is None:
@@ -903,6 +992,10 @@ def main():
         help='Explicit default-off guarded replay kernel; technical qualification only until recovery is validated')
     parser.add_argument('--conditioning-batch-size', type=int, default=1,
         help='Explicit ordered conditioning transport batch (1..16, default1); requires staged conditioning')
+    parser.add_argument('--conditioning-options', type=Path,
+        help='Hash-bound explicit worker conditioning JSON; fresh qualification only, no silent default changes')
+    parser.add_argument('--initial-dispatch-workers', type=int, default=20,
+        help='Registered initial FIFO width (1..20); default preserves all twenty initial starts')
     parser.add_argument('--qualification-readout', type=Path)
     parser.add_argument('--recover-from', type=Path)
     parser.add_argument('--repair-certificate', type=Path)

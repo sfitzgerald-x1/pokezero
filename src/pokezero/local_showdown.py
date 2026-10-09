@@ -46,6 +46,7 @@ from .showdown import (
     normalize_for_player,
     observation_from_player_state,
     showdown_choice_for_action,
+    showdown_choices_for_request,
 )
 from .investment import InvestmentLiveTracker
 from .paths import portable_path
@@ -408,16 +409,36 @@ class PublicBattleMaterializationState:
     def deferred_opponent_action_player(self) -> PlayerId | None:
         """Return the opponent whose committed move must resolve after this switch.
 
-        A Baton Pass forced switch interrupts a simultaneous turn after the opponent has already
-        committed an action. Its identity is hidden, but the pending action itself is public
-        timing information and must be sampled into a direct search world.
+        A fast Baton Pass interrupts before the opponent's committed action.
+        A slow Baton Pass (or an opponent's prior switch/cant/cancellation) does
+        not: that action has already resolved. Classify using current-turn PUBLIC
+        events, never the opponent's private choice or the simulator's queue.
         """
 
         if _request_materialization_kind(self.self_request) != "force-switch":
             return None
         if self.player_id not in self.replay.pending_baton_pass:
             return None
-        return "p2" if self.player_id == "p1" else "p1"
+        opponent = "p2" if self.player_id == "p1" else "p1"
+        current_round = []
+        for event in reversed(getattr(self.replay, 'public_events', ())):
+            if event.raw_line.startswith('|turn|'):
+                break
+            current_round.append(event.raw_line)
+        current_round.reverse()
+        # Only an action before the unresolved actor Baton Pass can consume
+        # this turn's commitment. Earlier-turn actions do not count.
+        baton_indices = [i for i,line in enumerate(current_round)
+            if line.startswith('|move|' + self.player_id + 'a:')
+            and len(line.split('|')) >= 4 and line.split('|')[3] == 'Baton Pass']
+        if baton_indices:
+            from .public_action_capture import public_action_identifiers_from_protocol_lines
+            before = current_round[:baton_indices[-1]]
+            actions = public_action_identifiers_from_protocol_lines(
+                before, cancellation_players=(opponent,))
+            if opponent in actions:
+                return None
+        return opponent
 
 
 class LocalShowdownEnv:
@@ -568,6 +589,15 @@ class LocalShowdownEnv:
         if not isinstance(rows, list) or len(rows) != 6 or not all(isinstance(row, Mapping) for row in rows):
             raise LocalShowdownError(f"Bridge emitted malformed scenario team: {event!r}")
         return tuple(_json_clone_mapping(row) for row in rows)
+
+    def generate_unknown_membership(self, *, seeds, known, required, max_proposals, budget_ms):
+        """Bounded original complete-party rejection inside the stateless bridge."""
+        if self._process is None or self._process.poll() is not None:
+            self.reset(seed=seeds[0])
+        return self._bridge_request_event(
+            dict(type="reference_unknown_membership", seeds=list(seeds), known=list(known),
+                 required=list(required), maxProposals=max_proposals, budgetMs=budget_ms),
+            "reference_unknown_membership")
 
     def generate_reference_set(self, *, seed: int, species: str) -> Mapping[str, Any]:
         """One exact pinned Gen 3 server set for a known species, not a cached variant.
@@ -1117,6 +1147,42 @@ class LocalShowdownEnv:
         )
         self._restore_local_snapshot_state(snapshot)
 
+    def observe_search_snapshot(
+        self, snapshot: LocalShowdownSnapshot, player: PlayerId,
+    ) -> PokeZeroObservationV0:
+        """Encode an owned hypothetical snapshot without restoring native state.
+
+        The observation is entirely a projection of the paired Python request,
+        parser, belief and annotation state. Use an isolated projection shell so
+        neither the current native battle nor its Python side is changed. This
+        is NOT a live opponent observation API: only an existing sampled search
+        environment and a resident, same-format search snapshot are eligible.
+        A subsequent native transition must still restore the retained handle.
+        """
+        if self._battle_token is None or not self._search_snapshot_permitted:
+            raise LocalShowdownError('Snapshot observations require a sampled search world.')
+        if not isinstance(snapshot, LocalShowdownSnapshot):
+            raise ValueError('Snapshot observation requires a paired search snapshot.')
+        snapshot_id = snapshot.bridge_snapshot.get('snapshot_id')
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ValueError('Snapshot observation requires a bridge-resident search handle.')
+        if (snapshot.format_id != self._format_id
+                or snapshot.observation_format_id != self._observation_format_id):
+            raise ValueError('Snapshot observation format differs from this battle.')
+        if player not in requested_players_from_requests(snapshot.latest_requests):
+            raise ValueError('Snapshot observation player has no retained actionable request.')
+        # Deliberately do not copy bridge/process/queue resources. All mutable
+        # parser, belief and tracker state is cloned by the existing paired
+        # restore routine. Immutable config and pinned set source are shared.
+        projection = object.__new__(LocalShowdownEnv)
+        projection.config = self.config
+        projection._process = None
+        projection._belief_set_source = self._belief_set_source
+        projection._battle_token = snapshot.battle_token
+        projection._search_snapshot_permitted = False
+        projection._restore_local_snapshot_state(snapshot)
+        return projection.observe(player)
+
     def step_from_search_snapshot(
         self,
         snapshot: LocalShowdownSnapshot,
@@ -1257,6 +1323,9 @@ class LocalShowdownEnv:
         chance_seeds: Sequence[int],
         expected_history: Sequence[str],
         deadline_at: float,
+        fixed_pool: bool = False,
+        trace_chance: bool = False,
+        auxiliary_trace_only: bool = False,
     ) -> Mapping[str, Any]:
         """Try a bounded ordered prefix of explicit seeds in one bridge exchange.
 
@@ -1266,6 +1335,14 @@ class LocalShowdownEnv:
         the production parser; an uncertain bridge projection stops, never skips,
         a trial. Only the final consumed trial changes Python's hypothetical state.
         No live battle is permitted and no observations are eagerly constructed.
+        With explicit ``fixed_pool=True``, process all 1..32 declared trials,
+        never stop at a match, and return every authoritative prefix-match index.
+        A censored pool is not a likelihood estimate and must not be accepted.
+        An explicit single auxiliary trace may leave Python's paired shell
+        untouched: its hints are not a world, observation likelihood or search
+        value. Native execution and all stream/predicate validation are identical.
+        The native shell holds the pilot afterward; the caller must use another
+        snapshot-restoring operation before reading a current battle state.
         """
         if self._battle_token is None or not self._search_snapshot_permitted:
             raise LocalShowdownError("Conditioning batches require a sampled search world.")
@@ -1275,9 +1352,17 @@ class LocalShowdownEnv:
         if (snapshot.format_id != self._format_id
                 or snapshot.observation_format_id != self._observation_format_id):
             raise ValueError("Conditioning batch snapshot format differs from this battle.")
+        if type(fixed_pool) is not bool:
+            raise ValueError("Fixed chance pool requires an explicit boolean.")
+        if type(trace_chance) is not bool or trace_chance and not fixed_pool:
+            raise ValueError("Chance tracing requires an explicit fixed hypothetical pool.")
+        if type(auxiliary_trace_only) is not bool or auxiliary_trace_only and not (trace_chance and fixed_pool):
+            raise ValueError("Auxiliary trace-only requires an explicit traced fixed pool.")
         seeds = tuple(chance_seeds)
-        if not 1 <= len(seeds) <= 16 or any(type(seed) is not int for seed in seeds):
+        if not 1 <= len(seeds) <= (32 if fixed_pool else 16) or any(type(seed) is not int for seed in seeds):
             raise ValueError("Conditioning batch requires 1..16 explicit integer seeds.")
+        if auxiliary_trace_only and len(seeds) != 1:
+            raise ValueError("Auxiliary trace-only requires exactly one explicit seed.")
         if type(deadline_at) not in (int, float) or not math.isfinite(deadline_at):
             raise ValueError("Conditioning batch requires a finite original deadline.")
         remaining = deadline_at - time.perf_counter()
@@ -1315,6 +1400,8 @@ class LocalShowdownEnv:
             "expectedSuffix": list(expected[len(base):]), "initialTurn": snapshot.replay.turn_number,
             "remainingMs": remaining * 1000,
             "waitMs": self.config.read_timeout_seconds * 1000,
+            **({"fixedPool": True} if fixed_pool else {}),
+            **({"traceChance": True} if trace_chance else {}),
         }, "conditioning_batch")
         trials, events = event.get("trials"), event.get("events")
         if (not isinstance(trials, list) or not isinstance(events, list)
@@ -1322,6 +1409,8 @@ class LocalShowdownEnv:
                 or any(type(event.get(key)) is not bool for key in ("matched", "uncertain", "deadlineReached"))):
             raise LocalShowdownError("Malformed conditioning batch receipt.")
         matched = False
+        matching_indices = []
+        mismatches = []
         for index, trial in enumerate(trials):
             if (not isinstance(trial, Mapping) or type(trial.get("index")) is not int
                     or trial["index"] != index or not isinstance(trial.get("publicLines"), list)
@@ -1330,10 +1419,19 @@ class LocalShowdownEnv:
                 raise LocalShowdownError("Malformed ordered conditioning trial receipt.")
             parser = _ReplayParser.from_snapshot(snapshot.replay)
             parser.feed(trial["publicLines"])
-            matched = not trial["terminal"] and history(parser) == expected
+            actual = history(parser)
+            matched = not trial["terminal"] and (expected[:len(actual)] == actual if fixed_pool else actual == expected)
+            if matched:
+                matching_indices.append(index)
+            elif len(mismatches) < 4:
+                first = next((i for i, (e, a) in enumerate(zip(expected, actual)) if e != a),
+                             min(len(expected), len(actual)))
+                mismatches.append(dict(index=first,
+                    expected=expected[first] if first < len(expected) else None,
+                    hypothetical=actual[first] if first < len(actual) else None))
             if trial["matched"] != matched and not trial["uncertain"]:
                 raise LocalShowdownError("Bridge conditioning predicate disagrees with production parser.")
-            if index < len(trials) - 1 and (matched or trial["uncertain"]):
+            if not fixed_pool and index < len(trials) - 1 and (matched or trial["uncertain"]):
                 raise LocalShowdownError("Conditioning batch continued past its first candidate.")
         if not trials:
             if events or not event["deadlineReached"] or event["matched"] or event["uncertain"]:
@@ -1342,7 +1440,7 @@ class LocalShowdownEnv:
         last = trials[-1]
         if event["matched"] != last["matched"] or event["uncertain"] != last["uncertain"]:
             raise LocalShowdownError("Conditioning batch final predicate receipt drift.")
-        if len(trials) < len(seeds) and not (event["matched"] or event["uncertain"] or event["deadlineReached"]):
+        if len(trials) < len(seeds) and not (event["deadlineReached"] or not fixed_pool and (event["matched"] or event["uncertain"])):
             raise LocalShowdownError("Conditioning batch stopped without a candidate or deadline.")
         boundaries = [row for row in events if isinstance(row, Mapping) and row.get("type") in ("ready", "terminal")]
         public_lines = [line for row in events if isinstance(row, Mapping)
@@ -1351,16 +1449,20 @@ class LocalShowdownEnv:
         if (len(boundaries) != 1 or (boundaries[0]["type"] == "terminal") != last["terminal"]
                 or public_lines != last["publicLines"]
                 or any(not isinstance(row, Mapping) or row.get("battleId") != self._battle_token
-                    or row.get("type") not in ("stream", "choice_ack", "ready", "terminal") for row in events)):
+                    or row.get("type") not in ("stream", "choice_ack", "ready", "terminal", *(['chance_trace'] if trace_chance else [])) for row in events)):
             raise LocalShowdownError("Conditioning batch final stream/boundary receipt drift.")
-        self._restore_local_snapshot_state(snapshot)
-        self._latest_requests = {}
-        for row in events:
-            self._apply_event(row)
-        result = StepResult(observations={}, rewards=self._rewards(),
-            terminal=self.terminal(), requested_players=self.requested_players())
+        result = None
+        if not auxiliary_trace_only:
+            self._restore_local_snapshot_state(snapshot)
+            self._latest_requests = {}
+            for row in events:
+                self._apply_event(row)
+            result = StepResult(observations={}, rewards=self._rewards(),
+                terminal=self.terminal(), requested_players=self.requested_players())
         return dict(consumed=len(trials), matched=matched,
-            deadline_reached=event["deadlineReached"] or time.perf_counter() >= deadline_at, step=result)
+            deadline_reached=event["deadlineReached"] or time.perf_counter() >= deadline_at, step=result,
+            **(dict(matching_indices=matching_indices, first_public_mismatches=mismatches) if fixed_pool else {}),
+            **(dict(chance_traces=[trial['chanceTrace'] for trial in trials]) if trace_chance else {}))
 
     def _restore_local_snapshot_state(self, snapshot: LocalShowdownSnapshot) -> None:
         self._battle_id = snapshot.battle_id
@@ -1439,14 +1541,24 @@ class LocalShowdownEnv:
     def _search_choice_cache(self) -> dict[PlayerId, dict[int, str]]:
         """Precompute legal choices once for a retained sampled-world snapshot."""
 
+        # Transport choices need only the paired request. Annotation producers
+        # still consume the canonical per-action history in the original player
+        # order, retaining the exact tracker updates and belief narrowing that
+        # the old full observation path performed. Skip only unused public/
+        # opponent belief projections, recent-event features and merged output.
+        requested = self.requested_players()
+        if not requested:
+            return {}
+        self._sync_incremental_state()
+        replay = self._parser.snapshot() if self.tier2_residuals_active() else None
         cache: dict[PlayerId, dict[int, str]] = {}
-        for player in self.requested_players():
-            state = self._state_for_player(player)
-            cache[player] = {
-                action_index: showdown_choice_for_action(state, action_index)
-                for action_index in range(ACTION_COUNT)
-                if state.legal_action_mask[action_index]
-            }
+        for player in requested:
+            if replay is not None:
+                from .transitions import extract_transition_tokens
+
+                tokens = extract_transition_tokens(replay, perspective_slot=player)
+                self._annotate_transition_tokens(player, replay, tokens)
+            cache[player] = showdown_choices_for_request(self._parser.requests.get(player), player)
         return cache
 
     def _annotation_cache(self) -> SnapshotAnnotationCache:
@@ -1958,28 +2070,11 @@ class LocalShowdownEnv:
         state = _normalize()
         annotation_started_at = time.perf_counter() if root_puct_branch_observation else None
         try:
-            tracker = self._tier2_tracker_for(player)
-            investment_tracker = self._investment_tracker_for(player)
-
-            if tracker is not None:
-                state = replace(
-                    state,
-                    transition_tokens=tracker.annotate(
-                        replay, state.transition_tokens, self._belief_engine
-                    ),
-                )
-            if investment_tracker is not None:
-                codes = investment_tracker.observe(
-                    replay, state.transition_tokens, self._belief_engine
-                )
-                if codes:
-                    state = replace(
-                        state,
-                        transition_tokens=tuple(
-                            replace(token, investment=codes[index]) if index in codes else token
-                            for index, token in enumerate(state.transition_tokens)
-                        ),
-                    )
+            tokens, annotation_active = self._annotate_transition_tokens(
+                player, replay, state.transition_tokens
+            )
+            if annotation_active:
+                state = replace(state, transition_tokens=tokens)
             # NO REFRESH HERE, deliberately. An earlier version re-derived the player view
             # whenever a producer narrowed, on the reasoning that the view snapshotted a few
             # lines above was now stale and a root and its leaves would otherwise disagree.
@@ -1996,7 +2091,7 @@ class LocalShowdownEnv:
             # v2.2: map the FINAL annotated per-action stream (tier2 residual/CB +
             # investment codes) onto the merged sub-blocks; the per-action stream stays
             # the annotation substrate and the per-mon pinned-surface derivation source.
-            if turn_merged and (tracker is not None or investment_tracker is not None):
+            if turn_merged and annotation_active:
                 from .turn_merged import annotate_turn_merged_tokens
 
                 state = replace(
@@ -2012,6 +2107,28 @@ class LocalShowdownEnv:
                 )
                 self._root_puct_branch_observation_state_annotation_count += 1
         return state
+
+    def _annotate_transition_tokens(
+        self, player: PlayerId, replay: ShowdownReplayState, tokens: tuple[Any, ...]
+    ) -> tuple[tuple[Any, ...], bool]:
+        """Shared annotation substrate for observations and retained snapshots.
+
+        Preserve producer creation order, residual-before-investment evaluation,
+        and the same mutable belief engine. Snapshot callers discard the encoded
+        tokens but retain the producers' state exactly as full observations did.
+        """
+        tracker = self._tier2_tracker_for(player)
+        investment_tracker = self._investment_tracker_for(player)
+        if tracker is not None:
+            tokens = tracker.annotate(replay, tokens, self._belief_engine)
+        if investment_tracker is not None:
+            codes = investment_tracker.observe(replay, tokens, self._belief_engine)
+            if codes:
+                tokens = tuple(
+                    replace(token, investment=codes[index]) if index in codes else token
+                    for index, token in enumerate(tokens)
+                )
+        return tokens, tracker is not None or investment_tracker is not None
 
     def tier2_residuals_active(self) -> bool:
         """Whether this env populates Tier-2 residuals into transition tokens.

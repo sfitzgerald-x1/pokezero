@@ -451,6 +451,16 @@ class TrajectorySearch:
             None if deadline_seconds is None else started + deadline_seconds)
         expired = lambda: deadline is not None and clock() >= deadline
         completed = transitions = draws = 0
+        timing = None
+        if getattr(sample_world, 'collect_phase_timing', False):
+            from .paper_reference_conditioning_metrics import phase
+            timing = {'phase_timing': {}, 'schema': 'pokezero.reference-search-phases.v1'}
+            if not hasattr(sample_world, 'search_phase_timing'):
+                sample_world.search_phase_timing = []
+            sample_world.search_phase_timing.append(timing)
+        else:
+            from contextlib import nullcontext
+            phase = lambda evidence, name: nullcontext()
         try:
             if root.faint_count < self._faint_floor:
                 raise ReferenceRefusal("real faint count decreased without a battle reset")
@@ -463,7 +473,8 @@ class TrajectorySearch:
                                      if row.state.faint_count >= self._faint_floor}
             node = self._existing(root)
             if node is None and not expired():
-                node = self._node_from_evaluation(root, evaluate_root(root))
+                with phase(timing, 'root_inference'):
+                    node = self._node_from_evaluation(root, evaluate_root(root))
                 self.nodes[root.key] = node
                 self._discovered(node)
             for _ in range(trajectories):
@@ -473,7 +484,8 @@ class TrajectorySearch:
                 self._ordinal += 1
                 draws += 1
                 try:
-                    world = sample_world(_rng(seed, ordinal, "hidden"))
+                    with phase(timing, 'world_reconstruction_inclusive'):
+                        world = sample_world(_rng(seed, ordinal, "hidden"))
                 except SamplingDeadlineExceeded:
                     if not expired():
                         raise ReferenceRefusal('sampler reported deadline expiry before the search deadline')
@@ -481,12 +493,14 @@ class TrajectorySearch:
                     # work and the attempted RNG ordinal; never back up this draw.
                     break
                 try:
-                    steps, backed = self._trajectory(world, root, _rng(seed, ordinal, "opponent"),
-                                                    _rng(seed, ordinal, "chance"), expired)
+                    with phase(timing, 'forward_search_inclusive'):
+                        steps, backed = self._trajectory(world, root, _rng(seed, ordinal, "opponent"),
+                                                        _rng(seed, ordinal, "chance"), expired)
                     transitions += steps
                     completed += int(backed)
                 finally:
-                    world.close()
+                    with phase(timing, 'world_cleanup'):
+                        world.close()
                 if not backed:
                     break
             if completed == 0 and require_complete:
@@ -508,3 +522,7 @@ class TrajectorySearch:
             # A simulator/cleanup/inference refusal cannot leave a reusable successful tree.
             self._usable = False
             raise
+        finally:
+            if timing is not None:
+                timing.update(completed_trajectories=completed, forward_transitions=transitions,
+                    attempted_world_draws=draws)

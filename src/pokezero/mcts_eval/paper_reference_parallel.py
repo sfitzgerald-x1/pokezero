@@ -58,6 +58,7 @@ class ParallelResult:
     exchange_count: int
     startup_seconds: float
     decision_id: int
+    initial_dispatch_schedule: tuple[dict[str, Any], ...] = ()
 
 
 def _worker_seed(seed: int, index: int) -> int:
@@ -171,13 +172,21 @@ class ParallelTrajectorySearch:
     """
 
     def __init__(self, config: ReferenceConfig, runtime_factory: Callable[[int], WorkerRuntime],
-                 *, workers: int = 20, batch_size: int = 10, transport_timeout: float = 120.):
+                 *, workers: int = 20, batch_size: int = 10, transport_timeout: float = 120.,
+                 initial_dispatch_workers: int | None = None):
         if (type(workers) is not int or not 1 <= workers <= 20
                 or type(batch_size) is not int or batch_size != 10
                 or type(transport_timeout) not in (int, float)
                 or not math.isfinite(transport_timeout) or transport_timeout <= 0):
             raise ReferenceRefusal("invalid parallel worker/exchange/timeout contract")
+        if (initial_dispatch_workers is not None and (type(initial_dispatch_workers) is not int
+                or not 1 <= initial_dispatch_workers <= workers)):
+            raise ReferenceRefusal("initial dispatch width requires an integer within the owned worker count")
         self.workers, self.batch_size = workers, batch_size
+        # Default preserves immediate broadcast. Opt-in staggering changes only
+        # when the first batch starts, never workers, particles, seeds or budget.
+        self.initial_dispatch_workers = (workers if initial_dispatch_workers is None
+                                         else initial_dispatch_workers)
         self.transport_timeout = transport_timeout
         self._closed = self._poisoned = False
         self._master = None
@@ -295,6 +304,9 @@ class ParallelTrajectorySearch:
         receipts, progress = [], [0] * self.workers
         self.last_evidence = {"decision_id": decision, "battle_id": battle_id,
             "worker_pids": self.worker_pids, "receipts": receipts, "errors": []}
+        dispatch_schedule = []
+        self.last_evidence['initial_dispatch_workers'] = self.initial_dispatch_workers
+        self.last_evidence['initial_dispatch_schedule'] = dispatch_schedule
         try:
             if self._master is None or self._master.battle_id != battle_id:
                 self._master = StatisticsMaster(battle_id)
@@ -302,9 +314,20 @@ class ParallelTrajectorySearch:
             snapshot = self._master.snapshot()
             before = next((row.count for row in snapshot.rows if row.state == root), 0)
             first = min(self.batch_size, trajectories_per_worker or self.batch_size)
-            for index, connection in enumerate(self._connections):
-                connection.send(("start", decision, public_request, root, snapshot,
-                                 _worker_seed(seed, index), first, deadline))
+            queued = list(range(self.initial_dispatch_workers, self.workers))
+            first_updates = set()
+            def dispatch(index, snapshot, released_by=None):
+                # Public capture, serialization and queue delay are all inside
+                # the original absolute deadline. A late worker receives that
+                # expired deadline and reports zero work, not a fresh budget.
+                at = time.perf_counter()
+                dispatch_schedule.append(dict(worker=index, seconds_from_decision_start=at-started,
+                    released_by_first_update=released_by, master_version=snapshot.version,
+                    deadline_expired=deadline is not None and at >= deadline))
+                self._connections[index].send(("start", decision, public_request, root, snapshot,
+                                               _worker_seed(seed, index), first, deadline))
+            for index in range(self.initial_dispatch_workers):
+                dispatch(index, snapshot)
             pending = set(range(self.workers))
             while pending:
                 for index, message in self._receive(pending):
@@ -325,6 +348,12 @@ class ParallelTrajectorySearch:
                     receipts.append({"worker": index, "sequence": update.sequence,
                         "batch": batch, "preparation_seconds": preparation,
                         "evidence": evidence, "master_version": snapshot.version})
+                    if index not in first_updates:
+                        first_updates.add(index)
+                        if queued:
+                            # FIFO activation, irrespective of outcomes, rewards,
+                            # acceptance or throughput. No worker/draw is retried.
+                            dispatch(queued.pop(0), snapshot, released_by=index)
                     remaining = (self.batch_size if trajectories_per_worker is None else
                                  trajectories_per_worker - progress[index])
                     expired = deadline is not None and time.perf_counter() >= deadline
@@ -352,7 +381,7 @@ class ParallelTrajectorySearch:
                 0.0 if deadline_seconds is None else max(0., elapsed - deadline_seconds))
             self.last_evidence.update(status="COMPLETE", result=result)
             return ParallelResult(result, self.worker_pids, tuple(receipts), len(receipts),
-                                  self.startup_seconds, decision)
+                                  self.startup_seconds, decision, tuple(dispatch_schedule))
         except BaseException:
             self._poisoned = True
             raise

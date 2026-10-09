@@ -239,12 +239,23 @@ class PaperHiddenTeamSampler:
         self.max_known_set_draws = max_known_set_draws
 
     def draw(self, known: tuple[KnownSetTraits, ...], rng: random.Random) -> HiddenTeamDraw:
+        self._validate_known(known)
+        team, receipts = self._draw_known(known, rng)
+        unknown, party_seeds = self._draw_unknown(known, rng)
+        team.extend(unknown)
+        return HiddenTeamDraw(tuple(team), tuple(receipts), tuple(party_seeds),
+            hashlib.sha256(pack_team(tuple(team)).encode()).hexdigest())
+
+    @staticmethod
+    def _validate_known(known):
         if (not isinstance(known, tuple) or len(known) > 6
                 or any(not isinstance(mon, KnownSetTraits) for mon in known)):
             raise ReferenceRefusal("reference requires at most six explicit public species traits")
         seen = {canonical_gen3_randbat_species_id(mon.species) for mon in known}
         if len(seen) != len(known):
             raise ReferenceRefusal("public known species violate the random-battle species clause")
+
+    def _draw_known(self, known, rng):
         team: list[FixturePokemon] = []
         receipts = []
         for traits in known:
@@ -318,8 +329,14 @@ class PaperHiddenTeamSampler:
             receipts.append(KnownDrawReceipt(traits.species, tuple(seeds), forced,
                 hashlib.sha256(pack_team((candidate,)).encode()).hexdigest(), assigned_gender,
                 selected_attempt, tuple(projection_evidence), self.max_known_set_draws, len(seeds) > 10))
+        return team, receipts
+
+    def _draw_unknown(self, known, rng):
+        # Unknown completion depends on known SPECIES, never their sampled sets.
+        seen = {canonical_gen3_randbat_species_id(mon.species) for mon in known}
+        team = []
         party_seeds = []
-        while len(team) < 6:
+        while len(team) + len(known) < 6:
             if len(party_seeds) >= 10:
                 raise ReferenceRefusal("unknown-species fresh-party rejection safety cap exceeded")
             seed = rng.getrandbits(32)
@@ -333,7 +350,41 @@ class PaperHiddenTeamSampler:
                 if species not in seen:
                     seen.add(species)
                     team.append(candidate)
-                if len(team) == 6:
+                if len(team) + len(known) == 6:
                     break
-        return HiddenTeamDraw(tuple(team), tuple(receipts), tuple(party_seeds),
-            hashlib.sha256(pack_team(tuple(team)).encode()).hexdigest())
+        return team, party_seeds
+
+    def draw_membership_first(self, known, rng, *, required, check, receipt):
+        """Same accepted joint law, without drawing known sets for rejected parties.
+
+        Conditional on fixed public known traits, original draws factor as
+        K(known sets) U(unknown completion | known species). The necessary
+        membership predicate M depends only on species in U plus fixed known
+        species, so p(K,U | M) = p(K) p(U | M). Reordering independent original
+        seed draws changes the deterministic stream coupling, not this target.
+        No later trait is forced and no source-generated party is modified.
+        Known-set completion errors and native errors still propagate; the
+        original bounded completion remains unchanged for every retained party.
+        """
+        self._validate_known(known)
+        if (not isinstance(required, frozenset) or not required or len(required) > 6
+                or any(not isinstance(s, str) or not s for s in required)):
+            raise ReferenceRefusal('invalid necessary membership-first species predicate')
+        fixed = {canonical_gen3_randbat_species_id(mon.species) for mon in known}
+        for _ in range(2048):
+            check()
+            unknown, seeds = self._draw_unknown(known, rng)
+            receipt['complete_proposals'] += 1
+            check()
+            if not required <= fixed | {canonical_gen3_randbat_species_id(mon.species) for mon in unknown}:
+                receipt['membership_rejections'] += 1
+                continue
+            receipt['matches'] += 1
+            check()
+            team, known_receipts = self._draw_known(known, rng)
+            check()
+            team.extend(unknown)
+            receipt['known_completions_materialized'] += 1
+            return HiddenTeamDraw(tuple(team), tuple(known_receipts), tuple(seeds),
+                hashlib.sha256(pack_team(tuple(team)).encode()).hexdigest())
+        raise ReferenceRefusal('particle necessary membership exhausted fixed original-proposal cap')

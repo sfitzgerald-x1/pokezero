@@ -77,7 +77,7 @@ class ConditionalSamplingTests(unittest.TestCase):
         factory = SimpleNamespace(env=env, pending_transition=certificate, evaluator=lambda obs:
             ((0, 5), SimpleNamespace(priors=(.9, .1))), set_source='bound-source', known=('same-known-traits',),
             allow_earlier_compatible_template=True, max_known_set_draws=128,
-            state=SimpleNamespace(player_id='p1', match=True), root=root,
+            state=SimpleNamespace(player_id='p1', match=True, deferred_opponent_action_player='p2'), root=root,
             _release=lambda evidence: evidence.update(released=True))
         worlds, receipts = [], []
         class Prior:
@@ -163,6 +163,53 @@ class ConditionalSamplingTests(unittest.TestCase):
         self.assertEqual(factory.env.plays, [{'p1': 1, 'p2': 5}])
         world.close()
         self.assertTrue(evidence['released'])
+
+    def test_slow_baton_replays_both_original_actions_without_inventing_a_remaining_move(self):
+        factory, rng, prior, worlds, patches = self.fixture([True])
+        factory.state.deferred_opponent_action_player = None
+        factory.env.public_materialization_state = lambda player: SimpleNamespace(
+            deferred_opponent_action_player=None, match=True)
+        evidence = {}
+        with patches[0], patches[1], patches[2]:
+            world = condition_pending_world(factory, rng, evidence)
+        self.assertEqual(factory.env.plays, [{'p1':1,'p2':5}])
+        self.assertEqual(evidence['pending_policy_conditioning']['transition_kind'],
+                         'slow-baton-pass-native-residual-queue')
+        self.assertFalse(evidence['pending_policy_conditioning']['live_opponent_action_used'])
+        world.close()
+        self.assertTrue(evidence['released'])
+
+    def test_pending_prior_deliberately_keeps_original_kernel_and_shared_deadline(self):
+        factory, rng, prior, worlds, patches = self.fixture([True])
+        factory.history_particles = 32
+        factory.early_encore_potential = True
+        factory.sampling_deadline_at = 123.5
+        prior.bind_sampling_deadline = mock.Mock()
+        with patches[0] as constructor, patches[1], patches[2]:
+            world = condition_pending_world(factory, rng, {})
+        self.assertNotIn('history_particles', constructor.call_args.kwargs)
+        self.assertNotIn('early_encore_potential', constructor.call_args.kwargs)
+        prior.bind_sampling_deadline.assert_called_once_with(123.5)
+        world.close()
+        self.assertTrue(all(w.closed for w in worlds))
+
+
+class SlowBatonCertificateTests(CertificateTests):
+    # Reuse source/privacy/actor-action checks against the distinct slow timing.
+    def setUp(self):
+        super().setUp()
+        self.current.replay.public_events.insert(1,
+            SimpleNamespace(raw_line='|move|p2a: Mawile|Hidden Power|p1a: Jolteon'))
+
+    def test_public_completion_changes_timing_not_certificate_exactness(self):
+        self.assertIsNone(self.current.deferred_opponent_action_player)
+        self.assertEqual(self.validate(),'exact-root')
+        from pokezero.mcts_eval.paper_reference_pending import requires_baton_interruption_replay
+        self.assertTrue(requires_baton_interruption_replay(self.current))
+        with mock.patch.object(PublicBattleMaterializationState,'deferred_opponent_action_player',
+                               new=property(lambda state:'p2' if state is self.current else None)):
+            with self.assertRaisesRegex(ReferenceRefusal,'inconsistent public opponent action timing'):
+                self.validate()
 
 
 class FaintCertificateTests(unittest.TestCase):

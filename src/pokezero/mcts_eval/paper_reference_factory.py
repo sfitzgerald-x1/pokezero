@@ -63,17 +63,71 @@ class PublicRootWorldFactory:
                  observation: Any, evaluator: ChampionEvaluator, set_source: Gen3RandbatSource,
                  allow_earlier_compatible_template: bool = False,
                  max_known_set_draws: int = 10, pending_transition: Any = None,
-                 staged_substitute_conditioning: bool = False) -> None:
+                 staged_substitute_conditioning: bool = False,
+                 history_particles: int = 0,
+                 guide_history_actions: bool = False,
+                 history_chance_pool: int = 1,
+                 batch_history_chance: bool = False,
+                 guide_history_chance: bool = False,
+                 guide_history_accuracy: bool = False,
+                 membership_first: bool = False,
+                 native_membership_batch_size: int = 0,
+                 public_anchor_constraints: bool = False,
+                 guide_anchor_genders: bool = False,
+                 early_encore_potential: bool = False,
+                 collect_phase_timing: bool = False) -> None:
+        if type(collect_phase_timing) is not bool:
+            raise ReferenceRefusal('phase timing requires an explicit boolean opt-in')
+        self.collect_phase_timing = collect_phase_timing
+        from .paper_reference_particles import validate_particle_count
+        self.history_particles = validate_particle_count(history_particles)
+        from .paper_reference_chance_pool import validate_chance_pool_count
+        self.history_chance_pool = validate_chance_pool_count(history_chance_pool,particles=history_particles)
+        if type(batch_history_chance) is not bool or batch_history_chance and not history_particles:
+            raise ReferenceRefusal('batched historical chance requires explicit particles and boolean opt-in')
+        self.batch_history_chance = batch_history_chance
+        if type(guide_history_chance) is not bool or guide_history_chance and (not history_particles or batch_history_chance):
+            raise ReferenceRefusal('guided historical seeds require particles and no batched chance allocation')
+        self.guide_history_chance = guide_history_chance
+        if type(guide_history_accuracy) is not bool or guide_history_accuracy and not guide_history_chance:
+            raise ReferenceRefusal('accuracy guidance requires explicit guided historical seeds')
+        self.guide_history_accuracy = guide_history_accuracy
+        if type(membership_first) is not bool or membership_first and not history_particles:
+            raise ReferenceRefusal('membership-first conditioning requires explicit particles and boolean opt-in')
+        self.membership_first = membership_first
+        from .paper_reference_native_membership import validate_native_membership
+        self.native_membership_batch_size = validate_native_membership(
+            native_membership_batch_size, membership_first=membership_first)
+        if type(public_anchor_constraints) is not bool or public_anchor_constraints and not history_particles:
+            raise ReferenceRefusal('public anchor constraints require explicit particles and boolean opt-in')
+        self.public_anchor_constraints = public_anchor_constraints
+        if type(guide_anchor_genders) is not bool or guide_anchor_genders and not public_anchor_constraints:
+            raise ReferenceRefusal('anchor gender guidance requires explicit public anchor constraints')
+        self.guide_anchor_genders = guide_anchor_genders
+        self.anchor_gender_guidance_rows = []
+        if (type(early_encore_potential) is not bool
+                or early_encore_potential and (not history_particles or not public_anchor_constraints)):
+            raise ReferenceRefusal('early Encore potential requires explicit particles and public anchor constraints')
+        self.early_encore_potential = early_encore_potential
+        # Populated only by a necessary-predicate certificate on an original,
+        # nonnested hypothetical anchor; normal/reference defaults are unchanged.
+        self.necessary_public_encore_support = {}
+        if (type(guide_history_actions) is not bool or guide_history_actions and not history_particles):
+            raise ReferenceRefusal('historical action guidance requires explicit particles and boolean opt-in')
+        self.guide_history_actions = guide_history_actions
+        self.history_population = None
         if type(staged_substitute_conditioning) is not bool:
             raise ReferenceRefusal('constant-chance conditioning requires an explicit boolean opt-in')
         if state.replay.requests:
             raise ReferenceRefusal("public root must strip replay request payloads")
-        from .paper_reference_pending import requires_faint_encore_replay, validate_transition
+        from .paper_reference_pending import (
+            requires_faint_encore_replay, requires_baton_interruption_replay, validate_transition)
         from .paper_reference_substitute import (SubstituteHistoryTransition,
             requires_substitute_replay, validate_substitute_transition)
         if isinstance(pending_transition, SubstituteHistoryTransition) or requires_substitute_replay(state):
             validate_substitute_transition(pending_transition, state, observation, set_source.metadata.source_hash)
-        elif state.deferred_opponent_action_player is not None or requires_faint_encore_replay(state):
+        elif (state.deferred_opponent_action_player is not None or requires_faint_encore_replay(state)
+                or requires_baton_interruption_replay(state)):
             validate_transition(pending_transition, state, observation, set_source.metadata.source_hash)
         elif pending_transition is not None:
             raise ReferenceRefusal('nonpending public root cannot carry a pending certificate')
@@ -178,6 +232,11 @@ class PublicRootWorldFactory:
             if self.pending_transition is not None:
                 from .paper_reference_substitute import SubstituteHistoryTransition, condition_substitute_world
                 if isinstance(self.pending_transition, SubstituteHistoryTransition):
+                    if self.history_particles:
+                        from .paper_reference_particles import HypotheticalHistoryPopulation
+                        if self.history_population is None:
+                            self.history_population = HypotheticalHistoryPopulation(self)
+                        return self.history_population.draw(hidden_rng, evidence)
                     return condition_substitute_world(self, hidden_rng, evidence)
                 from .paper_reference_pending import condition_pending_world
                 return condition_pending_world(self, hidden_rng, evidence)
@@ -188,14 +247,27 @@ class PublicRootWorldFactory:
             opponent = "p2" if self.state.player_id == "p1" else "p1"
             override = BattleStartOverride(player_teams={self.state.player_id: pack_team(self.own_team),
                 opponent: pack_team(draw.team)}, observation_format_id="gen3randombattle")
-            seed = hidden_rng.getrandbits(32)
+            if self.anchor_gender_guidance_rows:
+                from .paper_reference_anchor_seed import guided_anchor_seed
+                seed, proposal = guided_anchor_seed(hidden_rng,
+                    {self.state.player_id:self.own_team,opponent:draw.team},self.set_source,
+                    self.anchor_gender_guidance_rows,opponent,self.check_sampling_deadline)
+                evidence['materialization_seed_proposal']=proposal
+            else:
+                seed = hidden_rng.getrandbits(32)
             evidence["materialization_seed"] = seed
             durations, conditioning = {}, {}
             for side in ('p1', 'p2'):
                 certificate = _public_reference_encore(self.state, side)
                 if certificate is not None:
-                    durations[side] = hidden_rng.choice(certificate['remaining_candidates'])
+                    support=certificate['remaining_candidates']
+                    direct=None
+                    if side in self.necessary_public_encore_support:
+                        from .paper_reference_anchor_constraints import conditional_encore_support
+                        support,direct=conditional_encore_support(support,self.necessary_public_encore_support[side])
+                    durations[side] = hidden_rng.choice(support)
                     conditioning[side] = {**certificate, 'sampled_remaining': durations[side]}
+                    if direct is not None: conditioning[side]['necessary_public_direct_conditioning']=direct
             evidence['encore_conditioning'] = conditioning
             sleep_draws, sleep_conditioning = {}, {}
             teams = {self.state.player_id: self.own_team, opponent: draw.team}
@@ -233,3 +305,9 @@ class PublicRootWorldFactory:
         self.active = False
         # Release is ownership accounting, not a completed-trajectory assertion.
         evidence["released"] = True
+
+    def close(self):
+        if self.active:
+            raise ReferenceRefusal('cannot close a factory while a trajectory owns its world')
+        if self.history_population is not None:
+            self.history_population.close()

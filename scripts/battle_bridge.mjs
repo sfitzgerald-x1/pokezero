@@ -6,6 +6,10 @@ import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
 import {retryPublicSuffix, samePublicSuffix} from "./battle_bridge_conditioning_batch.mjs";
+import {installChanceTrace} from "./battle_bridge_chance_trace.mjs";
+import {rejectUnknownMembership} from "./battle_bridge_membership.mjs";
+import {createIsolatedGen3PartyGenerator} from "./battle_bridge_gen3_party.mjs";
+import {copyDeserializationAliases} from "./battle_bridge_owned_snapshot.mjs";
 import {referenceRestState, bindReferenceRestSources, referenceInducedSleepState} from "./battle_bridge_reference_rest.mjs";
 import {applyReferenceTurnClocks, applyReferenceRechargePP} from "./battle_bridge_reference_turn_clocks.mjs";
 import {refreshReferenceTrapping} from "./battle_bridge_reference_trapping.mjs";
@@ -61,6 +65,7 @@ try {
 const DEFAULT_BATTLE_ID = "default";
 const battles = new Map();
 const searchSnapshots = new Map();
+const generateIsolatedUnknownParty = createIsolatedGen3PartyGenerator(Teams);
 let nextSearchSnapshotId = 1;
 
 function emit(payload) {
@@ -390,10 +395,11 @@ function jsonSnapshotClone(value) {
 
 function restoreSerializedBattle(battle, snapshot, { cloneSnapshot = false } = {}) {
   const send = battle.battleStream.battle.send;
-  // Search restores clone the retained serialized world for every root visit. Keep the generic
-  // snapshot path byte-for-byte compatible with its prior bridge contract.
+  // DeserializeWithRefs itself owns the recursive copy. Detach the pinned
+  // decoder's direct mutable aliases first; never lend sets/log to a branch.
+  // The generic snapshot path keeps its existing bridge contract unchanged.
   battle.battleStream.battle = State.deserializeBattle(
-    cloneSnapshot ? structuredClone(snapshot.battle) : snapshot.battle
+    cloneSnapshot ? copyDeserializationAliases(snapshot.battle) : snapshot.battle
   );
   battle.battleStream.battle.restart(send);
   battle.boundaryRequests =
@@ -479,14 +485,27 @@ async function restoreSearchAndSendChoices(command) {
     // Use the same simulator command as reseedBattle, including its public log.
     await battle.streams.omniscient.write(`>reseed ${command.seed}`);
   }
-  await submitChoices(battle, command.choices, startedAt);
+  if (command.traceChance !== undefined && typeof command.traceChance !== 'boolean') {
+    throw new Error('Chance tracing requires an explicit boolean.');
+  }
+  const trace = command.traceChance ? installChanceTrace(battle.battleStream.battle) : null;
+  try {
+    await submitChoices(battle, command.choices, startedAt);
+  } finally {
+    if (trace) trace.close();
+  }
+  if (trace) emitForBattle(battle, {type:'chance_trace',battleId:battle.battleId,records:trace.records});
 }
 
 async function restoreSearchConditioningBatch(command) {
   const battle = requireBattle(command);
   const startedAt = process.hrtime.bigint();
   if (battle.conditioningCapture) throw new Error("Conditioning batch already active.");
-  if (!Array.isArray(command.seeds) || command.seeds.length < 1 || command.seeds.length > 16 ||
+  const fixedPool = command.fixedPool === true;
+  if (command.fixedPool !== undefined && typeof command.fixedPool !== "boolean") {
+    throw new Error("Fixed chance pool requires an explicit boolean.");
+  }
+  if (!Array.isArray(command.seeds) || command.seeds.length < 1 || command.seeds.length > (fixedPool ? 32 : 16) ||
       command.seeds.some(seed => typeof seed !== "string" || !seed.trim())) {
     throw new Error("Conditioning batch requires 1..16 explicit seeds.");
   }
@@ -527,14 +546,20 @@ async function restoreSearchConditioningBatch(command) {
         throw new Error("Showdown rejected a conditioning batch choice.");
       }
       const suffix = retryPublicSuffix(publicLines, command.initialTurn);
-      matched = !terminal && samePublicSuffix(suffix, command.expectedSuffix);
+      matched = !terminal && (fixedPool
+        ? suffix !== null && suffix.length <= command.expectedSuffix.length &&
+          suffix.every((line, i) => line === command.expectedSuffix[i])
+        : samePublicSuffix(suffix, command.expectedSuffix));
       uncertain = !terminal && suffix === null;
-      trials.push({index, publicLines, terminal, matched, uncertain});
+      trials.push({index, publicLines, terminal, matched, uncertain,
+        ...(command.traceChance ? {chanceTrace: events.find(event => event.type === 'chance_trace')?.records} : {})});
     } finally {
       clearTimeout(timeout);
       delete battle.conditioningCapture;
     }
-    if (matched || uncertain) break;
+    // A fixed likelihood estimate must include EVERY declared draw, never the
+    // first matching candidate. Uncertain projections are checked in Python.
+    if (!fixedPool && (matched || uncertain)) break;
   }
   emit({type: "conditioning_batch", battleId: battle.battleId,
     trials, events, matched, uncertain, deadlineReached, nodeProcMs: elapsedNodeProcMs(startedAt)});
@@ -697,6 +722,19 @@ function generateScenarioTeam(command) {
     })),
     nodeProcMs: elapsedNodeProcMs(startedAt),
   });
+}
+
+function generateUnknownMembership(command) {
+    const startedAt = process.hrtime.bigint();
+  const result = rejectUnknownMembership(command, seed => {
+    const parts = deriveSeed(String(seed), "scenario-team").split(",").map(Number);
+    return generateIsolatedUnknownParty(parts).map(set => ({
+      species: set.species || set.name || "", moves: Array.isArray(set.moves) ? set.moves : [],
+      ability: set.ability || "", item: set.item || "", level: set.level || 100,
+      nature: set.nature || "", gender: set.gender || "", evs: set.evs || {}, ivs: set.ivs || {},
+    }));
+  });
+  emit({type: "reference_unknown_membership", ...result, nodeProcMs: elapsedNodeProcMs(startedAt)});
 }
 
 function generateReferenceSet(command) {
@@ -2065,6 +2103,9 @@ async function handleCommand(command) {
       break;
     case "scenario_generate_team":
       generateScenarioTeam(command);
+      break;
+    case "reference_unknown_membership":
+      generateUnknownMembership(command);
       break;
     case "reference_generate_set":
       generateReferenceSet(command);

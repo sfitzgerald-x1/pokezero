@@ -33,6 +33,18 @@ def normalized(value):
     return value
 
 
+def annotation_state(value):
+    if isinstance(value,dict):
+        return {key:annotation_state(row) for key,row in value.items() if key!='_dex'}
+    if isinstance(value,(tuple,list)):
+        return tuple(annotation_state(row) for row in value)
+    if isinstance(value,(set,frozenset)):
+        return frozenset(annotation_state(row) for row in value)
+    if hasattr(value,'__dict__'):
+        return (type(value).__name__,annotation_state(vars(value)))
+    return value
+
+
 class RetryProjectionTests(unittest.TestCase):
     def test_bridge_projection_matches_parser_or_stops_without_rejection(self):
         module = (Path(__file__).resolve().parents[1] /
@@ -127,6 +139,195 @@ class BatchRngOwnershipTests(unittest.TestCase):
 
 @requires_showdown()
 class ConditioningBatchIntegrationTests(unittest.TestCase):
+    def test_auxiliary_trace_skips_python_projection_not_native_outcomes(self):
+        from pokezero.mcts_eval.paper_reference_seed_bank import validate_native_trace
+        with LocalShowdownEnv(self.config()) as env:
+            env.reset_with_start_override(seed=17,start_override=self.override())
+            env.step({'p1':0,'p2':1})
+            resident=env.snapshot_for_search()
+            actions={'p1':0,'p2':1}
+            history=public_history(resident.replay)
+            for seed in (0,17,101,2**64-1):
+                ordinary=env.conditioning_batch_from_search_snapshot(resident,actions,
+                    chance_seeds=[seed],expected_history=history,
+                    deadline_at=time.perf_counter()+10,fixed_pool=True,trace_chance=True)
+                expected_native=normalized(env.snapshot().bridge_snapshot)
+                expected_history=public_history(env.snapshot().replay)
+                env.restore_search_snapshot(resident)
+                before=env._local_snapshot(bridge_snapshot={'snapshot_id':'python-only'})
+                with mock.patch.object(env,'_restore_local_snapshot_state',
+                        side_effect=AssertionError('unused Python restore')), \
+                     mock.patch.object(env,'_apply_event',
+                        side_effect=AssertionError('unused Python event application')):
+                    auxiliary=env.conditioning_batch_from_search_snapshot(resident,actions,
+                        chance_seeds=[seed],expected_history=history,
+                        deadline_at=time.perf_counter()+10,fixed_pool=True,
+                        trace_chance=True,auxiliary_trace_only=True)
+                after=env._local_snapshot(bridge_snapshot={'snapshot_id':'python-only'})
+                self.assertEqual(before.replay,after.replay)
+                self.assertEqual(before.protocol_lines,after.protocol_lines)
+                self.assertEqual(before.latest_requests,after.latest_requests)
+                self.assertEqual(before.request_history,after.request_history)
+                self.assertEqual(before.belief_engine.snapshot(),after.belief_engine.snapshot())
+                self.assertEqual(annotation_state(before.annotation_cache),
+                                 annotation_state(after.annotation_cache))
+                self.assertIsNone(auxiliary['step'])
+                for key in ('consumed','matched','deadline_reached','matching_indices',
+                        'first_public_mismatches','chance_traces'):
+                    self.assertEqual(auxiliary[key],ordinary[key])
+                validate_native_trace(auxiliary['chance_traces'][0],seed)
+                # No generic snapshot/observation is read from the deliberately
+                # unprojected shell. Actual transition restores both sides first.
+                env.step_from_search_snapshot_for_conditioning(resident,actions,chance_seed=seed)
+                self.assertEqual(normalized(env.snapshot().bridge_snapshot),expected_native)
+                self.assertEqual(public_history(env.snapshot().replay),expected_history)
+            env.release_search_snapshot(resident)
+
+    def test_auxiliary_trace_flag_requires_one_owned_fixed_traced_trial(self):
+        with LocalShowdownEnv(self.config()) as env:
+            env.reset_with_start_override(seed=17,start_override=self.override())
+            resident=env.snapshot_for_search()
+            with mock.patch.object(env,'_send_command',side_effect=AssertionError('must not send')):
+                for flag,fixed,traced,seeds in (
+                        (1,True,True,[1]),(True,False,True,[1]),
+                        (True,True,False,[1]),(True,True,True,[1,2])):
+                    with self.assertRaises(ValueError):
+                        env.conditioning_batch_from_search_snapshot(resident,{'p1':0,'p2':1},
+                            chance_seeds=seeds,expected_history=public_history(resident.replay),
+                            deadline_at=time.perf_counter()+10,fixed_pool=fixed,
+                            trace_chance=traced,auxiliary_trace_only=flag)
+            env.release_search_snapshot(resident)
+
+    def test_native_encore_trace_guides_original_roll_and_preserves_outcome(self):
+        from pokezero.mcts_eval.paper_reference_seed_bank import encore_hints, matches_hints
+        override=BattleStartOverride(observation_format_id='gen3randombattle',player_teams={
+            'p1':pack_team((FixturePokemon('Aipom',('Growl','Tackle'),ability='Run Away'),)),
+            'p2':pack_team((FixturePokemon('Wobbuffet',('Encore','Splash'),ability='Shadow Tag'),))})
+        with LocalShowdownEnv(self.config()) as env:
+            env.reset_with_start_override(seed=223,start_override=override)
+            resident=env.snapshot_for_search(); before=public_history(resident.replay)
+            for seed in (0,17,101):
+                env.step_from_search_snapshot_for_conditioning(resident,{'p1':0,'p2':0},chance_seed=seed)
+                original=normalized(env.snapshot().bridge_snapshot)
+                for _ in range(7):
+                    if 'encore' not in env.snapshot().bridge_snapshot['battle']['sides'][0]['pokemon'][0]['volatiles']:break
+                    env.step({'p1':0,'p2':1})
+                expected=public_history(env.snapshot().replay)
+                result=env.conditioning_batch_from_search_snapshot(resident,{'p1':0,'p2':0},
+                    chance_seeds=[seed],expected_history=expected,deadline_at=time.perf_counter()+10,
+                    fixed_pool=True,trace_chance=True)
+                self.assertEqual(normalized(env.snapshot().bridge_snapshot),original)
+                trace=result['chance_traces'][0]
+                hints=encore_hints(trace,before,expected)
+                self.assertEqual(len(hints),1, repr((trace,expected)))
+                self.assertTrue(matches_hints(seed,hints))
+                self.assertEqual(trace[hints[0]['ordinal']-1]['volatile']['ident'],'p1a: Aipom')
+            env.release_search_snapshot(resident)
+
+    def test_cross_critical_branch_uses_native_base_not_a_doubled_normal_base(self):
+        from pokezero.mcts_eval.paper_reference_seed_bank import (chance_hints,
+            critical_alignment_hints,matches_hints)
+        override=BattleStartOverride(observation_format_id='gen3randombattle',player_teams={
+            'p1':pack_team((FixturePokemon('Lugia',('Psychic',),ability='Pressure',level=74),)),
+            'p2':pack_team((FixturePokemon('Shuckle',('Splash',),ability='Sturdy',level=100),))})
+        with LocalShowdownEnv(self.config()) as env:
+            env.reset_with_start_override(seed=17,start_override=override)
+            resident=env.snapshot_for_search();before=public_history(resident.replay)
+            branches={}
+            for seed in range(32):
+                result=env.conditioning_batch_from_search_snapshot(resident,{'p1':0,'p2':0},
+                    chance_seeds=[seed],expected_history=before,deadline_at=time.perf_counter()+10,
+                    fixed_pool=True,trace_chance=True)
+                trace=result['chance_traces'][0]
+                roll=next(row for row in trace if row.get('damage') and 'base_damage' in row['damage'])
+                branches.setdefault(roll['damage']['critical'],(seed,trace,public_history(env.snapshot().replay)))
+                if len(branches)==2:break
+            self.assertEqual(set(branches),{False,True})
+            normal=branches[False][1];critical_seed,critical,expected=branches[True]
+            old_branch_hints=chance_hints(normal,before,expected)
+            self.assertFalse(any(h['kind']=='damage' for h in old_branch_hints))
+            self.assertTrue(critical_alignment_hints(normal,before,expected))
+            native_hints=chance_hints(critical,before,expected)
+            self.assertTrue(any(h['kind']=='damage' for h in native_hints))
+            self.assertTrue(matches_hints(critical_seed,native_hints))
+            self.assertEqual(critical_alignment_hints(critical,before,expected),[])
+            env.release_search_snapshot(resident)
+
+    def test_native_trace_reports_actual_critical_damage_without_changing_outcomes(self):
+        from pokezero.mcts_eval.paper_reference_seed_bank import chance_hints, matches_hints
+        override = BattleStartOverride(observation_format_id='gen3randombattle', player_teams={
+            'p1': pack_team((FixturePokemon('Tauros', ('Slash',), ability='Intimidate', level=50),)),
+            'p2': pack_team((FixturePokemon('Snorlax', ('Splash',), ability='Immunity', level=100),))})
+        criticals=0
+        with LocalShowdownEnv(self.config()) as env:
+            env.reset_with_start_override(seed=17,start_override=override)
+            resident=env.snapshot_for_search()
+            for seed in range(24):
+                result=env.conditioning_batch_from_search_snapshot(resident,{'p1':0,'p2':0},
+                    chance_seeds=[seed],expected_history=public_history(resident.replay),
+                    deadline_at=time.perf_counter()+10,fixed_pool=True,trace_chance=True)
+                trace=result['chance_traces'][0]
+                roll=next(row for row in trace if row.get('damage') and 'base_damage' in row['damage'])
+                logged=any(line.startswith('|-crit|') for line in public_history(env.snapshot().replay))
+                self.assertEqual(roll['damage']['critical'],logged)
+                hints=chance_hints(trace,public_history(resident.replay),public_history(env.snapshot().replay))
+                self.assertTrue(any(h['kind']=='damage' for h in hints), 'native argument format lost damage guidance')
+                self.assertTrue(matches_hints(seed,hints), 'native executed seed disagrees with its own guidance')
+                criticals+=logged
+            self.assertGreater(criticals,0)
+            env.release_search_snapshot(resident)
+
+    def test_observational_chance_trace_preserves_hidden_state_public_state_and_rng(self):
+        from pokezero.mcts_eval.paper_reference_seed_bank import validate_native_trace
+        seeds = [0,1,17,101,2**64-1]
+        with LocalShowdownEnv(self.config()) as env:
+            env.reset_with_start_override(seed=17,start_override=self.override())
+            env.step({'p1':0,'p2':1})
+            resident=env.snapshot_for_search();actions={'p1':0,'p2':1}
+            for seed in seeds:
+                env.step_from_search_snapshot_for_conditioning(resident,actions,chance_seed=seed)
+                original=normalized(env.snapshot().bridge_snapshot)
+                expected=public_history(env.snapshot().replay)
+                result=env.conditioning_batch_from_search_snapshot(resident,actions,chance_seeds=[seed],
+                    expected_history=expected,deadline_at=time.perf_counter()+10,fixed_pool=True,trace_chance=True)
+                self.assertEqual(result['consumed'],1)
+                trace=result['chance_traces'][0]
+                self.assertTrue(trace);validate_native_trace(trace,seed)
+                self.assertEqual(normalized(env.snapshot().bridge_snapshot),original)
+                self.assertEqual(public_history(env.snapshot().replay),expected)
+                # Subsequent original steps also see no installed tracing hooks.
+                env.step_from_search_snapshot_for_conditioning(resident,actions,chance_seed=seed)
+                self.assertEqual(normalized(env.snapshot().bridge_snapshot),original)
+            env.release_search_snapshot(resident)
+
+    def test_fixed_pool_processes_all_32_seeds_and_matches_legacy_prefixes(self):
+        seeds = list(range(32))
+        with LocalShowdownEnv(self.config()) as env:
+            env.reset_with_start_override(seed=17, start_override=self.override())
+            env.step({'p1': 0, 'p2': 1})
+            full, resident = env.snapshot(), env.snapshot_for_search()
+            actions = {'p1': 0, 'p2': 1}
+            histories, terminals = [], []
+            for seed in seeds:
+                env.restore(full); env.reseed_simulator_rng(seed); env.step(actions)
+                histories.append(public_history(env.snapshot().replay))
+                terminals.append(env.terminal() is not None)
+            target = next(h for h, terminal in zip(histories, terminals) if not terminal)
+            expected = [i for i, h in enumerate(histories) if h == target and not terminals[i]]
+            before = env.root_puct_bridge_timing_snapshot()['bridge_round_trip_count']
+            result = env.conditioning_batch_from_search_snapshot(resident, actions, chance_seeds=seeds,
+                expected_history=target, deadline_at=time.perf_counter()+10, fixed_pool=True)
+            self.assertEqual(result['consumed'], 32)
+            self.assertEqual(result['matching_indices'], expected)
+            self.assertEqual(env.root_puct_bridge_timing_snapshot()['bridge_round_trip_count']-before, 1)
+            self.assertFalse(result['deadline_reached'])
+            # A future public suffix is a prefix potential, not a demand that
+            # the hypothetical transition jump past its current boundary.
+            result = env.conditioning_batch_from_search_snapshot(resident, actions, chance_seeds=seeds,
+                expected_history=target+('|message|future',), deadline_at=time.perf_counter()+10, fixed_pool=True)
+            self.assertEqual(result['matching_indices'], expected)
+            env.release_search_snapshot(resident)
+
     def config(self):
         return LocalShowdownConfig(showdown_root=showdown_root(), set_belief_source=True)
 
