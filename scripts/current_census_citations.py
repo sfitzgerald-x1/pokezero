@@ -20,7 +20,7 @@ import c153_wide_negative_census as c153
 import c154_unreachable_readjudication as c154
 
 ROOT = Path(__file__).resolve().parent.parent
-ARTIFACT = "reports/artifacts/current_census_citations_20261010_raw_redecision_reviewed.json"
+ARTIFACT = "reports/artifacts/current_census_citations_20261010_strict_diagnostics.json"
 C153_ARTIFACT = "reports/artifacts/c153_wide_negative_census.json"
 C154_ARTIFACT = "reports/artifacts/c154_unreachable_readjudication.json"
 HISTORICAL = {

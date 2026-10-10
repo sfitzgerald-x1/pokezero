@@ -89,7 +89,17 @@ class EngineSearchFallbackWarning(UserWarning):
 
 
 class EngineSearchFallbackError(RuntimeError):
-    """Raised instead of falling back when ``strict_fallbacks`` is set."""
+    """Strict refusal, with an optional detached diagnostic-only receipt."""
+
+    def __init__(self, message: str, *, diagnostic: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message)
+        # Serialize once: later mutations of search ledgers or extracted receipts
+        # cannot rewrite the evidence attached to this refusal. No policy input,
+        # selected action, or replacement outcome is supplied by this receipt.
+        self.engine_search_fallback_diagnostic = (
+            json.dumps(dict(diagnostic), sort_keys=True, allow_nan=False)
+            if diagnostic is not None else None
+        )
 
 
 def validate_native_joint_action_witness(report: Mapping[str, Any]) -> dict[str, Any]:
@@ -6557,9 +6567,13 @@ class EngineMctsPolicy:
             return max(1, math.ceil(usable_seconds * 1000.0))
 
         def time_budget_fallback_extra() -> dict[str, Any] | None:
-            if decision_deadline is None:
-                return None
-            return {"time_budget": time_budget_metadata()}
+            extra = ({"time_budget": time_budget_metadata()}
+                     if decision_deadline is not None else {})
+            if config.strict_fallbacks and model_leaf_override == "raw_policy_terminal":
+                # Keep validated invocation work, including cancelled/discarded
+                # rows. This is NOT an accepted-world or selected-action witness.
+                extra["raw_leaf_invocations"] = raw_leaf_invocations
+            return extra or None
 
         def run_world(
             record: Mapping[str, Any],
@@ -8957,7 +8971,16 @@ class EngineMctsPolicy:
             f"reason={reason} world_failures={delta or '{}'}"
         )
         if self._config.strict_fallbacks:
-            raise EngineSearchFallbackError(message)
+            raise EngineSearchFallbackError(message, diagnostic={
+                "schema": "engine-search-fallback-refusal-v1",
+                "diagnostic_only_not_policy_input": True,
+                "battle_id": str(battle_id), "round": round_index, "seat": str(player),
+                "reason": reason, "world_failures": delta,
+                "engine_mcts": {
+                    "fallback": reason,
+                    **(dict(engine_mcts_extra) if engine_mcts_extra is not None else {}),
+                },
+            })
         warnings.warn(message, EngineSearchFallbackWarning, stacklevel=3)
         _fallback_logger.warning(message)
         legal = legal_action_indices(context.observation.legal_action_mask)

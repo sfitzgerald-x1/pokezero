@@ -3237,6 +3237,17 @@ class FallbackAlertTests(unittest.TestCase):
         with self.assertRaises(EngineSearchFallbackError) as caught:
             policy.select_action_with_context(self._fallback_context(), rng=random.Random(1))
         self.assertIn("reason=no_public_state", str(caught.exception))
+        from pokezero.mcts_eval.policy_opponent_profile import fallback_refusal_diagnostic
+        receipt = fallback_refusal_diagnostic(caught.exception)
+        self.assertEqual(receipt["reason"], "no_public_state")
+        self.assertEqual(receipt["battle_id"], "alert-test")
+        self.assertEqual(receipt["round"], 7)
+        self.assertEqual(receipt["world_failures"], {})
+        self.assertTrue(receipt["diagnostic_only_not_policy_input"])
+        self.assertEqual(receipt["engine_mcts"], {"fallback": "no_public_state"})
+        self.assertNotIn("action", receipt)
+        self.assertNotIn("outcome", receipt)
+        self.assertIsNone(fallback_refusal_diagnostic(EngineSearchFallbackError("legacy")))
 
 
 class _FakeState:
@@ -5476,6 +5487,23 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertEqual(budget["worlds_budget_skipped"], 1)
         self.assertEqual(budget["native_invocations"], [])
 
+        # Strict mode keeps the same receipt but never invents a native start.
+        from pokezero.mcts_eval.policy_opponent_profile import fallback_refusal_diagnostic
+        clock.now = 0.0
+        strict = self._policy(worlds=1, strict=True, model_decision_time_ms=10,
+                              model_native_batch_guard_ms=2)
+        with (
+            patch("pokezero.engine_search.time.perf_counter", lambda: clock.now),
+            patch("pokezero.engine_search.native_search_args", side_effect=consume_reserved_window),
+            patch.object(self._Native, "search_batched_multi_encoded") as search,
+            self.assertRaises(EngineSearchFallbackError) as caught,
+        ):
+            self._run(strict, [report])
+        search.assert_not_called()
+        receipt = fallback_refusal_diagnostic(caught.exception)
+        self.assertEqual(receipt["engine_mcts"]["time_budget"], budget)
+        self.assertEqual(strict.stats.worlds_searched, 0)
+
     def test_time_budget_records_one_multiplicity_scaled_native_invocation(self) -> None:
         """Collapsed worlds are one native call, not two falsely capped calls."""
         policy = self._policy(worlds=2, model_decision_time_ms=10_000)
@@ -5841,6 +5869,24 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertTrue(invocation["time_budget_exhausted"])
         self.assertEqual(invocation["status"], "completed")
         self.assertEqual(invocation["root_visits"], {"side_one": 0, "side_two": 0})
+
+        from pokezero.mcts_eval.policy_opponent_profile import fallback_refusal_diagnostic
+        strict = self._policy(worlds=1, strict=True, model_decision_time_ms=10_000)
+        # Root-prior fallbacks independently refuse strict mode before the
+        # deadline seam. Keep that rule intact and isolate zero completed work.
+        strict_report = {**report, "prior_fallbacks": 0, "root_prior_fallbacks": 0}
+        with patch("pokezero.engine_search.time.perf_counter", return_value=0.0), \
+                self.assertRaises(EngineSearchFallbackError) as caught:
+            self._run(strict, [strict_report])
+        receipt = fallback_refusal_diagnostic(caught.exception)
+        self.assertEqual(receipt["engine_mcts"]["time_budget"], witness)
+        self.assertEqual(strict.stats.worlds_searched, 0)
+        self.assertEqual(strict.stats.total_iterations, 0)
+        self.assertEqual(strict.stats.model_evals, 1)
+        # Extracted copies and mutable input reports cannot rewrite the refusal.
+        receipt["engine_mcts"]["time_budget"]["native_invocations"].clear()
+        report["time_budget_elapsed_ms"] = 0
+        self.assertEqual(fallback_refusal_diagnostic(caught.exception)["engine_mcts"]["time_budget"], witness)
 
     def test_mismatched_prior_fallback_scope_refuses_the_native_world(self) -> None:
         policy = self._policy(worlds=1)

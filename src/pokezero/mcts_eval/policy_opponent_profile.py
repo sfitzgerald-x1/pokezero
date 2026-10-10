@@ -35,11 +35,24 @@ def refusal_diagnostic(error: BaseException) -> dict[str, Any] | None:
     Diagnostics never enter policy context or alter acceptance. Search failures
     still refuse; this records the failing node instead of losing its evidence.
     """
+    return _refusal_diagnostic(error, (
+        ("policy_opponent_diagnostic", "policy-opponent-refusal-v1"),
+        ("raw_policy_leaf_diagnostic", "raw-policy-terminal-refusal-v1"),
+    ))
+
+
+def fallback_refusal_diagnostic(error: BaseException) -> dict[str, Any] | None:
+    """Extract strict engine refusal evidence separately from native errors."""
+    return _refusal_diagnostic(error, (
+        ("engine_search_fallback_diagnostic", "engine-search-fallback-refusal-v1"),
+    ))
+
+
+def _refusal_diagnostic(error: BaseException, attributes: Sequence[tuple[str, str]]) -> dict[str, Any] | None:
     seen: set[int] = set()
     while error is not None and id(error) not in seen:
         seen.add(id(error))
-        for attribute, schema in (("policy_opponent_diagnostic", "policy-opponent-refusal-v1"),
-                                  ("raw_policy_leaf_diagnostic", "raw-policy-terminal-refusal-v1")):
+        for attribute, schema in attributes:
             raw = getattr(error, attribute, None)
             if isinstance(raw, str):
                 try:

@@ -14,7 +14,9 @@ from pokezero.engine_search import (
     raw_policy_leaf_seed, require_model_leaf_witness, validate_native_raw_leaf_witness,
     native_search_args,
 )
-from pokezero.mcts_eval.policy_opponent_profile import make_profile_decider, refusal_diagnostic
+from pokezero.mcts_eval.policy_opponent_profile import (
+    fallback_refusal_diagnostic, make_profile_decider, refusal_diagnostic,
+)
 from pokezero.mcts_eval.search_over_raw_adapters import _incumbent_runtime
 from test_model_tree_hp_leaf_contract import config as base_config
 from test_policy_opponent_engine import Fixtures
@@ -222,12 +224,27 @@ class RawLeafContractTests(unittest.TestCase):
         wrapper = EngineSearchWitnessError("world refused")
         wrapper.__cause__ = native
         self.assertEqual(refusal_diagnostic(wrapper), diagnostic)
+        payload = dict(schema="engine-search-fallback-refusal-v1", diagnostic_only_not_policy_input=True,
+            reason="model_time_budget_no_completed_worlds", engine_mcts={"time_budget": {"native_invocations": []}})
+        strict = EngineSearchFallbackError("strict deadline refusal", diagnostic=payload)
+        payload["engine_mcts"]["time_budget"]["native_invocations"].append("mutation")
+        strict.__cause__ = wrapper
+        self.assertEqual(refusal_diagnostic(strict), diagnostic)
+        extracted = fallback_refusal_diagnostic(strict)
+        self.assertEqual(extracted["engine_mcts"]["time_budget"]["native_invocations"], [])
+        wrapper.__cause__ = strict  # Cycle protection for malformed causal chains.
+        self.assertIsNone(fallback_refusal_diagnostic(ValueError("no typed receipt")))
+        for change in ({"schema": "wrong"}, {"diagnostic_only_not_policy_input": False}):
+            bad = EngineSearchFallbackError("invalid receipt", diagnostic={**payload, **change})
+            bad.__cause__ = bad
+            self.assertIsNone(fallback_refusal_diagnostic(bad))
 
 
 class RawLeafPolicyIntegrationTests(unittest.TestCase):
     def run_policy(self, bad=None, order_missing=False):
         policy = Fixtures._policy(workers=1)
-        policy._config = config(worlds=2, search_sims=100, search_batch=10)
+        policy._config = config(worlds=2, search_sims=100, search_batch=10,
+            model_decision_time_ms=10_000 if bad == "deadline" else None)
         ctx = Fixtures._context()
         ctx.public_materialization_state.self_request = {"side": {"pokemon": [{"details": "Rattata, L100"}]}}
         calls = []
@@ -237,6 +254,14 @@ class RawLeafPolicyIntegrationTests(unittest.TestCase):
                 if bad == "refused":
                     raise ValueError("synthetic nonterminal cap")
                 r = {**Fixtures._report(60, 40), **report(args[9])}
+                if bad == "deadline":
+                    r.update({key: 0 for key in RAW_LEAF_COUNTERS})
+                    r.update(iterations=0, requested_iterations=100, remaining_iterations=100,
+                        side_one=[], side_two=[], root_priors=[], model_evals=1,
+                        raw_leaf_started=1, raw_leaf_cancelled_rows=1, raw_leaf_cancelled_traversals=1,
+                        time_budget_enabled=True, time_budget_ms=args[-1],
+                        time_budget_elapsed_ms=float(args[-1])+1, time_budget_exhausted=True,
+                        time_budget_batch_overshoot_ms=1.)
                 if bad == "missing":
                     del r["raw_leaf_terminal"]
                 return json.dumps(r)
@@ -268,6 +293,24 @@ class RawLeafPolicyIntegrationTests(unittest.TestCase):
         for bad in ("refused", "missing"):
             with self.subTest(bad=bad), self.assertRaises(EngineSearchWitnessError):
                 self.run_policy(bad=bad)
+        with patch("pokezero.engine_search.time.perf_counter", return_value=0.), \
+                self.assertRaises(EngineSearchFallbackError) as caught:
+            self.run_policy(bad="deadline")
+        receipt = fallback_refusal_diagnostic(caught.exception)
+        self.assertEqual(receipt["reason"], "model_time_budget_no_completed_worlds")
+        work = receipt["engine_mcts"]["raw_leaf_invocations"]
+        # The synthetic Python clock is fixed; both native receipts must be
+        # retained, not deduced from their exhausted flags or belief weights.
+        self.assertEqual(len(work), 2)
+        for row in work:
+            self.assertEqual(row["completed_iterations"], 0)
+            self.assertEqual(row["report"]["raw_leaf_terminal"], 0)
+            self.assertEqual(row["report"]["raw_leaf_cancelled_rows"], 1)
+            self.assertEqual(row["report"]["raw_leaf_cancelled_traversals"], 1)
+        invocations = receipt["engine_mcts"]["time_budget"]["native_invocations"]
+        self.assertEqual(len(invocations), 2)
+        self.assertTrue(all(row["completed_iterations"] == 0 for row in invocations))
+        self.assertNotIn("action", receipt)
 
     def test_unresolved_request_order_refuses_before_search(self):
         with self.assertRaisesRegex(EngineSearchWitnessError, "request order refused"):

@@ -246,6 +246,27 @@ class PublicBoundaryTests(unittest.TestCase):
             self.assertNotIn("private_canary", seen.observation.metadata)
             native.reset.assert_called_once()
             self.assertEqual(validate.call_args.kwargs["deadline_ms"], 3000)
+            from pokezero.engine_search import EngineSearchFallbackError
+            from pokezero.mcts_eval.policy_opponent_profile import fallback_refusal_diagnostic
+            deadline = dict(schema="engine-search-fallback-refusal-v1", diagnostic_only_not_policy_input=True,
+                reason="model_time_budget_no_completed_worlds",
+                engine_mcts={"time_budget": {"exhausted": True, "native_invocations": []}})
+            failure = EngineSearchFallbackError("strict refusal", diagnostic=deadline)
+            native.select_action_with_context.side_effect = failure
+            with self.assertRaises(EngineSearchFallbackError):
+                adapter.select(self.context, root_id="fixture:deadline", selection_seed=8)
+            saved = adapter.last_failure
+            self.assertEqual(saved["status"], "UNCERTAIN_REFUSED")
+            self.assertFalse(saved["retry_authorized"])
+            self.assertEqual(saved["engine_fallback_diagnostic"], deadline)
+            self.assertNotIn("native_diagnostic", saved)
+            self.assertNotIn("action", saved)
+            validate.assert_called_once()  # A refused selection is never validated.
+            with self.assertRaisesRegex(ValueError, "poisoned"):
+                adapter.select(self.context, root_id="fixture:no-retry", selection_seed=9)
+            self.assertEqual(native.select_action_with_context.call_count, 2)
+            saved["engine_fallback_diagnostic"]["engine_mcts"]["time_budget"]["exhausted"] = False
+            self.assertTrue(fallback_refusal_diagnostic(failure)["engine_mcts"]["time_budget"]["exhausted"])
             adapter.close()
             decider.close.assert_called_once()
 

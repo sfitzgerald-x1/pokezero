@@ -266,10 +266,13 @@ class PublicModelSearchAdapter:
             self._poisoned = True
             self.last_failure = dict(root_id=root_id, error_type=type(error).__name__,
                 status="UNCERTAIN_REFUSED", retry_authorized=False)
-            from .policy_opponent_profile import refusal_diagnostic
+            from .policy_opponent_profile import fallback_refusal_diagnostic, refusal_diagnostic
             diagnostic = refusal_diagnostic(error)
             if diagnostic is not None:
                 self.last_failure["native_diagnostic"] = diagnostic
+            fallback = fallback_refusal_diagnostic(error)
+            if fallback is not None:
+                self.last_failure["engine_fallback_diagnostic"] = fallback
             raise
 
     def close(self):
