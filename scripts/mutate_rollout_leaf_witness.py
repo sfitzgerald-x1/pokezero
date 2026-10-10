@@ -1089,19 +1089,29 @@ def _classify(
     return "KILLED", f"{failed} failed, {passed} passed", named
 
 
+def _killer_environment() -> dict[str, str]:
+    """Keep this tree first without discarding an isolated compiled wheel.
+
+    Dropping the caller's native package path loaded an older model wheel and
+    made all five HP tests fail for every mutant. Such failures are not kills.
+    The in-process resolved-source checks still reject a sibling Python tree.
+    """
+    env = dict(os.environ)
+    source = str(ROOT / "src")
+    extra = [path for path in env.get("PYTHONPATH", "").split(os.pathsep)
+             if path and path != source]
+    env["PYTHONPATH"] = os.pathsep.join([source, *extra])
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
+
+
 def _run_killers(python: str, timeout: int) -> tuple[str, str, str, object, bool]:
     """Resolve the modules, then run the killers.
 
     Returns (stdout, stderr, resolved-marker-lines, completed, imported).
     """
 
-    env = dict(os.environ)
-    # DELIBERATELY POISONED: a sibling checkout on PYTHONPATH is the exact condition
-    # under which a mutant appears to survive without loading. `tests/conftest.py`
-    # moves this tree's `src` to the FRONT, so the resolved path printed below must
-    # still be this tree's -- and the classifier refuses the run if it is not.
-    env["PYTHONPATH"] = str(ROOT / "src")
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env = _killer_environment()
     # STALE BYTECODE IS A TRAP THAT FLATTERS. A `__pycache__` written by an earlier
     # process (or by an earlier revision of this tree, in a worktree that has been
     # reused) can be loaded while `__file__` still names the `.py`, so the run scores a

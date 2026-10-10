@@ -133,6 +133,49 @@ class SourceQualificationAdmissionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'arm/resource drift'):
                 DRIVER.claim_attempt(Path(directory), row)
 
+    def hp_registration(self):
+        from dataclasses import asdict
+        row = self.registration()
+        row.update(schema=DRIVER.INCUMBENT_HP_SCHEMA,
+            source_contract=DRIVER.engineering_contract(incumbent_hp=True),
+            configurations=[asdict(c) for c in DRIVER.qualification_configurations(10., incumbent_hp=True)])
+        return row
+
+    def test_incumbent_hp_qualification_preserves_model_tree_and_separate_namespace(self):
+        row = self.hp_registration()
+        self.assertNotIn(row["source_contract"]["namespace"],
+            (DRIVER.NAMESPACE, DRIVER.LEAF_NAMESPACE, DRIVER.ORACLE_NAMESPACE))
+        with tempfile.TemporaryDirectory() as directory:
+            configs = DRIVER.claim_attempt(Path(directory), row)
+        self.assertEqual([DRIVER.configuration_key(c) for c in configs], ["raw", "incumbent", "reference",
+            "incumbent-hp_fraction", "incumbent-oracle", "incumbent-oracle-hp_fraction"])
+        ablation = row["source_contract"]["incumbent_hp_ablation"]
+        self.assertEqual(ablation["tree"], "unchanged_encoded_model_tree")
+        self.assertEqual(ablation["model_forwards"], "retained")
+        self.assertFalse(ablation["oracle_deployable"])
+
+    def test_incumbent_hp_qualification_refuses_relabeling_before_claim(self):
+        for key, value in (("tree", "hp_fraction_crate"), ("priors", "uniform"),
+                ("model_forwards", "skipped"), ("value_frame", "self_relative"), ("oracle_deployable", True)):
+            row = self.hp_registration()
+            row["source_contract"]["incumbent_hp_ablation"][key] = value
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(ValueError, "qualification changed"):
+                    DRIVER.claim_attempt(Path(directory), row)
+                self.assertFalse((Path(directory) / "attempt.json").exists())
+
+    def test_incumbent_hp_budget_and_mode_are_explicit(self):
+        for kwargs in (dict(incumbent_hp=True, oracle=True), dict(incumbent_hp=True, reference_leaves=True)):
+            with self.assertRaisesRegex(ValueError, "undeclared qualification"):
+                DRIVER.qualification_configurations(10., **kwargs)
+        with self.assertRaisesRegex(ValueError, "ten-second budget"):
+            DRIVER.qualification_configurations(3., incumbent_hp=True)
+        row = self.hp_registration()
+        row["configurations"][-1]["leaf"] = "model"
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "arm/resource drift"):
+                DRIVER.claim_attempt(Path(directory), row)
+
 
 class ActualSourceBoundaryArchiveTests(unittest.TestCase):
     def setUp(self):

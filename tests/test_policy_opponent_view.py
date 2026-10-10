@@ -18,7 +18,7 @@ from pokezero.category_vocab import build_category_vocabulary
 VOCAB = build_category_vocabulary((
     "last_used_move:switch", "ability:trace", "species:swampert", "species:snorlax",
     "species:starmie", "move:bodyslam", "move:shadowball", "move:surf",
-    "move:earthquake", "request_kind:move", "request_kind:force_switch",
+    "move:earthquake", "request_kind:move", "request_kind:force_switch", "request_kind:wait",
     "field", "stats", "status:none", "pokemon:self", "pokemon:opponent",
     "action:move", "action:switch", "action", "lastmove:switch", "move_priority:0",
     "type:normal", "type:water", "type:psychic", "type:ground", "move_category:physical",

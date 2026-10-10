@@ -49,7 +49,7 @@ use crate::tree::{
     finalize, multiply_report_json, root_visit_lock, traverse, BranchSeam, LeafPrice,
     MultiPlyConfig, MultiPlyOutcome, SearchCounters, Traversal, Tree,
 };
-use crate::{make_stats, parse_state, sample_branch, select, stats_to_json};
+use crate::{make_stats, parse_state, sample_branch, select, stats_to_json, HpFractionEval, LeafEval};
 
 /// Observation tensor shape from the selected schema's export manifest.
 #[derive(Clone, Copy, Debug)]
@@ -882,6 +882,9 @@ impl Drop for PhaseTimer<'_> {
 pub(crate) enum EncodedLeafMode {
     /// Production: the checkpoint's value head, seat-reflected.
     ModelValue,
+    /// Phase A valuation-only ablation. Preserve all production encodings and
+    /// forwards (including champion priors), but back up side-one HP values.
+    HpFraction,
     /// Observational-only leaf audit.  The tree is still priced with
     /// [`Self::ModelValue`]; terminal-rollout values are computed for the exact
     /// same reached leaves and emitted as aggregate, split-heldout statistics.
@@ -927,6 +930,7 @@ impl EncodedLeafMode {
     fn name(self) -> &'static str {
         match self {
             Self::ModelValue => "model_value",
+            Self::HpFraction => "hp_fraction",
             Self::ModelValueShadowRollout => "model_value_shadow_rollout",
             Self::Rollout => "rollout",
             Self::RolloutEncodeAll => "rollout_encode_all",
@@ -1183,6 +1187,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let rollout_mode = rollout_seam.as_ref().map(|seam| seam.mode);
     let prices_by_rollout = rollout_mode.is_some_and(EncodedLeafMode::prices_by_rollout);
     let shadow_rollout = matches!(rollout_mode, Some(EncodedLeafMode::ModelValueShadowRollout));
+    let hp_fraction = matches!(rollout_mode, Some(EncodedLeafMode::HpFraction));
+    let mut hp_leaf_rows_priced = 0usize;
     let mut rng = StdRng::seed_from_u64(seed);
     let mut completed = 0usize;
     let mut rounds = 0usize;
@@ -1486,6 +1492,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         // the leaf value.
                         None
                         | Some(EncodedLeafMode::ModelValue)
+                        | Some(EncodedLeafMode::HpFraction)
                         | Some(EncodedLeafMode::ModelValueShadowRollout) => true,
                         // The reference: rollout values, no skip.
                         Some(EncodedLeafMode::RolloutEncodeAll) => true,
@@ -1732,7 +1739,14 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         // them through it would invert every leaf on p2 decisions and leave p1
         // correct, a defect that is invisible in half of all games.
         // `rollout_values_are_not_seat_reflected` is the gate.
-        let row_values = if prices_by_rollout {
+        let row_values = if hp_fraction {
+            // HP values already use the tree's side-one frame. Reflecting them
+            // like checkpoint values would invert every side-two decision.
+            // The model forward above is intentionally retained: only valuation
+            // changes, not encoding refusals, priors, batching or tree plumbing.
+            hp_leaf_rows_priced += rollout_rows.len();
+            rollout_rows.iter().map(|state| HpFractionEval.eval(state)).collect()
+        } else if prices_by_rollout {
             let seam = rollout_seam
                 .as_ref()
                 .expect("prices_by_rollout implies the seam is present");
@@ -1948,6 +1962,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     // every field production has.
     let extra = match &rollout_seam {
         None => extra,
+        Some(_) if hp_fraction => format!(
+            "{extra},\"model_leaf_override\":\"hp_fraction\",\"hp_leaf_rows_priced\":{hp_leaf_rows_priced},\"hp_leaf_value_frame\":\"side_one_absolute\",\"hp_leaf_model_forwards_retained\":true"
+        ),
         Some(seam) => {
             let shadow_fields = if shadow_rollout {
                 format!(",{}", model_rollout_shadow.json_fields())
@@ -2443,6 +2460,7 @@ impl NativeLeafModel {
         let rollout_mode = match rollout_leaf_mode {
             None => None,
             Some("model_value") => Some(EncodedLeafMode::ModelValue),
+            Some("hp_fraction") => Some(EncodedLeafMode::HpFraction),
             Some("model_value_shadow_rollout") => Some(EncodedLeafMode::ModelValueShadowRollout),
             Some("rollout") => Some(EncodedLeafMode::Rollout),
             // Gate fixtures. Named, documented on `EncodedLeafMode`, and not
@@ -2453,6 +2471,7 @@ impl NativeLeafModel {
                 return Err(PyValueError::new_err(format!(
                     "unknown rollout_leaf_mode {other:?}; supported: 'model_value' (the \
                      fidelity control), 'model_value_shadow_rollout' (observational leaf audit), \
+                     'hp_fraction' (model-tree valuation ablation), \
                      'rollout' (the arbiter arm), or None (production)"
                 )))
             }

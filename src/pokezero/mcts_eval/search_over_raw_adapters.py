@@ -1,8 +1,8 @@
 """Public/model decision adapters for prospective Phase A root experiments.
 
 Not an admission controller: source/native/runtime qualification and durable
-attempt receipts remain the collector's responsibility. Oracle and incumbent
-alternative leaves are rejected, not silently run with model defaults. Reference
+attempt receipts remain the collector's responsibility. Implicit oracle and
+unimplemented incumbent raw-terminal leaves are rejected. Reference
 leaf ablations change valuation only, retaining champion priors and the tree.
 The reference retains its genuine twenty-worker kernel; the incumbent retains
 the historical depth6/batch16/worlds4 configuration at one worker.
@@ -48,13 +48,15 @@ def validate_reference_work(measured) -> None:
         measured.result.trajectories, measured.result.transitions), "reference aggregate work drift")
 
 
-def _incumbent_runtime(contract, showdown_root, seconds):
+def _incumbent_runtime(contract, showdown_root, seconds, *, leaf="model"):
     from .manifest import SearchConfig
     from .policy_opponent_profile import make_profile_decider
 
+    require(leaf in ("model", "hp_fraction"), "incumbent leaf requires an implemented model-tree valuation")
     decider = make_profile_decider(contract, showdown_root, arm="incumbent_mcts",
         mode="matched_deadline", opponent_seed=0, deadline_ms=round(seconds * 1000),
-        native_batch_guard_ms=64)
+        native_batch_guard_ms=64,
+        **({"model_leaf_override": leaf} if leaf != "model" else {}))
     config = SearchConfig(depth=6, sims=4096, batch=16, worlds=4, inference_mode="local")
     try:
         return decider, decider._policy_for(config), config
@@ -74,7 +76,8 @@ class PublicModelSearchAdapter:
 
     def _check_configuration(self, configuration):
         require(configuration.belief == "public" and (configuration.leaf == "model"
-            or configuration.arm == "reference"),
+            or configuration.arm == "reference"
+            or (configuration.arm == "incumbent" and configuration.leaf == "hp_fraction")),
             "oracle and incumbent alternative-leaf adapters remain required")
 
     def _reference_worker_factory(self, factory):
@@ -140,7 +143,13 @@ class PublicModelSearchAdapter:
         self.runtime_sha256 = digest(self.runtime_configuration)
         if configuration.arm == "incumbent":
             self._decider, self._native, self._search_config = _incumbent_runtime(
-                checkpoint_contract, showdown_root, configuration.seconds)
+                checkpoint_contract, showdown_root, configuration.seconds,
+                **({"leaf": configuration.leaf} if configuration.leaf != "model" else {}))
+            if configuration.leaf != "model":
+                self.runtime_configuration["incumbent_leaf"] = dict(leaf=configuration.leaf,
+                    tree="unchanged_encoded_model_tree", priors="unchanged_champion",
+                    model_forwards="retained", value_frame="side_one_absolute")
+                self.runtime_sha256 = digest(self.runtime_configuration)
         elif configuration.arm == "reference":
             from .paper_reference import ReferenceConfig
             from .paper_reference_parallel import ParallelTrajectorySearch
@@ -208,9 +217,15 @@ class PublicModelSearchAdapter:
                 if sum(mask) > 1:
                     validate_selection(evidence, arm="incumbent_mcts", mode="matched_deadline",
                         config=self._search_config, mask=mask, opponent_seed=selection_seed,
-                        deadline_ms=round(self.configuration.seconds*1000), native_batch_guard_ms=64)
+                        deadline_ms=round(self.configuration.seconds*1000), native_batch_guard_ms=64,
+                        **({"model_leaf_override": self.configuration.leaf}
+                            if self.configuration.leaf != "model" else {}))
                 else:
                     require(not evidence["fallbacks"] and not evidence["prior_fallbacks"], "forced root fell back")
+                if self.configuration.leaf != "model":
+                    from ..engine_search import require_model_hp_leaf_witness
+                    require_model_hp_leaf_witness({"engine_mcts": evidence["engine_mcts"]},
+                        model_leaf_override=self.configuration.leaf)
             else:
                 root = decision_state(request.observation, player=public.player_id)
                 remaining = self.configuration.seconds - (time.perf_counter()-started)

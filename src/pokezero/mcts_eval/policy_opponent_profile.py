@@ -167,10 +167,14 @@ class _LiveRawPolicyTimingDecider(_LiveEngineTimingDecider):
 def make_profile_decider(
     contract: CheckpointContract, showdown_root: str, *, arm: str, mode: str,
     opponent_seed: int, deadline_ms: int, native_batch_guard_ms: int,
+    model_leaf_override: str | None = None,
 ) -> _LiveEngineTimingDecider:
     _unsigned_seed(opponent_seed)
     if arm not in ARMS or mode not in MODES:
         raise ContractError("unsupported profile arm or timing mode")
+    if model_leaf_override not in (None, "hp_fraction") or (model_leaf_override is not None
+            and arm != "incumbent_mcts"):
+        raise ContractError("model leaf override requires explicit incumbent HP valuation")
     if (type(deadline_ms) is not int or deadline_ms <= 0
             or type(native_batch_guard_ms) is not int
             or not 0 <= native_batch_guard_ms < deadline_ms):
@@ -183,12 +187,13 @@ def make_profile_decider(
         model_decision_time_ms=deadline_ms if mode == "matched_deadline" else None,
         model_native_batch_guard_ms=native_batch_guard_ms if mode == "matched_deadline" else 0,
         policy_opponent=arm == "own_policy_opponent_mcts",
-        policy_opponent_seed=opponent_seed if arm == "own_policy_opponent_mcts" else None)
+        policy_opponent_seed=opponent_seed if arm == "own_policy_opponent_mcts" else None,
+        **({"model_leaf_override": model_leaf_override} if model_leaf_override is not None else {}))
 
 
 def validate_selection(telemetry: Any, *, arm: str, mode: str, config: SearchConfig,
                        mask: Sequence[bool], opponent_seed: int, deadline_ms: int,
-                       native_batch_guard_ms: int) -> None:
+                       native_batch_guard_ms: int, model_leaf_override: str | None = None) -> None:
     """Validate arm identity and allocation; configuration alone is not proof."""
     if not isinstance(telemetry, Mapping) or not isinstance(telemetry.get("root_action"), str) or not telemetry["root_action"]:
         raise ContractError("profile has no serialized selected action")
@@ -216,6 +221,15 @@ def validate_selection(telemetry: Any, *, arm: str, mode: str, config: SearchCon
         return
     if arm not in ARMS or mode not in MODES or "raw_policy" in telemetry or engine.get("leaf_eval") != "model":
         raise ContractError("profile search arm identity drift")
+    from ..engine_search import require_model_hp_leaf_witness
+    if model_leaf_override is not None and arm != "incumbent_mcts":
+        raise ContractError("model leaf override belongs to the incumbent arm only")
+    require_model_hp_leaf_witness({"engine_mcts": engine}, model_leaf_override=model_leaf_override)
+    if model_leaf_override is not None:
+        rows = engine["model_leaf_override"]["native_invocations"]
+        if (sum(row["completed_iterations"] for row in rows) != telemetry["total_iterations"]
+                or sum(row["model_evals"] for row in rows) != telemetry["model_evals"]):
+            raise ContractError("model-tree HP work differs from actual native invocations")
     from ..engine_search import EngineSearchWitnessError, validate_native_joint_action_witness
     joint = engine.get("joint_actions")
     if (not isinstance(joint, Mapping)

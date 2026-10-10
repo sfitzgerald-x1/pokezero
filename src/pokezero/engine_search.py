@@ -162,6 +162,49 @@ def validate_native_joint_action_witness(report: Mapping[str, Any]) -> dict[str,
     return dict(witness)
 
 
+def validate_native_hp_leaf_witness(report: Mapping[str, Any]) -> None:
+    """HP on the model tree must be witnessed, never inferred from a config."""
+    if (report.get("model_leaf_override") != "hp_fraction"
+            or report.get("hp_leaf_value_frame") != "side_one_absolute"
+            or report.get("hp_leaf_model_forwards_retained") is not True
+            or any(type(report.get(key)) is not int or report[key] < 0
+                   for key in ("hp_leaf_rows_priced", "model_evals", "iterations"))
+            or report["hp_leaf_rows_priced"] > report["model_evals"]
+            or "rollout_leaf_mode" in report):
+        raise EngineSearchWitnessError("native model-tree HP leaf witness missing or malformed")
+
+
+def require_model_hp_leaf_witness(metadata: Mapping[str, Any], *, model_leaf_override: str | None) -> None:
+    witness = metadata.get("engine_mcts", {}).get("model_leaf_override")
+    if model_leaf_override is None:
+        if witness is not None:
+            raise EngineSearchWitnessError("unrequested model-tree HP leaf witness")
+        return
+    if (model_leaf_override != "hp_fraction" or not isinstance(witness, Mapping)
+            or witness.get("schema") != "pokezero.model-tree-hp-leaf.v1"
+            or witness.get("mode") != "hp_fraction"
+            or witness.get("value_frame") != "side_one_absolute"
+            or witness.get("model_forwards_retained") is not True
+            or witness.get("scope") != "per_native_invocation_without_belief_reweighting"
+            or type(witness.get("hp_leaf_rows_priced")) is not int
+            or witness["hp_leaf_rows_priced"] < 0
+            or not isinstance(witness.get("native_invocations"), list)
+            or not witness["native_invocations"]):
+        raise EngineSearchWitnessError("model-tree HP leaf witness missing or malformed")
+    total = 0
+    for row in witness["native_invocations"]:
+        if (not isinstance(row, Mapping)
+                or any(type(row.get(key)) is not int or row[key] < 0 for key in (
+                    "world_seed", "completed_iterations", "model_evals", "hp_leaf_rows_priced"))
+                or not 0 <= row["world_seed"] < 2**64
+                or type(row.get("belief_multiplicity")) is not int or row["belief_multiplicity"] < 1
+                or row["hp_leaf_rows_priced"] > row["model_evals"]):
+            raise EngineSearchWitnessError("model-tree HP leaf invocation malformed")
+        total += row["hp_leaf_rows_priced"]
+    if total != witness["hp_leaf_rows_priced"]:
+        raise EngineSearchWitnessError("model-tree HP leaf work does not conserve")
+
+
 def policy_opponent_world_seed(config: Any, context: Any, record: Mapping[str, Any]) -> int:
     """Versioned deterministic stream split; consumes no decision/chance draws."""
     payload = json.dumps([
@@ -815,6 +858,10 @@ class EngineMctsConfig:
     #: It is deliberately separate from the replacement arm so a calibration
     #: probe cannot alter the tree whose frontier it claims to audit.
     rollout_leaf_shadow: bool = False
+    #: Explicit Phase A valuation-only ablation on the MODEL tree. None keeps
+    #: historical calls/reports unchanged. HP retains model forwards and priors;
+    #: it is not the separate hp_fraction or hp_fraction_crate search path.
+    model_leaf_override: str | None = None
     #: Damage-roll branching INSIDE rollouts. Independent of the search's own
     #: `branch_on_damage`: a rollout samples one outcome either way, so this only
     #: refines the sampled damage distribution.
@@ -987,6 +1034,13 @@ class EngineMctsConfig:
     fold_cross_check: bool = False
 
     def __post_init__(self) -> None:
+        if self.model_leaf_override is not None:
+            if (self.model_leaf_override != "hp_fraction" or self.leaf_eval != "model"
+                    or not self.model_priors or not self.strict_fallbacks
+                    or self.rollout_leaf_eval or self.rollout_leaf_shadow
+                    or self.policy_opponent or self.early_stop
+                    or self.depth_min is not None or self.worlds_min is not None):
+                raise ValueError("model_leaf_override requires explicit hp_fraction on the fixed strict model-prior tree, without rollout or policy-opponent seams.")
         if type(self.policy_opponent) is not bool:
             raise ValueError("policy_opponent must be a boolean.")
         if type(self.record_joint_actions) is not bool or (self.record_joint_actions and (
@@ -2736,7 +2790,8 @@ def native_search_args(
     # independent `if`s.
     rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
     rollout_leaf_shadow = bool(getattr(config, "rollout_leaf_shadow", False))
-    rollout_seam_enabled = rollout_leaf_eval or rollout_leaf_shadow
+    model_leaf_override = getattr(config, "model_leaf_override", None)
+    rollout_seam_enabled = rollout_leaf_eval or rollout_leaf_shadow or model_leaf_override is not None
     if time_budget_ms is not None and time_budget_ms <= 0:
         raise ValueError("time_budget_ms must be positive when passed to native search.")
     if (
@@ -2798,6 +2853,8 @@ def native_search_args(
                 (
                     "rollout"
                     if rollout_leaf_eval
+                    else model_leaf_override
+                    if model_leaf_override is not None
                     else "model_value_shadow_rollout"
                     if rollout_leaf_shadow
                     else None
@@ -6279,6 +6336,8 @@ class EngineMctsPolicy:
         # the answer must survive a run that somehow mixed two.
         rollout_leaf_eval = bool(getattr(config, "rollout_leaf_eval", False))
         rollout_leaf_shadow = bool(getattr(config, "rollout_leaf_shadow", False))
+        model_leaf_override = getattr(config, "model_leaf_override", None)
+        hp_leaf_invocations: list[dict[str, Any]] = []
         rollout_ledger: Counter[str] = Counter()
         rollout_modes: Counter[str] = Counter()
         model_rollout_shadow_reports: list[Mapping[str, Any]] = []
@@ -7009,6 +7068,15 @@ class EngineMctsPolicy:
                     field_name,
                     getattr(self.stats, field_name) + int(report.get(field_name) or 0),
                 )
+            if model_leaf_override is not None:
+                validate_native_hp_leaf_witness(report)
+                hp_leaf_invocations.append(dict(world_seed=record["seed"],
+                    belief_multiplicity=weight,
+                    completed_iterations=int(report["iterations"]),
+                    model_evals=int(report["model_evals"]),
+                    hp_leaf_rows_priced=report["hp_leaf_rows_priced"]))
+            elif "model_leaf_override" in report:
+                raise EngineSearchWitnessError("unrequested native model leaf override")
             if no_completed_batch:
                 # The native core may have completed root-prior work before it
                 # reached the deadline seam, even though it completed no full
@@ -7717,6 +7785,14 @@ class EngineMctsPolicy:
         metadata = {
             "engine_mcts": {
                 "leaf_eval": "model",
+                **({"model_leaf_override": {
+                    "schema": "pokezero.model-tree-hp-leaf.v1",
+                    "mode": "hp_fraction", "value_frame": "side_one_absolute",
+                    "model_forwards_retained": True,
+                    "scope": "per_native_invocation_without_belief_reweighting",
+                    "native_invocations": hp_leaf_invocations,
+                    "hp_leaf_rows_priced": sum(r["hp_leaf_rows_priced"] for r in hp_leaf_invocations),
+                }} if model_leaf_override is not None else {}),
                 **({"joint_actions": {
                     "scope": "per_native_invocation_without_belief_reweighting",
                     "native_invocations": joint_action_invocations,
@@ -7809,6 +7885,7 @@ class EngineMctsPolicy:
         # which the measurement could be recovered, because `run_world`'s reports go
         # out of scope with this frame.
         require_rollout_leaf_witness(metadata, rollout_leaf_eval=rollout_leaf_eval)
+        require_model_hp_leaf_witness(metadata, model_leaf_override=model_leaf_override)
         return PolicyDecision(
             action_index=action_index,
             policy_id=self.policy_id,

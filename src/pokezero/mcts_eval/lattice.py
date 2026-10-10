@@ -303,6 +303,7 @@ class _LiveEngineTimingDecider:
         policy_opponent: bool = False,
         policy_opponent_seed: int | None = None,
         record_joint_actions: bool = False,
+        model_leaf_override: str | None = None,
         rollout_leaf_eval: bool = False,
         rollout_count: int = 32,
         rollout_max_plies: int = 200,
@@ -318,6 +319,9 @@ class _LiveEngineTimingDecider:
         from ..randbat import load_gen3_randbat_source_cached
 
         opponent_kwargs = _policy_opponent_config_kwargs(policy_opponent, policy_opponent_seed)
+        if model_leaf_override not in (None, "hp_fraction") or (model_leaf_override is not None
+                and (policy_opponent or rollout_leaf_eval or not model_priors or not record_joint_actions)):
+            raise ValueError("model leaf override requires explicit strict incumbent HP valuation")
         if policy_opponent and (not model_priors or use_opponent_priors or rollout_leaf_eval):
             raise ValueError("policy opponent profile requires subject priors, no auxiliary opponent priors or rollout leaves")
         if model_decision_time_ms is not None and model_decision_time_ms <= 0:
@@ -362,6 +366,7 @@ class _LiveEngineTimingDecider:
         # default replay contract.
         self._override_telemetry = override_telemetry
         self._record_joint_actions = record_joint_actions
+        self._model_leaf_override = model_leaf_override
         self._policy_opponent_kwargs = {**opponent_kwargs,
             **({"strict_fallbacks": True} if record_joint_actions else {})}
         # The source-root leaf ablation uses the existing model-prior rollout
@@ -426,6 +431,7 @@ class _LiveEngineTimingDecider:
                 use_opponent_priors=self._use_opponent_priors,
                 override_telemetry=self._override_telemetry,
                 record_joint_actions=getattr(self, "_record_joint_actions", False),
+                model_leaf_override=getattr(self, "_model_leaf_override", None),
                 early_stop=False,
                 model_decision_time_ms=self._model_decision_time_ms,
                 model_native_batch_guard_ms=self._model_native_batch_guard_ms,

@@ -959,8 +959,8 @@ jobs:
             tests.test_foulplay_budget_calibration \
             tests.test_battle_bridge_boundary_requests -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 381 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 381 tests"
+          if ! grep -qE 'Ran 388 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter, HP model-tree leaves, V1 conversion, and calibration suite did not run all 388 tests"
             exit 1
           fi
           rollout_leaf_skip_status=0
@@ -1042,9 +1042,9 @@ jobs:
             tests.test_search_over_raw_ledger tests.test_prepare_search_over_raw \
             tests.test_search_over_raw_adapters tests.test_search_over_raw_opening \
             tests.test_search_over_raw_archive tests.test_search_over_raw_leaves \
-            tests.test_search_over_raw_oracle -v 2>&1 \
+            tests.test_search_over_raw_oracle tests.test_model_tree_hp_leaf_contract -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 115 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 127 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"

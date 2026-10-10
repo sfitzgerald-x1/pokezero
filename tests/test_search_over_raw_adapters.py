@@ -42,7 +42,7 @@ class FakeEvaluator(ChampionEvaluator):
 class AdapterContractTests(unittest.TestCase):
     def test_unsupported_oracle_and_leaves_fail_before_runtime_construction(self):
         for arm, belief, leaf in [("reference", "oracle", "model"),
-                ("incumbent", "public", "hp_fraction"), ("incumbent", "public", "raw_rollout")]:
+                ("incumbent", "public", "raw_rollout")]:
             with self.assertRaisesRegex(ValueError, "adapters remain required"):
                 PublicModelSearchAdapter(SearchConfiguration(arm, belief, leaf, workers=20 if arm == "reference" else 1),
                     checkpoint_contract=None, showdown_root="")
@@ -86,6 +86,25 @@ class AdapterContractTests(unittest.TestCase):
                     self.assertEqual(adapter.runtime_configuration["reference_leaf"]["priors"], "unchanged_champion")
                 identities.add(adapter.runtime_sha256)
         self.assertEqual(len(identities), 3)
+
+    def test_incumbent_hp_uses_the_explicit_model_tree_hook_and_distinct_identity(self):
+        contract = SimpleNamespace(checkpoint_path="weights", checkpoint_sha256=SHA,
+            showdown_source_sha256="source")
+        from unittest.mock import Mock
+        identities = []
+        for leaf in ("model", "hp_fraction"):
+            decider = Mock()
+            with patch("pokezero.mcts_eval.search_over_raw_adapters._incumbent_runtime",
+                    return_value=(decider, Mock(), "config")) as runtime:
+                adapter = PublicModelSearchAdapter(SearchConfiguration("incumbent", leaf=leaf),
+                    checkpoint_contract=contract, showdown_root="showdown")
+                self.addCleanup(adapter.close)
+                self.assertEqual(runtime.call_args.kwargs, {} if leaf == "model" else {"leaf": leaf})
+                identities.append(adapter.runtime_sha256)
+                if leaf == "hp_fraction":
+                    self.assertEqual(adapter.runtime_configuration["incumbent_leaf"]["tree"],
+                        "unchanged_encoded_model_tree")
+        self.assertEqual(len(set(identities)), 2)
 
     def test_reference_receipt_reconciles_new_work(self):
         validate_reference_work(work())

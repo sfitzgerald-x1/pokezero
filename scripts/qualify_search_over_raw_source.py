@@ -21,6 +21,8 @@ LEAF_SCHEMA = "pokezero.search-over-raw.reference-leaf-qualification.v1"
 LEAF_NAMESPACE = "38e3b8e9-26bf-4f8a-aa2e-6f196ea3079f"
 ORACLE_SCHEMA = "pokezero.search-over-raw.team-oracle-qualification.v1"
 ORACLE_NAMESPACE = "f0d75db8-9d7e-45bf-a63f-a6faacb8d263"
+INCUMBENT_HP_SCHEMA = "pokezero.search-over-raw.incumbent-hp-qualification.v1"
+INCUMBENT_HP_NAMESPACE = "d0e01df6-a758-44dc-b4fd-6443c8e5f7aa"
 
 
 def configuration_key(configuration):
@@ -28,10 +30,10 @@ def configuration_key(configuration):
     return key if configuration.leaf == "model" else key + "-" + configuration.leaf
 
 
-def qualification_configurations(seconds, reference_leaves=False, oracle=False):
+def qualification_configurations(seconds, reference_leaves=False, oracle=False, incumbent_hp=False):
     require(type(seconds) in (int, float) and seconds in (1., 3., 10.)
-        and type(reference_leaves) is bool and type(oracle) is bool
-        and not (reference_leaves and oracle), "undeclared qualification budget or mode")
+        and all(type(mode) is bool for mode in (reference_leaves, oracle, incumbent_hp))
+        and sum((reference_leaves, oracle, incumbent_hp)) <= 1, "undeclared qualification budget or mode")
     configs = [SearchConfiguration(arm, seconds=seconds, workers=20 if arm == "reference" else 1)
         for arm in ARMS]
     if reference_leaves:
@@ -41,13 +43,18 @@ def qualification_configurations(seconds, reference_leaves=False, oracle=False):
         require(seconds == 10., "oracle qualification requires the declared ten-second budget")
         configs += [replace(configs[1], belief="oracle"), replace(configs[2], belief="oracle")]
         configs += [replace(configs[-1], leaf=leaf) for leaf in ("hp_fraction", "raw_rollout")]
+    if incumbent_hp:
+        require(seconds == 10., "incumbent HP qualification requires the declared ten-second budget")
+        configs += [replace(configs[1], leaf="hp_fraction"), replace(configs[1], belief="oracle"),
+            replace(configs[1], belief="oracle", leaf="hp_fraction")]
     return configs
 
 
-def engineering_contract(reference_leaves=False, oracle=False):
-    require(type(reference_leaves) is bool and type(oracle) is bool and not (reference_leaves and oracle),
+def engineering_contract(reference_leaves=False, oracle=False, incumbent_hp=False):
+    require(all(type(mode) is bool for mode in (reference_leaves, oracle, incumbent_hp))
+        and sum((reference_leaves, oracle, incumbent_hp)) <= 1,
         "undeclared qualification mode")
-    result = dict(namespace=ORACLE_NAMESPACE if oracle else LEAF_NAMESPACE if reference_leaves else NAMESPACE,
+    result = dict(namespace=INCUMBENT_HP_NAMESPACE if incumbent_hp else ORACLE_NAMESPACE if oracle else LEAF_NAMESPACE if reference_leaves else NAMESPACE,
         candidate_seat="p1", exclude_opening_requests=True,
         panels={"excluded": dict(seeds=[FIXTURE_SEED], root_slots=[
             dict(root_id=f"excluded:{FIXTURE_SEED}:{i}", source_seed=FIXTURE_SEED, root_slot=i)
@@ -72,14 +79,22 @@ def engineering_contract(reference_leaves=False, oracle=False):
             tree="unchanged_per_arm", priors="unchanged_champion",
             deployment_authorized=False, sampled_fallback="refusal",
             raw_rollout_cap=250, pool_lifetime="one_selection_sequential_twenty_worker_pools")
+    if incumbent_hp:
+        result["incumbent_hp_ablation"] = dict(leaves=["model", "hp_fraction"],
+            beliefs=["public", "original_opponent_team_only"],
+            tree="unchanged_encoded_model_tree", priors="unchanged_champion",
+            model_forwards="retained", value_frame="side_one_absolute",
+            allocation=dict(depth=6, sims=4096, batch=16, worlds=4, workers=1),
+            oracle_deployable=False, comparison="excluded_engineering_only",
+            pool_lifetime="one_selection_sequential_nonraw_adapters")
     return result
 
 
-def register(*, output, reference_leaves=False, oracle=False, **kwargs):
+def register(*, output, reference_leaves=False, oracle=False, incumbent_hp=False, **kwargs):
     registration = prepare_binding(**kwargs)
-    registration.update(schema=ORACLE_SCHEMA if oracle else LEAF_SCHEMA if reference_leaves else SCHEMA,
-        configurations=[asdict(c) for c in qualification_configurations(kwargs.get("seconds", 1.), reference_leaves, oracle)],
-        source_contract=engineering_contract(reference_leaves, oracle),
+    registration.update(schema=INCUMBENT_HP_SCHEMA if incumbent_hp else ORACLE_SCHEMA if oracle else LEAF_SCHEMA if reference_leaves else SCHEMA,
+        configurations=[asdict(c) for c in qualification_configurations(kwargs.get("seconds", 1.), reference_leaves, oracle, incumbent_hp)],
+        source_contract=engineering_contract(reference_leaves, oracle, incumbent_hp),
         scope="one excluded raw source game; two non-opening roots; eight continuations per unique selected action")
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -90,8 +105,9 @@ def register(*, output, reference_leaves=False, oracle=False, **kwargs):
 def claim_attempt(output, registration):
     reference_leaves = registration["schema"] == LEAF_SCHEMA
     oracle = registration["schema"] == ORACLE_SCHEMA
-    require(registration["schema"] in (SCHEMA, LEAF_SCHEMA, ORACLE_SCHEMA)
-        and registration["source_contract"] == engineering_contract(reference_leaves, oracle)
+    incumbent_hp = registration["schema"] == INCUMBENT_HP_SCHEMA
+    require(registration["schema"] in (SCHEMA, LEAF_SCHEMA, ORACLE_SCHEMA, INCUMBENT_HP_SCHEMA)
+        and registration["source_contract"] == engineering_contract(reference_leaves, oracle, incumbent_hp)
         and registration["fixture_seed"] == FIXTURE_SEED
         and registration["seeds"] == list(ENGINEERING_EXCLUDED_SEEDS)
         and registration["candidate_seat"] == "p1"
@@ -99,7 +115,7 @@ def claim_attempt(output, registration):
         and registration["scientific_strength_evidence"] is False,
         "qualification changed or admits scientific outcomes")
     configs = [SearchConfiguration(**c) for c in registration["configurations"]]
-    require(bool(configs) and configs == qualification_configurations(configs[0].seconds, reference_leaves, oracle),
+    require(bool(configs) and configs == qualification_configurations(configs[0].seconds, reference_leaves, oracle, incumbent_hp),
         "qualification arm/resource drift")
     save_new(output / "attempt.json", dict(status="CLAIMED_BEFORE_RUNTIME",
         registration_sha256=digest(registration), retry_authorized=False))
@@ -177,7 +193,7 @@ def run(output):
         for root in source["roots"]:
             context, pending, snapshot = archive.selected(root)
             oracle_payload = None
-            if registration["schema"] == ORACLE_SCHEMA:
+            if registration["schema"] in (ORACLE_SCHEMA, INCUMBENT_HP_SCHEMA):
                 from pokezero.mcts_eval.paper_reference_runtime import PublicRootRequest
                 from pokezero.mcts_eval.search_over_raw_oracle import TeamOracle
                 from pokezero.randbat import load_gen3_randbat_source_cached
@@ -204,7 +220,7 @@ def run(output):
                         showdown_root=showdown, evaluator=evaluator if cfg.arm == "raw" else None,
                         reference_factory=factory if cfg.arm == "reference" else None,
                         initial_dispatch_workers=registration["initial_dispatch_workers"], **diagnostic_kwargs)
-                    construction_dir = root_dir if registration["schema"] in (LEAF_SCHEMA, ORACLE_SCHEMA) else output
+                    construction_dir = root_dir if registration["schema"] in (LEAF_SCHEMA, ORACLE_SCHEMA, INCUMBENT_HP_SCHEMA) else output
                     save_new(construction_dir / (key + "-construction.json"),
                         dict(seconds=time.perf_counter()-began, runtime_configuration=adapters[key].runtime_configuration))
                 selected = adapters[key].select(context, root_id=root_id + ":" + key,
@@ -213,7 +229,7 @@ def run(output):
                 save_new(root_dir / (key + "-selected.json"), selected)
                 print(json.dumps(dict(stage=stage, action=selected["action"], seconds=selected["elapsed_seconds"])), flush=True)
                 if (registration["schema"] == LEAF_SCHEMA and cfg.arm == "reference"
-                        or registration["schema"] == ORACLE_SCHEMA and cfg.arm != "raw"):
+                        or registration["schema"] in (ORACLE_SCHEMA, INCUMBENT_HP_SCHEMA) and cfg.arm != "raw"):
                     # Do not keep three twenty-worker pools resident at once.
                     # Construction is separately measured; each independent
                     # root selection still runs the genuine twenty-worker arm.
@@ -256,7 +272,8 @@ def run(output):
         env.close()
         env = None
         verify_inputs(registration)
-        save_new(output / "terminal.json", dict(status=("COMPLETE_TEAM_ORACLE_TECHNICAL_QUALIFICATION_ONLY"
+        save_new(output / "terminal.json", dict(status=("COMPLETE_INCUMBENT_HP_TECHNICAL_QUALIFICATION_ONLY"
+            if registration["schema"] == INCUMBENT_HP_SCHEMA else "COMPLETE_TEAM_ORACLE_TECHNICAL_QUALIFICATION_ONLY"
             if registration["schema"] == ORACLE_SCHEMA else "COMPLETE_REFERENCE_LEAF_TECHNICAL_QUALIFICATION_ONLY"
             if registration["schema"] == LEAF_SCHEMA else "COMPLETE_SOURCE_CONTINUATION_TECHNICAL_QUALIFICATION_ONLY"),
             registration_sha256=digest(registration), roots=completed_roots,
@@ -296,6 +313,8 @@ def main(argv=None):
         help="separate excluded ten-second model/HP/raw-terminal reference leaf qualification")
     prep.add_argument("--oracle", action="store_true",
         help="separate excluded team-only oracle diagnostics for both arms and reference alternative leaves")
+    prep.add_argument("--incumbent-hp", action="store_true",
+        help="separate excluded model-tree incumbent HP valuation under public and team-only oracle beliefs")
     args = vars(parser.parse_args(argv))
     command = args.pop("command")
     if command == "run":
