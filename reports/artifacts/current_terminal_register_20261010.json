@@ -660,7 +660,7 @@
     "reports/artifacts/current_terminal_register_20261010.json"
   ],
   "source_sha256": {
-    ".github/workflows/engine-fidelity-gates.yml": "8df94720bf389c7d8a7d922e77efc71f8b3d00edd3aa10c09890e7e46832726a",
+    ".github/workflows/engine-fidelity-gates.yml": "227260a87deb5cfdbd5752c969fd1aa8f9fa28ec4f5557f6215c53cb68530eb3",
     "reports/c138_known_gaps_ledger.md": "0a453f65c88708bc33801c3ba96360b7df52fbf2498a5ccc1951a76ff9adf83c",
     "reports/c155_terminal_disposition_register.md": "be65dff053da8cb41b9e7ece66cdd94afacc8dad6c1915a72372ce367893193c",
     "rust/pokezero-search/Cargo.lock": "e45863fea7c6a11b4c2cc4234a859656d9aaaac58afd1b1f415e30351cc80435",

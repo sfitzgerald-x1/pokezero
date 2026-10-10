@@ -179,7 +179,7 @@ def compare_sampled_teams(draws, *, truth, information_key):
         unresolved_worlds=len(draws)-validated, member_denominator=denominator,
         agreement_intervals={field: [v / denominator for v in interval] if denominator else [0., 1.]
             for field, interval in totals.items()},
-        estimand="original opponent species/moves/ability/item/level in actual attempted reference worlds",
+        estimand="original opponent species/moves/ability/item/level in actual attempted worlds",
         exact_nature_gender_spread_identity_established=False,
         root_member_weighting="six truth members per attempted world; absent species is disagreement",
         dynamic_hidden_state_fidelity=False, posterior_calibration_established=False,
@@ -198,12 +198,38 @@ def validate_members(rows):
 
 class _BeliefDiagnosticAdapterMixin:
     def __init__(self, configuration, **kwargs):
-        require(configuration.arm == "reference", "incumbent belief instrumentation remains required")
+        require(configuration.arm in {"incumbent", "reference"}, "search diagnostic arm required")
         super().__init__(configuration, **kwargs)
         self.runtime_configuration["belief_diagnostics"] = dict(schema=SCHEMA,
             scope="actual_materialized_original_teams", truth_sent_to_public_worker=False,
             instrumentation_can_change_deadlines=True, qualifies_uninstrumented_runtime=False)
         self.runtime_sha256 = digest(self.runtime_configuration)
+
+    def select(self, context, **kwargs):
+        self._belief_recorder = None
+        try:
+            return super().select(context, **kwargs)
+        except BaseException:
+            if self._belief_recorder is not None and self.last_failure is not None:
+                self.last_failure["attempted_belief_evidence"] = self._belief_recorder.failure_evidence(
+                    self._native.stats.worlds_attempted - self._belief_before[0],
+                    self._native.stats.worlds_constructed - self._belief_before[1])
+            raise
+        finally:
+            if self._belief_recorder is not None:
+                if self._native._world_attempt_observer == self._belief_recorder.attempt:
+                    self._native._world_attempt_observer = None
+                if self._native._world_observer == self._belief_recorder.constructed:
+                    self._native._world_observer = None
+
+    def _prepare_incumbent(self, request):
+        super()._prepare_incumbent(request)
+        require(self._native._world_observer is None
+            and self._native._world_attempt_observer is None, "existing diagnostic hook cannot be overwritten")
+        self._belief_recorder = IncumbentBeliefRecorder(request)
+        self._native._world_attempt_observer = self._belief_recorder.attempt
+        self._native._world_observer = self._belief_recorder.constructed
+        self._belief_before = (self._native.stats.worlds_attempted, self._native.stats.worlds_constructed)
 
     def _reference_worker_factory(self, factory):
         return BeliefDiagnosticWorkerFactory(super()._reference_worker_factory(factory))
@@ -211,6 +237,12 @@ class _BeliefDiagnosticAdapterMixin:
     def _selection_evidence(self, evidence, request):
         from .search_over_raw_oracle import public_root_binding
         binding = public_root_binding(request)
+        if self.configuration.arm == "incumbent":
+            attempted = self._native.stats.worlds_attempted - self._belief_before[0]
+            constructed = self._native.stats.worlds_constructed - self._belief_before[1]
+            draws = self._belief_recorder.finish(attempted, constructed)
+            return super()._selection_evidence({**evidence, "belief_draws": draws,
+                "belief_work": dict(attempted=attempted, constructed=constructed)}, request)
         for receipt in evidence["worker_receipts"]:
             for row in receipt["evidence"]["draws"]:
                 diagnostic = row.get("sampled_original_team")
@@ -225,6 +257,89 @@ class _BeliefDiagnosticAdapterMixin:
                 else:
                     require(diagnostic is None, "unvalidated world carries an agreement measurement")
         return super()._selection_evidence(evidence, request)
+
+
+class IncumbentBeliefRecorder:
+    """Actual packed overrides, joined with actual constructed worlds only.
+
+    Hook errors are retained despite the engine's telemetry exception policy.
+    Missing callback/counter disagreement refuses the diagnostic; failed world
+    construction remains uncertain. No sampler, RNG, model or snapshot calls.
+    """
+    def __init__(self, request):
+        from .search_over_raw_oracle import public_root_binding
+        self.binding = public_root_binding(request)
+        self.subject = request.state.player_id
+        self.source = request.set_source_hash
+        self.pending_transition = request.pending_transition
+        from .paper_reference_showdown import decision_state
+        self.information_key = decision_state(request.observation, player=self.subject).key.hex()
+        self.draws, self.errors = [], []
+
+    def attempt(self, context, ordinal, override):
+        from ..engine_world import unpack_team
+        from .search_over_raw_oracle import public_root_binding
+        from .paper_reference_runtime import PublicRootRequest
+        import hashlib
+        row = dict(ordinal=ordinal, status="STARTED")
+        self.draws.append(row)
+        try:
+            require(ordinal == len(self.draws)-1 and context.player_id == self.subject,
+                "incumbent attempt ordinal/subject drift")
+            current = PublicRootRequest.capture(context.public_materialization_state, context.observation,
+                pending_transition=self.pending_transition)
+            require(public_root_binding(current) == self.binding, "incumbent attempt public root drift")
+            if override is None:
+                row["status"] = "REFUSED"
+                return
+            opponent = "p2" if self.subject == "p1" else "p1"
+            packed = override.player_teams[opponent]
+            members = team_fingerprints(unpack_team(packed))
+            original = hashlib.sha256(packed.encode()).hexdigest()
+            row.update(packed_team_sha256=original, sampled_team_origin=dict(schema=SCHEMA,
+                original_team_sha256=original, members=members, members_sha256=digest(members)))
+        except Exception as error:
+            self.errors.append(type(error).__name__)
+            raise
+
+    def constructed(self, context, world, state):
+        try:
+            from ..randbat import canonical_gen3_randbat_species_id
+            require(bool(self.draws) and context.player_id == self.subject, "world without attempted draw")
+            row = self.draws[-1]
+            origin = selected_team_origin(row)
+            opponent = "p2" if self.subject == "p1" else "p1"
+            require(row["status"] == "STARTED" and sorted(canonical_gen3_randbat_species_id(s)
+                for s in world.party_species[opponent])
+                == [r["species"] for r in origin["members"]], "constructed world/actual draw drift")
+            row.update(status="ROOT_VALIDATED", sampled_original_team=dict(schema=SCHEMA,
+                role="HYPOTHETICAL_DRAW_ONLY", root_binding=self.binding, subject=self.subject,
+                set_source_hash=self.source, information_key=self.information_key,
+                members=origin["members"], members_sha256=origin["members_sha256"],
+                original_team_sha256=origin["original_team_sha256"],
+                measurement_scope="original_species_moves_ability_item_level",
+                instrumentation_can_change_deadlines=True, qualifies_uninstrumented_runtime=False))
+        except Exception as error:
+            self.errors.append(type(error).__name__)
+            raise
+
+    def finish(self, attempted, constructed):
+        require(not self.errors and type(attempted) is int and attempted == len(self.draws)
+            and type(constructed) is int and constructed == sum(
+                r["status"] == "ROOT_VALIDATED" for r in self.draws),
+            "incumbent diagnostic callback/counter reconciliation failed")
+        return self.draws
+
+    def failure_evidence(self, attempted, constructed):
+        observed = {r["ordinal"] for r in self.draws}
+        return dict(schema="pokezero.search-over-raw.incumbent-attempt-ledger.v1",
+            root_binding=self.binding, subject=self.subject, set_source_hash=self.source,
+            information_key=self.information_key, observed_draws=self.draws,
+            callback_error_types=list(self.errors), attempted_counter=attempted,
+            constructed_counter=constructed, unobserved_attempt_ordinals=[i for i in range(attempted)
+                if i not in observed], diagnostic_qualified=False,
+            uncertainty="missing or unreconciled observations remain unknown; not agreement evidence",
+            source_truth_transported=False)
 
 
 from .search_over_raw_adapters import PublicModelSearchAdapter

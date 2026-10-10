@@ -201,9 +201,9 @@ class BeliefDiagnosticsTests(unittest.TestCase):
         self.assertNotIn(b"opponent_team", pickle.dumps(factory))
         with self.assertRaises(ValueError): BeliefDiagnosticWorkerFactory(object())
 
-    def test_incumbent_support_not_claimed(self):
-        with self.assertRaisesRegex(ValueError, "incumbent belief instrumentation remains required"):
-            PublicBeliefDiagnosticSearchAdapter(SearchConfiguration("incumbent"))
+    def test_raw_is_not_a_belief_search_diagnostic(self):
+        with self.assertRaisesRegex(ValueError, "search diagnostic arm required"):
+            PublicBeliefDiagnosticSearchAdapter(SearchConfiguration("raw"))
 
     def test_actual_factory_direct_path_preserves_rng_world_and_sampler(self):
         from pokezero.mcts_eval.paper_reference_sampling import HiddenTeamDraw
