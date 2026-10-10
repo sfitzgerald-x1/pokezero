@@ -1017,7 +1017,7 @@ jobs:
             cargo test --release --features model --lib raw_policy_leaf::tests \
             --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/raw-policy-leaf.log
-          grep -qE '^test result: ok\. 6 passed; 0 failed' /tmp/raw-policy-leaf.log
+          grep -qE '^test result: ok\. 16 passed; 0 failed' /tmp/raw-policy-leaf.log
           LIBTORCH_USE_PYTORCH=1 \
             cargo test --release --features model --lib tree::tests::cancellation_ \
             --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
@@ -1063,7 +1063,7 @@ jobs:
             tests.test_search_over_raw_oracle tests.test_model_tree_hp_leaf_contract \
             tests.test_model_tree_raw_leaf_contract -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 145 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 146 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"

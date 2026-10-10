@@ -1793,6 +1793,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             "plies": raw_stats.plies,
                             "provider_calls": raw_stats.provider_calls,
                             "policy_evals": raw_stats.policy_evals,
+                            "choice_attempts": raw_stats.choice_attempts,
+                            "trapped_switch_rejections": raw_stats.trapped_switch_rejections,
+                            "private_redecisions": raw_stats.private_redecisions,
                         }).to_string();
                         Python::attach(|py| { let _ = error.value(py).setattr("raw_policy_leaf_diagnostic", witness); });
                         error
@@ -2041,6 +2044,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             let witness = serde_json::json!({
                 "model_leaf_override": "raw_policy_terminal",
                 "raw_leaf_policy": "both_seats_own_raw_masked_argmax",
+                "raw_leaf_request_protocol": "private_choice_attempt_redecision_v1",
                 "raw_leaf_value_frame": "side_one_absolute",
                 "raw_leaf_model_forwards_retained": true,
                 "raw_leaf_max_plies": raw.max_plies,
@@ -2051,6 +2055,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 "raw_leaf_plies": raw_stats.plies,
                 "raw_leaf_provider_calls": raw_stats.provider_calls,
                 "raw_leaf_policy_evals": raw_stats.policy_evals,
+                "raw_leaf_choice_attempts": raw_stats.choice_attempts,
+                "raw_leaf_trapped_switch_rejections": raw_stats.trapped_switch_rejections,
+                "raw_leaf_private_redecisions": raw_stats.private_redecisions,
                 "raw_leaf_policy_s": raw_stats.policy_nanos as f64 / 1e9,
                 "raw_leaf_cancelled_traversals": raw_stats.cancelled_traversals,
                 "raw_leaf_cancelled_rows": raw_stats.cancelled_rows,

@@ -211,7 +211,10 @@ _CORPUS_TREES = ("reports", "docs")
 # is held to its recorded source bytes by its dedicated mutation-evidence guard.
 # 409 -> 410: one distinct current-source citation supplement binds the unchanged
 # C153/C154 snapshots; no historical pool, measurement, or verdict is rewritten.
-_EXPECTED_COUNTER_ARTIFACTS = 410
+# 410 -> 411: preserve all 410 prior JSON bytes, including the first current
+# supplement; retain the pre-review raw-redecision binding and add the distinct
+# reviewed binding after the final witness-conservation correction.
+_EXPECTED_COUNTER_ARTIFACTS = 412
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

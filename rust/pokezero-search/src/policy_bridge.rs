@@ -15,6 +15,7 @@ use serde_json::json;
 
 use crate::events::EventContext;
 use crate::policy_opponent::ActionDistribution;
+use crate::policy_request::PrivateTrapObservation;
 use crate::tree::DecisionNode;
 
 type BranchKey = (usize, usize);
@@ -243,7 +244,20 @@ impl PolicyOpponentBridge {
         state: &State,
         node: &DecisionNode,
         parent: Option<BranchKey>,
+        ctx: &EventContext,
+    ) -> PyResult<ActionDistribution> {
+        self.provide_with_trap(state, node, parent, ctx, PrivateTrapObservation::None)
+    }
+
+    /// Private trapping observations never enter public prefix/PP ledgers.
+    /// Normal policy-opponent search retains its original strict native surface.
+    pub(crate) fn provide_with_trap(
+        &self,
+        state: &State,
+        node: &DecisionNode,
+        parent: Option<BranchKey>,
         _ctx: &EventContext,
+        trap_observation: PrivateTrapObservation,
     ) -> PyResult<ActionDistribution> {
         let started = Instant::now();
         let result = (|| {
@@ -313,7 +327,7 @@ impl PolicyOpponentBridge {
             } else {
                 state.side_one.force_switch
             };
-            let bundle = crate::policy_request::sampled_side_request_with_pp(
+            let bundle = crate::policy_request::sampled_side_request_with_trap(
                 &own,
                 slot,
                 species,
@@ -323,6 +337,7 @@ impl PolicyOpponentBridge {
                 parent.is_none(),
                 opponent_replacing,
                 Some(&self.base_pp),
+                trap_observation,
             )
             .map_err(|error| {
                 Python::attach(|py| {

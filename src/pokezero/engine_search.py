@@ -209,6 +209,7 @@ RAW_LEAF_COUNTERS = (
     "raw_leaf_started", "raw_leaf_terminal", "raw_leaf_plies", "raw_leaf_provider_calls",
     "raw_leaf_policy_evals", "raw_leaf_cancelled_traversals", "raw_leaf_cancelled_rows",
     "raw_leaf_discarded_terminal_rows", "raw_leaf_cap_fallbacks",
+    "raw_leaf_choice_attempts", "raw_leaf_trapped_switch_rejections", "raw_leaf_private_redecisions",
 )
 
 
@@ -224,6 +225,7 @@ def validate_native_raw_leaf_witness(report: Mapping[str, Any], *, cap: int,
     """Terminal rows and cancelled reservations are distinct, unweighted work."""
     if (report.get("model_leaf_override") != "raw_policy_terminal"
             or report.get("raw_leaf_policy") != "both_seats_own_raw_masked_argmax"
+            or report.get("raw_leaf_request_protocol") != "private_choice_attempt_redecision_v1"
             or report.get("raw_leaf_value_frame") != "side_one_absolute"
             or report.get("raw_leaf_model_forwards_retained") is not True
             or report.get("raw_leaf_tree_counters_include_cancelled_work") is not True
@@ -246,6 +248,18 @@ def validate_native_raw_leaf_witness(report: Mapping[str, Any], *, cap: int,
             # however, cannot retain a backed-up terminal row.
             or (report["iterations"] == 0 and terminal != discarded)
             or report["raw_leaf_policy_evals"] > report["raw_leaf_provider_calls"]
+            or report["raw_leaf_choice_attempts"] != report["raw_leaf_provider_calls"]
+            # Every completed ply submitted both choices. Rejected switches
+            # dispatch one more provider; a cancelled unfinished row may have
+            # submitted zero, one or two initial choices, but never a full ply.
+            or report["raw_leaf_choice_attempts"] < 2 * report["raw_leaf_plies"] + report["raw_leaf_private_redecisions"]
+            or report["raw_leaf_choice_attempts"] > 2 * (report["raw_leaf_plies"] + started - terminal) + report["raw_leaf_private_redecisions"]
+            or not 0 <= report["raw_leaf_private_redecisions"] <= report["raw_leaf_trapped_switch_rejections"]
+            # Terminal rows have no unfinished request: already-terminal
+            # zero-ply rows cannot invent rejected switches or redecisions.
+            or report["raw_leaf_trapped_switch_rejections"] > 2 * (report["raw_leaf_plies"] + started - terminal)
+            or (report["raw_leaf_private_redecisions"] != report["raw_leaf_trapped_switch_rejections"]
+                and report.get("time_budget_exhausted") is not True)
             or report["raw_leaf_cap_fallbacks"] != 0
             or cancelled > report["model_evals"]
             or (cancelled > 0 and report["raw_leaf_cancelled_traversals"] == 0)
@@ -255,7 +269,8 @@ def validate_native_raw_leaf_witness(report: Mapping[str, Any], *, cap: int,
 
 
 def model_raw_leaf_witness(config: Any, invocations: list[dict[str, Any]]) -> dict[str, Any]:
-    return dict(schema="pokezero.model-tree-raw-leaf.v1", mode="raw_policy_terminal",
+    return dict(schema="pokezero.model-tree-raw-leaf.v2", mode="raw_policy_terminal",
+        request_protocol="private_choice_attempt_redecision_v1",
         value_frame="side_one_absolute", policy="both_seats_own_raw_masked_argmax",
         model_forwards_retained=True, scope="per_native_invocation_without_belief_reweighting",
         max_plies=config.rollout_max_plies, seed_root=config.rollout_seed,
@@ -269,7 +284,8 @@ def require_model_leaf_witness(metadata: Mapping[str, Any], *, model_leaf_overri
         require_model_hp_leaf_witness(metadata, model_leaf_override=model_leaf_override)
         return
     witness = metadata.get("engine_mcts", {}).get("model_leaf_override")
-    if (not isinstance(witness, Mapping) or witness.get("schema") != "pokezero.model-tree-raw-leaf.v1"
+    if (not isinstance(witness, Mapping) or witness.get("schema") != "pokezero.model-tree-raw-leaf.v2"
+            or witness.get("request_protocol") != "private_choice_attempt_redecision_v1"
             or witness.get("mode") != "raw_policy_terminal"
             or witness.get("value_frame") != "side_one_absolute"
             or witness.get("policy") != "both_seats_own_raw_masked_argmax"
@@ -7203,7 +7219,7 @@ class EngineMctsPolicy:
                     report={"time_budget_exhausted": report.get("time_budget_exhausted", False),
                         **{key: report[key] for key in (
                         *RAW_LEAF_COUNTERS, "iterations", "model_evals", "model_leaf_override",
-                        "raw_leaf_policy", "raw_leaf_value_frame", "raw_leaf_model_forwards_retained",
+                        "raw_leaf_policy", "raw_leaf_request_protocol", "raw_leaf_value_frame", "raw_leaf_model_forwards_retained",
                         "raw_leaf_tree_counters_include_cancelled_work", "raw_leaf_max_plies",
                         "raw_leaf_seed", "raw_leaf_branch_on_damage", "raw_leaf_policy_s")}}))
             elif model_leaf_override is not None:

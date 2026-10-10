@@ -29,11 +29,13 @@ def config(**changes):
 def report(seed=17, **changes):
     result = {key: 0 for key in RAW_LEAF_COUNTERS}
     result.update(model_leaf_override="raw_policy_terminal", raw_leaf_policy="both_seats_own_raw_masked_argmax",
+        raw_leaf_request_protocol="private_choice_attempt_redecision_v1",
         raw_leaf_value_frame="side_one_absolute", raw_leaf_model_forwards_retained=True,
         raw_leaf_tree_counters_include_cancelled_work=True, raw_leaf_max_plies=250,
         raw_leaf_seed=raw_policy_leaf_seed(config(), {"seed": seed}), raw_leaf_branch_on_damage=True,
         iterations=100, model_evals=25, raw_leaf_started=12, raw_leaf_terminal=12,
         raw_leaf_plies=30, raw_leaf_provider_calls=60, raw_leaf_policy_evals=40,
+        raw_leaf_choice_attempts=60,
         raw_leaf_policy_s=.02, time_budget_exhausted=False)
     result.update(changes)
     return result
@@ -98,6 +100,36 @@ class RawLeafContractTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(EngineSearchWitnessError):
                 validate_native_raw_leaf_witness({**good, **change}, cap=250,
                     seed=good["raw_leaf_seed"], branch_on_damage=True)
+
+    def test_private_redecision_work_is_versioned_and_cannot_be_erased(self):
+        terminal = report(iterations=1, model_evals=1, raw_leaf_started=1,
+            raw_leaf_terminal=1, raw_leaf_plies=0, raw_leaf_provider_calls=0,
+            raw_leaf_policy_evals=0, raw_leaf_choice_attempts=0)
+        validate_native_raw_leaf_witness(terminal, cap=250,
+            seed=terminal["raw_leaf_seed"], branch_on_damage=True)
+        phantom = {**terminal, "raw_leaf_choice_attempts": 2,
+            "raw_leaf_provider_calls": 2, "raw_leaf_trapped_switch_rejections": 2,
+            "raw_leaf_private_redecisions": 2}
+        with self.assertRaises(EngineSearchWitnessError):
+            validate_native_raw_leaf_witness(phantom, cap=250,
+                seed=phantom["raw_leaf_seed"], branch_on_damage=True)
+        good = report(raw_leaf_trapped_switch_rejections=2, raw_leaf_private_redecisions=2,
+            raw_leaf_choice_attempts=62, raw_leaf_provider_calls=62)
+        validate_native_raw_leaf_witness(good, cap=250, seed=good["raw_leaf_seed"], branch_on_damage=True)
+        for change in (dict(raw_leaf_choice_attempts=59), dict(raw_leaf_private_redecisions=3),
+                dict(raw_leaf_choice_attempts=60, raw_leaf_provider_calls=60),
+                dict(raw_leaf_choice_attempts=63, raw_leaf_provider_calls=63),
+                dict(raw_leaf_private_redecisions=1), dict(raw_leaf_trapped_switch_rejections=1000),
+                dict(raw_leaf_request_protocol="native_truth_mask"), dict(raw_leaf_private_redecisions=True)):
+            with self.subTest(change=change), self.assertRaises(EngineSearchWitnessError):
+                validate_native_raw_leaf_witness({**good, **change}, cap=250,
+                    seed=good["raw_leaf_seed"], branch_on_damage=True)
+        old = model_raw_leaf_witness(config(), [dict(world_seed=17, belief_multiplicity=1,
+            completed_iterations=100, model_evals=25, report=good)])
+        old["schema"] = "pokezero.model-tree-raw-leaf.v1"
+        with self.assertRaises(EngineSearchWitnessError):
+            require_model_leaf_witness({"engine_mcts": {"model_leaf_override": old}},
+                model_leaf_override="raw_policy_terminal")
 
     def test_aggregate_counts_compute_once_not_belief_multiplicity(self):
         r = report()
