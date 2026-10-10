@@ -124,7 +124,8 @@ class ReferenceLeafWorkerFactory:
     rollout_cap: int = ROLLOUT_CAP
 
     def __post_init__(self):
-        require(isinstance(self.base, ShowdownWorkerFactory) and self.leaf in {"hp_fraction", "raw_rollout"}
+        from .search_over_raw_oracle import OracleWorkerFactory
+        require(isinstance(self.base, (ShowdownWorkerFactory, OracleWorkerFactory)) and self.leaf in {"hp_fraction", "raw_rollout"}
             and self.rollout_cap == ROLLOUT_CAP, "unregistered reference leaf factory")
 
     def __call__(self, index):

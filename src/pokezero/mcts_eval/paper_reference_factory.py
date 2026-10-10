@@ -75,7 +75,7 @@ class PublicRootWorldFactory:
                  public_anchor_constraints: bool = False,
                  guide_anchor_genders: bool = False,
                  early_encore_potential: bool = False,
-                 collect_phase_timing: bool = False) -> None:
+                 collect_phase_timing: bool = False, diagnostic_oracle_team=None) -> None:
         if type(collect_phase_timing) is not bool:
             raise ReferenceRefusal('phase timing requires an explicit boolean opt-in')
         self.collect_phase_timing = collect_phase_timing
@@ -187,6 +187,9 @@ class PublicRootWorldFactory:
         self.sampler = PaperHiddenTeamSampler(env, set_source=set_source,
             allow_earlier_compatible_template=allow_earlier_compatible_template,
             max_known_set_draws=max_known_set_draws)
+        self.diagnostic_oracle_team = None
+        if diagnostic_oracle_team is not None:
+            self.install_diagnostic_oracle(diagnostic_oracle_team)
         self.active = False
         self.receipts: list[dict[str, Any]] = []
         self.sampling_deadline_at = None
@@ -199,6 +202,13 @@ class PublicRootWorldFactory:
                 self.constant_chance_plan = build_constant_chance_plan(self)
             if self.constant_chance_plan is None:
                 self.constant_chance_plan = build_staged_prefix_joint_plan(self)
+
+    def install_diagnostic_oracle(self, team):
+        from .search_over_raw_oracle import OracleTeamSampler
+        if getattr(self, 'active', False) or getattr(self, 'receipts', ()) or getattr(self, 'history_population', None):
+            raise ReferenceRefusal('cannot replace a sampled or retained belief with oracle truth')
+        self.sampler = OracleTeamSampler(team, self.set_source)
+        self.diagnostic_oracle_team = team
 
     def bind_sampling_deadline(self, deadline):
         if deadline is not None and (type(deadline) not in (int, float) or not math.isfinite(deadline)):
@@ -226,6 +236,10 @@ class PublicRootWorldFactory:
             raise ReferenceRefusal("warm reference world is still owned by another trajectory")
         self.active = True
         evidence: dict[str, Any] = {"ordinal": len(self.receipts), "status": "STARTED"}
+        if getattr(self, 'diagnostic_oracle_team', None) is not None:
+            from .search_over_raw_oracle import team_sha256
+            evidence.update(diagnostic_oracle_team_sha256=team_sha256(self.diagnostic_oracle_team),
+                information_scope="original_opponent_team_only")
         self.receipts.append(evidence)
         try:
             self.check_sampling_deadline()

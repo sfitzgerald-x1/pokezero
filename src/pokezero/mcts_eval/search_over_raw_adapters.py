@@ -72,14 +72,36 @@ class PublicModelSearchAdapter:
     It must not treat this object as scientific execution authorization.
     """
 
+    def _check_configuration(self, configuration):
+        require(configuration.belief == "public" and (configuration.leaf == "model"
+            or configuration.arm == "reference"),
+            "oracle and incumbent alternative-leaf adapters remain required")
+
+    def _reference_worker_factory(self, factory):
+        if self.configuration.leaf != "model":
+            from .search_over_raw_leaves import ReferenceLeafWorkerFactory
+            return ReferenceLeafWorkerFactory(factory, self.configuration.leaf)
+        return factory
+
+    def _diagnostic_request(self, request):
+        return request
+
+    def _prepare_incumbent(self, request):
+        require(getattr(self._native, "_fixed_override", None) is None,
+            "public incumbent contains an oracle override")
+
+    def _validate_diagnostic_work(self, measured):
+        pass
+
+    def _selection_evidence(self, evidence, request):
+        return evidence
+
     def __init__(self, configuration: SearchConfiguration, *, checkpoint_contract,
                  showdown_root: str, evaluator=None, reference_factory=None,
                  initial_dispatch_workers: int = 6):
         from .paper_reference_runtime import ShowdownWorkerFactory
 
-        require(configuration.belief == "public" and (configuration.leaf == "model"
-            or configuration.arm == "reference"),
-            "oracle and incumbent alternative-leaf adapters remain required")
+        self._check_configuration(configuration)
         require(configuration.workers == (20 if configuration.arm == "reference" else 1),
             "resource allocation differs from the registered arm")
         require(type(initial_dispatch_workers) is int and 1 <= initial_dispatch_workers <= 20,
@@ -113,6 +135,8 @@ class PublicModelSearchAdapter:
                 if configuration.arm == "incumbent" else None,
             reference_factory=asdict(reference_factory) if configuration.arm == "reference" else None,
             initial_dispatch_workers=initial_dispatch_workers if configuration.arm == "reference" else None)
+        if configuration.belief == "oracle":
+            self.runtime_configuration["team_oracle"] = self.oracle.receipt()
         self.runtime_sha256 = digest(self.runtime_configuration)
         if configuration.arm == "incumbent":
             self._decider, self._native, self._search_config = _incumbent_runtime(
@@ -121,13 +145,12 @@ class PublicModelSearchAdapter:
             from .paper_reference import ReferenceConfig
             from .paper_reference_parallel import ParallelTrajectorySearch
             if configuration.leaf != "model":
-                from .search_over_raw_leaves import ReferenceLeafWorkerFactory, ROLLOUT_CAP
-                reference_factory = ReferenceLeafWorkerFactory(reference_factory, configuration.leaf)
+                from .search_over_raw_leaves import ROLLOUT_CAP
                 self.runtime_configuration["reference_leaf"] = dict(leaf=configuration.leaf,
                     rollout_cap=ROLLOUT_CAP, rollout_policy="raw_argmax_both_seats",
                     tree="unchanged_trajectory_reference", priors="unchanged_champion")
                 self.runtime_sha256 = digest(self.runtime_configuration)
-            self._pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1.), reference_factory,
+            self._pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1.), self._reference_worker_factory(reference_factory),
                 workers=20, batch_size=10, initial_dispatch_workers=initial_dispatch_workers)
 
     def select(self, context, *, root_id: str, selection_seed: int, pending_transition=None) -> dict:
@@ -166,6 +189,7 @@ class PublicModelSearchAdapter:
             elif arm == "incumbent":
                 from .policy_opponent_profile import validate_selection
                 self._native.reset()
+                self._prepare_incumbent(request)
                 # Distinct root ID prevents statistics/fold carry-over from
                 # other sampled roots from masquerading as fresh decisions.
                 public = replace(public, battle_id="search-over-raw-root:" + root_id)
@@ -191,9 +215,10 @@ class PublicModelSearchAdapter:
                 root = decision_state(request.observation, player=public.player_id)
                 remaining = self.configuration.seconds - (time.perf_counter()-started)
                 require(remaining > 0, "reference ceiling expired during public capture")
-                measured = self._pool.search(request, root, battle_id="search-over-raw-root:"+root_id,
+                measured = self._pool.search(self._diagnostic_request(request), root, battle_id="search-over-raw-root:"+root_id,
                     seed=selection_seed, deadline_seconds=remaining)
                 validate_reference_work(measured)
+                self._validate_diagnostic_work(measured)
                 if self.configuration.leaf != "model":
                     from .search_over_raw_leaves import validate_leaf_work
                     validate_leaf_work(measured, self.configuration.leaf)
@@ -203,6 +228,7 @@ class PublicModelSearchAdapter:
                 action = int(encoded[7:])
                 evidence = asdict(measured)
             require(type(action) is int and 0 <= action < len(mask) and mask[action], "illegal selected action")
+            evidence = self._selection_evidence(evidence, request)
             elapsed = time.perf_counter()-started
             return dict(root_id=root_id, configuration_sha256=self.configuration.identity,
                 runtime_sha256=self.runtime_sha256,

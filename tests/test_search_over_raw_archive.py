@@ -96,6 +96,43 @@ class SourceQualificationAdmissionTests(unittest.TestCase):
                 DRIVER.claim_attempt(Path(directory), row)
             self.assertFalse((Path(directory) / "attempt.json").exists())
 
+    def oracle_registration(self):
+        from dataclasses import asdict
+        row = self.registration()
+        row.update(schema=DRIVER.ORACLE_SCHEMA, source_contract=DRIVER.engineering_contract(oracle=True),
+            configurations=[asdict(c) for c in DRIVER.qualification_configurations(10., oracle=True)])
+        return row
+
+    def test_oracle_qualification_separate_namespace_roster_and_nondeployment(self):
+        row = self.oracle_registration()
+        self.assertNotIn(row['source_contract']['namespace'], (DRIVER.NAMESPACE, DRIVER.LEAF_NAMESPACE))
+        with tempfile.TemporaryDirectory() as directory:
+            configs = DRIVER.claim_attempt(Path(directory), row)
+        self.assertEqual([DRIVER.configuration_key(c) for c in configs], ['raw', 'incumbent',
+            'reference', 'incumbent-oracle', 'reference-oracle', 'reference-oracle-hp_fraction',
+            'reference-oracle-raw_rollout'])
+        self.assertTrue(all(not c.deployable for c in configs[3:]))
+        self.assertFalse(row['source_contract']['team_oracle_diagnostic']['deployment_authorized'])
+
+    def test_oracle_qualification_rejects_live_hidden_state_and_sampled_fallback(self):
+        for key, value in (('information_scope', 'current_opponent_private_state'),
+                ('sampled_fallback', 'allow'), ('deployment_authorized', True), ('raw_rollout_cap', 500)):
+            row = self.oracle_registration()
+            row['source_contract']['team_oracle_diagnostic'][key] = value
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(ValueError, 'qualification changed'):
+                    DRIVER.claim_attempt(Path(directory), row)
+                self.assertFalse((Path(directory) / 'attempt.json').exists())
+
+    def test_oracle_qualification_does_not_alias_leaf_or_default_mode(self):
+        with self.assertRaisesRegex(ValueError, 'undeclared qualification'):
+            DRIVER.qualification_configurations(10., reference_leaves=True, oracle=True)
+        row = self.oracle_registration()
+        row['configurations'][3]['belief'] = 'public'
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, 'arm/resource drift'):
+                DRIVER.claim_attempt(Path(directory), row)
+
 
 class ActualSourceBoundaryArchiveTests(unittest.TestCase):
     def setUp(self):

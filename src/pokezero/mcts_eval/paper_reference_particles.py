@@ -270,6 +270,8 @@ class HypotheticalHistoryPopulation:
             set_source=factory.set_source,
             allow_earlier_compatible_template=factory.allow_earlier_compatible_template,
             max_known_set_draws=factory.max_known_set_draws,
+            **({'diagnostic_oracle_team': factory.diagnostic_oracle_team}
+               if getattr(factory, 'diagnostic_oracle_team', None) is not None else {}),
             pending_transition=transition.prior_transition)
         prior.bind_sampling_deadline(factory.sampling_deadline_at)
         self.receipt['nested_anchor_kernel'] = ('retained complete empirical posterior; no new anchor draws'

@@ -30,6 +30,24 @@ def condition_necessary_party(prior, history, opponent, check, *, membership_fir
         complete_proposals=0, matches=0, membership_rejections=0,
         conditioned_later_traits=False, exact_posterior=False)
     original = prior.sampler
+    if getattr(prior, 'diagnostic_oracle_team', None) is not None:
+        # Truth is a fixed complete party, not an unknown-party proposal.
+        # Keep checking public membership without reverting to the sampler's
+        # membership-first/native unknown-team generator.
+        class OracleMembershipSampler:
+            def draw(self, known, rng):
+                check()
+                draw = original.draw(known, rng)
+                receipt['complete_proposals'] += 1
+                species = {canonical_gen3_randbat_species_id(mon.species) for mon in draw.team}
+                if not required <= species:
+                    raise ReferenceRefusal('oracle original party contradicts public membership')
+                receipt['matches'] += 1
+                return draw
+        prior.sampler = OracleMembershipSampler()
+        receipt.update(status='DIAGNOSTIC_ORACLE_MEMBERSHIP_CHECK', membership_first=False,
+            unknown_party_sampled=False)
+        return receipt
     if membership_first:
         receipt.update(membership_first=True, known_completions_materialized=0,
             complete_proposals_scope='complete unknown-party completions before known-set sampling',
