@@ -2,11 +2,14 @@
 import json
 import os
 from pathlib import Path
+import pickle
 import tempfile
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock
 
-from pokezero.mcts_eval.search_over_raw import digest
-from pokezero.mcts_eval.search_over_raw_archive import SealedSourceArchive
+from pokezero.mcts_eval.search_over_raw import digest, select_source_requests
+from pokezero.mcts_eval.search_over_raw_archive import SealedSourceArchive, SealedComparisonBank
 from pokezero.policy import PolicyDecision
 from pokezero.rollout import RolloutConfig, RolloutDriver
 import qualify_search_over_raw_source as DRIVER
@@ -259,6 +262,115 @@ class IncumbentRawQualificationAdmissionTests(unittest.TestCase):
                 self.assertFalse((Path(directory) / "attempt.json").exists())
 
 
+class ComparisonBankTests(unittest.TestCase):
+    def fixture(self, slots=1, memory_usage=lambda: 1, available=None):
+        roster = [dict(root_id=f"exploration:123:{i}", source_seed=123, root_slot=i) for i in range(slots)]
+        contract = dict(namespace="7e105338-51b1-44fd-8e0d-9fd526493b4c", exclude_opening_requests=True,
+            panels=dict(exploration=dict(seeds=[123], root_slots=roster)))
+        selected = select_source_requests(contract["namespace"], 123,
+            list(range(1, 1 + (slots if available is None else available))), slots)
+        roots = []
+        for slot, index in zip(roster, selected):
+            public = dict(seed=123, request=index)
+            roots.append(dict(root_id=slot["root_id"], source_request_index=index, public_record=public,
+                public_record_sha256=digest(public)))
+        catalog = [dict(source_request_index=root["source_request_index"],
+            public_record_sha256=root["public_record_sha256"]) for root in roots]
+        source = dict(contract_sha256=digest(contract), source_seed=123, panel="exploration", status="COMPLETE",
+            source_terminal_complete=True, source_policy="raw_argmax_both_seats", eligible_public_records=catalog,
+            eligible_requests=len(catalog), eligible_catalog_sha256=digest(catalog), requested_root_slots=slots,
+            roots=roots, missing_root_ids=[slot["root_id"] for slot in roster[len(roots):]])
+        archive = SealedSourceArchive()
+        snapshot = SimpleNamespace(bridge_snapshot=dict(battle={"private": "DO_NOT_EXPORT"}))
+        archive.selected = Mock(return_value=(SimpleNamespace(public=True), None, snapshot))
+        bank = SealedComparisonBank(roster, parent_memory_limit_bytes=100, memory_usage=memory_usage)
+        self.addCleanup(bank.close)
+        bank.account_source(source, contract=contract)
+        return bank, archive, roots[0], snapshot
+
+    def test_only_fixed_unique_exploration_slots_and_explicit_memory_limit(self):
+        for slots in ([], [dict(root_id="validation:123:0", source_seed=123, root_slot=0)],
+                [dict(root_id="exploration:123:0", source_seed=123, root_slot=0)] * 2):
+            with self.assertRaisesRegex(ValueError, "fixed unique exploration"):
+                SealedComparisonBank(slots, parent_memory_limit_bytes=100)
+        for limit in (0, True, 8 * 1024**3 + 1):
+            with self.assertRaisesRegex(ValueError, "memory limit"):
+                SealedComparisonBank([dict(root_id="exploration:123:0", source_seed=123, root_slot=0)],
+                    parent_memory_limit_bytes=limit)
+        bank, _, _, _ = self.fixture()
+        bank.validate_roster([dict(root_id="exploration:123:0", source_seed=123, root_slot=0)])
+        with self.assertRaisesRegex(ValueError, "differs from executable fixed roster"):
+            bank.validate_roster([dict(root_id="exploration:123:1", source_seed=123, root_slot=1)])
+
+    def test_public_manifest_does_not_export_private_payload_or_allow_persistence(self):
+        bank, archive, root, _ = self.fixture()
+        bank.capture(archive, root)
+        manifest = bank.seal()
+        self.assertNotIn("DO_NOT_EXPORT", json.dumps(manifest))
+        self.assertEqual(manifest["root_public_bindings"], {root["root_id"]: root["public_record_sha256"]})
+        self.assertFalse(manifest["source_environments_retained"])
+        with self.assertRaisesRegex(TypeError, "cannot be persisted"):
+            pickle.dumps(bank)
+
+    def test_unknown_duplicate_forged_seed_and_bridge_local_handle_fail(self):
+        bank, archive, root, snapshot = self.fixture()
+        forged = dict(root, root_id="exploration:456:0")
+        with self.assertRaisesRegex(ValueError, "unregistered"):
+            bank.capture(archive, forged)
+        forged = dict(root, public_record=dict(seed=456))
+        with self.assertRaisesRegex(ValueError, "seed drift"):
+            bank.capture(archive, forged)
+        snapshot.bridge_snapshot["snapshot_id"] = "resident-other-process"
+        with self.assertRaisesRegex(ValueError, "bridge-local handle"):
+            bank.capture(archive, root)
+        del snapshot.bridge_snapshot["snapshot_id"]
+        bank.capture(archive, root)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            bank.capture(archive, root)
+
+    def test_seal_requires_whole_registered_roster_and_forbids_later_capture(self):
+        bank, archive, root, _ = self.fixture(slots=2)
+        bank.capture(archive, root)
+        with self.assertRaisesRegex(ValueError, "all fixed slots"):
+            bank.seal()
+        with self.assertRaisesRegex(ValueError, "sealed registered"):
+            bank.selected_for_auditor(root["root_id"])
+        with self.assertRaisesRegex(ValueError, "validated priority-selected"):
+            bank.capture(archive, dict(root, root_id="exploration:123:1"))
+        bank.capture(archive, bank._selected["exploration:123:1"])
+        bank.seal()
+        with self.assertRaisesRegex(ValueError, "sealed root capture"):
+            bank.capture(archive, root)
+        short, archive, root, _ = self.fixture(slots=2, available=1)
+        short.capture(archive, root)
+        self.assertEqual(short.seal()["source_validated_missing_root_ids"], ["exploration:123:1"])
+        with self.assertRaisesRegex(ValueError, "sealed registered"):
+            short.selected_for_auditor("exploration:123:1")
+
+    def test_each_retrieval_is_independent_and_close_makes_bank_unusable(self):
+        bank, archive, root, snapshot = self.fixture()
+        bank.capture(archive, root)
+        snapshot.bridge_snapshot["battle"]["private"] = "original-mutated"
+        bank.seal()
+        first = bank.selected_for_auditor(root["root_id"])
+        first[3].bridge_snapshot["battle"]["private"] = "branch-mutated"
+        self.assertEqual(bank.selected_for_auditor(root["root_id"])[3].bridge_snapshot["battle"]["private"],
+            "DO_NOT_EXPORT")
+        bank.close()
+        self.assertEqual(bank._entries, {})
+        with self.assertRaisesRegex(ValueError, "closed"):
+            bank.selected_for_auditor(root["root_id"])
+
+    def test_memory_stop_clears_entries_without_eviction_or_redraw(self):
+        memory = Mock(return_value=1)
+        bank, archive, root, _ = self.fixture(memory_usage=memory)
+        memory.return_value = 101
+        with self.assertRaisesRegex(ValueError, "no eviction or replay"):
+            bank.capture(archive, root)
+        self.assertEqual(bank._entries, {})
+        self.assertEqual(bank._state, "CLOSED")
+
+
 class ActualSourceBoundaryArchiveTests(unittest.TestCase):
     def setUp(self):
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -358,6 +470,60 @@ class ActualSourceBoundaryArchiveTests(unittest.TestCase):
         self.archive.close()
         with self.assertRaisesRegex(ValueError, "unavailable"):
             self.archive.selected(root)
+
+    def test_comparison_bank_restores_after_original_environment_and_archive_close(self):
+        from pokezero.local_showdown import LocalShowdownEnv
+        from pokezero.public_decision_corpus import PublicObservation
+        # Existing three-boundary excluded engineering fixture, not a fresh
+        # scientific source or a strength measurement.
+        root = self.root(self.collect())
+        root["root_id"] = f"exploration:{DRIVER.FIXTURE_SEED}:0"
+        bank = SealedComparisonBank([dict(root_id=root["root_id"], source_seed=DRIVER.FIXTURE_SEED,
+            root_slot=0)], parent_memory_limit_bytes=8 * 1024**3)
+        self.addCleanup(bank.close)
+        contract = dict(namespace="7e105338-51b1-44fd-8e0d-9fd526493b4c", exclude_opening_requests=True,
+            panels=dict(exploration=dict(seeds=[DRIVER.FIXTURE_SEED], root_slots=[dict(
+                root_id=root["root_id"], source_seed=DRIVER.FIXTURE_SEED, root_slot=0)])))
+        catalog = [dict(source_request_index=root["source_request_index"],
+            public_record_sha256=root["public_record_sha256"])]
+        bank.account_source(dict(contract_sha256=digest(contract), source_seed=DRIVER.FIXTURE_SEED,
+            panel="exploration", status="COMPLETE", source_terminal_complete=True,
+            source_policy="raw_argmax_both_seats", eligible_public_records=catalog, eligible_requests=1,
+            eligible_catalog_sha256=digest(catalog), requested_root_slots=1, roots=[root], missing_root_ids=[]),
+            contract=contract)
+        bank.capture(self.archive, root)
+        bank.seal()
+        expected = bank.selected_for_auditor(root["root_id"])
+        self.archive.close()
+        self.env.close()
+        other = LocalShowdownEnv(self.env.config)
+        self.addCleanup(other.close)
+        other.reset(seed=DRIVER.FIXTURE_SEED, format_id="gen3randombattle")
+        suffixes = []
+        for _ in range(2):
+            retained, context, pending, snapshot = bank.selected_for_auditor(root["root_id"])
+            other.restore(snapshot)
+            self.assertEqual(PublicObservation.from_observation(other.observe("p1")).to_dict(),
+                PublicObservation.from_observation(context.observation).to_dict())
+            self.assertEqual({seat: tuple(rows) for seat, rows in other._request_history.items()},
+                snapshot.request_history)
+            self.assertEqual(other._parser.snapshot(), snapshot.replay)
+            self.assertEqual(retained, expected[0])
+            self.assertEqual(pending, expected[2])
+            other.reseed_simulator_rng(4711)
+            other.step({seat: next(i for i, legal in enumerate(other.observe(seat).legal_action_mask) if legal)
+                for seat in other.requested_players()})
+            # Showdown inserts wall-clock |t: messages into its protocol log.
+            # Only those timestamps are ignored; compare both observations,
+            # all other public protocol lines, full battle sides and PRNG state.
+            battle = other.snapshot().bridge_snapshot["battle"]
+            suffixes.append((tuple(line for line in other._lines if not line.startswith("|t:")),
+                {seat: PublicObservation.from_observation(other.observe(seat)).to_dict()
+                    for seat in ("p1", "p2")}, battle["sides"], battle.get("prng"), battle["turn"]))
+        self.assertEqual(suffixes[0], suffixes[1])
+        after = bank.selected_for_auditor(root["root_id"])
+        self.assertEqual(after[3].bridge_snapshot, expected[3].bridge_snapshot)
+        self.assertEqual(after[3].replay, expected[3].replay)
 
 
 if __name__ == "__main__":

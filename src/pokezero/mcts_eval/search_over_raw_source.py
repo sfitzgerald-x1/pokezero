@@ -67,6 +67,31 @@ class AuditedRawPolicy:
         return decision
 
 
+def validate_source_receipt(source, seed, *, contract, panel, require_full=False):
+    """Reconcile the fixed priority-selected plus missing source partition."""
+    slots = [r for r in contract["panels"][panel]["root_slots"] if r["source_seed"] == seed]
+    rows = source["eligible_public_records"]
+    indices = [r["source_request_index"] for r in rows]
+    require(slots and source["contract_sha256"] == digest(contract) and source["source_seed"] == seed
+        and source["panel"] == panel and source["status"] == "COMPLETE"
+        and source["source_terminal_complete"] is True and source["source_policy"] == "raw_argmax_both_seats"
+        and source["eligible_requests"] == len(rows) and digest(rows) == source["eligible_catalog_sha256"]
+        and all(type(i) is int and (i > 0 if contract.get("exclude_opening_requests") else i >= 0)
+            for i in indices) and len(set(indices)) == len(indices)
+        and source["requested_root_slots"] == len(slots)
+        and (not require_full or source["missing_root_ids"] == []),
+        "source catalog incomplete or drifted")
+    selected = select_source_requests(contract["namespace"], seed, indices, len(slots))
+    catalog = {r["source_request_index"]: r["public_record_sha256"] for r in rows}
+    require(len(source["roots"]) == len(selected)
+        and source["missing_root_ids"] == [r["root_id"] for r in slots[len(selected):]],
+        "missing roots; no replacement")
+    for slot, (root, index) in enumerate(zip(source["roots"], selected)):
+        require(root["root_id"] == slots[slot]["root_id"] and root["source_request_index"] == index
+            and digest(root["public_record"]) == root["public_record_sha256"] == catalog[index],
+            "source priority selection differs")
+
+
 def source_roots(contract: Mapping, *, panel: str, source_seed: int,
                  trajectory: Any) -> dict:
     """Freeze the complete catalog before outcome-independent priority sampling.

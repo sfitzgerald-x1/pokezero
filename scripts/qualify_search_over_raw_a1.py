@@ -149,28 +149,9 @@ def planned_continuations(contract=None, panel="excluded"):
 
 
 def validate_source(source, seed, *, contract=None, panel="excluded"):
-    engineering = contract is None
-    contract = contract or source_contract()
-    slots = [r for r in contract["panels"][panel]["root_slots"] if r["source_seed"] == seed]
-    rows = source["eligible_public_records"]
-    indices = [r["source_request_index"] for r in rows]
-    require(slots and source["contract_sha256"] == digest(contract) and source["source_seed"] == seed
-        and source["panel"] == panel and source["status"] == "COMPLETE"
-        and source["source_terminal_complete"] is True and source["source_policy"] == "raw_argmax_both_seats"
-        and source["eligible_requests"] == len(rows) and digest(rows) == source["eligible_catalog_sha256"]
-        and all(type(i) is int and i > 0 for i in indices) and len(set(indices)) == len(indices)
-        and source["requested_root_slots"] == len(slots)
-        and (not engineering or source["missing_root_ids"] == []),
-        "source catalog incomplete or drifted")
-    selected = select_source_requests(contract["namespace"], seed, indices, len(slots))
-    catalog = {r["source_request_index"]: r["public_record_sha256"] for r in rows}
-    require(len(source["roots"]) == len(selected)
-        and source["missing_root_ids"] == [r["root_id"] for r in slots[len(selected):]],
-        "missing roots; no replacement")
-    for slot, (root, index) in enumerate(zip(source["roots"], selected)):
-        require(root["root_id"] == slots[slot]["root_id"] and root["source_request_index"] == index
-            and digest(root["public_record"]) == root["public_record_sha256"] == catalog[index],
-            "source priority selection differs")
+    from pokezero.mcts_eval.search_over_raw_source import validate_source_receipt
+    validate_source_receipt(source, seed, contract=contract or source_contract(), panel=panel,
+        require_full=contract is None)
 
 
 def make_adapter(cfg, *, oracle, **kwargs):
@@ -197,7 +178,9 @@ def agreement(selected, truth, request, cfg):
 
 def collect_root(*, root, context, pending, snapshot, output, progress, env, evaluator,
                  factory, contract, source, showdown, verify, ownership=None,
-                 namespace=NAMESPACE, completion_status="COMPLETE_ENGINEERING_ONLY"):
+                 namespace=NAMESPACE, completion_status="COMPLETE_ENGINEERING_ONLY",
+                 boundary_censoring=False):
+    require(type(boundary_censoring) is bool, "explicit boolean boundary-censoring policy required")
     from pokezero.mcts_eval.paper_reference_runtime import PublicRootRequest
     from pokezero.mcts_eval.search_over_raw_oracle import TeamOracle
     from pokezero.mcts_eval.search_over_raw_belief_diagnostics import truth_record
@@ -283,7 +266,15 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
                     and actions[cell["configuration"]] == row["action"]):
                 cell.update(status=row["status"], action=row["action"], signed_outcome=row["signed_outcome"])
         progress["continuations_completed"] += int(row["status"] == "COMPLETE")
-        require(row["status"] == "COMPLETE", "capped/refused continuation stops attempt")
+        if boundary_censoring:
+            # This opt-in is for a separately registered amendment only. A
+            # boundary cap is missing data, not a terminal score; exceptions
+            # from workers, provenance, materialization or cleanup still halt.
+            require(row["status"] == "COMPLETE" or (row["status"] == "CAPPED"
+                and row["signed_outcome"] is None), "operational refusal stops attempt")
+            progress["continuations_capped"] = progress.get("continuations_capped", 0) + int(row["status"] == "CAPPED")
+        else:
+            require(row["status"] == "COMPLETE", "capped/refused continuation stops attempt")
 
     def raw_evaluator(observation):
         legal, evaluation = evaluator(observation)
@@ -303,8 +294,17 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
 
 
 def measure(r, output, progress, *, source_contract_value=None, panel="excluded",
-            completion_status="COMPLETE_ENGINEERING_ONLY", progress_sink=None):
+            completion_status="COMPLETE_ENGINEERING_ONLY", progress_sink=None,
+            comparison_bank=None):
     collection_contract = source_contract_value or source_contract()
+    censoring = collection_contract.get("boundary_censoring_policy")
+    require(censoring in (None, "CAPPED_UNKNOWN_CONTINUE_FIXED_ROSTER"), "unknown boundary-censoring policy")
+    if comparison_bank is not None:
+        from pokezero.mcts_eval.search_over_raw_archive import SealedComparisonBank
+        require(panel == "exploration" and censoring is not None
+            and isinstance(comparison_bank, SealedComparisonBank),
+            "comparison bank requires explicit censored exploration contract")
+        comparison_bank.validate_roster(collection_contract["panels"][panel]["root_slots"])
     _runtime(r)
     from pokezero.collection import env_config_with_policy_spec_masks
     from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -354,6 +354,8 @@ def measure(r, output, progress, *, source_contract_value=None, panel="excluded"
                 sealed_pre_step_sink=archive.capture_private)
             save_new(directory / "source.json", receipt)
             validate_source(receipt, seed, contract=source_contract_value, panel=panel)
+            if comparison_bank is not None:
+                comparison_bank.account_source(receipt, contract=collection_contract)
             progress["source_roster"][str(seed)]["status"] = "COMPLETE"
             progress["source_games_completed"] += 1
             if progress_sink is not None:
@@ -361,6 +363,10 @@ def measure(r, output, progress, *, source_contract_value=None, panel="excluded"
             evaluator = ChampionEvaluator(policies["p1"].policy)
             for root in receipt["roots"]:
                 context, pending, snapshot = archive.selected(root)
+                if comparison_bank is not None:
+                    # Opt-in future staged producer owns the bank's lifetime;
+                    # original engineering/exploration drivers pass no bank.
+                    comparison_bank.capture(archive, root)
                 root_dir = directory / f"root-{root['root_id'].rsplit(':', 1)[1]}"
                 root_dir.mkdir()
                 collect_root(root=root, context=context, pending=pending, snapshot=snapshot,
@@ -369,20 +375,26 @@ def measure(r, output, progress, *, source_contract_value=None, panel="excluded"
                     ownership=dict(directory=str(output / "owned-groups"), controller_pid=os.getpid(),
                         registration_sha256=digest(r), **({"protocol": r["owned_receipts_protocol"]}
                             if "owned_receipts_protocol" in r else {})), namespace=collection_contract["namespace"],
-                    completion_status=completion_status)
+                    completion_status=completion_status, boundary_censoring=censoring is not None)
                 if progress_sink is not None:
                     progress_sink(progress)
         finally:
-            close_resources((("archive", archive), ("source_env", env)), progress)
+            try:
+                close_resources((("archive", archive), ("source_env", env)), progress)
+            finally:
+                if comparison_bank is not None and sys.exc_info()[0] is not None:
+                    comparison_bank.close()
 
 
 def verify_completion(output, progress, *, contract=None, panel="excluded",
                       completion_status="COMPLETE_ENGINEERING_ONLY"):
     collection_contract = contract or source_contract()
+    censoring = collection_contract.get("boundary_censoring_policy")
+    require(censoring in (None, "CAPPED_UNKNOWN_CONTINUE_FIXED_ROSTER"), "unknown boundary-censoring policy")
     seeds = collection_contract["panels"][panel]["seeds"]
     slots = collection_contract["panels"][panel]["root_slots"]
     missing = set()
-    selectors = outcomes = roots = aliases = 0
+    selectors = outcomes = roots = aliases = capped = 0
     substantive = set()
     for seed in seeds:
         directory = output / f"source-{seed}"
@@ -394,7 +406,11 @@ def verify_completion(output, progress, *, contract=None, panel="excluded",
             d = directory / f"root-{root['root_id'].rsplit(':', 1)[1]}"
             load = lambda name: json.loads((d / name).read_text())
             audit = load("audit.json")
-            require(audit["root_id"] == root["root_id"] and audit["status"] == "COMPLETE"
+            expected_audit_status = "COMPLETE" if all(row["status"] == "COMPLETE"
+                for row in audit["outcomes"]) else "UNCERTAIN"
+            require(audit["root_id"] == root["root_id"]
+                and audit["status"] == expected_audit_status
+                and (censoring is not None or audit["status"] == "COMPLETE")
                 and set(audit["actions"]) == {key(c) for c in configurations()}, "incomplete staged action roster")
             truth = load("controller-truth.json")
             binding = load("root-binding.json")
@@ -434,17 +450,21 @@ def verify_completion(output, progress, *, contract=None, panel="excluded",
                         and row["replicate"] == replicate)
                     alias = next(c for c in progress["continuation_roster"] if c["root_id"] == root["root_id"]
                         and c["configuration"] == name and c["replicate"] == replicate)
-                    require(alias["status"] == "COMPLETE" and alias["action"] == selected["action"]
+                    require(alias["status"] == row["status"] and alias["action"] == selected["action"]
                         and alias["signed_outcome"] == row["signed_outcome"], "paired alias accounting mismatch")
                     aliases += 1
                 selectors += 1
             for row in audit["outcomes"]:
-                require(row["status"] == "COMPLETE" and load(f"outcome-{row['action']}-{row['replicate']}.json")
+                require((row["status"] == "COMPLETE" or (censoring is not None
+                    and row["status"] == "CAPPED" and row["signed_outcome"] is None))
+                    and type(row["boundaries"]) is int and 0 <= row["boundaries"] <= 250
+                    and load(f"outcome-{row['action']}-{row['replicate']}.json")
                     == dict(root_id=root["root_id"], **row)
                     and load(f"continuation-{row['action']}-{row['replicate']}-attempt.json") == dict(
                         root_id=root["root_id"], action=row["action"], replicate=row["replicate"]),
                     "durable terminal outcome/attempt mismatch")
-                outcomes += 1
+                outcomes += int(row["status"] == "COMPLETE")
+                capped += int(row["status"] == "CAPPED")
             roots += 1
     require(substantive == {key(c) for c in configurations() if c.arm != "raw"},
         "NO_SUBSTANTIVE_A1_EXERCISE; both public/oracle arms required, forced roots retained, no redraw")
@@ -460,7 +480,8 @@ def verify_completion(output, progress, *, contract=None, panel="excluded",
     expected_aliases = {(root, cfg, replicate) for root, cfg in expected_cells for replicate in range(8)}
     require(progress["source_games_completed"] == len(seeds) and progress["roots_completed"] == roots
         and roots + len(missing) == len(slots) and progress["selections_completed"] == selectors == roots * 5
-        and progress["continuations_completed"] == outcomes and aliases == roots * 40
+        and progress["continuations_completed"] == outcomes
+        and progress.get("continuations_capped", 0) == capped and aliases == roots * 40
         and len(progress["fixed_roster"]) == len(expected_cells)
         and {(c["root_id"], c["configuration"]) for c in progress["fixed_roster"]} == expected_cells
         and len(progress["continuation_roster"]) == len(expected_aliases)
