@@ -861,6 +861,19 @@ def materialize_search_artifacts(
 
     from .resolver import export_reuse_key, validate_encoder_tables
 
+    # Qualification collectors supply isolated, hashed exports so this path
+    # does not write beside the original champion or mutate a shared cache.
+    if contract.model_path is not None or contract.tables_path is not None:
+        if contract.model_path is None or contract.tables_path is None:
+            raise ContractError("explicit search artifacts require both model and tables")
+        from .resolver import sha256_file
+        if (contract.model_sha256 is None or contract.tables_sha256 is None
+                or sha256_file(contract.model_path) != contract.model_sha256
+                or sha256_file(contract.tables_path) != contract.tables_sha256):
+            raise ContractError("explicit search artifact digest drift")
+        validate_encoder_tables(contract, contract.tables_path)
+        return {"model_path": contract.model_path, "tables_path": contract.tables_path}
+
     key = export_reuse_key(contract)[:16]
     root = _Path(contract.checkpoint_path).parent / f".mcts-eval-artifacts-{key}"
     root.mkdir(parents=True, exist_ok=True)

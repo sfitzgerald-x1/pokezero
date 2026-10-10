@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from pokezero.mcts_eval.search_over_raw import ENGINEERING_EXCLUDED_SEEDS
 
 
 SPEC = importlib.util.spec_from_file_location("prepare_search_over_raw",
@@ -23,7 +24,7 @@ class PreparationTest(unittest.TestCase):
             result = DRIVER.prepare([registration], plan, out)
             self.assertFalse(result["execution_ready"])
             self.assertEqual(len(result["configurations"]), 37)
-            self.assertEqual(result["excluded_seeds"], [1, 2])
+            self.assertEqual(result["excluded_seeds"], sorted({1, 2, *ENGINEERING_EXCLUDED_SEEDS}))
             self.assertEqual(len(result["input_hashes"]), 2)
             self.assertEqual(json.loads((out / "contract.json").read_text()), result)
             with self.assertRaises(FileExistsError):

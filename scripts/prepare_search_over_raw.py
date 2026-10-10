@@ -12,12 +12,13 @@ import json
 from pathlib import Path
 import uuid
 
-from pokezero.mcts_eval.search_over_raw import SearchConfiguration, phase_a_contract, require
+from pokezero.mcts_eval.search_over_raw import (
+    ENGINEERING_EXCLUDED_SEEDS, SearchConfiguration, phase_a_contract, require)
 
 
 def prepare(exposure_registrations, plan, output, *, namespace=None):
     bindings = {}
-    excluded = set()
+    excluded = set(ENGINEERING_EXCLUDED_SEEDS)
     for path in exposure_registrations:
         path = Path(path).resolve()
         raw = path.read_bytes()

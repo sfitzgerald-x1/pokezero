@@ -166,6 +166,7 @@ class T(unittest.TestCase):
         )
         state = SimpleNamespace(
             legal_action_mask=mask,
+            request_kind="move",
             self_team=(SimpleNamespace(active=True), SimpleNamespace(active=False)),
         )
         public_state = SimpleNamespace(replay=SimpleNamespace(public_lines=record.event_prefix))
@@ -364,6 +365,7 @@ class T(unittest.TestCase):
         )
         state = SimpleNamespace(
             legal_action_mask=mask,
+            request_kind="move",
             self_team=(SimpleNamespace(active=True), SimpleNamespace(active=False)),
         )
 

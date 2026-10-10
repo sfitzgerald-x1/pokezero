@@ -95,8 +95,19 @@ includes the reviewed public sleep and Yawn dependencies, and its grouped
 reference test-count guard matches the actual 182 source tests. Local checks
 passed all 41 existing count guards, 28 provenance tests and 131 focused
 contracts. The six patch-context whitespace findings remain a diff-check
-failure, not a native build failure. This combined source still needs a new
-native build and runtime qualification; the old build cannot qualify it.
+failure, not a native build failure.
+
+Both native consumers were rebuilt in a new isolated artifact directory from
+source commit `099e902ae6b53a3fcc44c9f84a894b0645161820`, using the 79 ordered
+patches and PyTorch2.13.0 without a version bypass. The checked native build
+fingerprint is `62dca60fde5d45ef2f6404436661465ca3f0b5bd00b86d3f76adcd8d651cca1b`.
+The first model build failed with exit1 because torch-sys selected a Python
+without torch. That receipt remains intact; explicitly binding PATH and PYTHON
+produced exit0. Fresh imports resolve to the isolated packages, not the retained
+qualification environment. Full-champion native parity has zero maximum
+absolute difference at batch sizes1,8,16. All182 reference regression tests
+passed; synthetic fixture vocabulary warnings remain disclosed. These are
+build and regression checks, not full-game qualification or strength evidence.
 
 ## Phase A implementation status
 
@@ -150,9 +161,23 @@ they must be bound by the admission controller before execution.
 Ten adapter tests pass, including four with real Showdown opening boundaries
 and instrumented selectors. They do not run actual checkpoint-backed search.
 Their engineering fixture seed, 2026101009, must be excluded from prospective
-panels. Oracle and alternative-leaf configurations explicitly fail before
+panels. Preparation and direct contract generation now automatically exclude
+that fixture and the twenty reference-worker startup seeds; this minimum
+exclusion does not replace the full historical inventory. Oracle and alternative-leaf configurations explicitly fail before
 runtime construction until their dedicated adapters are implemented. CI runs
-all 47 new harness contracts with a no-skips and exact-count guard.
+all57 new harness contracts with a no-skips and exact-count guard.
+
+`scripts/qualify_search_over_raw_opening.py` registers an excluded opening
+benchmark before runtime construction and permits one attempt only. It binds
+clean source and Showdown commits, every native build input and artifact,
+the unchanged champion, checkpoint-derived encoder tables and reviewed factory
+options. Explicit hashed exports avoid writes beside the original checkpoint.
+The benchmark exercises raw, incumbent and reference at one registered budget
+and records actual work, construction time and selection latency. It neither
+plays terminal games nor admits an outcome panel. Its ten contract tests cover
+input drift, resources, exposure exclusion, one-attempt ordering and isolated
+export reuse. Two older lattice fixtures required their missing request kind
+to match the current action translator; production translation is unchanged.
 
 Remaining Phase A work includes full exposure inventory, source/model/native
 and simulator bindings, real-game root-collector qualification, checkpoint-backed adapter qualification,

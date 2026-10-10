@@ -16,6 +16,11 @@ from typing import Any, Callable, Mapping, Sequence
 import uuid
 
 
+# Opening fixtures and the reference runtime's twenty synthetic startup games.
+# This is a minimum exclusion, not the complete historical exposure inventory.
+ENGINEERING_EXCLUDED_SEEDS = (2026101009, *range(2026100400, 2026100420))
+
+
 def digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
         allow_nan=False).encode()).hexdigest()
@@ -85,7 +90,8 @@ def phase_a_contract(namespace: str, *, excluded_seeds: Sequence[int],
     require(any(c.arm == "incumbent" and c.deployable for c in configurations)
         and any(c.arm == "reference" and c.deployable for c in configurations),
         "both deployable search arms required")
-    used = set(excluded_seeds)
+    excluded = set(excluded_seeds) | set(ENGINEERING_EXCLUDED_SEEDS)
+    used = set(excluded)
     panels = {}
     ordinal = 0
     for panel in ("exploration", "validation"):
@@ -113,7 +119,8 @@ def phase_a_contract(namespace: str, *, excluded_seeds: Sequence[int],
         failure_policy="uncertain outcomes; no complete-case gate or redraw",
         selection_rule="exploration only; freeze one deployable configuration before validation",
         historical_outcomes_pooled=False, phase_b_authorized=False,
-        excluded_seed_inventory_sha256=digest(sorted(set(excluded_seeds))))
+        excluded_seeds=sorted(excluded),
+        excluded_seed_inventory_sha256=digest(sorted(excluded)))
 
 
 def select_source_requests(namespace: str, source_seed: int,

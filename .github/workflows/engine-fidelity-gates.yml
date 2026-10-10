@@ -1040,9 +1040,9 @@ jobs:
           python -m unittest \
             tests.test_search_over_raw tests.test_search_over_raw_source \
             tests.test_search_over_raw_ledger tests.test_prepare_search_over_raw \
-            tests.test_search_over_raw_adapters -v 2>&1 \
+            tests.test_search_over_raw_adapters tests.test_search_over_raw_opening -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 47 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 57 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"
