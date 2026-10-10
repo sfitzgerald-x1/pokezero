@@ -8,6 +8,7 @@ changing the public-state tracking API.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping as _RuntimeMapping
 import copy
 from dataclasses import dataclass, replace
 import math
@@ -2264,7 +2265,8 @@ def _optional_variant_int(value: Any) -> Optional[int]:
 
 
 def _event_value(event: Any, name: str) -> Optional[str]:
-    if isinstance(event, Mapping):
+    # typing.Mapping dispatches on type(event), not a spoofable __class__.
+    if issubclass(type(event), _RuntimeMapping):
         value = event.get(name)
     else:
         value = getattr(event, name, None)
