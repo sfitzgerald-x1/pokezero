@@ -60,7 +60,7 @@ class MetadataCacheParityTests(unittest.TestCase):
         paths = (None, "", "/opt/showdown/data/sets.json", "/opt/showdown-old/sets.json",
                  "/elsewhere/sets.json", "~/elsewhere/sets.json", "../sets.json",
                  "data/../sets.json", "data/sets.json", "./data/sets.json", ".",
-                 "C:\\Users\\name\\sets.json", "//host/share/sets.json", "a\u0130\ud800.json")
+                 "C:\\build\\sets.json", "//host/share/sets.json", "a\u0130\ud800.json")
         for root in roots:
             for left in paths:
                 for right in paths:
