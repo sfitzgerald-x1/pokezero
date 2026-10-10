@@ -30,7 +30,7 @@ def registration(output):
         historical_attempt_reused=False, attempt_directory=str(output.resolve()),
         source_root=str(driver.ROOT), exposure_registrations=bindings, excluded_seeds=excluded,
         excluded_seed_inventory_sha256=digest(excluded), input_sha256={**bindings,
-            str(Path(driver.__file__).resolve()): driver.sha256_file(driver.__file__)})
+            **{str(p): driver.sha256_file(p) for p in driver.bound_driver_files()}})
 
 
 class RealSourceFeasibilityTests(unittest.TestCase):
@@ -61,18 +61,22 @@ class RealSourceFeasibilityTests(unittest.TestCase):
         self.assertFalse(set(driver.SEEDS) & {seed for p in c["panels"].values() for seed in p["seeds"]})
 
     def test_fresh_post_optimization_scope_preserves_all_prior_seed_exclusions(self):
-        self.assertEqual(driver.SCHEMA, "pokezero.search-over-raw.real-source-feasibility.v2")
-        self.assertEqual(driver.NAMESPACE, "6ff7b2be-433a-4961-95b7-d0d47e0604ce")
-        self.assertEqual(driver.SEEDS, (2026101018, 2026101019))
-        self.assertTrue(set(range(2026101013, 2026101020)) <= set(ENGINEERING_EXCLUDED_SEEDS))
-        self.assertTrue({2026101015, 2026101016, 2026101017} <= set(self.registration["excluded_seeds"]))
+        self.assertEqual(driver.SCHEMA, "pokezero.search-over-raw.real-source-feasibility.v3")
+        self.assertEqual(driver.NAMESPACE, "8319a3be-b806-43eb-a3dc-ebcffb559093")
+        self.assertEqual(driver.SEEDS, (2026101022, 2026101023))
+        self.assertTrue(set(range(2026101013, 2026101024)) <= set(ENGINEERING_EXCLUDED_SEEDS))
+        self.assertTrue(set(range(2026101013, 2026101022)) <= set(self.registration["excluded_seeds"]))
         self.assertFalse(set(driver.SEEDS) & set(self.registration["excluded_seeds"]))
 
     def test_historical_schema_namespace_and_seeds_cannot_reopen_under_new_driver(self):
         for change in (
                 dict(schema="pokezero.search-over-raw.real-source-feasibility.v1"),
                 dict(namespace="7f133933-252b-4db6-becf-b8b5bda6a017"),
-                dict(seeds=[2026101015, 2026101016], fixture_seed=2026101015)):
+                dict(seeds=[2026101015, 2026101016], fixture_seed=2026101015),
+                dict(schema="pokezero.search-over-raw.real-source-feasibility.v2"),
+                dict(namespace="6ff7b2be-433a-4961-95b7-d0d47e0604ce"),
+                dict(seeds=[2026101018, 2026101019], fixture_seed=2026101018),
+                dict(seeds=[2026101020, 2026101021], fixture_seed=2026101020)):
             with self.subTest(change=change):
                 r = copy.deepcopy(self.registration)
                 r.update(change)
@@ -147,6 +151,21 @@ class RealSourceFeasibilityTests(unittest.TestCase):
             r[key] = value
             with self.assertRaises(ValueError):
                 driver.validate_contract(r, self.output)
+
+    def test_every_direct_runtime_pin_is_required_before_claim(self):
+        pins = driver.bound_driver_files()
+        self.assertEqual(len(pins), len(set(pins)))
+        self.assertIn(driver.ROOT / "src/pokezero/randbat.py", pins)
+        self.assertIn(driver.ROOT / "src/pokezero/belief.py", pins)
+        for path in pins:
+            with self.subTest(path=path):
+                r = copy.deepcopy(self.registration)
+                r["input_sha256"].pop(str(path))
+                with self.assertRaisesRegex(ValueError, "mandatory driver hash"):
+                    driver.validate_contract(r, self.output)
+                r["input_sha256"][str(path)] = "0" * 64
+                with self.assertRaisesRegex(ValueError, "mandatory driver hash"):
+                    driver.validate_contract(r, self.output)
 
     def test_claim_precedes_runtime_and_success_is_only_engineering(self):
         self.setup_run()

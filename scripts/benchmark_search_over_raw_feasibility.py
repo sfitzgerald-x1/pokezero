@@ -7,9 +7,9 @@ harness after action selection. First failure stops the entire attempt; the
 fixed remaining roster stays unmeasured. No easier roots, redrawn seeds, fallback
 actions, reduced work or replay of any prior qualification is permitted.
 
-Version 2 is a separately registered post-metadata-optimization diagnostic.
-Version 1's closed attempt, namespace and seeds remain historical evidence;
-no old root is replayed and neither version supplies scientific admission.
+Version 3 is a separately registered post-variant-cache engineering attempt.
+Versions 1 and 2 and the atomic diagnostics remain closed historical evidence;
+no old root is replayed and no version supplies scientific admission.
 """
 from dataclasses import asdict
 import argparse
@@ -29,10 +29,26 @@ from pokezero.mcts_eval.search_over_raw import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = "pokezero.search-over-raw.real-source-feasibility.v2"
-NAMESPACE = "6ff7b2be-433a-4961-95b7-d0d47e0604ce"
-SEEDS = (2026101018, 2026101019)
+SCHEMA = "pokezero.search-over-raw.real-source-feasibility.v3"
+NAMESPACE = "8319a3be-b806-43eb-a3dc-ebcffb559093"
+SEEDS = (2026101022, 2026101023)
 ROOTS_PER_SEED = 2
+
+
+def bound_driver_files():
+    # Explicit runtime input closure in addition to clean whole-checkout and
+    # native-build checks. In particular bind the optimized catalog consumer.
+    return [Path(__file__).resolve(), ROOT / "scripts/qualify_search_over_raw_opening.py", *[
+        ROOT / "src/pokezero" / name for name in (
+            "randbat.py", "belief.py", "collection.py", "local_showdown.py",
+            "neural_policy.py", "observation.py", "policy.py", "trajectory.py",
+            "public_decision_corpus.py", "engine_search.py", "policy_opponent.py",
+            "policy_opponent_diagnostics.py", "policy_opponent_view.py",
+            "mcts_eval/lattice.py", "mcts_eval/policy_opponent_profile.py",
+            "mcts_eval/resolver.py", "mcts_eval/paper_reference_showdown.py",
+            "mcts_eval/paper_reference_runtime.py", "mcts_eval/search_over_raw.py",
+            "mcts_eval/search_over_raw_adapters.py", "mcts_eval/search_over_raw_source.py",
+            "mcts_eval/search_over_raw_archive.py")]]
 
 
 def configurations():
@@ -107,7 +123,7 @@ def register(*, output, exposure_registrations, **kwargs):
         scope="four fixed real-game roots; complete public search allocations and paired continuation timing; excluded engineering only",
         representative_runtime_evidence=False, historical_attempt_reused=False)
     binding["input_sha256"].update(exposure)
-    binding["input_sha256"][str(Path(__file__).resolve())] = sha256_file(__file__)
+    binding["input_sha256"].update({str(p): sha256_file(p) for p in bound_driver_files()})
     validate_contract(binding, output)
     verify_inputs(binding)
     output.mkdir(parents=True, exist_ok=False)
@@ -138,7 +154,9 @@ def validate_contract(registration, output):
         "exposure inventory drift")
     script = Path(__file__).resolve()
     require(Path(registration["source_root"]).resolve() == ROOT
-        and registration["input_sha256"].get(str(script)) == sha256_file(script),
+        and registration["input_sha256"].get(str(script)) == sha256_file(script)
+        and all(registration["input_sha256"].get(str(p)) == sha256_file(p)
+            for p in bound_driver_files()),
         "executing source or mandatory driver hash differs")
     require(registration["attempt_directory"] == str(Path(output).resolve())
         and not Path(output).resolve().is_relative_to(ROOT),
