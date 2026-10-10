@@ -23,8 +23,12 @@ ORACLE_SCHEMA = "pokezero.search-over-raw.team-oracle-qualification.v1"
 ORACLE_NAMESPACE = "f0d75db8-9d7e-45bf-a63f-a6faacb8d263"
 INCUMBENT_HP_SCHEMA = "pokezero.search-over-raw.incumbent-hp-qualification.v1"
 INCUMBENT_HP_NAMESPACE = "d0e01df6-a758-44dc-b4fd-6443c8e5f7aa"
-INCUMBENT_RAW_SCHEMA = "pokezero.search-over-raw.incumbent-raw-terminal-qualification.v1"
-INCUMBENT_RAW_NAMESPACE = "eea8d8ed-3e3f-41d7-9856-fe69aa21557f"
+# Preserve the failed original registration identity; it cannot be launched by
+# this corrected private-request protocol. No historical attempt is resumed.
+CLOSED_INCUMBENT_RAW_SCHEMA = "pokezero.search-over-raw.incumbent-raw-terminal-qualification.v1"
+CLOSED_INCUMBENT_RAW_NAMESPACE = "eea8d8ed-3e3f-41d7-9856-fe69aa21557f"
+INCUMBENT_RAW_SCHEMA = "pokezero.search-over-raw.incumbent-raw-terminal-qualification.v2"
+INCUMBENT_RAW_NAMESPACE = "d84ec07c-0a49-4d57-89b4-ad42d19cbe18"
 
 
 def configuration_key(configuration):
@@ -102,6 +106,13 @@ def engineering_contract(reference_leaves=False, oracle=False, incumbent_hp=Fals
             capped_rollout="refusal_without_value_fallback", expired_rollout="whole_round_cancel_without_backup",
             seed="selection_seed_then_sha256_world_domain_v1", branch_on_damage=True,
             rollout_count=1, rollout_threads=1,
+            private_request_protocol="private_choice_attempt_redecision_v1",
+            raw_work_witness="pokezero.model-tree-raw-leaf.v2",
+            hidden_trap_information="own_request_only_initial_or_actual_rejected_choice",
+            opponent_choice="retained_during_private_redecision",
+            closed_registration_schema=CLOSED_INCUMBENT_RAW_SCHEMA,
+            closed_registration_namespace=CLOSED_INCUMBENT_RAW_NAMESPACE,
+            historical_attempt_reused=False,
             allocation=dict(depth=6, sims=4096, batch=16, worlds=4, workers=1),
             oracle_deployable=False, comparison="excluded_engineering_only",
             pool_lifetime="one_selection_sequential_nonraw_adapters")
@@ -121,6 +132,8 @@ def register(*, output, reference_leaves=False, oracle=False, incumbent_hp=False
 
 
 def claim_attempt(output, registration):
+    require(registration["schema"] != CLOSED_INCUMBENT_RAW_SCHEMA,
+        "original raw qualification is closed; no retry under corrected source")
     reference_leaves = registration["schema"] == LEAF_SCHEMA
     oracle = registration["schema"] == ORACLE_SCHEMA
     incumbent_hp = registration["schema"] == INCUMBENT_HP_SCHEMA

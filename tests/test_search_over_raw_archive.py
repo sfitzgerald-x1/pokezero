@@ -190,6 +190,8 @@ class IncumbentRawQualificationAdmissionTests(unittest.TestCase):
         row = self.registration()
         self.assertNotIn(row["source_contract"]["namespace"],
             (DRIVER.NAMESPACE, DRIVER.LEAF_NAMESPACE, DRIVER.ORACLE_NAMESPACE, DRIVER.INCUMBENT_HP_NAMESPACE))
+        self.assertNotEqual(row["source_contract"]["namespace"], DRIVER.CLOSED_INCUMBENT_RAW_NAMESPACE)
+        self.assertNotEqual(row["schema"], DRIVER.CLOSED_INCUMBENT_RAW_SCHEMA)
         with tempfile.TemporaryDirectory() as directory:
             configs = DRIVER.claim_attempt(Path(directory), row)
         self.assertEqual([DRIVER.configuration_key(c) for c in configs], ["raw", "incumbent", "reference",
@@ -201,13 +203,19 @@ class IncumbentRawQualificationAdmissionTests(unittest.TestCase):
         self.assertFalse(declared["oracle_deployable"])
         self.assertFalse(row["source_contract"]["phase_a_admission"])
         self.assertFalse(row["source_contract"]["scientific_strength_evidence"])
+        self.assertEqual(declared["private_request_protocol"], "private_choice_attempt_redecision_v1")
+        self.assertEqual(declared["raw_work_witness"], "pokezero.model-tree-raw-leaf.v2")
+        self.assertFalse(declared["historical_attempt_reused"])
 
     def test_relabelled_fallback_budget_seed_or_policy_refuses_before_claim(self):
         for key, value in (("tree", "rollout_crate"), ("priors", "uniform"),
                 ("model_forwards", "skipped"), ("raw_rollout_policy", "uniform"),
                 ("raw_rollout_cap", 500), ("capped_rollout", "hp_fallback"),
                 ("expired_rollout", "draw"), ("seed", "tree_rng"), ("branch_on_damage", False),
-                ("rollout_count", 32), ("rollout_threads", 12), ("oracle_deployable", True)):
+                ("rollout_count", 32), ("rollout_threads", 12), ("oracle_deployable", True),
+                ("private_request_protocol", "global_true_trapped"), ("raw_work_witness", "v1"),
+                ("hidden_trap_information", "true_hidden_ability"), ("opponent_choice", "resample"),
+                ("historical_attempt_reused", True)):
             row = self.registration()
             row["source_contract"]["incumbent_raw_terminal_ablation"][key] = value
             with tempfile.TemporaryDirectory() as directory:
@@ -216,6 +224,13 @@ class IncumbentRawQualificationAdmissionTests(unittest.TestCase):
                 self.assertFalse((Path(directory) / "attempt.json").exists())
 
     def test_mode_budget_and_create_only_attempt_are_explicit(self):
+        legacy = self.registration()
+        legacy["schema"] = DRIVER.CLOSED_INCUMBENT_RAW_SCHEMA
+        legacy["source_contract"]["namespace"] = DRIVER.CLOSED_INCUMBENT_RAW_NAMESPACE
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "original raw qualification is closed"):
+                DRIVER.claim_attempt(Path(directory), legacy)
+            self.assertFalse((Path(directory) / "attempt.json").exists())
         for mode in ("oracle", "reference_leaves", "incumbent_hp"):
             with self.assertRaisesRegex(ValueError, "undeclared qualification"):
                 DRIVER.qualification_configurations(10., incumbent_raw=True, **{mode: True})

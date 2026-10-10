@@ -69,6 +69,8 @@ jobs:
             reports/artifacts/c150_band_split_trade_census.json
             reports/c155_terminal_disposition_register.md
             tests/test_terminal_disposition_register.py
+            scripts/current_terminal_register.py
+            reports/artifacts/current_terminal_register_20261010.json
             tests/test_transform_forme_ident.py
             reports/artifacts/c131_leechseed_main_dev_sweep.json
             reports/artifacts/c131_leechseed_main_holdout_sweep.json
@@ -598,8 +600,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_terminal_disposition_register -v 2>&1 \
             | tee /tmp/c155register.log
-          if ! grep -qE 'Ran 53 tests' /tmp/c155register.log; then
-            echo "::error::expected 53 register pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 61 tests' /tmp/c155register.log; then
+            echo "::error::expected 61 register pins; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/c155register.log; then

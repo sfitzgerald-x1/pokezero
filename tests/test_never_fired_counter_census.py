@@ -214,7 +214,9 @@ _CORPUS_TREES = ("reports", "docs")
 # 410 -> 411: preserve all 410 prior JSON bytes, including the first current
 # supplement; retain the pre-review raw-redecision binding and add the distinct
 # reviewed binding after the final witness-conservation correction.
-_EXPECTED_COUNTER_ARTIFACTS = 412
+# 412 -> 413: a distinct current terminal-register metadata binding; all prior
+# measurements and the historical C155 register remain byte-identical.
+_EXPECTED_COUNTER_ARTIFACTS = 413
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
