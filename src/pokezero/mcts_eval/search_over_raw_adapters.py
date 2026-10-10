@@ -48,7 +48,7 @@ def validate_reference_work(measured) -> None:
         measured.result.trajectories, measured.result.transitions), "reference aggregate work drift")
 
 
-def _incumbent_runtime(contract, showdown_root, seconds, *, leaf="model"):
+def _incumbent_runtime(contract, showdown_root, seconds, *, leaf="model", policy_opponent_diagnostics=None):
     from .manifest import SearchConfig
     from .policy_opponent_profile import make_profile_decider
 
@@ -56,6 +56,8 @@ def _incumbent_runtime(contract, showdown_root, seconds, *, leaf="model"):
     decider = make_profile_decider(contract, showdown_root, arm="incumbent_mcts",
         mode="matched_deadline", opponent_seed=0, deadline_ms=round(seconds * 1000),
         native_batch_guard_ms=64,
+        **({"policy_opponent_diagnostics": policy_opponent_diagnostics}
+           if policy_opponent_diagnostics is not None else {}),
         **({"model_leaf_override": "raw_policy_terminal" if leaf == "raw_rollout" else leaf}
            if leaf != "model" else {}))
     config = SearchConfig(depth=6, sims=4096, batch=16, worlds=4, inference_mode="local")
@@ -102,10 +104,16 @@ class PublicModelSearchAdapter:
 
     def __init__(self, configuration: SearchConfiguration, *, checkpoint_contract,
                  showdown_root: str, evaluator=None, reference_factory=None,
-                 initial_dispatch_workers: int = 6):
+                 initial_dispatch_workers: int = 6, policy_opponent_diagnostics=None):
         from .paper_reference_runtime import ShowdownWorkerFactory
 
         self._check_configuration(configuration)
+        if policy_opponent_diagnostics is not None:
+            from ..policy_opponent_diagnostics import PolicyOpponentDiagnostics
+            require(type(policy_opponent_diagnostics) is PolicyOpponentDiagnostics
+                and configuration.arm == "incumbent" and configuration.belief == "public"
+                and configuration.leaf == "raw_rollout",
+                "callback diagnostics require the public incumbent raw-terminal adapter")
         require(configuration.workers == (20 if configuration.arm == "reference" else 1),
             "resource allocation differs from the registered arm")
         require(type(initial_dispatch_workers) is int and 1 <= initial_dispatch_workers <= 20,
@@ -139,12 +147,19 @@ class PublicModelSearchAdapter:
                 if configuration.arm == "incumbent" else None,
             reference_factory=asdict(reference_factory) if configuration.arm == "reference" else None,
             initial_dispatch_workers=initial_dispatch_workers if configuration.arm == "reference" else None)
+        if policy_opponent_diagnostics is not None:
+            self.runtime_configuration["callback_diagnostics"] = dict(
+                schema="pokezero.policy-opponent.callback-diagnostics.v1", enabled=True,
+                aggregate_only=True, instrumentation_can_change_deadlines=True,
+                qualifies_uninstrumented_runtime=False)
         if configuration.belief == "oracle":
             self.runtime_configuration["team_oracle"] = self.oracle.receipt()
         self.runtime_sha256 = digest(self.runtime_configuration)
         if configuration.arm == "incumbent":
             self._decider, self._native, self._search_config = _incumbent_runtime(
                 checkpoint_contract, showdown_root, configuration.seconds,
+                **({"policy_opponent_diagnostics": policy_opponent_diagnostics}
+                   if policy_opponent_diagnostics is not None else {}),
                 **({"leaf": configuration.leaf} if configuration.leaf != "model" else {}))
             if configuration.leaf != "model":
                 self.runtime_configuration["incumbent_leaf"] = dict(leaf=configuration.leaf,

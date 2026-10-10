@@ -183,7 +183,13 @@ def make_profile_decider(
     contract: CheckpointContract, showdown_root: str, *, arm: str, mode: str,
     opponent_seed: int, deadline_ms: int, native_batch_guard_ms: int,
     model_leaf_override: str | None = None,
+    policy_opponent_diagnostics: Any | None = None,
 ) -> _LiveEngineTimingDecider:
+    if policy_opponent_diagnostics is not None:
+        from ..policy_opponent_diagnostics import PolicyOpponentDiagnostics
+        if (type(policy_opponent_diagnostics) is not PolicyOpponentDiagnostics
+                or arm != "incumbent_mcts" or model_leaf_override != "raw_policy_terminal"):
+            raise ContractError("callback diagnostics require the explicit incumbent raw-terminal profile")
     _unsigned_seed(opponent_seed)
     if arm not in ARMS or mode not in MODES:
         raise ContractError("unsupported profile arm or timing mode")
@@ -204,6 +210,8 @@ def make_profile_decider(
         policy_opponent=arm == "own_policy_opponent_mcts",
         policy_opponent_seed=opponent_seed if arm == "own_policy_opponent_mcts" else None,
         **({"model_leaf_override": model_leaf_override} if model_leaf_override is not None else {}),
+        **({"policy_opponent_diagnostics": policy_opponent_diagnostics}
+           if policy_opponent_diagnostics is not None else {}),
         **(dict(rollout_count=1, rollout_max_plies=250, rollout_policy="raw_argmax",
                 rollout_seed=opponent_seed, rollout_threads=1, rollout_branch_on_damage=True)
            if model_leaf_override == "raw_policy_terminal" else {}))

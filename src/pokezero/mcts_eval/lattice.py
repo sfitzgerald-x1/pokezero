@@ -271,6 +271,7 @@ class _LiveEngineTimingDecider:
     """
 
     _FORMAT_ID = "gen3randombattle"
+    _policy_opponent_diagnostics: Any | None = None
     _STATS_FIELDS = (
         "fallback_decisions",
         "prior_fallbacks",
@@ -312,7 +313,14 @@ class _LiveEngineTimingDecider:
         rollout_threads: int = 1,
         rollout_threads_cpu_budget_ack: bool = False,
         rollout_branch_on_damage: bool = False,
+        policy_opponent_diagnostics: Any | None = None,
     ) -> None:
+        if policy_opponent_diagnostics is not None:
+            from ..policy_opponent_diagnostics import PolicyOpponentDiagnostics
+            if (type(policy_opponent_diagnostics) is not PolicyOpponentDiagnostics
+                    or not (policy_opponent or model_leaf_override == "raw_policy_terminal")):
+                raise ValueError("callback diagnostics require an explicit own-head callback runtime")
+        self._policy_opponent_diagnostics = policy_opponent_diagnostics
         from ..collection import env_config_with_policy_spec_masks
         from ..dex import load_showdown_dex_cached
         from ..engine_search import EnvTier2AnnotationSource
@@ -458,6 +466,8 @@ class _LiveEngineTimingDecider:
             ),
             policy_id=f"mcts-timing-{config.config_id}",
             annotation_source=self._annotation_source,
+            **({"policy_opponent_diagnostics": self._policy_opponent_diagnostics}
+               if self._policy_opponent_diagnostics is not None else {}),
         )
         # The model module's one-time initialization is explicitly outside the
         # decision window. The model's actual leaf forwards remain inside it.

@@ -20,7 +20,7 @@ import uuid
 # This is a minimum exclusion, not the complete historical exposure inventory.
 ENGINEERING_EXCLUDED_SEEDS = (2026101009, *range(2026100400, 2026100420),
     2026101013, 2026101014, 2026101015, 2026101016, 2026101017,
-    2026101018, 2026101019)
+    2026101018, 2026101019, 2026101020)
 
 
 def digest(value: object) -> str:

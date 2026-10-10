@@ -4749,6 +4749,7 @@ class EngineMctsPolicy:
     #: campaign_runs`. An instrument that crashes the search it was only supposed
     #: to watch is worse than no instrument.
     _world_observer: Any | None = None
+    _policy_opponent_diagnostics: Any | None = None
 
     def __init__(
         self,
@@ -4761,7 +4762,13 @@ class EngineMctsPolicy:
         fixed_override: Any | None = None,
         annotation_source: Any | None = None,
         world_observer: Any | None = None,
+        policy_opponent_diagnostics: Any | None = None,
     ) -> None:
+        if policy_opponent_diagnostics is not None:
+            from .policy_opponent_diagnostics import PolicyOpponentDiagnostics
+            if type(policy_opponent_diagnostics) is not PolicyOpponentDiagnostics:
+                raise TypeError("policy callback diagnostics require the exact aggregate sink")
+        self._policy_opponent_diagnostics = policy_opponent_diagnostics
         if module is None:
             import poke_engine as module  # noqa: PLC0415 — optional native dependency
 
@@ -6408,6 +6415,8 @@ class EngineMctsPolicy:
             model=model, result=result, category_vocab=vocab, dex=self._dex,
             device=self._config.model_device, inference_lock=self._policy_opponent_inference_lock,
             raw_argmax=raw_argmax,
+            **({"diagnostics": self._policy_opponent_diagnostics}
+               if self._policy_opponent_diagnostics is not None else {}),
         )
 
     def _search_model(

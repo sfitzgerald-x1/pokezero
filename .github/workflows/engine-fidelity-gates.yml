@@ -132,6 +132,7 @@ jobs:
             scripts/mutate_rollout_leaf_witness.py
             scripts/qualify_search_over_raw*.py
             scripts/benchmark_search_over_raw*.py
+            scripts/diagnose_search_over_raw*.py
             scripts/profile_search_over_raw*.py
             scripts/calibrate_search_over_raw_joint.py
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
@@ -1073,9 +1074,10 @@ jobs:
             tests.test_search_over_raw_callback_profile tests.test_randbat_normalization \
             tests.test_search_over_raw_statistics tests.test_search_over_raw_validation \
             tests.test_search_over_raw_feasibility tests.test_search_over_raw_midgame_profile \
-            tests.test_randbat_metadata_cache tests.test_policy_opponent_diagnostics -v 2>&1 \
+            tests.test_randbat_metadata_cache tests.test_policy_opponent_diagnostics \
+            tests.test_search_over_raw_atomic_round -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 299 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 326 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"
