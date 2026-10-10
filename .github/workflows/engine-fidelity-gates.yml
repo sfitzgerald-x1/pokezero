@@ -118,6 +118,7 @@ jobs:
             tests/test_leaf_encoder.py
             tests/test_roll_enumeration_scope.py
             src/pokezero/engine_search.py
+            src/pokezero/randbat.py
             src/pokezero/policy_opponent*.py
             src/pokezero/foulplay_bridge.py
             scripts/foulplay_paired_eval.py
@@ -135,6 +136,7 @@ jobs:
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
             reports/artifacts/rollout_leaf_witness_mutation_battery_*.json
             tests/test_search_over_raw*.py
+            tests/test_randbat_normalization.py
             tests/test_model_priors_search.py
             tests/test_policy_opponent*.py
             tests/test_raw_policy_leaf_native.py
@@ -1066,9 +1068,9 @@ jobs:
             tests.test_search_over_raw_archive tests.test_search_over_raw_leaves \
             tests.test_search_over_raw_oracle tests.test_model_tree_hp_leaf_contract \
             tests.test_model_tree_raw_leaf_contract tests.test_search_over_raw_synthetic \
-            tests.test_search_over_raw_callback_profile -v 2>&1 \
+            tests.test_search_over_raw_callback_profile tests.test_randbat_normalization -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 166 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 177 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"

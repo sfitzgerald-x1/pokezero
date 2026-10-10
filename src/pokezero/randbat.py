@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 import hashlib
 import itertools
 import json
@@ -1229,8 +1230,20 @@ def _hidden_power_type_name(value: str) -> str:
     return normalized[:1].upper() + normalized[1:]
 
 
+@lru_cache(maxsize=4096)
+def _normalize_plain_text(value: str) -> str:
+    """Memoize only short exact strings, never battle state or source objects."""
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
 def _normalize_id(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+    # Keep conversion outside the cache: callers may supply an unhashable object,
+    # dynamic __str__, or a str subclass with observable lower() behavior. Long
+    # strings bypass it so both entry count and retained text size are bounded.
+    text = str(value)
+    if type(text) is str and len(text) <= 128:
+        return _normalize_plain_text(text)
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
 
 
 _SOURCE_CACHE: dict[tuple[Path, tuple[tuple[str, int, int], ...]], "Gen3RandbatSource"] = {}
