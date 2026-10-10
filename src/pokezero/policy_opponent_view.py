@@ -9,9 +9,11 @@ reveals-only belief approximation.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
 import json
 import re
+from threading import Lock
 from typing import Any, Mapping, Sequence
 
 from .actions import ACTION_COUNT
@@ -24,7 +26,8 @@ from .observation import (
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
 )
 from .showdown import (
-    PlayerRelativeBattleState, _observation_metadata, normalize_for_player,
+    PlayerRelativeBattleState, ShowdownReplayState, _ReplayParser,
+    _observation_metadata, normalize_for_player,
     observation_from_player_state, parse_showdown_replay,
 )
 
@@ -116,6 +119,59 @@ def public_policy_lines(
     return tuple(result)
 
 
+class _PublicPolicyPrefix:
+    """Callback-owned parser prefix; never a cache of private requests or beliefs.
+
+    Preparation is lazy so it remains inside the callback's charged view work.
+    Every invocation deep-copies ALL parser state, including transient damage
+    attribution that snapshot hydration deliberately omits. The cached parser
+    never receives branch events; returned views cannot mutate it. Beliefs are
+    still rebuilt from the full resulting event history on every invocation,
+    retaining custom/stateful set-source behavior and boundary resolution.
+    """
+
+    _MAX_LINES = 4096
+    _MAX_CHARACTERS = 131072
+
+    def __init__(self, public_lines: tuple[str, ...], *, battle_id: str) -> None:
+        self._lines = public_lines
+        self._battle_id = battle_id
+        # One template per callback, with bounded retained parser history. Long
+        # transcripts keep the exact full-rebuild behavior, never truncation.
+        # Count characters rather than encode: protocol strings may contain
+        # lone surrogates and the reference parser accepts them unchanged.
+        # Reference parsing retains battle_id by identity. Custom string/tuple
+        # subclasses may implement deepcopy/len/iteration hooks; caching must
+        # neither call those hooks nor reject formerly accepted inputs.
+        self._cacheable = (type(battle_id) is str and type(public_lines) is tuple
+            and all(type(line) is str for line in public_lines)
+            and len(public_lines) <= self._MAX_LINES
+            and sum(map(len, public_lines)) <= self._MAX_CHARACTERS)
+        self._parser: _ReplayParser | None = None
+        self._lock = Lock()
+
+    def parse(self, public_lines: tuple[str, ...], *, battle_id: str) -> ShowdownReplayState:
+        if not self._cacheable:
+            return parse_showdown_replay(public_lines, battle_id=battle_id,
+                complete_prefix=True, hp_visibility={"p1": "percentage", "p2": "percentage"})
+        if battle_id != self._battle_id or public_lines[:len(self._lines)] != self._lines:
+            raise PolicyOpponentViewError("public parser prefix identity mismatch")
+        with self._lock:
+            if self._parser is None:
+                parser = _ReplayParser(
+                    battle_id, complete_prefix=True,
+                    hp_visibility={"p1": "percentage", "p2": "percentage"},
+                )
+                parser.feed(self._lines)
+                # Publish only a fully parsed prefix; failures retain no partial
+                # state. This lock protects preparation, not policy inference.
+                self._parser = parser
+            root = self._parser
+        branch = deepcopy(root)
+        branch.feed(public_lines[len(self._lines):])
+        return branch.snapshot()
+
+
 @dataclass(frozen=True)
 class PolicyOpponentView:
     state: PlayerRelativeBattleState
@@ -156,13 +212,16 @@ def build_policy_opponent_view(
     set_source: PokemonSetSource, spec: ObservationSpec,
     feature_masks: ObservationFeatureMasks,
     sampled_self_move_states: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    _public_prefix: _PublicPolicyPrefix | None = None,
 ) -> PolicyOpponentView:
     """Rebuild at root OR child from a complete prefix and sampled own request.
 
     Each caller must construct the private request from the opponent's sampled
     side only. Appending realized public branch lines and supplying its updated
     request evolves this view, including newly revealed subject identities.
-    This is a correctness reference; native caching/batching is a later step.
+    Without the private callback-owned prefix this is the full-rebuild
+    correctness reference. The optimized path reuses only parsing of public
+    root lines; sampled requests, full PP, beliefs and actions remain fresh.
     """
     if opponent_slot not in {"p1", "p2"} or set_source is None:
         raise PolicyOpponentViewError("opponent slot and canonical set source are required")
@@ -195,10 +254,15 @@ def build_policy_opponent_view(
     if any(not isinstance(mon, dict) or not str(mon.get("ident", "")).startswith(f"{opponent_slot}:") for mon in team):
         raise PolicyOpponentViewError("sampled party identity belongs to a different seat")
     move_states = _sampled_move_states(request, sampled_self_move_states)
-    replay = parse_showdown_replay(
-        clean_lines, battle_id=battle_id, complete_prefix=True,
-        hp_visibility={"p1": "percentage", "p2": "percentage"},
-    )
+    if _public_prefix is None:
+        replay = parse_showdown_replay(
+            clean_lines, battle_id=battle_id, complete_prefix=True,
+            hp_visibility={"p1": "percentage", "p2": "percentage"},
+        )
+    else:
+        if type(_public_prefix) is not _PublicPolicyPrefix:
+            raise PolicyOpponentViewError("invalid public parser prefix")
+        replay = _public_prefix.parse(clean_lines, battle_id=battle_id)
     if replay.winner is not None or any(line.split("|")[1] == "tie" for line in clean_lines if "|" in line):
         raise PolicyOpponentViewError("public policy cannot infer at a terminal root")
     belief = PublicBattleBeliefEngine.from_events(

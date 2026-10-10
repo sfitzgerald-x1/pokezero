@@ -18,7 +18,7 @@ from .dex import ShowdownDex
 from .policy_opponent_diagnostics import PolicyOpponentDiagnostics
 from .policy_opponent_view import (
     PolicyOpponentView, PolicyOpponentViewError,
-    build_policy_opponent_view_from_native_bundle, public_policy_lines,
+    _PublicPolicyPrefix, build_policy_opponent_view_from_native_bundle, public_policy_lines,
 )
 
 
@@ -118,9 +118,10 @@ def make_policy_opponent_callback(
     """Native search callback using ONLY this seat's canonical own policy.
 
     Each reached node supplies a complete projected branch suffix and an
-    updated sampled own-party request. Rebuild from the immutable root public
-    prefix, not from the last callback's state: traversal order can revisit a
-    parent or alternate between sibling branches. The native sampler caches
+    updated sampled own-party request. Clone the immutable public root parser,
+    not the last callback's state: traversal order can revisit a parent or
+    alternate between sibling branches. Beliefs and private request surfaces
+    are fully reconstructed on each call. The native sampler caches
     each returned distribution for its specific node/ordered action surface.
     """
     from .neural_policy import feature_masks_from_model_config, observation_spec_from_model_config
@@ -130,6 +131,7 @@ def make_policy_opponent_callback(
     if type(raw_argmax) is not bool:
         raise PolicyOpponentViewError("raw_argmax must be an explicit boolean")
     root_prefix = public_policy_lines(public_lines, hp_visibility=hp_visibility)
+    public_prefix = _PublicPolicyPrefix(root_prefix, battle_id=battle_id)
     spec = observation_spec_from_model_config(result.model_config)
     masks = feature_masks_from_model_config(result.model_config)
 
@@ -153,6 +155,7 @@ def make_policy_opponent_callback(
                     public_lines=(*root_prefix, *suffix), hp_visibility={"p1": "percentage", "p2": "percentage"},
                     opponent_slot=opponent_slot, battle_id=battle_id, battle_seed=battle_seed,
                     format_id=format_id, set_source=set_source, spec=spec, feature_masks=masks,
+                    _public_prefix=public_prefix,
                 )
             return policy_opponent_distribution(
                 view, native_action_indices=view.native_action_indices or (),

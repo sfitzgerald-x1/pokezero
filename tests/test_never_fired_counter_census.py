@@ -222,7 +222,10 @@ _CORPUS_TREES = ("reports", "docs")
 # 414 -> 415: a distinct fresh current-tree mutation battery; the three earlier
 # batteries retain their exact bytes. This changes the inventory, not a witness
 # count, measurement, source-pool disposition or scientific admission.
-_EXPECTED_COUNTER_ARTIFACTS = 415
+# 415 -> 416: add one distinct current-source public-prefix citation supplement;
+# historical measurements and every previous supplement retain their bytes.
+# Refresh only the explicitly scoped current terminal-register metadata binding.
+_EXPECTED_COUNTER_ARTIFACTS = 416
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

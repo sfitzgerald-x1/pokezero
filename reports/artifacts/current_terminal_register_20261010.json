@@ -209,6 +209,7 @@
     "reports/artifacts/c153_wide_negative_census.json": "b4cfee633a79af3fcd246906a898168aedd3e5ac254311856d67b70d4affd995",
     "reports/artifacts/c154_unreachable_readjudication.json": "67b6711b007df553ed1e63be635fef2f048b021d1464b6168851fce2e3f2485c",
     "reports/artifacts/current_census_citations_20261010.json": "60895b824665a40f4cfc0918b5f90b705de1c18c0132ac2601763c01c9b9df6e",
+    "reports/artifacts/current_census_citations_20261010_public_prefix.json": "922582596ba55986a4887be8d6545cd94b5ba764ca452beba6ba029b5e743d10",
     "reports/artifacts/current_census_citations_20261010_raw_redecision.json": "3c1a9445425b4cb116d7372595be8026c6d88dc95bf377503e244c1475a97b0d",
     "reports/artifacts/current_census_citations_20261010_raw_redecision_reviewed.json": "8c4c6d74aba51be1c85b2b3eeee6859f106c83d2c458c033d30ac463242f419a",
     "reports/artifacts/current_census_citations_20261010_strict_diagnostics.json": "b46a6f0c4e4c68dca92177e10a4e2d77bb3605566cec35506d41d28e4ebb5fc4",
@@ -419,7 +420,7 @@
   "current_test_methods": 61,
   "deltas": {
     "base.expected_counter_artifacts": {
-      "current": "415",
+      "current": "416",
       "historical": "407"
     },
     "base.patch_stack": {
@@ -458,7 +459,7 @@
     "bar.roll_window_holdout_fraction": "0.899 %",
     "bar.support_gated_dev": "8.689 %",
     "bar.support_gated_holdout": "9.185 %",
-    "base.expected_counter_artifacts": "415",
+    "base.expected_counter_artifacts": "416",
     "base.expected_sweep_artifacts": "115",
     "base.patch_stack": "79",
     "base.section3_rows": "82",
@@ -658,7 +659,7 @@
     "reports/artifacts/current_terminal_register_20261010.json"
   ],
   "source_sha256": {
-    ".github/workflows/engine-fidelity-gates.yml": "a9b08f3de374670d4b0fc0312f354caa98fdee872c8025ce391cf040ef991a82",
+    ".github/workflows/engine-fidelity-gates.yml": "559e9b26a6009325d40cb944fa4b4e3efad09b2cf907d91c06422ea2c875f7ec",
     "reports/c138_known_gaps_ledger.md": "0a453f65c88708bc33801c3ba96360b7df52fbf2498a5ccc1951a76ff9adf83c",
     "reports/c155_terminal_disposition_register.md": "be65dff053da8cb41b9e7ece66cdd94afacc8dad6c1915a72372ce367893193c",
     "rust/pokezero-search/Cargo.lock": "e45863fea7c6a11b4c2cc4234a859656d9aaaac58afd1b1f415e30351cc80435",
@@ -684,7 +685,7 @@
     "scripts/current_terminal_register.py": "eb20084e9e8d2f9c6b9d338992ce684e65768813b096034362cb19b9bc4a2f25",
     "scripts/engine_build_fingerprint.py": "b10558e38b38fdc2eb25582a85d46e8a5b04331f54883e0586050f4690d55302",
     "tests/test_boundary_verdict_partition.py": "793d063490ab17a84c794de5fca5c7d7f57a5abc2195738f5ebb87582c865ce1",
-    "tests/test_never_fired_counter_census.py": "26b0152c2ca721282a18801429be3582f0f57a1fd258df19e805a83d5b7b0994",
+    "tests/test_never_fired_counter_census.py": "e554b38c8df4118afdd94b59259380b2da270b3f9c5a27c8c7c4c04b3ea0496a",
     "tests/test_terminal_disposition_register.py": "340126a2e0e50043eb43ae71eeb6f9d24e897d22321642ae271197926ebcdd20",
     "tests/test_unreachable_readjudication.py": "58242432ffba34b98786c34b4190297b75f987cce394a1f8925ca0e36d8a61d7",
     "third_party/poke-engine-base-source.json": "32e26940858439aacdb82fb1ca58adf5bf489a8aee016a3002370944dafb24f7",
