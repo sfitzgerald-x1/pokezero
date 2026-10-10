@@ -18,7 +18,7 @@ import uuid
 
 # Opening fixtures and the reference runtime's twenty synthetic startup games.
 # This is a minimum exclusion, not the complete historical exposure inventory.
-ENGINEERING_EXCLUDED_SEEDS = (2026101009, *range(2026100400, 2026100420))
+ENGINEERING_EXCLUDED_SEEDS = (2026101009, *range(2026100400, 2026100420), 2026101013)
 
 
 def digest(value: object) -> str:
