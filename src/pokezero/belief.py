@@ -429,6 +429,41 @@ def _narrowed_possible_values(
     return narrowed or values
 
 
+def _immutable_public_value(value: Any) -> bool:
+    """Only proven immutable values may be shared across belief clones.
+
+    Inspect actual values rather than annotations/a field allowlist: a new field or
+    an out-of-contract mutable value must still get an isolated recursive copy.
+    Exact types exclude mutable subclasses of otherwise immutable builtins.
+    """
+    kind = type(value)
+    if kind in (str, int, float, bool, bytes, type(None)):
+        return True
+    if kind is tuple:
+        return all(_immutable_public_value(item) for item in value)
+    if kind is BeliefEvidence:
+        return all(_immutable_public_value(item) for item in vars(value).values())
+    return False
+
+
+def _copy_revealed_belief(
+    belief: RevealedPokemonBelief, memo: dict[int, Any]
+) -> RevealedPokemonBelief:
+    """Fast frozen-record copy, with ordinary deepcopy for every mutable payload."""
+    if type(belief) is not RevealedPokemonBelief:
+        return copy.deepcopy(belief, memo)
+    existing = memo.get(id(belief))
+    if existing is not None:
+        return existing
+    twin = object.__new__(RevealedPokemonBelief)
+    memo[id(belief)] = twin
+    twin.__dict__.update({
+        name: value if _immutable_public_value(value) else copy.deepcopy(value, memo)
+        for name, value in vars(belief).items()
+    })
+    return twin
+
+
 class PublicBattleBeliefEngine:
     def __init__(
         self,
@@ -1323,7 +1358,20 @@ class PublicBattleBeliefEngine:
             item_belief_narrowing=self.item_belief_narrowing,
         )
         twin._event_count = self._event_count
-        twin._sides = copy.deepcopy(self._sides)
+        # A frozen belief record is not wholly immutable: candidate/source payloads
+        # contain mutable mappings and lists. Copy those recursively, but do not run
+        # deepcopy's object reconstruction over every immutable ledger field on each
+        # observation/sampled-world restore. One memo preserves aliases within a twin.
+        twin._sides = {}
+        memo: dict[int, Any] = {id(self._sides): twin._sides}
+        # Register side lists first to preserve payload backreferences as well.
+        for slot, side in self._sides.items():
+            twin._sides[slot] = memo.setdefault(id(side), [])
+        visited: set[int] = set()
+        for slot, side in self._sides.items():
+            if id(side) not in visited:
+                visited.add(id(side))
+                twin._sides[slot].extend(_copy_revealed_belief(belief, memo) for belief in side)
         twin._pending_switches = copy.deepcopy(self._pending_switches)
         twin._turn_number = self._turn_number
         twin._cure_all_count = dict(self._cure_all_count)
@@ -1947,6 +1995,14 @@ class PublicBattleBeliefEngine:
             # Record the proc for the Early Bird Rest-wake guard (Fix C), before
             # the already-confirmed early return below so it fires on every proc.
             self._shed_skin_activated_this_turn.add(belief.key)
+        if belief.transformed or belief.key in self._running_ability:
+            # An effect identifies the CURRENT ability, not the original set.
+            # Trace acquisition already records the borrowed copy separately;
+            # a later Flash Fire activation must not turn it into an impossible
+            # Porygon2/Gardevoir set trait (or a false conflict with known Trace).
+            # Transform has the same distinction. Switch-out clears the running
+            # copy, so later unborrowed effects can still reveal native abilities.
+            return
         if _normalize_identifier(belief.revealed_ability or "") == _normalize_identifier(ability_name):
             return
         if belief.revealed_ability:

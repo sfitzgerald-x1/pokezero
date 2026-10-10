@@ -90,6 +90,11 @@ fingerprint = _load(
 # 72 first-party modules, all 73 - 1 of these, the extra being `inference_service`
 # (imported lazily, so not resident at import time). Static superset of runtime,
 # which is the safe direction.
+# Conditioning integration grows the current-main pin from 75 to 77 files:
+# local_showdown reaches paper_reference_sleep and reference_yawn, and sleep
+# certificates also reach reference_yawn. Both consume public event ledgers;
+# neither introduces private snapshots or a new differential root. Measured
+# against the current-main set: these two additions only, no removed members.
 _EXPECTED_HARNESS_CLOSURE = frozenset(
     {
         "scripts/differential_denominator.py",
@@ -123,6 +128,8 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/investment.py",
         "src/pokezero/linear_policy.py",
         "src/pokezero/local_showdown.py",
+        # The opt-in reference sleep certificate is reached from local_showdown.
+        "src/pokezero/mcts_eval/paper_reference_sleep.py",
         "src/pokezero/mcts_diagnostics.py",
         "src/pokezero/neural_policy.py",
         "src/pokezero/neural_selfplay.py",
@@ -142,6 +149,7 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/public_decision_corpus.py",
         "src/pokezero/randbat.py",
         "src/pokezero/randbat_vocab.py",
+        "src/pokezero/reference_yawn.py",
         "src/pokezero/refutation_curriculum.py",
         "src/pokezero/refutation_mining.py",
         "src/pokezero/refutation_population.py",

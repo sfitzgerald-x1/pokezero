@@ -23,6 +23,10 @@ class ReferenceRefusal(ValueError):
     """Invalid state, work, or inference is evidence of refusal, not a fallback."""
 
 
+class SamplingDeadlineExceeded(Exception):
+    """An unfinished world exhausted the explicit decision clock, not fidelity."""
+
+
 @dataclass(frozen=True)
 class DecisionState:
     # Adapter-owned public/own-private information identity, NEVER latent truth.
@@ -210,6 +214,7 @@ class TrajectorySearch:
         self._master_version = -1
         self._exported_statistics = None
         self._last_master_snapshot = None
+        self._draw_recovered = False
 
     def reset_battle(self, battle_id: str) -> None:
         if not isinstance(battle_id, str) or not battle_id:
@@ -223,6 +228,7 @@ class TrajectorySearch:
         self._master_version = -1
         self._exported_statistics = None
         self._last_master_snapshot = None
+        self._draw_recovered = False
 
     def export_statistics(self, *, worker_id: str, sequence: int):
         from .paper_reference_exchange import WorkerUpdate
@@ -240,6 +246,19 @@ class TrajectorySearch:
                 raise ReferenceRefusal("same export sequence has different own evidence")
         self._exported_statistics = message
         return message
+
+    def restore_draw_ordinal(self, ordinal: int) -> None:
+        """Restore only the accepted-prefix draw position in a fresh worker.
+
+        No failed partial work, local priors or private sampled world is restored.
+        Imported Q/N/M/F may already be present; it remains shared, not OWN work.
+        """
+        if (type(ordinal) is not int or ordinal < 0 or self._battle_id is None
+                or not self._usable or self._draw_recovered or self._ordinal != 0 or self.nodes
+                or self._local_statistics or self._exported_statistics is not None):
+            raise ReferenceRefusal('draw recovery requires a fresh bound worker and nonnegative ordinal')
+        self._ordinal = ordinal
+        self._draw_recovered = True
 
     def merge_statistics(self, snapshot) -> None:
         from .paper_reference_exchange import MasterSnapshot, _nonregressing
@@ -432,6 +451,16 @@ class TrajectorySearch:
             None if deadline_seconds is None else started + deadline_seconds)
         expired = lambda: deadline is not None and clock() >= deadline
         completed = transitions = draws = 0
+        timing = None
+        if getattr(sample_world, 'collect_phase_timing', False):
+            from .paper_reference_conditioning_metrics import phase
+            timing = {'phase_timing': {}, 'schema': 'pokezero.reference-search-phases.v1'}
+            if not hasattr(sample_world, 'search_phase_timing'):
+                sample_world.search_phase_timing = []
+            sample_world.search_phase_timing.append(timing)
+        else:
+            from contextlib import nullcontext
+            phase = lambda evidence, name: nullcontext()
         try:
             if root.faint_count < self._faint_floor:
                 raise ReferenceRefusal("real faint count decreased without a battle reset")
@@ -444,7 +473,8 @@ class TrajectorySearch:
                                      if row.state.faint_count >= self._faint_floor}
             node = self._existing(root)
             if node is None and not expired():
-                node = self._node_from_evaluation(root, evaluate_root(root))
+                with phase(timing, 'root_inference'):
+                    node = self._node_from_evaluation(root, evaluate_root(root))
                 self.nodes[root.key] = node
                 self._discovered(node)
             for _ in range(trajectories):
@@ -452,15 +482,25 @@ class TrajectorySearch:
                     break
                 ordinal = self._ordinal
                 self._ordinal += 1
-                world = sample_world(_rng(seed, ordinal, "hidden"))
                 draws += 1
                 try:
-                    steps, backed = self._trajectory(world, root, _rng(seed, ordinal, "opponent"),
-                                                    _rng(seed, ordinal, "chance"), expired)
+                    with phase(timing, 'world_reconstruction_inclusive'):
+                        world = sample_world(_rng(seed, ordinal, "hidden"))
+                except SamplingDeadlineExceeded:
+                    if not expired():
+                        raise ReferenceRefusal('sampler reported deadline expiry before the search deadline')
+                    # No world/trajectory was accepted. Keep completed local
+                    # work and the attempted RNG ordinal; never back up this draw.
+                    break
+                try:
+                    with phase(timing, 'forward_search_inclusive'):
+                        steps, backed = self._trajectory(world, root, _rng(seed, ordinal, "opponent"),
+                                                        _rng(seed, ordinal, "chance"), expired)
                     transitions += steps
                     completed += int(backed)
                 finally:
-                    world.close()
+                    with phase(timing, 'world_cleanup'):
+                        world.close()
                 if not backed:
                     break
             if completed == 0 and require_complete:
@@ -482,3 +522,7 @@ class TrajectorySearch:
             # A simulator/cleanup/inference refusal cannot leave a reusable successful tree.
             self._usable = False
             raise
+        finally:
+            if timing is not None:
+                timing.update(completed_trajectories=completed, forward_transitions=transitions,
+                    attempted_world_draws=draws)

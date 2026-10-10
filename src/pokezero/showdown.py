@@ -4734,21 +4734,51 @@ def stable_category_id(value: str, *, buckets: int = CATEGORY_ID_BUCKETS) -> int
 
 def showdown_choice_for_action(state: PlayerRelativeBattleState, action_index: int) -> str:
     """Translate a 0-8 policy action index to a Showdown choice string."""
+    return _showdown_choice_for_layout(
+        state.legal_action_mask, state.self_team, state.request_kind, action_index
+    )
+
+
+def showdown_choices_for_request(
+    request: Mapping[str, Any] | None, showdown_slot: str
+) -> dict[int, str]:
+    """Translate a paired request without reconstructing public history or beliefs.
+
+    Choices depend only on request legality and the ordered own party. Share the
+    same layout translator as the full observation path, including its errors.
+    This does not observe a player, annotate history, or draw simulator randomness.
+    """
+    mask = _legal_action_mask(request)
+    team = _self_team_from_request(request, showdown_slot)
+    kind = _request_kind(request)
+    return {
+        action: _showdown_choice_for_layout(mask, team, kind, action)
+        for action in range(ACTION_COUNT)
+        if mask[action]
+    }
+
+
+def _showdown_choice_for_layout(
+    legal_action_mask: tuple[bool, ...],
+    self_team: tuple[ShowdownPokemon, ...],
+    request_kind: str,
+    action_index: int,
+) -> str:
     if action_index < 0 or action_index >= ACTION_COUNT:
         raise ValueError(f"action_index must be between 0 and {ACTION_COUNT - 1}.")
-    if not state.legal_action_mask[action_index]:
+    if not legal_action_mask[action_index]:
         raise ValueError(
             f"action_index {action_index} is not legal for the current request "
-            f"(request_kind={state.request_kind})."
+            f"(request_kind={request_kind})."
         )
     if is_move_action(action_index):
         return f"move {action_index + 1}"
     if is_switch_action(action_index):
-        active_team_index = _active_team_index(state.self_team)
+        active_team_index = _active_team_index(self_team)
         if active_team_index is None:
             raise ValueError("Cannot translate switch action without an active self Pokemon.")
         switch_slot = action_index - MOVE_ACTION_COUNT
-        switch_targets = canonical_switch_action_map(active_team_index, team_size=len(state.self_team))
+        switch_targets = canonical_switch_action_map(active_team_index, team_size=len(self_team))
         if switch_slot >= len(switch_targets):
             raise ValueError(f"action_index {action_index} is outside the current switch target map.")
         return f"switch {switch_targets[switch_slot] + 1}"
