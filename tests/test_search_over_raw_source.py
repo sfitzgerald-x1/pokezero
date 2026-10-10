@@ -7,7 +7,7 @@ from pokezero.actions import ACTION_COUNT
 from pokezero.env import StepResult, TerminalState
 from pokezero.observation import ObservationSpec, PokeZeroObservationV0
 from pokezero.policy import PolicyDecision
-from pokezero.mcts_eval.search_over_raw import SearchConfiguration, phase_a_contract
+from pokezero.mcts_eval.search_over_raw import SearchConfiguration, digest, phase_a_contract
 from pokezero.mcts_eval.search_over_raw_source import AuditedRawPolicy, collect_raw_source
 
 
@@ -93,6 +93,10 @@ class SourceCollectorTest(unittest.TestCase):
         env = SourceEnv()
         result = self.collect(env)
         self.assertEqual(result["eligible_requests"], 12)
+        self.assertEqual([r["source_request_index"] for r in result["eligible_public_records"]], list(range(12)))
+        self.assertEqual(digest(result["eligible_public_records"]), result["eligible_catalog_sha256"])
+        catalog = {r["source_request_index"]: r["public_record_sha256"] for r in result["eligible_public_records"]}
+        self.assertTrue(all(catalog[r["source_request_index"]] == r["public_record_sha256"] for r in result["roots"]))
         self.assertEqual(result["verified_raw_decisions"], 24)
         self.assertEqual(len(result["roots"]), 7)
         self.assertEqual(result["missing_root_ids"], [])
@@ -104,6 +108,7 @@ class SourceCollectorTest(unittest.TestCase):
     def test_source_winner_does_not_affect_selection_or_public_roots(self):
         won, lost = self.collect(SourceEnv(winner="p1")), self.collect(SourceEnv(winner="p2"))
         self.assertEqual(won["roots"], lost["roots"])
+        self.assertEqual(won["eligible_catalog_sha256"], lost["eligible_catalog_sha256"])
 
     def test_excluded_nonopening_rule_does_not_change_default_panel(self):
         self.contract["exclude_opening_requests"] = True

@@ -18,7 +18,8 @@ import uuid
 
 # Opening fixtures and the reference runtime's twenty synthetic startup games.
 # This is a minimum exclusion, not the complete historical exposure inventory.
-ENGINEERING_EXCLUDED_SEEDS = (2026101009, *range(2026100400, 2026100420), 2026101013, 2026101014)
+ENGINEERING_EXCLUDED_SEEDS = (2026101009, *range(2026100400, 2026100420),
+    2026101013, 2026101014, 2026101015, 2026101016)
 
 
 def digest(value: object) -> str:
@@ -159,7 +160,7 @@ def _raw_action(legal: Sequence[int], priors: Sequence[float]) -> int:
 def paired_continuations(*, env: Any, snapshot: object, subject: str,
                          actions: Mapping[str, int], evaluator: Callable,
                          namespace: str, root_id: str, max_boundaries: int = 200,
-                         outcome_sink=None) -> dict:
+                         outcome_sink=None, attempt_sink=None) -> dict:
     """Oct5 audit law, retaining identical actions and terminal uncertainty.
 
     Oracle snapshots are used AFTER action selection. The evaluator returns
@@ -174,6 +175,8 @@ def paired_continuations(*, env: Any, snapshot: object, subject: str,
     rows = []
     for action in sorted(set(actions.values())):
         for replicate in range(8):
+            if attempt_sink is not None:
+                attempt_sink(dict(root_id=root_id, action=action, replicate=replicate))
             env.restore(snapshot)
             require(env.terminal() is None, "continuation source root is already terminal")
             result = None

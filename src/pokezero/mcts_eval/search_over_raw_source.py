@@ -90,6 +90,9 @@ def source_roots(contract: Mapping, *, panel: str, source_seed: int,
     if contract.get("exclude_opening_requests", False):
         catalog = tuple(r for r in catalog if r.turn_index > 0)
     require(len({r.turn_index for r in catalog}) == len(catalog), "duplicate source request")
+    eligible = [dict(source_request_index=r.turn_index,
+        public_record_sha256=digest(PublicDecisionRecord.from_dict(r.to_dict()).to_dict()))
+        for r in catalog]
     selected = select_source_requests(contract["namespace"], source_seed,
         [r.turn_index for r in catalog], len(slots))
     records = {r.turn_index: r for r in catalog}
@@ -103,7 +106,8 @@ def source_roots(contract: Mapping, *, panel: str, source_seed: int,
     return dict(schema="pokezero.search-over-raw.source.v1", panel=panel,
         source_seed=source_seed, contract_sha256=digest(contract),
         status="COMPLETE" if complete else "UNCERTAIN_SOURCE", source_policy="raw_argmax_both_seats",
-        eligible_requests=len(catalog), requested_root_slots=len(slots), roots=roots,
+        eligible_requests=len(catalog), eligible_public_records=eligible,
+        eligible_catalog_sha256=digest(eligible), requested_root_slots=len(slots), roots=roots,
         missing_root_ids=[slot["root_id"] for slot in slots[len(roots):]],
         source_terminal_complete=complete, scientific_strength_evidence=False,
         search_invoked=False, replacement_seeds=[])
