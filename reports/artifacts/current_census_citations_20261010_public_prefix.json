@@ -1217,7 +1217,7 @@
     "scripts/current_census_citations.py": "7142b1da4f4138b1e1151a2f2fa3aff53dcf3dc7c928d61df38b226bd5e37d0a",
     "scripts/engine_transition_differential.py": "db85cb044ac894b232b6f6f36eaa41c128518352dace9081bf7dba11e4e3d7b0",
     "src/pokezero/engine_fidelity.py": "13531d5e1f0d9c5b2797b3cb4f00e760a4e0787ccfa3575f6f0bfd99411dd459",
-    "src/pokezero/engine_search.py": "58e400edb3e0bf472c6c676af2e55bcd64da7caed737b6bf1c0c52e9f2416e3e",
+    "src/pokezero/engine_search.py": "050e982955f90ba724f9592d1906a25389b1d8a33962459884352bd883d213a1",
     "src/pokezero/engine_world.py": "539c5254b678e663f91587edd79261eb7e9fdfda85a36e33b9a8345f43970a0a",
     "src/pokezero/golden_corpus_scenarios.py": "e0db60fefc8238aa9ef2521a7397bf50e9e386f17bfd33fc5451bde6ffc8e0e4",
     "src/pokezero/local_showdown.py": "70226dcd24e3cfb9015b255b2beca7d03cfb56e15e38a25523ca9a34ff7d61fd",

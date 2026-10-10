@@ -209,7 +209,7 @@
     "reports/artifacts/c153_wide_negative_census.json": "b4cfee633a79af3fcd246906a898168aedd3e5ac254311856d67b70d4affd995",
     "reports/artifacts/c154_unreachable_readjudication.json": "67b6711b007df553ed1e63be635fef2f048b021d1464b6168851fce2e3f2485c",
     "reports/artifacts/current_census_citations_20261010.json": "60895b824665a40f4cfc0918b5f90b705de1c18c0132ac2601763c01c9b9df6e",
-    "reports/artifacts/current_census_citations_20261010_public_prefix.json": "922582596ba55986a4887be8d6545cd94b5ba764ca452beba6ba029b5e743d10",
+    "reports/artifacts/current_census_citations_20261010_public_prefix.json": "30df88b1399415889ad2257d822b4002bf645cf72ad720af38550bd5ad89ba07",
     "reports/artifacts/current_census_citations_20261010_raw_redecision.json": "3c1a9445425b4cb116d7372595be8026c6d88dc95bf377503e244c1475a97b0d",
     "reports/artifacts/current_census_citations_20261010_raw_redecision_reviewed.json": "8c4c6d74aba51be1c85b2b3eeee6859f106c83d2c458c033d30ac463242f419a",
     "reports/artifacts/current_census_citations_20261010_strict_diagnostics.json": "b46a6f0c4e4c68dca92177e10a4e2d77bb3605566cec35506d41d28e4ebb5fc4",
