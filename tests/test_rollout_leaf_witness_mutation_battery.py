@@ -41,7 +41,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261010_raw.json"
+ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261010_current.json"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import mutate_rollout_leaf_witness as harness  # noqa: E402
@@ -74,6 +74,9 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
         hp = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261010_hp.json"
         self.assertEqual(_sha256(hp),
             "b33c8d9168739f342f10b34eb71e1819a6a5a2e574f29ddbcafe17d435e3e344")
+        raw = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261010_raw.json"
+        self.assertEqual(_sha256(raw),
+            "8b22658e0914fbe92fcaead95d7d06c00ca167c54e992718c1cb9c79bae1d8f7")
 
     def test_isolated_native_path_survives_while_this_source_stays_first(self) -> None:
         source = str(ROOT / "src")

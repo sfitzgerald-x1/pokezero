@@ -219,7 +219,10 @@ _CORPUS_TREES = ("reports", "docs")
 # 413 -> 414: a new create-only citation snapshot for strict-refusal diagnostics;
 # all previous citation/measurement snapshots remain immutable. Only the exact
 # nonmeasurement current terminal binding is explicitly refreshed to this corpus.
-_EXPECTED_COUNTER_ARTIFACTS = 414
+# 414 -> 415: a distinct fresh current-tree mutation battery; the three earlier
+# batteries retain their exact bytes. This changes the inventory, not a witness
+# count, measurement, source-pool disposition or scientific admission.
+_EXPECTED_COUNTER_ARTIFACTS = 415
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

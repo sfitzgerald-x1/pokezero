@@ -213,6 +213,7 @@
     "reports/artifacts/current_census_citations_20261010_raw_redecision_reviewed.json": "8c4c6d74aba51be1c85b2b3eeee6859f106c83d2c458c033d30ac463242f419a",
     "reports/artifacts/current_census_citations_20261010_strict_diagnostics.json": "b46a6f0c4e4c68dca92177e10a4e2d77bb3605566cec35506d41d28e4ebb5fc4",
     "reports/artifacts/rollout_leaf_witness_mutation_battery.json": "de99eed67b6570ba37c10584a470ab2416d738d672de86be9fad9e8d6fb4a3cc",
+    "reports/artifacts/rollout_leaf_witness_mutation_battery_20261010_current.json": "bb27f6d122c36b5081e008d691a0666287dd5051055c6d101c23cbfc3beff584",
     "reports/artifacts/rollout_leaf_witness_mutation_battery_20261010_hp.json": "b33c8d9168739f342f10b34eb71e1819a6a5a2e574f29ddbcafe17d435e3e344",
     "reports/artifacts/rollout_leaf_witness_mutation_battery_20261010_raw.json": "8b22658e0914fbe92fcaead95d7d06c00ca167c54e992718c1cb9c79bae1d8f7",
     "reports/artifacts/zero_heal_guard_mutation_battery.json": "d8e10cdc6e305b13610dcbf8af2858e24fa5225932e70f570471c4a8488c0765",
@@ -418,7 +419,7 @@
   "current_test_methods": 61,
   "deltas": {
     "base.expected_counter_artifacts": {
-      "current": "414",
+      "current": "415",
       "historical": "407"
     },
     "base.patch_stack": {
@@ -457,7 +458,7 @@
     "bar.roll_window_holdout_fraction": "0.899 %",
     "bar.support_gated_dev": "8.689 %",
     "bar.support_gated_holdout": "9.185 %",
-    "base.expected_counter_artifacts": "414",
+    "base.expected_counter_artifacts": "415",
     "base.expected_sweep_artifacts": "115",
     "base.patch_stack": "79",
     "base.section3_rows": "82",
@@ -683,7 +684,7 @@
     "scripts/current_terminal_register.py": "eb20084e9e8d2f9c6b9d338992ce684e65768813b096034362cb19b9bc4a2f25",
     "scripts/engine_build_fingerprint.py": "b10558e38b38fdc2eb25582a85d46e8a5b04331f54883e0586050f4690d55302",
     "tests/test_boundary_verdict_partition.py": "793d063490ab17a84c794de5fca5c7d7f57a5abc2195738f5ebb87582c865ce1",
-    "tests/test_never_fired_counter_census.py": "13500eb4ad8bdc9919cad8665d1505103ac92c30568ac3269e0534bdb741adb1",
+    "tests/test_never_fired_counter_census.py": "26b0152c2ca721282a18801429be3582f0f57a1fd258df19e805a83d5b7b0994",
     "tests/test_terminal_disposition_register.py": "340126a2e0e50043eb43ae71eeb6f9d24e897d22321642ae271197926ebcdd20",
     "tests/test_unreachable_readjudication.py": "58242432ffba34b98786c34b4190297b75f987cce394a1f8925ca0e36d8a61d7",
     "third_party/poke-engine-base-source.json": "32e26940858439aacdb82fb1ca58adf5bf489a8aee016a3002370944dafb24f7",
