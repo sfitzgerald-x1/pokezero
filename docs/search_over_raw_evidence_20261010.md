@@ -158,14 +158,45 @@ nominal-ceiling overruns rather than promising a strict latency bound.
 Runtime identities include the complete reference factory and dispatch width;
 they must be bound by the admission controller before execution.
 
-Eleven adapter tests pass, including five with real Showdown opening boundaries
+Thirteen adapter tests pass, including six with real Showdown opening boundaries
 and instrumented selectors. They do not run actual checkpoint-backed search.
 Their engineering fixture seed, 2026101009, must be excluded from prospective
 panels. Preparation and direct contract generation now automatically exclude
 that fixture and the twenty reference-worker startup seeds; this minimum
-exclusion does not replace the full historical inventory. Oracle and alternative-leaf configurations explicitly fail before
-runtime construction until their dedicated adapters are implemented. CI runs
-all 73 harness contracts with a no-skips and exact-count guard.
+exclusion does not replace the full historical inventory. Oracle and incumbent
+alternative-leaf configurations explicitly fail before runtime construction
+until their dedicated adapters are implemented. CI runs all98 harness
+contracts with a no-skips and exact-count guard.
+
+### Reference evaluator ablations
+
+The reference now supports HP-fraction and raw-policy terminal leaves with the
+same trajectory tree, public belief sampler and champion action priors. HP
+uses the signed difference between each hypothetical party's total remaining
+HP divided by total maximum HP. Raw-policy leaves run masked argmax for both
+seats with a separate deterministic chance domain, without consuming extra
+belief-sampler RNG draws. They restore and release their owned hypothetical
+snapshot before the tree continues. Source snapshots are never accepted.
+
+A capped rollout is a refusal, not an HP or model-value fallback. An expired
+rollout produces no value and backs up no partial trajectory; its worker
+receipt must contain a finite, expired decision clock. The original model
+leaf remains the default. Nineteen leaf tests cover signed terminals, priors,
+world restoration, cleanup after failure, cancellation and receipt validation.
+All182 reference regression tests pass with the existing synthetic vocabulary
+warnings disclosed above. These tests do not qualify real alternative-leaf
+search or admit either scientific panel.
+
+The source qualification driver's optional `--reference-leaves` registration
+adds a separate excluded ten-second experiment. It compares raw, incumbent,
+reference model, reference HP and reference raw-terminal selectors at two
+non-opening roots before paired terminal continuations. Its registration uses
+a separate chance and root-sampling namespace, fixed250-boundary caps and
+create-only attempts. Failed runs are retained and cannot be retried. The
+reference variants use sequential twenty-worker pools, with construction
+separately measured, rather than keeping sixty workers resident at once. The
+unchanged default contract preserves the earlier source qualification's
+scope; it does not relabel that earlier result as leaf qualification.
 
 `scripts/qualify_search_over_raw_opening.py` registers an excluded opening
 benchmark before runtime construction and permits one attempt only. It binds
@@ -253,7 +284,8 @@ record and its validation are still needed; the failing check is not waived.
 
 Remaining Phase A work includes full exposure inventory, complete source/model/native
 and simulator admission, broader non-opening and difficult-state qualification,
-the reference oracle diagnostic, evaluator ablations, timing benchmarks,
+the reference oracle diagnostic, incumbent evaluator ablations, real reference
+leaf qualification, timing benchmarks,
 direct belief/value/fidelity checks, durable worker progress receipts and
 integration of the held-out ledger with the real adapters. The excluded source
 game and continuations do not open exploration or validation. Phase B also

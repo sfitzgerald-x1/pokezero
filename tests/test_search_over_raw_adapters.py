@@ -41,9 +41,10 @@ class FakeEvaluator(ChampionEvaluator):
 
 class AdapterContractTests(unittest.TestCase):
     def test_unsupported_oracle_and_leaves_fail_before_runtime_construction(self):
-        for mode in [("oracle", "model"), ("public", "hp_fraction"), ("public", "raw_rollout")]:
-            with self.assertRaisesRegex(ValueError, "public/model"):
-                PublicModelSearchAdapter(SearchConfiguration("reference", *mode, workers=20),
+        for arm, belief, leaf in [("reference", "oracle", "model"),
+                ("incumbent", "public", "hp_fraction"), ("incumbent", "public", "raw_rollout")]:
+            with self.assertRaisesRegex(ValueError, "adapters remain required"):
+                PublicModelSearchAdapter(SearchConfiguration(arm, belief, leaf, workers=20 if arm == "reference" else 1),
                     checkpoint_contract=None, showdown_root="")
 
     def test_reference_cannot_change_resource_allocation_or_omit_factory(self):
@@ -63,6 +64,28 @@ class AdapterContractTests(unittest.TestCase):
                 PublicModelSearchAdapter(SearchConfiguration("reference", workers=20),
                     checkpoint_contract=contract, showdown_root="showdown", reference_factory=factory)
             pool.assert_not_called()
+
+    def test_reference_leaf_factory_and_runtime_identity_do_not_alias_model(self):
+        from pokezero.mcts_eval.search_over_raw_leaves import ReferenceLeafWorkerFactory
+        contract = SimpleNamespace(checkpoint_path="weights", checkpoint_sha256=SHA,
+            showdown_source_sha256="source")
+        factory = ShowdownWorkerFactory("weights", SHA, "showdown", "source")
+        identities = set()
+        for leaf in ("model", "hp_fraction", "raw_rollout"):
+            with patch("pokezero.mcts_eval.paper_reference_parallel.ParallelTrajectorySearch") as pool:
+                adapter = PublicModelSearchAdapter(SearchConfiguration("reference", leaf=leaf, workers=20),
+                    checkpoint_contract=contract, showdown_root="showdown", reference_factory=factory)
+                self.addCleanup(adapter.close)
+                dispatched = pool.call_args.args[1]
+                if leaf == "model":
+                    self.assertIs(dispatched, factory)
+                else:
+                    self.assertIsInstance(dispatched, ReferenceLeafWorkerFactory)
+                    self.assertIs(dispatched.base, factory)
+                    self.assertEqual(dispatched.leaf, leaf)
+                    self.assertEqual(adapter.runtime_configuration["reference_leaf"]["priors"], "unchanged_champion")
+                identities.add(adapter.runtime_sha256)
+        self.assertEqual(len(identities), 3)
 
     def test_reference_receipt_reconciles_new_work(self):
         validate_reference_work(work())
@@ -171,6 +194,18 @@ class PublicBoundaryTests(unittest.TestCase):
             adapter.close()
             adapter.close()
             pool.close.assert_called_once()
+
+    def test_reference_alternative_leaf_requires_matching_worker_evidence(self):
+        factory = ShowdownWorkerFactory("weights", SHA, str(showdown_root()), self.contract.showdown_source_sha256)
+        with patch("pokezero.mcts_eval.paper_reference_parallel.ParallelTrajectorySearch") as pool_type:
+            pool_type.return_value.search.return_value = work()
+            adapter = PublicModelSearchAdapter(SearchConfiguration("reference", leaf="raw_rollout", workers=20),
+                checkpoint_contract=self.contract, showdown_root=str(showdown_root()), reference_factory=factory)
+            self.addCleanup(adapter.close)
+            with self.assertRaisesRegex(ValueError, "authoritative worker evidence"):
+                adapter.select(self.context, root_id="fixture:raw-leaf", selection_seed=5)
+            self.assertTrue(adapter._poisoned)
+            self.assertIsNone(adapter.last_failure.get("action"))
 
     def test_incumbent_receives_no_opponent_observation_and_resets_root(self):
         legal = next(i for i,x in enumerate(self.context.observation.legal_action_mask) if x)

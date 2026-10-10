@@ -52,6 +52,50 @@ class SourceQualificationAdmissionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "qualification changed"):
                 DRIVER.claim_attempt(Path(directory), row)
 
+    def leaf_registration(self):
+        from dataclasses import asdict
+        row = self.registration()
+        row.update(schema=DRIVER.LEAF_SCHEMA, source_contract=DRIVER.engineering_contract(True),
+            configurations=[asdict(c) for c in DRIVER.qualification_configurations(10., True)])
+        return row
+
+    def test_leaf_qualification_has_distinct_namespace_and_configurations(self):
+        row = self.leaf_registration()
+        self.assertNotEqual(row["source_contract"]["namespace"], DRIVER.NAMESPACE)
+        with tempfile.TemporaryDirectory() as directory:
+            configs = DRIVER.claim_attempt(Path(directory), row)
+        self.assertEqual([DRIVER.configuration_key(c) for c in configs],
+            ["raw", "incumbent", "reference", "reference-hp_fraction", "reference-raw_rollout"])
+        self.assertEqual([c.leaf for c in configs[-3:]], ["model", "hp_fraction", "raw_rollout"])
+
+    def test_leaf_qualification_rejects_uniform_or_model_fallback_relabeling(self):
+        for key, value in (("raw_rollout_policy", "uniform"), ("raw_rollout_cap", 1000),
+                ("capped_rollout", "hp_fallback"), ("expired_rollout", "model_fallback")):
+            row = self.leaf_registration()
+            row["source_contract"]["reference_leaf_ablation"][key] = value
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(ValueError, "qualification changed"):
+                    DRIVER.claim_attempt(Path(directory), row)
+                self.assertFalse((Path(directory) / "attempt.json").exists())
+
+    def test_leaf_qualification_rejects_budget_arm_or_valuation_drift(self):
+        for key, value in (("seconds", 3.), ("belief", "oracle"), ("leaf", "model"), ("workers", 1)):
+            row = self.leaf_registration()
+            row["configurations"][-1][key] = value
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(ValueError, "arm/resource drift"):
+                    DRIVER.claim_attempt(Path(directory), row)
+                self.assertFalse((Path(directory) / "attempt.json").exists())
+
+    def test_source_qualification_cannot_admit_an_undeclared_budget(self):
+        row = self.registration()
+        for config in row["configurations"]:
+            config["seconds"] = 2.
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "undeclared qualification budget"):
+                DRIVER.claim_attempt(Path(directory), row)
+            self.assertFalse((Path(directory) / "attempt.json").exists())
+
 
 class ActualSourceBoundaryArchiveTests(unittest.TestCase):
     def setUp(self):

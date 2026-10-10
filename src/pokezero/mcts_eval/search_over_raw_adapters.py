@@ -1,8 +1,9 @@
 """Public/model decision adapters for prospective Phase A root experiments.
 
 Not an admission controller: source/native/runtime qualification and durable
-attempt receipts remain the collector's responsibility. Oracle and alternative
-leaves are deliberately rejected here, not silently run with model defaults.
+attempt receipts remain the collector's responsibility. Oracle and incumbent
+alternative leaves are rejected, not silently run with model defaults. Reference
+leaf ablations change valuation only, retaining champion priors and the tree.
 The reference retains its genuine twenty-worker kernel; the incumbent retains
 the historical depth6/batch16/worlds4 configuration at one worker.
 """
@@ -76,8 +77,9 @@ class PublicModelSearchAdapter:
                  initial_dispatch_workers: int = 6):
         from .paper_reference_runtime import ShowdownWorkerFactory
 
-        require(configuration.belief == "public" and configuration.leaf == "model",
-            "this adapter supports public/model only; oracle and leaf adapters remain required")
+        require(configuration.belief == "public" and (configuration.leaf == "model"
+            or configuration.arm == "reference"),
+            "oracle and incumbent alternative-leaf adapters remain required")
         require(configuration.workers == (20 if configuration.arm == "reference" else 1),
             "resource allocation differs from the registered arm")
         require(type(initial_dispatch_workers) is int and 1 <= initial_dispatch_workers <= 20,
@@ -118,6 +120,13 @@ class PublicModelSearchAdapter:
         elif configuration.arm == "reference":
             from .paper_reference import ReferenceConfig
             from .paper_reference_parallel import ParallelTrajectorySearch
+            if configuration.leaf != "model":
+                from .search_over_raw_leaves import ReferenceLeafWorkerFactory, ROLLOUT_CAP
+                reference_factory = ReferenceLeafWorkerFactory(reference_factory, configuration.leaf)
+                self.runtime_configuration["reference_leaf"] = dict(leaf=configuration.leaf,
+                    rollout_cap=ROLLOUT_CAP, rollout_policy="raw_argmax_both_seats",
+                    tree="unchanged_trajectory_reference", priors="unchanged_champion")
+                self.runtime_sha256 = digest(self.runtime_configuration)
             self._pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1.), reference_factory,
                 workers=20, batch_size=10, initial_dispatch_workers=initial_dispatch_workers)
 
@@ -185,6 +194,9 @@ class PublicModelSearchAdapter:
                 measured = self._pool.search(request, root, battle_id="search-over-raw-root:"+root_id,
                     seed=selection_seed, deadline_seconds=remaining)
                 validate_reference_work(measured)
+                if self.configuration.leaf != "model":
+                    from .search_over_raw_leaves import validate_leaf_work
+                    validate_leaf_work(measured, self.configuration.leaf)
                 encoded = measured.result.action
                 require(type(encoded) is str and encoded.startswith("action:") and encoded[7:].isdigit(),
                     "invalid reference action encoding")

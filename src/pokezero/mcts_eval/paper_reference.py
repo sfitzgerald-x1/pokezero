@@ -27,6 +27,10 @@ class SamplingDeadlineExceeded(Exception):
     """An unfinished world exhausted the explicit decision clock, not fidelity."""
 
 
+class LeafDeadlineExceeded(Exception):
+    """An opt-in leaf rollout expired; no placeholder value may be backed up."""
+
+
 @dataclass(frozen=True)
 class DecisionState:
     # Adapter-owned public/own-private information identity, NEVER latent truth.
@@ -365,7 +369,12 @@ class TrajectorySearch:
                 faint_floor = state.faint_count
                 node = self._existing(state)
                 if node is None:
-                    evaluation = world.evaluate(state)
+                    try:
+                        evaluation = world.evaluate(state)
+                    except LeafDeadlineExceeded:
+                        if not expired():
+                            raise ReferenceRefusal("leaf reported deadline expiry before the search deadline")
+                        return transitions, False
                     node = self._node_from_evaluation(state, evaluation)
                     if state.key not in self._shared_statistics:
                         leaf = node

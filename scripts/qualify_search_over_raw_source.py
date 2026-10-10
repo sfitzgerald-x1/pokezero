@@ -4,7 +4,7 @@ Register against clean source/native bindings first, then run once. This is
 engineering qualification, never exploration, held-out admission or strength.
 No historical pool, accepted prefix or model is resumed or changed.
 """
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import argparse
 import json
 from pathlib import Path
@@ -17,10 +17,28 @@ from pokezero.mcts_eval.search_over_raw import (
 
 NAMESPACE = "b969773c-de77-42ca-a67a-1ce83b60f7a9"
 SCHEMA = "pokezero.search-over-raw.source-qualification.v1"
+LEAF_SCHEMA = "pokezero.search-over-raw.reference-leaf-qualification.v1"
+LEAF_NAMESPACE = "38e3b8e9-26bf-4f8a-aa2e-6f196ea3079f"
 
 
-def engineering_contract():
-    return dict(namespace=NAMESPACE, candidate_seat="p1", exclude_opening_requests=True,
+def configuration_key(configuration):
+    return configuration.arm if configuration.leaf == "model" else configuration.arm + "-" + configuration.leaf
+
+
+def qualification_configurations(seconds, reference_leaves=False):
+    require(type(seconds) in (int, float) and seconds in (1., 3., 10.)
+        and type(reference_leaves) is bool, "undeclared qualification budget or mode")
+    configs = [SearchConfiguration(arm, seconds=seconds, workers=20 if arm == "reference" else 1)
+        for arm in ARMS]
+    if reference_leaves:
+        require(seconds == 10., "reference leaf qualification requires the declared ten-second budget")
+        configs += [replace(configs[-1], leaf=leaf) for leaf in ("hp_fraction", "raw_rollout")]
+    return configs
+
+
+def engineering_contract(reference_leaves=False):
+    result = dict(namespace=LEAF_NAMESPACE if reference_leaves else NAMESPACE,
+        candidate_seat="p1", exclude_opening_requests=True,
         panels={"excluded": dict(seeds=[FIXTURE_SEED], root_slots=[
             dict(root_id=f"excluded:{FIXTURE_SEED}:{i}", source_seed=FIXTURE_SEED, root_slot=i)
             for i in range(2)])}, continuation_replicates=8,
@@ -29,11 +47,21 @@ def engineering_contract():
         continuation_policy="raw_argmax_after_initial_sampled_opponent_reply",
         max_source_boundaries=250, max_continuation_boundaries=250,
         scientific_strength_evidence=False, phase_a_admission=False, retry_authorized=False)
+    if reference_leaves:
+        result["reference_leaf_ablation"] = dict(leaves=["model", "hp_fraction", "raw_rollout"],
+            tree="unchanged_trajectory_reference", priors="unchanged_champion",
+            world_sampler="unchanged_public_belief", raw_rollout_policy="raw_argmax_both_seats",
+            raw_rollout_cap=250, capped_rollout="refusal_without_value_fallback",
+            expired_rollout="cancelled_without_backup", comparison="excluded_engineering_only",
+            pool_lifetime="one_selection_sequential_twenty_worker_pools")
+    return result
 
 
-def register(*, output, **kwargs):
+def register(*, output, reference_leaves=False, **kwargs):
     registration = prepare_binding(**kwargs)
-    registration.update(schema=SCHEMA, source_contract=engineering_contract(),
+    registration.update(schema=LEAF_SCHEMA if reference_leaves else SCHEMA,
+        configurations=[asdict(c) for c in qualification_configurations(kwargs.get("seconds", 1.), reference_leaves)],
+        source_contract=engineering_contract(reference_leaves),
         scope="one excluded raw source game; two non-opening roots; eight continuations per unique selected action")
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -42,7 +70,9 @@ def register(*, output, **kwargs):
 
 
 def claim_attempt(output, registration):
-    require(registration["schema"] == SCHEMA and registration["source_contract"] == engineering_contract()
+    reference_leaves = registration["schema"] == LEAF_SCHEMA
+    require(registration["schema"] in (SCHEMA, LEAF_SCHEMA)
+        and registration["source_contract"] == engineering_contract(reference_leaves)
         and registration["fixture_seed"] == FIXTURE_SEED
         and registration["seeds"] == list(ENGINEERING_EXCLUDED_SEEDS)
         and registration["candidate_seat"] == "p1"
@@ -50,9 +80,7 @@ def claim_attempt(output, registration):
         and registration["scientific_strength_evidence"] is False,
         "qualification changed or admits scientific outcomes")
     configs = [SearchConfiguration(**c) for c in registration["configurations"]]
-    require(tuple(c.arm for c in configs) == ARMS and all(c.belief == "public" and c.leaf == "model"
-        and c.workers == (20 if c.arm == "reference" else 1) for c in configs)
-        and len({c.seconds for c in configs}) == 1 and configs[0].seconds in (1., 3., 10.),
+    require(bool(configs) and configs == qualification_configurations(configs[0].seconds, reference_leaves),
         "qualification arm/resource drift")
     save_new(output / "attempt.json", dict(status="CLAIMED_BEFORE_RUNTIME",
         registration_sha256=digest(registration), retry_authorized=False))
@@ -134,23 +162,30 @@ def run(output):
             root_dir.mkdir()
             actions = {}
             for cfg in configs:
+                key = configuration_key(cfg)
                 verify_inputs(registration)
-                stage = root_id + ":" + cfg.arm
-                save_new(root_dir / (cfg.arm + "-attempt.json"), dict(status="CLAIMED_BEFORE_SELECTION",
+                stage = root_id + ":" + key
+                save_new(root_dir / (key + "-attempt.json"), dict(status="CLAIMED_BEFORE_SELECTION",
                     configuration=asdict(cfg), source_request_index=root["source_request_index"], retry_authorized=False))
-                if cfg.arm not in adapters:
+                if key not in adapters:
                     began = time.perf_counter()
-                    adapters[cfg.arm] = PublicModelSearchAdapter(cfg, checkpoint_contract=contract,
+                    adapters[key] = PublicModelSearchAdapter(cfg, checkpoint_contract=contract,
                         showdown_root=showdown, evaluator=evaluator if cfg.arm == "raw" else None,
                         reference_factory=factory if cfg.arm == "reference" else None,
                         initial_dispatch_workers=registration["initial_dispatch_workers"])
-                    save_new(output / (cfg.arm + "-construction.json"),
-                        dict(seconds=time.perf_counter()-began, runtime_configuration=adapters[cfg.arm].runtime_configuration))
-                selected = adapters[cfg.arm].select(context, root_id=root_id + ":" + cfg.arm,
+                    construction_dir = root_dir if registration["schema"] == LEAF_SCHEMA else output
+                    save_new(construction_dir / (key + "-construction.json"),
+                        dict(seconds=time.perf_counter()-began, runtime_configuration=adapters[key].runtime_configuration))
+                selected = adapters[key].select(context, root_id=root_id + ":" + key,
                     selection_seed=FIXTURE_SEED, pending_transition=pending)
-                actions[cfg.arm] = selected["action"]
-                save_new(root_dir / (cfg.arm + "-selected.json"), selected)
+                actions[key] = selected["action"]
+                save_new(root_dir / (key + "-selected.json"), selected)
                 print(json.dumps(dict(stage=stage, action=selected["action"], seconds=selected["elapsed_seconds"])), flush=True)
+                if registration["schema"] == LEAF_SCHEMA and cfg.arm == "reference":
+                    # Do not keep three twenty-worker pools resident at once.
+                    # Construction is separately measured; each independent
+                    # root selection still runs the genuine twenty-worker arm.
+                    adapters.pop(key).close()
             require(actions["raw"] == root["public_record"]["recorded_action_index"], "raw source/evaluator action drift")
             # The true source boundary enters only the auditor, AFTER all arms
             # select from public contexts. No source opponent choice is replayed.
@@ -170,9 +205,10 @@ def run(output):
                 return legal, evaluation.priors
 
             audit = paired_continuations(env=env, snapshot=snapshot, subject="p1", actions=actions,
-                evaluator=raw_evaluator, namespace=NAMESPACE, root_id=root_id, max_boundaries=250,
+                evaluator=raw_evaluator, namespace=registration["source_contract"]["namespace"],
+                root_id=root_id, max_boundaries=250,
                 outcome_sink=outcome_sink)
-            audit.update(contrasts={arm: root_contrast(audit, arm) for arm in ARMS[1:]},
+            audit.update(contrasts={arm: root_contrast(audit, arm) for arm in actions if arm != "raw"},
                 scientific_strength_evidence=False, source_public_record_sha256=root["public_record_sha256"])
             verify_inputs(registration)
             save_new(root_dir / "audit.json", audit)
@@ -187,7 +223,8 @@ def run(output):
         env.close()
         env = None
         verify_inputs(registration)
-        save_new(output / "terminal.json", dict(status="COMPLETE_SOURCE_CONTINUATION_TECHNICAL_QUALIFICATION_ONLY",
+        save_new(output / "terminal.json", dict(status=("COMPLETE_REFERENCE_LEAF_TECHNICAL_QUALIFICATION_ONLY"
+            if registration["schema"] == LEAF_SCHEMA else "COMPLETE_SOURCE_CONTINUATION_TECHNICAL_QUALIFICATION_ONLY"),
             registration_sha256=digest(registration), roots=completed_roots,
             elapsed_seconds=time.perf_counter()-started, scientific_strength_evidence=False, phase_a_admission=False))
         return 0
@@ -221,6 +258,8 @@ def main(argv=None):
     for name in ("checkpoint-sha256", "showdown-commit", "source-commit", "factory-options-sha256"):
         prep.add_argument("--" + name, required=True)
     prep.add_argument("--seconds", type=float, choices=(1., 3., 10.), default=1.)
+    prep.add_argument("--reference-leaves", action="store_true",
+        help="separate excluded ten-second model/HP/raw-terminal reference leaf qualification")
     args = vars(parser.parse_args(argv))
     command = args.pop("command")
     if command == "run":
