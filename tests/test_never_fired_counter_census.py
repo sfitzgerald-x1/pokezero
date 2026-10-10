@@ -225,7 +225,10 @@ _CORPUS_TREES = ("reports", "docs")
 # 415 -> 416: add one distinct current-source public-prefix citation supplement;
 # historical measurements and every previous supplement retain their bytes.
 # Refresh only the explicitly scoped current terminal-register metadata binding.
-_EXPECTED_COUNTER_ARTIFACTS = 416
+# 416 -> 417: a full isolated callback-diagnostics mutation sweep adds distinct
+# current-byte evidence; all four earlier mutation artifacts remain unchanged.
+# Refresh only the explicit current nonmeasurement source binding.
+_EXPECTED_COUNTER_ARTIFACTS = 417
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

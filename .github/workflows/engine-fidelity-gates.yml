@@ -1077,7 +1077,7 @@ jobs:
             tests.test_randbat_metadata_cache tests.test_policy_opponent_diagnostics \
             tests.test_search_over_raw_atomic_round tests.test_policy_opponent_prefix -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 348 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 357 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"

@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import threading
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import AbstractSet, Any, Iterable, Mapping, Optional, Sequence
 
 from .belief import CandidateSetSummary
 from .paths import portable_path
@@ -279,7 +279,15 @@ class Gen3RandbatVariant:
         ruled_out_abilities: Sequence[str] = (),
         ruled_out_items: Sequence[str] = (),
     ) -> bool:
-        normalized_moves = {_normalize_move(move) for move in self.moves}
+        # Read once, as the original comprehension did. Bind current immutable
+        # values rather than variant identity: even frozen fields may be forced
+        # to change. Noncanonical/custom inputs retain original conversion order.
+        moves = self.moves
+        if (type(self) is Gen3RandbatVariant and type(moves) is tuple and len(moves) <= 4
+                and all(type(move) is str and len(move) <= 128 for move in moves)):
+            normalized_moves = _normalized_variant_move_set(moves)
+        else:
+            normalized_moves = {_normalize_move(move) for move in moves}
         if any(not _revealed_move_matches_variant(move, normalized_moves) for move in revealed_moves):
             return False
         if _normalize_id(self.ability) in {_normalize_id(ability) for ability in ruled_out_abilities}:
@@ -1081,7 +1089,18 @@ def _stab_only_via_hidden_power(
     return bool(eligible) and all(move_id.startswith("hiddenpower") for move_id in eligible)
 
 
-def _revealed_move_matches_variant(revealed_move: str, normalized_variant_moves: set[str]) -> bool:
+@lru_cache(maxsize=2048)
+def _normalized_variant_move_set(moves: tuple[str, ...]) -> frozenset[str]:
+    """Bounded exact-string move derivation, never a query/source/belief cache.
+
+    Only matches()'s guarded canonical values enter this cache. It may retain
+    caller-supplied plain move strings, not exclusively a public catalog.
+    Immutable results cannot be poisoned by another match or a branch clone.
+    """
+    return frozenset(_normalize_move(move) for move in moves)
+
+
+def _revealed_move_matches_variant(revealed_move: str, normalized_variant_moves: AbstractSet[str]) -> bool:
     normalized = _normalize_move(revealed_move)
     if normalized == "hiddenpower":
         return any(move.startswith("hiddenpower") for move in normalized_variant_moves)
