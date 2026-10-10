@@ -14,6 +14,7 @@ from pathlib import Path
 import sys
 import time
 import traceback
+from uuid import UUID
 
 from benchmark_search_over_raw_feasibility import _runtime, close_resources, save_new
 from qualify_search_over_raw_opening import prepare_binding, verify_inputs
@@ -30,20 +31,33 @@ MODES = ("instrumented", "disabled")
 CONFIGURATION = SearchConfiguration("incumbent", "public", "raw_rollout", 10., 1)
 
 
-def source_contract():
-    return dict(namespace=NAMESPACE, candidate_seat="p1", exclude_opening_requests=True,
-        panels={"excluded": dict(seeds=[SEED], root_slots=[dict(
-            root_id=f"excluded:{SEED}:0", source_seed=SEED, root_slot=0)])},
+def validate_identity(seed, namespace):
+    require(type(seed) is int and 0 <= seed < 2**32, "probe seed must be exact uint32")
+    require(type(namespace) is str, "probe namespace must be canonical UUID")
+    try:
+        canonical = str(UUID(namespace))
+    except (ValueError, AttributeError):
+        raise ValueError("probe namespace must be canonical UUID") from None
+    require(namespace == canonical, "probe namespace must be canonical UUID")
+    require((seed == SEED) == (namespace == NAMESPACE), "historical probe identity cannot be rebound")
+
+
+def source_contract(seed=SEED, namespace=NAMESPACE):
+    validate_identity(seed, namespace)
+    return dict(namespace=namespace, candidate_seat="p1", exclude_opening_requests=True,
+        panels={"excluded": dict(seeds=[seed], root_slots=[dict(
+            root_id=f"excluded:{seed}:0", source_seed=seed, root_slot=0)])},
         source_policy="raw_argmax_both_seats", max_source_boundaries=250,
         replacements_permitted=False, retry_authorized=False,
         scientific_strength_evidence=False, phase_a_admission=False)
 
 
-def core():
-    return dict(schema=SCHEMA, namespace=NAMESPACE, seeds=[SEED], fixture_seed=SEED,
+def core(seed=SEED, namespace=NAMESPACE):
+    validate_identity(seed, namespace)
+    return dict(schema=SCHEMA, namespace=namespace, seeds=[seed], fixture_seed=seed,
         candidate_seat="p1", configurations=[asdict(CONFIGURATION)],
-        source_contract=source_contract(), mode_order=list(MODES),
-        selection_seed=int(digest([NAMESPACE, SEED, "selection"])[:16], 16),
+        source_contract=source_contract(seed, namespace), mode_order=list(MODES),
+        selection_seed=int(digest([namespace, seed, "selection"])[:16], 16),
         paired_root_reuse="Same fresh root in independently constructed adapters, declared before source collection",
         stop_policy="First source, construction, selection, diagnostic, provenance or cleanup failure stops entire attempt",
         scientific_strength_evidence=False, phase_a_admission=False, phase_b_authorized=False,
@@ -55,9 +69,13 @@ def core():
             deadline="whole_round_cancel_without_backup"))
 
 
-def exposure_inventory(paths):
+def exposure_inventory(paths, *, seed=SEED):
     require(paths, "explicit exposure registrations required")
-    seeds, bindings = set(ENGINEERING_EXCLUDED_SEEDS) - {SEED}, {}
+    require(type(seed) is int and 0 <= seed < 2**32, "probe seed must be exact uint32")
+    # Preserve the historical default contract for audit/tests. Fresh attempts
+    # retain ALL minimum exclusions, including the permanently terminal seed20.
+    seeds = set(ENGINEERING_EXCLUDED_SEEDS) - ({SEED} if seed == SEED else set())
+    bindings = {}
     for supplied in paths:
         path = Path(supplied).resolve()
         value = json.loads(path.read_text())
@@ -67,7 +85,7 @@ def exposure_inventory(paths):
             "exposure registration requires explicit uint32 seeds")
         seeds.update(roster)
         bindings[str(path)] = sha256_file(path)
-    require(SEED not in seeds, "fresh diagnostic seed already exposed; no retry/redraw")
+    require(seed not in seeds, "fresh diagnostic seed already exposed; no retry/redraw")
     return sorted(seeds), bindings
 
 
@@ -82,9 +100,11 @@ def bound_driver_files():
 
 
 def validate_contract(registration, output):
-    require(digest({k: registration[k] for k in core()}) == digest(core()),
+    expected = core(registration["fixture_seed"], registration["namespace"])
+    require(digest({k: registration[k] for k in expected}) == digest(expected),
         "diagnostic core changed or scientific/retry claim attempted")
-    excluded, exposure = exposure_inventory(list(registration["exposure_registrations"]))
+    excluded, exposure = exposure_inventory(list(registration["exposure_registrations"]),
+        seed=registration["fixture_seed"])
     require(excluded == registration["excluded_seeds"]
         and digest(excluded) == registration["excluded_seed_inventory_sha256"]
         and exposure == registration["exposure_registrations"], "exposure inventory drift")
@@ -96,11 +116,13 @@ def validate_contract(registration, output):
         and not Path(output).resolve().is_relative_to(ROOT), "source/output identity drift")
 
 
-def register(*, output, exposure_registrations, **kwargs):
-    excluded, exposure = exposure_inventory(exposure_registrations)
+def register(*, output, exposure_registrations, seed=SEED, namespace=NAMESPACE, **kwargs):
+    prospective = core(seed, namespace)
+    require(seed not in ENGINEERING_EXCLUDED_SEEDS, "terminal or excluded probe seed cannot be registered")
+    excluded, exposure = exposure_inventory(exposure_registrations, seed=seed)
     binding = prepare_binding(**kwargs, seconds=10.)
     output = Path(output).resolve()
-    binding.update(**core(), attempt_directory=str(output), exposure_registrations=exposure,
+    binding.update(**prospective, attempt_directory=str(output), exposure_registrations=exposure,
         excluded_seeds=excluded, excluded_seed_inventory_sha256=digest(excluded),
         exposure_scope="supplied registrations plus minimum exclusions, not a universal census",
         scope="one fresh real-source root, instrumented then disabled native atomic-round diagnostic only")
@@ -114,13 +136,14 @@ def register(*, output, exposure_registrations, **kwargs):
     return binding
 
 
-def validate_source(source, *, checkpoint_sha256=None):
+def validate_source(source, *, checkpoint_sha256=None, seed=SEED, namespace=NAMESPACE):
+    validate_identity(seed, namespace)
     from pokezero.public_decision_corpus import PublicDecisionRecord
     rows = source["eligible_public_records"]
     indices = [r["source_request_index"] for r in rows]
     require(source["schema"] == "pokezero.search-over-raw.source.v1"
         and source["panel"] == "excluded" and type(source["source_seed"]) is int
-        and source["source_seed"] == SEED and source["contract_sha256"] == digest(source_contract())
+        and source["source_seed"] == seed and source["contract_sha256"] == digest(source_contract(seed, namespace))
         and source["status"] == "COMPLETE" and source["source_terminal_complete"] is True
         and source["source_policy"] == "raw_argmax_both_seats"
         and type(source["eligible_requests"]) is int and source["eligible_requests"] == len(rows)
@@ -133,13 +156,13 @@ def validate_source(source, *, checkpoint_sha256=None):
         and type(source["verified_raw_decisions"]) is int and source["verified_raw_decisions"] > 0
         and (checkpoint_sha256 is None or source["checkpoint_sha256"] == checkpoint_sha256),
         "source checkpoint/cap/elapsed evidence drift")
-    chosen = select_source_requests(NAMESPACE, SEED, indices, 1)
+    chosen = select_source_requests(namespace, seed, indices, 1)
     require(source["missing_root_ids"] == [] and source["requested_root_slots"] == 1
         and len(source["roots"]) == len(chosen) == 1, "source incomplete; no redraw")
     root = source["roots"][0]
     public = PublicDecisionRecord.from_dict(root["public_record"])
-    require(root["root_id"] == f"excluded:{SEED}:0" and root["source_request_index"] == chosen[0]
-        and type(root["public_record"]["seed"]) is int and public.seed == SEED
+    require(root["root_id"] == f"excluded:{seed}:0" and root["source_request_index"] == chosen[0]
+        and type(root["public_record"]["seed"]) is int and public.seed == seed
         and public.acting_player == "p1" and public.format_id == "gen3randombattle"
         and public.turn_index == chosen[0]
         and digest(public.to_dict())
@@ -151,6 +174,7 @@ def validate_source(source, *, checkpoint_sha256=None):
 
 
 def measure(registration, output, progress):
+    seed, namespace = registration["fixture_seed"], registration["namespace"]
     _runtime(registration)
     from pokezero.collection import env_config_with_policy_spec_masks
     from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -181,13 +205,14 @@ def measure(registration, output, progress):
             policies[seat] = AuditedRawPolicy(policy, checkpoint_sha256=registration["checkpoint_sha256"],
                 public_context_sink=archive.capture_public if seat == "p1" else None)
         verify_inputs(registration)
-        save_new(output / "source-attempt.json", dict(seed=SEED, retry_authorized=False))
+        save_new(output / "source-attempt.json", dict(seed=seed, retry_authorized=False))
         progress.update(stage="source:collect", source_status="ATTEMPTED_UNCERTAIN")
-        source = collect_raw_source(source_contract(), panel="excluded", source_seed=SEED,
+        source = collect_raw_source(source_contract(seed, namespace), panel="excluded", source_seed=seed,
             env=env, policies=policies, max_decision_rounds=250,
             sealed_pre_step_sink=archive.capture_private)
         save_new(output / "source.json", source)
-        root = validate_source(source, checkpoint_sha256=registration["checkpoint_sha256"])
+        root = validate_source(source, checkpoint_sha256=registration["checkpoint_sha256"],
+            seed=seed, namespace=namespace)
         progress.update(source_status="COMPLETE", source_boundaries=source["decision_boundaries"],
             source_elapsed_seconds=source["elapsed_seconds"], source_request_index=root["source_request_index"])
         context, pending, _snapshot = archive.selected(root)
@@ -299,7 +324,8 @@ def verify_completion(registration, output, progress):
     from pokezero.mcts_eval.policy_opponent_profile import validate_selection
     def load(name):
         return json.loads((output / name).read_text())
-    root = validate_source(load("source.json"), checkpoint_sha256=registration["checkpoint_sha256"])
+    root = validate_source(load("source.json"), checkpoint_sha256=registration["checkpoint_sha256"],
+        seed=registration["fixture_seed"], namespace=registration["namespace"])
     identities = []
     for mode in MODES:
         attempt, runtime = load(f"{mode}-attempt.json"), load(f"{mode}-runtime.json")
@@ -350,6 +376,8 @@ def run(output):
     registration = json.loads((output / "registration.json").read_text())
     require(load_binding(output) == digest(registration), "registration binding drift")
     validate_contract(registration, output)
+    require(registration["fixture_seed"] not in ENGINEERING_EXCLUDED_SEEDS,
+        "terminal or excluded probe seed cannot run")
     verify_inputs(registration)
     require(not any((output / name).exists() for name in (
         "attempt.json", "terminal.json", "source-attempt.json", "source.json",
@@ -396,6 +424,8 @@ def main(argv=None):
     launch = sub.add_parser("run")
     launch.add_argument("--output", type=Path, required=True)
     prep = sub.add_parser("register")
+    prep.add_argument("--seed", type=int, required=True)
+    prep.add_argument("--namespace", required=True)
     prep.add_argument("--exposure-registration", dest="exposure_registrations", type=Path,
         action="append", required=True)
     for name in ("output", "checkpoint", "showdown-root", "native-receipt", "factory-options", "encoder-tables"):

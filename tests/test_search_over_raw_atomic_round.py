@@ -23,8 +23,12 @@ from test_policy_opponent_diagnostics import arguments
 from test_search_over_raw_source import FakeChampion, SourceEnv, SHA
 
 
-def synthetic_source():
-    return collect_raw_source(driver.source_contract(), panel="excluded", source_seed=driver.SEED,
+PROBE_SEED = 2026101021
+PROBE_NAMESPACE = "7d2df0c6-8c3f-4ce7-a801-50e1e9cf928b"
+
+
+def synthetic_source(seed=driver.SEED, namespace=driver.NAMESPACE):
+    return collect_raw_source(driver.source_contract(seed, namespace), panel="excluded", source_seed=seed,
         env=SourceEnv(), policies={s: AuditedRawPolicy(FakeChampion(), checkpoint_sha256=SHA)
             for s in ("p1", "p2")})
 
@@ -146,8 +150,8 @@ class DiagnosticDriverTests(unittest.TestCase):
         self.output = Path(self.temporary.name).resolve()
         self.exposure = self.output / "prior.json"
         driver.save_new(self.exposure, dict(seeds=[123]))
-        excluded, bindings = driver.exposure_inventory([self.exposure])
-        self.registration = dict(driver.core(), source_root=str(driver.ROOT),
+        excluded, bindings = driver.exposure_inventory([self.exposure], seed=PROBE_SEED)
+        self.registration = dict(driver.core(PROBE_SEED, PROBE_NAMESPACE), source_root=str(driver.ROOT),
             attempt_directory=str(self.output), exposure_registrations=bindings,
             excluded_seeds=excluded, excluded_seed_inventory_sha256=digest(excluded),
             input_sha256={**bindings, **{str(p): driver.sha256_file(p) for p in driver.bound_driver_files()}})
@@ -165,6 +169,19 @@ class DiagnosticDriverTests(unittest.TestCase):
         self.assertEqual(driver.core()["native_allocation"]["batch"], 16)
         self.assertEqual(driver.core()["native_allocation"]["worlds"], 4)
         self.assertEqual(len(driver.source_contract()["panels"]["excluded"]["root_slots"]), 1)
+        fresh = driver.core(PROBE_SEED, PROBE_NAMESPACE)
+        self.assertEqual(fresh["seeds"], [PROBE_SEED])
+        self.assertEqual(fresh["native_allocation"], driver.core()["native_allocation"])
+        self.assertNotEqual(fresh["selection_seed"], driver.core()["selection_seed"])
+        self.assertEqual(fresh["source_contract"]["panels"]["excluded"]["root_slots"][0]["root_id"],
+            f"excluded:{PROBE_SEED}:0")
+        self.assertIn(driver.SEED, self.registration["excluded_seeds"])
+        for seed, namespace in ((True, PROBE_NAMESPACE), (-1, PROBE_NAMESPACE),
+                (2**32, PROBE_NAMESPACE), (PROBE_SEED, "not-a-uuid"),
+                (PROBE_SEED, PROBE_NAMESPACE.upper()), (PROBE_SEED, driver.NAMESPACE),
+                (driver.SEED, PROBE_NAMESPACE)):
+            with self.subTest(seed=seed, namespace=namespace), self.assertRaises(ValueError):
+                driver.core(seed, namespace)
 
     def test_core_changes_and_typed_aliases_refuse(self):
         driver.validate_contract(self.registration, self.output)
@@ -184,6 +201,17 @@ class DiagnosticDriverTests(unittest.TestCase):
             driver.save_new(path, dict(seeds=seeds))
             with self.assertRaises(ValueError):
                 driver.exposure_inventory([path])
+        exposed = self.output / "fresh-exposed.json"
+        driver.save_new(exposed, dict(seeds=[PROBE_SEED]))
+        with self.assertRaisesRegex(ValueError, "already exposed"):
+            driver.exposure_inventory([exposed], seed=PROBE_SEED)
+        with patch.object(driver, "prepare_binding") as prepare:
+            for seed in ENGINEERING_EXCLUDED_SEEDS:
+                namespace = driver.NAMESPACE if seed == driver.SEED else PROBE_NAMESPACE
+                with self.subTest(seed=seed), self.assertRaisesRegex(ValueError, "terminal or excluded"):
+                    driver.register(output=self.output, exposure_registrations=[self.exposure],
+                        seed=seed, namespace=namespace)
+            prepare.assert_not_called()
         r = deepcopy(self.registration)
         r["input_sha256"].pop(str(driver.bound_driver_files()[0]))
         with self.assertRaisesRegex(ValueError, "mandatory driver"):
@@ -200,6 +228,11 @@ class DiagnosticDriverTests(unittest.TestCase):
     def test_source_is_full_catalog_priority_sampled_and_capped_not_redrawn(self):
         source = synthetic_source()
         self.assertEqual(driver.validate_source(source), source["roots"][0])
+        fresh = synthetic_source(PROBE_SEED, PROBE_NAMESPACE)
+        self.assertEqual(driver.validate_source(fresh, seed=PROBE_SEED, namespace=PROBE_NAMESPACE),
+            fresh["roots"][0])
+        with self.assertRaises(ValueError):
+            driver.validate_source(fresh)
         for field, value in (("status", "UNCERTAIN_SOURCE"), ("source_terminal_complete", False),
                 ("eligible_catalog_sha256", "0"*64), ("roots", [])):
             changed = deepcopy(source)
@@ -242,6 +275,16 @@ class DiagnosticDriverTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "drift"):
                 driver.run(self.output)
         self.assertFalse((self.output / "attempt.json").exists())
+        historical = dict(self.registration)
+        historical.update(driver.core())
+        with patch.object(driver, "load_binding", return_value=digest(historical)), \
+                patch.object(driver, "validate_contract"), patch.object(driver, "verify_inputs"), \
+                patch.object(driver, "measure") as measured, \
+                patch.object(driver.json, "loads", return_value=historical):
+            with self.assertRaisesRegex(ValueError, "terminal or excluded"):
+                driver.run(self.output)
+            measured.assert_not_called()
+        self.assertFalse((self.output / "attempt.json").exists())
 
     def test_refusal_retains_diagnostic_and_unknown_control(self):
         self.setup_run()
@@ -260,7 +303,7 @@ class DiagnosticDriverTests(unittest.TestCase):
         self.assertFalse(terminal["representative_runtime_evidence"])
 
     def fixtures(self, *, failed=False, forced=False, cleanup_failure=False, construction_failure=False):
-        source, calls, resources = synthetic_source(), [], []
+        source, calls, resources = synthetic_source(PROBE_SEED, PROBE_NAMESPACE), [], []
         source_root = source["roots"][0]
         context = SimpleNamespace(observation=SimpleNamespace(legal_action_mask=(True, not forced)))
         registration = self.registration
