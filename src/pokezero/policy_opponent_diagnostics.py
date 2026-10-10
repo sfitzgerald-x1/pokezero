@@ -11,11 +11,19 @@ from threading import Lock
 from time import perf_counter_ns
 
 
-PHASES = (
+SCHEMA = "pokezero.policy-opponent.callback-diagnostics.v2"
+CALLBACK_PHASES = (
     "callback_total", "payload_binding", "view_reconstruction",
     "distribution_binding", "observation_and_surface", "model_evaluation",
     "output_certification",
 )
+VIEW_PHASES = (
+    "view_public_projection", "view_own_request_certification",
+    "view_replay_parse", "view_prefix_prepare", "view_branch_clone",
+    "view_suffix_parse", "view_replay_snapshot", "view_belief_rebuild",
+    "view_normalization", "view_materialization",
+)
+PHASES = CALLBACK_PHASES + VIEW_PHASES
 
 
 class PolicyOpponentDiagnostics:
@@ -39,13 +47,15 @@ or masking its exception. There is no user-supplied clock, hook or output sink.
     def snapshot(self) -> dict:
         with self._lock:
             return {
-                "schema": "pokezero.policy-opponent.callback-diagnostics.v1",
+                "schema": SCHEMA,
                 "valid": self._faults == 0,
                 "timing_faults": self._faults,
                 "phases": {phase: dict(calls=row[0], failed_calls=row[1],
                     timed_calls=row[2], elapsed_seconds=row[3] / 1_000_000_000)
                     for phase, row in self._rows.items()},
                 "callback_total_contains_components_do_not_sum": True,
+                "view_reconstruction_contains_view_phases_do_not_sum": True,
+                "view_replay_parse_contains_prefix_prepare_clone_suffix_snapshot": True,
                 "model_evaluation_includes_lock_wait_and_canonical_setup": True,
                 "native_request_and_bridge_outside_python_spans": True,
                 "instrumentation_can_change_deadlines": True,

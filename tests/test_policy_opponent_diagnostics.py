@@ -10,7 +10,10 @@ from unittest.mock import patch
 from pokezero.neural_policy import TransformerInferenceTimingAccumulator
 from pokezero.policy_opponent import make_policy_opponent_callback, policy_opponent_distribution
 from pokezero.policy_opponent_diagnostics import PHASES, PolicyOpponentDiagnostics
-from pokezero.policy_opponent_view import PolicyOpponentViewError
+from pokezero.policy_opponent_view import (
+    PolicyOpponentViewError, _PublicPolicyPrefix, build_policy_opponent_view_from_native_bundle,
+    public_policy_lines,
+)
 from test_engine_world import _dex
 from test_policy_opponent import config
 from test_policy_opponent_request import bundle
@@ -94,6 +97,9 @@ class DiagnosticSinkTests(unittest.TestCase):
         self.assertEqual(snap["phases"]["callback_total"]["calls"], 0)
         self.assertEqual(tuple(snap["phases"]), PHASES)
         self.assertTrue(snap["callback_total_contains_components_do_not_sum"])
+        self.assertEqual(snap["schema"], "pokezero.policy-opponent.callback-diagnostics.v2")
+        self.assertTrue(snap["view_reconstruction_contains_view_phases_do_not_sum"])
+        self.assertTrue(snap["view_replay_parse_contains_prefix_prepare_clone_suffix_snapshot"])
         self.assertTrue(snap["model_evaluation_includes_lock_wait_and_canonical_setup"])
         self.assertTrue(snap["native_request_and_bridge_outside_python_spans"])
         self.assertTrue(snap["instrumentation_can_change_deadlines"])
@@ -102,6 +108,10 @@ class DiagnosticSinkTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sink.phase("arbitrary private phase")
         self.assertEqual(tuple(sink.snapshot()["phases"]), PHASES)
+        import profile_policy_opponent_view_components as profiler
+        with patch.object(profiler.sys, "flags", SimpleNamespace(optimize=1)):
+            with self.assertRaisesRegex(ValueError, "optimization is refused"):
+                profiler.run("this-path-must-never-be-created")
 
     def test_parallel_spans_have_invocation_owned_starts_and_exact_counts(self):
         sink = PolicyOpponentDiagnostics()
@@ -237,6 +247,45 @@ class CallbackDiagnosticTests(unittest.TestCase):
         self.assertEqual(values, before)
         self.assertEqual(forward.call_count, 8)
         self.assertEqual(sink.snapshot()["phases"]["view_reconstruction"]["calls"], 4)
+        rows = sink.snapshot()["phases"]
+        self.assertEqual(rows["view_prefix_prepare"]["calls"], 1)
+        for phase in ("view_public_projection", "view_own_request_certification",
+                "view_replay_parse", "view_branch_clone", "view_suffix_parse", "view_replay_snapshot",
+                "view_belief_rebuild", "view_normalization", "view_materialization"):
+            self.assertEqual(rows[phase]["calls"], 4)
+        # Inclusive parents contain their children, never a flat additive table.
+        children = ("view_public_projection", "view_own_request_certification",
+            "view_replay_parse", "view_belief_rebuild", "view_normalization", "view_materialization")
+        self.assertGreaterEqual(rows["view_reconstruction"]["elapsed_seconds"],
+            sum(rows[p]["elapsed_seconds"] for p in children))
+        self.assertGreaterEqual(rows["view_replay_parse"]["elapsed_seconds"],
+            sum(rows[p]["elapsed_seconds"] for p in ("view_prefix_prepare",
+                "view_branch_clone", "view_suffix_parse", "view_replay_snapshot")))
+        # The complete reference parser (and the bounded long-prefix fallback)
+        # must not invent cached clone/suffix measurements.
+        for cached in (False, True):
+            projected = public_policy_lines(LINES, hp_visibility=args["hp_visibility"])
+            prefix = _PublicPolicyPrefix(projected, battle_id="authored") if cached else None
+            if prefix is not None:
+                prefix._MAX_LINES = 0  # Authored cache-bound negative control.
+                prefix._cacheable = False
+            direct_args = {k: args[k] for k in ("opponent_slot", "battle_id", "battle_seed",
+                "format_id", "set_source")}
+            from pokezero.neural_policy import feature_masks_from_model_config, observation_spec_from_model_config
+            direct_args.update(public_lines=projected, hp_visibility={"p1": "percentage", "p2": "percentage"},
+                spec=observation_spec_from_model_config(args["result"].model_config),
+                feature_masks=feature_masks_from_model_config(args["result"].model_config), _public_prefix=prefix)
+            direct_sink = PolicyOpponentDiagnostics()
+            measured_view = build_policy_opponent_view_from_native_bundle(native_request_bundle=bundle(),
+                **direct_args, diagnostics=direct_sink)
+            with patch(CLOCK, side_effect=AssertionError("disabled timer was read")) as clock:
+                plain_view = build_policy_opponent_view_from_native_bundle(native_request_bundle=bundle(), **direct_args)
+                clock.assert_not_called()
+            self.assertEqual(measured_view.state, plain_view.state)
+            direct_rows = direct_sink.snapshot()["phases"]
+            self.assertEqual(direct_rows["view_replay_parse"]["calls"], 1)
+            self.assertEqual(direct_rows["view_branch_clone"]["calls"], 0)
+            self.assertEqual(direct_rows["view_prefix_prepare"]["calls"], 0)
 
     def test_arbitrary_or_subclass_collector_is_rejected_before_use(self):
         class Custom(PolicyOpponentDiagnostics):

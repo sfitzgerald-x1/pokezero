@@ -23,7 +23,7 @@ from test_policy_opponent_diagnostics import arguments
 from test_search_over_raw_source import FakeChampion, SourceEnv, SHA
 
 
-PROBE_SEED = 2026101021
+PROBE_SEED = 2026101099  # Authored test fixture only; never a real launch identity.
 PROBE_NAMESPACE = "7d2df0c6-8c3f-4ce7-a801-50e1e9cf928b"
 
 
@@ -463,6 +463,11 @@ class DiagnosticDriverTests(unittest.TestCase):
         snapshot["phases"].pop("model_evaluation")
         with self.assertRaises(ValueError):
             driver.validate_diagnostic(snapshot)
+        for phase in ("view_belief_rebuild", "view_branch_clone", "view_prefix_prepare"):
+            snapshot = sink.snapshot()
+            snapshot["phases"][phase].update(calls=2, timed_calls=2)
+            with self.subTest(phase=phase), self.assertRaisesRegex(ValueError, "component counts"):
+                driver.validate_diagnostic(snapshot)
 
     def test_source_checkpoint_cap_and_selected_public_identity_refuse(self):
         source = synthetic_source()

@@ -148,8 +148,9 @@ class PublicModelSearchAdapter:
             reference_factory=asdict(reference_factory) if configuration.arm == "reference" else None,
             initial_dispatch_workers=initial_dispatch_workers if configuration.arm == "reference" else None)
         if policy_opponent_diagnostics is not None:
+            from ..policy_opponent_diagnostics import SCHEMA as DIAGNOSTIC_SCHEMA
             self.runtime_configuration["callback_diagnostics"] = dict(
-                schema="pokezero.policy-opponent.callback-diagnostics.v1", enabled=True,
+                schema=DIAGNOSTIC_SCHEMA, enabled=True,
                 aggregate_only=True, instrumentation_can_change_deadlines=True,
                 qualifies_uninstrumented_runtime=False)
         if configuration.belief == "oracle":

@@ -155,7 +155,7 @@ def make_policy_opponent_callback(
                     public_lines=(*root_prefix, *suffix), hp_visibility={"p1": "percentage", "p2": "percentage"},
                     opponent_slot=opponent_slot, battle_id=battle_id, battle_seed=battle_seed,
                     format_id=format_id, set_source=set_source, spec=spec, feature_masks=masks,
-                    _public_prefix=public_prefix,
+                    _public_prefix=public_prefix, diagnostics=diagnostics,
                 )
             return policy_opponent_distribution(
                 view, native_action_indices=view.native_action_indices or (),

@@ -94,6 +94,7 @@ def bound_driver_files():
         ROOT / "scripts/qualify_search_over_raw_opening.py", *[
             ROOT / "src/pokezero" / path for path in (
                 "engine_search.py", "policy_opponent.py", "policy_opponent_diagnostics.py",
+                "policy_opponent_view.py",
                 "mcts_eval/lattice.py", "mcts_eval/policy_opponent_profile.py",
                 "mcts_eval/search_over_raw.py", "mcts_eval/search_over_raw_adapters.py",
                 "mcts_eval/search_over_raw_source.py", "mcts_eval/search_over_raw_archive.py")]]
@@ -289,7 +290,8 @@ def expected_runtime(registration, *, enabled):
             rollout_count=1, rollout_threads=1, branch_on_damage=True,
             seed="selection_seed_then_sha256_world_domain_v1"))
     if enabled:
-        runtime["callback_diagnostics"] = dict(schema="pokezero.policy-opponent.callback-diagnostics.v1",
+        from pokezero.policy_opponent_diagnostics import SCHEMA as DIAGNOSTIC_SCHEMA
+        runtime["callback_diagnostics"] = dict(schema=DIAGNOSTIC_SCHEMA,
             enabled=True, aggregate_only=True, instrumentation_can_change_deadlines=True,
             qualifies_uninstrumented_runtime=False)
     return runtime
@@ -317,6 +319,13 @@ def validate_diagnostic(diagnostic):
         "distribution_binding", "observation_and_surface")}) == 1
         and calls["model_evaluation"] == calls["output_certification"] <= calls["callback_total"],
         "successful callback phase counts do not conserve")
+    require(all(calls[p] == calls["view_reconstruction"] for p in (
+        "view_public_projection", "view_own_request_certification", "view_replay_parse",
+        "view_belief_rebuild", "view_normalization", "view_materialization"))
+        and calls["view_branch_clone"] == calls["view_suffix_parse"] == calls["view_replay_snapshot"]
+            <= calls["view_replay_parse"]
+        and calls["view_prefix_prepare"] <= calls["view_branch_clone"],
+        "successful view component counts do not conserve")
 
 
 def verify_completion(registration, output, progress):
