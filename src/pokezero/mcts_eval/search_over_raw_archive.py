@@ -68,7 +68,8 @@ class SealedSourceArchive:
         self._private[index] = boundary.snapshot
 
     def selected(self, root):
-        from ..public_decision_corpus import PublicDecisionRecord, PublicObservation
+        from ..public_decision_corpus import (
+            PublicDecisionRecord, PublicObservation, PublicActorObservation, _public_belief_view)
         require(root["public_record_sha256"] == digest(root["public_record"]), "public root digest drift")
         record = PublicDecisionRecord.from_dict(root["public_record"])
         index = root["source_request_index"]
@@ -77,8 +78,16 @@ class SealedSourceArchive:
         context, pending, action = self._public[index]
         require((record.seed, record.battle_id, record.acting_player, record.recorded_action_index) ==
                 (context.seed, context.battle_id, self.subject, action)
+            and record.format_id == context.format_id
             and record.observation.to_dict() == PublicObservation.from_observation(context.observation).to_dict(),
             "selected canonical public root differs from sealed source")
+        history = [PublicActorObservation(step.turn_index, PublicObservation.from_observation(step.observation)).to_dict()
+            for step in context.trajectory.steps]
+        require([row.to_dict() for row in record.history] == history
+            and record.public_belief_view == _public_belief_view(context.observation.metadata)
+            and [row.to_dict() for row in record.public_resolved_action_rounds] ==
+                context.trajectory.metadata.get("public_resolved_action_rounds", []),
+            "selected public history/belief differs from sealed source")
         return context, pending, self._private[index]
 
     def close(self):

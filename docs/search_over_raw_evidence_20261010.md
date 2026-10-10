@@ -165,7 +165,7 @@ panels. Preparation and direct contract generation now automatically exclude
 that fixture and the twenty reference-worker startup seeds; this minimum
 exclusion does not replace the full historical inventory. Oracle and alternative-leaf configurations explicitly fail before
 runtime construction until their dedicated adapters are implemented. CI runs
-all 58 new harness contracts with a no-skips and exact-count guard.
+all 73 harness contracts with a no-skips and exact-count guard.
 
 `scripts/qualify_search_over_raw_opening.py` registers an excluded opening
 benchmark before runtime construction and permits one attempt only. It binds
@@ -202,17 +202,63 @@ measured, and shared selected actions provide no demonstrated improvement over
 raw. This is one-opening technical evidence, not qualification across
 reconstructed midgame requests, hidden-state diagnostics or alternative leaves.
 
+### Excluded source and continuation qualification
+
+`scripts/qualify_search_over_raw_source.py` registers one excluded raw source
+game and two non-opening roots before runtime construction. It reuses the
+unchanged champion and isolated native artifacts, retains source snapshots
+only in the trusted auditor's memory, and selects roots by seed-derived
+priorities over the completed source catalog. Search receives actor/public
+contexts and public pending-transition certificates, never source snapshots
+or the opponent's private observations or committed choices. The auditor
+uses a snapshot only after all three arms have selected. Durable progress and
+each completed continuation receipt are create-only; a failure stops without
+retrying or replacing a slot.
+
+The qualification at source `3cdc31d6018f4b1bb162f813a1e72291745f8793`
+completed with exit0 in 20.8802 seconds. Its existing excluded seed2026101009
+produced a complete raw-versus-raw game with 39 boundaries and 72 verified
+raw decisions in 2.0856 seconds. The two selected source requests were3 and25.
+At request3, raw and reference selected action6 while incumbent selected
+action1. At request25, all selected action2. Eight continuations per unique
+action produced24 complete outcomes and739 continuation boundaries, with no
+capped or refused outcome. Identical actions reused the same outcome receipts
+and remained zero-difference observations.
+
+The changed incumbent action's eight-replicate continuation win-score delta
+was +0.1875 at request3; all other contrasts were zero. These two roots belong
+to one previously exposed engineering seed, not either prospective panel.
+They exercise action comparison and terminal scoring but supply no population
+effect estimate, held-out admission or playing-strength claim.
+
+Incumbent selection took0.9528 and0.9481 seconds. Reference selection took
+1.3323 and1.0306 seconds, retaining both overruns against the nominal one-second
+budget. Reference completed193 new trajectories,287 transitions and217 world
+draws across the two roots. This does not qualify a strict one-second ceiling,
+the oracle/alternative-leaf paths or every difficult midgame reconstruction.
+The separately preserved opening failure remains a failure.
+
+Qualification artifacts are in the local report archive under
+`search-over-raw-source-qualification-20261010-r1/`. The registration's
+canonical identity is
+`e3ff3e90a140b69720b2224ac76c52c9f3710c6585dd81b0e25e0e2d15869e89`.
+Subsequent binding tests additionally reject altered actor history or belief
+with recomputed valid checksums; the qualification receipt still names its
+actual source commit, not the later test revision.
+
 CI at source `099e902a` also failed the historical C153 live-line citation check:
 three stored citations differ from current source locations. Historical C153
 and C154 artifact bytes remain unchanged. A separate current-source citation
 record and its validation are still needed; the failing check is not waived.
 
-Remaining Phase A work includes full exposure inventory, source/model/native
-and simulator bindings, real-game root-collector qualification, non-opening checkpoint-backed adapter qualification,
+Remaining Phase A work includes full exposure inventory, complete source/model/native
+and simulator admission, broader non-opening and difficult-state qualification,
 the reference oracle diagnostic, evaluator ablations, timing benchmarks,
 direct belief/value/fidelity checks, durable worker progress receipts and
-integration of the held-out ledger with the real adapters. No new battle has
-been launched by this preparation.
+integration of the held-out ledger with the real adapters. The excluded source
+game and continuations do not open exploration or validation. Phase B also
+requires a resolved both-arm admission rule, valid two-primary inference,
+missing-data and stopping rules, and qualification against pinned Foul Play.
 
 ## Later gates and completion criteria
 

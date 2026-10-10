@@ -110,9 +110,35 @@ class ActualSourceBoundaryArchiveTests(unittest.TestCase):
 
     def test_forged_source_action_binding_is_rejected(self):
         root = self.root(self.collect())
-        root["public_record"]["recorded_action_index"] = 8
+        from pokezero.public_decision_corpus import canonical_json_sha256
+        original = root["public_record"]["recorded_action_index"]
+        alternative = next(i for i, x in enumerate(root["public_record"]["current_legal_action_mask"])
+            if x and i != original)
+        root["public_record"]["recorded_action_index"] = alternative
+        root["public_record"]["decision_id"] = canonical_json_sha256(
+            {k: v for k, v in root["public_record"].items() if k != "decision_id"})
         root["public_record_sha256"] = digest(root["public_record"])
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "differs from sealed source"):
+            self.archive.selected(root)
+
+    def test_valid_checksum_cannot_replace_source_history(self):
+        from pokezero.public_decision_corpus import canonical_json_sha256
+        root = self.root(self.collect())
+        root["public_record"]["history"][0]["observation"]["numeric_features"][0][0] += 1
+        root["public_record"]["decision_id"] = canonical_json_sha256(
+            {k: v for k, v in root["public_record"].items() if k != "decision_id"})
+        root["public_record_sha256"] = digest(root["public_record"])
+        with self.assertRaisesRegex(ValueError, "history/belief differs"):
+            self.archive.selected(root)
+
+    def test_valid_checksum_cannot_replace_source_belief(self):
+        from pokezero.public_decision_corpus import canonical_json_sha256
+        root = self.root(self.collect())
+        root["public_record"]["public_belief_view"]["self_slot"] = "p2"
+        root["public_record"]["decision_id"] = canonical_json_sha256(
+            {k: v for k, v in root["public_record"].items() if k != "decision_id"})
+        root["public_record_sha256"] = digest(root["public_record"])
+        with self.assertRaisesRegex(ValueError, "history/belief differs"):
             self.archive.selected(root)
 
     def test_private_boundary_cannot_precede_public_selection(self):
