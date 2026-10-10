@@ -22,6 +22,7 @@ import subprocess
 from pathlib import Path
 import time
 import traceback
+import uuid
 from typing import Any, Callable, Protocol
 
 from .paper_reference import (
@@ -78,6 +79,51 @@ def owned_process_identity(pid):
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def owned_process_identities(pids):
+    """One bounded identity query for the exact active generations, not history."""
+    if not pids or len(pids) > 20 or any(type(pid) is not int or pid <= 0 for pid in pids):
+        raise ReferenceRefusal("invalid active owned process roster")
+    result = subprocess.run(["ps", "-p", ",".join(str(pid) for pid in sorted(set(pids))),
+        "-o", "pid=,lstart="], capture_output=True, text=True, timeout=2)
+    if result.returncode not in (0, 1) or result.stderr.strip():
+        raise ReferenceRefusal("active owned identity query failed")
+    identities = {}
+    for line in result.stdout.splitlines():
+        pid, birth = line.strip().split(maxsplit=1)
+        pid = int(pid)
+        if pid not in pids or pid in identities:
+            raise ReferenceRefusal("active owned identity response drift")
+        identities[pid] = " ".join(birth.split())
+    return identities
+
+
+def live_owned_groups(groups):
+    """Bounded process-group liveness check; no commands or unrelated data kept."""
+    result = subprocess.run(["ps", "-axo", "pid=,pgid=,stat="],
+        capture_output=True, text=True, timeout=2)
+    if result.returncode != 0 or result.stderr.strip():
+        raise ReferenceRefusal("owned group liveness query failed")
+    live = set()
+    for line in result.stdout.splitlines():
+        pid, group, state = line.split()
+        if int(group) in groups and not state.startswith("Z"):
+            live.add(int(group))
+    return live
+
+
+def signal_owned_group(group, sig):
+    try:
+        os.killpg(group, sig)
+    except ProcessLookupError:
+        pass
+    except PermissionError:
+        # macOS can return EPERM for a group that disappeared between TERM
+        # and CONT/KILL. Suppress only when no live member remains; a genuine
+        # access denial still propagates and stops the attempt.
+        if live_owned_groups({group}):
+            raise
+
+
 def record_owned_process(pid, ownership):
     """Parent publishes ownership BEFORE permitting the child to detach/start."""
     if ownership["controller_pid"] != os.getpid():
@@ -85,12 +131,62 @@ def record_owned_process(pid, ownership):
     identity = owned_process_identity(pid)
     if not identity:
         raise ReferenceRefusal("owned process identity unavailable")
-    path = Path(ownership["directory"]) / f"group-{pid}.json"
+    directory = Path(ownership["directory"])
+    generation = str(uuid.uuid4()) if ownership.get("protocol") == "active-generations-v1" else None
+    path = directory / (f"group-{pid}-{generation}.json" if generation else f"group-{pid}.json")
+    row = dict(pid=pid, group=pid, birth_identity=identity,
+        controller_pid=os.getpid(), registration_sha256=ownership["registration_sha256"])
+    if generation:
+        row.update(generation=generation, protocol="active-generations-v1")
     with path.open("x") as stream:
-        json.dump(dict(pid=pid, group=pid, birth_identity=identity,
-            controller_pid=os.getpid(), registration_sha256=ownership["registration_sha256"]), stream)
+        json.dump(row, stream)
         stream.flush()
         os.fsync(stream.fileno())
+    if generation:
+        # An active hardlink is an expendable index, not historical evidence.
+        # It must be durable before the waiting worker may detach/runtime.
+        active = directory / "active"
+        active.mkdir(exist_ok=True)
+        os.link(path, active / path.name)
+        for parent in (directory, active):
+            descriptor = os.open(parent, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        return path
+    return None
+
+
+def close_owned_generations(receipts, processes):
+    """Publish actual terminal exits and retire only the corresponding index."""
+    if not receipts:
+        return
+    rows = {index: json.loads(path.read_text()) for index, path in receipts.items()}
+    if any(processes[index].exitcode is None or processes[index].pid != row["pid"]
+           or row["controller_pid"] != os.getpid() for index, row in rows.items()):
+        raise ReferenceRefusal("owned generation not actually reaped")
+    if live_owned_groups({row["group"] for row in rows.values()}):
+        raise ReferenceRefusal("owned generation still has live descendants")
+    for index, row in rows.items():
+        path = receipts[index]
+        receipt_hash = hashlib.sha256(path.read_bytes()).hexdigest()
+        with path.with_name("closed-" + path.name).open("x") as stream:
+            json.dump(dict(generation=row["generation"], launch_sha256=receipt_hash,
+                pid=row["pid"], worker_exit_code=processes[index].exitcode,
+                group_live=False, controller_pid=os.getpid()), stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Only this owned generation's active index is removed. Immutable
+        # launch and terminal receipts remain available for every generation.
+        (path.parent / "active" / path.name).unlink()
+    for parent in {path.parent for path in receipts.values()}:
+        for directory in (parent, parent / "active"):
+            descriptor = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
 
 
 def _worker(connection, index, runtime_factory, config, ownership_required=False):
@@ -221,6 +317,7 @@ class ParallelTrajectorySearch:
         self._decision_id = 0
         self._connections, self._processes = [], []
         self._owned_groups = {}
+        self._ownership_receipts = {}
         self.worker_pids = ()
         self.startup_seconds = 0.0
         self.last_evidence = {}
@@ -236,7 +333,9 @@ class ParallelTrajectorySearch:
                 self._processes.append(process)
                 process.start()
                 if owned_process_receipts is not None:
-                    record_owned_process(process.pid, owned_process_receipts)
+                    receipt = record_owned_process(process.pid, owned_process_receipts)
+                    if receipt is not None:
+                        self._ownership_receipts[index] = receipt
                     parent.send(("owned_launch",))
                 child.close()
             pending = set(range(workers))
@@ -443,9 +542,17 @@ class ParallelTrajectorySearch:
                     process.join(timeout=2.)
         if os.name == "posix":
             remaining = []
+            permitted = set(self._owned_groups.values())
+            if self._ownership_receipts:
+                rows = [json.loads(path.read_text()) for path in self._ownership_receipts.values()]
+                identities = owned_process_identities([row["pid"] for row in rows])
+                permitted = {row["group"] for row in rows if row["pid"] not in identities
+                    or identities[row["pid"]] == " ".join(row["birth_identity"].split())}
             for group in self._owned_groups.values():
+                if group not in permitted:
+                    continue  # A reused PID is never an owned signalling target.
                 try:
-                    os.killpg(group, signal.SIGTERM)
+                    signal_owned_group(group, signal.SIGTERM)
                     remaining.append(group)
                 except ProcessLookupError:
                     pass
@@ -453,7 +560,7 @@ class ParallelTrajectorySearch:
                 time.sleep(.2)
                 for group in remaining:
                     try:
-                        os.killpg(group, signal.SIGKILL)
+                        signal_owned_group(group, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
         # A stubborn worker is owned too; don't leave it running after close.
@@ -463,6 +570,7 @@ class ParallelTrajectorySearch:
                 process.join(timeout=2.)
         for connection in self._connections:
             connection.close()
+        close_owned_generations(self._ownership_receipts, self._processes)
 
     def __enter__(self):
         return self

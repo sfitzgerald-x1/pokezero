@@ -135,34 +135,40 @@ def validate_contract(r, output):
         and not Path(output).resolve().is_relative_to(ROOT), "staged driver/attempt binding drift")
 
 
-def planned_cells():
+def planned_cells(contract=None, panel="excluded"):
     return [dict(root_id=root["root_id"], configuration=key(cfg),
         status="UNSTARTED_UNCERTAIN", contrast_interval=[-1., 1.], action=None)
-        for root in source_contract()["panels"]["excluded"]["root_slots"] for cfg in configurations()]
+        for root in (contract or source_contract())["panels"][panel]["root_slots"] for cfg in configurations()]
 
 
-def planned_continuations():
+def planned_continuations(contract=None, panel="excluded"):
     return [dict(root_id=root["root_id"], configuration=key(cfg), replicate=replicate,
         status="UNSTARTED_UNCERTAIN", action=None, signed_outcome=None)
-        for root in source_contract()["panels"]["excluded"]["root_slots"]
+        for root in (contract or source_contract())["panels"][panel]["root_slots"]
         for cfg in configurations() for replicate in range(8)]
 
 
-def validate_source(source, seed):
+def validate_source(source, seed, *, contract=None, panel="excluded"):
+    engineering = contract is None
+    contract = contract or source_contract()
+    slots = [r for r in contract["panels"][panel]["root_slots"] if r["source_seed"] == seed]
     rows = source["eligible_public_records"]
     indices = [r["source_request_index"] for r in rows]
-    require(source["contract_sha256"] == digest(source_contract()) and source["source_seed"] == seed
-        and source["panel"] == "excluded" and source["status"] == "COMPLETE"
+    require(slots and source["contract_sha256"] == digest(contract) and source["source_seed"] == seed
+        and source["panel"] == panel and source["status"] == "COMPLETE"
         and source["source_terminal_complete"] is True and source["source_policy"] == "raw_argmax_both_seats"
         and source["eligible_requests"] == len(rows) and digest(rows) == source["eligible_catalog_sha256"]
         and all(type(i) is int and i > 0 for i in indices) and len(set(indices)) == len(indices)
-        and source["requested_root_slots"] == ROOTS_PER_SEED and source["missing_root_ids"] == [],
+        and source["requested_root_slots"] == len(slots)
+        and (not engineering or source["missing_root_ids"] == []),
         "source catalog incomplete or drifted")
-    selected = select_source_requests(NAMESPACE, seed, indices, ROOTS_PER_SEED)
+    selected = select_source_requests(contract["namespace"], seed, indices, len(slots))
     catalog = {r["source_request_index"]: r["public_record_sha256"] for r in rows}
-    require(len(source["roots"]) == len(selected) == ROOTS_PER_SEED, "missing roots; no replacement")
+    require(len(source["roots"]) == len(selected)
+        and source["missing_root_ids"] == [r["root_id"] for r in slots[len(selected):]],
+        "missing roots; no replacement")
     for slot, (root, index) in enumerate(zip(source["roots"], selected)):
-        require(root["root_id"] == f"excluded:{seed}:{slot}" and root["source_request_index"] == index
+        require(root["root_id"] == slots[slot]["root_id"] and root["source_request_index"] == index
             and digest(root["public_record"]) == root["public_record_sha256"] == catalog[index],
             "source priority selection differs")
 
@@ -190,7 +196,8 @@ def agreement(selected, truth, request, cfg):
 
 
 def collect_root(*, root, context, pending, snapshot, output, progress, env, evaluator,
-                 factory, contract, source, showdown, verify, ownership=None):
+                 factory, contract, source, showdown, verify, ownership=None,
+                 namespace=NAMESPACE, completion_status="COMPLETE_ENGINEERING_ONLY"):
     from pokezero.mcts_eval.paper_reference_runtime import PublicRootRequest
     from pokezero.mcts_eval.search_over_raw_oracle import TeamOracle
     from pokezero.mcts_eval.search_over_raw_belief_diagnostics import truth_record
@@ -283,7 +290,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
         return legal, evaluation.priors
 
     audit = paired_continuations(env=env, snapshot=snapshot, subject="p1", actions=actions,
-        evaluator=raw_evaluator, namespace=NAMESPACE, root_id=root["root_id"], max_boundaries=250,
+        evaluator=raw_evaluator, namespace=namespace, root_id=root["root_id"], max_boundaries=250,
         outcome_sink=outcome, attempt_sink=attempt)
     audit.update(contrasts={name: list(root_contrast(audit, name)) for name in actions},
         scientific_strength_evidence=False)
@@ -291,11 +298,13 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
     save_new(output / "audit.json", audit)
     for cell in progress["fixed_roster"]:
         if cell["root_id"] == root["root_id"]:
-            cell.update(status="COMPLETE_ENGINEERING_ONLY", contrast_interval=audit["contrasts"][cell["configuration"]])
+            cell.update(status=completion_status, contrast_interval=audit["contrasts"][cell["configuration"]])
     progress["roots_completed"] += 1
 
 
-def measure(r, output, progress):
+def measure(r, output, progress, *, source_contract_value=None, panel="excluded",
+            completion_status="COMPLETE_ENGINEERING_ONLY", progress_sink=None):
+    collection_contract = source_contract_value or source_contract()
     _runtime(r)
     from pokezero.collection import env_config_with_policy_spec_masks
     from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
@@ -314,7 +323,7 @@ def measure(r, output, progress):
     source_catalog = load_gen3_randbat_source_cached(showdown)
     factory = ShowdownWorkerFactory(checkpoint, r["checkpoint_sha256"], showdown,
         r["set_source_hash"], **r["factory_options"])
-    for seed in SEEDS:
+    for seed in collection_contract["panels"][panel]["seeds"]:
         env = archive = None
         directory = output / f"source-{seed}"
         directory.mkdir()
@@ -322,7 +331,7 @@ def measure(r, output, progress):
         progress["source_roster"][str(seed)]["status"] = "CONSTRUCTION_ATTEMPTED_UNCERTAIN"
         try:
             config = env_config_with_policy_spec_masks(LocalShowdownConfig(showdown_root=Path(showdown),
-                set_belief_source=True), [f"neural:{checkpoint}"], context="staged A1 excluded engineering")
+                set_belief_source=True), [f"neural:{checkpoint}"], context="staged A1 " + panel)
             env, archive = LocalShowdownEnv(config), SealedSourceArchive()
             policies = {}
             for seat in ("p1", "p2"):
@@ -340,13 +349,15 @@ def measure(r, output, progress):
                     row = dict(seed=seed, boundaries=event.decision_round_count, terminal=event.terminal)
                     save_new(directory / f"progress-{event.decision_round_count:03d}.json", row)
                     print(json.dumps(row), flush=True)
-            receipt = collect_raw_source(source_contract(), panel="excluded", source_seed=seed,
+            receipt = collect_raw_source(collection_contract, panel=panel, source_seed=seed,
                 env=env, policies=policies, max_decision_rounds=250, decision_sink=source_progress,
                 sealed_pre_step_sink=archive.capture_private)
             save_new(directory / "source.json", receipt)
-            validate_source(receipt, seed)
+            validate_source(receipt, seed, contract=source_contract_value, panel=panel)
             progress["source_roster"][str(seed)]["status"] = "COMPLETE"
             progress["source_games_completed"] += 1
+            if progress_sink is not None:
+                progress_sink(progress)
             evaluator = ChampionEvaluator(policies["p1"].policy)
             for root in receipt["roots"]:
                 context, pending, snapshot = archive.selected(root)
@@ -356,18 +367,28 @@ def measure(r, output, progress):
                     output=root_dir, progress=progress, env=env, evaluator=evaluator, factory=factory,
                     contract=contract, source=source_catalog, showdown=showdown, verify=lambda: verify_inputs(r),
                     ownership=dict(directory=str(output / "owned-groups"), controller_pid=os.getpid(),
-                        registration_sha256=digest(r)))
+                        registration_sha256=digest(r), **({"protocol": r["owned_receipts_protocol"]}
+                            if "owned_receipts_protocol" in r else {})), namespace=collection_contract["namespace"],
+                    completion_status=completion_status)
+                if progress_sink is not None:
+                    progress_sink(progress)
         finally:
             close_resources((("archive", archive), ("source_env", env)), progress)
 
 
-def verify_completion(output, progress):
+def verify_completion(output, progress, *, contract=None, panel="excluded",
+                      completion_status="COMPLETE_ENGINEERING_ONLY"):
+    collection_contract = contract or source_contract()
+    seeds = collection_contract["panels"][panel]["seeds"]
+    slots = collection_contract["panels"][panel]["root_slots"]
+    missing = set()
     selectors = outcomes = roots = aliases = 0
     substantive = set()
-    for seed in SEEDS:
+    for seed in seeds:
         directory = output / f"source-{seed}"
         source = json.loads((directory / "source.json").read_text())
-        validate_source(source, seed)
+        validate_source(source, seed, contract=contract, panel=panel)
+        missing.update(source["missing_root_ids"])
         require(progress["source_roster"][str(seed)]["status"] == "COMPLETE", "source accounting mismatch")
         for root in source["roots"]:
             d = directory / f"root-{root['root_id'].rsplit(':', 1)[1]}"
@@ -397,7 +418,7 @@ def verify_completion(output, progress):
                 require(audit["contrasts"][name] == interval, "durable paired contrast mismatch")
                 cell = next(c for c in progress["fixed_roster"] if c["root_id"] == root["root_id"]
                     and c["configuration"] == name)
-                require(cell["status"] == "COMPLETE_ENGINEERING_ONLY" and cell["action"] == selected["action"]
+                require(cell["status"] == completion_status and cell["action"] == selected["action"]
                     and cell["contrast_interval"] == interval, "fixed roster disagrees with durable outcomes")
                 if cfg.arm != "raw":
                     from pokezero.mcts_eval.search_over_raw_belief_diagnostics import compare_sampled_teams
@@ -427,12 +448,24 @@ def verify_completion(output, progress):
             roots += 1
     require(substantive == {key(c) for c in configurations() if c.arm != "raw"},
         "NO_SUBSTANTIVE_A1_EXERCISE; both public/oracle arms required, forced roots retained, no redraw")
-    require(progress["source_games_completed"] == len(SEEDS) and progress["roots_completed"] == roots == 4
-        and progress["selections_completed"] == selectors == 20 and progress["continuations_completed"] == outcomes
-        and len(progress["fixed_roster"]) == 20 and len({(c["root_id"], c["configuration"])
-            for c in progress["fixed_roster"]}) == 20 and len(progress["continuation_roster"]) == aliases == 160
-        and len({(c["root_id"], c["configuration"], c["replicate"])
-            for c in progress["continuation_roster"]}) == 160, "full staged work accounting mismatch")
+    for cell in progress["fixed_roster"]:
+        if cell["root_id"] in missing:
+            require(cell["status"] == "UNSTARTED_UNCERTAIN" and cell["action"] is None
+                and cell["contrast_interval"] == [-1., 1.], "missing root was scored")
+    for cell in progress["continuation_roster"]:
+        if cell["root_id"] in missing:
+            require(cell["status"] == "UNSTARTED_UNCERTAIN" and cell["action"] is None
+                and cell["signed_outcome"] is None, "missing continuation was scored")
+    expected_cells = {(r["root_id"], key(c)) for r in slots for c in configurations()}
+    expected_aliases = {(root, cfg, replicate) for root, cfg in expected_cells for replicate in range(8)}
+    require(progress["source_games_completed"] == len(seeds) and progress["roots_completed"] == roots
+        and roots + len(missing) == len(slots) and progress["selections_completed"] == selectors == roots * 5
+        and progress["continuations_completed"] == outcomes and aliases == roots * 40
+        and len(progress["fixed_roster"]) == len(expected_cells)
+        and {(c["root_id"], c["configuration"]) for c in progress["fixed_roster"]} == expected_cells
+        and len(progress["continuation_roster"]) == len(expected_aliases)
+        and {(c["root_id"], c["configuration"], c["replicate"])
+            for c in progress["continuation_roster"]} == expected_aliases, "full staged work accounting mismatch")
 
 
 def admit(output, review):
@@ -506,6 +539,7 @@ def wait_bounded(process, seconds, grace, ownership=None, deadline_state=None):
 
 
 def stop_owned(process, grace, ownership=None):
+    from pokezero.mcts_eval.paper_reference_parallel import signal_owned_group
     # Freeze the publishing controller first. Each nested child waits for the
     # parent to fsync its receipt before setsid(), so no unrecorded group can
     # escape this stop. Waiting, not-yet-detached children share the top group.
@@ -515,22 +549,37 @@ def stop_owned(process, grace, ownership=None):
         pass
     groups, errors = [process.pid], []
     if ownership is not None:
-        from pokezero.mcts_eval.paper_reference_parallel import owned_process_identity
-        for path in sorted(Path(ownership["directory"]).glob("group-*.json")):
+        from pokezero.mcts_eval.paper_reference_parallel import owned_process_identity, owned_process_identities
+        generations = ownership.get("protocol") == "active-generations-v1"
+        directory = Path(ownership["directory"]) / "active" if generations else Path(ownership["directory"])
+        paths = sorted(directory.glob("group-*.json"))
+        identities = None
+        if generations:
+            try:
+                require(len(paths) <= 20, "active owned generation cap exceeded")
+                rows = [json.loads(path.read_text()) for path in paths]
+                identities = owned_process_identities([row["pid"] for row in rows]) if rows else {}
+            except BaseException as error:
+                errors.append(error)
+                paths = []
+        for path in paths:
             try:
                 row = json.loads(path.read_text())
                 require(row["controller_pid"] == process.pid and row["registration_sha256"] ==
                     ownership["registration_sha256"] and row["group"] == row["pid"]
-                    and path.name == f"group-{row['pid']}.json", "nested ownership drift")
-                identity = owned_process_identity(row["pid"])
-                require(identity is None or identity == row["birth_identity"], "owned PID was reused; never signal it")
+                    and path.name == (f"group-{row['pid']}-{row['generation']}.json" if generations
+                        else f"group-{row['pid']}.json")
+                    and (not generations or row["protocol"] == "active-generations-v1"), "nested ownership drift")
+                identity = identities.get(row["pid"]) if generations else owned_process_identity(row["pid"])
+                require(identity is None or " ".join(identity.split()) == " ".join(row["birth_identity"].split()),
+                    "owned PID was reused; never signal it")
                 groups.append(row["group"])
             except BaseException as error:
                 errors.append(error)
     for group in groups:
         try:
-            os.killpg(group, signal.SIGTERM)
-            os.killpg(group, signal.SIGCONT)
+            signal_owned_group(group, signal.SIGTERM)
+            signal_owned_group(group, signal.SIGCONT)
         except ProcessLookupError:
             pass
         except BaseException as error:
@@ -543,7 +592,7 @@ def stop_owned(process, grace, ownership=None):
     # another devbox, browser, broad UID, or an inferred historical PID.
     for group in groups:
         try:
-            os.killpg(group, signal.SIGKILL)
+            signal_owned_group(group, signal.SIGKILL)
         except ProcessLookupError:
             pass
         except BaseException as error:
