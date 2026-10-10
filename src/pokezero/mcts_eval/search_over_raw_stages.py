@@ -86,7 +86,9 @@ class ExplorationStages:
     two-source A2 slots and source-validated short-game slots remain uncertain.
     No historical A1 measurement is promoted to an A2 evaluator measurement.
     """
-    def __init__(self, plan, bank_manifest):
+    def __init__(self, plan, bank_manifest, *, original_deadline_at=None):
+        require(original_deadline_at is None or (type(original_deadline_at) in (int, float)
+            and math.isfinite(original_deadline_at)), "finite A2 execution deadline required")
         require(digest(plan["phase_a_cohort"]) == plan["phase_a_cohort_sha256"], "original cohort digest drift")
         panel = plan["phase_a_cohort"]["panels"]["exploration"]
         slots, seeds = panel["root_slots"], panel["seeds"]
@@ -108,6 +110,10 @@ class ExplorationStages:
         self._captured = captured
         self._records = {}
         self._frozen = None
+        self._plan_sha256 = digest(plan)
+        self._a3_started = False
+        self._a3_records = {}
+        self._original_deadline_at = original_deadline_at
 
     def record_root(self, audit, selections, *, public_record_sha256, selection_seed, legal_choices):
         require(self._frozen is None, "A2 frozen; no later evidence or reselection")
@@ -138,13 +144,16 @@ class ExplorationStages:
         require(audit["status"] == ("COMPLETE" if all(row["status"] == "COMPLETE"
             for row in audit["outcomes"]) else "UNCERTAIN"), "A2 audit status drift")
         self._records[root_id] = deepcopy(dict(intervals=intervals, worlds=worlds,
-            audit_sha256=digest(audit), selections_sha256=digest(selections)))
+            audit_sha256=digest(audit), selections_sha256=digest(selections),
+            selected_sha256={name: digest(row) for name, row in selections.items()},
+            outcome_sha256={f"{row['action']}:{row['replicate']}": digest(row) for row in audit["outcomes"]}))
 
-    def _summary(self, cfg):
+    def _summary(self, cfg, records=None):
+        records = self._records if records is None else records
         by_seed = {seed: [] for seed in self._panel["seeds"]}
         uncertain = 0
         for root_id, slot in self._slots.items():
-            interval = self._records.get(root_id, {}).get("intervals", {}).get(cfg.identity, [-1., 1.])
+            interval = records.get(root_id, {}).get("intervals", {}).get(cfg.identity, [-1., 1.])
             require(len(interval) == 2 and all(type(v) in (int, float) and math.isfinite(v) for v in interval)
                 and -1 <= interval[0] <= interval[1] <= 1, "invalid full-roster A2 bounds")
             uncertain += interval[0] != interval[1]
@@ -176,6 +185,7 @@ class ExplorationStages:
                 substantive_roots=len(informative), full_panel_same_world_qualification=False,
                 causal_evaluator_claim=False, positive_gain_claim=False))
         self._frozen = dict(schema="pokezero.search-over-raw.a3-exploration-freeze.v1", choices=choices,
+            original_deadline_at=self._original_deadline_at,
             full_root_denominator=200, full_seed_denominator=32, accounted_new_roots=len(self._records),
             unavailable_a2_roots=200-len(self._records),
             a2_evidence_sha256=digest(self._records), bank_manifest_sha256=digest(self._manifest),
@@ -189,3 +199,89 @@ class ExplorationStages:
         return (SearchConfiguration("raw", seconds=1.), *(SearchConfiguration(
             row["arm"], row["belief"], row["leaf"], seconds, 20 if row["arm"] == "reference" else 1)
             for row in self._frozen["choices"] for seconds in (1., 3., 10.)))
+
+    def begin_a3(self, plan, bank_manifest, frozen, *, deadline_at):
+        """Claim this in-process frozen stage once; no restore/retry entrypoint."""
+        require(not self._a3_started and self._frozen is not None,
+            "A3 requires unconsumed sealed exploration freeze; no retry")
+        require(self._original_deadline_at is not None and deadline_at == self._original_deadline_at,
+            "A3 cannot extend bound original A2 execution deadline")
+        def identity(manifest):
+            value = deepcopy(manifest)
+            value.pop("parent_high_water_bytes", None)  # RSS may rise without changing bank contents.
+            return digest(value)
+        require(digest(plan) == self._plan_sha256 and digest(frozen) == digest(self._frozen)
+            and identity(bank_manifest) == identity(self._manifest), "A3 plan/bank/freeze binding drift")
+        self._a3_started = True
+        return deepcopy(self._frozen)
+
+    def a3_reuse(self, root_id, audit, selections):
+        """Bind all original A2 evidence, then project only frozen 1s selectors."""
+        require(self._a3_started and root_id in self._records, "A3 has no captured A2 root")
+        record = self._records[root_id]
+        require(digest(audit) == record["audit_sha256"]
+            and digest(selections) == record["selections_sha256"], "prior A2 evidence hash drift")
+        contract = audit["continuation_contract"]
+        require(contract["root_id"] == root_id
+            and contract["root_binding"]["public_record_sha256"] == self._manifest["root_public_bindings"][root_id]
+            and contract["selection_seed"] == self._slots[root_id]["source_seed"], "prior A2 public root drift")
+        reused = {key(cfg): deepcopy(selections[key(cfg)]) for cfg in self.a3_configurations()
+            if cfg.arm == "raw" or cfg.seconds == 1.}
+        return dict(audit=deepcopy(audit), audit_sha256=record["audit_sha256"], selections=reused)
+
+    def record_a3_root(self, audit, selections):
+        root_id = audit["root_id"]
+        require(self._a3_started and root_id in self._captured and root_id not in self._a3_records,
+            "unstarted, uncaptured or duplicate A3 root")
+        configs = self.a3_configurations()
+        record = self._records[root_id]
+        require(set(selections) == set(audit["actions"]) == {key(cfg) for cfg in configs}
+            and audit["prior_a2_audit_sha256"] == record["audit_sha256"], "A3 frozen roster/parent drift")
+        for cfg in configs:
+            selected = selections[key(cfg)]
+            require(selected["status"] == "SELECTED" and selected["configuration_sha256"] == cfg.identity
+                and selected["root_id"] == root_id + ":" + key(cfg)
+                and type(selected["action"]) is int and selected["action"] == audit["actions"][key(cfg)],
+                "A3 selection binding drift")
+            if cfg.arm == "raw" or cfg.seconds == 1.:
+                require(digest(selected) == record["selected_sha256"][key(cfg)], "A3 reran original one-second selector")
+            else:
+                require(selected.get("statistics_root_id") == root_id
+                    and selected.get("selection_seed") == self._slots[root_id]["source_seed"],
+                    "A3 sampler root/seed drift")
+        expected_reused = {f"{action}:{rep}" for action in set(audit["actions"].values()) for rep in range(8)
+            if f"{action}:{rep}" in record["outcome_sha256"]}
+        keys = audit["reused_continuation_keys"]
+        require(len(keys) == len(expected_reused)
+            and {f"{a}:{r}" for a, r in keys} == expected_reused, "A3 shared-action evidence must be reused exactly")
+        for row in audit["outcomes"]:
+            name = f"{row['action']}:{row['replicate']}"
+            if name in expected_reused:
+                require(digest(row) == record["outcome_sha256"][name], "A3 changed or retried prior continuation")
+        intervals = {cfg.identity: list(root_contrast(audit, cfg.identity)) for cfg in configs if cfg.arm != "raw"}
+        require(all(row["status"] in {"COMPLETE", "CAPPED"} for row in audit["outcomes"])
+            and audit["status"] == ("COMPLETE" if all(row["status"] == "COMPLETE"
+                for row in audit["outcomes"]) else "UNCERTAIN"), "A3 operational refusal/status drift")
+        self._a3_records[root_id] = dict(intervals=intervals, audit_sha256=digest(audit),
+            selections_sha256=digest(selections))
+
+    def a3_readout(self):
+        require(self._a3_started and set(self._a3_records) == self._captured, "A3 full fixed accounting pass required")
+        curves = []
+        for arm, belief in GROUPS:
+            rows = [self._summary(cfg, self._a3_records) for cfg in self.a3_configurations()
+                if (cfg.arm, cfg.belief) == (arm, belief)]
+            curves.append(dict(arm=arm, belief=belief, leaf=rows[0]["configuration"]["leaf"],
+                deployable=belief == "public", budget_points=rows))
+        observed = sorted({self._slots[root_id]["source_seed"] for root_id in self._a3_records})
+        return dict(schema="pokezero.search-over-raw.a3-exploratory-readout.v1", curves=curves,
+            full_root_denominator=200, full_seed_denominator=32, measured_roots=len(self._a3_records),
+            observed_source_seeds=observed, observed_source_seed_count=len(observed),
+            at_least_32_observed_sources=len(observed) >= 32,
+            original_phase_a_measurement_requirement_satisfied=False,
+            unavailable_roots=200-len(self._a3_records), frozen_choice_sha256=digest(self._frozen),
+            a3_evidence_sha256=digest(self._a3_records),
+            one_second_points_reused_not_independent=True, causal_mechanism_claim=False,
+            visited_value_calibration_established=False, searched_line_fidelity_established=False,
+            monotone_gain_claim=False, scientific_strength_evidence=False,
+            holdout_authorized=False, phase_b_authorized=False, runtime_authorized=False)

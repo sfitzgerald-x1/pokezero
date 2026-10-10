@@ -8,6 +8,7 @@ This does not replace any scientific registration or open the holdout. Failed
 attempts remain closed; zero complete comparison is failed qualification.
 """
 from dataclasses import asdict
+from copy import deepcopy
 import argparse
 import json
 import os
@@ -180,7 +181,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
                  factory, contract, source, showdown, verify, ownership=None,
                  namespace=NAMESPACE, completion_status="COMPLETE_ENGINEERING_ONLY",
                  boundary_censoring=False, configuration_roster=None,
-                 matched_statistics_root=False):
+                 matched_statistics_root=False, reused_root_evidence=None):
     require(type(boundary_censoring) is bool, "explicit boolean boundary-censoring policy required")
     require(type(matched_statistics_root) is bool, "explicit statistics-root policy required")
     roster = configurations() if configuration_roster is None else list(configuration_roster)
@@ -206,15 +207,55 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
     truth = truth_record(oracle, request=request, source=source)
     save_new(output / "controller-truth.json", truth)
     from pokezero.mcts_eval.paper_reference_showdown import decision_state
-    save_new(output / "root-binding.json", dict(root_id=root["root_id"],
+    root_binding = dict(root_id=root["root_id"],
         public_record_sha256=root["public_record_sha256"], root_binding=truth["root_binding"],
         legal_choices=sum(context.observation.legal_action_mask),
-        information_key=decision_state(request.observation, player=request.state.player_id).key.hex()))
+        information_key=decision_state(request.observation, player=request.state.player_id).key.hex())
+    continuation_contract = dict(root_binding=root_binding, root_id=root["root_id"],
+        namespace=namespace, subject="p1", max_boundaries=250, replicates=8,
+        selection_seed=root["public_record"]["seed"],
+        policy="raw_argmax_after_initial_sampled_opponent_reply")
+    reused = {}
+    cached_outcomes = None
+    if reused_root_evidence is not None:
+        require(matched_statistics_root and boundary_censoring,
+            "reuse requires explicit staged matched/censored collection")
+        prior = reused_root_evidence["audit"]
+        reused = deepcopy(reused_root_evidence["selections"])
+        require(prior["continuation_contract"] == continuation_contract
+            and digest(prior) == reused_root_evidence["audit_sha256"],
+            "prior A2 continuation/root contract drift")
+        require(set(reused) == {key(cfg) for cfg in roster if cfg.arm == "raw" or cfg.seconds == 1.},
+            "exact frozen one-second selectors must be reused")
+        for cfg in roster:
+            name = key(cfg)
+            if name not in reused:
+                continue
+            selected = reused[name]
+            require(selected["status"] == "SELECTED" and selected["root_id"] == root["root_id"] + ":" + name
+                and selected["configuration_sha256"] == cfg.identity
+                and type(selected["action"]) is int and selected["action"] == prior["actions"][name],
+                "reused selector binding drift")
+            root_contrast(prior, name)  # Validates the complete original outcome roster.
+        cached_outcomes = dict(continuation_contract, outcomes=deepcopy(prior["outcomes"]))
+    save_new(output / "root-binding.json", root_binding)
+    if matched_statistics_root:
+        save_new(output / "continuation-contract.json", continuation_contract)
     actions = {}
     for cfg in roster:
         name = key(cfg)
         cell = next(c for c in progress["fixed_roster"] if c["root_id"] == root["root_id"]
             and c["configuration"] == name)
+        if name in reused:
+            verify()
+            selected = deepcopy(reused[name])
+            save_new(output / f"{name}-selected.json", selected)
+            save_new(output / f"{name}-reuse.json", dict(prior_a2_audit_sha256=digest(prior),
+                selected_sha256=digest(selected), new_selection=False))
+            actions[name] = selected["action"]
+            cell.update(status="SELECTED_UNMEASURED", action=selected["action"], reused_from_a2=True)
+            progress["selections_reused"] = progress.get("selections_reused", 0) + 1
+            continue
         adapter = None
         progress["stage"] = root["root_id"] + ":" + name + ":construct"
         cell["status"] = "CONSTRUCTION_ATTEMPTED_UNCERTAIN"
@@ -278,20 +319,28 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
                     and actions[cell["configuration"]] == row["action"]):
                 cell.update(status="ATTEMPTED_UNCERTAIN", action=row["action"])
 
-    def outcome(row):
+    def outcome(row, *, reused=False):
         save_new(output / f"outcome-{row['action']}-{row['replicate']}.json", row)
         for cell in progress["continuation_roster"]:
             if (cell["root_id"] == root["root_id"] and cell["replicate"] == row["replicate"]
                     and actions[cell["configuration"]] == row["action"]):
                 cell.update(status=row["status"], action=row["action"], signed_outcome=row["signed_outcome"])
-        progress["continuations_completed"] += int(row["status"] == "COMPLETE")
+                if reused:
+                    cell["reused_from_a2"] = True
+        if reused:
+            save_new(output / f"outcome-{row['action']}-{row['replicate']}-reuse.json",
+                dict(prior_a2_audit_sha256=digest(prior), new_continuation=False))
+            progress["continuations_reused"] = progress.get("continuations_reused", 0) + 1
+        else:
+            progress["continuations_completed"] += int(row["status"] == "COMPLETE")
         if boundary_censoring:
             # This opt-in is for a separately registered amendment only. A
             # boundary cap is missing data, not a terminal score; exceptions
             # from workers, provenance, materialization or cleanup still halt.
             require(row["status"] == "COMPLETE" or (row["status"] == "CAPPED"
                 and row["signed_outcome"] is None), "operational refusal stops attempt")
-            progress["continuations_capped"] = progress.get("continuations_capped", 0) + int(row["status"] == "CAPPED")
+            counter = "continuations_reused_capped" if reused else "continuations_capped"
+            progress[counter] = progress.get(counter, 0) + int(row["status"] == "CAPPED")
         else:
             require(row["status"] == "COMPLETE", "capped/refused continuation stops attempt")
 
@@ -301,7 +350,12 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
 
     audit = paired_continuations(env=env, snapshot=snapshot, subject="p1", actions=actions,
         evaluator=raw_evaluator, namespace=namespace, root_id=root["root_id"], max_boundaries=250,
-        outcome_sink=outcome, attempt_sink=attempt)
+        outcome_sink=outcome, attempt_sink=attempt, cached_outcomes=cached_outcomes,
+        reuse_sink=lambda row: outcome(row, reused=True))
+    if matched_statistics_root:
+        audit["continuation_contract"] = continuation_contract
+    if reused_root_evidence is not None:
+        audit["prior_a2_audit_sha256"] = digest(prior)
     audit.update(contrasts={name: list(root_contrast(audit, name)) for name in actions},
         scientific_strength_evidence=False)
     verify()

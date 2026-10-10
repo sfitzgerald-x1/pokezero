@@ -41,7 +41,7 @@ def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpo
         guard()
         bank.validate_roster(plan["comparable_root_contract"]["root_slots"])
         manifest = bank.manifest()
-        ledger = ExplorationStages(plan, manifest)
+        ledger = ExplorationStages(plan, manifest, original_deadline_at=deadline_at)
         output.mkdir(parents=True, exist_ok=False)
         roster = a2_configurations()
         slots = plan["phase_a_cohort"]["panels"]["exploration"]["root_slots"]

@@ -560,6 +560,8 @@ class ExplorationStageTests(unittest.TestCase):
             adapter.select = select_with_binding
             return adapter
         self.bank = bank
+        self.stage_kwargs = kwargs
+        self.stage_adapter = adapter_with_stream_receipt
         self.stage_output = helper.output / "a2-stage"
         with patch.object(a1, "make_adapter", side_effect=adapter_with_stream_receipt):
             return stage.collect_a2_from_bank(plan=self.plan, bank=bank, output=self.stage_output,
@@ -589,6 +591,252 @@ class ExplorationStageTests(unittest.TestCase):
         self.assertEqual(terminal["status"], "FAILED_NO_RETRY")
         self.assertEqual(terminal["roots_completed"], 0)
         self.assertFalse(terminal["retry_authorized"])
+
+
+class A3StageTests(unittest.TestCase):
+    def setUp(self):
+        self.helper = ExplorationStageTests()
+        self.helper.setUp()
+        self.addCleanup(self.helper.doCleanups)
+        (self.ledger, _), self.events = self.helper.run_synthetic_stage()
+        self.output = self.helper.stage_output.parent / "a3-stage"
+
+    def collect(self, *, options=None, adapter=None):
+        import collect_search_over_raw_a3_stage as stage
+        kw = self.helper.stage_kwargs
+        kwargs = dict(plan=self.helper.plan, bank=self.helper.bank, ledger=self.ledger,
+            a2_output=self.helper.stage_output, output=self.output, env=kw["env"],
+            evaluator=kw["evaluator"], factory=kw["factory"], checkpoint_contract=kw["contract"],
+            source=kw["source"], showdown="none", verify=lambda: None, deadline_at=100., clock=lambda: 10.)
+        kwargs.update(options or {})
+        with patch.object(a1, "make_adapter", side_effect=adapter or self.helper.stage_adapter) as factory:
+            result = stage.collect_a3_from_bank(**kwargs)
+            self.factory_calls = factory.call_count
+            return result
+
+    def test_sweep_reuses_all_one_second_selections_and_capped_shared_outcomes_without_retry(self):
+        env = self.helper.stage_kwargs["env"]
+        with patch.object(env, "restore", wraps=env.restore) as restore:
+            readout, progress = self.collect()
+        self.assertEqual(self.factory_calls, 8)
+        restore.assert_not_called()
+        self.assertEqual((progress["selections_completed"], progress["selections_reused"],
+            progress["continuations_completed"], progress["continuations_capped"],
+            progress["continuations_reused"], progress["continuations_reused_capped"]), (8, 5, 0, 0, 8, 8))
+        self.assertEqual((len(progress["fixed_roster"]), len(progress["continuation_roster"])), (2600, 20800))
+        self.assertEqual(progress["roots_completed"], 1)
+        self.assertTrue(all(row["reused_from_a2"] and row["signed_outcome"] is None
+            for row in progress["continuation_roster"] if row["root_id"] == self.helper.slot["root_id"]))
+        self.assertFalse(self.helper.bank.closed)
+        self.assertEqual(readout["observed_source_seed_count"], 1)
+        self.assertFalse(readout["at_least_32_observed_sources"])
+        self.assertFalse(readout["original_phase_a_measurement_requirement_satisfied"])
+        self.assertTrue(readout["one_second_points_reused_not_independent"])
+        self.assertFalse(readout["monotone_gain_claim"])
+        self.assertEqual(len(readout["curves"]), 4)
+        for curve in readout["curves"]:
+            self.assertEqual([row["configuration"]["seconds"] for row in curve["budget_points"]], [1., 3., 10.])
+            self.assertTrue(all(row["root_slots"] == 200 and row["source_seeds"] == 32
+                and row["uncertain_roots"] == 199 for row in curve["budget_points"]))
+
+    def test_only_new_action_continuations_execute_and_full_null_aliases_remain(self):
+        original = self.helper.stage_adapter
+        def new_action(cfg, **options):
+            adapter = original(cfg, **options)
+            select = adapter.select
+            def choose(context, **kwargs):
+                result = select(context, **kwargs)
+                result["action"] = 1
+                return result
+            adapter.select = choose
+            return adapter
+        env = self.helper.stage_kwargs["env"]
+        with patch.object(env, "restore", wraps=env.restore) as restore:
+            readout, progress = self.collect(adapter=new_action)
+        self.assertEqual(restore.call_count, 8)
+        self.assertEqual((progress["continuations_capped"], progress["continuations_reused_capped"]), (8, 8))
+        points = readout["curves"][0]["budget_points"]
+        self.assertEqual(points[1]["identification_interval"], [-1., 1.])
+        self.assertLess(points[0]["identification_interval"][1], 1.)
+
+    def test_changed_a2_audit_is_refused_before_any_new_selector(self):
+        path = self.helper.stage_output / f"source-{self.helper.slot['source_seed']}" / "root-0" / "audit.json"
+        # Simulate read-time tampering without overwriting the retained evidence.
+        original_loads = json.loads
+        def forged(text):
+            value = original_loads(text)
+            if "continuation_contract" in value:
+                value["outcomes"][0]["signed_outcome"] = 0
+            return value
+        import collect_search_over_raw_a3_stage as stage
+        with patch.object(stage.json, "loads", side_effect=forged), patch.object(stage, "collect_root") as collect:
+            with self.assertRaisesRegex(ValueError, "prior A2 evidence hash drift"):
+                self.collect()
+            collect.assert_not_called()
+        self.assertTrue(self.helper.bank.closed)
+        self.assertEqual(original_loads(path.read_text())["outcomes"][0]["signed_outcome"], None)
+
+    def test_changed_freeze_cannot_select_a_new_leaf(self):
+        import collect_search_over_raw_a3_stage as stage
+        original_loads = json.loads
+        def forged(text):
+            value = original_loads(text)
+            if "choices" in value:
+                value["choices"][0]["leaf"] = "hp_fraction"
+            return value
+        with patch.object(stage.json, "loads", side_effect=forged), patch.object(stage, "collect_root") as collect:
+            with self.assertRaisesRegex(ValueError, "freeze binding drift"):
+                self.collect()
+            collect.assert_not_called()
+        self.assertTrue(self.helper.bank.closed)
+        self.assertFalse(self.output.exists())
+
+    def test_deadline_cannot_be_extended_and_expiry_closes_bank_before_stage(self):
+        for options, pattern in ((dict(deadline_at=101.), "cannot extend"),
+                (dict(clock=lambda: 100.), "no new stage clock")):
+            with self.assertRaisesRegex(ValueError, pattern):
+                self.collect(options=options)
+            self.assertTrue(self.helper.bank.closed)
+        self.assertFalse(self.output.exists())
+
+    def test_stage_failure_preserves_a2_but_closes_bank_and_never_publishes_readout(self):
+        original = self.helper.stage_adapter
+        def refused(cfg, **options):
+            adapter = original(cfg, **options)
+            adapter.select = lambda *a, **k: (_ for _ in ()).throw(ValueError("new selection refused"))
+            return adapter
+        frozen = (self.helper.stage_output / "a3-exploration-freeze.json").read_bytes()
+        with self.assertRaisesRegex(ValueError, "new selection refused"):
+            self.collect(adapter=refused)
+        self.assertTrue(self.helper.bank.closed)
+        self.assertEqual(frozen, (self.helper.stage_output / "a3-exploration-freeze.json").read_bytes())
+        self.assertFalse((self.output / "exploratory-readout.json").exists())
+        failure = json.loads((self.output / "stage-failure.json").read_text())
+        self.assertEqual(failure["status"], "FAILED_NO_RETRY")
+        self.assertEqual(failure["selections_reused"], 2)  # raw and first group's 1s; no fresh work completed.
+
+    def test_forged_manifest_and_matching_argument_cannot_extend_live_a2_deadline(self):
+        import collect_search_over_raw_a3_stage as stage
+        original_loads = json.loads
+        def forged(text):
+            value = original_loads(text)
+            if "bank" in value and "original_deadline_at" in value:
+                value["original_deadline_at"] = 200.
+            return value
+        with patch.object(stage.json, "loads", side_effect=forged), patch.object(stage, "collect_root") as collect:
+            with self.assertRaisesRegex(ValueError, "bound original A2 execution deadline"):
+                self.collect(options=dict(deadline_at=200., clock=lambda: 150.))
+            collect.assert_not_called()
+        self.assertTrue(self.helper.bank.closed)
+        self.assertFalse(self.output.exists())
+
+    def test_a3_is_single_use_even_after_success_and_readout_requires_complete_pass(self):
+        with self.assertRaisesRegex(ValueError, "full fixed accounting"):
+            self.ledger.a3_readout()
+        self.collect()
+        with self.assertRaisesRegex(ValueError, "no retry"):
+            self.collect(options=dict(output=self.output.parent / "a3-retry"))
+        self.assertTrue(self.helper.bank.closed)
+
+    def test_existing_stage_output_or_historical_target_never_overwrites_evidence(self):
+        self.output.mkdir()
+        with self.assertRaises(FileExistsError):
+            self.collect()
+        self.assertTrue(self.helper.bank.closed)
+        self.assertEqual(list(self.output.iterdir()), [])
+
+    def test_deadline_reached_between_selectors_keeps_partial_progress_uncertain(self):
+        count = 0
+        def clock():
+            nonlocal count
+            count += 1
+            return 100. if count >= 6 else 10.
+        with self.assertRaisesRegex(ValueError, "no new stage clock"):
+            self.collect(options=dict(clock=clock))
+        failure = json.loads((self.output / "stage-failure.json").read_text())
+        self.assertEqual(failure["roots_completed"], 0)
+        self.assertTrue(any(row["status"] == "UNSTARTED_UNCERTAIN" for row in failure["fixed_roster"]))
+        self.assertTrue(self.helper.bank.closed)
+
+    def test_prior_root_binding_change_cannot_reuse_even_hash_valid_outcomes(self):
+        kw = self.helper.stage_kwargs
+        prior_dir = self.helper.stage_output / f"source-{self.helper.slot['source_seed']}" / "root-0"
+        audit = json.loads((prior_dir / "audit.json").read_text())
+        selections = {self.helper.stages.key(cfg): json.loads((prior_dir / f"{self.helper.stages.key(cfg)}-selected.json").read_text())
+            for cfg in self.helper.stages.a2_configurations()}
+        self.ledger.begin_a3(self.helper.plan, self.helper.manifest,
+            json.loads((self.helper.stage_output / "a3-exploration-freeze.json").read_text()), deadline_at=100.)
+        reuse = self.ledger.a3_reuse(self.helper.slot["root_id"], audit, selections)
+        kw = dict(kw, output=self.output, reused_root_evidence=reuse,
+            configuration_roster=self.ledger.a3_configurations(), matched_statistics_root=True, boundary_censoring=True)
+        self.output.mkdir()
+        progress = deepcopy(kw["progress"])
+        configs = self.ledger.a3_configurations()
+        progress["fixed_roster"] = [dict(root_id=self.helper.slot["root_id"], configuration=self.helper.stages.key(c)) for c in configs]
+        progress["continuation_roster"] = [dict(root_id=self.helper.slot["root_id"], configuration=self.helper.stages.key(c), replicate=r)
+            for c in configs for r in range(8)]
+        kw.update(progress=progress, namespace="different-continuation-namespace")
+        with patch.object(a1, "make_adapter") as construct:
+            with self.assertRaisesRegex(ValueError, "continuation/root contract drift"):
+                a1.collect_root(**kw)
+            construct.assert_not_called()
+
+    def test_shared_capped_outcome_forgery_cannot_enter_a3_readout(self):
+        self.collect()
+        directory = self.output / f"source-{self.helper.slot['source_seed']}" / "root-0"
+        audit = json.loads((directory / "audit.json").read_text())
+        selections = {self.helper.stages.key(cfg): json.loads((directory / f"{self.helper.stages.key(cfg)}-selected.json").read_text())
+            for cfg in self.ledger.a3_configurations()}
+        # A separate ledger follows the same freeze, but has not recorded A3 yet.
+        other = self.helper.stages.ExplorationStages(self.helper.plan, self.helper.manifest, original_deadline_at=100.)
+        prior_dir = self.helper.stage_output / directory.relative_to(self.output)
+        prior = json.loads((prior_dir / "audit.json").read_text())
+        prior_selections = {self.helper.stages.key(cfg): json.loads((prior_dir / f"{self.helper.stages.key(cfg)}-selected.json").read_text())
+            for cfg in self.helper.stages.a2_configurations()}
+        self.helper.record(other, prior, prior_selections)
+        frozen = other.freeze_for_a3()
+        other.begin_a3(self.helper.plan, self.helper.manifest, frozen, deadline_at=100.)
+        audit["outcomes"][0].update(status="COMPLETE", signed_outcome=1)
+        with self.assertRaisesRegex(ValueError, "changed or retried"):
+            other.record_a3_root(audit, selections)
+
+
+class CachedContinuationTests(unittest.TestCase):
+    def cache(self):
+        return dict(root_id="root", namespace="namespace", subject="p1", max_boundaries=250,
+            replicates=8, outcomes=[dict(action=0, replicate=r, boundaries=250,
+                status="CAPPED", signed_outcome=None) for r in range(8)])
+
+    def run_cache(self, cache):
+        from pokezero.mcts_eval.search_over_raw import paired_continuations
+        return paired_continuations(env=None, snapshot=None, subject="p1", actions=dict(raw=0),
+            evaluator=None, namespace="namespace", root_id="root", max_boundaries=250, cached_outcomes=cache)
+
+    def test_cache_requires_all_eight_and_refuses_duplicates_invalid_scores_or_refusals(self):
+        for mutate in (lambda c: c["outcomes"].pop(),
+                lambda c: c["outcomes"].append(deepcopy(c["outcomes"][0])),
+                lambda c: c["outcomes"][0].update(status="REFUSED"),
+                lambda c: c["outcomes"][0].update(signed_outcome=0),
+                lambda c: c["outcomes"][0].update(boundaries=251),
+                lambda c: c.update(namespace="other")):
+            cache = self.cache()
+            mutate(cache)
+            with self.assertRaises(ValueError):
+                self.run_cache(cache)
+
+    def test_cache_is_copy_isolated_and_preserves_null_scores_and_zero_fresh_attempts(self):
+        from pokezero.mcts_eval.search_over_raw import paired_continuations
+        cache = self.cache()
+        attempts, reused = [], []
+        audit = paired_continuations(env=None, snapshot=None, subject="p1", actions=dict(raw=0),
+            evaluator=None, namespace="namespace", root_id="root", max_boundaries=250,
+            cached_outcomes=cache, attempt_sink=attempts.append, reuse_sink=reused.append)
+        self.assertEqual(attempts, [])
+        self.assertEqual(len(reused), 8)
+        self.assertEqual(root_contrast(audit, "raw"), (0., 0.))
+        self.assertEqual(audit["status"], "UNCERTAIN")
+        audit["outcomes"][0]["signed_outcome"] = 0
+        self.assertIsNone(cache["outcomes"][0]["signed_outcome"])
 
 
 if __name__ == "__main__":

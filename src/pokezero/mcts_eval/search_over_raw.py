@@ -6,6 +6,7 @@ search adapters must receive their separately captured public requests.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -161,7 +162,8 @@ def _raw_action(legal: Sequence[int], priors: Sequence[float]) -> int:
 def paired_continuations(*, env: Any, snapshot: object, subject: str,
                          actions: Mapping[str, int], evaluator: Callable,
                          namespace: str, root_id: str, max_boundaries: int = 200,
-                         outcome_sink=None, attempt_sink=None) -> dict:
+                         outcome_sink=None, attempt_sink=None, cached_outcomes=None,
+                         reuse_sink=None) -> dict:
     """Oct5 audit law, retaining identical actions and terminal uncertainty.
 
     Oracle snapshots are used AFTER action selection. The evaluator returns
@@ -173,9 +175,36 @@ def paired_continuations(*, env: Any, snapshot: object, subject: str,
     require(actions and all(type(a) is int and a >= 0 for a in actions.values()),
         "frozen legal action indices required")
     require(type(max_boundaries) is int and max_boundaries > 0, "positive continuation cap required")
+    cached = {}
+    if cached_outcomes is not None:
+        require(cached_outcomes["root_id"] == root_id
+            and cached_outcomes["namespace"] == namespace and cached_outcomes["subject"] == subject
+            and cached_outcomes["max_boundaries"] == max_boundaries
+            and cached_outcomes["replicates"] == 8, "cached continuation contract drift")
+        for supplied in cached_outcomes["outcomes"]:
+            row = deepcopy(supplied)
+            action, rep = row["action"], row["replicate"]
+            require(type(action) is int and action >= 0 and type(rep) is int and 0 <= rep < 8
+                and (action, rep) not in cached, "invalid or duplicate cached continuation")
+            require(type(row["boundaries"]) is int and 0 <= row["boundaries"] <= max_boundaries
+                and ((row["status"] == "COMPLETE" and type(row["signed_outcome"]) is int
+                    and row["signed_outcome"] in (-1, 0, 1))
+                or (row["status"] == "CAPPED" and row["signed_outcome"] is None)),
+                "cached refusal or invalid terminal outcome")
+            cached[action, rep] = row
+        require(set(cached) == {(a, r) for a, _ in cached for r in range(8)},
+            "all eight cached replicates required; no partial-prefix reuse")
     rows = []
+    reused_keys = []
     for action in sorted(set(actions.values())):
         for replicate in range(8):
+            if (action, replicate) in cached:
+                row = deepcopy(cached[action, replicate])
+                rows.append(row)
+                reused_keys.append([action, replicate])
+                if reuse_sink is not None:
+                    reuse_sink(dict(root_id=root_id, **deepcopy(row)))
+                continue  # Capped outcomes are reused as null, never retried.
             if attempt_sink is not None:
                 attempt_sink(dict(root_id=root_id, action=action, replicate=replicate))
             env.restore(snapshot)
@@ -221,8 +250,11 @@ def paired_continuations(*, env: Any, snapshot: object, subject: str,
                 **(result or dict(status="CAPPED", signed_outcome=None, boundaries=max_boundaries))))
             if outcome_sink is not None:
                 outcome_sink(dict(root_id=root_id, **rows[-1]))
-    return dict(root_id=root_id, actions=dict(actions), outcomes=rows,
+    result = dict(root_id=root_id, actions=dict(actions), outcomes=rows,
         status="COMPLETE" if all(r["status"] == "COMPLETE" for r in rows) else "UNCERTAIN")
+    if cached_outcomes is not None:
+        result["reused_continuation_keys"] = reused_keys
+    return result
 
 
 def root_contrast(audit: Mapping, configuration: str) -> tuple[float, float]:
