@@ -184,6 +184,37 @@ class PublicBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fresh attempt"):
             adapter.select(self.context, root_id="fixture:0", selection_seed=5)
 
+    def test_matched_root_receipt_cannot_reuse_statistics_on_another_receipt_id(self):
+        adapter, evaluator = self.raw()
+        row = adapter.select(self.context, root_id="fixture:model", selection_seed=5,
+            statistics_root_id="fixture:common")
+        self.assertEqual((row["root_id"], row["statistics_root_id"], row["selection_seed"]),
+            ("fixture:model", "fixture:common", 5))
+        with self.assertRaisesRegex(ValueError, "fresh adapter"):
+            adapter.select(self.context, root_id="fixture:another-receipt", selection_seed=5,
+                statistics_root_id="fixture:common")
+        self.assertEqual(evaluator.forwards, 1)
+
+    def test_all_reference_leaves_use_common_statistics_identity_without_changing_receipt_ids(self):
+        factory = ShowdownWorkerFactory("weights", SHA, str(showdown_root()), self.contract.showdown_source_sha256)
+        legal = next(i for i, enabled in enumerate(self.context.observation.legal_action_mask) if enabled)
+        ids = []
+        for leaf in ("model", "hp_fraction", "raw_rollout"):
+            with patch("pokezero.mcts_eval.paper_reference_parallel.ParallelTrajectorySearch") as pool_type, \
+                 patch("pokezero.mcts_eval.search_over_raw_leaves.validate_leaf_work"):
+                pool = pool_type.return_value
+                pool.search.return_value = replace(work(), result=replace(work().result, action=f"action:{legal}"))
+                adapter = PublicModelSearchAdapter(SearchConfiguration("reference", leaf=leaf, seconds=1., workers=20),
+                    checkpoint_contract=self.contract, showdown_root=str(showdown_root()), reference_factory=factory)
+                self.addCleanup(adapter.close)
+                selected = adapter.select(self.context, root_id="fixture:"+leaf, selection_seed=4,
+                    statistics_root_id="fixture:common")
+                ids.append(selected["root_id"])
+                self.assertEqual(pool.search.call_args.kwargs["battle_id"], "search-over-raw-root:fixture:common")
+                self.assertEqual(pool.search.call_args.kwargs["seed"], 4)
+                self.assertEqual(selected["statistics_root_id"], "fixture:common")
+        self.assertEqual(len(set(ids)), 3)
+
     def test_failure_poisoned_and_no_raw_fallback_or_retry(self):
         adapter, evaluator = self.raw()
         with self.assertRaisesRegex(ValueError, "nonterminal"):

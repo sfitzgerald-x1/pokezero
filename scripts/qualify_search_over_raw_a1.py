@@ -179,8 +179,24 @@ def agreement(selected, truth, request, cfg):
 def collect_root(*, root, context, pending, snapshot, output, progress, env, evaluator,
                  factory, contract, source, showdown, verify, ownership=None,
                  namespace=NAMESPACE, completion_status="COMPLETE_ENGINEERING_ONLY",
-                 boundary_censoring=False):
+                 boundary_censoring=False, configuration_roster=None,
+                 matched_statistics_root=False):
     require(type(boundary_censoring) is bool, "explicit boolean boundary-censoring policy required")
+    require(type(matched_statistics_root) is bool, "explicit statistics-root policy required")
+    roster = configurations() if configuration_roster is None else list(configuration_roster)
+    require(roster and all(type(cfg) is SearchConfiguration for cfg in roster)
+        and len({key(cfg) for cfg in roster}) == len(roster)
+        and sum(cfg.arm == "raw" for cfg in roster) == 1,
+        "one raw control and unique explicit selector roster required")
+    names = {key(cfg) for cfg in roster}
+    root_cells = [cell for cell in progress["fixed_roster"] if cell["root_id"] == root["root_id"]]
+    root_aliases = [cell for cell in progress["continuation_roster"] if cell["root_id"] == root["root_id"]]
+    require(len(root_cells) == len(names) and len(root_aliases) == 8*len(names)
+        and {cell["configuration"] for cell in progress["fixed_roster"]
+        if cell["root_id"] == root["root_id"]} == names
+        and {(cell["configuration"], cell["replicate"]) for cell in progress["continuation_roster"]
+            if cell["root_id"] == root["root_id"]} == {(name, rep) for name in names for rep in range(8)},
+        "root progress differs from explicit selectors/aliases")
     from pokezero.mcts_eval.paper_reference_runtime import PublicRootRequest
     from pokezero.mcts_eval.search_over_raw_oracle import TeamOracle
     from pokezero.mcts_eval.search_over_raw_belief_diagnostics import truth_record
@@ -195,7 +211,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
         legal_choices=sum(context.observation.legal_action_mask),
         information_key=decision_state(request.observation, player=request.state.player_id).key.hex()))
     actions = {}
-    for cfg in configurations():
+    for cfg in roster:
         name = key(cfg)
         cell = next(c for c in progress["fixed_roster"] if c["root_id"] == root["root_id"]
             and c["configuration"] == name)
@@ -219,7 +235,8 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
             progress["stage"] = root["root_id"] + ":" + name + ":select"
             cell["status"] = "SELECTION_ATTEMPTED_UNCERTAIN"
             selected = adapter.select(context, root_id=root["root_id"] + ":" + name,
-                selection_seed=root["public_record"]["seed"], pending_transition=pending)
+                selection_seed=root["public_record"]["seed"], pending_transition=pending,
+                **({"statistics_root_id": root["root_id"]} if matched_statistics_root else {}))
             verify()
             save_new(output / f"{name}-selected.json", selected)
             if cfg.arm != "raw":
@@ -253,6 +270,8 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
     save_new(output / "continuation-attempt.json", dict(actions=actions, replicates=8, maximum_boundaries=250))
 
     def attempt(row):
+        if matched_statistics_root:
+            verify()  # Keep the producer's original deadline across action/replicate starts.
         save_new(output / f"continuation-{row['action']}-{row['replicate']}-attempt.json", row)
         for cell in progress["continuation_roster"]:
             if (cell["root_id"] == root["root_id"] and cell["replicate"] == row["replicate"]

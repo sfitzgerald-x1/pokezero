@@ -303,5 +303,293 @@ class CollectionAmendmentTests(unittest.TestCase):
             a1.verify_completion(self.output, p, contract=contract, panel="exploration", completion_status=amendment.COLLECTED)
 
 
+class ExplorationStageTests(unittest.TestCase):
+    def setUp(self):
+        from pokezero.mcts_eval import search_over_raw_stages as stages
+        self.stages = stages
+        self.helper = CollectionAmendmentTests()
+        self.helper.setUp()
+        self.addCleanup(self.helper.doCleanups)
+        self.plan = amendment.plan_collection_amendment(*self.helper.reviewed_fixture())
+        self.plan["historical_directory"] = str(self.helper.output / "closed-historical-attempt")
+        self.slots = self.plan["comparable_root_contract"]["root_slots"]
+        self.slot = self.slots[0]
+        self.manifest = dict(state="SEALED", capacity=186, captured_roots=1,
+            root_public_bindings={self.slot["root_id"]: "f"*64},
+            source_validated_missing_root_ids=[s["root_id"] for s in self.slots[1:]])
+
+    def evidence(self, *, actions=None):
+        root = self.slot["root_id"]
+        configs = self.stages.a2_configurations()
+        actions = actions or {self.stages.key(cfg): 0 for cfg in configs}
+        selections = {self.stages.key(cfg): dict(status="SELECTED", action=actions[self.stages.key(cfg)],
+            root_id=root + ":" + self.stages.key(cfg), configuration_sha256=cfg.identity,
+            statistics_root_id=root, selection_seed=self.slot["source_seed"],
+            evidence=dict(belief_draws=[fixtures.row()],
+                worker_receipts=[dict(worker=0, evidence=dict(draws=[fixtures.row()]))])) for cfg in configs}
+        audit = dict(root_id=root, actions=actions, status="COMPLETE", outcomes=[dict(
+            action=action, replicate=rep, status="COMPLETE", signed_outcome=1)
+            for action in sorted(set(actions.values())) for rep in range(8)])
+        return audit, selections
+
+    def record(self, ledger, audit=None, selections=None, **kwargs):
+        if audit is None:
+            audit, selections = self.evidence()
+        ledger.record_root(audit, selections, public_record_sha256="f"*64,
+            selection_seed=self.slot["source_seed"], legal_choices=2, **kwargs)
+
+    def test_exact_a2_roster_and_a3_requires_sealed_global_choice(self):
+        configs = self.stages.a2_configurations()
+        self.assertEqual(len(configs), 13)
+        self.assertEqual(len({self.stages.key(c) for c in configs}), 13)
+        self.assertTrue(all(c.seconds == 1. and c.workers == (20 if c.arm == "reference" else 1) for c in configs))
+        ledger = self.stages.ExplorationStages(self.plan, self.manifest)
+        with self.assertRaisesRegex(ValueError, "prior sealed"):
+            ledger.a3_configurations()
+        with self.assertRaisesRegex(ValueError, "no early freeze"):
+            ledger.freeze_for_a3()
+        self.record(ledger)
+        frozen = ledger.freeze_for_a3()
+        self.assertEqual(len(ledger.a3_configurations()), 13)
+        self.assertEqual(sum(c.deployable for c in ledger.a3_configurations()), 6)
+        self.assertEqual({c.seconds for c in ledger.a3_configurations()}, {1., 3., 10.})
+        self.assertEqual(sum(row["deployable"] for row in frozen["choices"]), 2)
+
+    def test_all_200_slots_and_32_seeds_remain_in_lower_bound_ranking(self):
+        ledger = self.stages.ExplorationStages(self.plan, self.manifest)
+        self.record(ledger)
+        frozen = ledger.freeze_for_a3()
+        self.assertEqual((frozen["full_root_denominator"], frozen["full_seed_denominator"],
+            frozen["accounted_new_roots"], frozen["unavailable_a2_roots"]), (200, 32, 1, 199))
+        chosen = frozen["choices"][0]["candidate_scores"][0]
+        quota = sum(s["source_seed"] == self.slot["source_seed"] for s in self.plan[
+            "phase_a_cohort"]["panels"]["exploration"]["root_slots"])
+        self.assertAlmostEqual(chosen["identification_interval"][0], -1+1/(32*quota))
+        self.assertEqual(len(chosen["seed_intervals"]), 32)
+        self.assertEqual(chosen["uncertain_roots"], 199)
+        self.assertTrue(all(row["choice_basis"] == "PREDECLARED_TIE_DEFAULT_NOT_A_WINNER"
+            and row["leaf"] == "model" and row["positive_gain_claim"] is False for row in frozen["choices"]))
+
+    def test_freeze_is_irreversible_and_returns_copy_isolated_choices(self):
+        ledger = self.stages.ExplorationStages(self.plan, self.manifest)
+        self.record(ledger)
+        frozen = ledger.freeze_for_a3()
+        frozen["choices"][0]["leaf"] = "raw_rollout"
+        self.assertEqual(ledger.a3_configurations()[1].leaf, "model")
+        with self.assertRaisesRegex(ValueError, "reselection"):
+            ledger.freeze_for_a3()
+        with self.assertRaisesRegex(ValueError, "A2 frozen"):
+            self.record(ledger)
+
+    def test_original_team_equality_cannot_establish_full_world_or_tree_equality(self):
+        ledger = self.stages.ExplorationStages(self.plan, self.manifest)
+        self.record(ledger)
+        chosen = ledger.freeze_for_a3()["choices"][0]
+        self.assertEqual(chosen["original_team_matched_roots"], 1)
+        self.assertEqual(chosen["strict_same_world_roots"], 0)
+        self.assertFalse(chosen["full_panel_same_world_qualification"])
+        self.assertFalse(chosen["causal_evaluator_claim"])
+
+    def test_forced_roots_keep_real_nonempty_search_work_without_becoming_evaluator_evidence(self):
+        configs = [c for c in self.stages.a2_configurations() if (c.arm, c.belief) == ("reference", "public")]
+        _, selections = self.evidence()
+        for cfg, count in zip(configs, (43, 48, 37)):
+            selections[cfg.identity]["evidence"]["worker_receipts"][0]["evidence"]["draws"] = [
+                fixtures.row(i) for i in range(count)]
+        result = self.stages.compare_leaf_worlds(selections, configs, root_id=self.slot["root_id"],
+            selection_seed=self.slot["source_seed"], legal_choices=1)
+        self.assertEqual(result["attempted_world_counts"], dict(model=43, hp_fraction=48, raw_rollout=37))
+        self.assertTrue(result["forced_action_not_evaluator_evidence"])
+        self.assertFalse(result["strict_whole_population_match"])
+        ledger = self.stages.ExplorationStages(self.plan, self.manifest)
+        audit, selections = self.evidence()
+        ledger.record_root(audit, selections, public_record_sha256="f"*64,
+            selection_seed=self.slot["source_seed"], legal_choices=1)
+        self.assertTrue(all(row["substantive_roots"] == 0 and row["strict_same_world_roots"] == 0
+            for row in ledger.freeze_for_a3()["choices"]))
+
+    def test_full_attempted_tails_and_cancelled_draws_are_never_common_prefix_filtered(self):
+        _, selections = self.evidence()
+        configs = [c for c in self.stages.a2_configurations() if (c.arm, c.belief) == ("reference", "public")]
+        selections[configs[1].identity]["evidence"]["worker_receipts"][0]["evidence"]["draws"].append(
+            dict(ordinal=1, status="DEADLINE_CANCELLED"))
+        result = self.stages.compare_leaf_worlds(selections, configs, root_id=self.slot["root_id"],
+            selection_seed=self.slot["source_seed"], legal_choices=2)
+        self.assertEqual(result["attempted_world_counts"], dict(model=1, hp_fraction=2, raw_rollout=1))
+        self.assertEqual(result["unresolved_world_counts"]["hp_fraction"], 1)
+        self.assertFalse(result["original_team_population_match"])
+        self.assertFalse(result["common_prefix_filtering"])
+
+    def test_duplicate_draw_ordinals_and_stream_namespace_drift_refuse(self):
+        configs = [c for c in self.stages.a2_configurations() if (c.arm, c.belief) == ("incumbent", "public")]
+        _, selections = self.evidence()
+        selections[configs[0].identity]["evidence"]["belief_draws"].append(fixtures.row())
+        with self.assertRaisesRegex(ValueError, "duplicate or invalid"):
+            self.stages.compare_leaf_worlds(selections, configs, root_id=self.slot["root_id"],
+                selection_seed=self.slot["source_seed"], legal_choices=2)
+        _, selections = self.evidence()
+        selections[configs[1].identity]["statistics_root_id"] += ":different-leaf"
+        with self.assertRaisesRegex(ValueError, "namespace differs"):
+            self.stages.compare_leaf_worlds(selections, configs, root_id=self.slot["root_id"],
+                selection_seed=self.slot["source_seed"], legal_choices=2)
+
+    def test_bound_duplicate_and_action_or_configuration_forgery_refuses(self):
+        for mutation in ("action", "configuration_sha256", "root_id"):
+            ledger = self.stages.ExplorationStages(self.plan, self.manifest)
+            audit, selections = self.evidence()
+            row = selections[next(k for k in selections if k != "raw")]
+            row[mutation] = 1 if mutation == "action" else "forged"
+            with self.assertRaisesRegex(ValueError, "binding drift"):
+                self.record(ledger, audit, selections)
+        ledger = self.stages.ExplorationStages(self.plan, self.manifest)
+        self.record(ledger)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            self.record(ledger)
+
+    def test_short_source_manifest_cannot_silently_omit_or_replace_roots(self):
+        for mutate in (lambda m: m["source_validated_missing_root_ids"].pop(),
+                lambda m: m["source_validated_missing_root_ids"].append(self.slot["root_id"]),
+                lambda m: m.update(state="CAPTURING")):
+            manifest = deepcopy(self.manifest)
+            mutate(manifest)
+            with self.assertRaisesRegex(ValueError, "exact186"):
+                self.stages.ExplorationStages(self.plan, manifest)
+
+    def test_missing_continuation_or_fake_terminal_score_cannot_enter_ranking(self):
+        for mutation in (lambda a: a["outcomes"].pop(),
+                lambda a: a["outcomes"][0].update(status="CAPPED", signed_outcome=0)):
+            ledger = self.stages.ExplorationStages(self.plan, self.manifest)
+            audit, selections = self.evidence()
+            mutation(audit)
+            with self.assertRaises(ValueError):
+                self.record(ledger, audit, selections)
+
+    def test_performance_rank_can_choose_hp_without_manufacturing_a_mechanism_claim(self):
+        configs = self.stages.a2_configurations()
+        actions = {self.stages.key(c): int(c.leaf == "hp_fraction") for c in configs}
+        audit, selections = self.evidence(actions=actions)
+        for row in audit["outcomes"]:
+            row["signed_outcome"] = 1 if row["action"] else -1
+        ledger = self.stages.ExplorationStages(self.plan, self.manifest)
+        self.record(ledger, audit, selections)
+        frozen = ledger.freeze_for_a3()
+        self.assertTrue(all(row["leaf"] == "hp_fraction" and row["choice_basis"] == "LOWER_BOUND_PERFORMANCE_RANK"
+            and not row["positive_gain_claim"] and not row["causal_evaluator_claim"] for row in frozen["choices"]))
+
+    def test_concrete_collector_runs_thirteen_selectors_and_all_capped_aliases(self):
+        helper, (kwargs, p, events) = self.helper.root_helper(capped=True)
+        root_id = kwargs["root"]["root_id"]
+        roster = self.stages.a2_configurations()
+        p["fixed_roster"] = [dict(root_id=root_id, configuration=self.stages.key(c),
+            status="UNSTARTED_UNCERTAIN", action=None, contrast_interval=[-1, 1]) for c in roster]
+        p["continuation_roster"] = [dict(root_id=root_id, configuration=self.stages.key(c), replicate=rep,
+            status="UNSTARTED_UNCERTAIN", action=None, signed_outcome=None) for c in roster for rep in range(8)]
+        a1.collect_root(**kwargs, configuration_roster=roster, boundary_censoring=True, matched_statistics_root=True)
+        self.assertEqual((p["selections_completed"], p["roots_completed"], p["continuations_capped"]), (13, 1, 8))
+        self.assertEqual(len(events), 26)
+        self.assertEqual(len(p["continuation_roster"]), 104)
+        self.assertTrue(all(row["status"] == "CAPPED" and row["signed_outcome"] is None for row in p["continuation_roster"]))
+
+    def test_deadline_expiry_clears_bank_without_starting_stage_or_scientific_work(self):
+        import collect_search_over_raw_a2_stage as stage
+        from pokezero.mcts_eval.search_over_raw_archive import SealedComparisonBank
+        class Bank(SealedComparisonBank):
+            def __init__(self):
+                self.closed = False
+            def close(self):
+                self.closed = True
+        bank = Bank()
+        with patch.object(stage, "collect_root") as collector:
+            with self.assertRaisesRegex(ValueError, "no new stage clock"):
+                stage.collect_a2_from_bank(plan=self.plan, bank=bank, output=self.helper.output / "stage",
+                    env=None, evaluator=None, factory=None, checkpoint_contract=None, source=None,
+                    showdown="none", verify=lambda: None, deadline_at=10., clock=lambda: 10.)
+            collector.assert_not_called()
+        self.assertTrue(bank.closed)
+        self.assertFalse((self.helper.output / "stage").exists())
+
+    def test_invalid_stage_arguments_clear_bank_and_cannot_write_under_historical_evidence(self):
+        import collect_search_over_raw_a2_stage as stage
+        from pokezero.mcts_eval.search_over_raw_archive import SealedComparisonBank
+        class Bank(SealedComparisonBank):
+            def __init__(self):
+                self.closed = False
+            def close(self):
+                self.closed = True
+        base = dict(plan=self.plan, output=self.helper.output / "stage", env=None, evaluator=None,
+            factory=None, checkpoint_contract=None, source=None, showdown="none", verify=lambda: None,
+            deadline_at=100., clock=lambda: 10.)
+        for options in (dict(deadline_at=float("nan")), dict(verify=None),
+                dict(output=Path(self.plan["historical_directory"]) / "new-stage")):
+            bank = Bank()
+            with self.assertRaises(ValueError):
+                stage.collect_a2_from_bank(bank=bank, **(base | options))
+            self.assertTrue(bank.closed)
+        self.assertFalse(Path(self.plan["historical_directory"]).exists())
+
+    def run_synthetic_stage(self, *, fail=None):
+        import collect_search_over_raw_a2_stage as stage
+        from pokezero.mcts_eval.search_over_raw_archive import SealedComparisonBank
+        helper, (kwargs, _, events) = self.helper.root_helper(capped=True, fail=fail)
+        root = kwargs["root"]
+        root["root_id"] = self.slot["root_id"]
+        root["public_record"]["seed"] = self.slot["source_seed"]
+        manifest = self.manifest
+        class Bank(SealedComparisonBank):
+            def __init__(self):
+                self.closed = False
+            def manifest(self):
+                return deepcopy(manifest)
+            def validate_roster(self, slots):
+                pass
+            def selected_for_auditor(self, root_id):
+                return root, kwargs["context"], kwargs["pending"], kwargs["snapshot"]
+            def close(self):
+                self.closed = True
+        bank = Bank()
+        original = a1.make_adapter
+        def adapter_with_stream_receipt(cfg, **options):
+            adapter = original(cfg, **options)
+            select = adapter.select
+            def select_with_binding(context, **opts):
+                result = select(context, **opts)
+                result.update(statistics_root_id=opts["statistics_root_id"], selection_seed=opts["selection_seed"])
+                for receipt in result["evidence"]["worker_receipts"]:
+                    receipt["worker"] = 0
+                return result
+            adapter.select = select_with_binding
+            return adapter
+        self.bank = bank
+        self.stage_output = helper.output / "a2-stage"
+        with patch.object(a1, "make_adapter", side_effect=adapter_with_stream_receipt):
+            return stage.collect_a2_from_bank(plan=self.plan, bank=bank, output=self.stage_output,
+                env=kwargs["env"], evaluator=kwargs["evaluator"], factory=kwargs["factory"],
+                checkpoint_contract=kwargs["contract"], source=kwargs["source"], showdown="none",
+                verify=lambda: None, deadline_at=100., clock=lambda: 10.), events
+
+    def test_concrete_stage_collects_then_freezes_and_retains_bank_for_a3(self):
+        (ledger, progress), events = self.run_synthetic_stage()
+        self.assertEqual(progress["status"], "A2_ACCOUNTED_NOT_MECHANISM_QUALIFIED")
+        self.assertEqual((progress["roots_completed"], progress["selections_completed"],
+            progress["continuations_capped"]), (1, 13, 8))
+        self.assertEqual((len(progress["fixed_roster"]), len(progress["continuation_roster"])), (2600, 20800))
+        self.assertFalse(self.bank.closed)
+        frozen = json.loads((self.stage_output / "a3-exploration-freeze.json").read_text())
+        self.assertEqual(frozen["unavailable_a2_roots"], 199)
+        self.assertFalse(frozen["runtime_authorized"])
+        self.assertEqual(len(ledger.a3_configurations()), 13)
+        self.assertEqual(len(events), 26)
+
+    def test_concrete_stage_operational_failure_closes_bank_and_never_freezes(self):
+        with self.assertRaisesRegex(ValueError, "synthetic selection failure"):
+            self.run_synthetic_stage(fail=("incumbent", "oracle"))
+        self.assertTrue(self.bank.closed)
+        self.assertFalse((self.stage_output / "a3-exploration-freeze.json").exists())
+        terminal = json.loads((self.stage_output / "stage-failure.json").read_text())
+        self.assertEqual(terminal["status"], "FAILED_NO_RETRY")
+        self.assertEqual(terminal["roots_completed"], 0)
+        self.assertFalse(terminal["retry_authorized"])
+
+
 if __name__ == "__main__":
     unittest.main()

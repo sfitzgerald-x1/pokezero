@@ -137,6 +137,7 @@ class PublicModelSearchAdapter:
         self.contract = checkpoint_contract
         self._closed = self._poisoned = False
         self._attempted = set()
+        self._attempted_statistics_roots = set()
         self._decider = self._native = self._search_config = self._pool = None
         self._evaluator = evaluator
         self.last_failure = None
@@ -192,7 +193,8 @@ class PublicModelSearchAdapter:
                 workers=20, batch_size=10, initial_dispatch_workers=initial_dispatch_workers,
                 **({"owned_process_receipts": owned_process_receipts} if owned_process_receipts is not None else {}))
 
-    def select(self, context, *, root_id: str, selection_seed: int, pending_transition=None) -> dict:
+    def select(self, context, *, root_id: str, selection_seed: int, pending_transition=None,
+               statistics_root_id: str | None = None) -> dict:
         from .head_to_head import public_only_context
         from .paper_reference_runtime import PublicRootRequest
         from .paper_reference_showdown import decision_state
@@ -201,7 +203,13 @@ class PublicModelSearchAdapter:
         require(type(root_id) is str and bool(root_id) and root_id not in self._attempted,
             "root requires one fresh attempt")
         require(type(selection_seed) is int and 0 <= selection_seed < 2**64, "invalid selection seed")
+        require(statistics_root_id is None or (type(statistics_root_id) is str
+            and bool(statistics_root_id)), "invalid matched statistics root")
+        statistics_root = root_id if statistics_root_id is None else statistics_root_id
+        require(statistics_root not in self._attempted_statistics_roots,
+            "statistics root requires a fresh adapter; no carry-over or retry")
         self._attempted.add(root_id)
+        self._attempted_statistics_roots.add(statistics_root)
         started = time.perf_counter()
         try:
             require(context.player_id in context.requested_players
@@ -233,7 +241,7 @@ class PublicModelSearchAdapter:
                 self._prepare_incumbent(request)
                 # Distinct root ID prevents statistics/fold carry-over from
                 # other sampled roots from masquerading as fresh decisions.
-                public = replace(public, battle_id="search-over-raw-root:" + root_id)
+                public = replace(public, battle_id="search-over-raw-root:" + statistics_root)
                 before = self._decider._snapshot_stats(self._native)
                 decision = self._native.select_action_with_context(public, rng=random.Random(selection_seed))
                 after = self._decider._snapshot_stats(self._native)
@@ -264,7 +272,7 @@ class PublicModelSearchAdapter:
                 root = decision_state(request.observation, player=public.player_id)
                 remaining = self.configuration.seconds - (time.perf_counter()-started)
                 require(remaining > 0, "reference ceiling expired during public capture")
-                measured = self._pool.search(self._diagnostic_request(request), root, battle_id="search-over-raw-root:"+root_id,
+                measured = self._pool.search(self._diagnostic_request(request), root, battle_id="search-over-raw-root:"+statistics_root,
                     seed=selection_seed, deadline_seconds=remaining)
                 validate_reference_work(measured)
                 self._validate_diagnostic_work(measured)
@@ -280,6 +288,8 @@ class PublicModelSearchAdapter:
             evidence = self._selection_evidence(evidence, request)
             elapsed = time.perf_counter()-started
             return dict(root_id=root_id, configuration_sha256=self.configuration.identity,
+                **({"statistics_root_id": statistics_root_id, "selection_seed": selection_seed}
+                   if statistics_root_id is not None else {}),
                 runtime_sha256=self.runtime_sha256,
                 action=action, status="SELECTED", elapsed_seconds=elapsed,
                 nominal_search_seconds=self.configuration.seconds,
