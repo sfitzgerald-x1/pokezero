@@ -198,6 +198,38 @@ separately measured, rather than keeping sixty workers resident at once. The
 unchanged default contract preserves the earlier source qualification's
 scope; it does not relabel that earlier result as leaf qualification.
 
+At source `ad6260f4679ef7ba46b24a015b2bbb91a1da0021`, the separately
+registered benchmark completed with exit0 in 108.7286 seconds. The fixed
+excluded source game supplied late requests 30 and 32. Every selector ran at
+both roots; six reference selections each used 20 distinct workers. Model
+leaves completed 2804 trajectories, HP leaves 2503 and raw-terminal leaves 1120.
+The raw-terminal variant recorded 1575 completed and 21 deadline-cancelled
+leaf evaluations, with 5585 rollout boundaries in total. Cancelled evaluations
+supplied no backup value. HP produced 3802 completed leaf evaluations. No capped leaf or refusal was
+accepted as a value.
+
+At request 30, HP selected action0 while all other selectors selected action3;
+at request 32, all selected action3. The 24 paired continuation outcomes across
+125 boundaries were complete and every win-score contrast was zero. These
+late positions from one exposed seed qualify real leaf execution and terminal
+bookkeeping, not benefit on a prospective root population. Raw-terminal leaves
+completed fewer trajectories under the same nominal clock; longer midgame
+rollouts still require qualification. Reference selection times ranged from
+10.0538 to 10.1945 seconds, so no strict ten-second ceiling is claimed.
+
+The artifacts reside in the report archive under
+`search-over-raw-reference-leaf-qualification-20261010-r1/`. Its registration
+identity is
+`c4165a14fc28ae1a74d232ab7174a6792fcc1f01e05c985e44f0499c81de0247`;
+registration-file SHA256 is
+`24f5926c31ae6fec6234421391906f84d4f8d3dd081204ad424f2e8e501c24c8`,
+and terminal-file SHA256 is
+`1d8f227591249f49f85d57d3affcfa1ea2eb3920699df3dcd2d7b671cce2ddaa`.
+An additional read-only reconciliation passed all input, source-root,
+configuration, runtime, worker-work, leaf, outcome and contrast checks while
+the qualified source was still clean. Subsequent documentation changes do
+not relabel the qualification source.
+
 `scripts/qualify_search_over_raw_opening.py` registers an excluded opening
 benchmark before runtime construction and permits one attempt only. It binds
 clean source and Showdown commits, every native build input and artifact,
@@ -284,8 +316,8 @@ record and its validation are still needed; the failing check is not waived.
 
 Remaining Phase A work includes full exposure inventory, complete source/model/native
 and simulator admission, broader non-opening and difficult-state qualification,
-the reference oracle diagnostic, incumbent evaluator ablations, real reference
-leaf qualification, timing benchmarks,
+the reference oracle diagnostic, incumbent evaluator ablations, broader
+reference leaf qualification, timing benchmarks,
 direct belief/value/fidelity checks, durable worker progress receipts and
 integration of the held-out ledger with the real adapters. The excluded source
 game and continuations do not open exploration or validation. Phase B also
