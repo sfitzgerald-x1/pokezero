@@ -163,9 +163,9 @@ and instrumented selectors. They do not run actual checkpoint-backed search.
 Their engineering fixture seed, 2026101009, must be excluded from prospective
 panels. Preparation and direct contract generation now automatically exclude
 that fixture and the twenty reference-worker startup seeds; this minimum
-exclusion does not replace the full historical inventory. Oracle and incumbent
-alternative-leaf configurations explicitly fail before runtime construction
-until their dedicated adapters are implemented. CI runs all98 harness
+exclusion does not replace the full historical inventory. Public adapters still
+reject oracle configurations; a separate diagnostic adapter is described below.
+Incumbent alternative-leaf configurations remain unsupported. CI runs all 115 harness
 contracts with a no-skips and exact-count guard.
 
 ### Reference evaluator ablations
@@ -230,6 +230,80 @@ configuration, runtime, worker-work, leaf, outcome and contrast checks while
 the qualified source was still clean. Subsequent documentation changes do
 not relabel the qualification source.
 
+### Team only oracle diagnostics
+
+`search_over_raw_oracle.DiagnosticTeamOracleSearchAdapter` supports both search
+arms with the opponent's original team supplied by the trusted source controller.
+The payload contains original sets and root/source/team hashes, not a source
+snapshot, current opponent request or committed action. The actor's own opening
+party is rebuilt from its public transport. Ordinary public-state reconstruction,
+chance handling, champion priors and the search implementations remain in place.
+Oracle configurations are diagnostic and cannot be promoted to deployment.
+
+The reference fixed-team sampler checks public original-set constraints without
+drawing unknown parties. Pending and staged historical reconstruction preserve
+the same original-team binding. Necessary-membership conditioning checks the
+fixed party instead of invoking the native unknown-party generator. Installing
+truth after sampling or retained-particle adoption refuses; worker receipts must
+identify the bound oracle on every draw. The reference HP and raw-terminal leaf
+wrappers also compose with this diagnostic. Incumbent selection uses its explicit
+fixed-team hook and rejects raw/prior fallback.
+
+The separately registered `--oracle` engineering benchmark at source
+`92532f2ade3397e6bcc5253215f40631d0a6692e` completed with exit 0 in 165.7127 seconds.
+It retained the unchanged excluded raw source game, with 39 boundaries and 72
+verified raw decisions. Its separate sampling namespace selected requests 10
+and 36. Seven selectors ran at each root: raw, public incumbent/reference,
+oracle incumbent/reference, oracle reference HP and oracle reference raw-terminal.
+The reference variants used sequential pools of 20 workers each.
+
+At request 10, raw selected action 7; public and oracle incumbent selected 1;
+public, oracle-model and oracle-raw-terminal reference selected 3; oracle HP
+selected 4. The eight-replicate continuation deltas versus raw were +0.25 for
+both incumbent selectors, +0.5 for the three reference selectors selecting 3,
+and -0.125 for oracle HP. Request 36 had only one legal action, 6: every selector
+chose it and all contrasts were zero. Forty continuation outcomes across 971
+boundaries completed without unresolved outcomes. These are engineering results
+from one previously exposed seed, with only one nontrivial decision comparison;
+they are not prospective effect estimates or evidence for a causal bottleneck.
+
+| Reference selector | Trajectories across both roots | Completed alternative leaves | Deadline cancelled leaves |
+| --- | ---: | ---: | ---: |
+| Public model | 2721 | Not applicable | Not applicable |
+| Oracle model | 2516 | Not applicable | Not applicable |
+| Oracle HP | 2562 | 3342 | 0 |
+| Oracle raw terminal | 1007 | 934 | 20 |
+
+Oracle raw-terminal leaves consumed 4990 rollout boundaries, including cancelled
+evaluations; cancellations supplied no value or backup. At request 10 they
+completed 102 trajectories versus 1114 for oracle-model leaves, a measured
+compute tradeoff rather than an evaluator-quality finding. Public incumbent
+constructed four worlds but searched a deadline prefix of three at that root;
+the existing allocation/deadline witness validated it. Oracle incumbent searched
+four. Reference selection times ranged from 10.0508 to 10.1553 seconds, retaining
+the overruns rather than claiming a strict ten-second ceiling.
+
+The report archive folder is
+`search-over-raw-team-oracle-qualification-20261010-r1/`. Registration identity is
+`e85e626e308952d63ece25f88ba13ef77ba23206c7fbf268b2d1cf75e2338e49`;
+registration-file SHA256 is
+`b960dcbc4dc6b4fcd1d4e44d1b5ec1c125e469aa26c4ef4fcc2c22b10b7d0d1d`,
+and terminal-file SHA256 is
+`8b15c4fdd35ea14fd7148b4cd0e180353727ea3464983d956e922d5f14d27cc4`.
+Read-only reconciliation passed against the clean qualified source, checking
+inputs, runtime identities, actual work, oracle and leaf bindings, continuation
+files and recomputed contrasts. It is not an independent review. Two initial
+reconciliation checks failed because the checker omitted the durable outcome's
+root ID and incorrectly required every incumbent world to be searched; correcting
+the checker preserved every run receipt and used the existing deadline validator.
+
+Verification passed 115 harness tests, 182 reference regression tests and 94
+conditioning/provenance/count-guard tests, with no skips. A broader 126-test
+check failed with exit 1 on nine historical C154 citation and call-graph
+re-derivations. The same nine failures were reproduced with the pre-oracle
+source text; none of this change's source files participates in those failing
+derivations. Historical artifacts remain unchanged and the failures are not waived.
+
 `scripts/qualify_search_over_raw_opening.py` registers an excluded opening
 benchmark before runtime construction and permits one attempt only. It binds
 clean source and Showdown commits, every native build input and artifact,
@@ -271,11 +345,13 @@ reconstructed midgame requests, hidden-state diagnostics or alternative leaves.
 game and two non-opening roots before runtime construction. It reuses the
 unchanged champion and isolated native artifacts, retains source snapshots
 only in the trusted auditor's memory, and selects roots by seed-derived
-priorities over the completed source catalog. Search receives actor/public
-contexts and public pending-transition certificates, never source snapshots
+priorities over the completed source catalog. Default public search receives
+actor/public contexts and public pending-transition certificates, never source snapshots
 or the opponent's private observations or committed choices. The auditor
-uses a snapshot only after all three arms have selected. Durable progress and
-each completed continuation receipt are create-only; a failure stops without
+uses a snapshot only after all three arms have selected. The separately registered
+oracle diagnostic extracts original teams before selection without transporting
+the snapshot. Durable progress and each completed continuation receipt are
+create-only; a failure stops without
 retrying or replacing a slot.
 
 The qualification at source `3cdc31d6018f4b1bb162f813a1e72291745f8793`
@@ -316,7 +392,7 @@ record and its validation are still needed; the failing check is not waived.
 
 Remaining Phase A work includes full exposure inventory, complete source/model/native
 and simulator admission, broader non-opening and difficult-state qualification,
-the reference oracle diagnostic, incumbent evaluator ablations, broader
+broader oracle diagnostics, incumbent evaluator ablations, broader
 reference leaf qualification, timing benchmarks,
 direct belief/value/fidelity checks, durable worker progress receipts and
 integration of the held-out ledger with the real adapters. The excluded source
