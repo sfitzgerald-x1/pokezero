@@ -3,8 +3,11 @@ from contextlib import ExitStack
 from copy import deepcopy
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
 import random
+import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -305,11 +308,14 @@ class StagedA1Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "core drift"):
             driver.validate_contract(bad, self.output)
 
-    def prepare_run(self, r, review):
+    def prepare_run(self, r, review, *, worker=True):
         driver.save_new(self.output / "registration.json", r)
         driver.save_new(self.output / "registration-binding.json", dict(registration_sha256=digest(r)))
         path = self.output / "review.json"
         driver.save_new(path, review)
+        if worker:
+            driver.save_new(self.output / "supervision.json", dict(supervisor_pid=os.getppid(),
+                registration_sha256=digest(r), review_sha256=driver.sha256_file(path)))
         return path
 
     def clearance(self, r):
@@ -341,6 +347,84 @@ class StagedA1Tests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "no retry"):
                 driver.run(self.output, path)
             self.assertEqual(runtime.call_count, 1)
+
+    def test_external_wall_cap_reaps_real_synthetic_hung_worker(self):
+        process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], start_new_session=True)
+        self.addCleanup(lambda: process.poll() is None and driver.stop_owned(process, 1))
+        code, timed_out = driver.wait_bounded(process, .05, 1)
+        self.assertTrue(timed_out)
+        self.assertNotEqual(code, 0)
+        self.assertIsNotNone(process.poll())
+
+    def test_supervisor_deadline_persists_unknown_roster_and_disallows_second_launch(self):
+        r = self.registration()
+        path = self.prepare_run(r, self.clearance(r), worker=False)
+        child = Mock(pid=987654)
+        child.wait.return_value = -15
+        with patch.object(driver, "verify_inputs"), patch.object(driver.subprocess, "Popen", return_value=child) as spawn, \
+             patch.object(driver, "wait_bounded", return_value=(-15, True)), patch.object(driver, "stop_owned", return_value=-15):
+            self.assertEqual(driver.supervise(self.output, path), 124)
+            terminal = json.loads((self.output / "terminal.json").read_text())
+            self.assertEqual((terminal["exit_code"], len(terminal["continuation_roster"])), (124, 160))
+            self.assertTrue(all(c["signed_outcome"] is None for c in terminal["continuation_roster"]))
+            self.assertTrue(json.loads((self.output / "supervision-terminal.json").read_text())["wall_cap_reached"])
+            with self.assertRaisesRegex(ValueError, "no retry"):
+                driver.supervise(self.output, path)
+            self.assertEqual(spawn.call_count, 1)
+
+    def test_supervisor_receipt_write_failure_still_stops_owned_worker(self):
+        r = self.registration()
+        path = self.prepare_run(r, self.clearance(r), worker=False)
+        save = driver.save_new
+        def faulty(path, value):
+            if path.name == "worker-launch.json":
+                raise OSError("synthetic full disk")
+            save(path, value)
+        child = Mock(pid=987654)
+        with patch.object(driver, "verify_inputs"), patch.object(driver.subprocess, "Popen", return_value=child), \
+             patch.object(driver, "save_new", side_effect=faulty), patch.object(driver, "stop_owned", return_value=-15) as stop:
+            self.assertEqual(driver.supervise(self.output, path), 1)
+            stop.assert_called_once_with(child, driver.CLEANUP_GRACE_SECONDS, dict(
+                directory=str(self.output / "owned-groups"), registration_sha256=digest(r)))
+            receipt = json.loads((self.output / "supervision-terminal.json").read_text())
+            self.assertEqual(receipt["error_type"], "OSError")
+
+    def test_wall_cap_stops_real_detached_nested_worker_registered_before_setsid(self):
+        directory = self.output / "owned-groups"
+        directory.mkdir()
+        ownership = dict(directory=str(directory), registration_sha256="synthetic")
+        child_code = "import os,sys,time; sys.stdin.readline(); os.setsid(); print(os.getpid(),flush=True); time.sleep(60)"
+        parent_code = "\n".join([
+            "import json,os,subprocess,sys,time",
+            "from pokezero.mcts_eval.paper_reference_parallel import record_owned_process",
+            "ownership=json.loads(sys.argv[1]); ownership['controller_pid']=os.getpid()",
+            "child=subprocess.Popen([sys.executable,'-c',sys.argv[2]],stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)",
+            "record_owned_process(child.pid,ownership)",
+            "child.stdin.write('owned launch\\n'); child.stdin.flush()",
+            "print(child.stdout.readline().strip(),flush=True)",
+            "time.sleep(60)"])
+        parent = subprocess.Popen([sys.executable, "-B", "-c", parent_code, json.dumps(ownership), child_code],
+            start_new_session=True, stdout=subprocess.PIPE, text=True)
+        self.addCleanup(parent.stdout.close)
+        self.addCleanup(lambda: parent.poll() is None and driver.stop_owned(parent, 1, ownership))
+        nested_pid = int(parent.stdout.readline().strip())
+        code, expired = driver.wait_bounded(parent, .05, 1, ownership)
+        self.assertTrue(expired)
+        self.assertNotEqual(code, 0)
+        state = subprocess.run(["ps", "-p", str(nested_pid), "-o", "stat="], capture_output=True, text=True).stdout.strip()
+        self.assertTrue(not state or state.startswith("Z"), state)
+
+    def test_deadline_classification_survives_cleanup_failure(self):
+        r = self.registration()
+        path = self.prepare_run(r, self.clearance(r), worker=False)
+        child = Mock(pid=987654)
+        child.wait.side_effect = subprocess.TimeoutExpired("synthetic", 1)
+        with patch.object(driver, "verify_inputs"), patch.object(driver.subprocess, "Popen", return_value=child), \
+             patch.object(driver, "stop_owned", side_effect=OSError("synthetic cleanup failure")):
+            self.assertEqual(driver.supervise(self.output, path), 124)
+        receipt = json.loads((self.output / "supervision-terminal.json").read_text())
+        self.assertTrue(receipt["wall_cap_reached"])
+        self.assertEqual(receipt["cleanup_error_type"], "OSError")
 
     def full_artifact_fixture(self):
         p = progress()

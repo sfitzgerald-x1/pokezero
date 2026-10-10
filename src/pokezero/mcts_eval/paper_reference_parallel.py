@@ -11,12 +11,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
 import math
 import multiprocessing as mp
 from multiprocessing.connection import wait
 import os
 import pickle
 import signal
+import subprocess
+from pathlib import Path
 import time
 import traceback
 from typing import Any, Callable, Protocol
@@ -67,11 +70,36 @@ def _worker_seed(seed: int, index: int) -> int:
     return int.from_bytes(digest[:8], "big")
 
 
-def _worker(connection, index, runtime_factory, config):
+def owned_process_identity(pid):
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="],
+        capture_output=True, text=True, timeout=2)
+    if result.returncode not in (0, 1) or result.stderr.strip():
+        raise ReferenceRefusal("owned process identity check failed")
+    return result.stdout.strip() if result.returncode == 0 else None
+
+
+def record_owned_process(pid, ownership):
+    """Parent publishes ownership BEFORE permitting the child to detach/start."""
+    if ownership["controller_pid"] != os.getpid():
+        raise ReferenceRefusal("owned process receipt controller drift")
+    identity = owned_process_identity(pid)
+    if not identity:
+        raise ReferenceRefusal("owned process identity unavailable")
+    path = Path(ownership["directory"]) / f"group-{pid}.json"
+    with path.open("x") as stream:
+        json.dump(dict(pid=pid, group=pid, birth_identity=identity,
+            controller_pid=os.getpid(), registration_sha256=ownership["registration_sha256"]), stream)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _worker(connection, index, runtime_factory, config, ownership_required=False):
     runtime, prepared = None, None
     phase, decision = "startup", None
     started = time.perf_counter()
     try:
+        if ownership_required and connection.recv() != ("owned_launch",):
+            raise ReferenceRefusal("owned launch permission missing")
         # Own an isolated group, including this worker's simulator children.
         # A stopped/hung bridge cannot execute EOF cleanup after Python exits.
         if os.name == "posix":
@@ -173,7 +201,7 @@ class ParallelTrajectorySearch:
 
     def __init__(self, config: ReferenceConfig, runtime_factory: Callable[[int], WorkerRuntime],
                  *, workers: int = 20, batch_size: int = 10, transport_timeout: float = 120.,
-                 initial_dispatch_workers: int | None = None):
+                 initial_dispatch_workers: int | None = None, owned_process_receipts=None):
         if (type(workers) is not int or not 1 <= workers <= 20
                 or type(batch_size) is not int or batch_size != 10
                 or type(transport_timeout) not in (int, float)
@@ -202,10 +230,14 @@ class ParallelTrajectorySearch:
             for index in range(workers):
                 parent, child = context.Pipe()
                 process = context.Process(target=_worker,
-                    args=(child, index, runtime_factory, config), name=f"paper-reference-{index}")
+                    args=(child, index, runtime_factory, config, owned_process_receipts is not None),
+                    name=f"paper-reference-{index}")
                 self._connections.append(parent)
                 self._processes.append(process)
                 process.start()
+                if owned_process_receipts is not None:
+                    record_owned_process(process.pid, owned_process_receipts)
+                    parent.send(("owned_launch",))
                 child.close()
             pending = set(range(workers))
             pids = {}

@@ -11,6 +11,8 @@ from dataclasses import asdict
 import argparse
 import json
 import os
+import signal
+import subprocess
 import sys
 from pathlib import Path
 import time
@@ -30,6 +32,8 @@ NAMESPACE = "93e6f244-397b-47c6-a7b9-841d17efc73b"
 SEEDS = (2026101024, 2026101025)
 ROOTS_PER_SEED = 2
 SECONDS = 1.
+ATTEMPT_WALL_SECONDS = 3600
+CLEANUP_GRACE_SECONDS = 10
 
 
 def configurations():
@@ -50,6 +54,8 @@ def source_contract():
         continuation_replicates=8, source_policy="raw_argmax_both_seats",
         source_root_rule="fixed seed-derived priorities over completed full nonopening catalog",
         max_source_boundaries=250, max_continuation_boundaries=250,
+        attempt_wall_seconds=ATTEMPT_WALL_SECONDS, cleanup_grace_seconds=CLEANUP_GRACE_SECONDS,
+        deadline_policy="external supervisor closes owned process group; unfinished evidence stays uncertain; no retry",
         continuation_policy="raw_argmax_after_initial_sampled_opponent_reply",
         replacements_permitted=False, retry_authorized=False,
         stop_policy="first source, selection, continuation, provenance or worker failure stops attempt",
@@ -63,6 +69,7 @@ def bound_files():
             "engine_search.py", "engine_world.py", "mcts_eval/search_over_raw.py",
             "mcts_eval/search_over_raw_adapters.py", "mcts_eval/search_over_raw_archive.py",
             "mcts_eval/search_over_raw_source.py", "mcts_eval/search_over_raw_oracle.py",
+            "mcts_eval/paper_reference_parallel.py",
             "mcts_eval/search_over_raw_belief_diagnostics.py")]]
 
 
@@ -183,7 +190,7 @@ def agreement(selected, truth, request, cfg):
 
 
 def collect_root(*, root, context, pending, snapshot, output, progress, env, evaluator,
-                 factory, contract, source, showdown, verify):
+                 factory, contract, source, showdown, verify, ownership=None):
     from pokezero.mcts_eval.paper_reference_runtime import PublicRootRequest
     from pokezero.mcts_eval.search_over_raw_oracle import TeamOracle
     from pokezero.mcts_eval.search_over_raw_belief_diagnostics import truth_record
@@ -214,7 +221,8 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
             # constructor helper does not forward oracle except on oracle arm.
             adapter = make_adapter(cfg, oracle=oracle, checkpoint_contract=contract,
                 showdown_root=showdown, evaluator=evaluator if cfg.arm == "raw" else None,
-                reference_factory=factory if cfg.arm == "reference" else None, initial_dispatch_workers=6)
+                reference_factory=factory if cfg.arm == "reference" else None, initial_dispatch_workers=6,
+                **({"owned_process_receipts": ownership} if cfg.arm == "reference" and ownership is not None else {}))
             construction = time.perf_counter() - began
             save_new(output / f"{name}-runtime.json", dict(runtime_configuration=adapter.runtime_configuration,
                 construction_seconds=construction))
@@ -346,7 +354,9 @@ def measure(r, output, progress):
                 root_dir.mkdir()
                 collect_root(root=root, context=context, pending=pending, snapshot=snapshot,
                     output=root_dir, progress=progress, env=env, evaluator=evaluator, factory=factory,
-                    contract=contract, source=source_catalog, showdown=showdown, verify=lambda: verify_inputs(r))
+                    contract=contract, source=source_catalog, showdown=showdown, verify=lambda: verify_inputs(r),
+                    ownership=dict(directory=str(output / "owned-groups"), controller_pid=os.getpid(),
+                        registration_sha256=digest(r)))
         finally:
             close_resources((("archive", archive), ("source_env", env)), progress)
 
@@ -425,7 +435,7 @@ def verify_completion(output, progress):
             for c in progress["continuation_roster"]}) == 160, "full staged work accounting mismatch")
 
 
-def run(output, review):
+def admit(output, review):
     output = Path(output).resolve()
     r = json.loads((output / "registration.json").read_text())
     require(json.loads((output / "registration-binding.json").read_text()) == dict(registration_sha256=digest(r)),
@@ -440,6 +450,16 @@ def run(output, review):
         "bound independent staged review required")
     require(not (output / "attempt.json").exists() and not (output / "terminal.json").exists(),
         "claimed or closed staged attempt; no retry")
+    return output, review, r
+
+
+def run(output, review):
+    """Private worker entry; the CLI always launches this under an external cap."""
+    output, review, r = admit(output, review)
+    supervision = json.loads((output / "supervision.json").read_text())
+    require(supervision["supervisor_pid"] == os.getppid()
+        and supervision["registration_sha256"] == digest(r)
+        and supervision["review_sha256"] == sha256_file(review), "owned supervisor required")
     save_new(output / "attempt.json", dict(pid=os.getpid(), registration_sha256=digest(r),
         review_path=str(review), review_sha256=sha256_file(review), status="CLAIMED_BEFORE_RUNTIME", retry_authorized=False))
     began = time.perf_counter()
@@ -465,12 +485,136 @@ def run(output, review):
     return code
 
 
+def wait_bounded(process, seconds, grace, ownership=None, deadline_state=None):
+    """Only the session/group created by this supervisor is eligible for signals."""
+    timed_out = False
+    try:
+        return_code = process.wait(timeout=seconds)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        if deadline_state is not None:
+            deadline_state["reached"] = True
+        try:
+            return_code = stop_owned(process, grace, ownership)
+        except BaseException as error:
+            if deadline_state is not None:
+                deadline_state["cleanup_error"] = type(error).__name__
+            raise
+        if deadline_state is not None:
+            deadline_state["cleanup_completed"] = True
+    return return_code, timed_out
+
+
+def stop_owned(process, grace, ownership=None):
+    # Freeze the publishing controller first. Each nested child waits for the
+    # parent to fsync its receipt before setsid(), so no unrecorded group can
+    # escape this stop. Waiting, not-yet-detached children share the top group.
+    try:
+        os.killpg(process.pid, signal.SIGSTOP)
+    except ProcessLookupError:
+        pass
+    groups, errors = [process.pid], []
+    if ownership is not None:
+        from pokezero.mcts_eval.paper_reference_parallel import owned_process_identity
+        for path in sorted(Path(ownership["directory"]).glob("group-*.json")):
+            try:
+                row = json.loads(path.read_text())
+                require(row["controller_pid"] == process.pid and row["registration_sha256"] ==
+                    ownership["registration_sha256"] and row["group"] == row["pid"]
+                    and path.name == f"group-{row['pid']}.json", "nested ownership drift")
+                identity = owned_process_identity(row["pid"])
+                require(identity is None or identity == row["birth_identity"], "owned PID was reused; never signal it")
+                groups.append(row["group"])
+            except BaseException as error:
+                errors.append(error)
+    for group in groups:
+        try:
+            os.killpg(group, signal.SIGTERM)
+            os.killpg(group, signal.SIGCONT)
+        except ProcessLookupError:
+            pass
+        except BaseException as error:
+            errors.append(error)
+    try:
+        process.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    # Kill any owned descendant left after leader exit; never target a name,
+    # another devbox, browser, broad UID, or an inferred historical PID.
+    for group in groups:
+        try:
+            os.killpg(group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except BaseException as error:
+            errors.append(error)
+    code = process.wait(timeout=grace)
+    if errors:
+        raise errors[0]
+    return code
+
+
+def supervise(output, review):
+    output, review, r = admit(output, review)
+    require(not (output / "supervision.json").exists(), "claimed supervised attempt; no retry")
+    began = time.perf_counter()
+    save_new(output / "supervision.json", dict(supervisor_pid=os.getpid(), registration_sha256=digest(r),
+        review_sha256=sha256_file(review), attempt_wall_seconds=ATTEMPT_WALL_SECONDS,
+        cleanup_grace_seconds=CLEANUP_GRACE_SECONDS, retry_authorized=False))
+    (output / "owned-groups").mkdir()
+    ownership = dict(directory=str(output / "owned-groups"), registration_sha256=digest(r))
+    process = None
+    worker_pid, return_code, timed_out, failure = None, None, False, None
+    cleanup_error = None
+    deadline_state = dict(reached=False)
+    try:
+        process = subprocess.Popen([sys.executable, "-B", str(Path(__file__).resolve()), "worker",
+            "--output", str(output), "--review", str(review)], start_new_session=True)
+        worker_pid = process.pid
+        save_new(output / "worker-launch.json", dict(pid=worker_pid, process_group=worker_pid,
+            supervisor_pid=os.getpid(), registration_sha256=digest(r)))
+        return_code, timed_out = wait_bounded(process, max(.001, ATTEMPT_WALL_SECONDS -
+            (time.perf_counter() - began)), CLEANUP_GRACE_SECONDS, ownership, deadline_state)
+        require(not timed_out, "STAGED_A1_WALL_CAP")
+        require(return_code == 0, "staged worker nonzero exit")
+        terminal = json.loads((output / "terminal.json").read_text())
+        require(terminal["exit_code"] == 0 and terminal["status"] == "COMPLETE_STAGED_A1_ENGINEERING_ONLY"
+            and terminal["registration_sha256"] == digest(r), "missing or inconsistent worker completion")
+    except BaseException as error:
+        timed_out = timed_out or deadline_state["reached"]
+        failure = type(error).__name__
+        cleanup_error = deadline_state.get("cleanup_error")
+        if process is not None and not deadline_state.get("cleanup_completed"):
+            try:
+                return_code = stop_owned(process, CLEANUP_GRACE_SECONDS, ownership)
+            except BaseException as cleanup:
+                cleanup_error = type(cleanup).__name__
+    code = 0 if failure is None else (124 if timed_out else 1)
+    if code and not (output / "terminal.json").exists():
+        # Persist the entire fixed roster as UNVALIDATED, not as losses or
+        # complete cases. Existing per-cell receipts remain untouched for audit.
+        save_new(output / "terminal.json", dict(status="FAILED_NO_RETRY", exit_code=code,
+            error=dict(error_type="STAGED_A1_WALL_CAP" if timed_out else failure),
+            fixed_roster=planned_cells(), continuation_roster=planned_continuations(),
+            accounting="supervisor did not validate partial cells; preserve and audit durable receipts",
+            registration_sha256=digest(r), retry_authorized=False, scientific_strength_evidence=False,
+            phase_a_admission=False, phase_b_authorized=False, holdout_opened=False))
+    save_new(output / "supervision-terminal.json", dict(exit_code=code, worker_return_code=return_code,
+        worker_pid=worker_pid, wall_cap_reached=timed_out, error_type=failure,
+        cleanup_error_type=cleanup_error,
+        elapsed_seconds=time.perf_counter()-began, registration_sha256=digest(r),
+        status="COMPLETE_STAGED_A1_ENGINEERING_ONLY" if code == 0 else "FAILED_NO_RETRY",
+        retry_authorized=False, scientific_strength_evidence=False))
+    return code
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    launch = sub.add_parser("run")
-    launch.add_argument("--output", type=Path, required=True)
-    launch.add_argument("--review", type=Path, required=True)
+    for command in ("run", "worker"):
+        launch = sub.add_parser(command)
+        launch.add_argument("--output", type=Path, required=True)
+        launch.add_argument("--review", type=Path, required=True)
     prep = sub.add_parser("register")
     prep.add_argument("--exposure-registration", dest="exposure_registrations", type=Path, action="append", required=True)
     for name in ("output", "checkpoint", "showdown-root", "native-receipt", "factory-options", "encoder-tables"):
@@ -478,8 +622,9 @@ def main(argv=None):
     for name in ("checkpoint-sha256", "showdown-commit", "source-commit", "factory-options-sha256"):
         prep.add_argument("--"+name, required=True)
     args = vars(parser.parse_args(argv))
-    if args.pop("command") == "run":
-        return run(**args)
+    command = args.pop("command")
+    if command in ("run", "worker"):
+        return (supervise if command == "run" else run)(**args)
     r = register(**args)
     print(json.dumps(dict(registration_sha256=digest(r), status=r["status"])), flush=True)
     return 0

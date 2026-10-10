@@ -104,7 +104,8 @@ class PublicModelSearchAdapter:
 
     def __init__(self, configuration: SearchConfiguration, *, checkpoint_contract,
                  showdown_root: str, evaluator=None, reference_factory=None,
-                 initial_dispatch_workers: int = 6, policy_opponent_diagnostics=None):
+                 initial_dispatch_workers: int = 6, policy_opponent_diagnostics=None,
+                 owned_process_receipts=None):
         from .paper_reference_runtime import ShowdownWorkerFactory
 
         self._check_configuration(configuration)
@@ -156,6 +157,11 @@ class PublicModelSearchAdapter:
         if configuration.belief == "oracle":
             self.runtime_configuration["team_oracle"] = self.oracle.receipt()
         self.runtime_sha256 = digest(self.runtime_configuration)
+        if owned_process_receipts is not None:
+            require(configuration.arm == "reference", "owned group receipts require reference workers")
+            self.runtime_configuration["owned_process_receipts"] = dict(
+                enabled=True, publishes_before_detachment=True, qualifies_uninstrumented_runtime=False)
+            self.runtime_sha256 = digest(self.runtime_configuration)
         if configuration.arm == "incumbent":
             self._decider, self._native, self._search_config = _incumbent_runtime(
                 checkpoint_contract, showdown_root, configuration.seconds,
@@ -183,7 +189,8 @@ class PublicModelSearchAdapter:
                     tree="unchanged_trajectory_reference", priors="unchanged_champion")
                 self.runtime_sha256 = digest(self.runtime_configuration)
             self._pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1.), self._reference_worker_factory(reference_factory),
-                workers=20, batch_size=10, initial_dispatch_workers=initial_dispatch_workers)
+                workers=20, batch_size=10, initial_dispatch_workers=initial_dispatch_workers,
+                **({"owned_process_receipts": owned_process_receipts} if owned_process_receipts is not None else {}))
 
     def select(self, context, *, root_id: str, selection_seed: int, pending_transition=None) -> dict:
         from .head_to_head import public_only_context

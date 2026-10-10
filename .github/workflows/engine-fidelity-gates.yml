@@ -1079,7 +1079,7 @@ jobs:
             tests.test_belief_event_dispatch tests.test_search_over_raw_belief_diagnostics \
             tests.test_search_over_raw_a1 -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 407 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 412 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"
