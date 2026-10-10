@@ -158,14 +158,14 @@ nominal-ceiling overruns rather than promising a strict latency bound.
 Runtime identities include the complete reference factory and dispatch width;
 they must be bound by the admission controller before execution.
 
-Ten adapter tests pass, including four with real Showdown opening boundaries
+Eleven adapter tests pass, including five with real Showdown opening boundaries
 and instrumented selectors. They do not run actual checkpoint-backed search.
 Their engineering fixture seed, 2026101009, must be excluded from prospective
 panels. Preparation and direct contract generation now automatically exclude
 that fixture and the twenty reference-worker startup seeds; this minimum
 exclusion does not replace the full historical inventory. Oracle and alternative-leaf configurations explicitly fail before
 runtime construction until their dedicated adapters are implemented. CI runs
-all58 new harness contracts with a no-skips and exact-count guard.
+all 58 new harness contracts with a no-skips and exact-count guard.
 
 `scripts/qualify_search_over_raw_opening.py` registers an excluded opening
 benchmark before runtime construction and permits one attempt only. It binds
@@ -189,13 +189,26 @@ carry `switched_species`, while the engine vocabulary expected a nested
 without reconstructing private metadata. Unit verification of that repair does
 not retroactively qualify the failed opening or authorize an outcome panel.
 
+A separately registered check at repaired source `9ffd7d52` completed with
+exit0. Raw, incumbent and reference all selected action7 at the same excluded
+opening. Raw took 0.0131 seconds for one model forward. Incumbent took 0.9498
+seconds, completing 854 native iterations and 1256 model evaluations without
+fallbacks or prior fallbacks. Reference used 20 distinct workers and completed
+65 new trajectories, 86 transitions and 76 world draws. Its selection took
+1.4100 seconds against a nominal one-second budget, with 4.5132 seconds of
+separately measured construction. The overrun is retained; this does not qualify
+a strict one-second ceiling. No terminal game or continuation outcome was
+measured, and shared selected actions provide no demonstrated improvement over
+raw. This is one-opening technical evidence, not qualification across
+reconstructed midgame requests, hidden-state diagnostics or alternative leaves.
+
 CI at source `099e902a` also failed the historical C153 live-line citation check:
 three stored citations differ from current source locations. Historical C153
 and C154 artifact bytes remain unchanged. A separate current-source citation
 record and its validation are still needed; the failing check is not waived.
 
 Remaining Phase A work includes full exposure inventory, source/model/native
-and simulator bindings, real-game root-collector qualification, checkpoint-backed adapter qualification,
+and simulator bindings, real-game root-collector qualification, non-opening checkpoint-backed adapter qualification,
 the reference oracle diagnostic, evaluator ablations, timing benchmarks,
 direct belief/value/fidelity checks, durable worker progress receipts and
 integration of the held-out ledger with the real adapters. No new battle has
