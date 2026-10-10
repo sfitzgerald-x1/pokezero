@@ -88,6 +88,16 @@ PR1507 currently has provenance and test-count CI failures; frozen patch
 context also causes six diff-check whitespace findings. Those failures are
 not waived by the qualification receipt.
 
+The new implementation branch integrates the exact candidate as a merge
+parent in `d4156a07edbdd492bcacd601ffdeb14b2b0b5447`. Integration preserves
+the current-main C153 and C154 historical artifacts. Its provenance pin
+includes the reviewed public sleep and Yawn dependencies, and its grouped
+reference test-count guard matches the actual 182 source tests. Local checks
+passed all 41 existing count guards, 28 provenance tests and 131 focused
+contracts. The six patch-context whitespace findings remain a diff-check
+failure, not a native build failure. This combined source still needs a new
+native build and runtime qualification; the old build cannot qualify it.
+
 ## Phase A implementation status
 
 `pokezero.mcts_eval.search_over_raw` implements disjoint prospective seed
@@ -126,8 +136,26 @@ tests. Source-collector tests exercise the production rollout driver with a
 scripted environment and policy, not a real checkpoint or Showdown battle.
 No scientific game or search has been launched by these tests.
 
+`search_over_raw_adapters.PublicModelSearchAdapter` connects the raw control,
+one-worker incumbent and twenty-worker reference through the existing runtime
+APIs. It strips simultaneous opponent observations and extra actor metadata,
+binds checkpoint and catalog identities, starts each root with independent
+statistics, and refuses retries or raw fallback after a failed decision.
+Reference receipts reconcile new trajectories, released world draws and
+zero-backup deadline cancellations. The adapter records elapsed time and
+nominal-ceiling overruns rather than promising a strict latency bound.
+Runtime identities include the complete reference factory and dispatch width;
+they must be bound by the admission controller before execution.
+
+Ten adapter tests pass, including four with real Showdown opening boundaries
+and instrumented selectors. They do not run actual checkpoint-backed search.
+Their engineering fixture seed, 2026101009, must be excluded from prospective
+panels. Oracle and alternative-leaf configurations explicitly fail before
+runtime construction until their dedicated adapters are implemented. CI runs
+all 47 new harness contracts with a no-skips and exact-count guard.
+
 Remaining Phase A work includes full exposure inventory, source/model/native
-and simulator bindings, real-game root-collector qualification, public-only policy adapters,
+and simulator bindings, real-game root-collector qualification, checkpoint-backed adapter qualification,
 the reference oracle diagnostic, evaluator ablations, timing benchmarks,
 direct belief/value/fidelity checks, durable worker progress receipts and
 integration of the held-out ledger with the real adapters. No new battle has

@@ -1029,6 +1029,26 @@ jobs:
             exit 1
           fi
 
+      - name: Prospective search over raw harness contracts
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+          PYTHONPATH: src:tests
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tests.test_search_over_raw tests.test_search_over_raw_source \
+            tests.test_search_over_raw_ledger tests.test_prepare_search_over_raw \
+            tests.test_search_over_raw_adapters -v 2>&1 \
+            | tee /tmp/search-over-raw.log
+          grep -qE 'Ran 47 tests' /tmp/search-over-raw.log
+          grep -qE '^OK$' /tmp/search-over-raw.log
+          if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
+            echo "::error::the prospective harness contracts must not skip"
+            exit 1
+          fi
+
       - name: Assert the engine build stamp is current
         run: python scripts/engine_build_fingerprint.py --check
 
