@@ -24,6 +24,8 @@ pub(crate) mod policy_opponent;
 pub(crate) mod policy_request;
 #[cfg(feature = "model")]
 pub(crate) mod policy_bridge;
+#[cfg(feature = "model")]
+pub(crate) mod raw_policy_leaf;
 pub mod rollout;
 pub mod tree;
 

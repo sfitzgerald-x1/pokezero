@@ -19,6 +19,7 @@ use crate::tree::DecisionNode;
 
 type BranchKey = (usize, usize);
 
+#[derive(Clone)]
 struct PublicPrefix {
     lines: Vec<String>,
     meta: crate::leaf::LeafMeta,
@@ -128,6 +129,20 @@ pub(crate) struct PolicyOpponentBridge {
 }
 
 impl PolicyOpponentBridge {
+    /// Isolate one terminal continuation's branch history. Copy ONLY the
+    /// frontier prefix; future siblings must never share mutable PP/history.
+    pub(crate) fn fork_at(&self, key: BranchKey) -> PyResult<Self> {
+        let prefix = self.prefixes.borrow().get(&key).cloned().ok_or_else(||
+            PyValueError::new_err("raw policy terminal: frontier public prefix missing"))?;
+        let fork = Self::new(
+            Python::attach(|py| self.callback.clone_ref(py)), self.opponent_side_one,
+            self.root_order.clone(), self.max_pp.clone(), self.base_pp.clone(),
+            self.root_own_side.clone(), self.display_ctx.clone(),
+        );
+        fork.prefixes.borrow_mut().insert(key, prefix);
+        Ok(fork)
+    }
+
     pub(crate) fn new(
         callback: Py<PyAny>,
         opponent_side_one: bool,
@@ -208,6 +223,18 @@ impl PolicyOpponentBridge {
                 own_pp,
             },
         );
+        Ok(())
+    }
+
+    /// A forked terminal continuation has exactly one live prefix, unlike a
+    /// branching search. Drop old copies after recording the next boundary so
+    /// a long continuation does not retain a quadratic history/PP ledger.
+    pub(crate) fn record_linear(
+        &self, parent: BranchKey, key: BranchKey, lines: &[String],
+        ctx: &EventContext, meta: &crate::leaf::LeafMeta,
+    ) -> PyResult<()> {
+        self.record(Some(parent), key, lines, ctx, meta)?;
+        self.prefixes.borrow_mut().retain(|candidate, _| *candidate == key);
         Ok(())
     }
 

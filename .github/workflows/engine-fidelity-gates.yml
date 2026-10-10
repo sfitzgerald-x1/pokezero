@@ -128,6 +128,7 @@ jobs:
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
             tests/test_model_priors_search.py
             tests/test_policy_opponent*.py
+            tests/test_raw_policy_leaf_native.py
             tests/test_paper_reference*.py
             tests/test_mcts_eval_timing_corpus.py
             tests/test_engine_fidelity_counts.py
@@ -991,9 +992,10 @@ jobs:
             tests.test_policy_opponent_view tests.test_policy_opponent_request \
             tests.test_policy_opponent_profile tests.test_policy_opponent_refusal_repairs \
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
-            tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
+            tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest \
+            tests.test_raw_policy_leaf_native -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 83 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 90 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"
@@ -1005,6 +1007,16 @@ jobs:
             --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/policy-opponent-bridge.log
           grep -qE '^test result: ok\. 7 passed; 0 failed' /tmp/policy-opponent-bridge.log
+          LIBTORCH_USE_PYTORCH=1 \
+            cargo test --release --features model --lib raw_policy_leaf::tests \
+            --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/raw-policy-leaf.log
+          grep -qE '^test result: ok\. 6 passed; 0 failed' /tmp/raw-policy-leaf.log
+          LIBTORCH_USE_PYTORCH=1 \
+            cargo test --release --features model --lib tree::tests::cancellation_ \
+            --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/raw-policy-cancellation.log
+          grep -qE '^test result: ok\. 3 passed; 0 failed' /tmp/raw-policy-cancellation.log
 
       - name: Paper trajectory reference contracts on the model wheel
         env:

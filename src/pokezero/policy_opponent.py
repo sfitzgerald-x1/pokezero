@@ -25,6 +25,7 @@ def policy_opponent_distribution(
     view: PolicyOpponentView, *, native_action_indices: Sequence[int | None],
     model: Any, result: Any, category_vocab: CategoryVocabulary, dex: ShowdownDex,
     device: Any = None, timing: Any = None, inference_lock: Any = None,
+    raw_argmax: bool = False,
 ) -> tuple[float, ...]:
     """Return probabilities in the exact native legal-option order, or refuse.
 
@@ -39,6 +40,8 @@ def policy_opponent_distribution(
         observation_spec_from_model_config,
     )
 
+    if type(raw_argmax) is not bool:
+        raise PolicyOpponentViewError("raw_argmax must be an explicit boolean")
     config = result.model_config
     if getattr(model, "config", None) != config:
         raise PolicyOpponentViewError("policy model/config binding mismatch")
@@ -88,6 +91,11 @@ def policy_opponent_distribution(
     total = math.fsum(weights)
     if not math.isfinite(total) or total <= 0:
         raise PolicyOpponentViewError("own-policy legal distribution has no mass")
+    if raw_argmax:
+        # Raw's canonical action-slot tie break, NOT native option order. The
+        # strict view and legal-surface certification above still apply in full.
+        chosen = min(range(len(indices)), key=lambda i: (-weights[i], indices[i]))
+        return tuple(float(i == chosen) for i in range(len(indices)))
     return tuple(weight / total for weight in weights)
 
 
@@ -96,6 +104,7 @@ def make_policy_opponent_callback(
     battle_id: str, battle_seed: int, format_id: str, set_source: Any,
     model: Any, result: Any, category_vocab: CategoryVocabulary, dex: ShowdownDex,
     device: Any = None, timing: Any = None, inference_lock: Any = None,
+    raw_argmax: bool = False,
 ) -> Callable[[str], tuple[float, ...]]:
     """Native search callback using ONLY this seat's canonical own policy.
 
@@ -107,6 +116,8 @@ def make_policy_opponent_callback(
     """
     from .neural_policy import feature_masks_from_model_config, observation_spec_from_model_config
 
+    if type(raw_argmax) is not bool:
+        raise PolicyOpponentViewError("raw_argmax must be an explicit boolean")
     root_prefix = public_policy_lines(public_lines, hp_visibility=hp_visibility)
     spec = observation_spec_from_model_config(result.model_config)
     masks = feature_masks_from_model_config(result.model_config)
@@ -133,6 +144,7 @@ def make_policy_opponent_callback(
             view, native_action_indices=view.native_action_indices or (),
             model=model, result=result, category_vocab=category_vocab, dex=dex,
             device=device, timing=timing, inference_lock=inference_lock,
+            raw_argmax=raw_argmax,
         )
 
     return provide

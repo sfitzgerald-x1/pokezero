@@ -885,6 +885,8 @@ pub(crate) enum EncodedLeafMode {
     /// Phase A valuation-only ablation. Preserve all production encodings and
     /// forwards (including champion priors), but back up side-one HP values.
     HpFraction,
+    /// Both seats' own raw masked argmax, terminal-only, no cap fallback.
+    RawPolicyTerminal,
     /// Observational-only leaf audit.  The tree is still priced with
     /// [`Self::ModelValue`]; terminal-rollout values are computed for the exact
     /// same reached leaves and emitted as aggregate, split-heldout statistics.
@@ -931,6 +933,7 @@ impl EncodedLeafMode {
         match self {
             Self::ModelValue => "model_value",
             Self::HpFraction => "hp_fraction",
+            Self::RawPolicyTerminal => "raw_policy_terminal",
             Self::ModelValueShadowRollout => "model_value_shadow_rollout",
             Self::Rollout => "rollout",
             Self::RolloutEncodeAll => "rollout_encode_all",
@@ -945,7 +948,7 @@ impl EncodedLeafMode {
 /// makes one slot out).
 pub(crate) struct EncodedRolloutSeam<'a> {
     pub mode: EncodedLeafMode,
-    pub cfg: &'a crate::rollout::RolloutConfig,
+    pub cfg: Option<&'a crate::rollout::RolloutConfig>,
 }
 
 /// Sufficient statistics for one immutable train/heldout partition of the
@@ -1134,6 +1137,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
     policy_opponent: Option<(&crate::policy_bridge::PolicyOpponentBridge, u64)>,
     record_joint_actions: bool,
+    raw_policy: Option<&crate::raw_policy_leaf::RawPolicyLeaf>,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
@@ -1188,6 +1192,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let prices_by_rollout = rollout_mode.is_some_and(EncodedLeafMode::prices_by_rollout);
     let shadow_rollout = matches!(rollout_mode, Some(EncodedLeafMode::ModelValueShadowRollout));
     let hp_fraction = matches!(rollout_mode, Some(EncodedLeafMode::HpFraction));
+    let raw_terminal = matches!(rollout_mode, Some(EncodedLeafMode::RawPolicyTerminal));
+    let mut raw_stats = crate::raw_policy_leaf::RawPolicyLeafStats::default();
+    let raw_deadline = match (time_budget_started, time_budget_ms) {
+        (Some(started), Some(ms)) if raw_terminal =>
+            Some(started + std::time::Duration::from_millis(ms)),
+        _ => None,
+    };
     let mut hp_leaf_rows_priced = 0usize;
     let mut rng = StdRng::seed_from_u64(seed);
     let mut completed = 0usize;
@@ -1343,12 +1354,14 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             }
         }
         let traversal_budget = batch_size.min(iterations - completed);
+        let mut round_reservation = raw_terminal.then(|| crate::tree::RoundReservation::new(&tree));
         let mut traversals: Vec<Traversal> = Vec::with_capacity(traversal_budget);
         let mut pending: Vec<crate::encoder::EncodedArrays> = Vec::new();
         // Rollout rows for this round, parallel with `rollout_ordinals`. Empty
         // and untouched on the production path.
         let mut rollout_rows: Vec<State> = Vec::new();
         let mut rollout_ordinals: Vec<u64> = Vec::new();
+        let mut raw_leaf_keys: Vec<(usize, usize)> = Vec::new();
         // Per-round prior work: (branch key, batch row, option→action map)
         // for every priced branch whose child decision node can exist.
         let mut pending_maps: Vec<((usize, usize), usize, Vec<Option<usize>>)> = Vec::new();
@@ -1493,6 +1506,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         None
                         | Some(EncodedLeafMode::ModelValue)
                         | Some(EncodedLeafMode::HpFraction)
+                        | Some(EncodedLeafMode::RawPolicyTerminal)
                         | Some(EncodedLeafMode::ModelValueShadowRollout) => true,
                         // The reference: rollout values, no skip.
                         Some(EncodedLeafMode::RolloutEncodeAll) => true,
@@ -1614,6 +1628,15 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                             return LeafPrice::Ready(0.5);
                         }
                     }
+                    if let Some(raw) = raw_policy {
+                        for bridge in &raw.bridges {
+                            if let Err(error) = bridge.record(seam.parent, (seam.chance, seam.branch_index), &rendered.lines, &ctx, &meta) {
+                                leaf_error = Some(error);
+                                return LeafPrice::Ready(0.5);
+                            }
+                        }
+                        raw_leaf_keys.push((seam.chance, seam.branch_index));
+                    }
                     fold_by_branch.insert(
                         (seam.chance, seam.branch_index),
                         BranchFold {
@@ -1645,6 +1668,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     policy_sampler.as_mut().expect("registered policy sampler"),
                     &mut |reached, node, parent| bridge.provide(reached, node, parent, event_ctx),
                 )?
+            } else if let Some(journal) = round_reservation.as_mut() {
+                crate::tree::traverse_cancellable(&mut tree, &mut state, &mut rng, &cfg,
+                    &mut counters, &mut price, journal)
             } else {
                 traverse(&mut tree, &mut state, &mut rng, &cfg, &mut counters, &mut price)
             };
@@ -1739,7 +1765,52 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         // them through it would invert every leaf on p2 decisions and leave p1
         // correct, a defect that is invisible in half of all games.
         // `rollout_values_are_not_seat_reflected` is the gate.
-        let row_values = if hp_fraction {
+        let row_values = if raw_terminal {
+            let raw = raw_policy.expect("validated raw-policy bridges");
+            let terminal_before = raw_stats.terminal;
+            let mut values = Vec::with_capacity(rollout_rows.len());
+            for (row, leaf) in rollout_rows.iter().enumerate() {
+                let key = raw_leaf_keys[row];
+                let frontier = fold_by_branch.get(&key).expect("priced frontier fold");
+                let mut ctx = event_ctx.clone();
+                ctx.turn = frontier.turn;
+                match crate::raw_policy_leaf::price(leaf, key, rollout_ordinals[row],
+                    &ctx, &frontier.meta, leaf_ctx.meta_ctx(), raw, raw_deadline,
+                    &mut raw_stats, lossy_subcases).map_err(|error| {
+                        // Failure work is evidence too. This carries counts,
+                        // not private states or a substitute terminal outcome.
+                        let witness = serde_json::json!({
+                            "schema": "raw-policy-terminal-refusal-v1",
+                            "diagnostic_only_not_policy_input": true,
+                            "unresolved_no_fallback": true,
+                            "completed_tree_traversals": completed,
+                            "unbacked_round_traversals": traversals.len(),
+                            "model_evals": model_evals,
+                            "started_leaves": raw_stats.started,
+                            "terminal_leaves": raw_stats.terminal,
+                            "cap_refusals": raw_stats.cap_refusals,
+                            "dead_end_refusals": raw_stats.dead_end_refusals,
+                            "plies": raw_stats.plies,
+                            "provider_calls": raw_stats.provider_calls,
+                            "policy_evals": raw_stats.policy_evals,
+                        }).to_string();
+                        Python::attach(|py| { let _ = error.value(py).setattr("raw_policy_leaf_diagnostic", witness); });
+                        error
+                    })? {
+                    Some(value) => values.push(value),
+                    None => break,
+                }
+            }
+            if values.len() != rollout_rows.len() || crate::raw_policy_leaf::expired(raw_deadline) {
+                raw_stats.cancelled_traversals += traversals.len();
+                raw_stats.cancelled_rows += rollout_rows.len();
+                raw_stats.discarded_terminal_rows += raw_stats.terminal - terminal_before;
+                round_reservation.take().expect("raw reservation journal").cancel(&mut tree, &traversals)?;
+                time_budget_exhausted = true;
+                break;
+            }
+            values
+        } else if hp_fraction {
             // HP values already use the tree's side-one frame. Reflecting them
             // like checkpoint values would invert every side-two decision.
             // The model forward above is intentionally retained: only valuation
@@ -1756,7 +1827,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             // release wheel). A lost rollout must abort the world, not
             // propagate silently into a win-rate number.
             let (values, round_stats) =
-                crate::rollout::price_rows(&rollout_rows, &rollout_ordinals, seam.cfg)?;
+                crate::rollout::price_rows(&rollout_rows, &rollout_ordinals, seam.cfg.expect("uniform rollout config"))?;
             rollout_stats.merge(&round_stats);
             values
         } else if shadow_rollout {
@@ -1764,7 +1835,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 .as_ref()
                 .expect("shadow_rollout implies the seam is present");
             let (rollout_values, round_stats) =
-                crate::rollout::price_terminal_rows(&rollout_rows, &rollout_ordinals, seam.cfg)?;
+                crate::rollout::price_terminal_rows(&rollout_rows, &rollout_ordinals, seam.cfg.expect("shadow rollout config"))?;
             // The shadow never supplies `row_values`: its only purpose is to
             // audit model values for the exact leaves the production tree
             // already reached.  Keeping this before `finalize` avoids a second
@@ -1965,6 +2036,30 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         Some(_) if hp_fraction => format!(
             "{extra},\"model_leaf_override\":\"hp_fraction\",\"hp_leaf_rows_priced\":{hp_leaf_rows_priced},\"hp_leaf_value_frame\":\"side_one_absolute\",\"hp_leaf_model_forwards_retained\":true"
         ),
+        Some(_) if raw_terminal => {
+            let raw = raw_policy.expect("validated raw-policy bridges");
+            let witness = serde_json::json!({
+                "model_leaf_override": "raw_policy_terminal",
+                "raw_leaf_policy": "both_seats_own_raw_masked_argmax",
+                "raw_leaf_value_frame": "side_one_absolute",
+                "raw_leaf_model_forwards_retained": true,
+                "raw_leaf_max_plies": raw.max_plies,
+                "raw_leaf_seed": raw.seed,
+                "raw_leaf_branch_on_damage": raw.branch_on_damage,
+                "raw_leaf_started": raw_stats.started,
+                "raw_leaf_terminal": raw_stats.terminal,
+                "raw_leaf_plies": raw_stats.plies,
+                "raw_leaf_provider_calls": raw_stats.provider_calls,
+                "raw_leaf_policy_evals": raw_stats.policy_evals,
+                "raw_leaf_policy_s": raw_stats.policy_nanos as f64 / 1e9,
+                "raw_leaf_cancelled_traversals": raw_stats.cancelled_traversals,
+                "raw_leaf_cancelled_rows": raw_stats.cancelled_rows,
+                "raw_leaf_discarded_terminal_rows": raw_stats.discarded_terminal_rows,
+                "raw_leaf_cap_fallbacks": 0,
+                "raw_leaf_tree_counters_include_cancelled_work": true,
+            }).to_string();
+            format!("{extra},{}", &witness[1..witness.len()-1])
+        },
         Some(seam) => {
             let shadow_fields = if shadow_rollout {
                 format!(",{}", model_rollout_shadow.json_fields())
@@ -1985,7 +2080,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 // exactly why no assertion could see it. `rollout_report_has_no_duplicate_keys`
                 // is the gate, and it parses the raw string rather than the dict --
                 // a dict cannot represent the defect.
-                rollout_stats.to_rollout_only_json_fields(seam.cfg),
+                rollout_stats.to_rollout_only_json_fields(seam.cfg.expect("uniform rollout report config")),
                 shadow_fields,
             )
         }
@@ -2385,6 +2480,8 @@ impl NativeLeafModel {
         policy_opponent_seed = None,
         policy_opponent_request_order = None,
         record_joint_actions = false,
+        raw_policy_callbacks = None,
+        raw_policy_request_orders = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -2419,6 +2516,8 @@ impl NativeLeafModel {
         policy_opponent_seed: Option<u64>,
         policy_opponent_request_order: Option<Vec<String>>,
         record_joint_actions: bool,
+        raw_policy_callbacks: Option<Vec<Py<PyAny>>>,
+        raw_policy_request_orders: Option<Vec<Vec<String>>>,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -2461,6 +2560,7 @@ impl NativeLeafModel {
             None => None,
             Some("model_value") => Some(EncodedLeafMode::ModelValue),
             Some("hp_fraction") => Some(EncodedLeafMode::HpFraction),
+            Some("raw_policy_terminal") => Some(EncodedLeafMode::RawPolicyTerminal),
             Some("model_value_shadow_rollout") => Some(EncodedLeafMode::ModelValueShadowRollout),
             Some("rollout") => Some(EncodedLeafMode::Rollout),
             // Gate fixtures. Named, documented on `EncodedLeafMode`, and not
@@ -2476,8 +2576,24 @@ impl NativeLeafModel {
                 )))
             }
         };
+        let raw_enabled = rollout_mode == Some(EncodedLeafMode::RawPolicyTerminal);
+        if raw_enabled != raw_policy_callbacks.is_some() || raw_enabled != raw_policy_request_orders.is_some() {
+            return Err(PyValueError::new_err("raw policy terminal requires both seat callbacks and request orders; forbidden in other modes"));
+        }
+        if raw_enabled && (policy_enabled || !model_priors || use_opponent_priors
+            || rollouts != 1 || rollout_threads != 1 || rollout_policy != "raw_argmax"
+            || rollout_max_plies == 0) {
+            return Err(PyValueError::new_err("raw policy terminal requires subject model priors, no policy-opponent/auxiliary priors, one raw_argmax continuation, one thread and a positive cap"));
+        }
+        if let Some(callbacks) = &raw_policy_callbacks {
+            if callbacks.len() != 2 || callbacks.iter().any(|callback| !callback.bind(py).is_callable())
+                || raw_policy_request_orders.as_ref().map_or(true, |orders| orders.len() != 2 || orders.iter().any(Vec::is_empty)) {
+                return Err(PyValueError::new_err("raw policy terminal requires two callable providers and two complete request orders in p1,p2 order"));
+            }
+        }
         let rollout_cfg = match rollout_mode {
             None => None,
+            Some(EncodedLeafMode::RawPolicyTerminal) => None,
             Some(_) => {
                 // A zero-rollout "Monte-Carlo" leaf is not a cheap one: it is
                 // the HP-fraction fallback wearing the oracle's name in the
@@ -2513,6 +2629,32 @@ impl NativeLeafModel {
             crate::events::EventContext::from_json(ctx_json).map_err(PyValueError::new_err)?;
         let fold = root_fold.inner().clone();
         drop(root_fold);
+        let raw_policy = if let Some(callbacks) = raw_policy_callbacks {
+            let mut display_ctx = event_ctx.clone();
+            for species in display_ctx.species.iter_mut().flatten() {
+                *species = leaf_ctx.tables.registered_species_display(species).ok_or_else(||
+                    PyValueError::new_err("raw policy terminal: sampled species missing registered display identity"))?;
+            }
+            let identity = |name: &str| name.chars().filter(|c| c.is_ascii_alphanumeric())
+                .flat_map(char::to_lowercase).collect::<String>();
+            for (seat, order) in raw_policy_request_orders.as_ref().expect("validated order pair").iter().enumerate() {
+                let actual: std::collections::HashSet<_> = order.iter().map(|name| identity(name)).collect();
+                let expected: std::collections::HashSet<_> = display_ctx.species[seat].iter().map(|name| identity(name)).collect();
+                if actual.len() != order.len() || actual.contains("") || actual != expected {
+                    return Err(PyValueError::new_err("raw policy terminal: request order must name the complete sampled own party exactly once"));
+                }
+            }
+            let mut callbacks = callbacks.into_iter();
+            let mut orders = raw_policy_request_orders.expect("validated raw orders").into_iter();
+            let mut bridge = |side_one: bool| crate::policy_bridge::PolicyOpponentBridge::new(
+                callbacks.next().expect("validated callback pair"), side_one,
+                orders.next().expect("validated order pair"),
+                leaf_ctx.tables.registered_move_max_pp(), leaf_ctx.tables.registered_move_base_pp(),
+                if side_one { root_state.side_one.clone() } else { root_state.side_two.clone() },
+                display_ctx.clone());
+            Some(crate::raw_policy_leaf::RawPolicyLeaf { bridges: [bridge(true), bridge(false)],
+                max_plies: rollout_max_plies, seed: rollout_seed, branch_on_damage: rollout_branch_on_damage })
+        } else { None };
         let policy_bridge = if let Some(callback) = policy_opponent_callback {
             // No extra context copy or table lookup on the incumbent path.
             let mut policy_display_ctx = event_ctx.clone();
@@ -2583,15 +2725,14 @@ impl NativeLeafModel {
                     arm_priors,
                     rollout_mode.map(|mode| EncodedRolloutSeam {
                         mode,
-                        cfg: rollout_cfg
-                            .as_ref()
-                            .expect("a mode implies a validated config"),
+                        cfg: rollout_cfg.as_ref(),
                     }),
                     time_budget_ms,
                     time_budget_started,
                     lossy_subcases,
                     policy_bridge.as_ref().map(|bridge| (bridge, policy_opponent_seed.expect("validated policy seed"))),
                     record_joint_actions,
+                    raw_policy.as_ref(),
                 )
             })
         })

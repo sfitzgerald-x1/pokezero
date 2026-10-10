@@ -44,6 +44,29 @@ class PolicyOpponentProviderTest(unittest.TestCase):
         self.assertEqual(obs.metadata["showdown_slot"], "p2")
         self.assertEqual(obs.metadata["opponent_team"][0]["condition"], "67/100")
 
+    def test_raw_argmax_is_certain_and_ties_use_policy_slot_not_native_order(self):
+        for row, expected in (
+            ((.89, .10, 0, 0, .01, 0, 0, 0, 0), (0., 0., 1.)),
+            ((.25, .50, 0, 0, .25, 0, 0, 0, 0), (0., 1., 0.)),
+            ((.5, 0, 0, 0, .5, 0, 0, 0, 0), (0., 0., 1.)),
+            ((0, .5, 0, 0, .5, 0, 0, 0, 0), (0., 1., 0.)),
+        ):
+            with self.subTest(row=row), patch("pokezero.neural_policy.evaluate_transformer_action_priors", return_value=row):
+                self.assertEqual(self.distribution(raw_argmax=True), expected)
+                self.assertEqual(self.distribution(), tuple(row[i] for i in (4, 1, 0)))
+
+    def test_raw_argmax_preserves_strict_surface_and_probability_refusals(self):
+        with patch("pokezero.neural_policy.evaluate_transformer_action_priors", return_value=(0,) * 9) as forward:
+            with self.assertRaisesRegex(PolicyOpponentViewError, "no mass"):
+                self.distribution(raw_argmax=True)
+            forward.reset_mock()
+            with self.assertRaises(PolicyOpponentViewError):
+                self.distribution((0, 1), raw_argmax=True)
+            forward.assert_not_called()
+            for flag in (1, "true", None):
+                with self.subTest(flag=flag), self.assertRaisesRegex(PolicyOpponentViewError, "boolean"):
+                    self.distribution(raw_argmax=flag)
+
     def test_shared_module_forward_is_protected_by_the_inference_lock(self):
         from threading import Lock
         lock = Lock()
@@ -80,6 +103,7 @@ class PolicyOpponentProviderTest(unittest.TestCase):
         self.view = build_policy_opponent_view_from_native_bundle(native_request_bundle=supplied, **arguments())
         with patch("pokezero.neural_policy.evaluate_transformer_action_priors") as forward:
             self.assertEqual(self.distribution((0,)), (1.0,))
+            self.assertEqual(self.distribution((0,), raw_argmax=True), (1.0,))
             with self.assertRaises(PolicyOpponentViewError):
                 self.distribution((1,))
             waiting = deepcopy(bundle())
@@ -88,6 +112,7 @@ class PolicyOpponentProviderTest(unittest.TestCase):
             waiting["native_action_indices"] = [None]
             self.view = build_policy_opponent_view_from_native_bundle(native_request_bundle=waiting, **arguments())
             self.assertEqual(self.distribution((None,)), (1.0,))
+            self.assertEqual(self.distribution((None,), raw_argmax=True), (1.0,))
             forward.assert_not_called()
 
     def test_model_schema_masks_vocab_and_source_binding_fail_before_forward(self):
@@ -104,6 +129,33 @@ class PolicyOpponentProviderTest(unittest.TestCase):
                 with self.assertRaises(PolicyOpponentViewError):
                     self.distribution(**arguments)
                 forward.assert_not_called()
+
+    @unittest.skipUnless(torch_available(), "requires Python PyTorch for real own-head forward")
+    def test_raw_argmax_matches_canonical_raw_policy_with_real_forward_and_ties(self):
+        import random
+        import torch
+        from pokezero.neural_policy import TransformerPolicyOutput, TransformerSoftmaxPolicy
+
+        class FixedHeads(torch.nn.Module):
+            def __init__(self, config, row):
+                super().__init__()
+                self.config, self.row = config, row
+            def forward(self, **inputs):
+                batch = inputs["categorical_ids"].shape[0]
+                # Deliberately contradictory auxiliary head and huge illegal
+                # own logits: neither is allowed to influence the raw action.
+                return TransformerPolicyOutput(torch.tensor(self.row).repeat(batch, 1),
+                    torch.zeros(batch), torch.tensor([99., -99., -99., -99., -99., 99., 99., 99., 99.]).repeat(batch, 1))
+
+        observation = self.view.observation(category_vocab=VOCAB, dex=_dex())
+        for row in ((0., 1., 99., 99., 2., 99., 99., 99., 99.),
+                    (2., 1., 99., 99., 2., 99., 99., 99., 99.),
+                    (0., 2., 99., 99., 2., 99., 99., 99., 99.)):
+            model = FixedHeads(self.config, row)
+            policy = TransformerSoftmaxPolicy(model=model, result=self.result, deterministic=True)
+            action = policy.select_action(observation, rng=random.Random(7)).action_index
+            actual = self.distribution(model=model, raw_argmax=True)
+            self.assertEqual(actual, tuple(float(index == action) for index in (4, 1, 0)))
 
     @unittest.skipUnless(torch_available(), "requires Python PyTorch for real own-head forward")
     def test_real_forward_uses_own_head_not_auxiliary_opponent_head(self):

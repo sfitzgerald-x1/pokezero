@@ -74,6 +74,21 @@ impl ActionDistribution {
         Self::new(&weights, map.len())
     }
 
+    /// A raw-policy leaf must be deterministic. Do not turn a stochastic
+    /// callback into native-order argmax or consume a policy-sampling RNG.
+    pub(crate) fn certain_action(&self) -> PyResult<usize> {
+        let mut chosen = None;
+        for (index, weight) in self.0.iter().enumerate() {
+            if *weight != 0.0 {
+                if *weight != 1.0 || chosen.is_some() {
+                    return Err(PyValueError::new_err("raw policy terminal: callback must return a one-hot legal action"));
+                }
+                chosen = Some(index);
+            }
+        }
+        chosen.ok_or_else(|| PyValueError::new_err("raw policy terminal: no certain legal action"))
+    }
+
     fn sample(&self, rng: &mut StdRng) -> usize {
         let draw = rng.random::<f64>();
         let mut cumulative = 0.0;
