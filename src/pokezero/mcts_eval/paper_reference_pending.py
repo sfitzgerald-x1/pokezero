@@ -137,6 +137,8 @@ def condition_pending_world(factory, hidden_rng, evidence, *, max_attempts=128):
            if getattr(factory, 'diagnostic_oracle_team', None) is not None else {}),
         **({'pending_transition': transition.prior_transition}
            if getattr(transition, 'prior_transition', None) is not None else {}))
+    if getattr(factory, 'collect_sampled_team_traits', False):
+        prior.collect_sampled_team_traits = True
     if getattr(factory, 'sampling_deadline_at', None) is not None:
         prior.bind_sampling_deadline(factory.sampling_deadline_at)
     check_deadline = getattr(factory, 'check_sampling_deadline', lambda: None)

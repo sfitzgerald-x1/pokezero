@@ -273,6 +273,8 @@ class HypotheticalHistoryPopulation:
             **({'diagnostic_oracle_team': factory.diagnostic_oracle_team}
                if getattr(factory, 'diagnostic_oracle_team', None) is not None else {}),
             pending_transition=transition.prior_transition)
+        if getattr(factory, 'collect_sampled_team_traits', False):
+            prior.collect_sampled_team_traits = True
         prior.bind_sampling_deadline(factory.sampling_deadline_at)
         self.receipt['nested_anchor_kernel'] = ('retained complete empirical posterior; no new anchor draws'
             if self._stage_offset else 'unchanged original kernel')

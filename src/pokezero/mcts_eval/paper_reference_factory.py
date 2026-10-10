@@ -217,6 +217,29 @@ class PublicRootWorldFactory:
             raise ReferenceRefusal('cannot change the deadline of an owned sampled world')
         self.sampling_deadline_at = deadline
 
+    def enable_team_diagnostics(self, root_binding):
+        """Explicit prospective instrumentation; never a source-truth input."""
+        if (self.active or self.receipts or hasattr(self, 'team_diagnostic_root_binding')
+                or type(root_binding) is not str or len(root_binding) != 64
+                or any(c not in '0123456789abcdef' for c in root_binding)):
+            raise ReferenceRefusal('team diagnostics require a fresh bound public root')
+        self.team_diagnostic_root_binding = root_binding
+        self.collect_sampled_team_traits = True
+
+    def _observe_team(self, world, evidence):
+        if hasattr(self, 'team_diagnostic_root_binding'):
+            from .search_over_raw_belief_diagnostics import capture_sampled_team
+            try:
+                capture_sampled_team(self, world, evidence)
+                # Observation is inside the same decision clock. Crossing it
+                # cannot turn an unfinished world into accepted search work.
+                self.check_sampling_deadline()
+            except BaseException:
+                world.close()
+                evidence.pop('sampled_original_team', None)
+                raise
+        return world
+
     def check_sampling_deadline(self):
         from .paper_reference import SamplingDeadlineExceeded
         deadline = self.sampling_deadline_at
@@ -250,14 +273,17 @@ class PublicRootWorldFactory:
                         from .paper_reference_particles import HypotheticalHistoryPopulation
                         if self.history_population is None:
                             self.history_population = HypotheticalHistoryPopulation(self)
-                        return self.history_population.draw(hidden_rng, evidence)
-                    return condition_substitute_world(self, hidden_rng, evidence)
+                        return self._observe_team(self.history_population.draw(hidden_rng, evidence), evidence)
+                    return self._observe_team(condition_substitute_world(self, hidden_rng, evidence), evidence)
                 from .paper_reference_pending import condition_pending_world
-                return condition_pending_world(self, hidden_rng, evidence)
+                return self._observe_team(condition_pending_world(self, hidden_rng, evidence), evidence)
             draw = self.sampler.draw(self.known, hidden_rng)
             evidence.update(packed_team_sha256=draw.packed_team_sha256,
                 known_draws=[asdict(row) for row in draw.known], forced_sets=draw.forced_sets,
                 unknown_party_seeds=list(draw.unknown_party_seeds))
+            if getattr(self, 'collect_sampled_team_traits', False):
+                from .search_over_raw_belief_diagnostics import sampled_team_origin
+                evidence['sampled_team_origin'] = sampled_team_origin(draw)
             opponent = "p2" if self.state.player_id == "p1" else "p1"
             override = BattleStartOverride(player_teams={self.state.player_id: pack_team(self.own_team),
                 opponent: pack_team(draw.team)}, observation_format_id="gen3randombattle")
@@ -304,8 +330,8 @@ class PublicRootWorldFactory:
                 raise ReferenceRefusal("fresh sampled world does not preserve exact player-known root")
             self.check_sampling_deadline()
             evidence["status"] = "ROOT_VALIDATED"
-            return ShowdownTrajectoryWorld(self.env, subject=self.state.player_id, evaluator=self.evaluator,
-                release=lambda: self._release(evidence))
+            return self._observe_team(ShowdownTrajectoryWorld(self.env, subject=self.state.player_id,
+                evaluator=self.evaluator, release=lambda: self._release(evidence)), evidence)
         except Exception as exc:
             from .paper_reference import SamplingDeadlineExceeded
             self.active = False
