@@ -16,6 +16,7 @@ class LedgerTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.config = SearchConfiguration("reference", workers=20).identity
+        self.configs = dict(incumbent=SearchConfiguration("incumbent").identity, reference=self.config)
         self.contract = phase_a_contract(NAMESPACE, excluded_seeds=[], configurations=[
             SearchConfiguration("raw"), SearchConfiguration("incumbent"),
             SearchConfiguration("reference", workers=20),
@@ -27,11 +28,15 @@ class LedgerTest(unittest.TestCase):
         self.temp.cleanup()
 
     def intervals(self, panel):
-        return {r["root_id"]: [.125, .125] for r in self.contract["panels"][panel]["root_slots"]}
+        return {r["root_id"]: [.75, .75] for r in self.contract["panels"][panel]["root_slots"]}
+
+    def both_intervals(self, panel):
+        return {arm: self.intervals(panel) for arm in self.configs}
 
     def freeze(self):
-        self.ledger.record_exploration(self.config, self.intervals("exploration"))
-        return self.ledger.freeze(self.config)
+        for config in self.configs.values():
+            self.ledger.record_exploration(config, self.intervals("exploration"))
+        return self.ledger.freeze(self.configs)
 
     def test_existing_ledger_is_not_overwritten(self):
         with self.assertRaises(FileExistsError):
@@ -39,8 +44,8 @@ class LedgerTest(unittest.TestCase):
 
     def test_one_shot_validation_recomputes_summary_and_never_authorizes_phase_b(self):
         self.freeze()
-        result = self.ledger.validation_once(lambda contract, config: self.intervals("validation"))
-        self.assertEqual(result["gate"]["status"], "PHASE_A_GAIN_VALIDATED")
+        result = self.ledger.validation_once(lambda contract, configs: self.both_intervals("validation"))
+        self.assertEqual(result["gate"]["status"], "BOTH_PHASE_A_GAINS_VALIDATED")
         self.assertFalse(result["phase_b_authorized"])
         other = PhaseALedger(self.root / "ledger")
         with self.assertRaises(FileExistsError):
@@ -55,14 +60,15 @@ class LedgerTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "frozen"):
             self.ledger.record_exploration(self.config, self.intervals("exploration"))
         with self.assertRaises(FileExistsError):
-            self.ledger.freeze(self.config)
+            self.ledger.freeze(self.configs)
 
     def test_missing_roots_remain_uncertain_and_gate_is_closed(self):
         self.freeze()
-        result = self.ledger.validation_once(lambda *_: {})
-        self.assertEqual(result["summary"]["uncertain_roots"], 200)
-        self.assertEqual(result["summary"]["identification_interval"], [-1., 1.])
-        self.assertEqual(result["gate"]["status"], "NO_VALIDATED_GAIN")
+        result = self.ledger.validation_once(lambda *_: {arm: {} for arm in self.configs})
+        for summary in result["summaries"].values():
+            self.assertEqual(summary["uncertain_roots"], 200)
+            self.assertEqual(summary["identification_interval"], [-1., 1.])
+        self.assertEqual(result["gate"]["status"], "NO_JOINT_VALIDATED_GAIN")
 
     def test_failure_or_orphan_claim_never_permits_retry(self):
         self.freeze()
@@ -88,8 +94,9 @@ class LedgerTest(unittest.TestCase):
         path.write_text("before")
         contract = dict(self.contract, input_hashes={str(path): hashlib.sha256(path.read_bytes()).hexdigest()})
         ledger = PhaseALedger.create(self.root / "bound", contract)
-        ledger.record_exploration(self.config, self.intervals("exploration"))
-        ledger.freeze(self.config)
+        for config in self.configs.values():
+            ledger.record_exploration(config, self.intervals("exploration"))
+        ledger.freeze(self.configs)
         path.write_text("after")
         with self.assertRaisesRegex(ValueError, "input drift"):
             ledger.validation_once(lambda *_: self.fail("must not launch"))

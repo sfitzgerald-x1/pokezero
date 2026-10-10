@@ -106,7 +106,7 @@ def phase_a_contract(namespace: str, *, excluded_seeds: Sequence[int],
             source_seed=seeds[i % seeds_per_panel], root_slot=i // seeds_per_panel)
             for i in range(roots // 2)]
         panels[panel] = dict(seeds=seeds, root_slots=slots)
-    return dict(schema="pokezero.search-over-raw.phase-a.v1", namespace=namespace,
+    return dict(schema="pokezero.search-over-raw.phase-a.v2", namespace=namespace,
         status="PREPARED_NOT_COLLECTED", panels=panels,
         configurations=[dict(asdict(c), identity=c.identity, deployable=c.deployable)
                         for c in configurations],
@@ -117,7 +117,15 @@ def phase_a_contract(namespace: str, *, excluded_seeds: Sequence[int],
         paired_randomness="root/replicate/step/domain; independent of selected action",
         estimand="equal-source-seed mean continuation win-score gain versus raw",
         failure_policy="uncertain outcomes; no complete-case gate or redraw",
-        selection_rule="exploration only; freeze one deployable configuration before validation",
+        selection_rule="exploration only; freeze one deployable configuration per search arm before opening either validation result",
+        validation_inference=dict(method="fixed_panel_betting", family_alpha=.05,
+            primary_arms=["incumbent", "reference"], alpha_per_arm=.025,
+            stake=.99,
+            looks="one sealed full panel; no interim admission", contrast_range=[-1., 1.],
+            uncertainty="pointwise lower bounds, full fixed root/seed denominator",
+            assumptions="independent source-seed clusters, conditional on frozen exploration selections; within-seed dependence unrestricted",
+            bootstrap_role="descriptive only; never an admission threshold",
+            analytical_extension="fixed-panel two-arm betting lower-bound gate replaces the uncalibrated bootstrap; Hoeffding is descriptive only"),
         historical_outcomes_pooled=False, phase_b_authorized=False,
         excluded_seeds=sorted(excluded),
         excluded_seed_inventory_sha256=digest(sorted(excluded)))
@@ -241,7 +249,13 @@ def root_contrast(audit: Mapping, configuration: str) -> tuple[float, float]:
 
 def panel_summary(contract: Mapping, *, panel: str, configuration: str,
                   root_intervals: Mapping[str, Sequence[float]], bootstrap_reps: int = 10000) -> dict:
-    """Keep full source-seed denominator; uncertainty disables validation gate."""
+    """Equal-seed sharp identification bounds and descriptive bootstrap.
+
+    The prospective v2 admission uses betting on independent seed-cluster
+    means in [-1,1]. Pointwise lower imputation keeps outcome-dependent missing
+    roots conservative. It does not require complete cases or iid roots; each
+    seed's fixed quota is averaged first, then all seeds receive equal weight.
+    """
     require(panel in contract["panels"], "unknown panel")
     require(configuration in {c["identity"] for c in contract["configurations"]},
         "unregistered configuration")
@@ -261,6 +275,8 @@ def panel_summary(contract: Mapping, *, panel: str, configuration: str,
              for rows in by_seed.values()]
     result = dict(panel=panel, configuration=configuration, root_slots=len(slots),
         source_seeds=len(means), uncertain_roots=unknown,
+        seed_intervals=[dict(source_seed=seed, lower=mean[0], upper=mean[1])
+                        for seed, mean in zip(by_seed, means)],
         identification_interval=[statistics.mean(x[0] for x in means),
                                  statistics.mean(x[1] for x in means)],
         bootstrap_interval=None, gate_positive=False, confirmatory_strength=False)
@@ -273,26 +289,135 @@ def panel_summary(contract: Mapping, *, panel: str, configuration: str,
     return result
 
 
-def freeze_selection(contract: Mapping, configuration: str, *, exploration_summary: Mapping) -> dict:
-    require(exploration_summary["panel"] == "exploration"
-        and exploration_summary["configuration"] == configuration,
-        "selection must use matching exploration evidence only")
-    require(exploration_summary["uncertain_roots"] == 0, "incomplete exploration cannot select a winner")
-    config = next((c for c in contract["configurations"] if c["identity"] == configuration), None)
-    require(config is not None and config["deployable"], "oracle/raw configuration cannot be promoted")
-    return dict(schema="pokezero.search-over-raw.selection.v1", contract_sha256=digest(contract),
-        configuration=configuration, exploration_summary_sha256=digest(exploration_summary),
+def _validation_design(contract: Mapping) -> Mapping:
+    design = contract.get("validation_inference", {})
+    require(contract.get("schema") == "pokezero.search-over-raw.phase-a.v2"
+        and design.get("method") == "fixed_panel_betting"
+        and type(design.get("stake")) is float and design["stake"] == .99
+        and type(design.get("family_alpha")) is float and design["family_alpha"] == .05
+        and type(design.get("alpha_per_arm")) is float and design["alpha_per_arm"] == .025
+        and design.get("primary_arms") == ["incumbent", "reference"]
+        and design.get("looks") == "one sealed full panel; no interim admission"
+        and design.get("contrast_range") == [-1., 1.],
+        "prospective two-arm validation design required; old contracts cannot be re-admitted")
+    # Never infer a fresh holdout from a label. Rebuild the exact deterministic
+    # allocation and configuration identities rather than checking counts only.
+    configs = [SearchConfiguration(**{key: c[key] for key in
+        ("arm", "belief", "leaf", "seconds", "workers")}) for c in contract["configurations"]]
+    panels = contract["panels"]
+    require(set(panels) == {"exploration", "validation"}, "exact independent panels required")
+    expected = phase_a_contract(contract["namespace"], excluded_seeds=contract["excluded_seeds"],
+        configurations=configs, roots=sum(len(p["root_slots"]) for p in panels.values()),
+        seeds_per_panel=len(panels["exploration"]["seeds"]),
+        continuations=contract["continuation_replicates"])
+    for key, value in expected.items():
+        require(digest(contract.get(key)) == digest(value), "frozen Phase A contract core drift: " + key)
+    return design
+
+
+def _fixed_panel_betting_lcb(lowers: Sequence[float], *, alpha: float, stake: float) -> float:
+    """Invert a monotone fixed-panel betting test, not an interim e-process.
+
+    Factor 1+stake*(X-mu)/(1+mu) is >=1-stake>0 for X>=-1, mu>-1.
+    For independent (not necessarily identically distributed) X_s, expected
+    wealth is the product of expected factors, <= their arithmetic mean^n.
+    At mu=mean(E[X_s]) that mean is1, so Markov controls rejection at alpha.
+    Factors decrease in mu and increase in X. Pointwise lower imputation thus
+    gives a conservative LCB even under outcome-dependent missingness.
+    Frozen stake/denominator/full panel are essential; this proof does NOT
+    permit interim testing of a varying-mean cluster sequence.
+    """
+    require(lowers and all(type(x) in (int, float) and math.isfinite(x) and -1 <= x <= 1
+        for x in lowers) and 0 < stake < 1 and 0 < alpha < 1, "invalid bounded betting inputs")
+    if all(x == -1 for x in lowers):
+        return -1.
+    threshold = math.log(1 / alpha)
+    low, high = -1., 1.
+    for _ in range(80):
+        mu = (low + high) / 2
+        if mu == low or mu == high:
+            break
+        # This algebra avoids cancellation of 1+stake*(x-mu)/(1+mu)
+        # close to the lower parameter endpoint; all factors stay positive.
+        wealth = math.fsum(math.log(((1 - stake) * (1 + mu) + stake * (1 + x)) / (1 + mu))
+                           for x in lowers)
+        if wealth > threshold:
+            low = mu
+        else:
+            high = mu
+    return low
+
+
+def freeze_selection(contract: Mapping, configurations: Mapping[str, str], *,
+                     exploration_summaries: Mapping[str, Mapping]) -> dict:
+    """Freeze BOTH arms before either held-out result is opened.
+
+    Selection may use incomplete exploration, whose uncertainty is disclosed;
+    no exploration confidence bound or positivity is a scientific gate.
+    """
+    _validation_design(contract)
+    require(isinstance(configurations, Mapping)
+        and set(configurations) == {"incumbent", "reference"}
+        and set(exploration_summaries) == set(configurations), "both search arms must be frozen together")
+    for arm, configuration in configurations.items():
+        summary = exploration_summaries[arm]
+        require(summary["panel"] == "exploration" and summary["configuration"] == configuration,
+            "selection must use matching exploration evidence only")
+        config = next((c for c in contract["configurations"] if c["identity"] == configuration), None)
+        require(config is not None and config["arm"] == arm and config["deployable"],
+            "matching deployable arm required; oracle/raw configuration cannot be promoted")
+    return dict(schema="pokezero.search-over-raw.selection.v2", contract_sha256=digest(contract),
+        configurations=dict(configurations),
+        exploration_summary_sha256={arm: digest(summary) for arm, summary in exploration_summaries.items()},
         validation_opened=False, phase_b_authorized=False)
 
 
-def validation_gate(contract: Mapping, selection: Mapping, summary: Mapping) -> dict:
+def validation_gate(contract: Mapping, selection: Mapping, summaries: Mapping[str, Mapping]) -> dict:
+    """Fixed full-panel two-arm gate, NEVER permission to launch Phase B.
+
+    Invert fixed-panel betting wealth using the frozen .99 stake. Observed
+    lower_s <= X_s even under outcome-dependent missingness; see the kernel
+    for the independent, nonidentical-cluster fixed-panel proof. Hoeffding
+    is reported only as a descriptive conservative comparison, not an OR gate.
+    Union-bound allocation controls both selected-arm claims at family alpha
+    .05, conditional on independent exploration. No variance or bootstrap
+    adaptation, optional stopping, pooled historical evidence or holdout reuse.
+    """
+    design = _validation_design(contract)
     require(selection["contract_sha256"] == digest(contract), "selection/contract mismatch")
-    require(summary["panel"] == "validation" and summary["configuration"] == selection["configuration"],
-        "held-out evidence must match the frozen exploration selection")
-    config = next(c for c in contract["configurations"] if c["identity"] == selection["configuration"])
-    require(config["deployable"], "oracle configuration cannot pass validation")
-    interval = summary["bootstrap_interval"]
-    return dict(status="PHASE_A_GAIN_VALIDATED" if summary["uncertain_roots"] == 0
-        and interval is not None and interval[0] > 0 else "NO_VALIDATED_GAIN",
+    require(selection.get("schema") == "pokezero.search-over-raw.selection.v2"
+        and set(selection["configurations"]) == set(design["primary_arms"])
+        and set(summaries) == set(design["primary_arms"]), "both frozen held-out arms required")
+    seeds = contract["panels"]["validation"]["seeds"]
+    require(len(seeds) >= 32 and len(set(seeds)) == len(seeds), "invalid validation seed roster")
+    results = {}
+    for arm, configuration in selection["configurations"].items():
+        summary = summaries[arm]
+        require(summary["panel"] == "validation" and summary["configuration"] == configuration,
+            "held-out evidence must match the frozen exploration selection")
+        config = next((c for c in contract["configurations"] if c["identity"] == configuration), None)
+        require(config is not None and config["arm"] == arm and config["deployable"],
+            "oracle/raw or mismatched arm cannot pass validation")
+        rows = summary["seed_intervals"]
+        require([row["source_seed"] for row in rows] == seeds
+            and all(type(row[key]) in (int, float) and math.isfinite(row[key])
+                for row in rows for key in ("lower", "upper"))
+            and all(-1 <= row["lower"] <= row["upper"] <= 1 for row in rows),
+            "invalid full fixed-roster seed intervals")
+        lower = statistics.mean(row["lower"] for row in rows)
+        upper = statistics.mean(row["upper"] for row in rows)
+        require(summary["source_seeds"] == len(seeds)
+            and summary["root_slots"] == len(contract["panels"]["validation"]["root_slots"])
+            and summary["identification_interval"] == [lower, upper], "summary/seed evidence mismatch")
+        lcb = _fixed_panel_betting_lcb([row["lower"] for row in rows],
+            alpha=design["alpha_per_arm"], stake=design["stake"])
+        results[arm] = dict(configuration=configuration, lower_confidence_bound=lcb,
+            descriptive_hoeffding_lower=max(-1., lower - math.sqrt(2 * math.log(1 / design["alpha_per_arm"]) / len(seeds))),
+            alpha=design["alpha_per_arm"], method=design["method"], stake=design["stake"],
+            uncertain_roots=summary["uncertain_roots"],
+            status="PHASE_A_GAIN_VALIDATED" if lcb > 0 else "NO_VALIDATED_GAIN")
+    both = all(row["status"] == "PHASE_A_GAIN_VALIDATED" for row in results.values())
+    return dict(status="BOTH_PHASE_A_GAINS_VALIDATED" if both else "NO_JOINT_VALIDATED_GAIN",
+        arms=results, both_arms_admitted=both,
         phase_b_authorized=False, full_game_strength_established=False,
         explanation="Phase B still requires calibration, reliability and source qualification gates")

@@ -1070,9 +1070,9 @@ jobs:
             tests.test_search_over_raw_oracle tests.test_model_tree_hp_leaf_contract \
             tests.test_model_tree_raw_leaf_contract tests.test_search_over_raw_synthetic \
             tests.test_search_over_raw_callback_profile tests.test_randbat_normalization \
-            tests.test_search_over_raw_statistics -v 2>&1 \
+            tests.test_search_over_raw_statistics tests.test_search_over_raw_validation -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 201 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 224 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"

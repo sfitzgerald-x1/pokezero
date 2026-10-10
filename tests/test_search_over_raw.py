@@ -148,15 +148,22 @@ class SearchOverRawTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate"):
             root_contrast(audit, "search")
 
-    def summary(self, panel, config=None, missing=False):
+    def summary(self, panel, config=None, missing=False, value=.75):
         config = config or self.configs[2].identity
-        rows = {r["root_id"]: (.125, .125) for r in self.contract["panels"][panel]["root_slots"]}
+        rows = {r["root_id"]: (value, value) for r in self.contract["panels"][panel]["root_slots"]}
         if missing:
             rows.pop(next(iter(rows)))
         return panel_summary(self.contract, panel=panel, configuration=config,
             root_intervals=rows, bootstrap_reps=1000)
 
-    def test_missing_source_root_keeps_denominator_and_disables_gate(self):
+    def summaries(self, panel, missing=False, value=.75):
+        return {c.arm: self.summary(panel, c.identity, missing=missing, value=value) for c in self.configs[1:3]}
+
+    def selection(self):
+        return freeze_selection(self.contract, {c.arm: c.identity for c in self.configs[1:3]},
+            exploration_summaries=self.summaries("exploration"))
+
+    def test_missing_source_root_keeps_denominator_and_disables_descriptive_bootstrap(self):
         summary = self.summary("validation", missing=True)
         self.assertEqual(summary["source_seeds"], 32)
         self.assertEqual(summary["root_slots"], 200)
@@ -165,36 +172,42 @@ class SearchOverRawTest(unittest.TestCase):
 
     def test_exploration_is_required_before_selection(self):
         with self.assertRaisesRegex(ValueError, "exploration"):
-            freeze_selection(self.contract, self.configs[2].identity,
-                exploration_summary=self.summary("validation"))
+            freeze_selection(self.contract, {c.arm: c.identity for c in self.configs[1:3]},
+                exploration_summaries=self.summaries("validation"))
 
     def test_oracle_cannot_be_selected(self):
         config = self.configs[3].identity
         with self.assertRaisesRegex(ValueError, "oracle"):
-            freeze_selection(self.contract, config, exploration_summary=self.summary("exploration", config))
+            freeze_selection(self.contract, dict(incumbent=self.configs[1].identity, reference=config),
+                exploration_summaries=dict(incumbent=self.summary("exploration", self.configs[1].identity),
+                    reference=self.summary("exploration", config)))
 
     def test_validation_matches_frozen_selection_not_new_configuration(self):
         config = self.configs[2].identity
-        selection = freeze_selection(self.contract, config, exploration_summary=self.summary("exploration"))
+        selection = self.selection()
+        summaries = self.summaries("validation")
+        summaries["reference"] = self.summary("validation", self.configs[1].identity)
         with self.assertRaisesRegex(ValueError, "matching|match"):
-            validation_gate(self.contract, selection, self.summary("validation", self.configs[1].identity))
-        result = validation_gate(self.contract, selection, self.summary("validation"))
-        self.assertEqual(result["status"], "PHASE_A_GAIN_VALIDATED")
+            validation_gate(self.contract, selection, summaries)
+        result = validation_gate(self.contract, selection, self.summaries("validation"))
+        self.assertEqual(result["status"], "BOTH_PHASE_A_GAINS_VALIDATED")
         self.assertFalse(result["phase_b_authorized"])
 
     def test_uncertain_validation_cannot_open_phase_b(self):
         config = self.configs[2].identity
-        selection = freeze_selection(self.contract, config, exploration_summary=self.summary("exploration"))
-        result = validation_gate(self.contract, selection, self.summary("validation", missing=True))
-        self.assertEqual(result["status"], "NO_VALIDATED_GAIN")
+        selection = self.selection()
+        result = validation_gate(self.contract, selection, self.summaries("validation", missing=True))
+        # A finite number of missing roots may coexist with positive lower
+        # bounds, but Phase B remains unauthorized until its separate gates.
+        self.assertFalse(result["phase_b_authorized"])
 
     def test_source_drift_invalidates_frozen_selection(self):
         config = self.configs[2].identity
-        selection = freeze_selection(self.contract, config, exploration_summary=self.summary("exploration"))
+        selection = self.selection()
         drifted = copy.deepcopy(self.contract)
         drifted["candidate_seat"] = "p2"
-        with self.assertRaisesRegex(ValueError, "mismatch"):
-            validation_gate(drifted, selection, self.summary("validation"))
+        with self.assertRaisesRegex(ValueError, "mismatch|drift"):
+            validation_gate(drifted, selection, self.summaries("validation"))
 
     def test_no_snapshot_or_opponent_commitment_in_audit_receipt(self):
         audit = self.audit(FakeEnv(), dict(raw=0, search=1))
