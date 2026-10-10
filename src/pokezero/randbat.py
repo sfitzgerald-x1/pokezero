@@ -170,6 +170,24 @@ class RandbatSourceMetadata:
         path. The absolute form that reaches a tracked artifact comes from a cache file written
         BEFORE that was added. Relativizing here makes the serialized form independent of both.
         """
+        # Only exact immutable built-ins enter the bounded cache. Custom conversions,
+        # dataclass subclasses and wrong-typed fields retain asdict/deepcopy behavior.
+        # Cache immutable items, never the mutable mapping copied into each belief.
+        if type(self) is not RandbatSourceMetadata:
+            return RandbatSourceMetadata._portable_payload_uncached(self)
+        values = (self.format_id, self.generation, self.showdown_root,
+                  self.sets_path, self.generator_path, self.source_hash)
+        if (
+            type(self.generation) is int
+            and self.generation.bit_length() <= 64
+            and all(value is None or (type(value) is str and len(value) <= 4096)
+                    for index, value in enumerate(values) if index != 1)
+        ):
+            return dict(_portable_metadata_items(values))
+        return RandbatSourceMetadata._portable_payload_uncached(self)
+
+    def _portable_payload_uncached(self) -> dict[str, Any]:
+        """Original serializer, including custom input and deep-copy semantics."""
         payload = asdict(self)
         root = self.showdown_root
         for key in ("sets_path", "generator_path"):
@@ -233,6 +251,12 @@ class RandbatSourceMetadata:
         # external consumer can act on (verified: nothing outside this module reads it).
         payload["showdown_root"] = None
         return payload
+
+
+@lru_cache(maxsize=128)
+def _portable_metadata_items(values: tuple[Any, ...]) -> tuple[tuple[str, Any], ...]:
+    """Portable source identity only; bounded keys and immutable cached outputs."""
+    return tuple(RandbatSourceMetadata(*values)._portable_payload_uncached().items())
 
 
 @dataclass(frozen=True)
