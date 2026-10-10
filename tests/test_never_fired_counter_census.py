@@ -204,7 +204,12 @@ _CORPUS_TREES = ("reports", "docs")
 # counter census reads the same JSON set as the terminal-disposition register.
 # 406 -> 407: the frozen paper-policy opponent roster adds one tracked selection
 # document, not a measurement. No historical JSON was removed or altered.
-_EXPECTED_COUNTER_ARTIFACTS = 407
+# 407 -> 409: separate current-source HP and raw-terminal integration mutation
+# receipts are added under reports/artifacts/. The base at fccb728b has 407 JSON
+# paths; these two additions remove or rewrite none of its historical evidence.
+# Stage the new receipt before running this tracked-corpus census. Each battery
+# is held to its recorded source bytes by its dedicated mutation-evidence guard.
+_EXPECTED_COUNTER_ARTIFACTS = 409
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

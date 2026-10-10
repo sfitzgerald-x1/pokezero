@@ -38,15 +38,17 @@ def refusal_diagnostic(error: BaseException) -> dict[str, Any] | None:
     seen: set[int] = set()
     while error is not None and id(error) not in seen:
         seen.add(id(error))
-        raw = getattr(error, "policy_opponent_diagnostic", None)
-        if isinstance(raw, str):
-            try:
-                payload = json.loads(raw)
-            except (TypeError, ValueError):
-                payload = None
-            if (isinstance(payload, dict) and payload.get("schema") == "policy-opponent-refusal-v1"
-                    and payload.get("diagnostic_only_not_policy_input") is True):
-                return payload
+        for attribute, schema in (("policy_opponent_diagnostic", "policy-opponent-refusal-v1"),
+                                  ("raw_policy_leaf_diagnostic", "raw-policy-terminal-refusal-v1")):
+            raw = getattr(error, attribute, None)
+            if isinstance(raw, str):
+                try:
+                    payload = json.loads(raw)
+                except (TypeError, ValueError):
+                    payload = None
+                if (isinstance(payload, dict) and payload.get("schema") == schema
+                        and payload.get("diagnostic_only_not_policy_input") is True):
+                    return payload
         error = error.__cause__
     return None
 
@@ -172,9 +174,9 @@ def make_profile_decider(
     _unsigned_seed(opponent_seed)
     if arm not in ARMS or mode not in MODES:
         raise ContractError("unsupported profile arm or timing mode")
-    if model_leaf_override not in (None, "hp_fraction") or (model_leaf_override is not None
+    if model_leaf_override not in (None, "hp_fraction", "raw_policy_terminal") or (model_leaf_override is not None
             and arm != "incumbent_mcts"):
-        raise ContractError("model leaf override requires explicit incumbent HP valuation")
+        raise ContractError("model leaf override requires an implemented incumbent valuation")
     if (type(deadline_ms) is not int or deadline_ms <= 0
             or type(native_batch_guard_ms) is not int
             or not 0 <= native_batch_guard_ms < deadline_ms):
@@ -188,7 +190,10 @@ def make_profile_decider(
         model_native_batch_guard_ms=native_batch_guard_ms if mode == "matched_deadline" else 0,
         policy_opponent=arm == "own_policy_opponent_mcts",
         policy_opponent_seed=opponent_seed if arm == "own_policy_opponent_mcts" else None,
-        **({"model_leaf_override": model_leaf_override} if model_leaf_override is not None else {}))
+        **({"model_leaf_override": model_leaf_override} if model_leaf_override is not None else {}),
+        **(dict(rollout_count=1, rollout_max_plies=250, rollout_policy="raw_argmax",
+                rollout_seed=opponent_seed, rollout_threads=1, rollout_branch_on_damage=True)
+           if model_leaf_override == "raw_policy_terminal" else {}))
 
 
 def validate_selection(telemetry: Any, *, arm: str, mode: str, config: SearchConfig,
@@ -221,15 +226,15 @@ def validate_selection(telemetry: Any, *, arm: str, mode: str, config: SearchCon
         return
     if arm not in ARMS or mode not in MODES or "raw_policy" in telemetry or engine.get("leaf_eval") != "model":
         raise ContractError("profile search arm identity drift")
-    from ..engine_search import require_model_hp_leaf_witness
+    from ..engine_search import require_model_leaf_witness
     if model_leaf_override is not None and arm != "incumbent_mcts":
         raise ContractError("model leaf override belongs to the incumbent arm only")
-    require_model_hp_leaf_witness({"engine_mcts": engine}, model_leaf_override=model_leaf_override)
+    require_model_leaf_witness({"engine_mcts": engine}, model_leaf_override=model_leaf_override)
     if model_leaf_override is not None:
         rows = engine["model_leaf_override"]["native_invocations"]
         if (sum(row["completed_iterations"] for row in rows) != telemetry["total_iterations"]
                 or sum(row["model_evals"] for row in rows) != telemetry["model_evals"]):
-            raise ContractError("model-tree HP work differs from actual native invocations")
+            raise ContractError("model-tree leaf work differs from actual native invocations")
     from ..engine_search import EngineSearchWitnessError, validate_native_joint_action_witness
     joint = engine.get("joint_actions")
     if (not isinstance(joint, Mapping)

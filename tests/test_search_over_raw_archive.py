@@ -177,6 +177,73 @@ class SourceQualificationAdmissionTests(unittest.TestCase):
                 DRIVER.claim_attempt(Path(directory), row)
 
 
+class IncumbentRawQualificationAdmissionTests(unittest.TestCase):
+    def registration(self):
+        from dataclasses import asdict
+        row = SourceQualificationAdmissionTests().registration()
+        row.update(schema=DRIVER.INCUMBENT_RAW_SCHEMA,
+            source_contract=DRIVER.engineering_contract(incumbent_raw=True),
+            configurations=[asdict(c) for c in DRIVER.qualification_configurations(10., incumbent_raw=True)])
+        return row
+
+    def test_distinct_namespace_same_tree_both_seats_and_no_scientific_admission(self):
+        row = self.registration()
+        self.assertNotIn(row["source_contract"]["namespace"],
+            (DRIVER.NAMESPACE, DRIVER.LEAF_NAMESPACE, DRIVER.ORACLE_NAMESPACE, DRIVER.INCUMBENT_HP_NAMESPACE))
+        with tempfile.TemporaryDirectory() as directory:
+            configs = DRIVER.claim_attempt(Path(directory), row)
+        self.assertEqual([DRIVER.configuration_key(c) for c in configs], ["raw", "incumbent", "reference",
+            "incumbent-raw_rollout", "incumbent-oracle", "incumbent-oracle-raw_rollout"])
+        declared = row["source_contract"]["incumbent_raw_terminal_ablation"]
+        self.assertEqual(declared["tree"], "unchanged_encoded_model_tree")
+        self.assertEqual(declared["raw_rollout_policy"], "both_seats_own_raw_masked_argmax")
+        self.assertEqual(declared["allocation"], dict(depth=6, sims=4096, batch=16, worlds=4, workers=1))
+        self.assertFalse(declared["oracle_deployable"])
+        self.assertFalse(row["source_contract"]["phase_a_admission"])
+        self.assertFalse(row["source_contract"]["scientific_strength_evidence"])
+
+    def test_relabelled_fallback_budget_seed_or_policy_refuses_before_claim(self):
+        for key, value in (("tree", "rollout_crate"), ("priors", "uniform"),
+                ("model_forwards", "skipped"), ("raw_rollout_policy", "uniform"),
+                ("raw_rollout_cap", 500), ("capped_rollout", "hp_fallback"),
+                ("expired_rollout", "draw"), ("seed", "tree_rng"), ("branch_on_damage", False),
+                ("rollout_count", 32), ("rollout_threads", 12), ("oracle_deployable", True)):
+            row = self.registration()
+            row["source_contract"]["incumbent_raw_terminal_ablation"][key] = value
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaisesRegex(ValueError, "qualification changed"):
+                    DRIVER.claim_attempt(Path(directory), row)
+                self.assertFalse((Path(directory) / "attempt.json").exists())
+
+    def test_mode_budget_and_create_only_attempt_are_explicit(self):
+        for mode in ("oracle", "reference_leaves", "incumbent_hp"):
+            with self.assertRaisesRegex(ValueError, "undeclared qualification"):
+                DRIVER.qualification_configurations(10., incumbent_raw=True, **{mode: True})
+            with self.assertRaisesRegex(ValueError, "undeclared qualification"):
+                DRIVER.engineering_contract(incumbent_raw=True, **{mode: True})
+        with self.assertRaisesRegex(ValueError, "ten-second budget"):
+            DRIVER.qualification_configurations(3., incumbent_raw=True)
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory)
+            DRIVER.claim_attempt(output, self.registration())
+            before = (output / "attempt.json").read_bytes()
+            with self.assertRaises(FileExistsError):
+                DRIVER.claim_attempt(output, self.registration())
+            self.assertEqual(before, (output / "attempt.json").read_bytes())
+
+    def test_source_schema_and_arm_resource_drift_cannot_alias_raw_qualification(self):
+        for change in ("schema", "configuration"):
+            row = self.registration()
+            if change == "schema":
+                row["schema"] = DRIVER.INCUMBENT_HP_SCHEMA
+            else:
+                row["configurations"][-1]["leaf"] = "model"
+            with tempfile.TemporaryDirectory() as directory:
+                with self.assertRaises(ValueError):
+                    DRIVER.claim_attempt(Path(directory), row)
+                self.assertFalse((Path(directory) / "attempt.json").exists())
+
+
 class ActualSourceBoundaryArchiveTests(unittest.TestCase):
     def setUp(self):
         from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv

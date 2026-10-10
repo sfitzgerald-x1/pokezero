@@ -99,10 +99,10 @@ class HpLeafContractTests(unittest.TestCase):
         cfg = result[2]
         self.assertEqual((cfg.depth, cfg.sims, cfg.batch, cfg.worlds), (6, 4096, 16, 4))
 
-    def test_unimplemented_raw_terminal_runtime_fails_before_model_load(self):
+    def test_unknown_leaf_runtime_fails_before_model_load(self):
         with patch("pokezero.mcts_eval.policy_opponent_profile.make_profile_decider") as make:
             with self.assertRaisesRegex(ValueError, "implemented model-tree"):
-                _incumbent_runtime(None, "showdown", 10., leaf="raw_rollout")
+                _incumbent_runtime(None, "showdown", 10., leaf="unknown")
         make.assert_not_called()
 
 

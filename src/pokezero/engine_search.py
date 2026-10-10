@@ -44,7 +44,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, fields, replace
 from queue import Queue
 from threading import Lock
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Mapping, Optional, Sequence
 
 from .dex import ShowdownDex, normalize_id
@@ -203,6 +203,104 @@ def require_model_hp_leaf_witness(metadata: Mapping[str, Any], *, model_leaf_ove
         total += row["hp_leaf_rows_priced"]
     if total != witness["hp_leaf_rows_priced"]:
         raise EngineSearchWitnessError("model-tree HP leaf work does not conserve")
+
+
+RAW_LEAF_COUNTERS = (
+    "raw_leaf_started", "raw_leaf_terminal", "raw_leaf_plies", "raw_leaf_provider_calls",
+    "raw_leaf_policy_evals", "raw_leaf_cancelled_traversals", "raw_leaf_cancelled_rows",
+    "raw_leaf_discarded_terminal_rows", "raw_leaf_cap_fallbacks",
+)
+
+
+def raw_policy_leaf_seed(config: Any, record: Mapping[str, Any]) -> int:
+    """Split leaf chance randomness without consuming the native tree stream."""
+    payload = json.dumps(["pokezero-model-tree-raw-leaf-v1", config.rollout_seed,
+                          record["seed"]], separators=(",", ":")).encode()
+    return int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
+
+
+def validate_native_raw_leaf_witness(report: Mapping[str, Any], *, cap: int,
+                                     seed: int, branch_on_damage: bool) -> None:
+    """Terminal rows and cancelled reservations are distinct, unweighted work."""
+    if (report.get("model_leaf_override") != "raw_policy_terminal"
+            or report.get("raw_leaf_policy") != "both_seats_own_raw_masked_argmax"
+            or report.get("raw_leaf_value_frame") != "side_one_absolute"
+            or report.get("raw_leaf_model_forwards_retained") is not True
+            or report.get("raw_leaf_tree_counters_include_cancelled_work") is not True
+            or type(report.get("raw_leaf_max_plies")) is not int or report["raw_leaf_max_plies"] != cap
+            or type(report.get("raw_leaf_seed")) is not int or report["raw_leaf_seed"] != seed
+            or report.get("raw_leaf_branch_on_damage") is not branch_on_damage
+            or any(type(report.get(key)) is not int or report[key] < 0
+                   for key in (*RAW_LEAF_COUNTERS, "iterations", "model_evals"))
+            or "rollout_leaf_mode" in report or "hp_leaf_rows_priced" in report
+            or type(report.get("raw_leaf_policy_s")) not in (int, float)
+            or not math.isfinite(report["raw_leaf_policy_s"]) or report["raw_leaf_policy_s"] < 0):
+        raise EngineSearchWitnessError("native model-tree raw leaf witness missing or malformed")
+    started, terminal = report["raw_leaf_started"], report["raw_leaf_terminal"]
+    cancelled, discarded = report["raw_leaf_cancelled_rows"], report["raw_leaf_discarded_terminal_rows"]
+    if (not 0 <= terminal <= started <= report["model_evals"]
+            or started > terminal + cancelled
+            or discarded > min(terminal, cancelled)
+            # One traversal expands/prices every branch of its chance edge;
+            # rows may greatly exceed traversals. Zero completed traversals,
+            # however, cannot retain a backed-up terminal row.
+            or (report["iterations"] == 0 and terminal != discarded)
+            or report["raw_leaf_policy_evals"] > report["raw_leaf_provider_calls"]
+            or report["raw_leaf_cap_fallbacks"] != 0
+            or cancelled > report["model_evals"]
+            or (cancelled > 0 and report["raw_leaf_cancelled_traversals"] == 0)
+            or (report["raw_leaf_cancelled_traversals"] > 0
+                and report.get("time_budget_exhausted") is not True)):
+        raise EngineSearchWitnessError("native model-tree raw leaf work does not conserve")
+
+
+def model_raw_leaf_witness(config: Any, invocations: list[dict[str, Any]]) -> dict[str, Any]:
+    return dict(schema="pokezero.model-tree-raw-leaf.v1", mode="raw_policy_terminal",
+        value_frame="side_one_absolute", policy="both_seats_own_raw_masked_argmax",
+        model_forwards_retained=True, scope="per_native_invocation_without_belief_reweighting",
+        max_plies=config.rollout_max_plies, seed_root=config.rollout_seed,
+        branch_on_damage=config.rollout_branch_on_damage, native_invocations=invocations,
+        **{key: sum(row["report"][key] for row in invocations) for key in RAW_LEAF_COUNTERS},
+        raw_leaf_policy_s=math.fsum(row["report"]["raw_leaf_policy_s"] for row in invocations))
+
+
+def require_model_leaf_witness(metadata: Mapping[str, Any], *, model_leaf_override: str | None) -> None:
+    if model_leaf_override != "raw_policy_terminal":
+        require_model_hp_leaf_witness(metadata, model_leaf_override=model_leaf_override)
+        return
+    witness = metadata.get("engine_mcts", {}).get("model_leaf_override")
+    if (not isinstance(witness, Mapping) or witness.get("schema") != "pokezero.model-tree-raw-leaf.v1"
+            or witness.get("mode") != "raw_policy_terminal"
+            or witness.get("value_frame") != "side_one_absolute"
+            or witness.get("policy") != "both_seats_own_raw_masked_argmax"
+            or witness.get("model_forwards_retained") is not True
+            or witness.get("scope") != "per_native_invocation_without_belief_reweighting"
+            or type(witness.get("max_plies")) is not int or witness["max_plies"] <= 0
+            or type(witness.get("seed_root")) is not int or not 0 <= witness["seed_root"] < 2**64
+            or type(witness.get("branch_on_damage")) is not bool
+            or any(type(witness.get(key)) is not int or witness[key] < 0 for key in RAW_LEAF_COUNTERS)
+            or type(witness.get("raw_leaf_policy_s")) not in (int, float)
+            or not math.isfinite(witness["raw_leaf_policy_s"]) or witness["raw_leaf_policy_s"] < 0
+            or not isinstance(witness.get("native_invocations"), list) or not witness["native_invocations"]):
+        raise EngineSearchWitnessError("model-tree raw leaf witness missing or malformed")
+    config = SimpleNamespace(rollout_seed=witness["seed_root"])
+    for row in witness["native_invocations"]:
+        if (not isinstance(row, Mapping) or type(row.get("world_seed")) is not int
+                or not 0 <= row["world_seed"] < 2**64
+                or type(row.get("belief_multiplicity")) is not int or row["belief_multiplicity"] < 1
+                or type(row.get("completed_iterations")) is not int
+                or type(row.get("model_evals")) is not int or not isinstance(row.get("report"), Mapping)
+                or row["completed_iterations"] != row["report"].get("iterations")
+                or row["model_evals"] != row["report"].get("model_evals")):
+            raise EngineSearchWitnessError("model-tree raw leaf invocation malformed")
+        validate_native_raw_leaf_witness(row["report"], cap=witness["max_plies"],
+            seed=raw_policy_leaf_seed(config, {"seed": row["world_seed"]}),
+            branch_on_damage=witness["branch_on_damage"])
+    expected = model_raw_leaf_witness(SimpleNamespace(
+        rollout_seed=witness["seed_root"], rollout_max_plies=witness["max_plies"],
+        rollout_branch_on_damage=witness["branch_on_damage"]), witness["native_invocations"])
+    if dict(witness) != expected:
+        raise EngineSearchWitnessError("model-tree raw leaf aggregate work does not conserve")
 
 
 def policy_opponent_world_seed(config: Any, context: Any, record: Mapping[str, Any]) -> int:
@@ -1035,12 +1133,22 @@ class EngineMctsConfig:
 
     def __post_init__(self) -> None:
         if self.model_leaf_override is not None:
-            if (self.model_leaf_override != "hp_fraction" or self.leaf_eval != "model"
+            if (self.model_leaf_override not in {"hp_fraction", "raw_policy_terminal"} or self.leaf_eval != "model"
                     or not self.model_priors or not self.strict_fallbacks
                     or self.rollout_leaf_eval or self.rollout_leaf_shadow
                     or self.policy_opponent or self.early_stop
                     or self.depth_min is not None or self.worlds_min is not None):
-                raise ValueError("model_leaf_override requires explicit hp_fraction on the fixed strict model-prior tree, without rollout or policy-opponent seams.")
+                raise ValueError("model_leaf_override requires an implemented valuation on the fixed strict model-prior tree, without rollout or policy-opponent seams.")
+            if self.model_leaf_override == "raw_policy_terminal" and (
+                    self.use_opponent_priors or type(self.model_world_workers) is not int
+                    or self.model_world_workers != 1
+                    or type(self.rollout_count) is not int or self.rollout_count != 1
+                    or type(self.rollout_threads) is not int or self.rollout_threads != 1
+                    or self.rollout_policy != "raw_argmax"
+                    or type(self.rollout_max_plies) is not int or self.rollout_max_plies <= 0
+                    or type(self.rollout_seed) is not int or not 0 <= self.rollout_seed < 2**64
+                    or type(self.rollout_branch_on_damage) is not bool):
+                raise ValueError("model_leaf_override raw_policy_terminal requires both own policies, raw_argmax, one continuation/thread/world worker, and a declared positive cap and unsigned seed.")
         if type(self.policy_opponent) is not bool:
             raise ValueError("policy_opponent must be a boolean.")
         if type(self.record_joint_actions) is not bool or (self.record_joint_actions and (
@@ -2862,7 +2970,8 @@ def native_search_args(
                 int(config.rollout_count),
                 int(config.rollout_max_plies),
                 str(config.rollout_policy),
-                int(config.rollout_seed),
+                raw_policy_leaf_seed(config, record) if model_leaf_override == "raw_policy_terminal"
+                    else int(config.rollout_seed),
                 int(config.rollout_threads),
                 bool(getattr(config, "rollout_branch_on_damage", False)),
             ]
@@ -4749,7 +4858,7 @@ class EngineMctsPolicy:
             self._tables_json = _latch_encoder_tables_to_model_config(
                 tables_path.read_text(encoding="utf-8"), self._model_config
             )
-            if self._config.policy_opponent:
+            if self._config.policy_opponent or self._config.model_leaf_override == "raw_policy_terminal":
                 from .neural_policy import FreshValueHeadWarning, load_transformer_checkpoint
                 with warnings.catch_warnings():
                     warnings.simplefilter("error", FreshValueHeadWarning)
@@ -4804,8 +4913,8 @@ class EngineMctsPolicy:
     # Policy protocol (context-free path): uniform legal. Only reached if the
     # rollout driver cannot supply a context, which the bench never does.
     def select_action(self, observation, *, rng: random.Random) -> PolicyDecision:
-        if self._config.policy_opponent:
-            raise EngineSearchFallbackError("policy opponent requires a complete public context")
+        if self._config.policy_opponent or self._config.model_leaf_override == "raw_policy_terminal":
+            raise EngineSearchFallbackError("own-policy search requires a complete public context")
         legal = legal_action_indices(observation.legal_action_mask)
         return PolicyDecision(action_index=rng.choice(legal), policy_id=self.policy_id)
 
@@ -4819,7 +4928,7 @@ class EngineMctsPolicy:
             completed = True
         finally:
             # A refused experimental decision still spent wall time.
-            if completed or self._config.policy_opponent:
+            if completed or self._config.policy_opponent or self._config.model_leaf_override == "raw_policy_terminal":
                 self.stats.decisions += 1
                 self.stats.decision_wall_seconds += time.perf_counter() - started
         if self._config.policy_opponent:
@@ -4973,7 +5082,7 @@ class EngineMctsPolicy:
                 self.stats.world_failure_reasons[
                     f"belief_sample: {sample_failure or 'unknown'}"
                 ] += 1
-                if self._config.policy_opponent:
+                if self._config.policy_opponent or self._config.model_leaf_override == "raw_policy_terminal":
                     raise EngineSearchWitnessError(
                         f"policy opponent belief draw refused: {sample_failure or 'unknown'}"
                     )
@@ -5003,7 +5112,8 @@ class EngineMctsPolicy:
                 # permits a world; classify a missing patch as an attributed
                 # fallback instead of silently searching an optimistic state.
                 self.stats.world_failure_reasons["attract_patch_unavailable"] += 1
-                if self._config.policy_opponent or self._config.record_joint_actions:
+                if (self._config.policy_opponent or self._config.record_joint_actions
+                        or self._config.model_leaf_override == "raw_policy_terminal"):
                     raise EngineSearchWitnessError("policy opponent Attract world refused") from error
                 continue
             except PokeEngineMoveTrapUnsupportedError as error:
@@ -5015,7 +5125,8 @@ class EngineMctsPolicy:
                 # hand the trapped seat its switch options back, so declining is correct --
                 # but declining is a fallback, not a crashed run.
                 self.stats.world_failure_reasons["move_trap_patch_unavailable"] += 1
-                if self._config.policy_opponent or self._config.record_joint_actions:
+                if (self._config.policy_opponent or self._config.record_joint_actions
+                        or self._config.model_leaf_override == "raw_policy_terminal"):
                     raise EngineSearchWitnessError("policy opponent move-trap world refused") from error
                 continue
             except PokeEngineUnavailableError as error:
@@ -5041,12 +5152,14 @@ class EngineMctsPolicy:
                 self.stats.world_failure_reasons[
                     f"engine_capability_unavailable: {type(error).__name__}"
                 ] += 1
-                if self._config.policy_opponent or self._config.record_joint_actions:
+                if (self._config.policy_opponent or self._config.record_joint_actions
+                        or self._config.model_leaf_override == "raw_policy_terminal"):
                     raise EngineSearchWitnessError("policy opponent engine world refused") from error
                 continue
             except EngineWorldUnsupported as error:
                 self.stats.world_failure_reasons[_world_failure_key(error)] += 1
-                if self._config.policy_opponent or self._config.record_joint_actions:
+                if (self._config.policy_opponent or self._config.record_joint_actions
+                        or self._config.model_leaf_override == "raw_policy_terminal"):
                     raise EngineSearchWitnessError(f"policy opponent world construction refused: {error}") from error
                 continue
             worlds.append((world, state))
@@ -6216,18 +6329,32 @@ class EngineMctsPolicy:
         Every invocation owns its callback and vocabulary OOV tracker; neither
         histories nor inferred rows can leak between parallel worlds.
         """
+        if self._config.model_leaf_override == "raw_policy_terminal":
+            orders = record.get("_raw_policy_request_orders")
+            if (not isinstance(orders, list) or len(orders) != 2
+                    or any(not isinstance(order, list) or not order for order in orders)):
+                raise EngineSearchWitnessError("raw leaf sampled request orders are missing")
+            return {"raw_policy_callbacks": [self._checkpoint_policy_callback(context, slot, raw_argmax=True)
+                                            for slot in ("p1", "p2")],
+                    "raw_policy_request_orders": [list(order) for order in orders]}
         if not self._config.policy_opponent:
             return {}
-        from .policy_opponent import make_policy_opponent_callback
-
-        result, model = self._policy_opponent_result, self._policy_opponent_model
-        if result is None or model is None:
-            raise EngineSearchWitnessError("policy opponent own-head runtime is missing")
-        replay = context.public_materialization_state.replay
         order = record.get("_policy_opponent_request_order")
         if not order:
             raise EngineSearchWitnessError("policy opponent sampled request order is missing")
         policy_seed = policy_opponent_world_seed(self._config, context, record)
+        callback = self._checkpoint_policy_callback(context,
+            "p2" if context.player_id == "p1" else "p1", raw_argmax=False)
+        return {"policy_opponent_callback": callback,
+                "policy_opponent_seed": policy_seed,
+                "policy_opponent_request_order": list(order)}
+
+    def _checkpoint_policy_callback(self, context: PolicyContext, slot: str, *, raw_argmax: bool):
+        from .policy_opponent import make_policy_opponent_callback
+        result, model = self._policy_opponent_result, self._policy_opponent_model
+        if result is None or model is None:
+            raise EngineSearchWitnessError("own-head checkpoint runtime is missing")
+        replay = context.public_materialization_state.replay
         # The category tokens are checkpoint-bound. This allocates a fresh
         # tracker but does not infer vocabulary from a different runtime Dex.
         from .category_vocab import CategoryVocabulary
@@ -6247,17 +6374,15 @@ class EngineMctsPolicy:
             tokens=tokens, aliases=aliases,
             oov_buckets=result.model_config.category_oov_buckets,
         )
-        callback = make_policy_opponent_callback(
+        return make_policy_opponent_callback(
             public_lines=replay.public_lines, hp_visibility=replay.hp_visibility,
-            opponent_slot="p2" if context.player_id == "p1" else "p1",
+            opponent_slot=slot,
             battle_id=context.battle_id, battle_seed=context.seed,
             format_id=context.format_id, set_source=self._set_source,
             model=model, result=result, category_vocab=vocab, dex=self._dex,
             device=self._config.model_device, inference_lock=self._policy_opponent_inference_lock,
+            raw_argmax=raw_argmax,
         )
-        return {"policy_opponent_callback": callback,
-                "policy_opponent_seed": policy_seed,
-                "policy_opponent_request_order": list(order)}
 
     def _search_model(
         self,
@@ -6338,6 +6463,7 @@ class EngineMctsPolicy:
         rollout_leaf_shadow = bool(getattr(config, "rollout_leaf_shadow", False))
         model_leaf_override = getattr(config, "model_leaf_override", None)
         hp_leaf_invocations: list[dict[str, Any]] = []
+        raw_leaf_invocations: list[dict[str, Any]] = []
         rollout_ledger: Counter[str] = Counter()
         rollout_modes: Counter[str] = Counter()
         model_rollout_shadow_reports: list[Mapping[str, Any]] = []
@@ -6491,7 +6617,8 @@ class EngineMctsPolicy:
                     native_invocation_started = time_budget_ms is not None
                     if (
                         decision_deadline is not None
-                        and (config.model_native_batch_guard_ms > 0 or config.policy_opponent)
+                        and (config.model_native_batch_guard_ms > 0 or config.policy_opponent
+                             or model_leaf_override == "raw_policy_terminal")
                     ):
                         # Argument construction is inside the outer decision
                         # clock.  Re-check at the actual call seam so it cannot
@@ -6790,10 +6917,10 @@ class EngineMctsPolicy:
                 # ... and everything ELSE the world observed before it aborted, which
                 # this seam used to discard wholesale.
                 self._absorb_aborted_lossy_subcases(error)
-                if config.policy_opponent or config.record_joint_actions:
+                if config.policy_opponent or config.record_joint_actions or model_leaf_override == "raw_policy_terminal":
                     finalize_time_budget()
                     raise EngineSearchWitnessError(
-                        f"{'policy opponent' if config.policy_opponent else 'joint-action measurement'} world refused (chance seed={record['seed']}): {reason}"
+                        f"{'raw terminal leaf' if model_leaf_override == 'raw_policy_terminal' else 'policy opponent' if config.policy_opponent else 'joint-action measurement'} world refused (chance seed={record['seed']}): {reason}"
                     ) from error
                 return None
             # Invocation-level counters reflect actual compute. A stopped
@@ -7068,7 +7195,18 @@ class EngineMctsPolicy:
                     field_name,
                     getattr(self.stats, field_name) + int(report.get(field_name) or 0),
                 )
-            if model_leaf_override is not None:
+            if model_leaf_override == "raw_policy_terminal":
+                validate_native_raw_leaf_witness(report, cap=config.rollout_max_plies,
+                    seed=raw_policy_leaf_seed(config, record), branch_on_damage=config.rollout_branch_on_damage)
+                raw_leaf_invocations.append(dict(world_seed=record["seed"], belief_multiplicity=weight,
+                    completed_iterations=report["iterations"], model_evals=report["model_evals"],
+                    report={"time_budget_exhausted": report.get("time_budget_exhausted", False),
+                        **{key: report[key] for key in (
+                        *RAW_LEAF_COUNTERS, "iterations", "model_evals", "model_leaf_override",
+                        "raw_leaf_policy", "raw_leaf_value_frame", "raw_leaf_model_forwards_retained",
+                        "raw_leaf_tree_counters_include_cancelled_work", "raw_leaf_max_plies",
+                        "raw_leaf_seed", "raw_leaf_branch_on_damage", "raw_leaf_policy_s")}}))
+            elif model_leaf_override is not None:
                 validate_native_hp_leaf_witness(report)
                 hp_leaf_invocations.append(dict(world_seed=record["seed"],
                     belief_multiplicity=weight,
@@ -7149,7 +7287,8 @@ class EngineMctsPolicy:
             opponent_order_resolution = opponent_request_order_resolution(
                 context,
                 world.party_species["p2" if context.player_id == "p1" else "p1"],
-                **({"sampled_own_party": True} if config.policy_opponent else {}),
+                **({"sampled_own_party": True} if config.policy_opponent
+                   or model_leaf_override == "raw_policy_terminal" else {}),
             )
             ctx_payload: dict[str, Any] = {
                 "p1": list(world.party_species["p1"]),
@@ -7196,6 +7335,19 @@ class EngineMctsPolicy:
                         + opponent_order_resolution.status
                     )
                 record["_policy_opponent_request_order"] = opponent_order_resolution.order
+            if model_leaf_override == "raw_policy_terminal":
+                if opponent_order_resolution.order is None:
+                    raise EngineSearchWitnessError("raw leaf sampled opponent request order refused: "
+                                                   + opponent_order_resolution.status)
+                own_request = context.public_materialization_state.self_request
+                own_order = [normalize_id(str(row.get("details", "")).split(",", 1)[0])
+                    for row in own_request.get("side", {}).get("pokemon", ())]
+                if (not own_order or len(set(own_order)) != len(own_order)
+                        or set(own_order) != {normalize_id(name) for name in world.party_species[context.player_id]}):
+                    raise EngineSearchWitnessError("raw leaf own request order differs from sampled party")
+                opponent = "p2" if context.player_id == "p1" else "p1"
+                orders = {context.player_id: own_order, opponent: list(opponent_order_resolution.order)}
+                record["_raw_policy_request_orders"] = [orders[slot] for slot in ("p1", "p2")]
             # CONCENTRATE duplicate belief completions instead of skipping them.
             #
             # Two worlds with the same serialized state, context and seat are one
@@ -7785,7 +7937,9 @@ class EngineMctsPolicy:
         metadata = {
             "engine_mcts": {
                 "leaf_eval": "model",
-                **({"model_leaf_override": {
+                **({"model_leaf_override": model_raw_leaf_witness(config, raw_leaf_invocations)}
+                   if model_leaf_override == "raw_policy_terminal" else
+                   {"model_leaf_override": {
                     "schema": "pokezero.model-tree-hp-leaf.v1",
                     "mode": "hp_fraction", "value_frame": "side_one_absolute",
                     "model_forwards_retained": True,
@@ -7885,7 +8039,7 @@ class EngineMctsPolicy:
         # which the measurement could be recovered, because `run_world`'s reports go
         # out of scope with this frame.
         require_rollout_leaf_witness(metadata, rollout_leaf_eval=rollout_leaf_eval)
-        require_model_hp_leaf_witness(metadata, model_leaf_override=model_leaf_override)
+        require_model_leaf_witness(metadata, model_leaf_override=model_leaf_override)
         return PolicyDecision(
             action_index=action_index,
             policy_id=self.policy_id,

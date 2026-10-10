@@ -52,11 +52,12 @@ def _incumbent_runtime(contract, showdown_root, seconds, *, leaf="model"):
     from .manifest import SearchConfig
     from .policy_opponent_profile import make_profile_decider
 
-    require(leaf in ("model", "hp_fraction"), "incumbent leaf requires an implemented model-tree valuation")
+    require(leaf in ("model", "hp_fraction", "raw_rollout"), "incumbent leaf requires an implemented model-tree valuation")
     decider = make_profile_decider(contract, showdown_root, arm="incumbent_mcts",
         mode="matched_deadline", opponent_seed=0, deadline_ms=round(seconds * 1000),
         native_batch_guard_ms=64,
-        **({"model_leaf_override": leaf} if leaf != "model" else {}))
+        **({"model_leaf_override": "raw_policy_terminal" if leaf == "raw_rollout" else leaf}
+           if leaf != "model" else {}))
     config = SearchConfig(depth=6, sims=4096, batch=16, worlds=4, inference_mode="local")
     try:
         return decider, decider._policy_for(config), config
@@ -77,7 +78,7 @@ class PublicModelSearchAdapter:
     def _check_configuration(self, configuration):
         require(configuration.belief == "public" and (configuration.leaf == "model"
             or configuration.arm == "reference"
-            or (configuration.arm == "incumbent" and configuration.leaf == "hp_fraction")),
+            or (configuration.arm == "incumbent" and configuration.leaf in {"hp_fraction", "raw_rollout"})),
             "oracle and incumbent alternative-leaf adapters remain required")
 
     def _reference_worker_factory(self, factory):
@@ -149,6 +150,12 @@ class PublicModelSearchAdapter:
                 self.runtime_configuration["incumbent_leaf"] = dict(leaf=configuration.leaf,
                     tree="unchanged_encoded_model_tree", priors="unchanged_champion",
                     model_forwards="retained", value_frame="side_one_absolute")
+                if configuration.leaf == "raw_rollout":
+                    self.runtime_configuration["incumbent_leaf"].update(
+                        policy="both_seats_own_raw_masked_argmax", rollout_cap=250,
+                        cap="refusal_without_value_fallback", deadline="whole_round_cancel_without_backup",
+                        rollout_count=1, rollout_threads=1, branch_on_damage=True,
+                        seed="selection_seed_then_sha256_world_domain_v1")
                 self.runtime_sha256 = digest(self.runtime_configuration)
         elif configuration.arm == "reference":
             from .paper_reference import ReferenceConfig
@@ -198,6 +205,8 @@ class PublicModelSearchAdapter:
             elif arm == "incumbent":
                 from .policy_opponent_profile import validate_selection
                 self._native.reset()
+                if self.configuration.leaf == "raw_rollout":
+                    self._native._config = replace(self._native._config, rollout_seed=selection_seed)
                 self._prepare_incumbent(request)
                 # Distinct root ID prevents statistics/fold carry-over from
                 # other sampled roots from masquerading as fresh decisions.
@@ -218,14 +227,16 @@ class PublicModelSearchAdapter:
                     validate_selection(evidence, arm="incumbent_mcts", mode="matched_deadline",
                         config=self._search_config, mask=mask, opponent_seed=selection_seed,
                         deadline_ms=round(self.configuration.seconds*1000), native_batch_guard_ms=64,
-                        **({"model_leaf_override": self.configuration.leaf}
+                        **({"model_leaf_override": "raw_policy_terminal"
+                            if self.configuration.leaf == "raw_rollout" else self.configuration.leaf}
                             if self.configuration.leaf != "model" else {}))
                 else:
                     require(not evidence["fallbacks"] and not evidence["prior_fallbacks"], "forced root fell back")
-                if self.configuration.leaf != "model":
-                    from ..engine_search import require_model_hp_leaf_witness
-                    require_model_hp_leaf_witness({"engine_mcts": evidence["engine_mcts"]},
-                        model_leaf_override=self.configuration.leaf)
+                if self.configuration.leaf != "model" and sum(mask) > 1:
+                    from ..engine_search import require_model_leaf_witness
+                    require_model_leaf_witness({"engine_mcts": evidence["engine_mcts"]},
+                        model_leaf_override="raw_policy_terminal" if self.configuration.leaf == "raw_rollout"
+                            else self.configuration.leaf)
             else:
                 root = decision_state(request.observation, player=public.player_id)
                 remaining = self.configuration.seconds - (time.perf_counter()-started)
@@ -255,6 +266,10 @@ class PublicModelSearchAdapter:
             self._poisoned = True
             self.last_failure = dict(root_id=root_id, error_type=type(error).__name__,
                 status="UNCERTAIN_REFUSED", retry_authorized=False)
+            from .policy_opponent_profile import refusal_diagnostic
+            diagnostic = refusal_diagnostic(error)
+            if diagnostic is not None:
+                self.last_failure["native_diagnostic"] = diagnostic
             raise
 
     def close(self):

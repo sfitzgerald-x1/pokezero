@@ -176,7 +176,7 @@ class DiagnosticTeamOracleSearchAdapter(PublicModelSearchAdapter):
 
     def _check_configuration(self, configuration):
         require(configuration.belief == "oracle" and configuration.arm in {"incumbent", "reference"}
-            and (configuration.arm == "reference" or configuration.leaf in {"model", "hp_fraction"}),
+            and (configuration.arm == "reference" or configuration.leaf in {"model", "hp_fraction", "raw_rollout"}),
             "diagnostic oracle requires an explicit supported nondeployable configuration")
 
     def _reference_worker_factory(self, factory):

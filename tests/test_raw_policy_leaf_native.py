@@ -99,6 +99,8 @@ class RawPolicyLeafNativeTest(_EncodedSearchFixture, unittest.TestCase):
         self.assertEqual(report["raw_leaf_value_frame"], "side_one_absolute")
         self.assertEqual(report["raw_leaf_policy"], "both_seats_own_raw_masked_argmax")
         self.assertTrue(report["raw_leaf_model_forwards_retained"])
+        from pokezero.engine_search import validate_native_raw_leaf_witness
+        validate_native_raw_leaf_witness(report, cap=250, seed=101, branch_on_damage=False)
         self.assertNotIn("rollouts_run", report)
         for seat in ("side_one", "side_two"):
             self.assertEqual(sum(r["visits"] for r in report[seat]), 0)

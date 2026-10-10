@@ -41,8 +41,7 @@ class FakeEvaluator(ChampionEvaluator):
 
 class AdapterContractTests(unittest.TestCase):
     def test_unsupported_oracle_and_leaves_fail_before_runtime_construction(self):
-        for arm, belief, leaf in [("reference", "oracle", "model"),
-                ("incumbent", "public", "raw_rollout")]:
+        for arm, belief, leaf in [("reference", "oracle", "model"), ("incumbent", "oracle", "raw_rollout")]:
             with self.assertRaisesRegex(ValueError, "adapters remain required"):
                 PublicModelSearchAdapter(SearchConfiguration(arm, belief, leaf, workers=20 if arm == "reference" else 1),
                     checkpoint_contract=None, showdown_root="")
@@ -92,7 +91,7 @@ class AdapterContractTests(unittest.TestCase):
             showdown_source_sha256="source")
         from unittest.mock import Mock
         identities = []
-        for leaf in ("model", "hp_fraction"):
+        for leaf in ("model", "hp_fraction", "raw_rollout"):
             decider = Mock()
             with patch("pokezero.mcts_eval.search_over_raw_adapters._incumbent_runtime",
                     return_value=(decider, Mock(), "config")) as runtime:
@@ -104,7 +103,7 @@ class AdapterContractTests(unittest.TestCase):
                 if leaf == "hp_fraction":
                     self.assertEqual(adapter.runtime_configuration["incumbent_leaf"]["tree"],
                         "unchanged_encoded_model_tree")
-        self.assertEqual(len(set(identities)), 2)
+        self.assertEqual(len(set(identities)), 3)
 
     def test_reference_receipt_reconciles_new_work(self):
         validate_reference_work(work())

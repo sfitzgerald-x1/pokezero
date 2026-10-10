@@ -311,6 +311,7 @@ class _LiveEngineTimingDecider:
         rollout_seed: int = 0,
         rollout_threads: int = 1,
         rollout_threads_cpu_budget_ack: bool = False,
+        rollout_branch_on_damage: bool = False,
     ) -> None:
         from ..collection import env_config_with_policy_spec_masks
         from ..dex import load_showdown_dex_cached
@@ -319,9 +320,17 @@ class _LiveEngineTimingDecider:
         from ..randbat import load_gen3_randbat_source_cached
 
         opponent_kwargs = _policy_opponent_config_kwargs(policy_opponent, policy_opponent_seed)
-        if model_leaf_override not in (None, "hp_fraction") or (model_leaf_override is not None
+        if model_leaf_override not in (None, "hp_fraction", "raw_policy_terminal") or (model_leaf_override is not None
                 and (policy_opponent or rollout_leaf_eval or not model_priors or not record_joint_actions)):
-            raise ValueError("model leaf override requires explicit strict incumbent HP valuation")
+            raise ValueError("model leaf override requires an implemented strict incumbent valuation")
+        if model_leaf_override == "raw_policy_terminal" and (
+                use_opponent_priors or type(model_world_workers) is not int or model_world_workers != 1
+                or type(rollout_count) is not int or rollout_count != 1
+                or type(rollout_threads) is not int or rollout_threads != 1
+                or rollout_policy != "raw_argmax" or type(rollout_max_plies) is not int
+                or rollout_max_plies <= 0 or type(rollout_seed) is not int
+                or not 0 <= rollout_seed < 2**64 or type(rollout_branch_on_damage) is not bool):
+            raise ValueError("raw terminal valuation requires declared both-seat raw policy and cap/seed")
         if policy_opponent and (not model_priors or use_opponent_priors or rollout_leaf_eval):
             raise ValueError("policy opponent profile requires subject priors, no auxiliary opponent priors or rollout leaves")
         if model_decision_time_ms is not None and model_decision_time_ms <= 0:
@@ -380,6 +389,7 @@ class _LiveEngineTimingDecider:
         self._rollout_seed = rollout_seed
         self._rollout_threads = rollout_threads
         self._rollout_threads_cpu_budget_ack = rollout_threads_cpu_budget_ack
+        self._rollout_branch_on_damage = rollout_branch_on_damage
         self._artifacts = materialize_search_artifacts(contract, showdown_root=showdown_root)
         self._env_config = env_config_with_policy_spec_masks(
             LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=True),
@@ -443,6 +453,7 @@ class _LiveEngineTimingDecider:
                 rollout_seed=self._rollout_seed,
                 rollout_threads=self._rollout_threads,
                 rollout_threads_cpu_budget_ack=self._rollout_threads_cpu_budget_ack,
+                rollout_branch_on_damage=getattr(self, "_rollout_branch_on_damage", False),
                 **getattr(self, "_policy_opponent_kwargs", {}),
             ),
             policy_id=f"mcts-timing-{config.config_id}",
