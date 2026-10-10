@@ -126,7 +126,7 @@ impl UnmappedActionMapWitness {
             }
             unmapped = true;
             match option {
-                MoveChoice::Move(_) => {
+                MoveChoice::Move(_) | MoveChoice::Struggle => {
                     self.move_arms += 1;
                     move_arms_added += 1;
                 }

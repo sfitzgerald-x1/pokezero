@@ -5,7 +5,16 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
-import {referenceRestState, bindReferenceRestSources} from "./battle_bridge_reference_rest.mjs";
+import {retryPublicSuffix, samePublicSuffix} from "./battle_bridge_conditioning_batch.mjs";
+import {installChanceTrace} from "./battle_bridge_chance_trace.mjs";
+import {rejectUnknownMembership} from "./battle_bridge_membership.mjs";
+import {createIsolatedGen3PartyGenerator} from "./battle_bridge_gen3_party.mjs";
+import {copyDeserializationAliases} from "./battle_bridge_owned_snapshot.mjs";
+import {referenceRestState, bindReferenceRestSources, referenceInducedSleepState} from "./battle_bridge_reference_rest.mjs";
+import {applyReferenceTurnClocks, applyReferenceRechargePP} from "./battle_bridge_reference_turn_clocks.mjs";
+import {refreshReferenceTrapping} from "./battle_bridge_reference_trapping.mjs";
+import {bindReferenceAttract} from "./battle_bridge_reference_attract.mjs";
+import {bindReferenceYawn} from "./battle_bridge_reference_yawn.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -33,11 +42,12 @@ if (!showdownRoot) {
 }
 
 let BattleStream;
+let Battle;
 let getPlayerStreams;
 let State;
 let Teams;
 try {
-  ({ BattleStream, getPlayerStreams, Teams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
+  ({ Battle, BattleStream, getPlayerStreams, Teams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
   ({ State } = require(path.join(showdownRoot, "dist", "sim", "state.js")));
 } catch (error) {
   emit({
@@ -55,10 +65,22 @@ try {
 const DEFAULT_BATTLE_ID = "default";
 const battles = new Map();
 const searchSnapshots = new Map();
+const generateIsolatedUnknownParty = createIsolatedGen3PartyGenerator(Teams);
 let nextSearchSnapshotId = 1;
 
 function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
+}
+
+function emitForBattle(battle, payload) {
+  const capture = battle.conditioningCapture;
+  if (!capture) return emit(payload);
+  capture.events.push(payload);
+  if (payload.type === "error" || payload.type === "stream_end") {
+    capture.reject(new Error(payload.message || "Conditioning stream ended unexpectedly."));
+  } else if (payload.type === "ready" || payload.type === "terminal") {
+    capture.resolve(payload);
+  }
 }
 
 function battleIdOf(command) {
@@ -84,7 +106,7 @@ function emitStreamChunk(battle, stream, chunk) {
     .split("\n")
     .filter(line => line.length > 0);
   if (lines.length > 0) {
-    emit({ type: "stream", battleId: battle.battleId, stream, lines });
+    emitForBattle(battle, { type: "stream", battleId: battle.battleId, stream, lines });
     recordBoundaryLines(battle, stream, lines);
   }
 }
@@ -95,9 +117,9 @@ function listenToStream(battle, name, stream) {
       for await (const chunk of stream) {
         emitStreamChunk(battle, name, chunk);
       }
-      emit({ type: "stream_end", battleId: battle.battleId, stream: name });
+      emitForBattle(battle, { type: "stream_end", battleId: battle.battleId, stream: name });
     } catch (error) {
-      emit({ type: "error", battleId: battle.battleId, stream: name, message: error.message });
+      emitForBattle(battle, { type: "error", battleId: battle.battleId, stream: name, message: error.message });
     }
   })();
 }
@@ -186,7 +208,7 @@ function scheduleReady(battle, requested = actionableRequestedPlayers(battle)) {
       battle.readyScheduled = false;
       return;
     }
-    emit({
+    emitForBattle(battle, {
       type: "ready",
       battleId: battle.battleId,
       requested: currentRequested,
@@ -203,7 +225,7 @@ function scheduleTerminal(battle) {
   const procMs = nodeProcMs(battle);
   setImmediate(() => {
     if (battle.readyEpoch !== terminalEpoch || !battle.terminalScheduled) return;
-    emit({ type: "terminal", battleId: battle.battleId, nodeProcMs: procMs });
+    emitForBattle(battle, { type: "terminal", battleId: battle.battleId, nodeProcMs: procMs });
   });
 }
 
@@ -373,10 +395,11 @@ function jsonSnapshotClone(value) {
 
 function restoreSerializedBattle(battle, snapshot, { cloneSnapshot = false } = {}) {
   const send = battle.battleStream.battle.send;
-  // Search restores clone the retained serialized world for every root visit. Keep the generic
-  // snapshot path byte-for-byte compatible with its prior bridge contract.
+  // DeserializeWithRefs itself owns the recursive copy. Detach the pinned
+  // decoder's direct mutable aliases first; never lend sets/log to a branch.
+  // The generic snapshot path keeps its existing bridge contract unchanged.
   battle.battleStream.battle = State.deserializeBattle(
-    cloneSnapshot ? structuredClone(snapshot.battle) : snapshot.battle
+    cloneSnapshot ? copyDeserializationAliases(snapshot.battle) : snapshot.battle
   );
   battle.battleStream.battle.restart(send);
   battle.boundaryRequests =
@@ -451,11 +474,95 @@ async function restoreSearchAndSendChoices(command) {
   if (!battle.battleStream?.battle) {
     throw new Error(`No simulator state for battleId ${battle.battleId}.`);
   }
+  if (command.seed !== undefined && (typeof command.seed !== "string" || !command.seed.trim())) {
+    throw new Error("Conditioning reseed requires a non-empty seed string.");
+  }
   // This command is restricted to retained search handles. It restores one
   // belief-sampled world and submits the branch action without serializing a
   // simulator state or touching a live battle.
   restoreSerializedBattle(battle, snapshot, { cloneSnapshot: true });
-  await submitChoices(battle, command.choices, startedAt);
+  if (command.seed !== undefined) {
+    // Use the same simulator command as reseedBattle, including its public log.
+    await battle.streams.omniscient.write(`>reseed ${command.seed}`);
+  }
+  if (command.traceChance !== undefined && typeof command.traceChance !== 'boolean') {
+    throw new Error('Chance tracing requires an explicit boolean.');
+  }
+  const trace = command.traceChance ? installChanceTrace(battle.battleStream.battle) : null;
+  try {
+    await submitChoices(battle, command.choices, startedAt);
+  } finally {
+    if (trace) trace.close();
+  }
+  if (trace) emitForBattle(battle, {type:'chance_trace',battleId:battle.battleId,records:trace.records});
+}
+
+async function restoreSearchConditioningBatch(command) {
+  const battle = requireBattle(command);
+  const startedAt = process.hrtime.bigint();
+  if (battle.conditioningCapture) throw new Error("Conditioning batch already active.");
+  const fixedPool = command.fixedPool === true;
+  if (command.fixedPool !== undefined && typeof command.fixedPool !== "boolean") {
+    throw new Error("Fixed chance pool requires an explicit boolean.");
+  }
+  if (!Array.isArray(command.seeds) || command.seeds.length < 1 || command.seeds.length > (fixedPool ? 32 : 16) ||
+      command.seeds.some(seed => typeof seed !== "string" || !seed.trim())) {
+    throw new Error("Conditioning batch requires 1..16 explicit seeds.");
+  }
+  if (!Array.isArray(command.expectedSuffix) || command.expectedSuffix.some(line => typeof line !== "string") ||
+      !Number.isSafeInteger(command.initialTurn) || command.initialTurn < 0 ||
+      !Number.isFinite(command.remainingMs) || command.remainingMs <= 0 ||
+      !Number.isFinite(command.waitMs) || command.waitMs <= 0) {
+    throw new Error("Invalid conditioning batch predicate or deadline.");
+  }
+  const trials = [];
+  let events = [];
+  let matched = false;
+  let uncertain = false;
+  let deadlineReached = false;
+  for (let index = 0; index < command.seeds.length; index++) {
+    if (elapsedNodeProcMs(startedAt) >= command.remainingMs) {
+      deadlineReached = true;
+      break;
+    }
+    let resolve, reject;
+    const boundary = new Promise((ok, fail) => { resolve = ok; reject = fail; });
+    // Attach immediately: a stream can fail while the write promise is pending.
+    void boundary.catch(() => {});
+    const capture = {events: [], resolve, reject};
+    battle.conditioningCapture = capture;
+    const timeout = setTimeout(() => reject(new Error(
+      `Conditioning trial ${index} boundary timed out: ${capture.events.map(event =>
+        `${event.type}:${event.stream || ''}`).join(',')}.`)), command.waitMs);
+    try {
+      await restoreSearchAndSendChoices({...command, seed: command.seeds[index]});
+      const terminal = (await boundary).type === "terminal";
+      // Drain the boundary's final stream callbacks before replacing capture.
+      await new Promise(ok => setImmediate(ok));
+      events = capture.events;
+      const publicLines = events.filter(event => event.type === "stream" && event.stream === "omniscient")
+        .flatMap(event => event.lines);
+      if (events.some(event => event.type === "stream" && event.lines.some(line => line.startsWith("|error|")))) {
+        throw new Error("Showdown rejected a conditioning batch choice.");
+      }
+      const suffix = retryPublicSuffix(publicLines, command.initialTurn);
+      matched = !terminal && (fixedPool
+        ? suffix !== null && suffix.length <= command.expectedSuffix.length &&
+          suffix.every((line, i) => line === command.expectedSuffix[i])
+        : samePublicSuffix(suffix, command.expectedSuffix));
+      uncertain = !terminal && suffix === null;
+      trials.push({index, publicLines, terminal, matched, uncertain,
+        ...(command.traceChance ? {chanceTrace: events.find(event => event.type === 'chance_trace')?.records} : {})});
+    } finally {
+      clearTimeout(timeout);
+      delete battle.conditioningCapture;
+    }
+    // A fixed likelihood estimate must include EVERY declared draw, never the
+    // first matching candidate. Uncertain projections are checked in Python.
+    if (!fixedPool && (matched || uncertain)) break;
+  }
+  emit({type: "conditioning_batch", battleId: battle.battleId,
+    trials, events, matched, uncertain, deadlineReached, nodeProcMs: elapsedNodeProcMs(startedAt)});
 }
 
 function releaseSearchSnapshot(command) {
@@ -488,10 +595,42 @@ function materializeBattle(command) {
   // This template belongs to the already belief-sampled search world. We construct a new
   // public branch-point payload from it, then let Showdown deserialize that payload directly.
   const snapshot = State.serializeBattle(battle.battleStream.battle);
-  applyPublicState(snapshot, publicState, command.referenceRestSleep === true);
+  applyPublicState(snapshot, publicState, command.referenceRestSleep === true,
+    command.referenceConsumedItems === true, battle.battleStream.battle.dex,
+    command.referenceEncoreDurations, command.referenceInducedSleep, command.referenceTurnClocks === true,
+    command.referenceAttract === true, command.referenceYawn === true);
+  // Packed-team shells use customgame. Restore canonical PUBLIC format rules,
+  // not the source world's private state; clearing pseudoWeather also cleared
+  // Sleep Clause's event handler in earlier reference materializations.
+  if (command.referenceRulesFormat !== null && command.referenceRulesFormat !== undefined) {
+    if (!['gen3randombattle','gen3customgame'].includes(command.referenceRulesFormat) ||
+        command.referenceRestSleep !== true || command.referenceInducedSleep === null) {
+      throw new Error('Reference rules require an explicit Gen 3 sleep opt-in.');
+    }
+    const template = new Battle({formatid:command.referenceRulesFormat, seed:[1,2,3,4]});
+    snapshot.formatid = command.referenceRulesFormat;
+    // A customgame shell's debug flag is not part of the canonical format.
+    snapshot.debugMode = template.debugMode;
+    snapshot.field.pseudoWeather = State.serializeWithRefs(template.field.pseudoWeather, template);
+  }
+  for (const side of snapshot.sides) {
+    for (const [index, pokemon] of side.pokemon.entries()) {
+      const source = pokemon.statusState?.referenceInducedSource;
+      if (!source) continue;
+      const sourceSide = snapshot.sides[source.side === 'p1' ? 0 : 1];
+      const matches = sourceSide.pokemon.map((p, i) => sameSpecies(p, source.name) ? i : -1).filter(i => i >= 0);
+      if (matches.length !== 1) throw new Error('Induced sleep source cannot be matched to sampled party.');
+      pokemon.statusState.source = `[Pokemon:${source.side}${'abcdef'[matches[0]]}]`;
+      pokemon.statusState.target = `[Pokemon:${side.id}${'abcdef'[index]}]`;
+      delete pokemon.statusState.referenceInducedSource;
+    }
+  }
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
+  if (command.referenceTurnClocks === true) {
+    refreshReferenceTrapping(battle.battleStream.battle, publicState);
+  }
   restoreDeferredOpponentActions(battle.battleStream.battle, publicState);
   battle.boundaryGeneration += 1;
   battle.boundaryRequests = boundaryRequestsFromBattle(battle.battleStream.battle);
@@ -583,6 +722,19 @@ function generateScenarioTeam(command) {
     })),
     nodeProcMs: elapsedNodeProcMs(startedAt),
   });
+}
+
+function generateUnknownMembership(command) {
+    const startedAt = process.hrtime.bigint();
+  const result = rejectUnknownMembership(command, seed => {
+    const parts = deriveSeed(String(seed), "scenario-team").split(",").map(Number);
+    return generateIsolatedUnknownParty(parts).map(set => ({
+      species: set.species || set.name || "", moves: Array.isArray(set.moves) ? set.moves : [],
+      ability: set.ability || "", item: set.item || "", level: set.level || 100,
+      nature: set.nature || "", gender: set.gender || "", evs: set.evs || {}, ivs: set.ivs || {},
+    }));
+  });
+  emit({type: "reference_unknown_membership", ...result, nodeProcMs: elapsedNodeProcMs(startedAt)});
 }
 
 function generateReferenceSet(command) {
@@ -1008,7 +1160,14 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
   };
 }
 
-function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
+function applyPublicState(snapshot, publicState, referenceRestSleep = false, referenceConsumedItems = false, dex = null,
+  referenceEncoreDurations = null, referenceInducedSleep = null, referenceTurnClocks = false,
+  referenceAttract = false, referenceYawn = false) {
+  if (referenceEncoreDurations !== null && (!referenceEncoreDurations ||
+      typeof referenceEncoreDurations !== 'object' || Array.isArray(referenceEncoreDurations) || dex.gen !== 3 ||
+      Object.keys(referenceEncoreDurations).some(k => !['p1', 'p2'].includes(k)))) {
+    throw new Error('Materialize refuses invalid reference Encore opt-in.');
+  }
   if (!Number.isInteger(publicState.turn) || publicState.turn < 1) {
     throw new Error("Materialize requires a positive integer turn.");
   }
@@ -1129,6 +1288,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
         row.species,
         publicSide.toxicStage,
         referenceRestSleep ? row : null,
+        referenceInducedSleep?.[sideId + ':' + normalizeId(row.species)],
       );
       serializedSide.pokemon[index].boosts = row.active
         ? normalizedBoosts(publicSide.boosts)
@@ -1141,12 +1301,38 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
         publicSide,
         Boolean(row.active),
         serializedSide.pokemon,
+        referenceEncoreDurations,
+        referenceAttract,
+        referenceYawn,
       );
       if (row.currentItem !== undefined) {
         applyKnownCurrentItem(serializedSide.pokemon[index], row.currentItem, sideId, row.species);
       }
-      serializedSide.pokemon[index].lastMove = null;
-      serializedSide.pokemon[index].lastMoveUsed = null;
+      if (row.consumedItemState !== undefined) {
+        if (!referenceConsumedItems || row.currentItem !== undefined) {
+          throw new Error("Materialize refuses unaudited consumed-item state.");
+        }
+        const state = row.consumedItemState;
+        const item = dex.items.get(state?.id);
+        if (dex.gen !== 3 || !item.exists ||
+            typeof state.usedItemThisTurn !== "boolean" || typeof state.ateBerry !== "boolean" ||
+            !(item.isBerry && state.ateBerry || item.id === "whiteherb" && !state.ateBerry)) {
+          throw new Error("Materialize refuses invalid consumed-item history.");
+        }
+        const pokemon = serializedSide.pokemon[index];
+        pokemon.item = "";
+        pokemon.itemState = {id: "", effectOrder: 0, target: pokemon.itemState.target};
+        pokemon.lastItem = item.id;
+        pokemon.usedItemThisTurn = state.usedItemThisTurn;
+        pokemon.ateBerry = state.ateBerry;
+        pokemon.itemKnockedOff = false;
+      }
+      const last = row.active && referenceEncoreDurations !== null ? normalizeId(publicSide.lastUsedMove) : '';
+      if (last && last !== 'switch' && !serializedSide.pokemon[index].moveSlots.some(m => normalizeId(m.id) === last)) {
+        throw new Error('Materialize cannot preserve a disclosed last move absent from the sampled set.');
+      }
+      serializedSide.pokemon[index].lastMove = last && last !== 'switch' ? `[Move:${last}]` : null;
+      serializedSide.pokemon[index].lastMoveUsed = serializedSide.pokemon[index].lastMove;
       serializedSide.pokemon[index].attackedBy = [];
       serializedSide.pokemon[index].lastDamage = 0;
       serializedSide.pokemon[index].activeMoveActions = 0;
@@ -1165,6 +1351,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
     // ordering that a real switch produces; changing only `side.active` leaves the
     // sampled lead in slot zero and exposes the wrong request to the policy.
     const active = moveActivePokemonToFront(serializedSide, activeIndex);
+    if (referenceTurnClocks) applyReferenceTurnClocks(active, publicSide, sideId, dex.gen);
     active.activeTurns = Math.max(1, Number(active.activeTurns) || 1);
     serializedSide.active = [`[Pokemon:${sideId}a]`];
     // The acting request is private, but a fainted public active with a surviving
@@ -1196,6 +1383,24 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
     serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
     delete serializedSide.activeRequest;
   }
+  if (referenceTurnClocks) {
+    // Public construction permutes both parties into active-first / actor-known
+    // order. Item and ability states inherited from the sampled opening shell
+    // still name the old positional owner (and newly set items initially name
+    // slot a). Bind these intrinsic callbacks only AFTER both permutations.
+    // Their source, duration, item/ability identity and effect order are intact;
+    // public cross-Pokemon volatile/status sources are deliberately untouched.
+    for (const side of snapshot.sides) {
+      for (const [index, pokemon] of side.pokemon.entries()) {
+        const owner = `[Pokemon:${side.id}${'abcdef'[index]}]`;
+        pokemon.itemState.target = owner;
+        pokemon.abilityState.target = owner;
+      }
+    }
+  }
+  if (referenceTurnClocks) applyReferenceRechargePP(snapshot, publicState);
+  if (referenceAttract) bindReferenceAttract(snapshot, publicState, dex.gen);
+  if (referenceYawn) bindReferenceYawn(snapshot, publicState, dex.gen);
 }
 
 function restoreDeferredOpponentActions(simulatorBattle, publicState) {
@@ -1543,6 +1748,9 @@ function publicSubstituteHp(pokemon, publicSide, sideId, sidePokemon) {
 
 function applyPublicVolatiles(
   pokemon, rawVolatiles, sideId, leechSeedSourceSides, publicSide, isActive, sidePokemon,
+  referenceEncoreDurations = null,
+  referenceAttract = false,
+  referenceYawn = false,
 ) {
   if (!Array.isArray(rawVolatiles)) {
     throw new Error(`Materialize received invalid volatile effects for ${sideId}.`);
@@ -1554,6 +1762,33 @@ function applyPublicVolatiles(
       throw new Error(`Materialize received invalid volatile effect for ${sideId}.`);
     }
     const volatile = normalizeId(rawVolatile);
+    if (volatile === 'yawn' && referenceYawn) {
+      if (seen.has(volatile) || !isActive) throw new Error('Reference Yawn requires one active target.');
+      seen.add(volatile);
+      continue;
+    }
+    if (volatile === 'attract' && referenceAttract) {
+      if (seen.has(volatile) || !isActive) throw new Error('Reference Attract requires one active target.');
+      seen.add(volatile);
+      // The cross-Pokemon source is bound only after BOTH party permutations.
+      // Never install a source-free Attract or use a sampled opening lead.
+      continue;
+    }
+    if (volatile === 'encore' && referenceEncoreDurations !== null) {
+      const certificate = publicSide.referenceEncore;
+      const duration = referenceEncoreDurations[sideId];
+      const move = normalizeId(certificate?.move);
+      if (seen.has(volatile) || !isActive || !certificate || !Number.isInteger(duration) ||
+          !Array.isArray(certificate.remaining_candidates) || !certificate.remaining_candidates.includes(duration) ||
+          !pokemon.moveSlots.some(m => normalizeId(m.id) === move && m.pp > 0)) {
+        throw new Error('Materialize refuses invalid public Encore conditioning.');
+      }
+      seen.add(volatile);
+      pokemon.volatiles.encore = {id: 'encore', effectOrder: 0, target: `[Pokemon:${sideId}a]`,
+        source: `[Pokemon:${sideId === 'p1' ? 'p2' : 'p1'}a]`,
+        sourceSlot: `${sideId === 'p1' ? 'p2' : 'p1'}a`, move, duration};
+      continue;
+    }
     if (volatile === "leechseed") {
       const sourceSide = leechSeedSourceSides?.[sideId];
       if (!["p1", "p2"].includes(sourceSide) || sourceSide === sideId) {
@@ -1633,7 +1868,7 @@ function applyPublicVolatiles(
   }
 }
 
-function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, referenceRow = null) {
+function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, referenceRow = null, inducedDraw = null) {
   if (typeof condition !== "string" || !condition.trim()) {
     throw new Error(`Materialize is missing a condition for ${sideId} ${species}.`);
   }
@@ -1661,7 +1896,9 @@ function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, 
   pokemon.fainted = fainted;
   pokemon.status = status;
   pokemon.statusState = {id: status, effectOrder: 0};
-  if (status === "slp") pokemon.statusState = referenceRestState(referenceRow, pokemon.ability);
+  if (status === "slp") pokemon.statusState = referenceRow?.referenceInducedSleep
+    ? referenceInducedSleepState(referenceRow.referenceInducedSleep, pokemon.ability, inducedDraw)
+    : referenceRestState(referenceRow, pokemon.ability);
   if (status === "tox") {
     if (!Number.isInteger(toxicStage) || toxicStage < 0 || toxicStage > 15) {
       throw new Error(`Materialize requires a valid toxic stage for ${sideId} ${species}.`);
@@ -1795,7 +2032,7 @@ async function submitChoices(battle, choices, receivedAt) {
       throw new Error(`Choice for ${player} must be a non-empty string.`);
     }
     await battle.streams[player].write(choice);
-    emit({ type: "choice_ack", battleId: battle.battleId, player, choice });
+    emitForBattle(battle, { type: "choice_ack", battleId: battle.battleId, player, choice });
   }
 }
 
@@ -1852,6 +2089,9 @@ async function handleCommand(command) {
     case "restore_search_choices":
       await restoreSearchAndSendChoices(command);
       break;
+    case "restore_search_conditioning_batch":
+      await restoreSearchConditioningBatch(command);
+      break;
     case "release_search_snapshot":
       releaseSearchSnapshot(command);
       break;
@@ -1863,6 +2103,9 @@ async function handleCommand(command) {
       break;
     case "scenario_generate_team":
       generateScenarioTeam(command);
+      break;
+    case "reference_unknown_membership":
+      generateUnknownMembership(command);
       break;
     case "reference_generate_set":
       generateReferenceSet(command);

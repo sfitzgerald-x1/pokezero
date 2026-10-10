@@ -271,6 +271,17 @@ class TheSwitchSentinelSeedsTheEnginesOwnVariantTests(unittest.TestCase):
         self.assertEqual(side.last_used_move, "switch:0")
 
 
+    def test_public_struggle_keeps_a_distinct_last_used_variant_on_both_seats(self) -> None:
+        for seat, attribute in (("p1", "side_one"), ("p2", "side_two")):
+            with self.subTest(seat=seat):
+                payload = _payload(self.dex)
+                payload["sides"][seat]["lastUsedMove"] = "struggle"
+                side = getattr(battle_spec_from_payload(payload, _override(), dex=self.dex).spec, attribute)
+                self.assertEqual(side.last_used_move, "move:struggle")
+                self.assertNotIn("struggle", [move.id for move in side.pokemon[0].moves])
+                self.assertNotIn("encore", side.volatile_statuses)
+
+
 class ResolverPrecedenceUnitTests(unittest.TestCase):
     """``_resolve_encored_move_index`` in isolation: the three-source ladder."""
 

@@ -202,6 +202,7 @@ pub(crate) fn sampled_side_request_with_pp(
                         == side.switch_out_move_second_saved_move
                         && side.switch_out_move_second_saved_move != Choices::NONE
                 }
+                MoveChoice::Struggle => side.switch_out_move_second_saved_move == Choices::STRUGGLE,
                 _ => false,
             };
         if !commitment_matches {
@@ -337,6 +338,8 @@ pub(crate) fn sampled_side_request_with_pp(
             || side.trapped(&Pokemon::default());
         if recharging {
             active_moves = vec![json!({"id": "recharge", "move": "recharge", "disabled": false})];
+        } else if options.contains(&MoveChoice::Struggle) && !waiting {
+            active_moves = vec![json!({"id": "struggle", "move": "Struggle", "target": "randomNormal", "disabled": false})];
         }
         request["active"] = json!([{"moves": active_moves, "trapped": trapped}]);
     }
@@ -344,6 +347,8 @@ pub(crate) fn sampled_side_request_with_pp(
     let mut native_legal = HashSet::new();
     for option in options {
         let index = match option {
+            MoveChoice::Struggle if waiting => None,
+            MoveChoice::Struggle => Some(0),
             MoveChoice::Move(_) | MoveChoice::None if waiting => None,
             MoveChoice::Move(index) => Some(
                 index
@@ -492,6 +497,26 @@ mod tests {
     }
     fn pp() -> HashMap<String, i64> {
         [("ember".into(), 40), ("watergun".into(), 40)].into()
+    }
+
+    #[test]
+    fn synthetic_struggle_request_keeps_private_pp_banks_and_live_switches() {
+        let mut state = fixture();
+        state.side_one.get_active().moves.m0.pp = 0;
+        let options = state.root_get_all_options().0;
+        assert!(options.contains(&MoveChoice::Struggle));
+        let result = sampled_side_request(
+            &state.side_one, "p1", &names(), &names(), &options, &pp(), true,
+        ).unwrap();
+        assert_eq!(result["request"]["active"][0]["moves"], json!([
+            {"id": "struggle", "move": "Struggle", "target": "randomNormal", "disabled": false}
+        ]));
+        let indices = result["native_action_indices"].as_array().unwrap();
+        assert!(indices.contains(&json!(0)));
+        assert!(indices.iter().any(|i| i.as_u64().is_some_and(|i| i >= 4)));
+        assert!(indices.iter().all(|i| !i.is_null()));
+        assert_eq!(result["self_move_states"]["charmander"][0]["id"], "ember");
+        assert_eq!(result["self_move_states"]["charmander"][0]["pp"], 0);
     }
     fn bundle(state: &State, order: &[String]) -> PyResult<Value> {
         sampled_side_request(
