@@ -209,7 +209,9 @@ _CORPUS_TREES = ("reports", "docs")
 # paths; these two additions remove or rewrite none of its historical evidence.
 # Stage the new receipt before running this tracked-corpus census. Each battery
 # is held to its recorded source bytes by its dedicated mutation-evidence guard.
-_EXPECTED_COUNTER_ARTIFACTS = 409
+# 409 -> 410: one distinct current-source citation supplement binds the unchanged
+# C153/C154 snapshots; no historical pool, measurement, or verdict is rewritten.
+_EXPECTED_COUNTER_ARTIFACTS = 410
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

@@ -62,6 +62,8 @@ jobs:
             reports/artifacts/c154_unreachable_readjudication.json
             scripts/c154_unreachable_readjudication.py
             tests/test_unreachable_readjudication.py
+            scripts/current_census_citations.py
+            reports/artifacts/current_census_citations_*.json
             reports/c138_known_gaps_ledger.md
             tests/test_ledger_table_uniformity.py
             reports/artifacts/c150_band_split_trade_census.json
@@ -568,8 +570,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_unreachable_readjudication -v 2>&1 \
             | tee /tmp/c154readj.log
-          if ! grep -qE 'Ran 38 tests' /tmp/c154readj.log; then
-            echo "::error::expected 38 re-adjudication pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 46 tests' /tmp/c154readj.log; then
+            echo "::error::expected 46 re-adjudication pins; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/c154readj.log; then

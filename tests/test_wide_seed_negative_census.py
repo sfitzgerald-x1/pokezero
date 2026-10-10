@@ -141,7 +141,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -627,21 +629,24 @@ class WhatTheCensusCannotSettleIsNamedTests(unittest.TestCase):
 
         The generator now resolves every number at generation time (`_anchor`,
         `_anchor_after`, `_raise_line`), so a moved anchor follows the code and a deleted
-        one raises. This pin is the other half: it re-resolves them HERE and compares to
-        what the committed artifact recorded, so an artifact generated against an older
-        tree and not regenerated is red rather than quietly wrong.
+        one raises. The historical artifact remains an immutable measurement snapshot.
+        Its hash is checked by a separate current-source supplement, whose complete
+        source binding and demonstrations must re-derive exactly on every run. An
+        address refresh cannot change the historical claims or their measured counts.
         """
 
-        recorded = _document()["verdicts"]
+        with patch.object(sys, "path", [str(REPO / "scripts"), *sys.path]):
+            from current_census_citations import load_verified_supplement
+            recorded = load_verified_supplement()
         for name, demonstration in sorted(CENSUS_SCRIPT.CENSUS_CANNOT_REACH.items()):
             with self.subTest(entry=name):
-                self.assertEqual(recorded[name]["census_cannot_reach"], demonstration)
+                self.assertEqual(recorded["c153_cannot_reach"][name], demonstration)
         for name, demonstration in sorted(
             CENSUS_SCRIPT.STRUCTURAL_DIVERGENCE_CLASSES.items()
         ):
             key = f"divergence_class:{name}"
             with self.subTest(entry=key):
-                self.assertEqual(recorded[key]["structural_demonstration"], demonstration)
+                self.assertEqual(recorded["c153_structural"][name], demonstration)
         # Anti-vacuity: the demonstrations must actually carry resolved numbers, or the
         # comparison above is between two identical pieces of prose and proves nothing.
         cited = re.findall(
