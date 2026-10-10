@@ -150,7 +150,8 @@ def _raw_action(legal: Sequence[int], priors: Sequence[float]) -> int:
 
 def paired_continuations(*, env: Any, snapshot: object, subject: str,
                          actions: Mapping[str, int], evaluator: Callable,
-                         namespace: str, root_id: str, max_boundaries: int = 200) -> dict:
+                         namespace: str, root_id: str, max_boundaries: int = 200,
+                         outcome_sink=None) -> dict:
     """Oct5 audit law, retaining identical actions and terminal uncertainty.
 
     Oracle snapshots are used AFTER action selection. The evaluator returns
@@ -206,6 +207,8 @@ def paired_continuations(*, env: Any, snapshot: object, subject: str,
                 env.step(choices)
             rows.append(dict(action=action, replicate=replicate,
                 **(result or dict(status="CAPPED", signed_outcome=None, boundaries=max_boundaries))))
+            if outcome_sink is not None:
+                outcome_sink(dict(root_id=root_id, **rows[-1]))
     return dict(root_id=root_id, actions=dict(actions), outcomes=rows,
         status="COMPLETE" if all(r["status"] == "COMPLETE" for r in rows) else "UNCERTAIN")
 

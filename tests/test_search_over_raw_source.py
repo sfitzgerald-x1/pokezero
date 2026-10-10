@@ -105,6 +105,38 @@ class SourceCollectorTest(unittest.TestCase):
         won, lost = self.collect(SourceEnv(winner="p1")), self.collect(SourceEnv(winner="p2"))
         self.assertEqual(won["roots"], lost["roots"])
 
+    def test_excluded_nonopening_rule_does_not_change_default_panel(self):
+        self.contract["exclude_opening_requests"] = True
+        result = self.collect(SourceEnv(rounds=12))
+        self.assertEqual(result["eligible_requests"], 11)
+        self.assertTrue(all(root["source_request_index"] > 0 for root in result["roots"]))
+
+    def test_sealed_source_hook_is_explicit_and_not_exported(self):
+        env = SourceEnv(rounds=2)
+        private = object()
+        env.snapshot_actionable_boundary = lambda: private
+        boundaries = []
+        result = self.collect(env, sealed_pre_step_sink=boundaries.append)
+        self.assertEqual(len(boundaries), 2)
+        self.assertTrue(all(b.snapshot is private for b in boundaries))
+        self.assertNotIn("snapshot", json.dumps(result))
+
+    def test_context_sink_does_not_give_context_to_champion(self):
+        from pokezero.policy import PolicyContext
+        from pokezero.trajectory import BattleTrajectory
+        seen = []
+        policy = AuditedRawPolicy(FakeChampion(), checkpoint_sha256=SHA,
+            public_context_sink=lambda context, action: seen.append((context, action)))
+        env = SourceEnv()
+        own, other = env.observe("p1"), env.observe("p2")
+        context = PolicyContext("p1", 0, "fixture", "gen3randombattle", 1,
+            own, ("p1", "p2"), BattleTrajectory("fixture", "gen3randombattle", 1),
+            requested_observations={"p1": own, "p2": other})
+        decision = policy.select_action_with_context(context, rng=random.Random(0))
+        self.assertEqual(decision.action_index, 1)
+        self.assertEqual(seen[0][1], 1)
+        self.assertEqual(set(seen[0][0].requested_observations), {"p1"})
+
     def test_short_game_keeps_missing_registered_slots(self):
         result = self.collect(SourceEnv(rounds=2))
         self.assertEqual(len(result["roots"]), 2)

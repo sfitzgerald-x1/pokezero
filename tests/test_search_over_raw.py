@@ -1,4 +1,5 @@
 import copy
+import json
 from types import SimpleNamespace
 import unittest
 
@@ -90,6 +91,27 @@ class SearchOverRawTest(unittest.TestCase):
         audit = self.audit(env, dict(raw=1, search=1))
         self.assertEqual(len(env.calls), 8)
         self.assertEqual(root_contrast(audit, "search"), (0., 0.))
+
+    def test_outcome_sink_receives_only_completed_public_summary_rows(self):
+        rows = []
+        audit = paired_continuations(env=FakeEnv(), snapshot=object(), subject="p1",
+            actions=dict(raw=0, search=0), evaluator=lambda _: ([0, 1], [.4, .6]), namespace=NAMESPACE,
+            root_id="sink-root", outcome_sink=rows.append)
+        self.assertEqual(len(rows), 8)
+        self.assertEqual([{k: v for k, v in row.items() if k != "root_id"} for row in rows], audit["outcomes"])
+        self.assertNotIn("snapshot", json.dumps(rows))
+
+    def test_outcome_sink_failure_stops_without_retry(self):
+        rows = []
+
+        def fail(row):
+            rows.append(row)
+            raise RuntimeError("receipt unavailable")
+
+        with self.assertRaisesRegex(RuntimeError, "receipt unavailable"):
+            paired_continuations(env=FakeEnv(), snapshot=object(), subject="p1", actions=dict(raw=0),
+                evaluator=lambda _: ([0, 1], [.4, .6]), namespace=NAMESPACE, root_id="sink-root", outcome_sink=fail)
+        self.assertEqual(len(rows), 1)
 
     def test_opponent_and_chance_randomness_are_paired(self):
         env = FakeEnv()

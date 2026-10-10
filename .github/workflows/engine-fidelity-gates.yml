@@ -1032,7 +1032,7 @@ jobs:
       - name: Prospective search over raw harness contracts
         env:
           POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
-          PYTHONPATH: src:tests
+          PYTHONPATH: src:scripts:tests
           OMP_NUM_THREADS: "1"
           OPENBLAS_NUM_THREADS: "1"
         run: |
@@ -1040,9 +1040,10 @@ jobs:
           python -m unittest \
             tests.test_search_over_raw tests.test_search_over_raw_source \
             tests.test_search_over_raw_ledger tests.test_prepare_search_over_raw \
-            tests.test_search_over_raw_adapters tests.test_search_over_raw_opening -v 2>&1 \
+            tests.test_search_over_raw_adapters tests.test_search_over_raw_opening \
+            tests.test_search_over_raw_archive -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 58 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 71 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"

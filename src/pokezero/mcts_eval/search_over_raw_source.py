@@ -23,7 +23,7 @@ class AuditedRawPolicy:
     the same law usable by the continuation evaluator without losing history.
     """
 
-    def __init__(self, policy: Any, *, checkpoint_sha256: str) -> None:
+    def __init__(self, policy: Any, *, checkpoint_sha256: str, public_context_sink=None) -> None:
         require(len(checkpoint_sha256) == 64
             and all(c in "0123456789abcdef" for c in checkpoint_sha256), "invalid checkpoint digest")
         require(policy.weights_sha256 == checkpoint_sha256, "raw checkpoint binding mismatch")
@@ -36,6 +36,7 @@ class AuditedRawPolicy:
         self.policy.record_policy_distribution = True
         self.policy_id = "search-over-raw-source:" + checkpoint_sha256
         self.verified_decisions = 0
+        self.public_context_sink = public_context_sink
 
     def reset(self) -> None:
         self.policy.reset()
@@ -56,6 +57,14 @@ class AuditedRawPolicy:
         require(decision.action_index == chosen, "source decision differs from masked argmax")
         self.verified_decisions += 1
         return replace(decision, policy_id=self.policy_id)
+
+    def select_action_with_context(self, context: Any, *, rng: Any) -> Any:
+        # The champion sees only its observation, never the context or auditor.
+        decision = self.select_action(context.observation, rng=rng)
+        if self.public_context_sink is not None:
+            from .head_to_head import public_only_context
+            self.public_context_sink(public_only_context(context), decision.action_index)
+        return decision
 
 
 def source_roots(contract: Mapping, *, panel: str, source_seed: int,
@@ -78,6 +87,8 @@ def source_roots(contract: Mapping, *, panel: str, source_seed: int,
     complete = terminal is not None and not terminal.capped
     catalog = public_decision_records_from_trajectory(trajectory,
         acting_player=contract["candidate_seat"]) if complete else ()
+    if contract.get("exclude_opening_requests", False):
+        catalog = tuple(r for r in catalog if r.turn_index > 0)
     require(len({r.turn_index for r in catalog}) == len(catalog), "duplicate source request")
     selected = select_source_requests(contract["namespace"], source_seed,
         [r.turn_index for r in catalog], len(slots))
@@ -100,7 +111,8 @@ def source_roots(contract: Mapping, *, panel: str, source_seed: int,
 
 def collect_raw_source(contract: Mapping, *, panel: str, source_seed: int,
                        env: Any, policies: Mapping[str, AuditedRawPolicy],
-                       max_decision_rounds: int = 250, decision_sink=None) -> dict:
+                       max_decision_rounds: int = 250, decision_sink=None,
+                       sealed_pre_step_sink=None) -> dict:
     """Use the production rollout driver; return only selected public roots.
 
     The caller owns env lifecycle, durable attempts and runtime qualification.
@@ -119,7 +131,7 @@ def collect_raw_source(contract: Mapping, *, panel: str, source_seed: int,
     started = time.perf_counter()
     result = RolloutDriver(env=env, policies=policies, config=RolloutConfig(
         max_decision_rounds=max_decision_rounds, hide_opponent_legal_action_masks=True,
-        decision_sink=decision_sink)).run(seed=source_seed,
+        decision_sink=decision_sink, sealed_pre_step_sink=sealed_pre_step_sink)).run(seed=source_seed,
             battle_id=f"search-over-raw:{contract['namespace']}:{panel}:{source_seed}")
     receipt = source_roots(contract, panel=panel, source_seed=source_seed,
         trajectory=result.trajectory)

@@ -47,7 +47,7 @@ def verify_inputs(registration):
         require(sha256_file(path) == expected, "benchmark input drift")
 
 
-def register(*, output, checkpoint, checkpoint_sha256, showdown_root,
+def prepare_binding(*, checkpoint, checkpoint_sha256, showdown_root,
              showdown_commit, source_commit, native_receipt, factory_options,
              factory_options_sha256, encoder_tables, seconds=1.):
     require(type(seconds) in (int, float) and seconds in (1., 3., 10.),
@@ -99,6 +99,11 @@ def register(*, output, checkpoint, checkpoint_sha256, showdown_root,
         scope="one opening request per arm; no continuation, strength score or Phase A panel",
         scientific_strength_evidence=False, phase_a_admission=False, phase_b_authorized=False)
     verify_inputs(registration)
+    return registration
+
+
+def register(*, output, **kwargs):
+    registration = prepare_binding(**kwargs)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     save_new(output / "registration.json", registration)
