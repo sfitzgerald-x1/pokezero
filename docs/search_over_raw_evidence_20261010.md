@@ -165,7 +165,7 @@ panels. Preparation and direct contract generation now automatically exclude
 that fixture and the twenty reference-worker startup seeds; this minimum
 exclusion does not replace the full historical inventory. Oracle and alternative-leaf configurations explicitly fail before
 runtime construction until their dedicated adapters are implemented. CI runs
-all57 new harness contracts with a no-skips and exact-count guard.
+all58 new harness contracts with a no-skips and exact-count guard.
 
 `scripts/qualify_search_over_raw_opening.py` registers an excluded opening
 benchmark before runtime construction and permits one attempt only. It binds
@@ -178,6 +178,21 @@ plays terminal games nor admits an outcome panel. Its ten contract tests cover
 input drift, resources, exposure exclusion, one-attempt ordering and isolated
 export reuse. Two older lattice fixtures required their missing request kind
 to match the current action translator; production translation is unchanged.
+
+The first real opening attempt at source `c6ad4e44` failed with exit1 after
+raw selection succeeded: the incumbent root-allocation witness was not
+authoritative. Reference construction was never reached. The terminal receipt
+remains `FAILED_NO_RETRY`; it is not qualification success. A new boundary
+regression reproduced a public transport mismatch: canonical switch candidates
+carry `switched_species`, while the engine vocabulary expected a nested
+`pokemon.species` row. The vocabulary now accepts the public semantic identity
+without reconstructing private metadata. Unit verification of that repair does
+not retroactively qualify the failed opening or authorize an outcome panel.
+
+CI at source `099e902a` also failed the historical C153 live-line citation check:
+three stored citations differ from current source locations. Historical C153
+and C154 artifact bytes remain unchanged. A separate current-source citation
+record and its validation are still needed; the failing check is not waived.
 
 Remaining Phase A work includes full exposure inventory, source/model/native
 and simulator bindings, real-game root-collector qualification, checkpoint-backed adapter qualification,

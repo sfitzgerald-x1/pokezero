@@ -8573,7 +8573,10 @@ class EngineMctsPolicy:
                 species = (
                     normalize_id(str(pokemon.get("species") or ""))
                     if isinstance(pokemon, Mapping)
-                    else ""
+                    # Canonical public roots intentionally omit the request's
+                    # nested party row. Its actor-visible semantic identity is
+                    # sufficient; do not restore private metadata to map it.
+                    else normalize_id(str(candidate.get("switched_species") or ""))
                 )
                 if species:
                     switch_index_by_species[species] = index

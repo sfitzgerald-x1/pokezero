@@ -122,6 +122,16 @@ class PublicBoundaryTests(unittest.TestCase):
         self.addCleanup(adapter.close)
         return adapter, evaluator
 
+    def test_public_capture_preserves_engine_semantic_switch_vocabulary(self):
+        from pokezero.engine_search import EngineMctsPolicy
+        from pokezero.mcts_eval.paper_reference_runtime import PublicRootRequest
+        policy = object.__new__(EngineMctsPolicy)
+        request = PublicRootRequest.capture(self.public, self.context.observation)
+        original = policy._choice_vocabulary(self.context)
+        captured = policy._choice_vocabulary(replace(self.context, observation=request.observation))
+        self.assertTrue(original.switch_index_by_species)
+        self.assertEqual(captured, original)
+
     def test_raw_argmax_uses_one_forward_and_strips_extra_metadata(self):
         adapter, evaluator = self.raw()
         row = adapter.select(self.context, root_id="fixture:0", selection_seed=5)
