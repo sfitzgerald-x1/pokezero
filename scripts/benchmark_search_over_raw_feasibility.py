@@ -6,6 +6,10 @@ with model/HP/raw-terminal leaves. Eight paired continuations measure the full
 harness after action selection. First failure stops the entire attempt; the
 fixed remaining roster stays unmeasured. No easier roots, redrawn seeds, fallback
 actions, reduced work or replay of any prior qualification is permitted.
+
+Version 2 is a separately registered post-metadata-optimization diagnostic.
+Version 1's closed attempt, namespace and seeds remain historical evidence;
+no old root is replayed and neither version supplies scientific admission.
 """
 from dataclasses import asdict
 import argparse
@@ -25,9 +29,9 @@ from pokezero.mcts_eval.search_over_raw import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = "pokezero.search-over-raw.real-source-feasibility.v1"
-NAMESPACE = "7f133933-252b-4db6-becf-b8b5bda6a017"
-SEEDS = (2026101015, 2026101016)
+SCHEMA = "pokezero.search-over-raw.real-source-feasibility.v2"
+NAMESPACE = "6ff7b2be-433a-4961-95b7-d0d47e0604ce"
+SEEDS = (2026101018, 2026101019)
 ROOTS_PER_SEED = 2
 
 

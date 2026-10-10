@@ -60,6 +60,25 @@ class RealSourceFeasibilityTests(unittest.TestCase):
         c = phase_a_contract(driver.NAMESPACE, excluded_seeds=[], configurations=driver.configurations())
         self.assertFalse(set(driver.SEEDS) & {seed for p in c["panels"].values() for seed in p["seeds"]})
 
+    def test_fresh_post_optimization_scope_preserves_all_prior_seed_exclusions(self):
+        self.assertEqual(driver.SCHEMA, "pokezero.search-over-raw.real-source-feasibility.v2")
+        self.assertEqual(driver.NAMESPACE, "6ff7b2be-433a-4961-95b7-d0d47e0604ce")
+        self.assertEqual(driver.SEEDS, (2026101018, 2026101019))
+        self.assertTrue(set(range(2026101013, 2026101020)) <= set(ENGINEERING_EXCLUDED_SEEDS))
+        self.assertTrue({2026101015, 2026101016, 2026101017} <= set(self.registration["excluded_seeds"]))
+        self.assertFalse(set(driver.SEEDS) & set(self.registration["excluded_seeds"]))
+
+    def test_historical_schema_namespace_and_seeds_cannot_reopen_under_new_driver(self):
+        for change in (
+                dict(schema="pokezero.search-over-raw.real-source-feasibility.v1"),
+                dict(namespace="7f133933-252b-4db6-becf-b8b5bda6a017"),
+                dict(seeds=[2026101015, 2026101016], fixture_seed=2026101015)):
+            with self.subTest(change=change):
+                r = copy.deepcopy(self.registration)
+                r.update(change)
+                with self.assertRaisesRegex(ValueError, "core changed"):
+                    driver.validate_contract(r, self.output)
+
     def test_four_roots_have_76_selector_and_608_alias_continuation_cells(self):
         cells = driver.planned_cells()
         continuations = driver.planned_continuations()
