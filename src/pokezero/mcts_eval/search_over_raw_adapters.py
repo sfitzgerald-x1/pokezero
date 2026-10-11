@@ -105,10 +105,15 @@ class PublicModelSearchAdapter:
     def __init__(self, configuration: SearchConfiguration, *, checkpoint_contract,
                  showdown_root: str, evaluator=None, reference_factory=None,
                  initial_dispatch_workers: int = 6, policy_opponent_diagnostics=None,
-                 owned_process_receipts=None):
+                 owned_process_receipts=None, value_diagnostics=None):
         from .paper_reference_runtime import ShowdownWorkerFactory
 
         self._check_configuration(configuration)
+        if value_diagnostics is not None:
+            from .search_over_raw_value_diagnostics import ValueDiagnosticContract
+            require(isinstance(value_diagnostics, ValueDiagnosticContract) and configuration.arm == "reference",
+                "visited-value diagnostics currently require the reference arm")
+        self._value_diagnostics, self._pending_value_diagnostics = value_diagnostics, None
         if policy_opponent_diagnostics is not None:
             from ..policy_opponent_diagnostics import PolicyOpponentDiagnostics
             require(type(policy_opponent_diagnostics) is PolicyOpponentDiagnostics
@@ -158,6 +163,11 @@ class PublicModelSearchAdapter:
         if configuration.belief == "oracle":
             self.runtime_configuration["team_oracle"] = self.oracle.receipt()
         self.runtime_sha256 = digest(self.runtime_configuration)
+        if value_diagnostics is not None:
+            self.runtime_configuration["visited_value_diagnostics"] = dict(contract=asdict(value_diagnostics),
+                instrumentation_can_change_selection=True, labels_after_selection=True,
+                labels_used_for_backup=False, qualifies_uninstrumented_runtime=False)
+            self.runtime_sha256 = digest(self.runtime_configuration)
         if owned_process_receipts is not None:
             require(configuration.arm == "reference", "owned group receipts require reference workers")
             self.runtime_configuration["owned_process_receipts"] = dict(
@@ -189,7 +199,11 @@ class PublicModelSearchAdapter:
                     rollout_cap=ROLLOUT_CAP, rollout_policy="raw_argmax_both_seats",
                     tree="unchanged_trajectory_reference", priors="unchanged_champion")
                 self.runtime_sha256 = digest(self.runtime_configuration)
-            self._pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1.), self._reference_worker_factory(reference_factory),
+            factory = self._reference_worker_factory(reference_factory)
+            if value_diagnostics is not None:
+                from .search_over_raw_value_diagnostics import ReferenceValueDiagnosticFactory
+                factory = ReferenceValueDiagnosticFactory(factory, value_diagnostics)
+            self._pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1.), factory,
                 workers=20, batch_size=10, initial_dispatch_workers=initial_dispatch_workers,
                 **({"owned_process_receipts": owned_process_receipts} if owned_process_receipts is not None else {}))
 
@@ -200,6 +214,7 @@ class PublicModelSearchAdapter:
         from .paper_reference_showdown import decision_state
 
         require(not self._closed and not self._poisoned, "adapter closed or poisoned; no retry")
+        require(self._pending_value_diagnostics is None, "finish previous visited-value labels before another selection")
         require(type(root_id) is str and bool(root_id) and root_id not in self._attempted,
             "root requires one fresh attempt")
         require(type(selection_seed) is int and 0 <= selection_seed < 2**64, "invalid selection seed")
@@ -287,7 +302,7 @@ class PublicModelSearchAdapter:
             require(type(action) is int and 0 <= action < len(mask) and mask[action], "illegal selected action")
             evidence = self._selection_evidence(evidence, request)
             elapsed = time.perf_counter()-started
-            return dict(root_id=root_id, configuration_sha256=self.configuration.identity,
+            selected = dict(root_id=root_id, configuration_sha256=self.configuration.identity,
                 **({"statistics_root_id": statistics_root_id, "selection_seed": selection_seed}
                    if statistics_root_id is not None else {}),
                 runtime_sha256=self.runtime_sha256,
@@ -295,6 +310,9 @@ class PublicModelSearchAdapter:
                 nominal_search_seconds=self.configuration.seconds,
                 exceeded_nominal_seconds=arm != "raw" and elapsed > self.configuration.seconds,
                 evidence=evidence, independent_root_statistics=True, scientific_strength_evidence=False)
+            if self._value_diagnostics is not None:
+                self._pending_value_diagnostics = (selected, digest(selected), measured)
+            return selected
         except BaseException as error:
             self._poisoned = True
             self.last_failure = dict(root_id=root_id, error_type=type(error).__name__,
@@ -306,6 +324,22 @@ class PublicModelSearchAdapter:
             fallback = fallback_refusal_diagnostic(error)
             if fallback is not None:
                 self.last_failure["engine_fallback_diagnostic"] = fallback
+            raise
+
+    def finish_value_diagnostics(self, selected):
+        require(not self._closed and not self._poisoned and self._pending_value_diagnostics is not None,
+            "no live selected decision for visited-value labels")
+        receipt, binding, measured = self._pending_value_diagnostics
+        require(selected is receipt and digest(selected) == binding, "visited-value selected receipt changed")
+        self._pending_value_diagnostics = None
+        try:
+            workers = self._pool.finish_diagnostics(measured)
+            return dict(schema="pokezero.selected-visited-value.v1", root_id=selected["root_id"],
+                selected_receipt_sha256=binding, configuration_sha256=self.configuration.identity,
+                runtime_sha256=self.runtime_sha256, workers=workers,
+                labels_used_for_backup=False, scientific_strength_evidence=False)
+        except BaseException:
+            self._poisoned = True
             raise
 
     def close(self):

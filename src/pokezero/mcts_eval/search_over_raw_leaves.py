@@ -42,6 +42,7 @@ class ReferenceLeafWorld:
             "invalid leaf mode or rollout cap")
         self.world, self.leaf, self.deadline, self.receipts, self.cap = world, leaf, deadline, receipts, cap
         self.rollout_seed = rollout_seed
+        self.observe_model = None  # Explicit visited-value diagnostic only.
 
     def frame(self):
         return self.world.frame()
@@ -54,6 +55,8 @@ class ReferenceLeafWorld:
 
     def evaluate(self, state):
         model = self.world.evaluate(state)
+        if self.observe_model is not None:
+            self.observe_model(state, model)
         began = time.perf_counter()
         row = dict(schema="pokezero.search-over-raw.leaf.v1", leaf=self.leaf,
             information_key=state.key.hex(), model_signed_value=model.value,

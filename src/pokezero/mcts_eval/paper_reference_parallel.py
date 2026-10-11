@@ -41,6 +41,8 @@ class PreparedDecision:
     evidence: Callable[[], Any] = lambda: None
     # Worker-local clock binding only; no callable crosses the public transport.
     set_sampling_deadline: Callable[[float | None], None] = lambda deadline: None
+    # Opt-in worker-local labels AFTER selection; never exchanged as Q/N/M/F.
+    finish_diagnostics: Callable[[Callable[[Any], None]], Any] | None = None
 
 
 class WorkerRuntime(Protocol):
@@ -203,12 +205,24 @@ def _worker(connection, index, runtime_factory, config, ownership_required=False
         runtime = runtime_factory(index)
         search = TrajectorySearch(config)
         battle_id, sequence = None, 0
+        diagnostics_consumed = True
         connection.send(("boot", index, os.getpid(), time.perf_counter() - started,
                          os.getpgrp() if os.name == "posix" else None))
         while True:
             command = connection.recv()
             if command[0] == "close":
                 break
+            if command[0] == "diagnostics":
+                if (command != ("diagnostics", decision) or phase != "idle"
+                        or diagnostics_consumed or prepared.finish_diagnostics is None):
+                    raise ReferenceRefusal("diagnostic decision is absent, stale or already consumed")
+                diagnostics_consumed = True
+                phase = "post_selection_diagnostics"
+                evidence = prepared.finish_diagnostics(lambda row: connection.send(
+                    ("diagnostics_progress", decision, index, row)))
+                connection.send(("diagnostics_done", decision, index, evidence))
+                phase = "idle"
+                continue
             if command[0] == "restore":
                 if battle_id is not None or sequence != 0:
                     raise ReferenceRefusal('worker recovery requires unused processes')
@@ -223,6 +237,7 @@ def _worker(connection, index, runtime_factory, config, ownership_required=False
                 raise ReferenceRefusal("worker received an out-of-order decision command")
             _, decision, request, root, snapshot, seed, limit, deadline = command
             phase = "public_root_preparation"
+            diagnostics_consumed = False
             prepared = None
             if snapshot.battle_id != battle_id:
                 battle_id, sequence = snapshot.battle_id, 0
@@ -511,8 +526,49 @@ class ParallelTrajectorySearch:
                 deadline is not None and started + elapsed >= deadline,
                 0.0 if deadline_seconds is None else max(0., elapsed - deadline_seconds))
             self.last_evidence.update(status="COMPLETE", result=result)
-            return ParallelResult(result, self.worker_pids, tuple(receipts), len(receipts),
+            self._last_result = ParallelResult(result, self.worker_pids, tuple(receipts), len(receipts),
                                   self.startup_seconds, decision, tuple(dispatch_schedule))
+            self._diagnostics_consumed = False
+            return self._last_result
+        except BaseException:
+            self._poisoned = True
+            raise
+
+    def finish_diagnostics(self, selected: ParallelResult):
+        """Consume this exact completed decision once, without changing statistics.
+
+        Label clocks are owned by the opt-in runtime's original producer contract.
+        No new deadline, snapshot or callable is supplied over public transport.
+        """
+        if (self._closed or self._poisoned or selected is not getattr(self, "_last_result", None)
+                or getattr(self, "_diagnostics_consumed", True)):
+            raise ReferenceRefusal("diagnostics require the exact latest unconsumed selection")
+        self._diagnostics_consumed = True
+        rows = []
+        progress = {}
+        self.last_evidence["diagnostic_progress"] = progress
+        try:
+            for connection in self._connections:
+                connection.send(("diagnostics", selected.decision_id))
+            pending = set(range(self.workers))
+            while pending:
+                for index, message in self._receive(pending):
+                    if message[:3] == ("diagnostics_progress", selected.decision_id, index) and len(message) == 4:
+                        row = message[3]
+                        previous = progress.get(index, dict(boundaries=0, labels_accounted=0))
+                        if (type(row) is not dict or row.get("schema") != "pokezero.visited-value-progress.v1"
+                                or any(type(row.get(field)) is not int or row[field] < previous[field]
+                                    for field in ("boundaries", "labels_accounted"))
+                                or (row["boundaries"], row["labels_accounted"]) ==
+                                    (previous["boundaries"], previous["labels_accounted"])):
+                            self._fail("invalid reference diagnostic progress", [message])
+                        progress[index] = row
+                        continue
+                    if message[:3] != ("diagnostics_done", selected.decision_id, index) or len(message) != 4:
+                        self._fail("reference post-selection diagnostic failed", [message])
+                    rows.append(dict(worker=index, evidence=message[3]))
+                    pending.remove(index)
+            return tuple(sorted(rows, key=lambda row: row["worker"]))
         except BaseException:
             self._poisoned = True
             raise
