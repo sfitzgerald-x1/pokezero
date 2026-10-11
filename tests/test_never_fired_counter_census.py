@@ -228,7 +228,13 @@ _CORPUS_TREES = ("reports", "docs")
 # 416 -> 417: a full isolated callback-diagnostics mutation sweep adds distinct
 # current-byte evidence; all four earlier mutation artifacts remain unchanged.
 # Refresh only the explicit current nonmeasurement source binding.
-_EXPECTED_COUNTER_ARTIFACTS = 417
+# 417 -> 418: re-derived against a1e0bc73 using the exact tracked JSON selector.
+# The sole addition is rollout_leaf_witness_mutation_battery_20261011_native_diagnostics.json;
+# nothing was removed. The sole modified existing JSON is the explicit current
+# nonmeasurement terminal binding: new artifact hash, inventory count and test hash.
+# All prior corpus entries, measurement facts, statuses and historical evidence
+# remain unchanged.
+_EXPECTED_COUNTER_ARTIFACTS = 418
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
