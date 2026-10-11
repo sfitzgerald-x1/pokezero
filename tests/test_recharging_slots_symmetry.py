@@ -260,30 +260,13 @@ def _switch(index: int, species: str) -> dict:
     }
 
 
-class ForcedNoMoveMapsToStruggleTest(unittest.TestCase):
-    """The SECOND vocabulary gap behind the same `MoveChoice::None` token: Struggle.
+class SyntheticStruggleMappingTest(unittest.TestCase):
+    """Struggle is an executable native action, never a translated no-op."""
 
-    Captured, not hypothesised. Battle `bp-trap-lastmon2` d20 seat p1, the first
-    `choices_unmapped` record in the corpus whose `world_failures` is EMPTY -- 4 worlds
-    constructed AND searched, `engine_choices {"No Move": 4.0}`,
-    `request_legal_choices ["struggle"]`, cause mislabelled `all_unmapped_legality_mismatch`,
-    then 20 consecutive refusals d20-d39.
-
-    The engine has no Struggle arm: `MoveChoice` is Move/Switch/None and gen3
-    `get_all_options` never synthesizes one, so a 0-PP moveset with no live bench falls
-    through `add_available_moves` (nothing) and `add_switches` (nothing) to the terminal
-    `if options.len() == 0 { push(MoveChoice::None) }`. Showdown at the same state
-    substitutes Struggle. `_map_choices` translated `none` to `recharge` only.
-
-    The no-legal-switch precondition is MEASURED on that line, not inferred: d16 and d18
-    offered `['struggle', 'switch:Shedinja']` and SEARCHED; d20, same Struggle-only moveset
-    with the bench fainted away, REFUSED.
-    """
-
-    def test_no_move_resolves_to_the_requests_struggle_candidate(self) -> None:
+    def test_native_struggle_resolves_to_the_requests_struggle_candidate(self) -> None:
         policy = _policy()
         context = _map_context([_move(0, "struggle")])
-        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 4.0}), 0)
+        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"struggle": 4.0}), 0)
         self.assertEqual(dict(policy.stats.unmapped_choices), {})
         self.assertEqual(dict(policy.stats.choices_unmapped_causes), {})
 
@@ -303,7 +286,19 @@ class ForcedNoMoveMapsToStruggleTest(unittest.TestCase):
         context = _map_context(
             [_move(0, "pound", legal=False), _move(1, "tackle", legal=False), _move(2, "struggle")]
         )
-        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}), 2)
+        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"struggle": 1.0}), 2)
+
+    def test_a_native_noop_is_never_relabelled_as_struggle(self) -> None:
+        policy = _policy()
+        context = _map_context([_move(0, "struggle")])
+        self.assertIsNone(EngineMctsPolicy._map_choices(policy, context, {"No Move": 1.0}))
+        self.assertEqual(dict(policy.stats.unmapped_choices), {"No Move": 1})
+
+    def test_native_struggle_remains_present_with_live_switches(self) -> None:
+        policy = _policy()
+        context = _map_context([_move(0, "struggle"), _switch(1, "Shedinja")])
+        self.assertEqual(EngineMctsPolicy._map_choices(policy, context, {"struggle": 3.0, "switch shedinja": 1.0}), 0)
+        self.assertEqual(dict(policy.stats.unmapped_choices), {})
 
     def test_the_recharge_translation_still_wins_its_own_case(self) -> None:
         """Adding the second lookup must not disturb the first.

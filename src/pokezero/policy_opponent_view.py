@@ -9,9 +9,12 @@ reveals-only belief approximation.
 
 from __future__ import annotations
 
+from copy import deepcopy
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 import json
 import re
+from threading import Lock
 from typing import Any, Mapping, Sequence
 
 from .actions import ACTION_COUNT
@@ -23,8 +26,10 @@ from .observation import (
     FEATURE_PACK_OBSERVATION_SCHEMA_VERSIONS,
     TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
 )
+from .policy_opponent_diagnostics import PolicyOpponentDiagnostics
 from .showdown import (
-    PlayerRelativeBattleState, _observation_metadata, normalize_for_player,
+    PlayerRelativeBattleState, ShowdownReplayState, _ReplayParser,
+    _observation_metadata, normalize_for_player,
     observation_from_player_state, parse_showdown_replay,
 )
 
@@ -116,6 +121,66 @@ def public_policy_lines(
     return tuple(result)
 
 
+class _PublicPolicyPrefix:
+    """Callback-owned parser prefix; never a cache of private requests or beliefs.
+
+    Preparation is lazy so it remains inside the callback's charged view work.
+    Every invocation deep-copies ALL parser state, including transient damage
+    attribution that snapshot hydration deliberately omits. The cached parser
+    never receives branch events; returned views cannot mutate it. Beliefs are
+    still rebuilt from the full resulting event history on every invocation,
+    retaining custom/stateful set-source behavior and boundary resolution.
+    """
+
+    _MAX_LINES = 4096
+    _MAX_CHARACTERS = 131072
+
+    def __init__(self, public_lines: tuple[str, ...], *, battle_id: str) -> None:
+        self._lines = public_lines
+        self._battle_id = battle_id
+        # One template per callback, with bounded retained parser history. Long
+        # transcripts keep the exact full-rebuild behavior, never truncation.
+        # Count characters rather than encode: protocol strings may contain
+        # lone surrogates and the reference parser accepts them unchanged.
+        # Reference parsing retains battle_id by identity. Custom string/tuple
+        # subclasses may implement deepcopy/len/iteration hooks; caching must
+        # neither call those hooks nor reject formerly accepted inputs.
+        self._cacheable = (type(battle_id) is str and type(public_lines) is tuple
+            and all(type(line) is str for line in public_lines)
+            and len(public_lines) <= self._MAX_LINES
+            and sum(map(len, public_lines)) <= self._MAX_CHARACTERS)
+        self._parser: _ReplayParser | None = None
+        self._lock = Lock()
+
+    def parse(self, public_lines: tuple[str, ...], *, battle_id: str,
+              diagnostics: PolicyOpponentDiagnostics | None = None) -> ShowdownReplayState:
+        if diagnostics is not None and type(diagnostics) is not PolicyOpponentDiagnostics:
+            raise PolicyOpponentViewError("diagnostics must be the aggregate timing collector")
+        if not self._cacheable:
+            return parse_showdown_replay(public_lines, battle_id=battle_id,
+                complete_prefix=True, hp_visibility={"p1": "percentage", "p2": "percentage"})
+        if battle_id != self._battle_id or public_lines[:len(self._lines)] != self._lines:
+            raise PolicyOpponentViewError("public parser prefix identity mismatch")
+        with self._lock:
+            if self._parser is None:
+                with diagnostics.phase("view_prefix_prepare") if diagnostics is not None else nullcontext():
+                    parser = _ReplayParser(
+                        battle_id, complete_prefix=True,
+                        hp_visibility={"p1": "percentage", "p2": "percentage"},
+                    )
+                    parser.feed(self._lines)
+                    # Publish only a fully parsed prefix; failures retain no partial
+                    # state. This lock protects preparation, not policy inference.
+                    self._parser = parser
+            root = self._parser
+        with diagnostics.phase("view_branch_clone") if diagnostics is not None else nullcontext():
+            branch = deepcopy(root)
+        with diagnostics.phase("view_suffix_parse") if diagnostics is not None else nullcontext():
+            branch.feed(public_lines[len(self._lines):])
+        with diagnostics.phase("view_replay_snapshot") if diagnostics is not None else nullcontext():
+            return branch.snapshot()
+
+
 @dataclass(frozen=True)
 class PolicyOpponentView:
     state: PlayerRelativeBattleState
@@ -156,14 +221,20 @@ def build_policy_opponent_view(
     set_source: PokemonSetSource, spec: ObservationSpec,
     feature_masks: ObservationFeatureMasks,
     sampled_self_move_states: Mapping[str, Sequence[Mapping[str, Any]]] | None = None,
+    _public_prefix: _PublicPolicyPrefix | None = None,
+    diagnostics: PolicyOpponentDiagnostics | None = None,
 ) -> PolicyOpponentView:
     """Rebuild at root OR child from a complete prefix and sampled own request.
 
     Each caller must construct the private request from the opponent's sampled
     side only. Appending realized public branch lines and supplying its updated
     request evolves this view, including newly revealed subject identities.
-    This is a correctness reference; native caching/batching is a later step.
+    Without the private callback-owned prefix this is the full-rebuild
+    correctness reference. The optimized path reuses only parsing of public
+    root lines; sampled requests, full PP, beliefs and actions remain fresh.
     """
+    if diagnostics is not None and type(diagnostics) is not PolicyOpponentDiagnostics:
+        raise PolicyOpponentViewError("diagnostics must be the aggregate timing collector")
     if opponent_slot not in {"p1", "p2"} or set_source is None:
         raise PolicyOpponentViewError("opponent slot and canonical set source are required")
     # Damage conclusions mutate belief when narrowing is enabled and occupy
@@ -176,46 +247,57 @@ def build_policy_opponent_view(
         raise PolicyOpponentViewError("investment observer is not implemented for policy opponent")
     if feature_masks.tier2_residuals and not feature_pack:
         raise PolicyOpponentViewError("residual observer is not implemented for policy opponent history")
-    clean_lines = public_policy_lines(public_lines, hp_visibility=hp_visibility)
+    with diagnostics.phase("view_public_projection") if diagnostics is not None else nullcontext():
+        clean_lines = public_policy_lines(public_lines, hp_visibility=hp_visibility)
     if "|start" not in clean_lines:
         raise PolicyOpponentViewError("public policy requires a complete battle-start prefix")
-    # JSON cloning prevents mutation by a provider/client after certification.
-    try:
-        request = json.loads(json.dumps(sampled_self_request, allow_nan=False))
-    except (TypeError, ValueError) as error:
-        raise PolicyOpponentViewError("sampled own request is not finite JSON") from error
-    if not isinstance(request, dict):
-        raise PolicyOpponentViewError("sampled own request must be an object")
-    side = request.get("side")
-    if not isinstance(side, dict) or side.get("id") != opponent_slot:
-        raise PolicyOpponentViewError("sampled own request belongs to a different seat")
-    team = side.get("pokemon")
-    if not isinstance(team, list) or not team:
-        raise PolicyOpponentViewError("sampled own request has no party")
-    if any(not isinstance(mon, dict) or not str(mon.get("ident", "")).startswith(f"{opponent_slot}:") for mon in team):
-        raise PolicyOpponentViewError("sampled party identity belongs to a different seat")
-    move_states = _sampled_move_states(request, sampled_self_move_states)
-    replay = parse_showdown_replay(
-        clean_lines, battle_id=battle_id, complete_prefix=True,
-        hp_visibility={"p1": "percentage", "p2": "percentage"},
-    )
+    with diagnostics.phase("view_own_request_certification") if diagnostics is not None else nullcontext():
+        # JSON cloning prevents mutation by a provider/client after certification.
+        try:
+            request = json.loads(json.dumps(sampled_self_request, allow_nan=False))
+        except (TypeError, ValueError) as error:
+            raise PolicyOpponentViewError("sampled own request is not finite JSON") from error
+        if not isinstance(request, dict):
+            raise PolicyOpponentViewError("sampled own request must be an object")
+        side = request.get("side")
+        if not isinstance(side, dict) or side.get("id") != opponent_slot:
+            raise PolicyOpponentViewError("sampled own request belongs to a different seat")
+        team = side.get("pokemon")
+        if not isinstance(team, list) or not team:
+            raise PolicyOpponentViewError("sampled own request has no party")
+        if any(not isinstance(mon, dict) or not str(mon.get("ident", "")).startswith(f"{opponent_slot}:") for mon in team):
+            raise PolicyOpponentViewError("sampled party identity belongs to a different seat")
+        move_states = _sampled_move_states(request, sampled_self_move_states)
+    with diagnostics.phase("view_replay_parse") if diagnostics is not None else nullcontext():
+        if _public_prefix is None:
+            replay = parse_showdown_replay(
+                clean_lines, battle_id=battle_id, complete_prefix=True,
+                hp_visibility={"p1": "percentage", "p2": "percentage"},
+            )
+        else:
+            if type(_public_prefix) is not _PublicPolicyPrefix:
+                raise PolicyOpponentViewError("invalid public parser prefix")
+            replay = _public_prefix.parse(clean_lines, battle_id=battle_id, diagnostics=diagnostics)
     if replay.winner is not None or any(line.split("|")[1] == "tie" for line in clean_lines if "|" in line):
         raise PolicyOpponentViewError("public policy cannot infer at a terminal root")
-    belief = PublicBattleBeliefEngine.from_events(
-        replay.public_events, format_id=format_id, set_source=set_source,
-        item_belief_narrowing=feature_masks.item_belief_narrowing,
-    )
-    state = normalize_for_player(
-        replace(replay, requests={opponent_slot: request}), player_id=opponent_slot,
-        configured_showdown_slot=opponent_slot, format_id=format_id, belief_engine=belief,
-        include_turn_merged=spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
-    )
-    materialization = PublicBattleMaterializationState(
-        player_id=opponent_slot, format_id=format_id, observation_format_id=format_id,
-        replay=replace(replay, requests={}), belief_engine=belief,
-        self_request=request, self_initial_request=request,
-        self_move_states=move_states,
-    )
+    with diagnostics.phase("view_belief_rebuild") if diagnostics is not None else nullcontext():
+        belief = PublicBattleBeliefEngine.from_events(
+            replay.public_events, format_id=format_id, set_source=set_source,
+            item_belief_narrowing=feature_masks.item_belief_narrowing,
+        )
+    with diagnostics.phase("view_normalization") if diagnostics is not None else nullcontext():
+        state = normalize_for_player(
+            replace(replay, requests={opponent_slot: request}), player_id=opponent_slot,
+            configured_showdown_slot=opponent_slot, format_id=format_id, belief_engine=belief,
+            include_turn_merged=spec.schema_version in TURN_MERGED_OBSERVATION_SCHEMA_VERSIONS,
+        )
+    with diagnostics.phase("view_materialization") if diagnostics is not None else nullcontext():
+        materialization = PublicBattleMaterializationState(
+            player_id=opponent_slot, format_id=format_id, observation_format_id=format_id,
+            replay=replace(replay, requests={}), belief_engine=belief,
+            self_request=request, self_initial_request=request,
+            self_move_states=move_states,
+        )
     return PolicyOpponentView(state, materialization, clean_lines, spec, feature_masks, battle_seed)
 
 

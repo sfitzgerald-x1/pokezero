@@ -13,6 +13,12 @@ It selects the latest fully compatible projection without additional draws,
 catalog proposals, invented EVs, or silent relaxation. This is an adaptation,
 not the paper's exact tenth-template rule or a conditional posterior sampler.
 
+An additional explicit repair may extend ONLY an exhausted incompatible
+completion, up to a registered total draw limit. Each extra server template
+must match all public facts either directly or after the same disclosed trait
+projection. It never invents HP/EVs or relaxes exclusions. This changes the
+completion proposal, not the source position, and is not an exact posterior.
+
 Inputs are explicit PUBLIC original-set traits, not a live opponent request.
 Mapping mutated current items/abilities or transformed moves to these traits
 is the root factory's responsibility, not permission to copy private fields.
@@ -92,6 +98,8 @@ class KnownDrawReceipt:
     gender_assigned_after_server_draw: bool = False
     completion_template_attempt: int | None = None
     completion_projection_evidence: tuple[dict[str, Any], ...] = ()
+    max_known_set_draws: int = 10
+    extended_conditioning_used: bool = False
 
 
 @dataclass(frozen=True)
@@ -218,28 +226,43 @@ class PaperHiddenTeamSampler:
     """
 
     def __init__(self, generator: ServerGenerator, *, set_source: Gen3RandbatSource,
-                 allow_earlier_compatible_template: bool = False) -> None:
+                 allow_earlier_compatible_template: bool = False,
+                 max_known_set_draws: int = 10) -> None:
         if type(allow_earlier_compatible_template) is not bool:
             raise ReferenceRefusal("completion adaptation flag must be explicit boolean")
+        if type(max_known_set_draws) is not int or not 10 <= max_known_set_draws <= 256:
+            raise ReferenceRefusal("known-set draw limit must be an explicit integer in [10, 256]")
         self.generator, self.set_source = generator, set_source
         # Opt-in adaptation, NOT the paper's exact tenth-template rule. Preserve
         # that rule unless the caller explicitly registers the bounded variant.
         self.allow_earlier_compatible_template = allow_earlier_compatible_template
+        self.max_known_set_draws = max_known_set_draws
 
     def draw(self, known: tuple[KnownSetTraits, ...], rng: random.Random) -> HiddenTeamDraw:
+        self._validate_known(known)
+        team, receipts = self._draw_known(known, rng)
+        unknown, party_seeds = self._draw_unknown(known, rng)
+        team.extend(unknown)
+        return HiddenTeamDraw(tuple(team), tuple(receipts), tuple(party_seeds),
+            hashlib.sha256(pack_team(tuple(team)).encode()).hexdigest())
+
+    @staticmethod
+    def _validate_known(known):
         if (not isinstance(known, tuple) or len(known) > 6
                 or any(not isinstance(mon, KnownSetTraits) for mon in known)):
             raise ReferenceRefusal("reference requires at most six explicit public species traits")
         seen = {canonical_gen3_randbat_species_id(mon.species) for mon in known}
         if len(seen) != len(known):
             raise ReferenceRefusal("public known species violate the random-battle species clause")
+
+    def _draw_known(self, known, rng):
         team: list[FixturePokemon] = []
         receipts = []
         for traits in known:
             seeds = []
             candidates = []
             genders_assigned = []
-            for _ in range(10):
+            def draw_candidate():
                 assigned_gender = False
                 seed = rng.getrandbits(32)
                 seeds.append(seed)
@@ -261,6 +284,10 @@ class PaperHiddenTeamSampler:
                     assigned_gender = True
                 candidates.append(candidate)
                 genders_assigned.append(assigned_gender)
+                return candidate, assigned_gender
+
+            for _ in range(10):
+                candidate, assigned_gender = draw_candidate()
                 if _matches(candidate, traits, self.set_source):
                     break
             forced = not _matches(candidate, traits, self.set_source)
@@ -276,19 +303,40 @@ class PaperHiddenTeamSampler:
                         candidate, selected_attempt = projected, index+1
                         assigned_gender = genders_assigned[index]
                         break
-                if selected_attempt is None:
+                # Preserve the original ten-draw behavior unless every allowed
+                # projection is incompatible. Fresh proposals remain pinned to
+                # this same public species; no private set/catalog is consulted.
+                while selected_attempt is None and len(seeds) < self.max_known_set_draws:
+                    candidate, assigned_gender = draw_candidate()
+                    if _matches(candidate, traits, self.set_source):
+                        forced = False
+                        break
+                    projected = _force_known_traits(candidate, traits, self.set_source)
+                    evidence = _projection_evidence(projected, traits, self.set_source, len(seeds), seeds[-1])
+                    projection_evidence.append(evidence)
+                    if _matches(projected, traits, self.set_source):
+                        candidate, selected_attempt = projected, len(seeds)
+                        break
+                if forced and selected_attempt is None:
                     error = ReferenceRefusal("bounded forced completion violates public traits/exclusions: "
                         + json.dumps(projection_evidence[-1]["mismatches"], sort_keys=True))
                     error.sampling_diagnostic = {"known_public_traits": asdict(traits), "draw_seeds": seeds,
                         "allow_earlier_compatible_template": self.allow_earlier_compatible_template,
+                        "max_known_set_draws": self.max_known_set_draws,
                         "projection_evidence": projection_evidence}
                     raise error
             team.append(candidate)
             receipts.append(KnownDrawReceipt(traits.species, tuple(seeds), forced,
                 hashlib.sha256(pack_team((candidate,)).encode()).hexdigest(), assigned_gender,
-                selected_attempt, tuple(projection_evidence)))
+                selected_attempt, tuple(projection_evidence), self.max_known_set_draws, len(seeds) > 10))
+        return team, receipts
+
+    def _draw_unknown(self, known, rng):
+        # Unknown completion depends on known SPECIES, never their sampled sets.
+        seen = {canonical_gen3_randbat_species_id(mon.species) for mon in known}
+        team = []
         party_seeds = []
-        while len(team) < 6:
+        while len(team) + len(known) < 6:
             if len(party_seeds) >= 10:
                 raise ReferenceRefusal("unknown-species fresh-party rejection safety cap exceeded")
             seed = rng.getrandbits(32)
@@ -302,7 +350,41 @@ class PaperHiddenTeamSampler:
                 if species not in seen:
                     seen.add(species)
                     team.append(candidate)
-                if len(team) == 6:
+                if len(team) + len(known) == 6:
                     break
-        return HiddenTeamDraw(tuple(team), tuple(receipts), tuple(party_seeds),
-            hashlib.sha256(pack_team(tuple(team)).encode()).hexdigest())
+        return team, party_seeds
+
+    def draw_membership_first(self, known, rng, *, required, check, receipt):
+        """Same accepted joint law, without drawing known sets for rejected parties.
+
+        Conditional on fixed public known traits, original draws factor as
+        K(known sets) U(unknown completion | known species). The necessary
+        membership predicate M depends only on species in U plus fixed known
+        species, so p(K,U | M) = p(K) p(U | M). Reordering independent original
+        seed draws changes the deterministic stream coupling, not this target.
+        No later trait is forced and no source-generated party is modified.
+        Known-set completion errors and native errors still propagate; the
+        original bounded completion remains unchanged for every retained party.
+        """
+        self._validate_known(known)
+        if (not isinstance(required, frozenset) or not required or len(required) > 6
+                or any(not isinstance(s, str) or not s for s in required)):
+            raise ReferenceRefusal('invalid necessary membership-first species predicate')
+        fixed = {canonical_gen3_randbat_species_id(mon.species) for mon in known}
+        for _ in range(2048):
+            check()
+            unknown, seeds = self._draw_unknown(known, rng)
+            receipt['complete_proposals'] += 1
+            check()
+            if not required <= fixed | {canonical_gen3_randbat_species_id(mon.species) for mon in unknown}:
+                receipt['membership_rejections'] += 1
+                continue
+            receipt['matches'] += 1
+            check()
+            team, known_receipts = self._draw_known(known, rng)
+            check()
+            team.extend(unknown)
+            receipt['known_completions_materialized'] += 1
+            return HiddenTeamDraw(tuple(team), tuple(known_receipts), tuple(seeds),
+                hashlib.sha256(pack_team(tuple(team)).encode()).hexdigest())
+        raise ReferenceRefusal('particle necessary membership exhausted fixed original-proposal cap')

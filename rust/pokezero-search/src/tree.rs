@@ -549,6 +549,67 @@ pub(crate) struct Traversal {
     pub end: TraversalEnd,
 }
 
+/// Journal only touched provisional values, not an O(tree-size) clone each
+/// round. Used solely by terminal-policy valuation when its deadline expires.
+pub(crate) struct RoundReservation {
+    decisions: usize,
+    chances: usize,
+    side_two_values: HashMap<(usize, usize), f32>,
+}
+
+impl RoundReservation {
+    pub(crate) fn new(tree: &Tree) -> Self {
+        Self { decisions: tree.decisions.len(), chances: tree.chances.len(),
+            side_two_values: HashMap::new() }
+    }
+
+    /// Called BEFORE any finalize in this round. Chance samples/joint backups
+    /// are therefore untouched; remove all provisional visits and new topology.
+    pub(crate) fn cancel(self, tree: &mut Tree, traversals: &[Traversal]) -> PyResult<()> {
+        for traversal in traversals {
+            for step in &traversal.path {
+                let node = &mut tree.decisions[step.decision];
+                node.visits = node.visits.checked_sub(1).ok_or_else(||
+                    PyValueError::new_err("cancel round: decision reservation missing"))?;
+                node.s1_stats[step.i].visits = node.s1_stats[step.i].visits.checked_sub(1)
+                    .ok_or_else(|| PyValueError::new_err("cancel round: side-one reservation missing"))?;
+                node.s2_stats[step.j].visits = node.s2_stats[step.j].visits.checked_sub(1)
+                    .ok_or_else(|| PyValueError::new_err("cancel round: side-two reservation missing"))?;
+                if !self.side_two_values.contains_key(&(step.decision, step.j)) {
+                    return Err(PyValueError::new_err("cancel round: provisional value journal missing"));
+                }
+            }
+        }
+        // Assign the saved float exactly. Subtracting repeated virtual losses
+        // would round differently and could perturb ties in the surviving tree.
+        for ((node, arm), value) in self.side_two_values {
+            tree.decisions[node].s2_stats[arm].total_value = value;
+        }
+        for node in tree.decisions.iter_mut().take(self.decisions) {
+            node.children.retain(|_, chance| *chance < self.chances);
+        }
+        for chance in tree.chances.iter_mut().take(self.chances) {
+            for branch in &mut chance.branches {
+                if branch.child.is_some_and(|child| child >= self.decisions) {
+                    branch.child = None;
+                }
+            }
+        }
+        tree.decisions.truncate(self.decisions);
+        tree.chances.truncate(self.chances);
+        Ok(())
+    }
+}
+
+pub(crate) fn traverse_cancellable<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
+    tree: &mut Tree, state: &mut State, rng: &mut StdRng, cfg: &MultiPlyConfig,
+    counters: &mut SearchCounters, price: &mut F, journal: &mut RoundReservation,
+) -> Traversal {
+    traverse_inner(tree, state, rng, cfg, counters, price, None,
+        &mut |_, _, _| unreachable!("adversarial traversal has no policy provider"),
+        Some(journal)).expect("adversarial traversal has no fallible policy provider")
+}
+
 /// One selection pass from the root: descend decision nodes by decoupled
 /// per-side PUCT and chance nodes by weighted sampling over the exact branch
 /// probabilities, expanding the first untried joint edge. Applies VIRTUAL
@@ -569,6 +630,7 @@ pub(crate) fn traverse<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
         &mut |_, _, _| {
             unreachable!("adversarial traversal never requests a policy opponent")
         },
+        None,
     )
     .expect("adversarial traversal has no fallible policy provider")
 }
@@ -594,7 +656,7 @@ pub(crate) fn traverse_with_policy_opponent<F: FnMut(&State, &BranchSeam) -> Lea
     provide: &mut OpponentPolicyProvider<'_>,
 ) -> PyResult<Traversal> {
     traverse_inner(
-        tree, state, chance_rng, cfg, counters, price, Some(opponent), provide,
+        tree, state, chance_rng, cfg, counters, price, Some(opponent), provide, None,
     )
 }
 
@@ -608,6 +670,7 @@ fn traverse_inner<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
     price: &mut F,
     mut opponent: Option<&mut crate::policy_opponent::PolicyOpponent>,
     provide: &mut OpponentPolicyProvider<'_>,
+    mut journal: Option<&mut RoundReservation>,
 ) -> PyResult<Traversal> {
     let mut path: Vec<PathStep> = Vec::with_capacity(cfg.max_depth as usize + 1);
     let mut node_idx = 0usize;
@@ -668,6 +731,9 @@ fn traverse_inner<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
         };
         {
             let node = &mut tree.decisions[node_idx];
+            if let Some(journal) = journal.as_deref_mut() {
+                journal.side_two_values.entry((node_idx, j)).or_insert(node.s2_stats[j].total_value);
+            }
             node.visits += 1;
             node.s1_stats[i].visits += 1;
             node.s2_stats[j].visits += 1;
@@ -974,6 +1040,7 @@ fn sample_branch_index(rng: &mut StdRng, branches: &[ChanceBranch]) -> usize {
 fn move_choice_to_choice(side: &Side, mc: &MoveChoice) -> Option<Choice> {
     match mc {
         MoveChoice::Move(index) => Some(side.get_active_immutable().moves[index].choice.clone()),
+        MoveChoice::Struggle => Some(poke_engine::choices::MOVES.get(&poke_engine::choices::Choices::STRUGGLE).unwrap().clone()),
         _ => None,
     }
 }
@@ -1402,6 +1469,123 @@ mod tests {
 
     fn priors_of(stats: &[MoveStats]) -> Vec<f32> {
         stats.iter().map(|s| s.prior).collect()
+    }
+
+    #[test]
+    fn cancellation_restores_exact_values_visits_and_new_child_topology() {
+        let mut root = prior_node(&[1.], &[1.]);
+        root.depth = 0;
+        root.visits = 3;
+        root.s1_stats[0].visits = 3;
+        root.s2_stats[0].visits = 3;
+        root.s1_stats[0].total_value = 0.247;
+        root.s2_stats[0].total_value = 0.247;
+        root.children.insert((0, 0), 0);
+        let old_branch = ChanceBranch {
+            probability: 1., instructions: vec![], value_sum: 0.247, visits: 3,
+            terminal: None, no_expand: false, pending_row: None, child: None,
+            child_self_priors: None, child_opponent_priors: None,
+        };
+        let mut tree = Tree { decisions: vec![root], chances: vec![ChanceNode { branches: vec![old_branch] }],
+            joint_action_visits: Some(Default::default()) };
+        tree.joint_action_visits.as_mut().unwrap().insert((0, 0, 0), 3);
+        let mut journal = RoundReservation::new(&tree);
+        journal.side_two_values.insert((0, 0), 0.247);
+        tree.decisions.push(prior_node(&[1.], &[1.]));
+        tree.chances[0].branches[0].child = Some(1);
+        tree.chances.push(ChanceNode { branches: vec![] });
+        tree.decisions[1].children.insert((0, 0), 1);
+        journal.side_two_values.insert((1, 0), 0.);
+        let mut paths = Vec::new();
+        for _ in 0..2 {
+            for node in &mut tree.decisions {
+                node.visits += 1;
+                node.s1_stats[0].visits += 1;
+                node.s2_stats[0].visits += 1;
+                node.s2_stats[0].total_value += 1.;
+            }
+            paths.push(Traversal { path: vec![
+                PathStep { decision: 0, i: 0, j: 0, chance: 0, branch: Some(0) },
+                PathStep { decision: 1, i: 0, j: 0, chance: 1, branch: None },
+            ], end: TraversalEnd::Expanded });
+        }
+        journal.cancel(&mut tree, &paths).unwrap();
+        assert_eq!(tree.decisions.len(), 1);
+        assert_eq!(tree.chances.len(), 1);
+        let root = &tree.decisions[0];
+        assert_eq!(root.visits, 3);
+        assert_eq!(root.s1_stats[0].visits, 3);
+        assert_eq!(root.s2_stats[0].visits, 3);
+        assert_eq!(root.s1_stats[0].total_value.to_bits(), 0.247_f32.to_bits());
+        assert_eq!(root.s2_stats[0].total_value.to_bits(), 0.247_f32.to_bits());
+        assert_eq!(root.children.get(&(0, 0)), Some(&0));
+        assert_eq!(tree.chances[0].branches[0].child, None);
+        assert_eq!(tree.chances[0].branches[0].visits, 3);
+        assert_eq!(tree.chances[0].branches[0].value_sum, 0.247);
+        assert_eq!(tree.joint_action_visits.unwrap().get(&(0, 0, 0)), Some(&3));
+    }
+
+    #[test]
+    fn cancellation_after_real_traversals_preserves_all_completed_tree_state() {
+        let mut state = crate::parse_state(include_str!("test_fixtures/minimal.state").trim()).unwrap();
+        let before_state = state.serialize();
+        let mut tree = Tree::from_root(&state).unwrap();
+        tree.joint_action_visits = Some(Default::default());
+        let mut rng = StdRng::seed_from_u64(5);
+        let cfg = MultiPlyConfig { max_depth: 4, c_puct: 1.4, deep_ko_split: true,
+            use_opponent_priors: false, fpu_reduction: None };
+        let mut counters = SearchCounters::default();
+        let mut price = |_: &State, _: &BranchSeam| LeafPrice::Ready(0.247);
+        for _ in 0..32 {
+            let traversal = traverse(&mut tree, &mut state, &mut rng, &cfg, &mut counters, &mut price);
+            finalize(&mut tree, &traversal, &[]);
+        }
+        let snapshot = |tree: &Tree| {
+            let decisions: Vec<_> = tree.decisions.iter().map(|node| {
+                let children: std::collections::BTreeMap<_, _> = node.children.iter().map(|(key, value)| (*key, *value)).collect();
+                format!("{:?}", (node.visits, node.depth, &node.s1_options, &node.s2_options,
+                    node.s1_stats.iter().map(|s| (s.visits, s.total_value.to_bits(), s.prior.to_bits())).collect::<Vec<_>>(),
+                    node.s2_stats.iter().map(|s| (s.visits, s.total_value.to_bits(), s.prior.to_bits())).collect::<Vec<_>>(), children))
+            }).collect();
+            let chances: Vec<Vec<_>> = tree.chances.iter().map(|chance| chance.branches.iter().map(|branch|
+                format!("{:?}", (branch.probability, &branch.instructions, branch.value_sum.to_bits(), branch.visits,
+                    branch.terminal, branch.no_expand, branch.pending_row, branch.child,
+                    &branch.child_self_priors, &branch.child_opponent_priors))).collect()).collect();
+            (decisions, chances, tree.joint_action_visits.clone())
+        };
+        let before = snapshot(&tree);
+        let mut journal = RoundReservation::new(&tree);
+        let mut paths = Vec::new();
+        for _ in 0..16 {
+            paths.push(traverse_cancellable(&mut tree, &mut state, &mut rng, &cfg,
+                &mut counters, &mut price, &mut journal));
+        }
+        assert_ne!(snapshot(&tree), before, "fixture must exercise real in-flight reservations");
+        journal.cancel(&mut tree, &paths).unwrap();
+        assert_eq!(snapshot(&tree), before);
+        assert_eq!(state.serialize(), before_state);
+    }
+
+    #[test]
+    fn cancellation_removes_new_root_edges_without_ghost_visits() {
+        let mut tree = Tree { decisions: vec![prior_node(&[1.], &[1.])],
+            chances: vec![], joint_action_visits: None };
+        let mut journal = RoundReservation::new(&tree);
+        journal.side_two_values.insert((0, 0), 0.);
+        tree.decisions[0].visits = 1;
+        tree.decisions[0].s1_stats[0].visits = 1;
+        tree.decisions[0].s2_stats[0].visits = 1;
+        tree.decisions[0].s2_stats[0].total_value = 1.;
+        tree.decisions[0].children.insert((0, 0), 0);
+        tree.chances.push(ChanceNode { branches: vec![] });
+        let traversal = Traversal { path: vec![PathStep {
+            decision: 0, i: 0, j: 0, chance: 0, branch: None,
+        }], end: TraversalEnd::Expanded };
+        journal.cancel(&mut tree, &[traversal]).unwrap();
+        assert!(tree.chances.is_empty());
+        assert!(tree.decisions[0].children.is_empty());
+        assert_eq!(tree.decisions[0].visits, 0);
+        assert_eq!(tree.decisions[0].s2_stats[0].total_value, 0.);
     }
 
     #[test]

@@ -12,6 +12,16 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use serde_json::{json, Value};
 
+/// Only observations delivered by the Gen 3 PRIVATE request protocol. The
+/// environment determines visibility; the side-only constructor receives no
+/// opposing ability. Shadow Tag is known immediately, unlike hidden tryTrap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrivateTrapObservation {
+    None,
+    InitialRequest,
+    RejectedSwitch,
+}
+
 fn refusal(message: &str) -> PyErr {
     PyValueError::new_err(format!("policy opponent request: {message}"))
 }
@@ -115,6 +125,26 @@ pub(crate) fn sampled_side_request_with_pp(
     opponent_replacing: bool,
     base_pp: Option<&HashMap<String, i64>>,
 ) -> PyResult<Value> {
+    sampled_side_request_with_trap(side, slot, species, order, options, max_pp,
+        root, opponent_replacing, base_pp, PrivateTrapObservation::None)
+}
+
+/// Private request-boundary evidence is not a public battle event or an
+/// opposing ability name. InitialRequest is Gen 3's visible trapping request;
+/// RejectedSwitch is supplied ONLY after an attempted switch was rejected.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sampled_side_request_with_trap(
+    side: &Side,
+    slot: &str,
+    species: &[String],
+    order: &[String],
+    options: &[MoveChoice],
+    max_pp: &HashMap<String, i64>,
+    root: bool,
+    opponent_replacing: bool,
+    base_pp: Option<&HashMap<String, i64>>,
+    trap_observation: PrivateTrapObservation,
+) -> PyResult<Value> {
     if slot != "p1" && slot != "p2" {
         return Err(refusal("unknown seat"));
     }
@@ -193,6 +223,13 @@ pub(crate) fn sampled_side_request_with_pp(
     let recharging = side
         .volatile_statuses
         .contains(&PokemonVolatileStatus::MUSTRECHARGE);
+    if trap_observation != PrivateTrapObservation::None && (force_switch || opponent_replacing) {
+        return Err(refusal("trapping observation outside an ordinary move request"));
+    }
+    if trap_observation == PrivateTrapObservation::RejectedSwitch && (recharging
+        || side.active_is_charging_move().is_some()) {
+        return Err(refusal("switch rejection during a hard-locked move request"));
+    }
     if opponent_replacing && !force_switch {
         let commitment_matches = options.len() == 1
             && match options[0] {
@@ -202,6 +239,7 @@ pub(crate) fn sampled_side_request_with_pp(
                         == side.switch_out_move_second_saved_move
                         && side.switch_out_move_second_saved_move != Choices::NONE
                 }
+                MoveChoice::Struggle => side.switch_out_move_second_saved_move == Choices::STRUGGLE,
                 _ => false,
             };
         if !commitment_matches {
@@ -331,12 +369,14 @@ pub(crate) fn sampled_side_request_with_pp(
     } else {
         // Only known own volatiles contribute. Never ask Side::trapped with
         // the real opposing Pokemon (that would reveal hidden trap abilities).
-        let trapped = recharging
+        let trapped = trap_observation != PrivateTrapObservation::None || recharging
             || side.active_is_charging_move().is_some()
             || (root && side.force_trapped)
             || side.trapped(&Pokemon::default());
         if recharging {
             active_moves = vec![json!({"id": "recharge", "move": "recharge", "disabled": false})];
+        } else if options.contains(&MoveChoice::Struggle) && !waiting {
+            active_moves = vec![json!({"id": "struggle", "move": "Struggle", "target": "randomNormal", "disabled": false})];
         }
         request["active"] = json!([{"moves": active_moves, "trapped": trapped}]);
     }
@@ -344,6 +384,8 @@ pub(crate) fn sampled_side_request_with_pp(
     let mut native_legal = HashSet::new();
     for option in options {
         let index = match option {
+            MoveChoice::Struggle if waiting => None,
+            MoveChoice::Struggle => Some(0),
             MoveChoice::Move(_) | MoveChoice::None if waiting => None,
             MoveChoice::Move(index) => Some(
                 index
@@ -492,6 +534,26 @@ mod tests {
     }
     fn pp() -> HashMap<String, i64> {
         [("ember".into(), 40), ("watergun".into(), 40)].into()
+    }
+
+    #[test]
+    fn synthetic_struggle_request_keeps_private_pp_banks_and_live_switches() {
+        let mut state = fixture();
+        state.side_one.get_active().moves.m0.pp = 0;
+        let options = state.root_get_all_options().0;
+        assert!(options.contains(&MoveChoice::Struggle));
+        let result = sampled_side_request(
+            &state.side_one, "p1", &names(), &names(), &options, &pp(), true,
+        ).unwrap();
+        assert_eq!(result["request"]["active"][0]["moves"], json!([
+            {"id": "struggle", "move": "Struggle", "target": "randomNormal", "disabled": false}
+        ]));
+        let indices = result["native_action_indices"].as_array().unwrap();
+        assert!(indices.contains(&json!(0)));
+        assert!(indices.iter().any(|i| i.as_u64().is_some_and(|i| i >= 4)));
+        assert!(indices.iter().all(|i| !i.is_null()));
+        assert_eq!(result["self_move_states"]["charmander"][0]["id"], "ember");
+        assert_eq!(result["self_move_states"]["charmander"][0]["pp"], 0);
     }
     fn bundle(state: &State, order: &[String]) -> PyResult<Value> {
         sampled_side_request(

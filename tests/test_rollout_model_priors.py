@@ -306,6 +306,7 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         row_inputs: str | None = None,
         time_budget_ms: int | None = None,
         position: dict | None = None,
+        arm_priors: bool = False,
         _raw: bool = False,
     ):
         """One encoded search. `mode=None` is PRODUCTION: the seam's positionals
@@ -330,7 +331,7 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
             True,  # early_stop_side_one
             bool(use_opponent_priors),
             None,  # fpu_reduction
-            False,  # arm_priors
+            arm_priors,
         ]
         # The deadline is positioned after the rollout seam. A timed production
         # call therefore materializes the seam's inert defaults so the integer
@@ -988,6 +989,70 @@ class RolloutModelPriorsTest(_EncodedSearchFixture, unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             self._search(mode="rollout", policy="policy")
         self.assertIn("unknown rollout_policy", str(caught.exception))
+
+
+@unittest.skipUnless(_crate_ready, "crate not built with the model feature")
+class ModelTreeHpLeafNativeTests(_EncodedSearchFixture, unittest.TestCase):
+    """The HP pricer changes valuation, not the production model-tree driver."""
+
+    SIMS, SEED, DEPTH, ROLLOUTS, MAX_PLIES = 32, 5, 2, 8, 40
+    _native = RolloutModelPriorsTest._native
+    _search = RolloutModelPriorsTest._search
+    _search_raw_from_args = RolloutModelPriorsTest._search_raw_from_args
+    _differing = RolloutModelPriorsTest._differing
+    _row_inputs_for_slot = RolloutModelPriorsTest._row_inputs_for_slot
+
+    def test_hp_retains_champion_root_priors_and_real_leaf_forwards(self):
+        model = self._search(mode="model_value", use_opponent_priors=False, arm_priors=True)
+        hp = self._search(mode="hp_fraction", use_opponent_priors=False, arm_priors=True)
+        self.assertEqual(hp["model_leaf_override"], "hp_fraction")
+        self.assertTrue(hp["hp_leaf_model_forwards_retained"])
+        self.assertEqual(hp["hp_leaf_value_frame"], "side_one_absolute")
+        self.assertGreater(hp["hp_leaf_rows_priced"], 0)
+        self.assertGreater(hp["model_evals"], hp["hp_leaf_rows_priced"])
+        self.assertEqual(hp["root_priors"], model["root_priors"])
+        for side in ("side_one", "side_two"):
+            self.assertEqual({r["move"]: r["prior"] for r in hp[side]},
+                {r["move"]: r["prior"] for r in model[side]})
+        self.assertNotIn("rollout_leaf_mode", hp)
+        self.assertNotIn("rollouts_run", hp)
+        self.assertNotEqual(hp["root_value"], model["root_value"],
+            "same model tree must actually use HP, not just relabel a model value")
+
+    def test_hp_with_uniform_fixture_priors_matches_the_existing_hp_tree(self):
+        # A cross-driver numerical oracle, not the deployable configuration:
+        # priors off and batch one make the old HP tree the exact reference.
+        hp = self._search(mode="hp_fraction", model_priors=False, use_opponent_priors=False)
+        expected = json.loads(pokezero_search.puct_search_multi(self.position["state_str"],
+            self.SIMS, max_depth=self.DEPTH, c_puct=1.4, seed=self.SEED, deep_ko_split=True))
+        for key in ("root_value", "iterations", "decision_nodes", "chance_nodes", "depth_occupancy"):
+            self.assertEqual(hp[key], expected[key], key)
+        for side in ("side_one", "side_two"):
+            for key in ("move", "visits", "q"):
+                self.assertEqual([r[key] for r in hp[side]], [r[key] for r in expected[side]], (side, key))
+
+    def test_hp_is_side_one_absolute_and_not_reflected_like_model_values(self):
+        p1, p2 = (self._row_inputs_for_slot(slot) for slot in ("p1", "p2"))
+        kwargs = dict(mode="hp_fraction", model_priors=False, use_opponent_priors=False)
+        self.assertEqual(self._differing(self._search(row_inputs=p1, **kwargs),
+            self._search(row_inputs=p2, **kwargs), ignore={"collision_self_side"}), [])
+        model_kwargs = dict(mode="model_value", model_priors=False, use_opponent_priors=False)
+        self.assertNotEqual(self._search(row_inputs=p1, **model_kwargs)["root_value"],
+            self._search(row_inputs=p2, **model_kwargs)["root_value"])
+
+    def test_hp_rollout_knobs_are_inert_and_no_rollouts_are_claimed(self):
+        hp = self._search(mode="hp_fraction")
+        changed = self._search(mode="hp_fraction", rollouts=3, max_plies=7,
+            rollout_seed=992, threads=3)
+        self.assertEqual(self._differing(hp, changed), [])
+
+    def test_hp_uses_the_existing_batched_and_timed_driver(self):
+        hp = self._search(mode="hp_fraction", batch=16, sims=256, time_budget_ms=1)
+        self.assertEqual(hp["model_leaf_override"], "hp_fraction")
+        self.assertTrue(hp["time_budget_enabled"])
+        self.assertEqual(hp["time_budget_ms"], 1)
+        self.assertLessEqual(hp["iterations"], 256)
+        self.assertEqual(hp["hp_leaf_value_frame"], "side_one_absolute")
 
 
 class RolloutModelPriorsConfigTest(unittest.TestCase):

@@ -15,10 +15,12 @@ use serde_json::json;
 
 use crate::events::EventContext;
 use crate::policy_opponent::ActionDistribution;
+use crate::policy_request::PrivateTrapObservation;
 use crate::tree::DecisionNode;
 
 type BranchKey = (usize, usize);
 
+#[derive(Clone)]
 struct PublicPrefix {
     lines: Vec<String>,
     meta: crate::leaf::LeafMeta,
@@ -128,6 +130,41 @@ pub(crate) struct PolicyOpponentBridge {
 }
 
 impl PolicyOpponentBridge {
+    /// Private retained-payload accounting/binding only. Never sent to the
+    /// policy callback, a report, or another process. Includes the exact own
+    /// root, current public prefix and both original/transformed PP banks.
+    pub(crate) fn snapshot_payload(&self, key: BranchKey) -> PyResult<Vec<u8>> {
+        let prefixes = self.prefixes.borrow();
+        let prefix = prefixes.get(&key).ok_or_else(||
+            PyValueError::new_err("visited value: captured public prefix missing"))?;
+        let mut charges: Vec<_> = prefix.own_pp.original_charges.iter().collect();
+        charges.sort_by_key(|(key, _)| *key);
+        let mut transformed: Vec<_> = prefix.own_pp.transformed.iter().collect();
+        transformed.sort();
+        Ok(serde_json::json!({
+            "own_root": self.root_own_side.serialize(), "side_one": self.opponent_side_one,
+            "order": self.root_order, "max_pp": self.max_pp, "base_pp": self.base_pp,
+            "display_species": self.display_ctx.species, "display_turn": self.display_ctx.turn,
+            "hp_percent": self.display_ctx.hp_percent, "lines": prefix.lines,
+            "frontier_meta_debug": format!("{:?}", prefix.meta),
+            "charges": charges, "transformed": transformed, "active": prefix.own_pp.active,
+        }).to_string().into_bytes())
+    }
+
+    /// Isolate one terminal continuation's branch history. Copy ONLY the
+    /// frontier prefix; future siblings must never share mutable PP/history.
+    pub(crate) fn fork_at(&self, key: BranchKey) -> PyResult<Self> {
+        let prefix = self.prefixes.borrow().get(&key).cloned().ok_or_else(||
+            PyValueError::new_err("raw policy terminal: frontier public prefix missing"))?;
+        let fork = Self::new(
+            Python::attach(|py| self.callback.clone_ref(py)), self.opponent_side_one,
+            self.root_order.clone(), self.max_pp.clone(), self.base_pp.clone(),
+            self.root_own_side.clone(), self.display_ctx.clone(),
+        );
+        fork.prefixes.borrow_mut().insert(key, prefix);
+        Ok(fork)
+    }
+
     pub(crate) fn new(
         callback: Py<PyAny>,
         opponent_side_one: bool,
@@ -211,12 +248,37 @@ impl PolicyOpponentBridge {
         Ok(())
     }
 
+    /// A forked terminal continuation has exactly one live prefix, unlike a
+    /// branching search. Drop old copies after recording the next boundary so
+    /// a long continuation does not retain a quadratic history/PP ledger.
+    pub(crate) fn record_linear(
+        &self, parent: BranchKey, key: BranchKey, lines: &[String],
+        ctx: &EventContext, meta: &crate::leaf::LeafMeta,
+    ) -> PyResult<()> {
+        self.record(Some(parent), key, lines, ctx, meta)?;
+        self.prefixes.borrow_mut().retain(|candidate, _| *candidate == key);
+        Ok(())
+    }
+
     pub(crate) fn provide(
         &self,
         state: &State,
         node: &DecisionNode,
         parent: Option<BranchKey>,
+        ctx: &EventContext,
+    ) -> PyResult<ActionDistribution> {
+        self.provide_with_trap(state, node, parent, ctx, PrivateTrapObservation::None)
+    }
+
+    /// Private trapping observations never enter public prefix/PP ledgers.
+    /// Normal policy-opponent search retains its original strict native surface.
+    pub(crate) fn provide_with_trap(
+        &self,
+        state: &State,
+        node: &DecisionNode,
+        parent: Option<BranchKey>,
         _ctx: &EventContext,
+        trap_observation: PrivateTrapObservation,
     ) -> PyResult<ActionDistribution> {
         let started = Instant::now();
         let result = (|| {
@@ -286,7 +348,7 @@ impl PolicyOpponentBridge {
             } else {
                 state.side_one.force_switch
             };
-            let bundle = crate::policy_request::sampled_side_request_with_pp(
+            let bundle = crate::policy_request::sampled_side_request_with_trap(
                 &own,
                 slot,
                 species,
@@ -296,6 +358,7 @@ impl PolicyOpponentBridge {
                 parent.is_none(),
                 opponent_replacing,
                 Some(&self.base_pp),
+                trap_observation,
             )
             .map_err(|error| {
                 Python::attach(|py| {

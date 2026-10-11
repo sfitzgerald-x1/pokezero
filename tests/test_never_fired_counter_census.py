@@ -204,7 +204,37 @@ _CORPUS_TREES = ("reports", "docs")
 # counter census reads the same JSON set as the terminal-disposition register.
 # 406 -> 407: the frozen paper-policy opponent roster adds one tracked selection
 # document, not a measurement. No historical JSON was removed or altered.
-_EXPECTED_COUNTER_ARTIFACTS = 407
+# 407 -> 409: separate current-source HP and raw-terminal integration mutation
+# receipts are added under reports/artifacts/. The base at fccb728b has 407 JSON
+# paths; these two additions remove or rewrite none of its historical evidence.
+# Stage the new receipt before running this tracked-corpus census. Each battery
+# is held to its recorded source bytes by its dedicated mutation-evidence guard.
+# 409 -> 410: one distinct current-source citation supplement binds the unchanged
+# C153/C154 snapshots; no historical pool, measurement, or verdict is rewritten.
+# 410 -> 411: preserve all 410 prior JSON bytes, including the first current
+# supplement; retain the pre-review raw-redecision binding and add the distinct
+# reviewed binding after the final witness-conservation correction.
+# 412 -> 413: a distinct current terminal-register metadata binding; all prior
+# measurements and the historical C155 register remain byte-identical.
+# 413 -> 414: a new create-only citation snapshot for strict-refusal diagnostics;
+# all previous citation/measurement snapshots remain immutable. Only the exact
+# nonmeasurement current terminal binding is explicitly refreshed to this corpus.
+# 414 -> 415: a distinct fresh current-tree mutation battery; the three earlier
+# batteries retain their exact bytes. This changes the inventory, not a witness
+# count, measurement, source-pool disposition or scientific admission.
+# 415 -> 416: add one distinct current-source public-prefix citation supplement;
+# historical measurements and every previous supplement retain their bytes.
+# Refresh only the explicitly scoped current terminal-register metadata binding.
+# 416 -> 417: a full isolated callback-diagnostics mutation sweep adds distinct
+# current-byte evidence; all four earlier mutation artifacts remain unchanged.
+# Refresh only the explicit current nonmeasurement source binding.
+# 417 -> 418: re-derived against a1e0bc73 using the exact tracked JSON selector.
+# The sole addition is rollout_leaf_witness_mutation_battery_20261011_native_diagnostics.json;
+# nothing was removed. The sole modified existing JSON is the explicit current
+# nonmeasurement terminal binding: new artifact hash, inventory count and test hash.
+# All prior corpus entries, measurement facts, statuses and historical evidence
+# remain unchanged.
+_EXPECTED_COUNTER_ARTIFACTS = 418
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

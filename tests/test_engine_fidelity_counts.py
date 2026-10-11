@@ -78,7 +78,7 @@ class Second(unittest.TestCase):
             "tests.test_policy_opponent_native.NativePolicyOpponentSearchTest",
             "tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest",
         )
-        self.assertEqual(sum(scanner._target_methods(target) for target in targets), 54)
+        self.assertEqual(sum(scanner._target_methods(target) for target in targets), 57)
 
     def test_legacy_workflow_scanner_refuses_invalid_class_method_selection(self):
         from tests.test_unreachable_readjudication import EveryWorkflowTestCountGuardMatchesItsModuleTests as scanner

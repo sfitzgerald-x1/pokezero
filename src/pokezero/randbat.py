@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 import hashlib
 import itertools
 import json
@@ -11,7 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import threading
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import AbstractSet, Any, Iterable, Mapping, Optional, Sequence
 
 from .belief import CandidateSetSummary
 from .paths import portable_path
@@ -169,6 +170,24 @@ class RandbatSourceMetadata:
         path. The absolute form that reaches a tracked artifact comes from a cache file written
         BEFORE that was added. Relativizing here makes the serialized form independent of both.
         """
+        # Only exact immutable built-ins enter the bounded cache. Custom conversions,
+        # dataclass subclasses and wrong-typed fields retain asdict/deepcopy behavior.
+        # Cache immutable items, never the mutable mapping copied into each belief.
+        if type(self) is not RandbatSourceMetadata:
+            return RandbatSourceMetadata._portable_payload_uncached(self)
+        values = (self.format_id, self.generation, self.showdown_root,
+                  self.sets_path, self.generator_path, self.source_hash)
+        if (
+            type(self.generation) is int
+            and self.generation.bit_length() <= 64
+            and all(value is None or (type(value) is str and len(value) <= 4096)
+                    for index, value in enumerate(values) if index != 1)
+        ):
+            return dict(_portable_metadata_items(values))
+        return RandbatSourceMetadata._portable_payload_uncached(self)
+
+    def _portable_payload_uncached(self) -> dict[str, Any]:
+        """Original serializer, including custom input and deep-copy semantics."""
         payload = asdict(self)
         root = self.showdown_root
         for key in ("sets_path", "generator_path"):
@@ -234,6 +253,12 @@ class RandbatSourceMetadata:
         return payload
 
 
+@lru_cache(maxsize=128)
+def _portable_metadata_items(values: tuple[Any, ...]) -> tuple[tuple[str, Any], ...]:
+    """Portable source identity only; bounded keys and immutable cached outputs."""
+    return tuple(RandbatSourceMetadata(*values)._portable_payload_uncached().items())
+
+
 @dataclass(frozen=True)
 class Gen3RandbatVariant:
     variant_id: str
@@ -254,7 +279,15 @@ class Gen3RandbatVariant:
         ruled_out_abilities: Sequence[str] = (),
         ruled_out_items: Sequence[str] = (),
     ) -> bool:
-        normalized_moves = {_normalize_move(move) for move in self.moves}
+        # Read once, as the original comprehension did. Bind current immutable
+        # values rather than variant identity: even frozen fields may be forced
+        # to change. Noncanonical/custom inputs retain original conversion order.
+        moves = self.moves
+        if (type(self) is Gen3RandbatVariant and type(moves) is tuple and len(moves) <= 4
+                and all(type(move) is str and len(move) <= 128 for move in moves)):
+            normalized_moves = _normalized_variant_move_set(moves)
+        else:
+            normalized_moves = {_normalize_move(move) for move in moves}
         if any(not _revealed_move_matches_variant(move, normalized_moves) for move in revealed_moves):
             return False
         if _normalize_id(self.ability) in {_normalize_id(ability) for ability in ruled_out_abilities}:
@@ -1056,7 +1089,18 @@ def _stab_only_via_hidden_power(
     return bool(eligible) and all(move_id.startswith("hiddenpower") for move_id in eligible)
 
 
-def _revealed_move_matches_variant(revealed_move: str, normalized_variant_moves: set[str]) -> bool:
+@lru_cache(maxsize=2048)
+def _normalized_variant_move_set(moves: tuple[str, ...]) -> frozenset[str]:
+    """Bounded exact-string move derivation, never a query/source/belief cache.
+
+    Only matches()'s guarded canonical values enter this cache. It may retain
+    caller-supplied plain move strings, not exclusively a public catalog.
+    Immutable results cannot be poisoned by another match or a branch clone.
+    """
+    return frozenset(_normalize_move(move) for move in moves)
+
+
+def _revealed_move_matches_variant(revealed_move: str, normalized_variant_moves: AbstractSet[str]) -> bool:
     normalized = _normalize_move(revealed_move)
     if normalized == "hiddenpower":
         return any(move.startswith("hiddenpower") for move in normalized_variant_moves)
@@ -1229,8 +1273,20 @@ def _hidden_power_type_name(value: str) -> str:
     return normalized[:1].upper() + normalized[1:]
 
 
+@lru_cache(maxsize=4096)
+def _normalize_plain_text(value: str) -> str:
+    """Memoize only short exact strings, never battle state or source objects."""
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
 def _normalize_id(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value).lower())
+    # Keep conversion outside the cache: callers may supply an unhashable object,
+    # dynamic __str__, or a str subclass with observable lower() behavior. Long
+    # strings bypass it so both entry count and retained text size are bounded.
+    text = str(value)
+    if type(text) is str and len(text) <= 128:
+        return _normalize_plain_text(text)
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
 
 
 _SOURCE_CACHE: dict[tuple[Path, tuple[tuple[str, int, int], ...]], "Gen3RandbatSource"] = {}

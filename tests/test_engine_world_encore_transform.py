@@ -1037,15 +1037,13 @@ class CopiedMovesetLivePpTests(unittest.TestCase):
              for move in ("bodyslam", "healbell", "wish", "protect")],
         )
 
-    def test_a_drained_copy_leaves_the_engine_no_move(self) -> None:
-        """The link to #1202, asserted at the engine rather than argued.
+    def test_a_drained_copy_offers_synthetic_struggle_with_or_without_a_bench(self) -> None:
+        """A drained copied moveset offers Struggle, not an idle action.
 
-        #1202 translates the crate's forced-no-move token onto the request's
-        substituted ``struggle``. Reaching that gate needs the built world to
-        drive ``get_all_options`` to its terminal ``options.len() == 0`` push:
-        ``add_available_moves`` contributes nothing (every copied slot disabled)
-        AND ``add_switches`` contributes nothing (the fixture's only bench mon is
-        fainted). Both halves are separated below.
+        The pinned synthetic-Struggle patch adds that action before switches.
+        The historical #1202 No Move translation remains a compatibility path,
+        but it is not the current engine's representation of a living active
+        with no usable moves. Separate the no-bench and live-bench cases below.
         """
 
         def move_choices(payload, *, bench: bool):
@@ -1066,18 +1064,16 @@ class CopiedMovesetLivePpTests(unittest.TestCase):
             move_choices(self._payload_all_usable(), bench=False),
             {"bodyslam", "healbell", "wish", "protect"},
         )
-        # Drained, no live bench: the engine has nothing, which is the token
-        # `_map_choices` resolves onto the request's `struggle`.
+        # Drained, no live bench: only the synthetic action is usable.
         self.assertEqual(
             move_choices(self._struggle_only(self._payload_unencored()), bench=False),
-            {"No Move"},
+            {"struggle"},
         )
-        # Drained WITH a live bench: the switch is enumerated, so the request
-        # offers `['struggle', 'switch:...']` and this is not the class.
-        self.assertNotIn(
-            "No Move",
-            move_choices(self._struggle_only(self._payload_unencored()), bench=True),
-        )
+        # Drained WITH a live bench: Struggle must survive alongside the switch.
+        choices = move_choices(self._struggle_only(self._payload_unencored()), bench=True)
+        self.assertIn("struggle", choices)
+        self.assertNotIn("No Move", choices)
+        self.assertTrue(any(choice.startswith("switch") for choice in choices), choices)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -62,11 +62,15 @@ jobs:
             reports/artifacts/c154_unreachable_readjudication.json
             scripts/c154_unreachable_readjudication.py
             tests/test_unreachable_readjudication.py
+            scripts/current_census_citations.py
+            reports/artifacts/current_census_citations_*.json
             reports/c138_known_gaps_ledger.md
             tests/test_ledger_table_uniformity.py
             reports/artifacts/c150_band_split_trade_census.json
             reports/c155_terminal_disposition_register.md
             tests/test_terminal_disposition_register.py
+            scripts/current_terminal_register.py
+            reports/artifacts/current_terminal_register_20261010.json
             tests/test_transform_forme_ident.py
             reports/artifacts/c131_leechseed_main_dev_sweep.json
             reports/artifacts/c131_leechseed_main_holdout_sweep.json
@@ -114,6 +118,7 @@ jobs:
             tests/test_leaf_encoder.py
             tests/test_roll_enumeration_scope.py
             src/pokezero/engine_search.py
+            src/pokezero/randbat.py
             src/pokezero/policy_opponent*.py
             src/pokezero/foulplay_bridge.py
             scripts/foulplay_paired_eval.py
@@ -125,9 +130,23 @@ jobs:
             scripts/mcts_acceptance_h2h.py
             scripts/price_uniform_rollout_leaves.py
             scripts/mutate_rollout_leaf_witness.py
+            scripts/qualify_search_over_raw*.py
+            scripts/benchmark_search_over_raw*.py
+            scripts/diagnose_search_over_raw*.py
+            scripts/profile_search_over_raw*.py
+            scripts/calibrate_search_over_raw_joint.py
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
+            reports/artifacts/rollout_leaf_witness_mutation_battery_*.json
+            tests/test_search_over_raw*.py
+            tests/test_incumbent_value_diagnostics.py
+            tests/test_randbat_normalization.py
+            tests/test_randbat_metadata_cache.py
             tests/test_model_priors_search.py
             tests/test_policy_opponent*.py
+            tests/test_raw_policy_leaf_native.py
+            tests/test_native_visited_value.py
+            tests/test_native_searched_line.py
+            tests/test_model_tree_raw_leaf_contract.py
             tests/test_paper_reference*.py
             tests/test_mcts_eval_timing_corpus.py
             tests/test_engine_fidelity_counts.py
@@ -563,8 +582,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_unreachable_readjudication -v 2>&1 \
             | tee /tmp/c154readj.log
-          if ! grep -qE 'Ran 38 tests' /tmp/c154readj.log; then
-            echo "::error::expected 38 re-adjudication pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 46 tests' /tmp/c154readj.log; then
+            echo "::error::expected 46 re-adjudication pins; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/c154readj.log; then
@@ -591,8 +610,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_terminal_disposition_register -v 2>&1 \
             | tee /tmp/c155register.log
-          if ! grep -qE 'Ran 53 tests' /tmp/c155register.log; then
-            echo "::error::expected 53 register pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 61 tests' /tmp/c155register.log; then
+            echo "::error::expected 61 register pins; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/c155register.log; then
@@ -720,8 +739,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_engine_world_encore_last_used -v 2>&1 \
             | tee /tmp/encorelastused.log
-          if ! grep -qE 'Ran 23 tests' /tmp/encorelastused.log; then
-            echo "::error::expected 23 tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 24 tests' /tmp/encorelastused.log; then
+            echo "::error::expected 24 tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE 'OK \(skipped=5\)' /tmp/encorelastused.log; then
@@ -922,6 +941,20 @@ jobs:
             exit 1
           fi
 
+      - name: Synthetic Struggle executes through the fresh native option and event APIs
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_native_synthetic_struggle -v 2>&1 \
+            | tee /tmp/synthetic-struggle.log
+          if ! grep -qE '^Ran 3 tests' /tmp/synthetic-struggle.log; then
+            echo "::error::expected exactly 3 synthetic Struggle tests"
+            exit 1
+          fi
+          if ! grep -qE '^OK$' /tmp/synthetic-struggle.log; then
+            echo "::error::synthetic Struggle tests failed or skipped against the fresh module"
+            exit 1
+          fi
+
       - name: Rollout-leaf arbiter and FoulPlay calibration contracts run on the model wheel
         env:
           POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
@@ -945,8 +978,8 @@ jobs:
             tests.test_foulplay_budget_calibration \
             tests.test_battle_bridge_boundary_requests -v 2>&1 \
             | tee /tmp/rollout-leaf-arbiter.log
-          if ! grep -qE 'Ran 381 tests' /tmp/rollout-leaf-arbiter.log; then
-            echo "::error::the arbiter, V1 conversion, and calibration suite did not run all 381 tests"
+          if ! grep -qE 'Ran 388 tests' /tmp/rollout-leaf-arbiter.log; then
+            echo "::error::the arbiter, HP model-tree leaves, V1 conversion, and calibration suite did not run all 388 tests"
             exit 1
           fi
           rollout_leaf_skip_status=0
@@ -977,9 +1010,11 @@ jobs:
             tests.test_policy_opponent_view tests.test_policy_opponent_request \
             tests.test_policy_opponent_profile tests.test_policy_opponent_refusal_repairs \
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
-            tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
+            tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest \
+            tests.test_raw_policy_leaf_native tests.test_native_visited_value \
+            tests.test_native_searched_line -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 83 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 105 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"
@@ -991,6 +1026,21 @@ jobs:
             --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/policy-opponent-bridge.log
           grep -qE '^test result: ok\. 7 passed; 0 failed' /tmp/policy-opponent-bridge.log
+          LIBTORCH_USE_PYTORCH=1 \
+            cargo test --release --features model --lib raw_policy_leaf::tests \
+            --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/raw-policy-leaf.log
+          grep -qE '^test result: ok\. 17 passed; 0 failed' /tmp/raw-policy-leaf.log
+          LIBTORCH_USE_PYTORCH=1 \
+            cargo test --release --features model --lib visited_value::tests \
+            --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/native-visited-value.log
+          grep -qE '^test result: ok\. 7 passed; 0 failed' /tmp/native-visited-value.log
+          LIBTORCH_USE_PYTORCH=1 \
+            cargo test --release --features model --lib tree::tests::cancellation_ \
+            --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/raw-policy-cancellation.log
+          grep -qE '^test result: ok\. 3 passed; 0 failed' /tmp/raw-policy-cancellation.log
 
       - name: Paper trajectory reference contracts on the model wheel
         env:
@@ -1003,14 +1053,47 @@ jobs:
           python -m unittest \
             tests.test_paper_reference tests.test_paper_reference_exchange \
             tests.test_paper_reference_parallel tests.test_paper_reference_factory \
-            tests.test_paper_reference_sampler tests.test_paper_reference_rest \
+            tests.test_paper_reference_sampler tests.test_paper_reference_rest tests.test_paper_reference_items tests.test_paper_reference_encore tests.test_paper_reference_sleep \
             tests.test_paper_reference_showdown tests.test_battle_bridge_boundary_requests \
-            tests.test_mcts_eval_timing_corpus -v 2>&1 \
+            tests.test_mcts_eval_timing_corpus tests.test_followthrough \
+            tests.test_wider_search tests.test_paper_reference_turn_clocks tests.test_paper_reference_trace -v 2>&1 \
             | tee /tmp/paper-reference.log
-          grep -qE 'Ran 109 tests' /tmp/paper-reference.log
+          grep -qE 'Ran 182 tests' /tmp/paper-reference.log
           grep -qE '^OK$' /tmp/paper-reference.log
           if grep -qE '^OK \(.*skipped=' /tmp/paper-reference.log; then
             echo "::error::the paper trajectory reference contracts must not skip"
+            exit 1
+          fi
+
+      - name: Prospective search over raw harness contracts
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+          PYTHONPATH: src:scripts:tests
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          set -o pipefail
+          python -m unittest \
+            tests.test_search_over_raw tests.test_search_over_raw_source \
+            tests.test_search_over_raw_ledger tests.test_prepare_search_over_raw \
+            tests.test_search_over_raw_adapters tests.test_search_over_raw_opening \
+            tests.test_search_over_raw_archive tests.test_search_over_raw_leaves \
+            tests.test_search_over_raw_oracle tests.test_model_tree_hp_leaf_contract \
+            tests.test_model_tree_raw_leaf_contract tests.test_search_over_raw_synthetic \
+            tests.test_search_over_raw_callback_profile tests.test_randbat_normalization \
+            tests.test_search_over_raw_statistics tests.test_search_over_raw_validation \
+            tests.test_search_over_raw_feasibility tests.test_search_over_raw_midgame_profile \
+            tests.test_randbat_metadata_cache tests.test_policy_opponent_diagnostics \
+            tests.test_search_over_raw_atomic_round tests.test_policy_opponent_prefix \
+            tests.test_belief_event_dispatch tests.test_search_over_raw_belief_diagnostics \
+            tests.test_search_over_raw_a1 tests.test_search_over_raw_a1_exploration \
+            tests.test_search_over_raw_collection_amendment tests.test_search_over_raw_value_diagnostics \
+            tests.test_incumbent_value_diagnostics -v 2>&1 \
+            | tee /tmp/search-over-raw.log
+          grep -qE 'Ran 535 tests' /tmp/search-over-raw.log
+          grep -qE '^OK$' /tmp/search-over-raw.log
+          if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
+            echo "::error::the prospective harness contracts must not skip"
             exit 1
           fi
 

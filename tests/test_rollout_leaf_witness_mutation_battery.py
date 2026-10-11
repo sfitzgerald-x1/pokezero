@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -40,7 +41,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery.json"
+ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261011_native_diagnostics.json"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import mutate_rollout_leaf_witness as harness  # noqa: E402
@@ -65,6 +66,32 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
             [entry["name"] for entry in self.doc["controls"]],
             [name for name, _required, _edits in harness.CONTROLS],
         )
+
+    def test_historical_battery_is_preserved_without_relabeling(self) -> None:
+        historical = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery.json"
+        self.assertEqual(_sha256(historical),
+            "de99eed67b6570ba37c10584a470ab2416d738d672de86be9fad9e8d6fb4a3cc")
+        hp = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261010_hp.json"
+        self.assertEqual(_sha256(hp),
+            "b33c8d9168739f342f10b34eb71e1819a6a5a2e574f29ddbcafe17d435e3e344")
+        raw = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261010_raw.json"
+        self.assertEqual(_sha256(raw),
+            "8b22658e0914fbe92fcaead95d7d06c00ca167c54e992718c1cb9c79bae1d8f7")
+        prior_current = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261010_current.json"
+        self.assertEqual(_sha256(prior_current),
+            "bb27f6d122c36b5081e008d691a0666287dd5051055c6d101c23cbfc3beff584")
+        callback = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261010_callback_diagnostics.json"
+        self.assertEqual(_sha256(callback),
+            "f16b0f6fbd08ec16a6cf700eb20fabff865060bac0f48f137d4bdf64d6d7eddd")
+
+    def test_isolated_native_path_survives_while_this_source_stays_first(self) -> None:
+        source = str(ROOT / "src")
+        supplied = os.pathsep.join(["/fixture/sibling/src", "/fixture/native/packages", source])
+        with mock.patch.dict(os.environ, {"PYTHONPATH": supplied}):
+            env = harness._killer_environment()
+        self.assertEqual(env["PYTHONPATH"].split(os.pathsep),
+            [source, "/fixture/sibling/src", "/fixture/native/packages"])
+        self.assertEqual(env["PYTHONDONTWRITEBYTECODE"], "1")
 
     def test_missing_pytest_refuses_before_the_harness_can_mutate_targets(self) -> None:
         """A runner dependency failure is an instrument failure, never a verdict."""

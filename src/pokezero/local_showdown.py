@@ -46,6 +46,7 @@ from .showdown import (
     normalize_for_player,
     observation_from_player_state,
     showdown_choice_for_action,
+    showdown_choices_for_request,
 )
 from .investment import InvestmentLiveTracker
 from .paths import portable_path
@@ -398,21 +399,46 @@ class PublicBattleMaterializationState:
     self_request: Mapping[str, Any]
     self_move_states: Mapping[str, tuple[Mapping[str, Any], ...]] = field(default_factory=dict)
     self_initial_request: Mapping[str, Any] = field(default_factory=dict)
+    # An ordinary PP snapshot predates the Hyper Beam use when the next request
+    # contains only Recharge. This certificate carries the public use/target,
+    # not the true target's hidden ability or an oracle PP count. Pressure cost
+    # is conditioned on the target in each sampled world.
+    self_recharge_pp_charge: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def deferred_opponent_action_player(self) -> PlayerId | None:
         """Return the opponent whose committed move must resolve after this switch.
 
-        A Baton Pass forced switch interrupts a simultaneous turn after the opponent has already
-        committed an action. Its identity is hidden, but the pending action itself is public
-        timing information and must be sampled into a direct search world.
+        A fast Baton Pass interrupts before the opponent's committed action.
+        A slow Baton Pass (or an opponent's prior switch/cant/cancellation) does
+        not: that action has already resolved. Classify using current-turn PUBLIC
+        events, never the opponent's private choice or the simulator's queue.
         """
 
         if _request_materialization_kind(self.self_request) != "force-switch":
             return None
         if self.player_id not in self.replay.pending_baton_pass:
             return None
-        return "p2" if self.player_id == "p1" else "p1"
+        opponent = "p2" if self.player_id == "p1" else "p1"
+        current_round = []
+        for event in reversed(getattr(self.replay, 'public_events', ())):
+            if event.raw_line.startswith('|turn|'):
+                break
+            current_round.append(event.raw_line)
+        current_round.reverse()
+        # Only an action before the unresolved actor Baton Pass can consume
+        # this turn's commitment. Earlier-turn actions do not count.
+        baton_indices = [i for i,line in enumerate(current_round)
+            if line.startswith('|move|' + self.player_id + 'a:')
+            and len(line.split('|')) >= 4 and line.split('|')[3] == 'Baton Pass']
+        if baton_indices:
+            from .public_action_capture import public_action_identifiers_from_protocol_lines
+            before = current_round[:baton_indices[-1]]
+            actions = public_action_identifiers_from_protocol_lines(
+                before, cancellation_players=(opponent,))
+            if opponent in actions:
+                return None
+        return opponent
 
 
 class LocalShowdownEnv:
@@ -563,6 +589,15 @@ class LocalShowdownEnv:
         if not isinstance(rows, list) or len(rows) != 6 or not all(isinstance(row, Mapping) for row in rows):
             raise LocalShowdownError(f"Bridge emitted malformed scenario team: {event!r}")
         return tuple(_json_clone_mapping(row) for row in rows)
+
+    def generate_unknown_membership(self, *, seeds, known, required, max_proposals, budget_ms):
+        """Bounded original complete-party rejection inside the stateless bridge."""
+        if self._process is None or self._process.poll() is not None:
+            self.reset(seed=seeds[0])
+        return self._bridge_request_event(
+            dict(type="reference_unknown_membership", seeds=list(seeds), known=list(known),
+                 required=list(required), maxProposals=max_proposals, budgetMs=budget_ms),
+            "reference_unknown_membership")
 
     def generate_reference_set(self, *, seed: int, species: str) -> Mapping[str, Any]:
         """One exact pinned Gen 3 server set for a known species, not a cached variant.
@@ -755,6 +790,9 @@ class LocalShowdownEnv:
                 initial_request=self._first_requests.get(player) or request,
             ),
             self_initial_request=_json_clone_mapping(self._first_requests.get(player) or request),
+            self_recharge_pp_charge=_reference_recharge_pp_charge(
+                replay, player, request, self._request_history[player],
+            ),
         )
 
     def materialize_public_world(
@@ -766,11 +804,33 @@ class LocalShowdownEnv:
         deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
         deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
         reference_rest_sleep: bool = False,
+        reference_consumed_items: bool = False,
+        reference_encore_durations: Mapping[str, int] | None = None,
+        reference_induced_sleep: Mapping[str, Mapping[str, int]] | None = None,
+        reference_turn_clocks: bool = False,
+        reference_attract: bool = False,
+        reference_yawn: bool = False,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
         if not isinstance(reference_rest_sleep, bool):
             raise LocalShowdownError("Reference Rest opt-in must be boolean.")
+        if not isinstance(reference_consumed_items, bool):
+            raise LocalShowdownError("Reference consumed-item opt-in must be boolean.")
+        if type(reference_turn_clocks) is not bool:
+            raise LocalShowdownError("Reference turn-clock opt-in must be boolean.")
+        if type(reference_attract) is not bool:
+            raise LocalShowdownError("Reference Attract opt-in must be boolean.")
+        if type(reference_yawn) is not bool:
+            raise LocalShowdownError("Reference Yawn opt-in must be boolean.")
+        if reference_yawn and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference Yawn requires Gen 3.")
+        if reference_attract and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference Attract requires Gen 3.")
+        if reference_turn_clocks and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference turn clocks require Gen 3.")
+        if reference_consumed_items and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference consumed items require Gen 3.")
         if reference_rest_sleep and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
             raise LocalShowdownError("Reference Rest requires the Gen 3 public ledger.")
         if reference_rest_sleep and state.observation_format_id == "gen3customgame":
@@ -787,10 +847,23 @@ class LocalShowdownEnv:
                 "type": "materialize",
                 "battleId": self._battle_token,
                 "referenceRestSleep": reference_rest_sleep,
+                "referenceInducedSleep": dict(reference_induced_sleep) if reference_induced_sleep is not None else None,
+                "referenceRulesFormat": state.observation_format_id if reference_induced_sleep is not None else None,
+                "referenceConsumedItems": reference_consumed_items,
+                "referenceTurnClocks": reference_turn_clocks,
+                "referenceAttract": reference_attract,
+                "referenceYawn": reference_yawn,
+                "referenceEncoreDurations": dict(reference_encore_durations) if reference_encore_durations is not None else None,
                 "publicState": _public_materialization_payload(
                     state,
                     deferred_opponent_actions=deferred_opponent_actions,
                     deferred_opponent_action_priors=deferred_opponent_action_priors,
+                    reference_consumed_items=reference_consumed_items,
+                    reference_encore=reference_encore_durations is not None,
+                    reference_induced_sleep=reference_induced_sleep is not None,
+                    reference_turn_clocks=reference_turn_clocks,
+                    reference_attract=reference_attract,
+                    reference_yawn=reference_yawn,
                 ),
             },
             "materialized",
@@ -801,6 +874,8 @@ class LocalShowdownEnv:
         direct_requests = _json_clone_requests(requests)
         if not direct_requests:
             raise LocalShowdownError("Direct materialization produced no actionable request boundary.")
+        if reference_turn_clocks:
+            _validate_reference_actor_request(direct_requests.get(state.player_id), state.self_request)
         # The bridge rebuilds its team in active-first order to construct the sampled world.  Its
         # generated actor request can therefore reorder the player's own party tokens even though
         # the player-visible request at this decision boundary is already known.  Keep that exact
@@ -1072,6 +1147,42 @@ class LocalShowdownEnv:
         )
         self._restore_local_snapshot_state(snapshot)
 
+    def observe_search_snapshot(
+        self, snapshot: LocalShowdownSnapshot, player: PlayerId,
+    ) -> PokeZeroObservationV0:
+        """Encode an owned hypothetical snapshot without restoring native state.
+
+        The observation is entirely a projection of the paired Python request,
+        parser, belief and annotation state. Use an isolated projection shell so
+        neither the current native battle nor its Python side is changed. This
+        is NOT a live opponent observation API: only an existing sampled search
+        environment and a resident, same-format search snapshot are eligible.
+        A subsequent native transition must still restore the retained handle.
+        """
+        if self._battle_token is None or not self._search_snapshot_permitted:
+            raise LocalShowdownError('Snapshot observations require a sampled search world.')
+        if not isinstance(snapshot, LocalShowdownSnapshot):
+            raise ValueError('Snapshot observation requires a paired search snapshot.')
+        snapshot_id = snapshot.bridge_snapshot.get('snapshot_id')
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ValueError('Snapshot observation requires a bridge-resident search handle.')
+        if (snapshot.format_id != self._format_id
+                or snapshot.observation_format_id != self._observation_format_id):
+            raise ValueError('Snapshot observation format differs from this battle.')
+        if player not in requested_players_from_requests(snapshot.latest_requests):
+            raise ValueError('Snapshot observation player has no retained actionable request.')
+        # Deliberately do not copy bridge/process/queue resources. All mutable
+        # parser, belief and tracker state is cloned by the existing paired
+        # restore routine. Immutable config and pinned set source are shared.
+        projection = object.__new__(LocalShowdownEnv)
+        projection.config = self.config
+        projection._process = None
+        projection._belief_set_source = self._belief_set_source
+        projection._battle_token = snapshot.battle_token
+        projection._search_snapshot_permitted = False
+        projection._restore_local_snapshot_state(snapshot)
+        return projection.observe(player)
+
     def step_from_search_snapshot(
         self,
         snapshot: LocalShowdownSnapshot,
@@ -1114,6 +1225,7 @@ class LocalShowdownEnv:
         actions: Mapping[PlayerId, int],
         *,
         observation_players: tuple[PlayerId, ...] | None = None,
+        chance_seed: int | None = None,
     ) -> StepResult:
         if self._battle_token is None:
             raise LocalShowdownError("Cannot restore before reset.")
@@ -1129,6 +1241,7 @@ class LocalShowdownEnv:
         snapshot_id = snapshot.bridge_snapshot.get("snapshot_id")
         if not isinstance(snapshot_id, str) or not snapshot_id:
             raise ValueError("LocalShowdownSnapshot does not contain a bridge-resident search handle.")
+        seed = None if chance_seed is None else showdown_seed_from_int(chance_seed)
 
         # Choice conversion uses only the public snapshot paired with this sampled world. Do not
         # read the current search shell, which may hold a branch from a prior root visit.
@@ -1155,9 +1268,30 @@ class LocalShowdownEnv:
                 "battleId": self._battle_token,
                 "snapshotId": snapshot_id,
                 "choices": choices,
+                **({"seed": seed} if seed is not None else {}),
             },
             root_puct_branch_step=True,
             observation_players=observation_players,
+        )
+
+    def step_from_search_snapshot_for_conditioning(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+        *,
+        chance_seed: int,
+    ) -> StepResult:
+        """Replay one hypothetical chance trial without projecting unused observations.
+
+        Restore, explicit reseed, and choice submission share one bridge exchange.
+        The public parser, requests, rewards, and terminal state still advance normally;
+        callers can observe either player afterward. This is transport-only: callers
+        own the chance draws, retry limits, public-history predicate, and deadline.
+        """
+        if chance_seed is None:
+            raise ValueError("Conditioning requires an explicit chance seed.")
+        return self._step_from_search_snapshot(
+            snapshot, actions, observation_players=(), chance_seed=chance_seed,
         )
 
     def release_search_snapshot(self, snapshot: LocalShowdownSnapshot) -> bool:
@@ -1180,6 +1314,155 @@ class LocalShowdownEnv:
         if not isinstance(released, bool):
             raise LocalShowdownError(f"Bridge emitted malformed search snapshot release event: {event!r}")
         return released
+
+    def conditioning_batch_from_search_snapshot(
+        self,
+        snapshot: LocalShowdownSnapshot,
+        actions: Mapping[PlayerId, int],
+        *,
+        chance_seeds: Sequence[int],
+        expected_history: Sequence[str],
+        deadline_at: float,
+        fixed_pool: bool = False,
+        trace_chance: bool = False,
+        auxiliary_trace_only: bool = False,
+    ) -> Mapping[str, Any]:
+        """Try a bounded ordered prefix of explicit seeds in one bridge exchange.
+
+        This opt-in API does not draw RNG or change retry limits. The caller must
+        consume only the returned number of seeds and check its original deadline
+        before accepting a world. Every rejection is independently checked with
+        the production parser; an uncertain bridge projection stops, never skips,
+        a trial. Only the final consumed trial changes Python's hypothetical state.
+        No live battle is permitted and no observations are eagerly constructed.
+        With explicit ``fixed_pool=True``, process all 1..32 declared trials,
+        never stop at a match, and return every authoritative prefix-match index.
+        A censored pool is not a likelihood estimate and must not be accepted.
+        An explicit single auxiliary trace may leave Python's paired shell
+        untouched: its hints are not a world, observation likelihood or search
+        value. Native execution and all stream/predicate validation are identical.
+        The native shell holds the pilot afterward; the caller must use another
+        snapshot-restoring operation before reading a current battle state.
+        """
+        if self._battle_token is None or not self._search_snapshot_permitted:
+            raise LocalShowdownError("Conditioning batches require a sampled search world.")
+        snapshot_id = snapshot.bridge_snapshot.get("snapshot_id")
+        if not isinstance(snapshot_id, str) or not snapshot_id:
+            raise ValueError("Conditioning batch requires a bridge-resident search handle.")
+        if (snapshot.format_id != self._format_id
+                or snapshot.observation_format_id != self._observation_format_id):
+            raise ValueError("Conditioning batch snapshot format differs from this battle.")
+        if type(fixed_pool) is not bool:
+            raise ValueError("Fixed chance pool requires an explicit boolean.")
+        if type(trace_chance) is not bool or trace_chance and not fixed_pool:
+            raise ValueError("Chance tracing requires an explicit fixed hypothetical pool.")
+        if type(auxiliary_trace_only) is not bool or auxiliary_trace_only and not (trace_chance and fixed_pool):
+            raise ValueError("Auxiliary trace-only requires an explicit traced fixed pool.")
+        seeds = tuple(chance_seeds)
+        if not 1 <= len(seeds) <= (32 if fixed_pool else 16) or any(type(seed) is not int for seed in seeds):
+            raise ValueError("Conditioning batch requires 1..16 explicit integer seeds.")
+        if auxiliary_trace_only and len(seeds) != 1:
+            raise ValueError("Auxiliary trace-only requires exactly one explicit seed.")
+        if type(deadline_at) not in (int, float) or not math.isfinite(deadline_at):
+            raise ValueError("Conditioning batch requires a finite original deadline.")
+        remaining = deadline_at - time.perf_counter()
+        if remaining <= 0:
+            return dict(consumed=0, matched=False, deadline_reached=True, step=None)
+
+        def history(parser_or_replay):
+            return tuple(event.raw_line for event in parser_or_replay.public_events
+                if event.raw_line not in ("", "|", "|message|The battle's RNG was reset."))
+
+        expected = tuple(expected_history)
+        if any(not isinstance(line, str) for line in expected):
+            raise ValueError("Conditioning history must contain public protocol strings.")
+        base = history(snapshot.replay)
+        if expected[:len(base)] != base:
+            raise ValueError("Conditioning history does not extend the retained public prefix.")
+        # Read requested players from the paired snapshot, never the current
+        # shell (which may be terminal or at a different one-sided request).
+        requested = requested_players_from_requests(snapshot.latest_requests)
+        cache = snapshot.search_choice_cache
+        if (not requested or not cache or any(player not in cache for player in requested)
+                or any(type(actions.get(player)) is not int for player in requested)):
+            raise ValueError("Conditioning batch requires cached legal integer actions for every retained request.")
+        try:
+            choices = {player: cache[player][actions[player]] for player in requested}
+        except KeyError as exc:
+            raise ValueError("Conditioning batch action is not legal in the retained snapshot.") from exc
+        remaining = deadline_at - time.perf_counter()
+        if remaining <= 0:
+            return dict(consumed=0, matched=False, deadline_reached=True, step=None)
+        event = self._bridge_request_event({
+            "type": "restore_search_conditioning_batch",
+            "battleId": self._battle_token, "snapshotId": snapshot_id,
+            "choices": choices, "seeds": [showdown_seed_from_int(seed) for seed in seeds],
+            "expectedSuffix": list(expected[len(base):]), "initialTurn": snapshot.replay.turn_number,
+            "remainingMs": remaining * 1000,
+            "waitMs": self.config.read_timeout_seconds * 1000,
+            **({"fixedPool": True} if fixed_pool else {}),
+            **({"traceChance": True} if trace_chance else {}),
+        }, "conditioning_batch")
+        trials, events = event.get("trials"), event.get("events")
+        if (not isinstance(trials, list) or not isinstance(events, list)
+                or len(trials) > len(seeds)
+                or any(type(event.get(key)) is not bool for key in ("matched", "uncertain", "deadlineReached"))):
+            raise LocalShowdownError("Malformed conditioning batch receipt.")
+        matched = False
+        matching_indices = []
+        mismatches = []
+        for index, trial in enumerate(trials):
+            if (not isinstance(trial, Mapping) or type(trial.get("index")) is not int
+                    or trial["index"] != index or not isinstance(trial.get("publicLines"), list)
+                    or any(not isinstance(line, str) for line in trial["publicLines"])
+                    or any(type(trial.get(key)) is not bool for key in ("terminal", "matched", "uncertain"))):
+                raise LocalShowdownError("Malformed ordered conditioning trial receipt.")
+            parser = _ReplayParser.from_snapshot(snapshot.replay)
+            parser.feed(trial["publicLines"])
+            actual = history(parser)
+            matched = not trial["terminal"] and (expected[:len(actual)] == actual if fixed_pool else actual == expected)
+            if matched:
+                matching_indices.append(index)
+            elif len(mismatches) < 4:
+                first = next((i for i, (e, a) in enumerate(zip(expected, actual)) if e != a),
+                             min(len(expected), len(actual)))
+                mismatches.append(dict(index=first,
+                    expected=expected[first] if first < len(expected) else None,
+                    hypothetical=actual[first] if first < len(actual) else None))
+            if trial["matched"] != matched and not trial["uncertain"]:
+                raise LocalShowdownError("Bridge conditioning predicate disagrees with production parser.")
+            if not fixed_pool and index < len(trials) - 1 and (matched or trial["uncertain"]):
+                raise LocalShowdownError("Conditioning batch continued past its first candidate.")
+        if not trials:
+            if events or not event["deadlineReached"] or event["matched"] or event["uncertain"]:
+                raise LocalShowdownError("Empty conditioning batch lacks deadline evidence.")
+            return dict(consumed=0, matched=False, deadline_reached=True, step=None)
+        last = trials[-1]
+        if event["matched"] != last["matched"] or event["uncertain"] != last["uncertain"]:
+            raise LocalShowdownError("Conditioning batch final predicate receipt drift.")
+        if len(trials) < len(seeds) and not (event["deadlineReached"] or not fixed_pool and (event["matched"] or event["uncertain"])):
+            raise LocalShowdownError("Conditioning batch stopped without a candidate or deadline.")
+        boundaries = [row for row in events if isinstance(row, Mapping) and row.get("type") in ("ready", "terminal")]
+        public_lines = [line for row in events if isinstance(row, Mapping)
+            and row.get("type") == "stream" and row.get("stream") == "omniscient"
+            for line in row.get("lines", ())]
+        if (len(boundaries) != 1 or (boundaries[0]["type"] == "terminal") != last["terminal"]
+                or public_lines != last["publicLines"]
+                or any(not isinstance(row, Mapping) or row.get("battleId") != self._battle_token
+                    or row.get("type") not in ("stream", "choice_ack", "ready", "terminal", *(['chance_trace'] if trace_chance else [])) for row in events)):
+            raise LocalShowdownError("Conditioning batch final stream/boundary receipt drift.")
+        result = None
+        if not auxiliary_trace_only:
+            self._restore_local_snapshot_state(snapshot)
+            self._latest_requests = {}
+            for row in events:
+                self._apply_event(row)
+            result = StepResult(observations={}, rewards=self._rewards(),
+                terminal=self.terminal(), requested_players=self.requested_players())
+        return dict(consumed=len(trials), matched=matched,
+            deadline_reached=event["deadlineReached"] or time.perf_counter() >= deadline_at, step=result,
+            **(dict(matching_indices=matching_indices, first_public_mismatches=mismatches) if fixed_pool else {}),
+            **(dict(chance_traces=[trial['chanceTrace'] for trial in trials]) if trace_chance else {}))
 
     def _restore_local_snapshot_state(self, snapshot: LocalShowdownSnapshot) -> None:
         self._battle_id = snapshot.battle_id
@@ -1258,14 +1541,24 @@ class LocalShowdownEnv:
     def _search_choice_cache(self) -> dict[PlayerId, dict[int, str]]:
         """Precompute legal choices once for a retained sampled-world snapshot."""
 
+        # Transport choices need only the paired request. Annotation producers
+        # still consume the canonical per-action history in the original player
+        # order, retaining the exact tracker updates and belief narrowing that
+        # the old full observation path performed. Skip only unused public/
+        # opponent belief projections, recent-event features and merged output.
+        requested = self.requested_players()
+        if not requested:
+            return {}
+        self._sync_incremental_state()
+        replay = self._parser.snapshot() if self.tier2_residuals_active() else None
         cache: dict[PlayerId, dict[int, str]] = {}
-        for player in self.requested_players():
-            state = self._state_for_player(player)
-            cache[player] = {
-                action_index: showdown_choice_for_action(state, action_index)
-                for action_index in range(ACTION_COUNT)
-                if state.legal_action_mask[action_index]
-            }
+        for player in requested:
+            if replay is not None:
+                from .transitions import extract_transition_tokens
+
+                tokens = extract_transition_tokens(replay, perspective_slot=player)
+                self._annotate_transition_tokens(player, replay, tokens)
+            cache[player] = showdown_choices_for_request(self._parser.requests.get(player), player)
         return cache
 
     def _annotation_cache(self) -> SnapshotAnnotationCache:
@@ -1689,7 +1982,12 @@ class LocalShowdownEnv:
                     if side_id == stream:
                         self._latest_requests[stream] = request
                         self._first_requests.setdefault(stream, request)
-                        self._request_history[stream].append(_json_clone_mapping(request))
+                        # Anchor actor-known PP to public chronology. Do not put
+                        # this internal marker into the live/encoded request.
+                        self._sync_incremental_state()
+                        retained = _json_clone_mapping(request)
+                        retained["_pokezero_public_event_cursor"] = len(self._parser.public_events)
+                        self._request_history[stream].append(retained)
                         self._lines.append(line)
         return False
 
@@ -1772,28 +2070,11 @@ class LocalShowdownEnv:
         state = _normalize()
         annotation_started_at = time.perf_counter() if root_puct_branch_observation else None
         try:
-            tracker = self._tier2_tracker_for(player)
-            investment_tracker = self._investment_tracker_for(player)
-
-            if tracker is not None:
-                state = replace(
-                    state,
-                    transition_tokens=tracker.annotate(
-                        replay, state.transition_tokens, self._belief_engine
-                    ),
-                )
-            if investment_tracker is not None:
-                codes = investment_tracker.observe(
-                    replay, state.transition_tokens, self._belief_engine
-                )
-                if codes:
-                    state = replace(
-                        state,
-                        transition_tokens=tuple(
-                            replace(token, investment=codes[index]) if index in codes else token
-                            for index, token in enumerate(state.transition_tokens)
-                        ),
-                    )
+            tokens, annotation_active = self._annotate_transition_tokens(
+                player, replay, state.transition_tokens
+            )
+            if annotation_active:
+                state = replace(state, transition_tokens=tokens)
             # NO REFRESH HERE, deliberately. An earlier version re-derived the player view
             # whenever a producer narrowed, on the reasoning that the view snapshotted a few
             # lines above was now stale and a root and its leaves would otherwise disagree.
@@ -1810,7 +2091,7 @@ class LocalShowdownEnv:
             # v2.2: map the FINAL annotated per-action stream (tier2 residual/CB +
             # investment codes) onto the merged sub-blocks; the per-action stream stays
             # the annotation substrate and the per-mon pinned-surface derivation source.
-            if turn_merged and (tracker is not None or investment_tracker is not None):
+            if turn_merged and annotation_active:
                 from .turn_merged import annotate_turn_merged_tokens
 
                 state = replace(
@@ -1826,6 +2107,28 @@ class LocalShowdownEnv:
                 )
                 self._root_puct_branch_observation_state_annotation_count += 1
         return state
+
+    def _annotate_transition_tokens(
+        self, player: PlayerId, replay: ShowdownReplayState, tokens: tuple[Any, ...]
+    ) -> tuple[tuple[Any, ...], bool]:
+        """Shared annotation substrate for observations and retained snapshots.
+
+        Preserve producer creation order, residual-before-investment evaluation,
+        and the same mutable belief engine. Snapshot callers discard the encoded
+        tokens but retain the producers' state exactly as full observations did.
+        """
+        tracker = self._tier2_tracker_for(player)
+        investment_tracker = self._investment_tracker_for(player)
+        if tracker is not None:
+            tokens = tracker.annotate(replay, tokens, self._belief_engine)
+        if investment_tracker is not None:
+            codes = investment_tracker.observe(replay, tokens, self._belief_engine)
+            if codes:
+                tokens = tuple(
+                    replace(token, investment=codes[index]) if index in codes else token
+                    for index, token in enumerate(tokens)
+                )
+        return tokens, tracker is not None or investment_tracker is not None
 
     def tier2_residuals_active(self) -> bool:
         """Whether this env populates Tier-2 residuals into transition tokens.
@@ -2314,11 +2617,43 @@ def _json_clone_request_history(
     }
 
 
+def _validate_reference_actor_request(actual: Mapping[str, Any] | None, expected: Mapping[str, Any]) -> None:
+    """Known actor requests cannot conceal different sampled simulator legality.
+
+    The retained request still supplies encoder identity, but first require the
+    simulator's independently generated active move/PP/disable/lock boundary.
+    Never compare an actual opponent request or use one to repair the world.
+    """
+    def signature(request: Mapping[str, Any] | None) -> tuple[Any, ...]:
+        if not isinstance(request, Mapping):
+            raise LocalShowdownError("Reference actor boundary has no generated request.")
+        active = request.get("active", [])
+        if not isinstance(active, list) or len(active) > 1:
+            raise LocalShowdownError("Reference actor boundary has malformed active rows.")
+        moves, flags = (), ()
+        if active:
+            row = active[0]
+            if not isinstance(row, Mapping) or not isinstance(row.get("moves"), list):
+                raise LocalShowdownError("Reference actor boundary has malformed moves.")
+            moves = tuple((move.get("id"), move.get("pp"), move.get("maxpp"), bool(move.get("disabled")))
+                for move in row["moves"])
+            flags = tuple(bool(row.get(name)) for name in ("trapped", "maybeTrapped"))
+        return (tuple(bool(v) for v in request.get("forceSwitch", [])), bool(request.get("wait")), moves, flags)
+    if signature(actual) != signature(expected):
+        raise LocalShowdownError("Reference generated actor boundary differs from retained move/PP/legality request.")
+
+
 def _public_materialization_payload(
     state: PublicBattleMaterializationState,
     *,
     deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
     deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
+    reference_consumed_items: bool = False,
+    reference_encore: bool = False,
+    reference_induced_sleep: bool = False,
+    reference_turn_clocks: bool = False,
+    reference_attract: bool = False,
+    reference_yawn: bool = False,
 ) -> dict[str, Any]:
     # A live action request is a protocol boundary: the preceding action has
     # finished even if the omniscient stream reached the request before its
@@ -2346,6 +2681,7 @@ def _public_materialization_payload(
             rows,
             belief_snapshot.side(player),
             blockers,
+            consumed_items=_public_consumed_item_history(state, player) if reference_consumed_items else None,
         )
         _apply_traced_ability_materialization_state(rows, replay.traced_ability.get(player))
         _apply_rest_sleep_provenance(rows, replay, player)
@@ -2407,6 +2743,7 @@ def _public_materialization_payload(
             # duration, the move-slot lock, and the same-turn redirect the engine already
             # implements -- silently never happens.
             "lastUsedMove": replay.last_used_move.get(player) or "",
+            **({"referenceEncore": _public_reference_encore(state, player)} if reference_encore else {}),
             # gen3 Truant loaf parity for the active mon: True = loafs on its next move
             # attempt, False = acts, None = no holder OR a genuinely unknown phase. Unknown
             # includes a truncated prefix and a full-prefix Trace acquisition whose residual
@@ -2417,6 +2754,9 @@ def _public_materialization_payload(
             # the mon did, so the proxy inverts permanently the first time a holder is kept
             # from moving by sleep, paralysis, flinch, freeze, recharge or a switch.
             "truantPhase": replay.truant_phase.get(player),
+            **({"mustRecharge": bool(replay.must_recharge.get(player, False))} if reference_turn_clocks else {}),
+            **({"referenceAttract": _public_reference_attract(state, player)} if reference_attract else {}),
+            **({"referenceYawn": _public_reference_yawn(state, player)} if reference_yawn else {}),
             # Live in-battle retype of the ACTIVE mon, which the species token cannot
             # express. The parser has produced this since the v3 obs work but only the
             # OBSERVATION path consumed it (`_apply_live_type_override`); the world was
@@ -2463,6 +2803,14 @@ def _public_materialization_payload(
         for priors in deferred_priors.values()
     ):
         raise ValueError("Direct materialization received invalid deferred opponent move priors.")
+    if reference_induced_sleep:
+        from .mcts_eval.paper_reference_sleep import induced_sleep_certificates
+        certificates = induced_sleep_certificates(state)
+        for side, public_side in sides.items():
+            for row in public_side['pokemon']:
+                key = side + ':' + _normalize_identifier(row['species'])
+                if key in certificates and 'slp' in str(row.get('condition', '')).split():
+                    row['referenceInducedSleep'] = certificates[key]
     return {
         "turn": replay.turn_number,
         "weather": replay.weather,
@@ -2493,6 +2841,7 @@ def _public_materialization_payload(
         "selfRequestKind": _request_materialization_kind(state.self_request),
         "selfActiveMoves": _request_active_moves(state.self_request),
         "selfActiveRequestState": _request_active_materialization_state(state.self_request),
+        **({"selfRechargePPCharge": dict(state.self_recharge_pp_charge)} if reference_turn_clocks else {}),
         # The actor's request history retains exact PP state for Pokemon that were previously
         # active. If a used benched Pokemon has no such request-known snapshot, fail closed.
         "selfBenchedMoveHistory": _has_self_benched_move_history(state),
@@ -2729,15 +3078,17 @@ def _apply_public_item_materialization_state(
     rows: list[dict[str, Any]],
     beliefs: Sequence[RevealedPokemonBelief],
     blockers: set[str],
+    *,
+    consumed_items: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> None:
     """Attach only protocol-confirmed live item state to direct-world rows.
 
     A sampled set's item describes the battle-start assignment. Trick can publicly replace
     that item later, so starting the sampled world alone silently recreates the old holder.
     The belief engine records an audited ``current_public_item`` only for the corresponding
-    protocol surface. Removals and unaudited mutations intentionally remain blockers: this
-    constructor has no complete item-history representation, and guessing would create a
-    mechanically false world.
+    protocol surface. Removals remain blockers by default. The reference-only
+    consumption ledger can discharge a positive, unmutated berry/White Herb
+    consumption, with history; unknown mutations and other removals still refuse.
     """
 
     rows_by_species: dict[str, list[dict[str, Any]]] = {}
@@ -2755,6 +3106,10 @@ def _apply_public_item_materialization_state(
             blockers.add(f"item-state-ambiguous:{species or 'unknown'}")
             continue
         if belief.item_removed:
+            consumed = (consumed_items or {}).get(_materialization_identifier(species))
+            if not belief.item_mutated and consumed is not None:
+                matching_rows[0]["consumedItemState"] = dict(consumed)
+                continue
             blockers.add(f"item-state-removed:{species}")
             continue
         current_item = belief.current_public_item
@@ -2762,6 +3117,179 @@ def _apply_public_item_materialization_state(
             blockers.add(f"item-state-unconfirmed:{species}")
             continue
         matching_rows[0]["currentItem"] = current_item
+
+
+def _public_consumed_item_history(
+    state: PublicBattleMaterializationState, player: PlayerId,
+) -> dict[str, dict[str, Any]]:
+    """Gen 3 berry/White Herb history, from public lines only; no guessed removals.
+
+    Item loss is not merely an empty current item: Recycle needs lastItem. The
+    consumed/ate flags persist on the bench; nextTurn clears usedItemThisTurn
+    only for the active Pokemon. Unknown item operations remain blocked.
+    Protocol names are not species (Deoxys-Attack is named Deoxys). Bind an
+    event actor to the species disclosed in its preceding switch details;
+    truncated identity histories cannot certify consumption. Duplicate species
+    are separately refused by the caller.
+    """
+    consumed: dict[str, dict[str, Any]] = {}
+    actors: dict[str, str] = {}
+    active = None
+    for event in state.replay.public_events:
+        parts = event.raw_line.split("|")
+        if len(parts) < 2:
+            continue
+        kind = parts[1]
+        if kind == "turn":
+            if active in consumed:
+                consumed[active]["usedItemThisTurn"] = False
+            continue
+        if len(parts) < 3 or parts[2][:2] != player:
+            continue
+        actor = parts[2]
+        if kind in {"switch", "drag", "replace"}:
+            identity = (_materialization_identifier(parts[3].split(",", 1)[0])
+                        if len(parts) >= 4 else "")
+            previous = actors.pop(actor, None)
+            if not identity and previous is not None:
+                consumed.pop(previous, None)
+            if identity:
+                actors[actor] = identity
+            active = identity
+            continue
+        if kind not in {"-item", "-enditem"}:
+            continue
+        identity = actors.get(actor)
+        if identity is None:
+            continue
+        consumed.pop(identity, None)
+        if kind != "-enditem" or len(parts) < 4:
+            continue
+        item = _materialization_identifier(parts[3])
+        tags = parts[4:]
+        berry = item.endswith("berry") and tags == ["[eat]"]
+        if berry or (item == "whiteherb" and not any(tags)):
+            consumed[identity] = {"id": item, "usedItemThisTurn": True, "ateBerry": berry}
+    return consumed
+
+
+def _public_reference_yawn(state: PublicBattleMaterializationState, player: PlayerId) -> dict[str, Any] | None:
+    from .reference_yawn import public_yawn_certificate
+    return public_yawn_certificate(state, player, error=LocalShowdownError)
+
+
+def _public_reference_attract(state: PublicBattleMaterializationState, player: PlayerId) -> dict[str, Any] | None:
+    """Certify the surviving source from public move/Cute Charm chronology only.
+
+    No hidden state, guessed source, timer, immobilization roll or RNG is read.
+    A switch invalidates the old relationship even when the same name returns.
+    The materializer binds both Pokemon AFTER sampled party permutations.
+    """
+    if "attract" not in state.replay.volatiles.get(player, ()):
+        return None
+    if state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+        raise LocalShowdownError("Reference Attract requires Gen 3.")
+    active: dict[str, dict[str, str]] = {}
+    last_move = None
+    lock = None
+    for event in state.replay.public_events:
+        parts = event.raw_line.split("|")
+        kind = parts[1] if len(parts) > 1 else ""
+        if kind in {"turn", "upkeep"}:
+            last_move = None
+        if len(parts) < 3:
+            continue
+        actor, side = parts[2], parts[2][:2]
+        if kind in {"switch", "drag", "replace"} and side in PLAYER_IDS:
+            if lock is not None and side in {player, lock["sourceSide"]}:
+                lock = None
+            active[side] = {"ident": actor, "species": parts[3].split(",", 1)[0]} if len(parts) >= 4 else {}
+            last_move = None
+        elif kind == "move":
+            last_move = parts if len(parts) >= 5 and "[miss]" not in parts[5:] else None
+        elif kind in {"-miss", "-fail", "-immune"}:
+            if last_move is not None and actor in {last_move[2], last_move[4]}:
+                last_move = None
+        elif kind == "faint" and side in PLAYER_IDS:
+            # Mid-turn force-switch frontiers need a separate replay certificate.
+            # A formerly active source must not be revived from an old start.
+            if lock is not None and side in {player, lock["sourceSide"]}:
+                lock = None
+            active.pop(side, None)
+            if last_move is not None and actor in {last_move[2], last_move[4]}:
+                last_move = None
+        elif kind == "-end" and side == player and len(parts) >= 4 and _normalize_identifier(parts[3]) == "attract":
+            lock = None
+        elif kind == "-start" and side == player and len(parts) >= 4 and _normalize_identifier(parts[3]) == "attract":
+            lock = None
+            tags = [part.strip() for part in parts[4:] if part.strip()]
+            sources = [tag[5:] for tag in tags if tag.startswith("[of] ")]
+            cause = None
+            source = None
+            if len(tags) == 2 and len(sources) == 1 and "[from] ability: Cute Charm" in tags:
+                source, cause = sources[0], "cutecharm"
+            elif not tags and last_move is not None and _normalize_identifier(last_move[3]) == "attract" and last_move[4] == actor:
+                source, cause = last_move[2], "attract"
+            source_side = source[:2] if isinstance(source, str) else ""
+            if (source_side in PLAYER_IDS and source_side != player
+                    and active.get(player, {}).get("ident") == actor
+                    and active.get(source_side, {}).get("ident") == source):
+                lock = dict(sourceSide=source_side, sourceIdent=source, targetIdent=actor,
+                    sourceSpecies=active[source_side]["species"], targetSpecies=active[player]["species"], cause=cause)
+    if lock is None:
+        raise LocalShowdownError("Reference Attract lacks an unambiguous surviving public source.")
+    return lock
+
+
+def _public_reference_encore(state: PublicBattleMaterializationState, player: PlayerId) -> dict[str, Any] | None:
+    """Public lock and conditional support; never reads a hidden duration.
+
+    Gen 3 rolls 3..6, adds one tick if the target already acted, then pays a
+    tick at residual. Only ordinary, post-upkeep move boundaries are supported;
+    an ambiguous mid-turn boundary is not assigned a fabricated clock.
+    """
+    if "encore" not in state.replay.volatiles.get(player, ()):
+        return None
+    if state.observation_format_id != "gen3randombattle" and state.observation_format_id != "gen3customgame":
+        raise LocalShowdownError("Reference Encore requires Gen 3.")
+    if state.self_request.get('forceSwitch') or state.deferred_opponent_action_player is not None:
+        raise LocalShowdownError("Reference Encore needs an ordinary post-upkeep boundary.")
+    acted, moves, active = set(), {}, {}
+    lock = None
+    for event in state.replay.public_events:
+        parts = event.raw_line.split('|')
+        kind = parts[1] if len(parts) > 1 else ''
+        if kind == 'turn':
+            acted.clear()
+        elif kind == 'upkeep' and lock is not None:
+            lock['paid_residuals'] += 1
+        elif len(parts) >= 3:
+            side = parts[2][:2]
+            if kind in {'switch', 'drag', 'replace'}:
+                active[side] = parts[2]
+                moves.pop(side, None)
+                if side == player:
+                    lock = None
+            elif kind == 'move' and len(parts) >= 4:
+                moves[side] = _materialization_identifier(parts[3])
+                acted.add(side)
+            elif kind == 'cant':
+                acted.add(side)
+            elif kind == '-start' and side == player and len(parts) >= 4 and parts[3] == 'Encore':
+                move = moves.get(side)
+                if move is None or parts[2] != active.get(side):
+                    raise LocalShowdownError("Reference Encore lacks a public locked move/identity.")
+                lock = {'move': move, 'after_target_acted': side in acted, 'paid_residuals': 0}
+            elif side == player and (kind == 'faint' or kind == '-end' and len(parts) >= 4 and parts[3] == 'Encore'):
+                lock = None
+    if lock is None or lock['paid_residuals'] != state.replay.encore_elapsed.get(player):
+        raise LocalShowdownError("Reference Encore lacks a complete residual ledger.")
+    offset = int(lock['after_target_acted'])
+    remaining = [d + offset - lock['paid_residuals'] for d in range(3, 7)
+        if d + offset > lock['paid_residuals']]
+    if not remaining:
+        raise LocalShowdownError("Reference Encore has impossible surviving duration.")
+    return {**lock, 'remaining_candidates': remaining}
 
 
 def _mark_legacy_rest_refund_pending(row: dict[str, Any]) -> None:
@@ -3079,77 +3607,16 @@ def _request_materialization_rows(
 def _apply_struggle_only_move_state(
     rows: list[dict[str, Any]], request: Mapping[str, Any]
 ) -> None:
-    """At a Struggle-only request, say so on the ACTIVE row: nothing is usable.
+    """Restore current active-slot unusability from a substituted Struggle request.
 
-    THE DEFECT THIS CLOSES. These rows are the only source of
-    ``sides[self].pokemon[].moves``, and their move state comes from
-    ``actor_move_states_from_request_history``, which retains the most recent request
-    per own Pokemon. That fold skips a request whose ``_request_active_moves`` is empty,
-    and Showdown's Struggle branch is exactly that -- so the row stayed pinned to the last
-    pp-BEARING request and advertised a usable move at a boundary where Showdown offers
-    only Struggle, while ``selfActiveMoves`` (built from the CURRENT request one call
-    later) correctly reported ``[]``. One payload, two views of the same request, built
-    from two different requests. Measured live: ``sunnyday pp1 disabled:false`` against
-    ``selfActiveMoves: []``.
+    The pseudo-move has no PP fields; historical PP-bearing requests can still
+    advertise usable real slots. Disable only copies on the active payload row,
+    never historical snapshots or benched moves. PP counters stay unchanged.
 
-    WHY HERE AND NOT IN THE FOLD, which is where this fix was first written and which was
-    WRONG. Showdown clears ``moveSlot.disabled`` on switch-out and recomputes it every
-    turn, so unusability is a property of ONE BOUNDARY, not of a Pokemon. The fold is a
-    per-identity historical accumulator whose entries outlive the request that produced
-    them: a marking written there rides the mon onto the bench and is never refreshed
-    until it is active again with a pp-bearing request. Measured on the fold version --
-    Bulbasaur Taunted into Struggle, then switched out -- the benched row read
-    ``sunnyday 8/8 disabled, growth 64/64 disabled``: full PP and no legal move in any
-    searched line, where ``origin/main`` correctly read both enabled. Applying the verdict
-    at the payload boundary instead keeps it exactly as durable as the request it came
-    from, and confines it to the one row the request describes.
-
-    That placement also removes two defects of the fold version for free: duplicate idents
-    (``attract_snorlax``'s two p2 Blisseys share a retained entry, so one Blissey's
-    Struggle marked the other's moveset) and the ``no retained snapshot`` case, both of
-    which are keyed by identity in the fold and by ``active`` here.
-
-    WHY MARKING IS A RESTORATION AND NOT A GUESS. ``Pokemon.getMoves``
-    (``sim/pokemon.ts:1017-1042``) folds ``moveSlot.pp <= 0`` into ``disabled`` for every
-    slot and returns ``hasValidMove ? moves : []``. An empty return therefore MEANS
-    Showdown computed ``disabled`` for every slot and every one came back true;
-    ``getMoveRequestData`` (``:1104``) then discards that list and substitutes the Struggle
-    row. This writes back the verdict Showdown had already reached. PP is left pinned --
-    the Struggle request carries none -- but no consumer can now read it as selectable.
-
-    WHAT THE ENGINE DOES WITH IT, and the case this does NOT fix.
-    ``Pokemon::add_available_moves`` (poke-engine 0.0.47 ``genx/state.rs``) requires
-    ``!disabled && pp > 0``, so it contributes nothing and ``get_all_options`` falls
-    through to ``add_switches``. With a live bench that is exactly the option set the
-    Struggle request also offers. With NO legal switch -- a trapped mon, or the archetypal
-    last-mon PP stall -- ``add_switches`` adds nothing either and the engine pushes
-    ``MoveChoice::None``. When this was written ``engine_search._map_choices`` translated
-    that token only to ``recharge`` and so could not map onto a request offering
-    ``struggle``, and the decision still missed -- not a regression (the pre-fix stale move
-    failed to map on the same decision), but not fixed here either.
-
-    CLOSED SINCE: ``_map_choices`` now also resolves the forced-no-move token to the
-    request's substituted ``struggle`` candidate, admitted on the same fact this module
-    checks one function down in ``_request_reports_only_struggle`` -- that the pseudo-move
-    is the request's ONLY move.
-
-    BOTH ROUTES ARE NOW CLOSED. The Taunt route used to fail EARLIER than the mapping, on
-    the unsupported ``taunt`` volatile (``no_worlds_constructed``), so it never reached it;
-    ``engine_world._SUPPORTED_VOLATILES`` now admits ``taunt`` with its counter seeded, so a
-    Taunt-induced Struggle-only request builds a world, the engine's own Status filter
-    empties the taunted side's options, and the resulting ``MoveChoice::None`` lands on
-    ``struggle`` through exactly the translation above. Captured on a lone all-status
-    Blissey vs a Taunting Smeargle: 12 decisions with ``legal == ['struggle']``, 12
-    ``no_worlds_constructed`` refusals before, 0 refusals and 48/48 worlds searched after,
-    with all 12 Struggle-only decisions still present.
-
-    ONE SHAPE STILL REFUSES, deliberately. At a mid-turn REPLACEMENT boundary the engine
-    runs the deferred residual on the replacement ply, so the counter the world must seed
-    depends on how old the Taunt is -- and both ages are reachable and disagree. ``taunt``
-    is withdrawn from ``_SUPPORTED_VOLATILES`` there, so that boundary keeps refusing with
-    the same ``volatile_unsupported`` it refused with before this change.
+    Native gen3 options now synthesize a distinct Struggle action before adding
+    switches. Its damage/recoil path is separate from recharge/replacement None.
+    This helper does not manufacture a move slot or relabel a no-op.
     """
-
     if not _request_reports_only_struggle(request):
         return
     for row in rows:
@@ -3258,6 +3725,57 @@ def _request_active_materialization_state(request: Mapping[str, Any]) -> dict[st
         for name in ("trapped", "maybeTrapped", "maybeDisabled", "maybeLocked")
         if bool(active_row.get(name))
     }
+
+
+def _reference_recharge_pp_charge(
+    replay: ShowdownReplayState,
+    player: PlayerId,
+    request: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Certify exactly one unreported Hyper Beam use from actor/public inputs.
+
+    Gen 3 Pressure's switch-in disclosure is private to its holder. Never
+    inspect that disclosure or infer a true opponent ability here: the sampled
+    world applies the conditional 1/2 PP charge. A fresh ordinary PP request
+    supersedes the certificate, so repeated captures cannot double-debit it.
+    Unsupported/truncated chronology is recorded as a refusal certificate for
+    the opt-in reference materializer, without changing production encoding.
+    """
+    if not replay.must_recharge.get(player):
+        return {}
+    identity = _request_active_pokemon_identity(request)
+    latest = next((row for row in reversed(history)
+                   if _request_active_pokemon_identity(row) == identity and _request_active_moves(row)), None)
+    if latest is None:
+        return {"refusal": "Recharge has no retained ordinary actor PP snapshot."}
+    cursor = latest.get("_pokezero_public_event_cursor")
+    if type(cursor) is not int or not 0 <= cursor <= len(replay.public_events):
+        return {"refusal": "Recharge actor PP snapshot lacks a public chronology anchor."}
+    active_species: dict[str, str] = {}
+    charges = []
+    for index, event in enumerate(replay.public_events):
+        parts = event.raw_line.split("|")
+        if event.event_type in {"switch", "drag", "replace"} and len(parts) >= 4:
+            active_species[parts[2][:2]] = parts[3].split(",", 1)[0]
+        if index < cursor or event.event_type != "move" or event.actor_slot != player:
+            continue
+        if event.actor_ident is None or _materialization_identity(event.actor_ident) != identity:
+            continue
+        if len(parts) < 5 or _normalize_identifier(parts[3]) != "hyperbeam" or any(
+            part.strip().startswith("[from]") for part in parts[5:]
+        ):
+            return {"refusal": "Recharge PP suffix is not a single direct Hyper Beam use."}
+        target_side = parts[4][:2]
+        species = active_species.get(target_side)
+        if target_side not in PLAYER_IDS or target_side == player or not species:
+            return {"refusal": "Recharge PP target lacks public occupancy provenance."}
+        charges.append({"move": "hyperbeam", "targetSide": target_side, "targetSpecies": species})
+    if len(charges) != 1:
+        return {"refusal": "Recharge requires exactly one unreported Hyper Beam charge."}
+    if "hyperbeam" not in {move["id"] for move in _request_active_moves(latest)}:
+        return {"refusal": "Recharge copied PP bank is not certified by an ordinary actor request."}
+    return charges[0]
 
 
 def actor_move_states_from_request_history(

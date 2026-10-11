@@ -483,6 +483,8 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import copy
+import hashlib
 import json
 import os
 import re
@@ -491,6 +493,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -498,6 +501,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "tests"))
 
 import engine_build_fingerprint  # noqa: E402
+import current_terminal_register  # noqa: E402
 from c153_wide_negative_census import _anchor  # noqa: E402
 from engine_build_fingerprint import compute_fingerprint  # noqa: E402
 from test_ledger_table_uniformity import (  # noqa: E402
@@ -693,7 +697,7 @@ def register_items() -> list[list[str]]:
     return _register_table(_ITEM_HEADER)
 
 
-def register_facts() -> dict[str, str]:
+def historical_register_facts() -> dict[str, str]:
     facts: dict[str, str] = {}
     for cells in _register_table(_FACT_HEADER):
         key = cells[0].strip("`")
@@ -701,6 +705,12 @@ def register_facts() -> dict[str, str]:
             raise AssertionError(f"duplicate Appendix A key: {key}")
         facts[key] = cells[1]
     return facts
+
+
+def register_facts() -> dict[str, str]:
+    # Stored current facts, never derived on read. Historical items and measured
+    # evidence remain in the byte-pinned original C155 document.
+    return current_terminal_register.load_binding()["facts"]
 
 
 # ---------------------------------------------------------------------------
@@ -1443,10 +1453,9 @@ class TheFingerprintGateIsOpenTests(unittest.TestCase):
         carriers = [name for name in committed_json() if head in _text(name)]
         self.assertEqual(
             carriers,
-            [],
-            "an artifact now carries the head fingerprint. That is progress on T1 and it "
-            "must be recorded here rather than absorbed: update the register in the same "
-            "change.",
+            [current_terminal_register.ARTIFACT],
+            "only the exact nonmeasurement current binding may carry the fingerprint; "
+            "T1 remains OPEN and no scientific sweep has been admitted.",
         )
 
     def test_nothing_in_the_tree_can_declare_the_fingerprint_frozen(self) -> None:
@@ -2239,7 +2248,13 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
             "git does not track the register at this exact path, so what this assertion "
             "reads is not what a CI checkout publishes.",
         )
-        text = (REPO / relative).read_bytes().decode("utf-8")
+        historical_bytes = (REPO / relative).read_bytes()
+        self.assertEqual(
+            hashlib.sha256(historical_bytes).hexdigest(),
+            "be65dff053da8cb41b9e7ece66cdd94afacc8dad6c1915a72372ce367893193c",
+            "historical primary register bytes changed",
+        )
+        text = historical_bytes.decode("utf-8")
         rows = re.findall(
             r"(?m)^\|\s*`t1\.head_fingerprint`\s*\|\s*([0-9a-f]{16})\s*\|\s*$", text
         )
@@ -2253,11 +2268,33 @@ class TheFingerprintDerivationReadsTheTreeTests(unittest.TestCase):
         )
         self.assertEqual(
             rows[0],
+            "7249f80b10c42ddf",
+            "historical fingerprint must not be relabeled as current",
+        )
+        # The current pin likewise bypasses register_facts(), derive(), _text(),
+        # load_binding() and head_fingerprint(). Both independent paths must pass.
+        current_relative = "reports/artifacts/current_terminal_register_20261010.json"
+        self.assertEqual(current_relative, current_terminal_register.ARTIFACT)
+        self.assertIn(current_relative, filters)
+        self.assertIn("scripts/current_terminal_register.py", filters)
+        tracked_current = subprocess.run(
+            ["git", "-C", str(REPO), "ls-files", "-z", "--", current_relative],
+            capture_output=True, check=True,
+        ).stdout.decode().split("\0")
+        self.assertEqual([name for name in tracked_current if name], [current_relative])
+        primary_bytes = (REPO / current_relative).read_bytes()
+        # Duplicate keys are refused even on this direct, independently parsed path.
+        def unique_pairs(pairs):
+            result = {}
+            for key, value in pairs:
+                self.assertNotIn(key, result, "duplicate key in primary binding bytes")
+                result[key] = value
+            return result
+        primary = json.loads(primary_bytes, object_pairs_hook=unique_pairs)
+        self.assertEqual(
+            primary["facts"]["t1.head_fingerprint"],
             compute_fingerprint()["fingerprint"][:16],
-            "the document's fingerprint row and the tree's fingerprint disagree, read "
-            "through NONE of this module's helpers. If the rest of the module is green "
-            "while this is red, a reader between the document and the assertion has been "
-            "re-pointed and every other T1 pin is currently a tautology.",
+            "raw current binding fingerprint disagrees with the tree independently of readers",
         )
 
     def test_the_appendix_row_is_compared_without_going_through_derive(self) -> None:
@@ -2566,11 +2603,14 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
             ("register §6 guard", r"exact `Ran (\d+) tests`", register),
             ("register §6 AST", r"derives (\d+) from the module's AST", register),
             ("register test evidence", r"→ \*\*Ran (\d+) tests, OK\*\*", register),
-            ("workflow guard", r"Ran (\d+) tests' /tmp/c155register", step),
-            ("workflow error message", r"expected (\d+) register pins", step),
         ):
             with self.subTest(site=label):
-                self.assertEqual(int(self._all(pattern, haystack)), derived)
+                self.assertEqual(int(self._all(pattern, haystack)), 53)
+        binding = current_terminal_register.load_binding()
+        self.assertEqual(binding["historical_self_description"]["test_methods"], 53)
+        self.assertEqual(binding["current_test_methods"], derived)
+        for pattern in (r"Ran (\d+) tests' /tmp/c155register", r"expected (\d+) register pins"):
+            self.assertEqual(int(self._all(pattern, step)), derived)
 
     def test_the_guard_scan_coverage_triple_is_re_derived(self) -> None:
         """⚠ FINDING A OF REVIEW ROUND TWO, and the check that then failed in CI.
@@ -2680,14 +2720,19 @@ class TheDocumentsClaimsAboutItselfAreReDerivedTests(unittest.TestCase):
         register = _text(REGISTER)
         self.assertEqual(
             int(self._all(r"there are \*\*(\d+) executable\*\* invocation sites", register)),
-            executable,
-            "the register's EXECUTABLE site count does not match this tree." + skew,
+            40,
+            "historical EXECUTABLE count changed",
         )
         self.assertEqual(
             int(self._all(r"the scan resolves \*\*(\d+)\*\* of them", register)),
-            resolved,
-            "the register's RESOLVED guard count does not match this tree." + skew,
+            40,
+            "historical RESOLVED count changed",
         )
+        binding = current_terminal_register.load_binding()
+        self.assertEqual(binding["workflow_guard_counts"],
+            dict(executable=executable, resolved=resolved, unresolved=unresolved), skew)
+        self.assertEqual(binding["historical_self_description"],
+            dict(test_methods=53, executable_guards=40, resolved_guards=40))
         words = {0: "none", 1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}
         self.assertIn(len(unresolved), words, f"{len(unresolved)} unresolved; extend `words`")
         self.assertRegex(
@@ -2778,6 +2823,89 @@ class TheRegisterRendersTests(unittest.TestCase):
         self.assertEqual(
             delimiter_anomalies(_text(REGISTER)), {"over": [], "under": []}
         )
+
+
+class CurrentTerminalBindingTests(unittest.TestCase):
+    def test_binding_preserves_history_and_scope(self):
+        binding = current_terminal_register.load_binding()
+        current_terminal_register.verify_binding(binding)
+        self.assertEqual(binding["items"], register_items())
+        self.assertEqual(len(binding["facts"]), 75)
+        self.assertLessEqual(set(binding["deltas"]), current_terminal_register.SOURCE_ONLY_KEYS)
+        for key, historical in historical_register_facts().items():
+            if key not in current_terminal_register.SOURCE_ONLY_KEYS:
+                self.assertEqual(binding["facts"][key], historical)
+        for key, value in (("pool_remeasured", True), ("scientific_admission", True),
+                           ("status_changes", ["T1"]), ("scope", "SCIENTIFIC")):
+            changed = copy.deepcopy(binding)
+            changed[key] = value
+            with self.assertRaises(ValueError):
+                current_terminal_register.validate_structure(changed)
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            current_terminal_register.strict_json('{"facts":{},"facts":{}}')
+
+    def test_altered_current_fact_is_not_repaired(self):
+        changed = copy.deepcopy(current_terminal_register.load_binding())
+        changed["facts"]["base.patch_stack"] = "0"
+        with self.assertRaisesRegex(ValueError, "stale or altered"):
+            current_terminal_register.verify_binding(changed)
+
+    def test_changed_source_hash_refuses(self):
+        changed = copy.deepcopy(current_terminal_register.load_binding())
+        changed["source_sha256"][EVENTS] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "stale or altered"):
+            current_terminal_register.verify_binding(changed)
+
+    def test_added_or_dropped_fact_refuses(self):
+        binding = current_terminal_register.load_binding()
+        for addition in (False, True):
+            changed = copy.deepcopy(binding)
+            if addition:
+                changed["facts"]["new.measurement"] = "0"
+            else:
+                del changed["facts"]["base.patch_stack"]
+            with self.assertRaisesRegex(ValueError, "malformed"):
+                current_terminal_register.validate_structure(changed)
+
+    def test_historical_byte_change_refuses(self):
+        binding = current_terminal_register.load_binding()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / REGISTER
+            target.parent.mkdir(parents=True)
+            target.write_bytes((REPO / REGISTER).read_bytes() + b"\n")
+            with self.assertRaisesRegex(ValueError, "historical C155 register changed"):
+                current_terminal_register.validate_structure(binding, historical_root=root)
+
+    def test_builder_refuses_measurement_delta(self):
+        changed = derive()
+        key = next(key for key in changed if key not in current_terminal_register.SOURCE_ONLY_KEYS)
+        changed[key] = "unauthorized measurement"
+        with mock.patch.object(sys.modules[__name__], "derive", return_value=changed):
+            with self.assertRaisesRegex(ValueError, "separate adjudication"):
+                current_terminal_register.build_binding()
+
+    def test_neighbor_fingerprint_has_no_self_declared_exemption(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            neighbor = "reports/artifacts/neighbor_binding.json"
+            target = root / neighbor
+            target.parent.mkdir(parents=True)
+            target.write_text(json.dumps(dict(scope=current_terminal_register.SCOPE,
+                fingerprint=head_fingerprint()[:16])))
+            with self.assertRaisesRegex(ValueError, "nonbinding artifacts"):
+                current_terminal_register.source_carriers([neighbor], root, head_fingerprint()[:16])
+
+    def test_raw_primary_binding_fingerprint_mutation_fails_independently(self):
+        target = REPO / current_terminal_register.ARTIFACT
+        primary = json.loads(target.read_bytes())
+        primary["facts"]["t1.head_fingerprint"] = "0" * 16
+        original = Path.read_bytes
+        def read_bytes(path):
+            return json.dumps(primary).encode() if path == target else original(path)
+        with mock.patch.object(Path, "read_bytes", read_bytes):
+            with self.assertRaisesRegex(AssertionError, "raw current binding fingerprint"):
+                TheFingerprintDerivationReadsTheTreeTests().test_the_row_holds_when_read_through_none_of_this_modules_helpers()
 
 
 if __name__ == "__main__":  # pragma: no cover

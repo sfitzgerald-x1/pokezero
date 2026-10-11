@@ -25,8 +25,9 @@ WHAT IS PINNED, and in every case what would have to be true for the pin to be v
      table is red.
 
   2. **EVERY DEMONSTRATION IS RE-DERIVED FROM SOURCE, BYTE FOR BYTE.** The pin re-runs
-     `build_verdicts()` against the artifact's own committed `pool` block and asserts the
-     result equals the committed `verdicts` block. Every `file:line` in every
+     `build_verdicts()` against the artifact's own committed `pool` block (with only
+     its source-derived graph refreshed) and compares to the separate current-source
+     supplement. The historical artifact is hash-pinned, never rewritten. Every `file:line` in every
      demonstration comes from `_anchor` / `_anchor_after` / `_raise_line`, so a moved
      anchor changes the string and fails here, and a DELETED anchor raises out of the
      resolver rather than silently pointing at whatever now occupies the line. This is the
@@ -239,6 +240,7 @@ import os
 import re
 import sys
 import unittest
+from unittest.mock import patch
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO, "src"))
@@ -246,6 +248,7 @@ sys.path.insert(0, os.path.join(REPO, "scripts"))
 sys.path.insert(0, os.path.join(REPO, "tests"))
 
 import c154_unreachable_readjudication as c154  # noqa: E402
+import current_census_citations as current_citations  # noqa: E402
 import check_engine_fidelity_unittest_counts as fidelity_counts  # noqa: E402
 from test_ledger_table_uniformity import (  # noqa: E402
     _EXPECTED_UNREACHABLE_ROWS,
@@ -451,7 +454,9 @@ class TheCitationsAreResolvedOnEveryRunTests(unittest.TestCase):
         """
 
         document = _document()
-        rebuilt = c154.build_verdicts(document["pool"])
+        current = current_citations.load_verified_supplement()
+        pool = dict(document["pool"], heal_subcase_call_graph=current["heal_subcase_call_graph"])
+        rebuilt = c154.build_verdicts(pool)
         self.assertEqual(
             set(rebuilt), set(document["verdicts"]),
             "re-derivation produced a different row set than the artifact carries",
@@ -459,19 +464,21 @@ class TheCitationsAreResolvedOnEveryRunTests(unittest.TestCase):
         for name in sorted(rebuilt, key=lambda r: int(r[1:])):
             with self.subTest(row=name):
                 self.assertEqual(
-                    rebuilt[name], document["verdicts"][name],
+                    rebuilt[name], current["c154_verdicts"][name],
                     f"{name} no longer re-derives from source. Either a citation has "
-                    "moved -- re-run scripts/c154_unreachable_readjudication.py --write "
-                    "and READ THE DIFF, because a line that moved may have moved into "
-                    "different code -- or the artifact was hand-edited.",
+                    "moved or the supplement was altered. Do not regenerate the "
+                    "historical pool or artifact to refresh source addresses.",
                 )
 
     def test_a_perturbed_citation_is_caught(self) -> None:
         """The control for the pin above: prove it can see a wrong line number."""
 
         document = _document()
-        rebuilt = c154.build_verdicts(document["pool"])
-        tampered = dict(document["verdicts"])
+        current = current_citations.load_verified_supplement()
+        pool = dict(document["pool"], heal_subcase_call_graph=current["heal_subcase_call_graph"])
+        rebuilt = c154.build_verdicts(pool)
+        self.assertEqual(rebuilt, current["c154_verdicts"])
+        tampered = dict(current["c154_verdicts"])
         record = dict(tampered["R9"])
         record["demonstration"] = re.sub(
             r":(\d+)", lambda m: f":{int(m.group(1)) + 1}", record["demonstration"], count=1
@@ -900,7 +907,7 @@ class TheDerivedClaimsAreDerivedTests(unittest.TestCase):
         built by reverse reachability over the file and re-derived here.
         """
 
-        committed = _document()["pool"]["heal_subcase_call_graph"]
+        committed = current_citations.load_verified_supplement()["heal_subcase_call_graph"]
         rederived = c154.rust_call_graph(c154.EV, "heal_subcase", c154.HEAL_SUBCASE_ROOT)
         self.assertEqual(committed, rederived)
         self.assertEqual(
@@ -1692,6 +1699,79 @@ class TheHumanReadingsAreNamedTests(unittest.TestCase):
                     "world. Scope of this negative: the text of "
                     "src/pokezero/scenario_studio/service.py, nothing wider.",
                 )
+
+class CurrentCitationSupplementTests(unittest.TestCase):
+    """Exercise the real verifier; no edits to sources or historical evidence."""
+
+    def _copy(self):
+        return json.loads(json.dumps(current_citations.load_verified_supplement()))
+
+    def test_historical_hashes_and_scope_are_pinned(self):
+        document = self._copy()
+        self.assertEqual(document["historical_sha256"], current_citations.HISTORICAL)
+        self.assertEqual(set(document["source_sha256"]), set(current_citations.INPUTS))
+        self.assertFalse(document["pool_remeasured"])
+        self.assertFalse(document["scientific_admission"])
+        document["scientific_admission"] = True
+        with self.assertRaisesRegex(ValueError, "stale or altered"):
+            current_citations.verify_supplement(document)
+
+    def test_c153_citation_mutation_is_rejected(self):
+        document = self._copy()
+        name = "skip:world_unsupported:deferred_opponent_action"
+        document["c153_cannot_reach"][name] = re.sub(
+            r":(\d+)", lambda m: f":{int(m.group(1)) + 1}",
+            document["c153_cannot_reach"][name], count=1,
+        )
+        with self.assertRaisesRegex(ValueError, "stale or altered"):
+            current_citations.verify_supplement(document)
+
+    def test_c154_citation_mutation_is_rejected(self):
+        document = self._copy()
+        record = document["c154_verdicts"]["R9"]
+        record["demonstration"] = re.sub(
+            r":(\d+)", lambda m: f":{int(m.group(1)) + 1}",
+            record["demonstration"], count=1,
+        )
+        with self.assertRaisesRegex(ValueError, "stale or altered"):
+            current_citations.verify_supplement(document)
+
+    def test_call_graph_edge_removal_is_rejected(self):
+        document = self._copy()
+        document["heal_subcase_call_graph"]["edges"]["heal_subcase"].clear()
+        with self.assertRaisesRegex(ValueError, "stale or altered"):
+            current_citations.verify_supplement(document)
+
+    def test_source_binding_mutation_is_rejected(self):
+        document = self._copy()
+        document["source_sha256"]["src/pokezero/engine_world.py"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "stale or altered"):
+            current_citations.verify_supplement(document)
+
+    def test_changed_claim_cannot_be_admitted_as_address_refresh(self):
+        document = self._copy()
+        verdicts = document["c154_verdicts"]
+        verdicts["R9"]["demonstration"] += " Changed closure."
+        with patch.object(current_citations.c154, "build_verdicts", return_value=verdicts):
+            with self.assertRaisesRegex(ValueError, "semantic change"):
+                current_citations.build_supplement()
+
+    def test_no_live_pool_census_is_performed(self):
+        with patch.object(current_citations.c154, "census", side_effect=AssertionError("live pool")):
+            current_citations.load_verified_supplement()
+
+    def test_historical_byte_change_is_rejected(self):
+        target = current_citations.ROOT / current_citations.C153_ARTIFACT
+        read_bytes = type(target).read_bytes
+
+        def changed(path):
+            data = read_bytes(path)
+            return data + b"\n" if path == target else data
+
+        with patch.object(type(target), "read_bytes", changed):
+            with self.assertRaisesRegex(ValueError, "historical evidence changed"):
+                current_citations.build_supplement()
+
 
 if __name__ == "__main__":
     unittest.main()

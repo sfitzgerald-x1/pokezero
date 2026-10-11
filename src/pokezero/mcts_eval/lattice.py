@@ -271,6 +271,7 @@ class _LiveEngineTimingDecider:
     """
 
     _FORMAT_ID = "gen3randombattle"
+    _policy_opponent_diagnostics: Any | None = None
     _STATS_FIELDS = (
         "fallback_decisions",
         "prior_fallbacks",
@@ -303,6 +304,7 @@ class _LiveEngineTimingDecider:
         policy_opponent: bool = False,
         policy_opponent_seed: int | None = None,
         record_joint_actions: bool = False,
+        model_leaf_override: str | None = None,
         rollout_leaf_eval: bool = False,
         rollout_count: int = 32,
         rollout_max_plies: int = 200,
@@ -310,7 +312,15 @@ class _LiveEngineTimingDecider:
         rollout_seed: int = 0,
         rollout_threads: int = 1,
         rollout_threads_cpu_budget_ack: bool = False,
+        rollout_branch_on_damage: bool = False,
+        policy_opponent_diagnostics: Any | None = None,
     ) -> None:
+        if policy_opponent_diagnostics is not None:
+            from ..policy_opponent_diagnostics import PolicyOpponentDiagnostics
+            if (type(policy_opponent_diagnostics) is not PolicyOpponentDiagnostics
+                    or not (policy_opponent or model_leaf_override == "raw_policy_terminal")):
+                raise ValueError("callback diagnostics require an explicit own-head callback runtime")
+        self._policy_opponent_diagnostics = policy_opponent_diagnostics
         from ..collection import env_config_with_policy_spec_masks
         from ..dex import load_showdown_dex_cached
         from ..engine_search import EnvTier2AnnotationSource
@@ -318,6 +328,17 @@ class _LiveEngineTimingDecider:
         from ..randbat import load_gen3_randbat_source_cached
 
         opponent_kwargs = _policy_opponent_config_kwargs(policy_opponent, policy_opponent_seed)
+        if model_leaf_override not in (None, "hp_fraction", "raw_policy_terminal") or (model_leaf_override is not None
+                and (policy_opponent or rollout_leaf_eval or not model_priors or not record_joint_actions)):
+            raise ValueError("model leaf override requires an implemented strict incumbent valuation")
+        if model_leaf_override == "raw_policy_terminal" and (
+                use_opponent_priors or type(model_world_workers) is not int or model_world_workers != 1
+                or type(rollout_count) is not int or rollout_count != 1
+                or type(rollout_threads) is not int or rollout_threads != 1
+                or rollout_policy != "raw_argmax" or type(rollout_max_plies) is not int
+                or rollout_max_plies <= 0 or type(rollout_seed) is not int
+                or not 0 <= rollout_seed < 2**64 or type(rollout_branch_on_damage) is not bool):
+            raise ValueError("raw terminal valuation requires declared both-seat raw policy and cap/seed")
         if policy_opponent and (not model_priors or use_opponent_priors or rollout_leaf_eval):
             raise ValueError("policy opponent profile requires subject priors, no auxiliary opponent priors or rollout leaves")
         if model_decision_time_ms is not None and model_decision_time_ms <= 0:
@@ -362,6 +383,7 @@ class _LiveEngineTimingDecider:
         # default replay contract.
         self._override_telemetry = override_telemetry
         self._record_joint_actions = record_joint_actions
+        self._model_leaf_override = model_leaf_override
         self._policy_opponent_kwargs = {**opponent_kwargs,
             **({"strict_fallbacks": True} if record_joint_actions else {})}
         # The source-root leaf ablation uses the existing model-prior rollout
@@ -375,6 +397,7 @@ class _LiveEngineTimingDecider:
         self._rollout_seed = rollout_seed
         self._rollout_threads = rollout_threads
         self._rollout_threads_cpu_budget_ack = rollout_threads_cpu_budget_ack
+        self._rollout_branch_on_damage = rollout_branch_on_damage
         self._artifacts = materialize_search_artifacts(contract, showdown_root=showdown_root)
         self._env_config = env_config_with_policy_spec_masks(
             LocalShowdownConfig(showdown_root=showdown_root, set_belief_source=True),
@@ -426,6 +449,7 @@ class _LiveEngineTimingDecider:
                 use_opponent_priors=self._use_opponent_priors,
                 override_telemetry=self._override_telemetry,
                 record_joint_actions=getattr(self, "_record_joint_actions", False),
+                model_leaf_override=getattr(self, "_model_leaf_override", None),
                 early_stop=False,
                 model_decision_time_ms=self._model_decision_time_ms,
                 model_native_batch_guard_ms=self._model_native_batch_guard_ms,
@@ -437,10 +461,13 @@ class _LiveEngineTimingDecider:
                 rollout_seed=self._rollout_seed,
                 rollout_threads=self._rollout_threads,
                 rollout_threads_cpu_budget_ack=self._rollout_threads_cpu_budget_ack,
+                rollout_branch_on_damage=getattr(self, "_rollout_branch_on_damage", False),
                 **getattr(self, "_policy_opponent_kwargs", {}),
             ),
             policy_id=f"mcts-timing-{config.config_id}",
             annotation_source=self._annotation_source,
+            **({"policy_opponent_diagnostics": self._policy_opponent_diagnostics}
+               if self._policy_opponent_diagnostics is not None else {}),
         )
         # The model module's one-time initialization is explicitly outside the
         # decision window. The model's actual leaf forwards remain inside it.
@@ -860,6 +887,19 @@ def materialize_search_artifacts(
     from pathlib import Path as _Path
 
     from .resolver import export_reuse_key, validate_encoder_tables
+
+    # Qualification collectors supply isolated, hashed exports so this path
+    # does not write beside the original champion or mutate a shared cache.
+    if contract.model_path is not None or contract.tables_path is not None:
+        if contract.model_path is None or contract.tables_path is None:
+            raise ContractError("explicit search artifacts require both model and tables")
+        from .resolver import sha256_file
+        if (contract.model_sha256 is None or contract.tables_sha256 is None
+                or sha256_file(contract.model_path) != contract.model_sha256
+                or sha256_file(contract.tables_path) != contract.tables_sha256):
+            raise ContractError("explicit search artifact digest drift")
+        validate_encoder_tables(contract, contract.tables_path)
+        return {"model_path": contract.model_path, "tables_path": contract.tables_path}
 
     key = export_reuse_key(contract)[:16]
     root = _Path(contract.checkpoint_path).parent / f".mcts-eval-artifacts-{key}"

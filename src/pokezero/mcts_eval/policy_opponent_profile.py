@@ -35,18 +35,33 @@ def refusal_diagnostic(error: BaseException) -> dict[str, Any] | None:
     Diagnostics never enter policy context or alter acceptance. Search failures
     still refuse; this records the failing node instead of losing its evidence.
     """
+    return _refusal_diagnostic(error, (
+        ("policy_opponent_diagnostic", "policy-opponent-refusal-v1"),
+        ("raw_policy_leaf_diagnostic", "raw-policy-terminal-refusal-v1"),
+    ))
+
+
+def fallback_refusal_diagnostic(error: BaseException) -> dict[str, Any] | None:
+    """Extract strict engine refusal evidence separately from native errors."""
+    return _refusal_diagnostic(error, (
+        ("engine_search_fallback_diagnostic", "engine-search-fallback-refusal-v1"),
+    ))
+
+
+def _refusal_diagnostic(error: BaseException, attributes: Sequence[tuple[str, str]]) -> dict[str, Any] | None:
     seen: set[int] = set()
     while error is not None and id(error) not in seen:
         seen.add(id(error))
-        raw = getattr(error, "policy_opponent_diagnostic", None)
-        if isinstance(raw, str):
-            try:
-                payload = json.loads(raw)
-            except (TypeError, ValueError):
-                payload = None
-            if (isinstance(payload, dict) and payload.get("schema") == "policy-opponent-refusal-v1"
-                    and payload.get("diagnostic_only_not_policy_input") is True):
-                return payload
+        for attribute, schema in attributes:
+            raw = getattr(error, attribute, None)
+            if isinstance(raw, str):
+                try:
+                    payload = json.loads(raw)
+                except (TypeError, ValueError):
+                    payload = None
+                if (isinstance(payload, dict) and payload.get("schema") == schema
+                        and payload.get("diagnostic_only_not_policy_input") is True):
+                    return payload
         error = error.__cause__
     return None
 
@@ -167,10 +182,20 @@ class _LiveRawPolicyTimingDecider(_LiveEngineTimingDecider):
 def make_profile_decider(
     contract: CheckpointContract, showdown_root: str, *, arm: str, mode: str,
     opponent_seed: int, deadline_ms: int, native_batch_guard_ms: int,
+    model_leaf_override: str | None = None,
+    policy_opponent_diagnostics: Any | None = None,
 ) -> _LiveEngineTimingDecider:
+    if policy_opponent_diagnostics is not None:
+        from ..policy_opponent_diagnostics import PolicyOpponentDiagnostics
+        if (type(policy_opponent_diagnostics) is not PolicyOpponentDiagnostics
+                or arm != "incumbent_mcts" or model_leaf_override != "raw_policy_terminal"):
+            raise ContractError("callback diagnostics require the explicit incumbent raw-terminal profile")
     _unsigned_seed(opponent_seed)
     if arm not in ARMS or mode not in MODES:
         raise ContractError("unsupported profile arm or timing mode")
+    if model_leaf_override not in (None, "hp_fraction", "raw_policy_terminal") or (model_leaf_override is not None
+            and arm != "incumbent_mcts"):
+        raise ContractError("model leaf override requires an implemented incumbent valuation")
     if (type(deadline_ms) is not int or deadline_ms <= 0
             or type(native_batch_guard_ms) is not int
             or not 0 <= native_batch_guard_ms < deadline_ms):
@@ -183,12 +208,18 @@ def make_profile_decider(
         model_decision_time_ms=deadline_ms if mode == "matched_deadline" else None,
         model_native_batch_guard_ms=native_batch_guard_ms if mode == "matched_deadline" else 0,
         policy_opponent=arm == "own_policy_opponent_mcts",
-        policy_opponent_seed=opponent_seed if arm == "own_policy_opponent_mcts" else None)
+        policy_opponent_seed=opponent_seed if arm == "own_policy_opponent_mcts" else None,
+        **({"model_leaf_override": model_leaf_override} if model_leaf_override is not None else {}),
+        **({"policy_opponent_diagnostics": policy_opponent_diagnostics}
+           if policy_opponent_diagnostics is not None else {}),
+        **(dict(rollout_count=1, rollout_max_plies=250, rollout_policy="raw_argmax",
+                rollout_seed=opponent_seed, rollout_threads=1, rollout_branch_on_damage=True)
+           if model_leaf_override == "raw_policy_terminal" else {}))
 
 
 def validate_selection(telemetry: Any, *, arm: str, mode: str, config: SearchConfig,
                        mask: Sequence[bool], opponent_seed: int, deadline_ms: int,
-                       native_batch_guard_ms: int) -> None:
+                       native_batch_guard_ms: int, model_leaf_override: str | None = None) -> None:
     """Validate arm identity and allocation; configuration alone is not proof."""
     if not isinstance(telemetry, Mapping) or not isinstance(telemetry.get("root_action"), str) or not telemetry["root_action"]:
         raise ContractError("profile has no serialized selected action")
@@ -216,6 +247,15 @@ def validate_selection(telemetry: Any, *, arm: str, mode: str, config: SearchCon
         return
     if arm not in ARMS or mode not in MODES or "raw_policy" in telemetry or engine.get("leaf_eval") != "model":
         raise ContractError("profile search arm identity drift")
+    from ..engine_search import require_model_leaf_witness
+    if model_leaf_override is not None and arm != "incumbent_mcts":
+        raise ContractError("model leaf override belongs to the incumbent arm only")
+    require_model_leaf_witness({"engine_mcts": engine}, model_leaf_override=model_leaf_override)
+    if model_leaf_override is not None:
+        rows = engine["model_leaf_override"]["native_invocations"]
+        if (sum(row["completed_iterations"] for row in rows) != telemetry["total_iterations"]
+                or sum(row["model_evals"] for row in rows) != telemetry["model_evals"]):
+            raise ContractError("model-tree leaf work differs from actual native invocations")
     from ..engine_search import EngineSearchWitnessError, validate_native_joint_action_witness
     joint = engine.get("joint_actions")
     if (not isinstance(joint, Mapping)
