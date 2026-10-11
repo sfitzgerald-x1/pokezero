@@ -4,6 +4,7 @@ No CLI, source replay, registration or runtime authority is provided. The
 producer owns the single auditor shell and one unchanged external deadline;
 the successful bank stays live for A3. Any stage failure clears the bank.
 """
+from dataclasses import asdict
 import json
 from pathlib import Path
 import time
@@ -17,7 +18,7 @@ from pokezero.mcts_eval.search_over_raw_stages import ExplorationStages, a2_conf
 
 def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpoint_contract,
                          source, showdown, verify, deadline_at, ownership=None, progress_sink=None,
-                         clock=time.perf_counter):
+                         clock=time.perf_counter, value_diagnostics=None):
     """Run thirteen selectors/root, all paired outcomes, then seal A3 choices.
 
     Deadline is the producer's ORIGINAL absolute monotonic deadline, not a new
@@ -31,6 +32,11 @@ def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpo
         from math import isfinite
         require(type(deadline_at) in (int, float) and isfinite(deadline_at), "original finite deadline required")
         require(callable(verify), "producer provenance/deadline verifier required")
+        if value_diagnostics is not None:
+            from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+            require(isinstance(value_diagnostics, ValueDiagnosticContract)
+                and value_diagnostics.original_deadline_at == deadline_at,
+                "diagnostics must use the unchanged original producer deadline")
         output = Path(output).resolve()
         require(not output.is_relative_to(Path(__file__).resolve().parents[1])
             and not output.is_relative_to(Path(plan["historical_directory"]).resolve()),
@@ -41,7 +47,8 @@ def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpo
         guard()
         bank.validate_roster(plan["comparable_root_contract"]["root_slots"])
         manifest = bank.manifest()
-        ledger = ExplorationStages(plan, manifest, original_deadline_at=deadline_at)
+        ledger = ExplorationStages(plan, manifest, original_deadline_at=deadline_at,
+            value_diagnostics=value_diagnostics)
         output.mkdir(parents=True, exist_ok=False)
         roster = a2_configurations()
         slots = plan["phase_a_cohort"]["panels"]["exploration"]["root_slots"]
@@ -55,11 +62,25 @@ def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpo
             roots_completed=0, selections_completed=0, continuations_completed=0,
             continuations_capped=0, scientific_strength_evidence=False, holdout_authorized=False,
             old_a1_not_promoted_to_a2=True, runtime_authorized=False)
-        save_new(output / "stage-manifest.json", dict(bank=manifest,
+        stage_manifest = dict(bank=manifest,
             fixed_root_denominator=200, fixed_seed_denominator=32,
             full_selector_denominator=len(slots)*len(roster),
             full_continuation_alias_denominator=len(slots)*len(roster)*8,
-            original_deadline_at=deadline_at, same_world_qualification_pending=True))
+            original_deadline_at=deadline_at, same_world_qualification_pending=True)
+        if value_diagnostics is not None:
+            progress["value_diagnostic_roster"] = [dict(root_id=slot["root_id"], configuration=key(cfg),
+                status="UNSTARTED_UNCERTAIN", sampled_leaves=None, labels=None, unknown_labels=None,
+                maximum_labels=cfg.workers*value_diagnostics.leaves_per_worker*8,
+                scientific_strength_evidence=False, retry_authorized=False)
+                for slot in slots for cfg in roster if cfg.arm == "reference"]
+            stage_manifest["visited_value_diagnostics"] = dict(contract=asdict(value_diagnostics),
+                configurations=[key(cfg) for cfg in roster if cfg.arm == "reference"],
+                full_selection_denominator=len(progress["value_diagnostic_roster"]),
+                missing_selections_remain_uncertain=True,
+                capture_inside_selection_clock=True, labels_after_selection=True,
+                qualifies_uninstrumented_runtime=False, incumbent_diagnostics_pending=True,
+                scientific_strength_evidence=False)
+        save_new(output / "stage-manifest.json", stage_manifest)
         for slot in slots:
             root_id = slot["root_id"]
             if root_id not in manifest["root_public_bindings"]:
@@ -73,7 +94,8 @@ def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpo
                 contract=checkpoint_contract, source=source, showdown=showdown, verify=guard,
                 ownership=ownership, namespace=plan["execution_source_contract"]["namespace"],
                 completion_status="COLLECTED_A2_CENSORING_AWARE", boundary_censoring=True,
-                configuration_roster=roster, matched_statistics_root=True)
+                configuration_roster=roster, matched_statistics_root=True,
+                **({"value_diagnostics": value_diagnostics} if value_diagnostics is not None else {}))
             audit = json.loads((directory / "audit.json").read_text())
             selections = {key(cfg): json.loads((directory / f"{key(cfg)}-selected.json").read_text())
                 for cfg in roster}

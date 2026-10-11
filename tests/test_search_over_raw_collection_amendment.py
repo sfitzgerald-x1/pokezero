@@ -527,8 +527,10 @@ class ExplorationStageTests(unittest.TestCase):
             self.assertTrue(bank.closed)
         self.assertFalse(Path(self.plan["historical_directory"]).exists())
 
-    def run_synthetic_stage(self, *, fail=None):
+    def run_synthetic_stage(self, *, fail=None, value_diagnostics=None, label_mode="COMPLETE", corrupt=None,
+                            fail_after_labels=False):
         import collect_search_over_raw_a2_stage as stage
+        from pokezero.mcts_eval.paper_reference_showdown import decision_state as diagnostic_decision_state
         from pokezero.mcts_eval.search_over_raw_archive import SealedComparisonBank
         helper, (kwargs, _, events) = self.helper.root_helper(capped=True, fail=fail)
         root = kwargs["root"]
@@ -551,23 +553,172 @@ class ExplorationStageTests(unittest.TestCase):
         def adapter_with_stream_receipt(cfg, **options):
             adapter = original(cfg, **options)
             select = adapter.select
+            diagnostic = options.get("value_diagnostics")
+            banks = []
             def select_with_binding(context, **opts):
                 result = select(context, **opts)
                 result.update(statistics_root_id=opts["statistics_root_id"], selection_seed=opts["selection_seed"])
                 for receipt in result["evidence"]["worker_receipts"]:
                     receipt["worker"] = 0
+                if diagnostic is not None:
+                    from tests.test_search_over_raw_value_diagnostics import DiagnosticEnv, actual_world
+                    from pokezero.mcts_eval.search_over_raw_value_diagnostics import VisitedValueBank
+                    with patch("pokezero.mcts_eval.paper_reference_showdown.decision_state", new=diagnostic_decision_state):
+                        for index in range(cfg.workers):
+                            world = actual_world(DiagnosticEnv(capped=label_mode == "CAPPED_UNCERTAIN"))
+                            state = world.frame().subject
+                            bank = VisitedValueBank(diagnostic, worker=index, root_key=bytes.fromhex("0102"),
+                                clock=lambda: 101. if label_mode == "DEADLINE_UNCERTAIN" else 0.)
+                            bank.observe(world, state, world.evaluate(state))
+                            banks.append(bank)
+                            world.close()
                 return result
             adapter.select = select_with_binding
+            if diagnostic is not None:
+                close = adapter.close
+                def finish(selected):
+                    events.append(("labels", cfg.arm, cfg.belief))
+                    def label(bank):
+                        with patch("pokezero.mcts_eval.paper_reference_showdown.decision_state", new=diagnostic_decision_state):
+                            return bank.label()
+                    if label_mode == "FAIL":
+                        label(banks[0])
+                        raise ValueError("synthetic labeling failure after partial worker")
+                    values = dict(schema="pokezero.selected-visited-value.v1", root_id=selected["root_id"],
+                        selected_receipt_sha256=digest(selected), configuration_sha256=cfg.identity,
+                        runtime_sha256=selected["runtime_sha256"], labels_used_for_backup=False,
+                        scientific_strength_evidence=False,
+                        workers=[dict(worker=index, evidence=label(bank)) for index, bank in enumerate(banks)])
+                    if corrupt is not None:
+                        corrupt(values)
+                    return values
+                def close_with_banks():
+                    for bank in banks:
+                        bank.close()
+                    close()
+                adapter.finish_value_diagnostics = finish
+                adapter.close = close_with_banks
+            self.diagnostic_banks = banks
             return adapter
         self.bank = bank
         self.stage_kwargs = kwargs
         self.stage_adapter = adapter_with_stream_receipt
         self.stage_output = helper.output / "a2-stage"
+        def verify():
+            if fail_after_labels and list(self.stage_output.rglob("*-values.json")):
+                raise ValueError("synthetic provenance failure after labels saved")
         with patch.object(a1, "make_adapter", side_effect=adapter_with_stream_receipt):
             return stage.collect_a2_from_bank(plan=self.plan, bank=bank, output=self.stage_output,
                 env=kwargs["env"], evaluator=kwargs["evaluator"], factory=kwargs["factory"],
                 checkpoint_contract=kwargs["contract"], source=kwargs["source"], showdown="none",
-                verify=lambda: None, deadline_at=100., clock=lambda: 10.), events
+                verify=verify, deadline_at=100., clock=lambda: 10.,
+                value_diagnostics=value_diagnostics), events
+
+    def test_integrated_value_capture_labels_before_close_and_publishes_bound_records(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        (_, progress), events = self.run_synthetic_stage(value_diagnostics=ValueDiagnosticContract(7, 100.))
+        manifest = json.loads((self.stage_output / "stage-manifest.json").read_text())
+        self.assertTrue(manifest["visited_value_diagnostics"]["incumbent_diagnostics_pending"])
+        self.assertFalse(manifest["visited_value_diagnostics"]["qualifies_uninstrumented_runtime"])
+        self.assertEqual(len(progress["value_diagnostics"]), 6)
+        self.assertEqual(len(progress["value_diagnostic_roster"]), 1200)
+        self.assertEqual(sum(row["status"] == "UNSTARTED_UNCERTAIN"
+            for row in progress["value_diagnostic_roster"]), 1194)
+        self.assertTrue(all(row["labels"] is None for row in progress["value_diagnostic_roster"]
+            if row["status"] == "UNSTARTED_UNCERTAIN"))
+        self.assertTrue(all(row["labels"] == 160 and row["sampled_leaves"] == 20
+            and row["unknown_labels"] == 0 for row in progress["value_diagnostics"]))
+        for index, event in enumerate(events):
+            if event[0] == "labels":
+                self.assertEqual(events[index-1], ("select", *event[1:]))
+                self.assertEqual(events[index+1], ("close", *event[1:]))
+        values = list(self.stage_output.rglob("*-values.json"))
+        self.assertEqual(len(values), 6)
+        for path in values:
+            value = json.loads(path.read_text())
+            selected = json.loads(path.with_name(path.name.replace("-values.json", "-selected.json")).read_text())
+            self.assertEqual(value["selected_receipt_sha256"], digest(selected))
+            self.assertNotIn('"snapshot":', path.read_text())
+        self.assertTrue(all(bank.closed and not bank.rows for bank in self.diagnostic_banks))
+
+    def test_integrated_capped_labels_keep_full_denominator_and_uncertainty(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        (_, progress), _ = self.run_synthetic_stage(value_diagnostics=ValueDiagnosticContract(7, 100.),
+            label_mode="CAPPED_UNCERTAIN")
+        self.assertTrue(all(row["unknown_labels"] == row["labels"] == 160
+            for row in progress["value_diagnostics"]))
+        for path in self.stage_output.rglob("*-value-summary.json"):
+            summary = json.loads(path.read_text())
+            populated = [row for row in summary["calibration"] if row["labels"]]
+            self.assertEqual(populated[0]["win_score_interval"], [0., 1.])
+
+    def test_integrated_expired_labels_remain_uncertain_without_new_deadline(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        (_, progress), _ = self.run_synthetic_stage(value_diagnostics=ValueDiagnosticContract(7, 100.),
+            label_mode="DEADLINE_UNCERTAIN")
+        self.assertTrue(all(row["unknown_labels"] == 160 for row in progress["value_diagnostics"]))
+        for path in self.stage_output.rglob("*-values.json"):
+            self.assertTrue(all(label["status"] == "DEADLINE_UNCERTAIN" and label["boundaries"] == 0
+                for worker in json.loads(path.read_text())["workers"]
+                for leaf in worker["evidence"]["leaves"] for label in leaf["labels"]))
+
+    def test_integrated_label_failure_preserves_selection_and_unknown_actual_denominator(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        with self.assertRaisesRegex(ValueError, "partial worker"):
+            self.run_synthetic_stage(value_diagnostics=ValueDiagnosticContract(7, 100.), label_mode="FAIL")
+        failure_path, = self.stage_output.rglob("*-value-failure.json")
+        failure = json.loads(failure_path.read_text())
+        self.assertIsNone(failure["labels"])
+        self.assertIsNone(failure["sampled_leaves"])
+        self.assertFalse(failure["retry_authorized"])
+        self.assertTrue(failure_path.with_name(failure_path.name.replace("-value-failure.json", "-selected.json")).exists())
+        self.assertFalse(list(self.stage_output.rglob("*-values.json")))
+        self.assertFalse((self.stage_output / "a3-exploration-freeze.json").exists())
+        self.assertTrue(self.bank.closed)
+        self.assertTrue(all(bank.closed and not bank.rows for bank in self.diagnostic_banks))
+
+    def test_integrated_malformed_or_private_diagnostics_refuse_before_publication(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        def corrupt(values):
+            values["workers"][0]["evidence"]["leaves"][0]["snapshot"] = {"private": "do not publish"}
+        with self.assertRaisesRegex(ValueError, "private/malformed"):
+            self.run_synthetic_stage(value_diagnostics=ValueDiagnosticContract(7, 100.), corrupt=corrupt)
+        self.assertFalse(list(self.stage_output.rglob("*-values.json")))
+        self.assertTrue(self.bank.closed)
+
+    def test_later_provenance_failure_preserves_validated_labels_without_promoting_root(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        with self.assertRaisesRegex(ValueError, "provenance failure after labels"):
+            self.run_synthetic_stage(value_diagnostics=ValueDiagnosticContract(7, 100.), fail_after_labels=True)
+        values, = self.stage_output.rglob("*-values.json")
+        failure = json.loads(values.with_name(values.name.replace("-values.json", "-value-failure.json")).read_text())
+        self.assertEqual((failure["status"], failure["labels"], failure["unknown_labels"]),
+            ("LABEL_ROSTER_VALIDATED", 160, 0))
+        self.assertTrue(failure["collection_failed"])
+        terminal = json.loads((self.stage_output / "stage-failure.json").read_text())
+        self.assertEqual((terminal["status"], terminal["roots_completed"]), ("FAILED_NO_RETRY", 0))
+        self.assertTrue(self.bank.closed)
+        self.assertTrue(all(bank.closed and not bank.rows for bank in self.diagnostic_banks))
+        self.assertFalse((self.stage_output / "a3-exploration-freeze.json").exists())
+
+    def test_diagnostic_stage_deadline_cannot_extend_original_and_clears_bank(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        with self.assertRaisesRegex(ValueError, "unchanged original"):
+            self.run_synthetic_stage(value_diagnostics=ValueDiagnosticContract(7, 101.))
+        self.assertTrue(self.bank.closed)
+        self.assertFalse(self.stage_output.exists())
+
+    def test_live_instrumentation_binding_survives_deleted_manifest_field(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        contract = ValueDiagnosticContract(7, 100.)
+        ledger = self.stages.ExplorationStages(self.plan, self.manifest,
+            original_deadline_at=100., value_diagnostics=contract)
+        self.record(ledger)
+        frozen = ledger.freeze_for_a3()
+        self.assertEqual(frozen["visited_value_diagnostics"]["sample_seed"], 7)
+        with self.assertRaisesRegex(ValueError, "uninstrumented A3 curve"):
+            ledger.begin_a3(self.plan, self.manifest, frozen, deadline_at=100.)
+        self.assertFalse(ledger._a3_started)
 
     def test_concrete_stage_collects_then_freezes_and_retains_bank_for_a3(self):
         (ledger, progress), events = self.run_synthetic_stage()
@@ -638,6 +789,22 @@ class A3StageTests(unittest.TestCase):
             self.assertEqual([row["configuration"]["seconds"] for row in curve["budget_points"]], [1., 3., 10.])
             self.assertTrue(all(row["root_slots"] == 200 and row["source_seeds"] == 32
                 and row["uncertain_roots"] == 199 for row in curve["budget_points"]))
+
+    def test_instrumented_a2_cannot_silently_feed_uninstrumented_budget_curve(self):
+        import collect_search_over_raw_a3_stage as stage
+        original_loads = json.loads
+        def instrumented_manifest(text):
+            value = original_loads(text)
+            if "same_world_qualification_pending" in value:
+                value["visited_value_diagnostics"] = dict(capture_inside_selection_clock=True)
+            return value
+        with patch.object(stage.json, "loads", side_effect=instrumented_manifest), \
+                patch.object(stage, "collect_root") as collect:
+            with self.assertRaisesRegex(ValueError, "uninstrumented A3 curve"):
+                self.collect()
+            collect.assert_not_called()
+        self.assertTrue(self.helper.bank.closed)
+        self.assertFalse(self.output.exists())
 
     def test_only_new_action_continuations_execute_and_full_null_aliases_remain(self):
         original = self.helper.stage_adapter

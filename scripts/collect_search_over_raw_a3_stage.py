@@ -40,6 +40,8 @@ def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluato
         manifest = bank.manifest()
         a2_manifest = json.loads((a2_output / "stage-manifest.json").read_text())
         require(a2_manifest["original_deadline_at"] == deadline_at, "A3 cannot extend A2/producer deadline")
+        require(a2_manifest.get("visited_value_diagnostics") is None,
+            "instrumented A2 cannot feed an uninstrumented A3 curve; matched capture/reuse pending")
         frozen = json.loads((a2_output / "a3-exploration-freeze.json").read_text())
         ledger.begin_a3(plan, manifest, frozen, deadline_at=deadline_at)
         output.mkdir(parents=True, exist_ok=False)

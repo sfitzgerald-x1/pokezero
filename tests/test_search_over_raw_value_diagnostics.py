@@ -13,7 +13,8 @@ from pokezero.mcts_eval.paper_reference_parallel import PreparedDecision, Parall
 from pokezero.mcts_eval.paper_reference_showdown import ShowdownTrajectoryWorld, decision_state
 from pokezero.mcts_eval.search_over_raw_leaves import ReferenceLeafWorld
 from pokezero.mcts_eval.search_over_raw_value_diagnostics import (
-    ValueDiagnosticContract, VisitedValueBank, _ValueRuntime, calibration_bounds)
+    ValueDiagnosticContract, VisitedValueBank, _ValueRuntime, calibration_bounds, reconcile_collected_values)
+from pokezero.mcts_eval.search_over_raw import digest
 from tests.test_search_over_raw_leaves import LeafEnv, evaluator
 
 
@@ -181,6 +182,69 @@ class ValueDiagnosticTests(unittest.TestCase):
         self.assertEqual(row["unknown_labels"], 4)
         self.assertEqual(row["win_score_interval"], [.25,.75])
         self.assertEqual(row["squared_error_interval"], [0.,.125])
+
+    def collected(self):
+        world, state, bank = self.bank()
+        bank.observe(world, state, world.evaluate(state))
+        selected = dict(root_id="synthetic:config", configuration_sha256="a"*64, runtime_sha256="b"*64)
+        values = dict(schema="pokezero.selected-visited-value.v1", root_id=selected["root_id"],
+            selected_receipt_sha256=digest(selected), configuration_sha256="a"*64, runtime_sha256="b"*64,
+            workers=[dict(worker=0, evidence=bank.label())], labels_used_for_backup=False,
+            scientific_strength_evidence=False)
+        kwargs = dict(selected=selected, contract=bank.contract, workers=1, information_key=state.key.hex())
+        return values, kwargs
+
+    def test_collected_reconciliation_retains_all_labels_and_validates_empty_workers(self):
+        values, kwargs = self.collected()
+        summary = reconcile_collected_values(values, **kwargs)
+        self.assertEqual((summary["sampled_leaves"], summary["labels"], summary["unknown_labels"]), (1, 8, 0))
+        worker = values["workers"][0]["evidence"]
+        worker.update(model_evaluations_seen=0, leaves=[], calibration=calibration_bounds([]))
+        summary = reconcile_collected_values(values, **kwargs)
+        self.assertEqual(summary["labels"], 0)
+        self.assertTrue(all(row["win_score_interval"] is None for row in summary["calibration"]))
+
+    def test_collected_reconciliation_rejects_incomplete_malformed_and_unbound_rows(self):
+        values, kwargs = self.collected()
+        worker = lambda row: row["workers"][0]["evidence"]
+        leaf = lambda row: worker(row)["leaves"][0]
+        label = lambda row: leaf(row)["labels"][0]
+        mutations = [lambda row: row.update(selected_receipt_sha256="c"*64),
+            lambda row: row.update(runtime_sha256="c"*64), lambda row: row.update(workers=[]),
+            lambda row: row["workers"][0].update(worker=True),
+            lambda row: worker(row)["contract"].update(original_deadline_at=101.),
+            lambda row: worker(row).update(model_evaluations_seen=2),
+            lambda row: worker(row).update(source_truth_transported=True),
+            lambda row: leaf(row).update(snapshot={"private": "secret"}),
+            lambda row: leaf(row).update(evaluation_ordinal=True),
+            lambda row: leaf(row).update(model_signed_value=True),
+            lambda row: leaf(row).update(priority=1),
+            lambda row: leaf(row).update(labels=leaf(row)["labels"][:-1]),
+            lambda row: label(row).update(replicate=True), lambda row: label(row).update(boundaries=251),
+            lambda row: label(row).update(status="CAPPED_UNCERTAIN"),
+            lambda row: worker(row)["calibration"][6].update(labels=1)]
+        for mutate in mutations:
+            with self.subTest(mutation=mutations.index(mutate)):
+                changed = deepcopy(values)
+                mutate(changed)
+                with self.assertRaises(ValueError):
+                    reconcile_collected_values(changed, **kwargs)
+
+    def test_collected_reconciliation_rejects_correctly_hashed_but_wrong_reservoir(self):
+        from pokezero.mcts_eval.search_over_raw import rng_seed
+        values, kwargs = self.collected()
+        worker = values["workers"][0]["evidence"]
+        worker["model_evaluations_seen"] = 10
+        candidates = sorted((rng_seed("visited-model-sample.v1", kwargs["contract"].sample_seed,
+            0, kwargs["information_key"], ordinal), ordinal) for ordinal in range(10))
+        wrong = []
+        for priority, ordinal in candidates[-2:]:
+            leaf = deepcopy(worker["leaves"][0])
+            leaf.update(priority=priority, evaluation_ordinal=ordinal)
+            wrong.append(leaf)
+        worker.update(leaves=wrong, calibration=calibration_bounds(wrong))
+        with self.assertRaisesRegex(ValueError, "priority drift"):
+            reconcile_collected_values(values, **kwargs)
 
     def test_runtime_model_capture_preserves_prediction_and_hidden_rng(self):
         runtime = _ValueRuntime(SyntheticBaseRuntime(0), ValueDiagnosticContract(7, time.perf_counter()+60), 0)

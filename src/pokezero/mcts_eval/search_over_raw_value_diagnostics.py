@@ -12,13 +12,14 @@ This exploratory diagnostic cannot establish a value-head cause or arm strength.
 from copy import deepcopy
 from dataclasses import dataclass, asdict
 import hashlib
+import heapq
 import math
 import pickle
 import time
 
 from .paper_reference_parallel import PreparedDecision
 from .paper_reference_showdown import ShowdownTrajectoryWorld, decision_state
-from .search_over_raw import _raw_action, require, rng_seed
+from .search_over_raw import _raw_action, digest, require, rng_seed
 
 
 @dataclass(frozen=True)
@@ -202,6 +203,95 @@ def calibration_bounds(leaves):
         row["win_score_interval"] = [row["score_lower_sum"]/n, row["score_upper_sum"]/n] if n else None
         row["squared_error_interval"] = [row["error_lower_sum"]/n, row["error_upper_sum"]/n] if n else None
     return bins
+
+
+def reconcile_collected_values(result, *, selected, contract, workers, information_key):
+    """Validate the complete selection-bound sanitized roster before publication.
+
+    No missing workers/leaves/replicates may become complete-case calibration.
+    A failed RPC has an unknown sampled denominator, not zero sampled leaves.
+    This is descriptive event-weighted calibration, not independent trials.
+    """
+    require(isinstance(contract, ValueDiagnosticContract) and type(workers) is int and workers > 0,
+        "explicit collector diagnostic contract required")
+    require(type(result) is dict and set(result) == {"schema", "root_id", "selected_receipt_sha256",
+        "configuration_sha256", "runtime_sha256", "workers", "labels_used_for_backup",
+        "scientific_strength_evidence"} and result["schema"] == "pokezero.selected-visited-value.v1"
+        and result["root_id"] == selected["root_id"]
+        and result["selected_receipt_sha256"] == digest(selected)
+        and result["configuration_sha256"] == selected["configuration_sha256"]
+        and result["runtime_sha256"] == selected["runtime_sha256"]
+        and result["labels_used_for_backup"] is False and result["scientific_strength_evidence"] is False,
+        "diagnostic selected/runtime binding drift")
+    rows = result["workers"]
+    require(type(rows) in (list, tuple) and len(rows) == workers
+        and all(type(row) is dict and set(row) == {"worker", "evidence"}
+            and type(row["worker"]) is int and row["worker"] == index for index, row in enumerate(rows)),
+        "diagnostic full worker roster required")
+    leaves, seen = [], 0
+    evidence_fields = {"schema", "worker", "root_information_key", "contract", "sampling_unit",
+        "model_evaluations_seen", "sampling", "leaves", "instrumentation_can_change_selection",
+        "labels_used_for_backup", "source_truth_transported", "scientific_strength_evidence",
+        "label_seconds", "calibration"}
+    for worker in rows:
+        index, evidence = worker["worker"], worker["evidence"]
+        require(type(evidence) is dict and set(evidence) == evidence_fields
+            and evidence["schema"] == "pokezero.visited-value.v1"
+            and type(evidence["worker"]) is int and evidence["worker"] == index
+            and evidence["root_information_key"] == information_key
+            and digest(evidence["contract"]) == digest(asdict(contract))
+            and evidence["sampling_unit"] == "successful_model_evaluation_event"
+            and evidence["sampling"] == "smallest_seeded_priorities_per_worker_decision"
+            and evidence["instrumentation_can_change_selection"] is True
+            and all(evidence[field] is False for field in ("labels_used_for_backup",
+                "source_truth_transported", "scientific_strength_evidence"))
+            and type(evidence["label_seconds"]) in (int, float)
+            and math.isfinite(evidence["label_seconds"]) and evidence["label_seconds"] >= 0,
+            "diagnostic worker binding/schema drift")
+        n, sampled = evidence["model_evaluations_seen"], evidence["leaves"]
+        require(type(n) is int and n >= 0 and type(sampled) is list
+            and len(sampled) == min(n, contract.leaves_per_worker), "diagnostic sampled denominator drift")
+        ordinals, priorities = set(), []
+        for leaf in sampled:
+            require(type(leaf) is dict and set(leaf) == {"evaluation_ordinal", "priority", "information_key",
+                "snapshot_sha256", "model_signed_value", "subject", "labels"}, "private/malformed diagnostic leaf")
+            ordinal = leaf["evaluation_ordinal"]
+            require(type(ordinal) is int and 0 <= ordinal < n and ordinal not in ordinals
+                and type(leaf["priority"]) is int and leaf["priority"] == rng_seed("visited-model-sample.v1",
+                    contract.sample_seed, index, information_key, ordinal)
+                and leaf["subject"] == "p1"
+                and type(leaf["information_key"]) is str and bool(leaf["information_key"])
+                and len(leaf["information_key"]) % 2 == 0
+                and all(c in "0123456789abcdef" for c in leaf["information_key"])
+                and type(leaf["snapshot_sha256"]) is str and len(leaf["snapshot_sha256"]) == 64
+                and all(c in "0123456789abcdef" for c in leaf["snapshot_sha256"])
+                and type(leaf["model_signed_value"]) in (int, float)
+                and math.isfinite(leaf["model_signed_value"]) and -1 <= leaf["model_signed_value"] <= 1,
+                "diagnostic actual prediction/state binding drift")
+            ordinals.add(ordinal)
+            priorities.append((leaf["priority"], ordinal))
+            require(type(leaf["labels"]) is list and len(leaf["labels"]) == 8,
+                "diagnostic full label roster required")
+            for rep, label in enumerate(leaf["labels"]):
+                require(type(label) is dict and set(label) == {"replicate", "status", "boundaries",
+                    "signed_outcome", "continuation_policy"} and type(label["replicate"]) is int
+                    and label["replicate"] == rep and label["continuation_policy"] == "raw_argmax_both_seats"
+                    and type(label["boundaries"]) is int and 0 <= label["boundaries"] <= 250,
+                    "diagnostic label roster/boundary drift")
+        expected = heapq.nsmallest(contract.leaves_per_worker,
+            ((rng_seed("visited-model-sample.v1", contract.sample_seed, index, information_key, ordinal), ordinal)
+                for ordinal in range(n)))
+        require(priorities == expected
+            and digest(evidence["calibration"]) == digest(calibration_bounds(sampled)),
+            "diagnostic calibration/priority drift")
+        leaves.extend(sampled)
+        seen += n
+    calibration = calibration_bounds(leaves)
+    return dict(schema="pokezero.collected-visited-value.v1", selection_sha256=digest(selected),
+        workers=workers, model_evaluations_seen=seen, sampled_leaves=len(leaves),
+        labels=8*len(leaves), unknown_labels=sum(row["unknown_labels"] for row in calibration),
+        calibration=calibration, weighting="sampled_model_evaluation_events_not_independent_trials",
+        mechanism_qualified=False, scientific_strength_evidence=False)
 
 
 class _ObservedWorld:

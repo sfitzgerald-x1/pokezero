@@ -86,9 +86,14 @@ class ExplorationStages:
     two-source A2 slots and source-validated short-game slots remain uncertain.
     No historical A1 measurement is promoted to an A2 evaluator measurement.
     """
-    def __init__(self, plan, bank_manifest, *, original_deadline_at=None):
+    def __init__(self, plan, bank_manifest, *, original_deadline_at=None, value_diagnostics=None):
         require(original_deadline_at is None or (type(original_deadline_at) in (int, float)
             and math.isfinite(original_deadline_at)), "finite A2 execution deadline required")
+        if value_diagnostics is not None:
+            from .search_over_raw_value_diagnostics import ValueDiagnosticContract
+            require(isinstance(value_diagnostics, ValueDiagnosticContract)
+                and value_diagnostics.original_deadline_at == original_deadline_at,
+                "A2 live diagnostic contract must bind original deadline")
         require(digest(plan["phase_a_cohort"]) == plan["phase_a_cohort_sha256"], "original cohort digest drift")
         panel = plan["phase_a_cohort"]["panels"]["exploration"]
         slots, seeds = panel["root_slots"], panel["seeds"]
@@ -114,6 +119,7 @@ class ExplorationStages:
         self._a3_started = False
         self._a3_records = {}
         self._original_deadline_at = original_deadline_at
+        self._value_diagnostic_contract = asdict(value_diagnostics) if value_diagnostics is not None else None
 
     def record_root(self, audit, selections, *, public_record_sha256, selection_seed, legal_choices):
         require(self._frozen is None, "A2 frozen; no later evidence or reselection")
@@ -186,6 +192,7 @@ class ExplorationStages:
                 causal_evaluator_claim=False, positive_gain_claim=False))
         self._frozen = dict(schema="pokezero.search-over-raw.a3-exploration-freeze.v1", choices=choices,
             original_deadline_at=self._original_deadline_at,
+            visited_value_diagnostics=deepcopy(self._value_diagnostic_contract),
             full_root_denominator=200, full_seed_denominator=32, accounted_new_roots=len(self._records),
             unavailable_a2_roots=200-len(self._records),
             a2_evidence_sha256=digest(self._records), bank_manifest_sha256=digest(self._manifest),
@@ -212,6 +219,8 @@ class ExplorationStages:
             return digest(value)
         require(digest(plan) == self._plan_sha256 and digest(frozen) == digest(self._frozen)
             and identity(bank_manifest) == identity(self._manifest), "A3 plan/bank/freeze binding drift")
+        require(self._value_diagnostic_contract is None,
+            "instrumented A2 cannot feed an uninstrumented A3 curve; matched capture/reuse pending")
         self._a3_started = True
         return deepcopy(self._frozen)
 

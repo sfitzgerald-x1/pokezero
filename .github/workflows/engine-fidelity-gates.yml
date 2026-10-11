@@ -1080,7 +1080,7 @@ jobs:
             tests.test_search_over_raw_a1 tests.test_search_over_raw_a1_exploration \
             tests.test_search_over_raw_collection_amendment tests.test_search_over_raw_value_diagnostics -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 506 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 518 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"

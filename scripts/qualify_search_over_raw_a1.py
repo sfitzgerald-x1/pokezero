@@ -71,7 +71,8 @@ def bound_files():
             "mcts_eval/search_over_raw_adapters.py", "mcts_eval/search_over_raw_archive.py",
             "mcts_eval/search_over_raw_source.py", "mcts_eval/search_over_raw_oracle.py",
             "mcts_eval/paper_reference_parallel.py",
-            "mcts_eval/search_over_raw_belief_diagnostics.py")]]
+            "mcts_eval/search_over_raw_belief_diagnostics.py",
+            "mcts_eval/search_over_raw_value_diagnostics.py")]]
 
 
 def exposure_inventory(paths):
@@ -181,10 +182,15 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
                  factory, contract, source, showdown, verify, ownership=None,
                  namespace=NAMESPACE, completion_status="COMPLETE_ENGINEERING_ONLY",
                  boundary_censoring=False, configuration_roster=None,
-                 matched_statistics_root=False, reused_root_evidence=None):
+                 matched_statistics_root=False, reused_root_evidence=None, value_diagnostics=None):
     require(type(boundary_censoring) is bool, "explicit boolean boundary-censoring policy required")
     require(type(matched_statistics_root) is bool, "explicit statistics-root policy required")
     roster = configurations() if configuration_roster is None else list(configuration_roster)
+    if value_diagnostics is not None:
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        require(isinstance(value_diagnostics, ValueDiagnosticContract) and matched_statistics_root
+            and boundary_censoring and reused_root_evidence is None,
+            "visited-value capture requires explicit new matched/censored selections; no relabeling reused A2")
     require(roster and all(type(cfg) is SearchConfiguration for cfg in roster)
         and len({key(cfg) for cfg in roster}) == len(roster)
         and sum(cfg.arm == "raw" for cfg in roster) == 1,
@@ -257,6 +263,23 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
             progress["selections_reused"] = progress.get("selections_reused", 0) + 1
             continue
         adapter = None
+        diagnostic = value_diagnostics if cfg.arm == "reference" else None
+        diagnostic_record = None
+        if diagnostic is not None:
+            diagnostic_record = dict(root_id=root["root_id"], configuration=name,
+                status="CAPTURE_ATTEMPTED_UNCERTAIN", contract=asdict(diagnostic),
+                maximum_labels=cfg.workers*diagnostic.leaves_per_worker*8,
+                sampled_leaves=None, labels=None, unknown_labels=None,
+                scientific_strength_evidence=False, retry_authorized=False)
+            if "value_diagnostic_roster" in progress:
+                planned = [row for row in progress["value_diagnostic_roster"]
+                    if row["root_id"] == root["root_id"] and row["configuration"] == name]
+                require(len(planned) == 1 and planned[0]["status"] == "UNSTARTED_UNCERTAIN",
+                    "diagnostic selector cannot be replayed or removed from full roster")
+                planned[0].update(diagnostic_record)
+                diagnostic_record = planned[0]
+            progress.setdefault("value_diagnostics", []).append(diagnostic_record)
+            save_new(output / f"{name}-value-attempt.json", diagnostic_record)
         progress["stage"] = root["root_id"] + ":" + name + ":construct"
         cell["status"] = "CONSTRUCTION_ATTEMPTED_UNCERTAIN"
         save_new(output / f"{name}-attempt.json", dict(root_id=root["root_id"],
@@ -269,6 +292,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
             adapter = make_adapter(cfg, oracle=oracle, checkpoint_contract=contract,
                 showdown_root=showdown, evaluator=evaluator if cfg.arm == "raw" else None,
                 reference_factory=factory if cfg.arm == "reference" else None, initial_dispatch_workers=6,
+                **({"value_diagnostics": diagnostic} if diagnostic is not None else {}),
                 **({"owned_process_receipts": ownership} if cfg.arm == "reference" and ownership is not None else {}))
             construction = time.perf_counter() - began
             save_new(output / f"{name}-runtime.json", dict(runtime_configuration=adapter.runtime_configuration,
@@ -278,8 +302,14 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
             selected = adapter.select(context, root_id=root["root_id"] + ":" + name,
                 selection_seed=root["public_record"]["seed"], pending_transition=pending,
                 **({"statistics_root_id": root["root_id"]} if matched_statistics_root else {}))
+            # Publish the actual selection before a diagnostic/deadline failure;
+            # it remains SELECTED_UNMEASURED, never a completed contrast.
+            if diagnostic is not None:
+                save_new(output / f"{name}-selected.json", selected)
+                cell.update(status="SELECTED_UNMEASURED", action=selected["action"])
             verify()
-            save_new(output / f"{name}-selected.json", selected)
+            if diagnostic is None:
+                save_new(output / f"{name}-selected.json", selected)
             if cfg.arm != "raw":
                 save_new(output / f"{name}-agreement.json", agreement(selected, truth, request, cfg))
             work = selection_work(cfg, selected, sum(context.observation.legal_action_mask))
@@ -287,6 +317,21 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
             actions[name] = selected["action"]
             cell.update(status="SELECTED_UNMEASURED", action=selected["action"])
             progress["selections_completed"] += 1
+            if diagnostic is not None:
+                from pokezero.mcts_eval.search_over_raw_value_diagnostics import reconcile_collected_values
+                progress["stage"] = root["root_id"] + ":" + name + ":visited-value-labels"
+                diagnostic_record.update(status="LABELING_ATTEMPTED_UNCERTAIN",
+                    selected_receipt_sha256=digest(selected))
+                save_new(output / f"{name}-value-label-attempt.json", diagnostic_record)
+                values = adapter.finish_value_diagnostics(selected)
+                summary = reconcile_collected_values(values, selected=selected, contract=diagnostic,
+                    workers=cfg.workers, information_key=root_binding["information_key"])
+                save_new(output / f"{name}-values.json", values)
+                save_new(output / f"{name}-value-summary.json", summary)
+                diagnostic_record.update(status="LABEL_ROSTER_VALIDATED", **{field: summary[field]
+                    for field in ("sampled_leaves", "labels", "unknown_labels")},
+                    values_sha256=digest(values), summary_sha256=digest(summary))
+                verify()
             progress["stage"] = root["root_id"] + ":" + name + ":close"
             close_start = time.perf_counter()
             adapter.close()
@@ -295,6 +340,16 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
                 end_to_end_seconds=time.perf_counter()-began,
                 nominal_ceiling_scope="selection only; startup/cleanup and overshoot reported separately"))
             print(json.dumps(dict(stage=progress["stage"], seconds=selected["elapsed_seconds"])), flush=True)
+        except BaseException as error:
+            if diagnostic_record is not None:
+                # Retain validated rows on later cleanup/provenance failure;
+                # failed/unreturned RPCs have UNKNOWN actual denominators.
+                diagnostic_record.update(collection_failed=True, error_type=type(error).__name__)
+                try:
+                    save_new(output / f"{name}-value-failure.json", diagnostic_record)
+                except BaseException as evidence_error:
+                    error.add_note("Diagnostic failure evidence also failed: " + type(evidence_error).__name__)
+            raise
         finally:
             primary_active = sys.exc_info()[0] is not None
             try:
