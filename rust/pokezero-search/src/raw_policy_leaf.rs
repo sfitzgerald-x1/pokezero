@@ -169,6 +169,15 @@ pub(crate) fn expired(deadline: Option<Instant>) -> bool {
     deadline.is_some_and(|deadline| Instant::now() >= deadline)
 }
 
+/// Diagnostic censoring is typed, never inferred by matching an exception.
+/// The search adapter below retains its historical cap-refusal semantics.
+#[derive(Debug, PartialEq)]
+pub(crate) enum TerminalLabel {
+    Terminal(f32),
+    Capped,
+    Deadline,
+}
+
 /// `None` is cancellation, NEVER a draw/leaf score. An owned hypothetical
 /// state and forked prefix are discarded on every exit; the search state and
 /// its persistent public ledgers cannot be changed by a continuation.
@@ -179,7 +188,22 @@ pub(crate) fn price(
     deadline: Option<Instant>, stats: &mut RawPolicyLeafStats,
     lossy: &mut crate::abort_telemetry::LossySubcaseLedger,
 ) -> PyResult<Option<f32>> {
-    if expired(deadline) { return Ok(None); }
+    match label_price(leaf, key, ordinal, ctx, meta, meta_ctx, cfg, deadline, stats, lossy)? {
+        TerminalLabel::Terminal(value) => Ok(Some(value)),
+        TerminalLabel::Deadline => Ok(None),
+        TerminalLabel::Capped => Err(PyValueError::new_err(
+            "raw policy terminal: nonterminal ply cap; no fallback value")),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn label_price(
+    leaf: &State, key: (usize, usize), ordinal: u64, ctx: &EventContext,
+    meta: &LeafMeta, meta_ctx: &LeafMetaCtx, cfg: &RawPolicyLeaf,
+    deadline: Option<Instant>, stats: &mut RawPolicyLeafStats,
+    lossy: &mut crate::abort_telemetry::LossySubcaseLedger,
+) -> PyResult<TerminalLabel> {
+    if expired(deadline) { return Ok(TerminalLabel::Deadline); }
     let bridges = [cfg.bridges[0].fork_at(key)?, cfg.bridges[1].fork_at(key)?];
     let mut state = leaf.clone();
     let mut ctx = ctx.clone();
@@ -189,7 +213,7 @@ pub(crate) fn price(
     stats.started += 1;
     let result = (|| {
         for ply in 0..=cfg.max_plies {
-            if expired(deadline) { return Ok(None); }
+            if expired(deadline) { return Ok(TerminalLabel::Deadline); }
             // Native's battle_is_over gives seat two the simultaneous-faint
             // case. That is not a certified draw/win: refuse instead.
             let one_dead = state.side_one.pokemon.into_iter().all(|p| p.hp <= 0);
@@ -200,14 +224,14 @@ pub(crate) fn price(
             let over = state.battle_is_over();
             if over != 0. {
                 stats.terminal += 1;
-                return Ok(Some(if over > 0. { 1. } else { 0. }));
+                return Ok(TerminalLabel::Terminal(if over > 0. { 1. } else { 0. }));
             }
             if ply == cfg.max_plies {
                 stats.cap_refusals += 1;
-                return Err(PyValueError::new_err("raw policy terminal: nonterminal ply cap; no fallback value"));
+                return Ok(TerminalLabel::Capped);
             }
             let Some((s1, s2)) = select_choices(&state, parent, &ctx, &bridges, deadline, stats)?
-                else { return Ok(None); };
+                else { return Ok(TerminalLabel::Deadline); };
             let branches = generate_instructions_from_move_pair(
                 &mut state, &s1, &s2, cfg.branch_on_damage);
             let mass: f32 = branches.iter().map(|b| b.percentage).sum();
@@ -247,7 +271,7 @@ pub(crate) fn price(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use poke_engine::choices::Choices;
     use poke_engine::engine::abilities::Abilities;
@@ -257,7 +281,7 @@ mod tests {
     use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn fixture(side_one_wins: bool, cap: u32) -> (State, EventContext, LeafMeta, RawPolicyLeaf) {
+    pub(crate) fn fixture(side_one_wins: bool, cap: u32) -> (State, EventContext, LeafMeta, RawPolicyLeaf) {
         Python::initialize();
         let callback = Python::attach(|py| {
             PyModule::from_code(py, c_str!("import json\ndef choose(payload):\n    row = json.loads(payload)['native_request_bundle']['native_action_indices']\n    return [float(i == 0) for i in range(len(row))]\n"),
@@ -320,6 +344,17 @@ mod tests {
         assert_eq!(stats.terminal, 0);
         assert_eq!(stats.cap_refusals, 1);
         assert_eq!(stats.plies, 1);
+    }
+
+    #[test]
+    fn diagnostic_caps_are_typed_while_search_cap_still_refuses() {
+        let (state, ctx, meta, cfg) = fixture(true, 1);
+        let mut stats = RawPolicyLeafStats::default();
+        assert_eq!(label_price(&state, (0, 0), 0, &ctx, &meta, &LeafMetaCtx::default(),
+            &cfg, None, &mut stats, &mut Default::default()).unwrap(), TerminalLabel::Capped);
+        assert_eq!(stats.terminal, 0);
+        assert_eq!(stats.plies, 1);
+        assert_eq!(stats.cap_refusals, 1);
     }
 
     #[test]

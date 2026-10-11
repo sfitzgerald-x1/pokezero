@@ -42,7 +42,8 @@ def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluato
         a2_manifest = json.loads((a2_output / "stage-manifest.json").read_text())
         require(a2_manifest["original_deadline_at"] == deadline_at, "A3 cannot extend A2/producer deadline")
         if value_diagnostics is not None:
-            from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+            from pokezero.mcts_eval.search_over_raw_value_diagnostics import (
+                ValueDiagnosticContract, diagnostic_configurations, maximum_diagnostic_labels)
             require(isinstance(value_diagnostics, ValueDiagnosticContract)
                 and value_diagnostics.original_deadline_at == deadline_at,
                 "A3 diagnostic contract must keep original producer deadline")
@@ -76,14 +77,16 @@ def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluato
         if value_diagnostics is not None:
             progress["value_diagnostic_roster"] = [dict(root_id=slot["root_id"], configuration=key(cfg),
                 status="UNSTARTED_UNCERTAIN", sampled_leaves=None, labels=None, unknown_labels=None,
-                maximum_labels=cfg.workers*value_diagnostics.leaves_per_worker*8,
+                maximum_labels=maximum_diagnostic_labels(cfg, value_diagnostics),
                 scientific_strength_evidence=False, retry_authorized=False)
-                for slot in slots for cfg in roster if cfg.arm == "reference"]
+                for slot in slots for cfg in diagnostic_configurations(roster, value_diagnostics)]
             stage_manifest["visited_value_diagnostics"] = dict(contract=asdict(value_diagnostics),
                 full_selection_denominator=len(progress["value_diagnostic_roster"]),
                 capture_inside_selection_clock=True, labels_after_selection=True,
                 one_second_labels_reused_not_independent=True, qualifies_uninstrumented_runtime=False,
-                incumbent_diagnostics_pending=True, scientific_strength_evidence=False)
+                incumbent_diagnostics_pending=value_diagnostics.incumbent_sampling is None,
+                native_labels_engineering_only=True, reference_and_native_sampling_not_equal=True,
+                scientific_strength_evidence=False)
         save_new(output / "stage-manifest.json", stage_manifest)
         for slot in slots:
             root_id = slot["root_id"]
@@ -98,7 +101,7 @@ def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluato
             prior_values = {key(cfg): dict(
                 values=json.loads((prior_directory / f"{key(cfg)}-values.json").read_text()),
                 summary=json.loads((prior_directory / f"{key(cfg)}-value-summary.json").read_text()))
-                for cfg in a2_configurations() if cfg.arm == "reference"} if value_diagnostics is not None else None
+                for cfg in diagnostic_configurations(a2_configurations(), value_diagnostics)} if value_diagnostics is not None else None
             reuse = ledger.a3_reuse(root_id, prior, prior_selections, value_evidence=prior_values)
             root, context, pending, snapshot = bank.selected_for_auditor(root_id)
             directory = output / relative
@@ -115,7 +118,7 @@ def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluato
             values = {key(cfg): dict(
                 values=json.loads((directory / f"{key(cfg)}-values.json").read_text()),
                 summary=json.loads((directory / f"{key(cfg)}-value-summary.json").read_text()))
-                for cfg in roster if cfg.arm == "reference"} if value_diagnostics is not None else None
+                for cfg in diagnostic_configurations(roster, value_diagnostics)} if value_diagnostics is not None else None
             ledger.record_a3_root(audit, selections, value_evidence=values)
             if progress_sink is not None:
                 progress_sink(progress)

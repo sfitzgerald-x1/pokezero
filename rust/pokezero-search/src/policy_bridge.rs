@@ -130,6 +130,27 @@ pub(crate) struct PolicyOpponentBridge {
 }
 
 impl PolicyOpponentBridge {
+    /// Private retained-payload accounting/binding only. Never sent to the
+    /// policy callback, a report, or another process. Includes the exact own
+    /// root, current public prefix and both original/transformed PP banks.
+    pub(crate) fn snapshot_payload(&self, key: BranchKey) -> PyResult<Vec<u8>> {
+        let prefixes = self.prefixes.borrow();
+        let prefix = prefixes.get(&key).ok_or_else(||
+            PyValueError::new_err("visited value: captured public prefix missing"))?;
+        let mut charges: Vec<_> = prefix.own_pp.original_charges.iter().collect();
+        charges.sort_by_key(|(key, _)| *key);
+        let mut transformed: Vec<_> = prefix.own_pp.transformed.iter().collect();
+        transformed.sort();
+        Ok(serde_json::json!({
+            "own_root": self.root_own_side.serialize(), "side_one": self.opponent_side_one,
+            "order": self.root_order, "max_pp": self.max_pp, "base_pp": self.base_pp,
+            "display_species": self.display_ctx.species, "display_turn": self.display_ctx.turn,
+            "hp_percent": self.display_ctx.hp_percent, "lines": prefix.lines,
+            "frontier_meta_debug": format!("{:?}", prefix.meta),
+            "charges": charges, "transformed": transformed, "active": prefix.own_pp.active,
+        }).to_string().into_bytes())
+    }
+
     /// Isolate one terminal continuation's branch history. Copy ONLY the
     /// frontier prefix; future siblings must never share mutable PP/history.
     pub(crate) fn fork_at(&self, key: BranchKey) -> PyResult<Self> {

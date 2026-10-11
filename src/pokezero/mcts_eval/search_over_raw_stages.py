@@ -125,18 +125,18 @@ class ExplorationStages:
         if self._value_diagnostic_contract is None:
             require(value_evidence is None, "uninstrumented stage cannot adopt diagnostic evidence")
             return {}
-        from .search_over_raw_value_diagnostics import ValueDiagnosticContract, reconcile_collected_values
+        from .search_over_raw_value_diagnostics import ValueDiagnosticContract, reconcile_collected_values, diagnostic_configurations
         contract = ValueDiagnosticContract(**self._value_diagnostic_contract)
-        references = [cfg for cfg in configs if cfg.arm == "reference"]
+        references = diagnostic_configurations(configs, contract)
         require(type(value_evidence) is dict and set(value_evidence) == {key(cfg) for cfg in references},
-            "full instrumented reference diagnostic evidence required")
+            "full instrumented arm diagnostic evidence required")
         information_key = audit["continuation_contract"]["root_binding"]["information_key"]
         hashes = {}
         for cfg in references:
             bundle = value_evidence[key(cfg)]
             require(type(bundle) is dict and set(bundle) == {"values", "summary"}, "diagnostic bundle drift")
             summary = reconcile_collected_values(bundle["values"], selected=selections[key(cfg)],
-                contract=contract, workers=cfg.workers, information_key=information_key)
+                contract=contract, workers=cfg.workers, information_key=information_key, arm=cfg.arm)
             require(digest(summary) == digest(bundle["summary"]), "diagnostic summary binding drift")
             hashes[key(cfg)] = digest(bundle)
         return hashes
@@ -304,7 +304,7 @@ class ExplorationStages:
                 for row in audit["outcomes"]) else "UNCERTAIN"), "A3 operational refusal/status drift")
         hashes = self._value_bindings(audit, selections, configs, value_evidence)
         for cfg in configs:
-            if cfg.arm == "reference" and cfg.seconds == 1. and self._value_diagnostic_contract is not None:
+            if key(cfg) in hashes and cfg.seconds == 1. and self._value_diagnostic_contract is not None:
                 require(hashes[key(cfg)] == record["value_evidence_sha256"][key(cfg)],
                     "A3 reran or changed original one-second diagnostic")
         self._a3_records[root_id] = dict(intervals=intervals, audit_sha256=digest(audit),

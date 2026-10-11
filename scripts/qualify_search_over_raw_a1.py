@@ -187,7 +187,8 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
     require(type(matched_statistics_root) is bool, "explicit statistics-root policy required")
     roster = configurations() if configuration_roster is None else list(configuration_roster)
     if value_diagnostics is not None:
-        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import (
+            ValueDiagnosticContract, diagnostic_configurations, maximum_diagnostic_labels)
         require(isinstance(value_diagnostics, ValueDiagnosticContract) and matched_statistics_root
             and boundary_censoring,
             "visited-value capture requires explicit matched/censored selections")
@@ -249,7 +250,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
             from pokezero.mcts_eval.search_over_raw_value_diagnostics import reconcile_collected_values
             reused_values = deepcopy(reused_root_evidence["value_evidence"])
             hashes = reused_root_evidence["value_evidence_sha256"]
-            expected = {key(cfg) for cfg in roster if cfg.arm == "reference" and cfg.seconds == 1.}
+            expected = {key(cfg) for cfg in diagnostic_configurations(roster, value_diagnostics) if cfg.seconds == 1.}
             require(set(reused_values) == set(hashes) == expected,
                 "exact original one-second diagnostic reuse required")
             for cfg in roster:
@@ -258,7 +259,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
                 bundle = reused_values[key(cfg)]
                 require(digest(bundle) == hashes[key(cfg)], "prior diagnostic reuse hash drift")
                 summary = reconcile_collected_values(bundle["values"], selected=reused[key(cfg)],
-                    contract=value_diagnostics, workers=cfg.workers, information_key=root_binding["information_key"])
+                    contract=value_diagnostics, workers=cfg.workers, information_key=root_binding["information_key"], arm=cfg.arm)
                 require(digest(summary) == digest(bundle["summary"]), "prior diagnostic reuse summary drift")
         else:
             require(not reused_root_evidence.get("value_evidence"), "cannot drop instrumentation on reused selectors")
@@ -267,7 +268,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
         save_new(output / "continuation-contract.json", continuation_contract)
     def diagnostic_entry(cfg, status):
         record = dict(root_id=root["root_id"], configuration=key(cfg), status=status,
-            contract=asdict(value_diagnostics), maximum_labels=cfg.workers*value_diagnostics.leaves_per_worker*8,
+            contract=asdict(value_diagnostics), maximum_labels=maximum_diagnostic_labels(cfg, value_diagnostics),
             sampled_leaves=None, labels=None, unknown_labels=None,
             scientific_strength_evidence=False, retry_authorized=False)
         if "value_diagnostic_roster" in progress:
@@ -308,7 +309,8 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
             progress["selections_reused"] = progress.get("selections_reused", 0) + 1
             continue
         adapter = None
-        diagnostic = value_diagnostics if cfg.arm == "reference" else None
+        diagnostic = value_diagnostics if value_diagnostics is not None and cfg in diagnostic_configurations(
+            roster, value_diagnostics) else None
         diagnostic_record = None
         if diagnostic is not None:
             diagnostic_record = diagnostic_entry(cfg, "CAPTURE_ATTEMPTED_UNCERTAIN")
@@ -358,7 +360,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
                 save_new(output / f"{name}-value-label-attempt.json", diagnostic_record)
                 values = adapter.finish_value_diagnostics(selected)
                 summary = reconcile_collected_values(values, selected=selected, contract=diagnostic,
-                    workers=cfg.workers, information_key=root_binding["information_key"])
+                    workers=cfg.workers, information_key=root_binding["information_key"], arm=cfg.arm)
                 save_new(output / f"{name}-values.json", values)
                 save_new(output / f"{name}-value-summary.json", summary)
                 diagnostic_record.update(status="LABEL_ROSTER_VALIDATED", **{field: summary[field]

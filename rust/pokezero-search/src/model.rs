@@ -1138,7 +1138,12 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     policy_opponent: Option<(&crate::policy_bridge::PolicyOpponentBridge, u64)>,
     record_joint_actions: bool,
     raw_policy: Option<&crate::raw_policy_leaf::RawPolicyLeaf>,
+    mut visited_values: Option<&mut crate::visited_value::VisitedValueBank>,
 ) -> PyResult<String> {
+    if visited_values.as_ref().is_some_and(|bank| bank.expired()) {
+        return Err(PyValueError::new_err("visited value: original producer deadline expired before native search"));
+    }
+    if let Some(bank) = visited_values.as_deref_mut() { bank.bind_root(state_str); }
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
         return Err(PyValueError::new_err("battle is already over at the root"));
@@ -1194,10 +1199,14 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let hp_fraction = matches!(rollout_mode, Some(EncodedLeafMode::HpFraction));
     let raw_terminal = matches!(rollout_mode, Some(EncodedLeafMode::RawPolicyTerminal));
     let mut raw_stats = crate::raw_policy_leaf::RawPolicyLeafStats::default();
-    let raw_deadline = match (time_budget_started, time_budget_ms) {
+    let native_raw_deadline = match (time_budget_started, time_budget_ms) {
         (Some(started), Some(ms)) if raw_terminal =>
             Some(started + std::time::Duration::from_millis(ms)),
         _ => None,
+    };
+    let raw_deadline = match (native_raw_deadline, visited_values.as_ref().map(|bank| bank.deadline())) {
+        (Some(native), Some(original)) => Some(native.min(original)),
+        (native, original) => native.or(original),
     };
     let mut hp_leaf_rows_priced = 0usize;
     let mut rng = StdRng::seed_from_u64(seed);
@@ -1343,6 +1352,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let _ = crate::leaf::drain_encode_subphases(); // per-search reset
     let start = Instant::now();
     while completed < iterations {
+        if visited_values.as_ref().is_some_and(|bank| bank.expired()) {
+            time_budget_exhausted = true;
+            break;
+        }
         if let (Some(budget_ms), Some(started)) = (time_budget_ms, time_budget_started) {
             if started.elapsed().as_millis() >= u128::from(budget_ms) {
                 // This check is deliberately before a round begins. Everything
@@ -1637,6 +1650,16 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         }
                         raw_leaf_keys.push((seam.chance, seam.branch_index));
                     }
+                    if let Some(bank) = visited_values.as_deref_mut() {
+                        let mut frontier_ctx = ctx.clone();
+                        frontier_ctx.turn = turn;
+                        if let Err(error) = bank.stage(leaf, (seam.chance, seam.branch_index), row,
+                            &frontier_ctx, &meta, leaf_ctx.meta_ctx(),
+                            raw_policy.expect("diagnostic own-policy bridges validated"), self_side_one) {
+                            leaf_error = Some(error);
+                            return LeafPrice::Ready(0.5);
+                        }
+                    }
                     fold_by_branch.insert(
                         (seam.chance, seam.branch_index),
                         BranchFold {
@@ -1713,6 +1736,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             encode_nanos += encode_started.elapsed().as_nanos();
             let model_started = Instant::now();
             let output = evaluator.eval_batch(&batch, None)?;
+            if let Some(bank) = visited_values.as_deref_mut() {
+                bank.commit(&output.values01)?;
+            }
             model_nanos += model_started.elapsed().as_nanos();
             model_evals += pending.len();
             let heads = head_pair(&output, cfg.use_opponent_priors)?;
@@ -2489,6 +2515,7 @@ impl NativeLeafModel {
         record_joint_actions = false,
         raw_policy_callbacks = None,
         raw_policy_request_orders = None,
+        visited_value_bank = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -2525,6 +2552,7 @@ impl NativeLeafModel {
         record_joint_actions: bool,
         raw_policy_callbacks: Option<Vec<Py<PyAny>>>,
         raw_policy_request_orders: Option<Vec<Vec<String>>>,
+        visited_value_bank: Option<Py<crate::visited_value::NativeVisitedValueBank>>,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -2584,7 +2612,14 @@ impl NativeLeafModel {
             }
         };
         let raw_enabled = rollout_mode == Some(EncodedLeafMode::RawPolicyTerminal);
-        if raw_enabled != raw_policy_callbacks.is_some() || raw_enabled != raw_policy_request_orders.is_some() {
+        let capture_enabled = visited_value_bank.is_some();
+        if capture_enabled && (policy_enabled || !model_priors || use_opponent_priors
+            || !matches!(rollout_mode, None | Some(EncodedLeafMode::ModelValue)
+                | Some(EncodedLeafMode::HpFraction) | Some(EncodedLeafMode::RawPolicyTerminal))) {
+            return Err(PyValueError::new_err("visited value: only fixed model/HP/raw model-prior trees without opponent providers are supported"));
+        }
+        if (raw_enabled || capture_enabled) != raw_policy_callbacks.is_some()
+            || (raw_enabled || capture_enabled) != raw_policy_request_orders.is_some() {
             return Err(PyValueError::new_err("raw policy terminal requires both seat callbacks and request orders; forbidden in other modes"));
         }
         if raw_enabled && (policy_enabled || !model_priors || use_opponent_priors
@@ -2677,7 +2712,11 @@ impl NativeLeafModel {
                 policy_display_ctx,
             ))
         } else { None };
-        py.detach(move || {
+        let mut visited = match &visited_value_bank {
+            Some(handle) => Some(handle.borrow_mut(py).begin()?),
+            None => None,
+        };
+        let (result, visited) = py.detach(move || {
             let spec = self.evaluator.spec();
             // Contain poke-engine's own panics, AND carry the sub-case counts out of
             // every failure the search can produce. Both halves live in
@@ -2710,7 +2749,7 @@ impl NativeLeafModel {
             // but the attribute's presence marks "a search ran and aborted", not "any
             // error left this function". Python treats a missing attribute and an empty
             // payload identically, so the counter is the same either way.
-            crate::abort_telemetry::guarded_search_with_ledger(|lossy_subcases| {
+            let result = crate::abort_telemetry::guarded_search_with_ledger(|lossy_subcases| {
                 multiply_batched_encoded_core(
                     state_str,
                     iterations,
@@ -2740,8 +2779,14 @@ impl NativeLeafModel {
                     policy_bridge.as_ref().map(|bridge| (bridge, policy_opponent_seed.expect("validated policy seed"))),
                     record_joint_actions,
                     raw_policy.as_ref(),
+                    visited.as_mut(),
                 )
-            })
-        })
+            });
+            (result, visited)
+        });
+        if let (Some(handle), Some(bank)) = (visited_value_bank, visited) {
+            handle.borrow_mut(py).finish(bank, &result);
+        }
+        result
     }
 }

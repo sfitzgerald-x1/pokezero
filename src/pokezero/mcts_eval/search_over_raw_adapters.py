@@ -111,8 +111,10 @@ class PublicModelSearchAdapter:
         self._check_configuration(configuration)
         if value_diagnostics is not None:
             from .search_over_raw_value_diagnostics import ValueDiagnosticContract
-            require(isinstance(value_diagnostics, ValueDiagnosticContract) and configuration.arm == "reference",
-                "visited-value diagnostics currently require the reference arm")
+            require(isinstance(value_diagnostics, ValueDiagnosticContract)
+                and (configuration.arm == "reference" or (configuration.arm == "incumbent"
+                    and value_diagnostics.incumbent_sampling == "per_native_invocation.v1")),
+                "visited-value diagnostics require an explicit supported arm/sampling contract")
         self._value_diagnostics, self._pending_value_diagnostics = value_diagnostics, None
         if policy_opponent_diagnostics is not None:
             from ..policy_opponent_diagnostics import PolicyOpponentDiagnostics
@@ -179,6 +181,17 @@ class PublicModelSearchAdapter:
                 **({"policy_opponent_diagnostics": policy_opponent_diagnostics}
                    if policy_opponent_diagnostics is not None else {}),
                 **({"leaf": configuration.leaf} if configuration.leaf != "model" else {}))
+            if value_diagnostics is not None:
+                try:
+                    self._native.prepare_visited_value_runtime()
+                except BaseException:
+                    self._decider.close()
+                    raise
+                self.runtime_configuration["visited_value_diagnostics"].update(
+                    native_sampling="per_native_invocation.v1", maximum_native_invocations=4,
+                    label_engine="poke_engine_unqualified_against_showdown", searched_line_showdown_fidelity=False,
+                    scientific_calibration_evidence=False, equals_reference_sampling=False)
+                self.runtime_sha256 = digest(self.runtime_configuration)
             if configuration.leaf != "model":
                 self.runtime_configuration["incumbent_leaf"] = dict(leaf=configuration.leaf,
                     tree="unchanged_encoded_model_tree", priors="unchanged_champion",
@@ -254,6 +267,10 @@ class PublicModelSearchAdapter:
                 if self.configuration.leaf == "raw_rollout":
                     self._native._config = replace(self._native._config, rollout_seed=selection_seed)
                 self._prepare_incumbent(request)
+                if self._value_diagnostics is not None:
+                    from .search_over_raw_value_diagnostics import NativeValueDiagnosticSession
+                    self._native._value_diagnostic_session = NativeValueDiagnosticSession(self._value_diagnostics,
+                        root_key=decision_state(request.observation, player=public.player_id).key.hex())
                 # Distinct root ID prevents statistics/fold carry-over from
                 # other sampled roots from masquerading as fresh decisions.
                 public = replace(public, battle_id="search-over-raw-root:" + statistics_root)
@@ -301,6 +318,10 @@ class PublicModelSearchAdapter:
                 evidence = asdict(measured)
             require(type(action) is int and 0 <= action < len(mask) and mask[action], "illegal selected action")
             evidence = self._selection_evidence(evidence, request)
+            if arm == "incumbent" and self._value_diagnostics is not None:
+                measured = self._native._value_diagnostic_session
+                evidence["visited_value_native_invocations"] = measured.bindings()
+                evidence["visited_value_root_legal_actions"] = sum(mask)
             elapsed = time.perf_counter()-started
             selected = dict(root_id=root_id, configuration_sha256=self.configuration.identity,
                 **({"statistics_root_id": statistics_root_id, "selection_seed": selection_seed}
@@ -315,6 +336,8 @@ class PublicModelSearchAdapter:
             return selected
         except BaseException as error:
             self._poisoned = True
+            if self._native is not None and getattr(self._native, "_value_diagnostic_session", None) is not None:
+                self._native._value_diagnostic_session.close()
             self.last_failure = dict(root_id=root_id, error_type=type(error).__name__,
                 status="UNCERTAIN_REFUSED", retry_authorized=False)
             from .policy_opponent_profile import fallback_refusal_diagnostic, refusal_diagnostic
@@ -333,6 +356,11 @@ class PublicModelSearchAdapter:
         require(selected is receipt and digest(selected) == binding, "visited-value selected receipt changed")
         self._pending_value_diagnostics = None
         try:
+            if self._pool is None:
+                return dict(schema="pokezero.selected-native-visited-value.engineering.v1", root_id=selected["root_id"],
+                    selected_receipt_sha256=binding, configuration_sha256=self.configuration.identity,
+                    runtime_sha256=self.runtime_sha256, native_invocations=measured.label(),
+                    labels_used_for_backup=False, scientific_strength_evidence=False)
             workers = self._pool.finish_diagnostics(measured)
             return dict(schema="pokezero.selected-visited-value.v1", root_id=selected["root_id"],
                 selected_receipt_sha256=binding, configuration_sha256=self.configuration.identity,
@@ -348,4 +376,8 @@ class PublicModelSearchAdapter:
             if self._pool is not None:
                 self._pool.close()
             if self._decider is not None:
-                self._decider.close()
+                try:
+                    if getattr(self._native, "_value_diagnostic_session", None) is not None:
+                        self._native._value_diagnostic_session.close()
+                finally:
+                    self._decider.close()

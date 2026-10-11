@@ -561,6 +561,16 @@ class ExplorationStageTests(unittest.TestCase):
                 for receipt in result["evidence"]["worker_receipts"]:
                     receipt["worker"] = 0
                 if diagnostic is not None:
+                    if cfg.arm == "incumbent":
+                        from tests.test_incumbent_value_diagnostics import synthetic_session
+                        session = synthetic_session(diagnostic)
+                        banks.append(session)
+                        result["evidence"]["visited_value_native_invocations"] = session.bindings()
+                        result["evidence"]["visited_value_root_legal_actions"] = 2
+                        result["evidence"]["model_evals"] = 2
+                        result["evidence"].setdefault("engine_mcts", {})["time_budget"] = dict(native_invocations=[
+                            dict(status="completed", world_seed=17)])
+                        return result
                     from tests.test_search_over_raw_value_diagnostics import DiagnosticEnv, actual_world
                     from pokezero.mcts_eval.search_over_raw_value_diagnostics import VisitedValueBank
                     with patch("pokezero.mcts_eval.paper_reference_showdown.decision_state", new=diagnostic_decision_state):
@@ -588,7 +598,12 @@ class ExplorationStageTests(unittest.TestCase):
                         selected_receipt_sha256=digest(selected), configuration_sha256=cfg.identity,
                         runtime_sha256=selected["runtime_sha256"], labels_used_for_backup=False,
                         scientific_strength_evidence=False,
-                        workers=[dict(worker=index, evidence=label(bank)) for index, bank in enumerate(banks)])
+                        workers=[dict(worker=index, evidence=label(bank)) for index, bank in enumerate(banks)]
+                            if cfg.arm == "reference" else [])
+                    if cfg.arm == "incumbent":
+                        values.pop("workers")
+                        values.update(schema="pokezero.selected-native-visited-value.engineering.v1",
+                            native_invocations=banks[0].label())
                     if corrupt is not None:
                         corrupt(values)
                     return values
@@ -640,6 +655,24 @@ class ExplorationStageTests(unittest.TestCase):
             self.assertEqual(value["selected_receipt_sha256"], digest(selected))
             self.assertNotIn('"snapshot":', path.read_text())
         self.assertTrue(all(bank.closed and not bank.rows for bank in self.diagnostic_banks))
+
+    def test_both_arm_extension_keeps_full_roster_and_distinct_native_label_summaries(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        (_, progress), events = self.run_synthetic_stage(value_diagnostics=ValueDiagnosticContract(7, 100.,
+            incumbent_sampling="per_native_invocation.v1"), label_mode="DEADLINE_UNCERTAIN")
+        self.assertEqual(len(progress["value_diagnostics"]), 12)
+        self.assertEqual(len(progress["value_diagnostic_roster"]), 2400)
+        self.assertEqual(sum(row["status"] == "UNSTARTED_UNCERTAIN"
+            for row in progress["value_diagnostic_roster"]), 2388)
+        manifest = json.loads((self.stage_output / "stage-manifest.json").read_text())
+        self.assertFalse(manifest["visited_value_diagnostics"]["incumbent_diagnostics_pending"])
+        self.assertTrue(manifest["visited_value_diagnostics"]["native_labels_engineering_only"])
+        summaries = [json.loads(path.read_text()) for path in self.stage_output.rglob("*-value-summary.json")]
+        native = [row for row in summaries if "native_invocations" in row]
+        self.assertEqual(len(native), 6)
+        self.assertTrue(all(row["labels"] == row["unknown_labels"] == 8
+            and row["scientific_calibration_evidence"] is False for row in native))
+        self.assertEqual(sum(row[0] == "labels" for row in events), 12)
 
     def test_integrated_capped_labels_keep_full_denominator_and_uncertainty(self):
         from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
@@ -969,7 +1002,8 @@ class A3StageTests(unittest.TestCase):
 class InstrumentedA3Tests(unittest.TestCase):
     def setUp(self):
         from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
-        self.contract = ValueDiagnosticContract(7, 100.)
+        self.contract = ValueDiagnosticContract(7, 100., incumbent_sampling="per_native_invocation.v1"
+            if self._testMethodName == "test_both_arm_reuse_is_exact_and_never_relabels_one_second_native" else None)
         self.helper = ExplorationStageTests()
         self.helper.setUp()
         self.addCleanup(self.helper.doCleanups)
@@ -1012,6 +1046,24 @@ class InstrumentedA3Tests(unittest.TestCase):
         self.assertEqual(self.a2_hashes, {str(path.relative_to(self.helper.stage_output)): digest(path.read_text())
             for path in self.helper.stage_output.rglob("*.json")})
         self.assertFalse(self.helper.bank.closed)
+
+    def test_both_arm_reuse_is_exact_and_never_relabels_one_second_native(self):
+        _, progress = self.collect()
+        self.assertEqual(self.factory_calls, 8)
+        self.assertEqual(progress["value_selections_reused"], 4)
+        fresh = self.events[self.event_boundary:]
+        self.assertEqual(sum(row[0] == "labels" for row in fresh), 8)
+        self.assertEqual(sum(row[0] == "select" for row in fresh), 8)
+        self.assertEqual(len(progress["value_diagnostic_roster"]), 2400)
+        reused = [row for row in progress["value_diagnostics"] if row.get("reused_from_a2")]
+        self.assertEqual(len(reused), 4)
+        self.assertTrue(all(row["new_labels"] is False and row["independent_credit"] is False for row in reused))
+        for path in self.output.rglob("*-value-reuse.json"):
+            value_path = path.with_name(path.name.replace("-value-reuse.json", "-values.json"))
+            prior_path = self.helper.stage_output / value_path.relative_to(self.output)
+            self.assertEqual(json.loads(value_path.read_text()), json.loads(prior_path.read_text()))
+        self.assertEqual(self.a2_hashes, {str(path.relative_to(self.helper.stage_output)): digest(path.read_text())
+            for path in self.helper.stage_output.rglob("*.json")})
 
     def test_changed_instrumentation_contract_refuses_before_new_selectors(self):
         from dataclasses import replace

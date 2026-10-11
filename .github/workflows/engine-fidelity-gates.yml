@@ -138,11 +138,13 @@ jobs:
             reports/artifacts/rollout_leaf_witness_mutation_battery.json
             reports/artifacts/rollout_leaf_witness_mutation_battery_*.json
             tests/test_search_over_raw*.py
+            tests/test_incumbent_value_diagnostics.py
             tests/test_randbat_normalization.py
             tests/test_randbat_metadata_cache.py
             tests/test_model_priors_search.py
             tests/test_policy_opponent*.py
             tests/test_raw_policy_leaf_native.py
+            tests/test_native_visited_value.py
             tests/test_model_tree_raw_leaf_contract.py
             tests/test_paper_reference*.py
             tests/test_mcts_eval_timing_corpus.py
@@ -1008,9 +1010,9 @@ jobs:
             tests.test_policy_opponent_profile tests.test_policy_opponent_refusal_repairs \
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
             tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest \
-            tests.test_raw_policy_leaf_native -v 2>&1 \
+            tests.test_raw_policy_leaf_native tests.test_native_visited_value -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 90 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 98 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"
@@ -1026,7 +1028,12 @@ jobs:
             cargo test --release --features model --lib raw_policy_leaf::tests \
             --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
             | tee /tmp/raw-policy-leaf.log
-          grep -qE '^test result: ok\. 16 passed; 0 failed' /tmp/raw-policy-leaf.log
+          grep -qE '^test result: ok\. 17 passed; 0 failed' /tmp/raw-policy-leaf.log
+          LIBTORCH_USE_PYTORCH=1 \
+            cargo test --release --features model --lib visited_value::tests \
+            --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
+            | tee /tmp/native-visited-value.log
+          grep -qE '^test result: ok\. 7 passed; 0 failed' /tmp/native-visited-value.log
           LIBTORCH_USE_PYTORCH=1 \
             cargo test --release --features model --lib tree::tests::cancellation_ \
             --manifest-path rust/pokezero-search/Cargo.toml 2>&1 \
@@ -1078,9 +1085,10 @@ jobs:
             tests.test_search_over_raw_atomic_round tests.test_policy_opponent_prefix \
             tests.test_belief_event_dispatch tests.test_search_over_raw_belief_diagnostics \
             tests.test_search_over_raw_a1 tests.test_search_over_raw_a1_exploration \
-            tests.test_search_over_raw_collection_amendment tests.test_search_over_raw_value_diagnostics -v 2>&1 \
+            tests.test_search_over_raw_collection_amendment tests.test_search_over_raw_value_diagnostics \
+            tests.test_incumbent_value_diagnostics -v 2>&1 \
             | tee /tmp/search-over-raw.log
-          grep -qE 'Ran 524 tests' /tmp/search-over-raw.log
+          grep -qE 'Ran 535 tests' /tmp/search-over-raw.log
           grep -qE '^OK$' /tmp/search-over-raw.log
           if grep -qE '^OK \(.*skipped=' /tmp/search-over-raw.log; then
             echo "::error::the prospective harness contracts must not skip"

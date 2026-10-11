@@ -33,7 +33,8 @@ def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpo
         require(type(deadline_at) in (int, float) and isfinite(deadline_at), "original finite deadline required")
         require(callable(verify), "producer provenance/deadline verifier required")
         if value_diagnostics is not None:
-            from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+            from pokezero.mcts_eval.search_over_raw_value_diagnostics import (
+                ValueDiagnosticContract, diagnostic_configurations, maximum_diagnostic_labels)
             require(isinstance(value_diagnostics, ValueDiagnosticContract)
                 and value_diagnostics.original_deadline_at == deadline_at,
                 "diagnostics must use the unchanged original producer deadline")
@@ -70,15 +71,16 @@ def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpo
         if value_diagnostics is not None:
             progress["value_diagnostic_roster"] = [dict(root_id=slot["root_id"], configuration=key(cfg),
                 status="UNSTARTED_UNCERTAIN", sampled_leaves=None, labels=None, unknown_labels=None,
-                maximum_labels=cfg.workers*value_diagnostics.leaves_per_worker*8,
+                maximum_labels=maximum_diagnostic_labels(cfg, value_diagnostics),
                 scientific_strength_evidence=False, retry_authorized=False)
-                for slot in slots for cfg in roster if cfg.arm == "reference"]
+                for slot in slots for cfg in diagnostic_configurations(roster, value_diagnostics)]
             stage_manifest["visited_value_diagnostics"] = dict(contract=asdict(value_diagnostics),
-                configurations=[key(cfg) for cfg in roster if cfg.arm == "reference"],
+                configurations=[key(cfg) for cfg in diagnostic_configurations(roster, value_diagnostics)],
                 full_selection_denominator=len(progress["value_diagnostic_roster"]),
                 missing_selections_remain_uncertain=True,
                 capture_inside_selection_clock=True, labels_after_selection=True,
-                qualifies_uninstrumented_runtime=False, incumbent_diagnostics_pending=True,
+                qualifies_uninstrumented_runtime=False, incumbent_diagnostics_pending=value_diagnostics.incumbent_sampling is None,
+                native_labels_engineering_only=True, reference_and_native_sampling_not_equal=True,
                 scientific_strength_evidence=False)
         save_new(output / "stage-manifest.json", stage_manifest)
         for slot in slots:
@@ -104,7 +106,7 @@ def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpo
                 value_evidence={key(cfg): dict(
                     values=json.loads((directory / f"{key(cfg)}-values.json").read_text()),
                     summary=json.loads((directory / f"{key(cfg)}-value-summary.json").read_text()))
-                    for cfg in roster if cfg.arm == "reference"} if value_diagnostics is not None else None)
+                    for cfg in diagnostic_configurations(roster, value_diagnostics)} if value_diagnostics is not None else None)
             if progress_sink is not None:
                 progress_sink(progress)
         guard()

@@ -4751,6 +4751,7 @@ class EngineMctsPolicy:
     _world_observer: Any | None = None
     _world_attempt_observer: Any | None = None
     _policy_opponent_diagnostics: Any | None = None
+    _value_diagnostic_session: Any | None = None
 
     def __init__(
         self,
@@ -4893,20 +4894,36 @@ class EngineMctsPolicy:
                 tables_path.read_text(encoding="utf-8"), self._model_config
             )
             if self._config.policy_opponent or self._config.model_leaf_override == "raw_policy_terminal":
-                from .neural_policy import FreshValueHeadWarning, load_transformer_checkpoint
-                with warnings.catch_warnings():
-                    warnings.simplefilter("error", FreshValueHeadWarning)
-                    model, result = load_transformer_checkpoint(
-                        checkpoint_path, map_location=self._config.model_device
-                    )
-                if result.model_config != self._model_config:
-                    raise ValueError("policy opponent checkpoint changed during initialization")
-                expected = result.belief_set_source_hash
-                actual = getattr(getattr(set_source, "metadata", None), "source_hash", None)
-                if expected is None or actual != expected:
-                    raise ValueError("policy opponent requires the checkpoint-bound belief source")
-                model.eval()
-                self._policy_opponent_model, self._policy_opponent_result = model, result
+                self._load_own_policy_runtime()
+
+    def _load_own_policy_runtime(self) -> None:
+        if self._policy_opponent_model is not None and self._policy_opponent_result is not None:
+            return
+        from .neural_policy import FreshValueHeadWarning, load_transformer_checkpoint
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FreshValueHeadWarning)
+            model, result = load_transformer_checkpoint(
+                self._config.checkpoint_path, map_location=self._config.model_device)
+        if result.model_config != self._model_config:
+            raise ValueError("policy opponent checkpoint changed during initialization")
+        expected = result.belief_set_source_hash
+        actual = getattr(getattr(self._set_source, "metadata", None), "source_hash", None)
+        if expected is None or actual != expected:
+            raise ValueError("policy opponent requires the checkpoint-bound belief source")
+        model.eval()
+        self._policy_opponent_model, self._policy_opponent_result = model, result
+
+    def prepare_visited_value_runtime(self) -> None:
+        # Exact prospective incumbent only. Parallel handles/ladder replays
+        # require a separately declared sampling and lifecycle contract.
+        config = self._config
+        if (config.leaf_eval != "model" or not config.model_priors or config.use_opponent_priors
+                or config.policy_opponent or config.model_world_workers != 1
+                or not config.strict_fallbacks or config.early_stop or config.worlds != 4
+                or config.depth_min is not None or config.worlds_min is not None
+                or config.rollout_leaf_eval or config.rollout_leaf_shadow):
+            raise EngineSearchWitnessError("visited values require the serial four-world incumbent model tree")
+        self._load_own_policy_runtime()
 
     def reset(self) -> None:
         """Clear state that belongs to one played battle, preserving telemetry and artifacts.
@@ -4924,6 +4941,9 @@ class EngineMctsPolicy:
         records per-game telemetry as deltas from those cumulative counters.
         """
 
+        if self._value_diagnostic_session is not None:
+            self._value_diagnostic_session.close()
+            self._value_diagnostic_session = None
         # Scratch state owned by one ladder decision/battle.
         self._ladder_depth_override = None
         self._ladder_sims_override = None
@@ -6379,7 +6399,7 @@ class EngineMctsPolicy:
         Every invocation owns its callback and vocabulary OOV tracker; neither
         histories nor inferred rows can leak between parallel worlds.
         """
-        if self._config.model_leaf_override == "raw_policy_terminal":
+        if self._config.model_leaf_override == "raw_policy_terminal" or self._value_diagnostic_session is not None:
             orders = record.get("_raw_policy_request_orders")
             if (not isinstance(orders, list) or len(orders) != 2
                     or any(not isinstance(order, list) or not order for order in orders)):
@@ -6691,9 +6711,14 @@ class EngineMctsPolicy:
                             )
                         search_args[-1] = time_budget_ms
                         native_invocation_started = True
-                    report = json.loads(
-                        native.search_batched_multi_encoded(*search_args, **policy_kwargs)
-                    )
+                    diagnostic = self._value_diagnostic_session
+                    handle = diagnostic.begin(record) if diagnostic is not None else None
+                    if handle is not None:
+                        policy_kwargs["visited_value_bank"] = handle
+                    raw_report = native.search_batched_multi_encoded(*search_args, **policy_kwargs)
+                    if handle is not None:
+                        diagnostic.complete(handle, raw_report)
+                    report = json.loads(raw_report)
                 else:
                     completed, payload = prefetched.completed, prefetched.payload
                     if not completed:
@@ -6973,7 +6998,8 @@ class EngineMctsPolicy:
                 # ... and everything ELSE the world observed before it aborted, which
                 # this seam used to discard wholesale.
                 self._absorb_aborted_lossy_subcases(error)
-                if config.policy_opponent or config.record_joint_actions or model_leaf_override == "raw_policy_terminal":
+                if (config.policy_opponent or config.record_joint_actions or model_leaf_override == "raw_policy_terminal"
+                        or self._value_diagnostic_session is not None):
                     finalize_time_budget()
                     raise EngineSearchWitnessError(
                         f"{'raw terminal leaf' if model_leaf_override == 'raw_policy_terminal' else 'policy opponent' if config.policy_opponent else 'joint-action measurement'} world refused (chance seed={record['seed']}): {reason}"
@@ -7344,7 +7370,7 @@ class EngineMctsPolicy:
                 context,
                 world.party_species["p2" if context.player_id == "p1" else "p1"],
                 **({"sampled_own_party": True} if config.policy_opponent
-                   or model_leaf_override == "raw_policy_terminal" else {}),
+                   or model_leaf_override == "raw_policy_terminal" or self._value_diagnostic_session is not None else {}),
             )
             ctx_payload: dict[str, Any] = {
                 "p1": list(world.party_species["p1"]),
@@ -7391,7 +7417,7 @@ class EngineMctsPolicy:
                         + opponent_order_resolution.status
                     )
                 record["_policy_opponent_request_order"] = opponent_order_resolution.order
-            if model_leaf_override == "raw_policy_terminal":
+            if model_leaf_override == "raw_policy_terminal" or self._value_diagnostic_session is not None:
                 if opponent_order_resolution.order is None:
                     raise EngineSearchWitnessError("raw leaf sampled opponent request order refused: "
                                                    + opponent_order_resolution.status)

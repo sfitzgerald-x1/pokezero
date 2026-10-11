@@ -26,6 +26,8 @@ pub(crate) mod policy_request;
 pub(crate) mod policy_bridge;
 #[cfg(feature = "model")]
 pub(crate) mod raw_policy_leaf;
+#[cfg(feature = "model")]
+pub(crate) mod visited_value;
 pub mod rollout;
 pub mod tree;
 
@@ -471,5 +473,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<fold::PyFoldState>()?;
     #[cfg(feature = "model")]
     m.add_class::<model::NativeLeafModel>()?;
+    #[cfg(feature = "model")]
+    m.add_class::<visited_value::NativeVisitedValueBank>()?;
     Ok(())
 }
