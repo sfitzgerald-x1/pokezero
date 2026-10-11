@@ -218,6 +218,7 @@
     "reports/artifacts/rollout_leaf_witness_mutation_battery_20261010_current.json": "bb27f6d122c36b5081e008d691a0666287dd5051055c6d101c23cbfc3beff584",
     "reports/artifacts/rollout_leaf_witness_mutation_battery_20261010_hp.json": "b33c8d9168739f342f10b34eb71e1819a6a5a2e574f29ddbcafe17d435e3e344",
     "reports/artifacts/rollout_leaf_witness_mutation_battery_20261010_raw.json": "8b22658e0914fbe92fcaead95d7d06c00ca167c54e992718c1cb9c79bae1d8f7",
+    "reports/artifacts/rollout_leaf_witness_mutation_battery_20261011_native_diagnostics.json": "4df91501bfb6d03d0903e44799476ccc8efae7e902330559bc2c942fc529b95b",
     "reports/artifacts/zero_heal_guard_mutation_battery.json": "d8e10cdc6e305b13610dcbf8af2858e24fa5225932e70f570471c4a8488c0765",
     "reports/c100_i2_reachability_fix_refuted.json": "c117f5d9fe3cca661d3e545940da45aa2a4a6b83ebe6168cfbf2393b0346790d",
     "reports/c101_i3_painsplit_tolerance_derivation.json": "40521a46f1268713599c936420332cdc1a53487e3e269d5dac63cd62caea07a9",
