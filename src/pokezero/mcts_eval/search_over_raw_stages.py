@@ -121,7 +121,28 @@ class ExplorationStages:
         self._original_deadline_at = original_deadline_at
         self._value_diagnostic_contract = asdict(value_diagnostics) if value_diagnostics is not None else None
 
-    def record_root(self, audit, selections, *, public_record_sha256, selection_seed, legal_choices):
+    def _value_bindings(self, audit, selections, configs, value_evidence):
+        if self._value_diagnostic_contract is None:
+            require(value_evidence is None, "uninstrumented stage cannot adopt diagnostic evidence")
+            return {}
+        from .search_over_raw_value_diagnostics import ValueDiagnosticContract, reconcile_collected_values
+        contract = ValueDiagnosticContract(**self._value_diagnostic_contract)
+        references = [cfg for cfg in configs if cfg.arm == "reference"]
+        require(type(value_evidence) is dict and set(value_evidence) == {key(cfg) for cfg in references},
+            "full instrumented reference diagnostic evidence required")
+        information_key = audit["continuation_contract"]["root_binding"]["information_key"]
+        hashes = {}
+        for cfg in references:
+            bundle = value_evidence[key(cfg)]
+            require(type(bundle) is dict and set(bundle) == {"values", "summary"}, "diagnostic bundle drift")
+            summary = reconcile_collected_values(bundle["values"], selected=selections[key(cfg)],
+                contract=contract, workers=cfg.workers, information_key=information_key)
+            require(digest(summary) == digest(bundle["summary"]), "diagnostic summary binding drift")
+            hashes[key(cfg)] = digest(bundle)
+        return hashes
+
+    def record_root(self, audit, selections, *, public_record_sha256, selection_seed, legal_choices,
+                    value_evidence=None):
         require(self._frozen is None, "A2 frozen; no later evidence or reselection")
         root_id = audit["root_id"]
         require(root_id in self._captured and root_id not in self._records
@@ -149,7 +170,9 @@ class ExplorationStages:
             for arm, belief in GROUPS}
         require(audit["status"] == ("COMPLETE" if all(row["status"] == "COMPLETE"
             for row in audit["outcomes"]) else "UNCERTAIN"), "A2 audit status drift")
+        value_hashes = self._value_bindings(audit, selections, configs, value_evidence)
         self._records[root_id] = deepcopy(dict(intervals=intervals, worlds=worlds,
+            value_evidence_sha256=value_hashes,
             audit_sha256=digest(audit), selections_sha256=digest(selections),
             selected_sha256={name: digest(row) for name, row in selections.items()},
             outcome_sha256={f"{row['action']}:{row['replicate']}": digest(row) for row in audit["outcomes"]}))
@@ -207,7 +230,7 @@ class ExplorationStages:
             row["arm"], row["belief"], row["leaf"], seconds, 20 if row["arm"] == "reference" else 1)
             for row in self._frozen["choices"] for seconds in (1., 3., 10.)))
 
-    def begin_a3(self, plan, bank_manifest, frozen, *, deadline_at):
+    def begin_a3(self, plan, bank_manifest, frozen, *, deadline_at, value_diagnostics=None):
         """Claim this in-process frozen stage once; no restore/retry entrypoint."""
         require(not self._a3_started and self._frozen is not None,
             "A3 requires unconsumed sealed exploration freeze; no retry")
@@ -219,26 +242,34 @@ class ExplorationStages:
             return digest(value)
         require(digest(plan) == self._plan_sha256 and digest(frozen) == digest(self._frozen)
             and identity(bank_manifest) == identity(self._manifest), "A3 plan/bank/freeze binding drift")
-        require(self._value_diagnostic_contract is None,
-            "instrumented A2 cannot feed an uninstrumented A3 curve; matched capture/reuse pending")
+        if value_diagnostics is not None:
+            from .search_over_raw_value_diagnostics import ValueDiagnosticContract
+            require(isinstance(value_diagnostics, ValueDiagnosticContract), "explicit A3 diagnostic contract required")
+        requested = asdict(value_diagnostics) if value_diagnostics is not None else None
+        require(digest(requested) == digest(self._value_diagnostic_contract),
+            "instrumented A2 cannot feed an uninstrumented A3 curve or changed diagnostic contract")
         self._a3_started = True
         return deepcopy(self._frozen)
 
-    def a3_reuse(self, root_id, audit, selections):
+    def a3_reuse(self, root_id, audit, selections, *, value_evidence=None):
         """Bind all original A2 evidence, then project only frozen 1s selectors."""
         require(self._a3_started and root_id in self._records, "A3 has no captured A2 root")
         record = self._records[root_id]
         require(digest(audit) == record["audit_sha256"]
             and digest(selections) == record["selections_sha256"], "prior A2 evidence hash drift")
+        hashes = self._value_bindings(audit, selections, a2_configurations(), value_evidence)
+        require(hashes == record["value_evidence_sha256"], "prior A2 diagnostic evidence hash drift")
         contract = audit["continuation_contract"]
         require(contract["root_id"] == root_id
             and contract["root_binding"]["public_record_sha256"] == self._manifest["root_public_bindings"][root_id]
             and contract["selection_seed"] == self._slots[root_id]["source_seed"], "prior A2 public root drift")
         reused = {key(cfg): deepcopy(selections[key(cfg)]) for cfg in self.a3_configurations()
             if cfg.arm == "raw" or cfg.seconds == 1.}
-        return dict(audit=deepcopy(audit), audit_sha256=record["audit_sha256"], selections=reused)
+        value_reuse = {name: deepcopy(value_evidence[name]) for name in reused if name in hashes}
+        return dict(audit=deepcopy(audit), audit_sha256=record["audit_sha256"], selections=reused,
+            value_evidence=value_reuse, value_evidence_sha256={name: hashes[name] for name in value_reuse})
 
-    def record_a3_root(self, audit, selections):
+    def record_a3_root(self, audit, selections, *, value_evidence=None):
         root_id = audit["root_id"]
         require(self._a3_started and root_id in self._captured and root_id not in self._a3_records,
             "unstarted, uncaptured or duplicate A3 root")
@@ -271,7 +302,13 @@ class ExplorationStages:
         require(all(row["status"] in {"COMPLETE", "CAPPED"} for row in audit["outcomes"])
             and audit["status"] == ("COMPLETE" if all(row["status"] == "COMPLETE"
                 for row in audit["outcomes"]) else "UNCERTAIN"), "A3 operational refusal/status drift")
+        hashes = self._value_bindings(audit, selections, configs, value_evidence)
+        for cfg in configs:
+            if cfg.arm == "reference" and cfg.seconds == 1. and self._value_diagnostic_contract is not None:
+                require(hashes[key(cfg)] == record["value_evidence_sha256"][key(cfg)],
+                    "A3 reran or changed original one-second diagnostic")
         self._a3_records[root_id] = dict(intervals=intervals, audit_sha256=digest(audit),
+            value_evidence_sha256=hashes,
             selections_sha256=digest(selections))
 
     def a3_readout(self):
@@ -284,6 +321,8 @@ class ExplorationStages:
                 deployable=belief == "public", budget_points=rows))
         observed = sorted({self._slots[root_id]["source_seed"] for root_id in self._a3_records})
         return dict(schema="pokezero.search-over-raw.a3-exploratory-readout.v1", curves=curves,
+            visited_value_diagnostics=deepcopy(self._value_diagnostic_contract),
+            one_second_diagnostic_labels_reused_not_independent=self._value_diagnostic_contract is not None,
             full_root_denominator=200, full_seed_denominator=32, measured_roots=len(self._a3_records),
             observed_source_seeds=observed, observed_source_seed_count=len(observed),
             at_least_32_observed_sources=len(observed) >= 32,

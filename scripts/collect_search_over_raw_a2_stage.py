@@ -100,7 +100,11 @@ def collect_a2_from_bank(*, plan, bank, output, env, evaluator, factory, checkpo
             selections = {key(cfg): json.loads((directory / f"{key(cfg)}-selected.json").read_text())
                 for cfg in roster}
             ledger.record_root(audit, selections, public_record_sha256=root["public_record_sha256"],
-                selection_seed=slot["source_seed"], legal_choices=sum(context.observation.legal_action_mask))
+                selection_seed=slot["source_seed"], legal_choices=sum(context.observation.legal_action_mask),
+                value_evidence={key(cfg): dict(
+                    values=json.loads((directory / f"{key(cfg)}-values.json").read_text()),
+                    summary=json.loads((directory / f"{key(cfg)}-value-summary.json").read_text()))
+                    for cfg in roster if cfg.arm == "reference"} if value_diagnostics is not None else None)
             if progress_sink is not None:
                 progress_sink(progress)
         guard()

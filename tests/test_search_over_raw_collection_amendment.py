@@ -711,10 +711,8 @@ class ExplorationStageTests(unittest.TestCase):
     def test_live_instrumentation_binding_survives_deleted_manifest_field(self):
         from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
         contract = ValueDiagnosticContract(7, 100.)
-        ledger = self.stages.ExplorationStages(self.plan, self.manifest,
-            original_deadline_at=100., value_diagnostics=contract)
-        self.record(ledger)
-        frozen = ledger.freeze_for_a3()
+        (ledger, _), _ = self.run_synthetic_stage(value_diagnostics=contract)
+        frozen = json.loads((self.stage_output / "a3-exploration-freeze.json").read_text())
         self.assertEqual(frozen["visited_value_diagnostics"]["sample_seed"], 7)
         with self.assertRaisesRegex(ValueError, "uninstrumented A3 curve"):
             ledger.begin_a3(self.plan, self.manifest, frozen, deadline_at=100.)
@@ -796,7 +794,7 @@ class A3StageTests(unittest.TestCase):
         def instrumented_manifest(text):
             value = original_loads(text)
             if "same_world_qualification_pending" in value:
-                value["visited_value_diagnostics"] = dict(capture_inside_selection_clock=True)
+                value["visited_value_diagnostics"] = dict(contract=dict(sample_seed=7), capture_inside_selection_clock=True)
             return value
         with patch.object(stage.json, "loads", side_effect=instrumented_manifest), \
                 patch.object(stage, "collect_root") as collect:
@@ -966,6 +964,139 @@ class A3StageTests(unittest.TestCase):
         audit["outcomes"][0].update(status="COMPLETE", signed_outcome=1)
         with self.assertRaisesRegex(ValueError, "changed or retried"):
             other.record_a3_root(audit, selections)
+
+
+class InstrumentedA3Tests(unittest.TestCase):
+    def setUp(self):
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+        self.contract = ValueDiagnosticContract(7, 100.)
+        self.helper = ExplorationStageTests()
+        self.helper.setUp()
+        self.addCleanup(self.helper.doCleanups)
+        (self.ledger, _), self.events = self.helper.run_synthetic_stage(value_diagnostics=self.contract,
+            label_mode="CAPPED_UNCERTAIN")
+        self.output = self.helper.stage_output.parent / "a3-instrumented"
+        self.event_boundary = len(self.events)
+        self.a2_hashes = {str(path.relative_to(self.helper.stage_output)): digest(path.read_text())
+            for path in self.helper.stage_output.rglob("*.json")}
+
+    def collect(self, *, options=None, adapter=None):
+        return A3StageTests.collect(self, options=dict(value_diagnostics=self.contract) | (options or {}), adapter=adapter)
+
+    def prior_bundle(self):
+        cfg = next(cfg for cfg in self.ledger.a3_configurations() if cfg.arm == "reference" and cfg.seconds == 1.)
+        directory = self.helper.stage_output / f"source-{self.helper.slot['source_seed']}" / "root-0"
+        return cfg, directory, dict(values=json.loads((directory / f"{cfg.identity}-values.json").read_text()),
+            summary=json.loads((directory / f"{cfg.identity}-value-summary.json").read_text()))
+
+    def test_matching_capture_reuses_labels_without_new_one_second_work_or_independent_credit(self):
+        readout, progress = self.collect()
+        self.assertEqual(self.factory_calls, 8)
+        self.assertEqual(progress["value_selections_reused"], 2)
+        fresh = self.events[self.event_boundary:]
+        self.assertEqual(sum(row[0] == "labels" for row in fresh), 4)
+        self.assertEqual(sum(row[0] == "select" for row in fresh), 8)
+        self.assertEqual(len(progress["value_diagnostic_roster"]), 1200)
+        self.assertEqual(sum(row["status"] == "UNSTARTED_UNCERTAIN"
+            for row in progress["value_diagnostic_roster"]), 1194)
+        reused = [row for row in progress["value_diagnostics"] if row.get("reused_from_a2")]
+        self.assertEqual(len(reused), 2)
+        self.assertTrue(all(row["labels"] == row["unknown_labels"] == 160
+            and row["independent_credit"] is False and row["new_labels"] is False for row in reused))
+        self.assertTrue(readout["one_second_diagnostic_labels_reused_not_independent"])
+        self.assertEqual(readout["visited_value_diagnostics"]["original_deadline_at"], 100.)
+        for path in self.output.rglob("*-value-reuse.json"):
+            value_path = path.with_name(path.name.replace("-value-reuse.json", "-values.json"))
+            prior_path = self.helper.stage_output / value_path.relative_to(self.output)
+            self.assertEqual(json.loads(value_path.read_text()), json.loads(prior_path.read_text()))
+        self.assertEqual(self.a2_hashes, {str(path.relative_to(self.helper.stage_output)): digest(path.read_text())
+            for path in self.helper.stage_output.rglob("*.json")})
+        self.assertFalse(self.helper.bank.closed)
+
+    def test_changed_instrumentation_contract_refuses_before_new_selectors(self):
+        from dataclasses import replace
+        with patch.object(a1, "make_adapter") as factory:
+            with self.assertRaisesRegex(ValueError, "changed diagnostic contract"):
+                self.collect(options=dict(value_diagnostics=replace(self.contract, sample_seed=8)))
+            factory.assert_not_called()
+        self.assertTrue(self.helper.bank.closed)
+        self.assertFalse(self.output.exists())
+
+    def test_deleted_manifest_instrumentation_cannot_bypass_live_contract(self):
+        import collect_search_over_raw_a3_stage as stage
+        original_loads = json.loads
+        def forged(text):
+            value = original_loads(text)
+            if "same_world_qualification_pending" in value:
+                value.pop("visited_value_diagnostics")
+            return value
+        with patch.object(stage.json, "loads", side_effect=forged), patch.object(stage, "collect_root") as collector:
+            with self.assertRaisesRegex(ValueError, "uninstrumented A3 curve"):
+                self.collect(options=dict(value_diagnostics=None))
+            collector.assert_not_called()
+        self.assertTrue(self.helper.bank.closed)
+        self.assertFalse(self.output.exists())
+
+    def test_validly_recomputed_but_changed_a2_labels_fail_live_hash_before_new_work(self):
+        import collect_search_over_raw_a3_stage as stage
+        from pokezero.mcts_eval.search_over_raw_value_diagnostics import calibration_bounds, reconcile_collected_values
+        cfg, directory, bundle = self.prior_bundle()
+        tampered = deepcopy(bundle)
+        worker = tampered["values"]["workers"][0]["evidence"]
+        worker["leaves"][0]["labels"][0].update(status="COMPLETE", signed_outcome=1.)
+        worker["calibration"] = calibration_bounds(worker["leaves"])
+        selected = json.loads((directory / f"{cfg.identity}-selected.json").read_text())
+        tampered["summary"] = reconcile_collected_values(tampered["values"], selected=selected,
+            contract=self.contract, workers=20, information_key="0102")
+        original_loads = json.loads
+        def forged(text):
+            value = original_loads(text)
+            if value.get("schema") == "pokezero.selected-visited-value.v1" and value["root_id"] == selected["root_id"]:
+                return deepcopy(tampered["values"])
+            if value.get("schema") == "pokezero.collected-visited-value.v1" and value["selection_sha256"] == digest(selected):
+                return deepcopy(tampered["summary"])
+            return value
+        with patch.object(stage.json, "loads", side_effect=forged), patch.object(stage, "collect_root") as collector:
+            with self.assertRaisesRegex(ValueError, "diagnostic evidence hash drift"):
+                self.collect()
+            collector.assert_not_called()
+        self.assertTrue(self.helper.bank.closed)
+        self.assertFalse((self.output / "exploratory-readout.json").exists())
+
+    def test_missing_one_original_diagnostic_cannot_be_recreated(self):
+        cfg, directory, _ = self.prior_bundle()
+        target = directory / f"{cfg.identity}-values.json"
+        original_read = Path.read_text
+        def missing(path, *args, **kwargs):
+            if path == target:
+                raise FileNotFoundError("synthetic missing one-second labels")
+            return original_read(path, *args, **kwargs)
+        import collect_search_over_raw_a3_stage as stage
+        with patch.object(Path, "read_text", new=missing), patch.object(stage, "collect_root") as collector:
+            with self.assertRaisesRegex(FileNotFoundError, "one-second labels"):
+                self.collect()
+            collector.assert_not_called()
+        self.assertTrue(self.helper.bank.closed)
+        self.assertFalse((self.output / "exploratory-readout.json").exists())
+
+    def test_new_label_failure_preserves_reused_labels_and_never_publishes_curve(self):
+        original = self.helper.stage_adapter
+        def fail_labels(cfg, **options):
+            adapter = original(cfg, **options)
+            if cfg.arm == "reference":
+                adapter.finish_value_diagnostics = lambda selected: (_ for _ in ()).throw(ValueError("new labels failed"))
+            return adapter
+        with self.assertRaisesRegex(ValueError, "new labels failed"):
+            self.collect(adapter=fail_labels)
+        self.assertTrue(self.helper.bank.closed)
+        self.assertFalse((self.output / "exploratory-readout.json").exists())
+        terminal = json.loads((self.output / "stage-failure.json").read_text())
+        self.assertEqual(terminal["roots_completed"], 0)
+        self.assertEqual(terminal["value_selections_reused"], 1)
+        self.assertEqual(len(list(self.output.rglob("*-value-reuse.json"))), 1)
+        failure, = self.output.rglob("*-value-failure.json")
+        self.assertIsNone(json.loads(failure.read_text())["labels"])
+        self.assertTrue(all(bank.closed and not bank.rows for bank in self.helper.diagnostic_banks))
 
 
 class CachedContinuationTests(unittest.TestCase):

@@ -189,8 +189,8 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
     if value_diagnostics is not None:
         from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
         require(isinstance(value_diagnostics, ValueDiagnosticContract) and matched_statistics_root
-            and boundary_censoring and reused_root_evidence is None,
-            "visited-value capture requires explicit new matched/censored selections; no relabeling reused A2")
+            and boundary_censoring,
+            "visited-value capture requires explicit matched/censored selections")
     require(roster and all(type(cfg) is SearchConfiguration for cfg in roster)
         and len({key(cfg) for cfg in roster}) == len(roster)
         and sum(cfg.arm == "raw" for cfg in roster) == 1,
@@ -222,6 +222,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
         selection_seed=root["public_record"]["seed"],
         policy="raw_argmax_after_initial_sampled_opponent_reply")
     reused = {}
+    reused_values = {}
     cached_outcomes = None
     if reused_root_evidence is not None:
         require(matched_statistics_root and boundary_censoring,
@@ -244,9 +245,40 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
                 "reused selector binding drift")
             root_contrast(prior, name)  # Validates the complete original outcome roster.
         cached_outcomes = dict(continuation_contract, outcomes=deepcopy(prior["outcomes"]))
+        if value_diagnostics is not None:
+            from pokezero.mcts_eval.search_over_raw_value_diagnostics import reconcile_collected_values
+            reused_values = deepcopy(reused_root_evidence["value_evidence"])
+            hashes = reused_root_evidence["value_evidence_sha256"]
+            expected = {key(cfg) for cfg in roster if cfg.arm == "reference" and cfg.seconds == 1.}
+            require(set(reused_values) == set(hashes) == expected,
+                "exact original one-second diagnostic reuse required")
+            for cfg in roster:
+                if key(cfg) not in expected:
+                    continue
+                bundle = reused_values[key(cfg)]
+                require(digest(bundle) == hashes[key(cfg)], "prior diagnostic reuse hash drift")
+                summary = reconcile_collected_values(bundle["values"], selected=reused[key(cfg)],
+                    contract=value_diagnostics, workers=cfg.workers, information_key=root_binding["information_key"])
+                require(digest(summary) == digest(bundle["summary"]), "prior diagnostic reuse summary drift")
+        else:
+            require(not reused_root_evidence.get("value_evidence"), "cannot drop instrumentation on reused selectors")
     save_new(output / "root-binding.json", root_binding)
     if matched_statistics_root:
         save_new(output / "continuation-contract.json", continuation_contract)
+    def diagnostic_entry(cfg, status):
+        record = dict(root_id=root["root_id"], configuration=key(cfg), status=status,
+            contract=asdict(value_diagnostics), maximum_labels=cfg.workers*value_diagnostics.leaves_per_worker*8,
+            sampled_leaves=None, labels=None, unknown_labels=None,
+            scientific_strength_evidence=False, retry_authorized=False)
+        if "value_diagnostic_roster" in progress:
+            planned = [row for row in progress["value_diagnostic_roster"]
+                if row["root_id"] == root["root_id"] and row["configuration"] == key(cfg)]
+            require(len(planned) == 1 and planned[0]["status"] == "UNSTARTED_UNCERTAIN",
+                "diagnostic selector cannot be replayed or removed from full roster")
+            planned[0].update(record)
+            record = planned[0]
+        progress.setdefault("value_diagnostics", []).append(record)
+        return record
     actions = {}
     for cfg in roster:
         name = key(cfg)
@@ -258,6 +290,19 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
             save_new(output / f"{name}-selected.json", selected)
             save_new(output / f"{name}-reuse.json", dict(prior_a2_audit_sha256=digest(prior),
                 selected_sha256=digest(selected), new_selection=False))
+            if name in reused_values:
+                bundle = reused_values[name]
+                save_new(output / f"{name}-values.json", bundle["values"])
+                save_new(output / f"{name}-value-summary.json", bundle["summary"])
+                reuse_receipt = dict(prior_a2_audit_sha256=digest(prior), bundle_sha256=digest(bundle),
+                    new_selection=False, new_labels=False, independent_credit=False,
+                    values_sha256=digest(bundle["values"]), summary_sha256=digest(bundle["summary"]))
+                save_new(output / f"{name}-value-reuse.json", reuse_receipt)
+                record = diagnostic_entry(cfg, "LABEL_ROSTER_REUSED_A2")
+                record.update(reused_from_a2=True, new_labels=False, independent_credit=False,
+                    **{field: bundle["summary"][field] for field in ("sampled_leaves", "labels", "unknown_labels")},
+                    values_sha256=reuse_receipt["values_sha256"], summary_sha256=reuse_receipt["summary_sha256"])
+                progress["value_selections_reused"] = progress.get("value_selections_reused", 0) + 1
             actions[name] = selected["action"]
             cell.update(status="SELECTED_UNMEASURED", action=selected["action"], reused_from_a2=True)
             progress["selections_reused"] = progress.get("selections_reused", 0) + 1
@@ -266,19 +311,7 @@ def collect_root(*, root, context, pending, snapshot, output, progress, env, eva
         diagnostic = value_diagnostics if cfg.arm == "reference" else None
         diagnostic_record = None
         if diagnostic is not None:
-            diagnostic_record = dict(root_id=root["root_id"], configuration=name,
-                status="CAPTURE_ATTEMPTED_UNCERTAIN", contract=asdict(diagnostic),
-                maximum_labels=cfg.workers*diagnostic.leaves_per_worker*8,
-                sampled_leaves=None, labels=None, unknown_labels=None,
-                scientific_strength_evidence=False, retry_authorized=False)
-            if "value_diagnostic_roster" in progress:
-                planned = [row for row in progress["value_diagnostic_roster"]
-                    if row["root_id"] == root["root_id"] and row["configuration"] == name]
-                require(len(planned) == 1 and planned[0]["status"] == "UNSTARTED_UNCERTAIN",
-                    "diagnostic selector cannot be replayed or removed from full roster")
-                planned[0].update(diagnostic_record)
-                diagnostic_record = planned[0]
-            progress.setdefault("value_diagnostics", []).append(diagnostic_record)
+            diagnostic_record = diagnostic_entry(cfg, "CAPTURE_ATTEMPTED_UNCERTAIN")
             save_new(output / f"{name}-value-attempt.json", diagnostic_record)
         progress["stage"] = root["root_id"] + ":" + name + ":construct"
         cell["status"] = "CONSTRUCTION_ATTEMPTED_UNCERTAIN"

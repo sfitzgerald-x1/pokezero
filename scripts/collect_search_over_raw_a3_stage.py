@@ -6,6 +6,7 @@ including capped null outcomes; run only eight new 3s/10s search selectors.
 The original producer owns the bank/shell/deadline through subsequent direct
 checks. This stage cannot establish mechanism, fidelity or held-out gain.
 """
+from dataclasses import asdict
 import json
 from math import isfinite
 from pathlib import Path
@@ -20,7 +21,7 @@ from pokezero.mcts_eval.search_over_raw_stages import ExplorationStages, a2_conf
 
 def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluator, factory,
                          checkpoint_contract, source, showdown, verify, deadline_at,
-                         ownership=None, progress_sink=None, clock=time.perf_counter):
+                         ownership=None, progress_sink=None, clock=time.perf_counter, value_diagnostics=None):
     require(isinstance(bank, SealedComparisonBank), "actual sealed comparison bank required")
     progress = None
     try:
@@ -40,10 +41,19 @@ def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluato
         manifest = bank.manifest()
         a2_manifest = json.loads((a2_output / "stage-manifest.json").read_text())
         require(a2_manifest["original_deadline_at"] == deadline_at, "A3 cannot extend A2/producer deadline")
-        require(a2_manifest.get("visited_value_diagnostics") is None,
-            "instrumented A2 cannot feed an uninstrumented A3 curve; matched capture/reuse pending")
+        if value_diagnostics is not None:
+            from pokezero.mcts_eval.search_over_raw_value_diagnostics import ValueDiagnosticContract
+            require(isinstance(value_diagnostics, ValueDiagnosticContract)
+                and value_diagnostics.original_deadline_at == deadline_at,
+                "A3 diagnostic contract must keep original producer deadline")
+        prior_instrumentation = a2_manifest.get("visited_value_diagnostics")
+        require(prior_instrumentation is None or (type(prior_instrumentation) is dict
+            and "contract" in prior_instrumentation), "malformed A2 diagnostic manifest")
+        require(digest(prior_instrumentation["contract"] if prior_instrumentation is not None else None)
+            == digest(asdict(value_diagnostics) if value_diagnostics is not None else None),
+            "instrumented A2 cannot feed an uninstrumented A3 curve or changed diagnostic contract")
         frozen = json.loads((a2_output / "a3-exploration-freeze.json").read_text())
-        ledger.begin_a3(plan, manifest, frozen, deadline_at=deadline_at)
+        ledger.begin_a3(plan, manifest, frozen, deadline_at=deadline_at, value_diagnostics=value_diagnostics)
         output.mkdir(parents=True, exist_ok=False)
         roster = ledger.a3_configurations()
         slots = plan["phase_a_cohort"]["panels"]["exploration"]["root_slots"]
@@ -58,11 +68,23 @@ def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluato
             continuations_completed=0, continuations_capped=0,
             continuations_reused=0, continuations_reused_capped=0,
             scientific_strength_evidence=False, holdout_authorized=False, runtime_authorized=False)
-        save_new(output / "stage-manifest.json", dict(bank=manifest, frozen_choice_sha256=digest(frozen),
+        stage_manifest = dict(bank=manifest, frozen_choice_sha256=digest(frozen),
             original_deadline_at=deadline_at, full_root_denominator=200, full_seed_denominator=32,
             full_selector_denominator=len(slots)*len(roster),
             full_continuation_alias_denominator=len(slots)*len(roster)*8,
-            per_measured_root_new_selectors=8, per_measured_root_reused_selectors=5))
+            per_measured_root_new_selectors=8, per_measured_root_reused_selectors=5)
+        if value_diagnostics is not None:
+            progress["value_diagnostic_roster"] = [dict(root_id=slot["root_id"], configuration=key(cfg),
+                status="UNSTARTED_UNCERTAIN", sampled_leaves=None, labels=None, unknown_labels=None,
+                maximum_labels=cfg.workers*value_diagnostics.leaves_per_worker*8,
+                scientific_strength_evidence=False, retry_authorized=False)
+                for slot in slots for cfg in roster if cfg.arm == "reference"]
+            stage_manifest["visited_value_diagnostics"] = dict(contract=asdict(value_diagnostics),
+                full_selection_denominator=len(progress["value_diagnostic_roster"]),
+                capture_inside_selection_clock=True, labels_after_selection=True,
+                one_second_labels_reused_not_independent=True, qualifies_uninstrumented_runtime=False,
+                incumbent_diagnostics_pending=True, scientific_strength_evidence=False)
+        save_new(output / "stage-manifest.json", stage_manifest)
         for slot in slots:
             root_id = slot["root_id"]
             if root_id not in manifest["root_public_bindings"]:
@@ -73,7 +95,11 @@ def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluato
             prior = json.loads((prior_directory / "audit.json").read_text())
             prior_selections = {key(cfg): json.loads((prior_directory / f"{key(cfg)}-selected.json").read_text())
                 for cfg in a2_configurations()}
-            reuse = ledger.a3_reuse(root_id, prior, prior_selections)
+            prior_values = {key(cfg): dict(
+                values=json.loads((prior_directory / f"{key(cfg)}-values.json").read_text()),
+                summary=json.loads((prior_directory / f"{key(cfg)}-value-summary.json").read_text()))
+                for cfg in a2_configurations() if cfg.arm == "reference"} if value_diagnostics is not None else None
+            reuse = ledger.a3_reuse(root_id, prior, prior_selections, value_evidence=prior_values)
             root, context, pending, snapshot = bank.selected_for_auditor(root_id)
             directory = output / relative
             directory.mkdir(parents=True, exist_ok=False)
@@ -82,10 +108,15 @@ def collect_a3_from_bank(*, plan, bank, ledger, a2_output, output, env, evaluato
                 contract=checkpoint_contract, source=source, showdown=showdown, verify=guard,
                 ownership=ownership, namespace=plan["execution_source_contract"]["namespace"],
                 completion_status="COLLECTED_A3_CENSORING_AWARE", boundary_censoring=True,
-                configuration_roster=roster, matched_statistics_root=True, reused_root_evidence=reuse)
+                configuration_roster=roster, matched_statistics_root=True, reused_root_evidence=reuse,
+                **({"value_diagnostics": value_diagnostics} if value_diagnostics is not None else {}))
             audit = json.loads((directory / "audit.json").read_text())
             selections = {key(cfg): json.loads((directory / f"{key(cfg)}-selected.json").read_text()) for cfg in roster}
-            ledger.record_a3_root(audit, selections)
+            values = {key(cfg): dict(
+                values=json.loads((directory / f"{key(cfg)}-values.json").read_text()),
+                summary=json.loads((directory / f"{key(cfg)}-value-summary.json").read_text()))
+                for cfg in roster if cfg.arm == "reference"} if value_diagnostics is not None else None
+            ledger.record_a3_root(audit, selections, value_evidence=values)
             if progress_sink is not None:
                 progress_sink(progress)
         guard()
