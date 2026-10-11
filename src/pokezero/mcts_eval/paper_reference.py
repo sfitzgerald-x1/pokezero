@@ -23,6 +23,10 @@ class ReferenceRefusal(ValueError):
     """Invalid state, work, or inference is evidence of refusal, not a fallback."""
 
 
+class SamplingDeadlineExceeded(ReferenceRefusal):
+    """An opted-in sampler returned no owned world before the deadline."""
+
+
 @dataclass(frozen=True)
 class DecisionState:
     # Adapter-owned public/own-private information identity, NEVER latent truth.
@@ -327,7 +331,7 @@ class TrajectorySearch:
 
     def _trajectory(self, world: World, root: DecisionState,
                     opponent_rng: random.Random, chance_rng: random.Random,
-                    expired: Callable[[], bool]) -> tuple[int, bool]:
+                    expired: Callable[[], bool], atomic_work=None) -> tuple[int, bool]:
         frame = world.frame()
         if not isinstance(frame, Frame) or frame.subject != root:
             raise ReferenceRefusal("sampled world changed the player-known root or legality")
@@ -385,6 +389,10 @@ class TrajectorySearch:
             node.totals[index] += value
             node.count += 1
             self._own_backup(node, index, value)
+        if atomic_work is not None:
+            # Observe only AFTER every path update committed. A callback failure
+            # poisons this attempt; it never converts partial work to success.
+            atomic_work.commit(self, path, leaf, value, transitions)
         return transitions, True
 
     def search(self, root: DecisionState, *, battle_id: str,
@@ -403,12 +411,13 @@ class TrajectorySearch:
                      evaluate_root: Callable[[DecisionState], Evaluation],
                      sample_world: Callable[[random.Random], World], seed: int,
                      trajectories: int, deadline_at: float | None = None,
-                     clock: Callable[[], float] = time.perf_counter) -> BatchResult:
+                     clock: Callable[[], float] = time.perf_counter,
+                     atomic_work=None) -> BatchResult:
         """At most one exchange batch, using the coordinator's absolute clock."""
         result = self._run_batch(root, battle_id=battle_id, evaluate_root=evaluate_root,
             sample_world=sample_world, seed=seed, trajectories=trajectories,
             deadline_seconds=None, deadline_at=deadline_at, clock=clock,
-            require_complete=False)
+            require_complete=False, atomic_work=atomic_work)
         assert isinstance(result, BatchResult)
         return result
 
@@ -417,7 +426,7 @@ class TrajectorySearch:
                    sample_world: Callable[[random.Random], World], seed: int,
                    trajectories: int, deadline_seconds: float | None,
                    deadline_at: float | None, clock: Callable[[], float],
-                   require_complete: bool) -> BatchResult | SearchResult:
+                   require_complete: bool, atomic_work=None) -> BatchResult | SearchResult:
         started = clock()  # Includes root inference, determinization, simulator and cleanup.
         if (battle_id != self._battle_id or not self._usable
                 or type(seed) is not int or not 0 <= seed < 2**64
@@ -447,22 +456,58 @@ class TrajectorySearch:
                 node = self._node_from_evaluation(root, evaluate_root(root))
                 self.nodes[root.key] = node
                 self._discovered(node)
+            if atomic_work is not None:
+                atomic_work.begin_batch(self, root)
             for _ in range(trajectories):
                 if expired():
                     break
                 ordinal = self._ordinal
                 self._ordinal += 1
-                world = sample_world(_rng(seed, ordinal, "hidden"))
-                draws += 1
+                if atomic_work is not None:
+                    draws += 1
+                    atomic_work.begin(self, root, ordinal)
+                trajectory_error = None
+                try:
+                    world = sample_world(_rng(seed, ordinal, "hidden"))
+                except SamplingDeadlineExceeded:
+                    if atomic_work is None:
+                        raise  # Preserve the historical non-instrumented path.
+                    if not expired():
+                        raise ReferenceRefusal("sampler reported deadline expiry before the search deadline")
+                    atomic_work.cancel(self, 0, sampled=False)
+                    break
+                if atomic_work is None:
+                    draws += 1
                 try:
                     steps, backed = self._trajectory(world, root, _rng(seed, ordinal, "opponent"),
-                                                    _rng(seed, ordinal, "chance"), expired)
+                                                    _rng(seed, ordinal, "chance"), expired, atomic_work)
                     transitions += steps
                     completed += int(backed)
+                    if not backed and atomic_work is not None:
+                        atomic_work.cancel(self, steps, sampled=True)
+                except BaseException as error:
+                    trajectory_error = error
+                    if atomic_work is not None:
+                        try:
+                            atomic_work.refuse(self)
+                        except BaseException as observer_error:
+                            getattr(error, "add_note", lambda _: None)(
+                                "atomic refusal observer failed: " + type(observer_error).__name__)
+                    raise
                 finally:
-                    world.close()
+                    try:
+                        world.close()
+                        if atomic_work is not None:
+                            atomic_work.cleanup()
+                    except BaseException as cleanup_error:
+                        if atomic_work is None or trajectory_error is None:
+                            raise
+                        getattr(trajectory_error, "add_note", lambda _: None)(
+                            "atomic trajectory cleanup failed: " + type(cleanup_error).__name__)
                 if not backed:
                     break
+            if atomic_work is not None:
+                atomic_work.end_batch(self)
             if completed == 0 and require_complete:
                 raise ReferenceRefusal("zero complete trajectories; no stale-statistics or raw-policy fallback")
             if require_complete:
@@ -478,7 +523,15 @@ class TrajectorySearch:
                     tuple(node.visits), tuple(q / n if n else None
                         for q, n in zip(node.totals, node.visits)), elapsed, exhausted, overrun)
             return BatchResult(completed, transitions, draws, elapsed, exhausted, overrun)
-        except Exception:
+        except BaseException as error:
+            if atomic_work is None and not isinstance(error, Exception):
+                raise  # Preserve the historical non-instrumented exception path.
             # A simulator/cleanup/inference refusal cannot leave a reusable successful tree.
             self._usable = False
+            if atomic_work is not None:
+                try:
+                    atomic_work.refuse(self)
+                except BaseException as observer_error:
+                    getattr(error, "add_note", lambda _: None)(
+                        "atomic refusal observer failed: " + type(observer_error).__name__)
             raise
