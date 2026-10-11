@@ -1,7 +1,9 @@
 //! Actual encoded-tree evaluation-event capture, with owned native frontiers.
 //! This is an opt-in ENGINEERING diagnostic, not a Showdown calibration label.
 //! Searched-line fidelity and producer integration remain separate gates.
-//! No private states leave this module, and no diagnostic label feeds backups.
+//! Private states reach only an explicitly opted-in, post-selection fidelity
+//! controller; never a policy callback or a published receipt. No diagnostic
+//! label or fidelity result feeds backups.
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -13,9 +15,35 @@ use sha2::{Digest, Sha256};
 use crate::events::EventContext;
 use crate::leaf::{LeafMeta, LeafMetaCtx};
 use crate::raw_policy_leaf::{label_price, RawPolicyLeaf, RawPolicyLeafStats, TerminalLabel};
+use crate::tree::BranchSeam;
 
 fn refuse(message: &str) -> PyErr { PyValueError::new_err(message.to_owned()) }
 fn hash(bytes: &[u8]) -> String { format!("{:x}", Sha256::digest(bytes)) }
+
+/// Opt-in ancestry of the ACTUAL priced branches, not regenerated support.
+/// All retained serialized ancestry shares the existing private payload cap.
+#[derive(Default)]
+struct SearchedLines {
+    root: String,
+    steps: BTreeMap<(usize, usize), Value>,
+    bytes: usize,
+}
+
+impl SearchedLines {
+    fn path(&self, key: (usize, usize)) -> PyResult<Vec<Value>> {
+        let mut cursor = Some(key);
+        let mut reverse = Vec::new();
+        while let Some(key) = cursor {
+            if reverse.len() >= 64 { return Err(refuse("searched line: ancestry cap/cycle")); }
+            let step = self.steps.get(&key).ok_or_else(|| refuse("searched line: missing actual ancestor"))?;
+            cursor = serde_json::from_value(step["parent"].clone())
+                .map_err(|_| refuse("searched line: invalid parent identity"))?;
+            reverse.push(step.clone());
+        }
+        reverse.reverse();
+        Ok(reverse)
+    }
+}
 fn seeded(namespace: &str, seed: u64, worker: usize, root: &str, ordinal: usize,
     replicate: Option<usize>) -> u64 {
     let mut parts = vec![json!(namespace), json!(seed), json!(worker), json!(root), json!(ordinal)];
@@ -64,13 +92,20 @@ pub(crate) struct VisitedValueBank {
     seen: usize,
     bytes: usize,
     rows: BTreeMap<(u64, usize), Frontier>,
+    searched_lines: Option<SearchedLines>,
 }
 
 impl VisitedValueBank {
     pub(crate) fn expired(&self) -> bool { Instant::now() >= self.deadline }
     pub(crate) fn deadline(&self) -> Instant { self.deadline }
-    pub(crate) fn bind_root(&mut self, state_str: &str) {
+    pub(crate) fn bind_root(&mut self, state_str: &str) -> PyResult<()> {
         self.root_native_state_sha256 = Some(hash(state_str.as_bytes()));
+        if let Some(lines) = &mut self.searched_lines {
+            if state_str.len() > self.maximum_payload_bytes { return Err(refuse("searched line: private payload cap reached")); }
+            lines.root = state_str.to_owned();
+            lines.bytes = state_str.len();
+        }
+        Ok(())
     }
     fn new(seed: u64, worker: usize, root: String, keep: usize,
         maximum_payload_bytes: usize, deadline_at: f64, deadline: Instant) -> PyResult<Self> {
@@ -82,7 +117,40 @@ impl VisitedValueBank {
         }
         Ok(Self { seed, worker, root, keep, maximum_payload_bytes, deadline_at, deadline,
             self_side_one: None, root_native_state_sha256: None, selection_report_sha256: None,
-            seen: 0, bytes: 0, rows: BTreeMap::new() })
+            seen: 0, bytes: 0, rows: BTreeMap::new(), searched_lines: None })
+    }
+
+    pub(crate) fn record_searched_branch(&mut self, state: &State, seam: &BranchSeam) -> PyResult<()> {
+        let Some(lines) = &mut self.searched_lines else { return Ok(()) };
+        let mut pre = state.clone();
+        pre.reverse_instructions(&seam.instructions.to_vec());
+        let before = pre.serialize();
+        let expected = match seam.parent {
+            None => lines.root.as_str(),
+            Some(parent) => lines.steps.get(&parent)
+                .and_then(|v| v["after"].as_str())
+                .ok_or_else(|| refuse("searched line: missing priced parent"))?,
+        };
+        if before != expected { return Err(refuse("searched line: actual prestate does not equal parent frontier")); }
+        let choice = |action: &poke_engine::engine::state::MoveChoice, side: &poke_engine::state::Side| {
+            use poke_engine::engine::state::MoveChoice;
+            let kind = match action { MoveChoice::Move(_) => "move", MoveChoice::Switch(_) => "switch",
+                MoveChoice::Struggle => "struggle", MoveChoice::None => "none" };
+            json!({ "kind": kind, "engine_id": action.to_string(side) })
+        };
+        let key = (seam.chance, seam.branch_index);
+        let step = json!({ "key": key, "parent": seam.parent, "depth": seam.depth,
+            "before": before, "after": state.serialize(), "branch_on_damage": seam.branch_on_damage,
+            "side_one_choice": choice(seam.s1, &pre.side_one),
+            "side_two_choice": choice(seam.s2, &pre.side_two) });
+        if lines.steps.contains_key(&key) { return Err(refuse("searched line: duplicate branch identity")); }
+        let size = serde_json::to_vec(&step).expect("finite private strings").len();
+        let total = lines.bytes.checked_add(size).and_then(|v| v.checked_add(self.bytes))
+            .ok_or_else(|| refuse("searched line: payload accounting overflow"))?;
+        if total > self.maximum_payload_bytes { return Err(refuse("searched line: private payload cap reached")); }
+        lines.bytes += size;
+        lines.steps.insert(key, step);
+        Ok(())
     }
 
     /// Stage only priority-selected candidates before the actual forward, while
@@ -117,7 +185,7 @@ impl VisitedValueBank {
         } else { 0 };
         let bytes = self.bytes.checked_add(item.payload_bytes).and_then(|n| n.checked_sub(victim_bytes))
             .ok_or_else(|| refuse("visited payload accounting overflow"))?;
-        if bytes > self.maximum_payload_bytes {
+        if bytes + self.searched_lines.as_ref().map_or(0, |lines| lines.bytes) > self.maximum_payload_bytes {
             return Err(refuse("visited value: retained private payload cap reached"));
         }
         if self.rows.len() == self.keep { self.rows.pop_last(); }
@@ -145,6 +213,7 @@ impl VisitedValueBank {
     }
 
     fn label(self, lossy: &mut crate::abort_telemetry::LossySubcaseLedger) -> PyResult<Value> {
+        if self.searched_lines.is_some() { return Err(refuse("searched line: use fidelity controller, not native labels")); }
         if self.selection_report_sha256.is_none() || self.root_native_state_sha256.is_none() {
             return Err(refuse("visited value: actual search root and successful selection receipt required"));
         }
@@ -223,10 +292,10 @@ impl NativeVisitedValueBank {
 impl NativeVisitedValueBank {
     #[new]
     #[pyo3(signature = (sample_seed, worker, root_information_key, original_deadline_at,
-        leaves_per_native_invocation=2, maximum_payload_bytes=8388608))]
+        leaves_per_native_invocation=2, maximum_payload_bytes=8388608, capture_searched_lines=false))]
     fn py_new(py: Python<'_>, sample_seed: u64, worker: usize, root_information_key: String,
         original_deadline_at: f64, leaves_per_native_invocation: usize,
-        maximum_payload_bytes: usize) -> PyResult<Self> {
+        maximum_payload_bytes: usize, capture_searched_lines: bool) -> PyResult<Self> {
         let now: f64 = py.import("time")?.getattr("perf_counter")?.call0()?.extract()?;
         let remaining = original_deadline_at - now;
         if !original_deadline_at.is_finite() || !remaining.is_finite() || remaining > 14400.0 {
@@ -234,8 +303,10 @@ impl NativeVisitedValueBank {
         }
         let deadline = Instant::now().checked_add(Duration::from_secs_f64(remaining.max(0.0)))
             .ok_or_else(|| refuse("visited value: deadline overflow"))?;
-        Ok(Self { bank: Some(VisitedValueBank::new(sample_seed, worker, root_information_key,
-            leaves_per_native_invocation, maximum_payload_bytes, original_deadline_at, deadline)?),
+        let mut bank = VisitedValueBank::new(sample_seed, worker, root_information_key,
+            leaves_per_native_invocation, maximum_payload_bytes, original_deadline_at, deadline)?;
+        if capture_searched_lines { bank.searched_lines = Some(SearchedLines::default()); }
+        Ok(Self { bank: Some(bank),
             ready: false, taken: false, closed: false })
     }
 
@@ -244,6 +315,56 @@ impl NativeVisitedValueBank {
         self.ready = false;
         let bank = self.bank.take().ok_or_else(|| refuse("visited value: labels already consumed"))?;
         py.detach(move || crate::abort_telemetry::guarded_search_with_ledger(|lossy| bank.label(lossy).map(|v| v.to_string())))
+    }
+
+    /// Trusted PRIVATE diagnostic controller, not a raw-policy provider. Takes
+    /// the bank before invoking Python, including on exceptions or reentry.
+    /// The only returned evidence is a bounded, whitelisted engineering result.
+    fn check_searched_lines(&mut self, py: Python<'_>, controller: Py<PyAny>) -> PyResult<String> {
+        if !self.ready { return Err(refuse("searched line: successful selection required")); }
+        self.ready = false;
+        let bank = self.bank.take().ok_or_else(|| refuse("searched line: already consumed"))?;
+        let lines = bank.searched_lines.as_ref().ok_or_else(|| refuse("searched line: capture was not enabled"))?;
+        let mut results = Vec::new();
+        for ((priority, ordinal), item) in &bank.rows {
+            if bank.expired() { return Err(refuse("searched line: original deadline expired")); }
+            if hash(&item.payload()?) != item.snapshot_sha256 { return Err(refuse("searched line: frontier mutated")); }
+            let path = lines.path(item.key)?;
+            if path.last().and_then(|v| v["after"].as_str()) != Some(item.state.serialize().as_str()) {
+                return Err(refuse("searched line: path endpoint does not equal predicted frontier"));
+            }
+            let private = json!({ "root_native_state": lines.root, "steps": path,
+                "native_frontier": item.state.serialize(), "model_signed_value": item.prediction,
+                "evaluation_ordinal": ordinal, "private_controller_only": true });
+            let reply: String = controller.call1(py, (private.to_string(),))?.extract(py)?;
+            if bank.expired() { return Err(refuse("searched line: controller exceeded original deadline")); }
+            let result: Value = serde_json::from_str(&reply).map_err(|_| refuse("searched line: invalid controller reply"))?;
+            let status = result["status"].as_str().unwrap_or("");
+            let count = result["checked_transitions"].as_u64().unwrap_or(u64::MAX);
+            let fields = result["mismatch_components"].as_array().ok_or_else(|| refuse("searched line: invalid mismatch fields"))?;
+            const COMPONENTS: &[&str] = &["root", "prestate", "hp", "status", "weather", "boosts", "native_pp", "request", "engine_serialization", "unsupported_action", "chance_coupling"];
+            if !matches!(status, "MATCHED_PROJECTION_NOT_FULL_STATE" | "MISMATCH" | "UNSUPPORTED")
+                || count > path.len() as u64 || fields.len() > COMPONENTS.len()
+                || fields.iter().any(|v| !v.as_str().is_some_and(|s| COMPONENTS.contains(&s)))
+                || result.as_object().map_or(0, |v| v.len()) != 3
+                || (status == "MATCHED_PROJECTION_NOT_FULL_STATE" && (count != path.len() as u64 || !fields.is_empty())) {
+                return Err(refuse("searched line: non-sanitized or unsupported controller verdict"));
+            }
+            results.push(json!({ "evaluation_ordinal": ordinal, "priority": priority,
+                "native_state_sha256": item.state_sha256, "model_signed_value": item.prediction,
+                "path_sha256": hash(serde_json::to_string(&path).unwrap().as_bytes()),
+                "path_boundaries": path.len(), "result": result }));
+        }
+        Ok(json!({ "schema": "pokezero.native-searched-line.excluded-engineering.v1",
+            "root_native_state_sha256": bank.root_native_state_sha256,
+            "selection_report_sha256": bank.selection_report_sha256, "model_evaluations_seen": bank.seen,
+            "retained_private_payload_bytes": bank.bytes + lines.bytes,
+            "maximum_payload_bytes": bank.maximum_payload_bytes, "leaves": results,
+            "payload_cap_is_not_rss_qualification": true,
+            "scope": "excluded_deterministic_fixture_only", "private_states_in_receipt": false,
+            "full_state_correspondence": false, "searched_line_showdown_fidelity": false,
+            "scientific_calibration_evidence": false, "scientific_strength_evidence": false,
+            "labels_used_for_backup": false, "instrumentation_can_change_selection": true }).to_string())
     }
 
     fn close(&mut self) { self.bank = None; self.ready = false; self.taken = true; self.closed = true; }
@@ -258,7 +379,7 @@ mod tests {
         let mut bank = VisitedValueBank::new(17, 0, "aa".into(), keep, 8*1024*1024,
             100.0, Instant::now() + Duration::from_secs(120)).unwrap();
         // These unit fixtures never claim to be a production/search receipt.
-        bank.bind_root("excluded-engineering-unit-fixture");
+        bank.bind_root("excluded-engineering-unit-fixture").unwrap();
         bank.selection_report_sha256 = Some(hash(b"excluded-fixture-selection"));
         bank
     }

@@ -441,7 +441,7 @@
       "historical": "99"
     },
     "t1.head_fingerprint": {
-      "current": "a17827506836c5a6",
+      "current": "dc732d1c3e755125",
       "historical": "7249f80b10c42ddf"
     },
     "t3.tie_refusal_line": {
@@ -484,7 +484,7 @@
     "t1.freeze_declaration_constants": "0",
     "t1.hashed_crate_sources": "17",
     "t1.hashed_input_files": "102",
-    "t1.head_fingerprint": "a17827506836c5a6",
+    "t1.head_fingerprint": "dc732d1c3e755125",
     "t1.newest_committed_sweep_fingerprint": "bfdbe1c04876edcd",
     "t2.first_remainder_off_fan_bands": "16205 of 27655",
     "t2.first_remainder_off_fan_fraction": "58.597 %",
@@ -660,7 +660,7 @@
     "reports/artifacts/current_terminal_register_20261010.json"
   ],
   "source_sha256": {
-    ".github/workflows/engine-fidelity-gates.yml": "92c6e25a40ad732ce574fbee6ddab17ff89ee12ec32a0781b8abcbe4db84c926",
+    ".github/workflows/engine-fidelity-gates.yml": "ce2ca105fbf11080c87e8a59f6404c827e7ab0ae4e02e7e4b31ddcd4d68e70db",
     "reports/c138_known_gaps_ledger.md": "0a453f65c88708bc33801c3ba96360b7df52fbf2498a5ccc1951a76ff9adf83c",
     "reports/c155_terminal_disposition_register.md": "be65dff053da8cb41b9e7ece66cdd94afacc8dad6c1915a72372ce367893193c",
     "rust/pokezero-search/Cargo.lock": "9400829448a2df873b9fda9f3e46f87ce755a31ebfa2873e35fb5c1f39a847ae",
@@ -674,7 +674,7 @@
     "rust/pokezero-search/src/fold.rs": "aed67ed2278c52e194bc146264ead4ed5e30dc32655137d43e00758279ee7d36",
     "rust/pokezero-search/src/leaf.rs": "4f0986745c98bad18525718f0c532358acb9a2eb75ff69111d0bc2156177d29a",
     "rust/pokezero-search/src/lib.rs": "5e37230d6aff78d65a992bf498e486bddb9f6ef74757ca57993beec6303fef8a",
-    "rust/pokezero-search/src/model.rs": "db3608bfe1bb20415c11e35ef914e38ec07470eeee1494707eb95f45e5797d91",
+    "rust/pokezero-search/src/model.rs": "cab662958781fd821252c967e6e0f5d4d218c442bda592a594e5e441962462f0",
     "rust/pokezero-search/src/panic_guard.rs": "764c9705d9d9ccb3e3208abbf7d5ea041331ce309c5b0bb484f5f700e1395e89",
     "rust/pokezero-search/src/policy_bridge.rs": "d08457bf4d4bf558a8b73822d80f0d170085a72637fb804f8e49a51403f0ed2e",
     "rust/pokezero-search/src/policy_opponent.rs": "51af6ff9c7b476c64ec1edbfbe4f3270515dd7a848ed38678218deefa0a37b78",
@@ -683,7 +683,7 @@
     "rust/pokezero-search/src/raw_policy_leaf.rs": "502cfa53dce1f4bf24426a334071a3811d6b4cf8963f7c316323ff3d3291376b",
     "rust/pokezero-search/src/rollout.rs": "033d3a8d4a2894d42e44327df86d82271dd7611f166c68f89e2385f5160b2ed4",
     "rust/pokezero-search/src/tree.rs": "20b4e1c03e881e7cdd4413138f93ae433e0083c98eb2b2795dd001aa0def7b27",
-    "rust/pokezero-search/src/visited_value.rs": "60ebce7d954bde50f3d49b272ee2abd115642a5565abccbc5be94c06d85c28c9",
+    "rust/pokezero-search/src/visited_value.rs": "ca34720d8a4487e3a0b58b92c63bd39f4b636c59a41d543e36b66f281a916c84",
     "scripts/current_terminal_register.py": "eb20084e9e8d2f9c6b9d338992ce684e65768813b096034362cb19b9bc4a2f25",
     "scripts/engine_build_fingerprint.py": "b10558e38b38fdc2eb25582a85d46e8a5b04331f54883e0586050f4690d55302",
     "tests/test_boundary_verdict_partition.py": "793d063490ab17a84c794de5fca5c7d7f57a5abc2195738f5ebb87582c865ce1",

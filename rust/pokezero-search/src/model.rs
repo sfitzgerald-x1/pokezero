@@ -1143,7 +1143,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     if visited_values.as_ref().is_some_and(|bank| bank.expired()) {
         return Err(PyValueError::new_err("visited value: original producer deadline expired before native search"));
     }
-    if let Some(bank) = visited_values.as_deref_mut() { bank.bind_root(state_str); }
+    if let Some(bank) = visited_values.as_deref_mut() { bank.bind_root(state_str)?; }
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
         return Err(PyValueError::new_err("battle is already over at the root"));
@@ -1651,6 +1651,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         raw_leaf_keys.push((seam.chance, seam.branch_index));
                     }
                     if let Some(bank) = visited_values.as_deref_mut() {
+                        if let Err(error) = bank.record_searched_branch(leaf, seam) {
+                            leaf_error = Some(error);
+                            return LeafPrice::Ready(0.5);
+                        }
                         let mut frontier_ctx = ctx.clone();
                         frontier_ctx.turn = turn;
                         if let Err(error) = bank.stage(leaf, (seam.chance, seam.branch_index), row,

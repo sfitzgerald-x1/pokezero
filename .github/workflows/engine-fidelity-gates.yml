@@ -145,6 +145,7 @@ jobs:
             tests/test_policy_opponent*.py
             tests/test_raw_policy_leaf_native.py
             tests/test_native_visited_value.py
+            tests/test_native_searched_line.py
             tests/test_model_tree_raw_leaf_contract.py
             tests/test_paper_reference*.py
             tests/test_mcts_eval_timing_corpus.py
@@ -1010,9 +1011,10 @@ jobs:
             tests.test_policy_opponent_profile tests.test_policy_opponent_refusal_repairs \
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
             tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest \
-            tests.test_raw_policy_leaf_native tests.test_native_visited_value -v 2>&1 \
+            tests.test_raw_policy_leaf_native tests.test_native_visited_value \
+            tests.test_native_searched_line -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 98 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 105 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"
