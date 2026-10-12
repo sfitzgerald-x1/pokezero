@@ -75,6 +75,7 @@ def _state_payload(value, active=None):
 
 
 SCHEMA = "pokezero.search-over-raw.actor-projection-program.v1"
+CONTEXT_SCHEMA = "pokezero.search-over-raw.actor-projection-program.v2"
 MAXIMUM_BYTES = 8 * 1024 * 1024
 ENCODING_LAW = "seat_visible_protocol_and_actual_own_requests"
 
@@ -118,17 +119,22 @@ class ActorObservationFold:
     fallback. Its hash alone is not that provenance proof. This interface does
     not claim complete history; the owning program reader supplies chronology.
     """
-    def __init__(self, *, config, actor, opening_request, expected_opening_sha256):
+    def __init__(self, *, config, actor, opening_request, expected_opening_sha256,
+            battle_id="actor-projection"):
         require(type(config) is LocalShowdownConfig and actor in {"p1", "p2"}
-            and type(actor) is str and digest(opening_request) == expected_opening_sha256,
+            and type(actor) is str and digest(opening_request) == expected_opening_sha256
+            and type(battle_id) is str and 0 < len(battle_id) <= 200
+            and not any(c in battle_id for c in ("\n", "\r", "\x00")),
             "exact actor/config/externally frozen own opening request required")
         self.actor, self.config_sha = actor, digest(_state_payload(config))
+        self.battle_id = battle_id
         self.opening_sha = expected_opening_sha256
         self.sources = projection_source_hashes()
         opening = _own_request(opening_request, actor, opening=True)
         self.env = _ProjectionEnv(deepcopy(config))
         other = "p2" if actor == "p1" else "p1"
-        self.env._parser = _ReplayParser("actor-projection", complete_prefix=True,
+        self.env._battle_id = battle_id
+        self.env._parser = _ReplayParser(battle_id, complete_prefix=True,
             hp_visibility={actor: "exact", other: "percentage"})
         # First knowledge is not guessed from requests[0] at a mid-battle leaf.
         self.env._first_requests = {actor: opening}
@@ -144,6 +150,7 @@ class ActorObservationFold:
             and digest(self.env._first_requests[self.actor]) == self.opening_sha
             and not self.env._request_history["p2" if self.actor == "p1" else "p1"]
             and set(self.env._parser.snapshot().requests) <= {self.actor}
+            and self.env._battle_id == self.env._parser.snapshot().battle_id == self.battle_id
             and projection_source_hashes() == self.sources,
             "original pure actor projection inputs/state changed")
 
@@ -205,7 +212,8 @@ def compile_actor_program(program, *, config, expected_program_sha256, expected_
     Waiting and terminal observation coordinates are returned as None.
     """
     require(type(program) is dict and set(program) == {"schema", "actor", "encoding_law", "opening_request", "events"}
-        and program["schema"] == SCHEMA and program["encoding_law"] == ENCODING_LAW
+            | ({"battle_id"} if program.get("schema") == CONTEXT_SCHEMA else set())
+        and program["schema"] in {SCHEMA,CONTEXT_SCHEMA} and program["encoding_law"] == ENCODING_LAW
         and type(program["events"]) is list and program["events"]
         and digest(program) == expected_program_sha256
         and digest(_state_payload(config)) == expected_config_sha256,
@@ -213,7 +221,8 @@ def compile_actor_program(program, *, config, expected_program_sha256, expected_
     source_hashes = projection_source_hashes()
     frozen = deepcopy(program)
     fold = ActorObservationFold(config=config, actor=frozen["actor"], opening_request=frozen["opening_request"],
-        expected_opening_sha256=digest(frozen["opening_request"]))
+        expected_opening_sha256=digest(frozen["opening_request"]),
+        battle_id=frozen["battle_id"] if frozen["schema"] == CONTEXT_SCHEMA else "actor-projection")
     observations, states, coordinates = [], [], []
     for row in frozen["events"]:
         require(type(row) is dict and row.get("kind") in {"protocol", "own_request", "observe"},
@@ -236,7 +245,7 @@ def compile_actor_program(program, *, config, expected_program_sha256, expected_
         and digest(_state_payload(config)) == expected_config_sha256 and projection_source_hashes() == source_hashes,
         "actor projection inputs changed during actual encoder callbacks")
     fold.check()
-    return CompiledActorProgram(tuple(observations), tuple(states), dict(schema=SCHEMA,
+    return CompiledActorProgram(tuple(observations), tuple(states), dict(schema=frozen["schema"],
         program_sha256=expected_program_sha256, config_sha256=expected_config_sha256,
         source_hashes=source_hashes, encoding_law=ENCODING_LAW, coordinates=coordinates,
         observed_requests=len(fold.env._request_history[frozen["actor"]]),

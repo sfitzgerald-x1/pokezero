@@ -11,7 +11,7 @@ from unittest.mock import patch
 from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
 from pokezero.showdown import _ReplayParser, V2_1_REPLAY_OBSERVATION_SPEC, V2_2_REPLAY_OBSERVATION_SPEC
 from pokezero.mcts_eval.search_over_raw_actor_projection import (
-    ActorObservationFold, compile_actor_program, digest, SCHEMA, ENCODING_LAW,
+    ActorObservationFold, compile_actor_program, digest, SCHEMA, CONTEXT_SCHEMA, ENCODING_LAW,
     _state_payload)
 from pokezero.observation import ObservationFeatureMasks
 from test_local_showdown import request_payload
@@ -132,7 +132,7 @@ class ActorProjectionTests(unittest.TestCase):
         # Independent normal environment path, no snapshot/state restoration.
         env=LocalShowdownEnv(self.config if config is None else config)
         actor=data["actor"];other="p2" if actor=="p1" else "p1"
-        env._parser=_ReplayParser("actor-projection",complete_prefix=True,
+        env._parser=_ReplayParser(data.get("battle_id","actor-projection"),complete_prefix=True,
             hp_visibility={actor:"exact",other:"percentage"})
         observations,states=[],[]
         for row in data["events"]:
@@ -174,6 +174,29 @@ class ActorProjectionTests(unittest.TestCase):
                     config=replace(self.config,observation_spec=spec)
                     result=self.assert_parity(program(actor),config)
                     self.assertEqual(result.receipt["encoded_observations"],1)
+
+    def test_v2_preserves_bound_original_observation_origin_without_masking_metadata(self):
+        data=program();data.update(schema=CONTEXT_SCHEMA,battle_id="local-gen3randombattle-42")
+        result=self.assert_parity(data)
+        self.assertEqual(result.observations[0].metadata["battle_id"],data["battle_id"])
+        self.assertEqual(result.materialization_states[0].replay.battle_id,data["battle_id"])
+        self.assertEqual(result.receipt["schema"],CONTEXT_SCHEMA)
+        legacy=self.compile(program())
+        self.assertEqual(legacy.observations[0].metadata["battle_id"],"actor-projection")
+        self.assertEqual(legacy.receipt["schema"],SCHEMA)
+
+    def test_origin_is_explicit_versioned_and_guarded_through_callbacks(self):
+        for value in (None,False,"", "source\nother", "x"*201):
+            data=program();data.update(schema=CONTEXT_SCHEMA,battle_id=value)
+            with self.subTest(value=value),self.assertRaises(ValueError):self.compile(data)
+        data=program();data["battle_id"]="foreign"
+        with self.assertRaisesRegex(ValueError,"externally bound"):self.compile(data)
+        data=program();data["schema"]=CONTEXT_SCHEMA
+        with self.assertRaisesRegex(ValueError,"externally bound"):self.compile(data)
+        fold=ActorObservationFold(config=self.config,actor="p1",opening_request=own_request(),
+            expected_opening_sha256=digest(own_request()),battle_id="original")
+        fold.env._parser.battle_id="replacement"
+        with self.assertRaisesRegex(ValueError,"inputs/state changed"):fold.check()
 
     def test_switch_bench_pp_history_and_repeated_observation_calls_match(self):
         data=program()
