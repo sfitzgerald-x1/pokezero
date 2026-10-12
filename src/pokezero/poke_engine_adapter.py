@@ -19,9 +19,10 @@ gated on a poke-engine root-option export).
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
+import warnings
 
 from .poke_engine_backend import (
     PokeEngineReversibleSmokeResult,
@@ -295,7 +296,8 @@ def minimal_gen3_fixture() -> BattleSpec:
     )
 
 
-def build_poke_engine_state(spec: BattleSpec, module: Any | None = None) -> Any:
+def build_poke_engine_state(spec: BattleSpec, module: Any | None = None, *,
+                            construction_observer: Any | None = None) -> Any:
     """Build a ``poke_engine.State`` from a curated :class:`BattleSpec`.
 
     When ``module`` is ``None`` the installed engine is loaded lazily via
@@ -322,7 +324,13 @@ def build_poke_engine_state(spec: BattleSpec, module: Any | None = None) -> Any:
     if _spec_requires_rest_turns(spec):
         require_rest_turns_support(engine)
 
-    return _build_poke_engine_state_unchecked(spec, engine)
+    state = _build_poke_engine_state_unchecked(spec, engine)
+    if construction_observer is not None:
+        try:
+            construction_observer(dict(spec=asdict(spec),native_state=state.to_string()))
+        except Exception as error:
+            warnings.warn(f"native construction_observer raised: {type(error).__name__}",RuntimeWarning)
+    return state
 
 
 def _build_poke_engine_state_unchecked(spec: BattleSpec, engine: Any) -> Any:
