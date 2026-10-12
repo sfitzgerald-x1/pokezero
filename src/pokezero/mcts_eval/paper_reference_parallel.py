@@ -35,6 +35,8 @@ class PreparedDecision:
     sample_world: Callable[..., World]
     # Called after each batch; returns incremental evidence, not all old draws.
     evidence: Callable[[], Any] = lambda: None
+    # Prospective worker-local commit observation; absent on historical runtimes.
+    atomic_work: Any | None = None
 
 
 class WorkerRuntime(Protocol):
@@ -100,12 +102,18 @@ def _worker(connection, index, runtime_factory, config):
                 phase = "trajectory_batch"
                 batch = search.search_batch(root, battle_id=battle_id,
                     evaluate_root=prepared.evaluate_root, sample_world=prepared.sample_world,
-                    seed=seed, trajectories=limit, deadline_at=deadline)
+                    seed=seed, trajectories=limit, deadline_at=deadline,
+                    atomic_work=prepared.atomic_work)
                 sequence += 1
                 update = search.export_statistics(worker_id=str(index), sequence=sequence)
                 phase = "statistics_exchange"
+                evidence = prepared.evidence()
+                if prepared.atomic_work is not None:
+                    from .search_over_raw_atomic_work import validate_reference_batch
+                    validate_reference_batch(evidence, batch=batch, update=update, root=root,
+                        battle_id=battle_id, worker_id=str(index), sequence=sequence)
                 connection.send(("update", decision, index, update, batch,
-                                 preparation_seconds, prepared.evidence()))
+                                 preparation_seconds, evidence))
                 acknowledgement = connection.recv()
                 if acknowledgement[0] != "ack" or acknowledgement[1] != decision:
                     raise ReferenceRefusal("worker received an out-of-order acknowledgement")
@@ -269,11 +277,17 @@ class ParallelTrajectorySearch:
                             or not isinstance(batch, BatchResult)
                             or not 0 <= batch.trajectories <= self.batch_size):
                         self._fail("invalid worker contribution/work receipt", [message])
+                    if isinstance(evidence, dict) and "atomic_work" in evidence:
+                        from .search_over_raw_atomic_work import validate_reference_batch, update_record
+                        validate_reference_batch(evidence, batch=batch, update=update, root=root,
+                            battle_id=battle_id, worker_id=str(index), sequence=update.sequence)
                     snapshot = self._master.accept(update)
                     progress[index] += batch.trajectories
                     receipts.append({"worker": index, "sequence": update.sequence,
                         "batch": batch, "preparation_seconds": preparation,
-                        "evidence": evidence, "master_version": snapshot.version})
+                        "evidence": evidence, "master_version": snapshot.version,
+                        **({"own_statistics": update_record(update)} if isinstance(evidence, dict)
+                           and "atomic_work" in evidence else {})})
                     remaining = (self.batch_size if trajectories_per_worker is None else
                                  trajectories_per_worker - progress[index])
                     expired = deadline is not None and time.perf_counter() >= deadline

@@ -1,0 +1,40 @@
+name: Reference atomic work contracts
+
+on:
+  pull_request:
+    paths:
+      - 'src/pokezero/mcts_eval/paper_reference*.py'
+      - 'src/pokezero/mcts_eval/search_over_raw_atomic_work.py'
+      - 'tests/test_paper_reference*.py'
+      - 'tests/test_search_over_raw_atomic_work.py'
+      - '.github/workflows/reference-atomic-work.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/pokezero/mcts_eval/paper_reference*.py'
+      - 'src/pokezero/mcts_eval/search_over_raw_atomic_work.py'
+      - 'tests/test_paper_reference*.py'
+      - 'tests/test_search_over_raw_atomic_work.py'
+      - '.github/workflows/reference-atomic-work.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Validate real kernel commits and spawned worker exchanges on toy worlds
+        env:
+          PYTHONPATH: src:tests
+        run: >-
+          python -m unittest
+          test_search_over_raw_atomic_work test_paper_reference
+          test_paper_reference_exchange test_paper_reference_parallel -v
