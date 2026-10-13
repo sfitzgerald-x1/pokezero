@@ -53,6 +53,7 @@ class ReferencePolicyConfig:
 
 @dataclass
 class ReferencePolicyStats:
+    binding: dict[str, Any] = field(default_factory=dict)
     searches: int = 0
     forced_decisions: int = 0
     refusals: int = 0
@@ -77,7 +78,12 @@ class TrajectoryReferencePolicy:
                  factory: ShowdownWorkerFactory, policy_id: str) -> None:
         self.config, self.factory = config, factory
         self.policy_id = f"{policy_id}+trajectory-reference"
-        self.stats = ReferencePolicyStats()
+        self.stats = ReferencePolicyStats(binding={
+            "checkpoint_sha256": factory.checkpoint_sha256,
+            "set_source_hash": factory.set_source_hash,
+            "showdown_root": factory.showdown_root,
+            "node_binary": factory.node_binary,
+        })
         self._pool: ParallelTrajectorySearch | None = None
         self._closed = self._failed = False
 

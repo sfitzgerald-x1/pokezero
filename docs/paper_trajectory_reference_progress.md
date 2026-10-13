@@ -33,6 +33,8 @@ action needs no worker and is labelled forced, not raw fallback. Zero new
 work, public-input drift, worker failure and malformed selectors refuse and
 prevent another decision from restarting the same policy.
 
+Checkpoint, catalog and executable bindings survive in both successful and
+refused summaries, independently of the last-decision metadata.
 Pool startup is separately measured. Public-root capture and the subsequent
 search count against the decision ceiling; overruns remain visible. The outer
 owner closes its pool on success, opponent-construction failure and bridge
@@ -42,13 +44,14 @@ observed partial-work counters are distinct from accepted work. CPU is explicitl
 uninstrumented, and complete workflow-cost and scientific qualification remain
 false. This older runtime does not provide the newer staged atomic-work hooks.
 
-The final parent regression passed 98 tests in 16.147 seconds without skips.
+The final parent regression passed 98 tests in 17.667 seconds without skips.
 It includes the actual CLI and bridge entry, public-only transport into real
 spawned toy workers, both opponent routes, p2 subject play, cumulative reuse,
 zero work after a populated tree, selector corruption and failure cleanup.
 It launches no model/Showdown games. Astra independently passed all seventeen
 focused tests in 8.452 seconds without skips and cleared this implementation,
-including CLI persistence, unsupported-model and failed-startup cases. Two initial authored-fixture runs
+including CLI persistence, unsupported-model and failed-startup cases. Its
+final binding/refusal check also passed independently. Two initial authored-fixture runs
 failed (wrong game-result fields and an incomplete fake external process);
 those failures remain failures, not accepted evidence. The required two-seed
 model/game qualification and pinned Foul Play execution package remain separate

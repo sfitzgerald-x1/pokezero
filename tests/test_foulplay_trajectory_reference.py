@@ -284,6 +284,8 @@ class TrajectoryReferenceBridgeTests(unittest.TestCase):
         self.assertEqual(progress[0].completed_games, 0)
         stats = progress[0].to_dict()["trajectory_reference"]["policy_stats"]
         self.assertEqual(stats["refusals"], 1)
+        self.assertEqual(stats["binding"]["set_source_hash"], CATALOG)
+        self.assertEqual(stats["binding"]["checkpoint_sha256"], hashlib.sha256(b"authored-checkpoint").hexdigest())
         self.assertEqual(stats["last_decision"]["status"], "REFUSED")
         self.assertNotIn("PRIVATE_CANARY", str(stats))
         self.assertTrue(all(not p.is_alive() for p in pools[0]._processes))
