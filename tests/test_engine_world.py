@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import replace
+from copy import deepcopy
+from dataclasses import asdict, replace
 import os
 import sys
 import unittest
+from unittest.mock import Mock, patch
+import warnings
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -918,6 +921,89 @@ class BattleSpecConstructionTests(unittest.TestCase):
         alt_world = battle_spec_from_payload(_payload(self.dex), alt, dex=self.dex)
         alt_moves = {m.id for m in alt_world.spec.side_two.pokemon[0].moves if m.id != "none"}
         self.assertEqual(alt_moves, {"earthquake"})
+
+
+class WorldConstructionObserverTests(unittest.TestCase):
+    def test_default_off_and_explicit_none_preserve_world_without_observer_copying(self) -> None:
+        dex = _dex()
+        payload, override = _payload(dex), _override()
+        before = deepcopy((payload, asdict(override)))
+        expected = battle_spec_from_payload(payload, override, dex=dex)
+        for options in ({}, {"construction_observer": None}):
+            with self.subTest(options=options), \
+                    patch("pokezero.engine_world.deepcopy", side_effect=AssertionError("unexpected copying")), \
+                    patch("pokezero.engine_world.asdict", side_effect=AssertionError("unexpected observer serialization")):
+                world = battle_spec_from_payload(payload, override, dex=dex, **options)
+            self.assertEqual(world, expected)
+            self.assertEqual((payload, asdict(override)), before)
+
+    def test_observer_receives_one_complete_original_construction_event(self) -> None:
+        dex = _dex()
+        payload, override = _payload(dex), _override()
+        before = deepcopy((payload, asdict(override)))
+        events = []
+        world = battle_spec_from_payload(payload, override, dex=dex, construction_observer=events.append)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(set(events[0]), {"payload", "override", "world"})
+        self.assertEqual(events[0], dict(payload=before[0], override=before[1], world=asdict(world)))
+        self.assertIsNot(events[0]["payload"], payload)
+        self.assertEqual((payload, asdict(override)), before)
+
+    def test_nested_event_mutation_cannot_change_draw_overlay_or_returned_world(self) -> None:
+        dex = _dex()
+        payload, override = _payload(dex), _override()
+        before = deepcopy((payload, asdict(override)))
+        expected = battle_spec_from_payload(payload, override, dex=dex)
+        def mutate(event):
+            event["payload"]["sides"]["p1"]["pokemon"][0]["moves"][0]["pp"] = 0
+            event["payload"]["sides"].clear()
+            event["override"]["player_teams"].clear()
+            event["world"]["spec"]["side_one"]["pokemon"][0]["moves"][0]["pp"] = 0
+            event["world"]["party_species"].clear()
+        world = battle_spec_from_payload(payload, override, dex=dex, construction_observer=mutate)
+        self.assertEqual(world, expected)
+        self.assertEqual((payload, asdict(override)), before)
+
+    def test_callback_failure_warns_only_its_type_and_preserves_world(self) -> None:
+        dex = _dex()
+        payload, override = _payload(dex), _override()
+        expected = battle_spec_from_payload(payload, override, dex=dex)
+        observer = Mock(side_effect=ValueError("PRIVATE_CONSTRUCTION_SENTINEL"))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            world = battle_spec_from_payload(payload, override, dex=dex, construction_observer=observer)
+        observer.assert_called_once()
+        self.assertEqual(world, expected)
+        self.assertEqual(len(caught), 1)
+        self.assertIs(caught[0].category, RuntimeWarning)
+        self.assertEqual(str(caught[0].message), "construction_observer raised: ValueError")
+        self.assertNotIn("PRIVATE_CONSTRUCTION_SENTINEL", str(caught[0].message))
+
+    def test_wrapper_forwards_only_an_explicit_observer_and_preserves_other_arguments(self) -> None:
+        dex = _dex()
+        payload, override, state = _payload(dex), _override(), object()
+        result, observer = object(), Mock()
+        with patch("pokezero.local_showdown._public_materialization_payload", return_value=payload) as overlay, \
+                patch("pokezero.engine_world.battle_spec_from_payload", return_value=result) as build:
+            self.assertIs(world_battle_spec(state, override, dex=dex), result)
+            original_args, original_kwargs = build.call_args
+            self.assertNotIn("construction_observer", original_kwargs)
+            self.assertIs(world_battle_spec(state, override, dex=dex, construction_observer=None), result)
+            self.assertEqual(build.call_args, (original_args, original_kwargs))
+            self.assertIs(world_battle_spec(state, override, dex=dex, construction_observer=observer), result)
+            self.assertEqual(build.call_args.args, original_args)
+            self.assertEqual(build.call_args.kwargs, dict(original_kwargs, construction_observer=observer))
+            overlay.assert_called_with(state)
+            observer.assert_not_called()
+
+    def test_refused_construction_never_emits_an_observer_event(self) -> None:
+        dex = _dex()
+        payload = _payload(dex)
+        payload["sides"]["p2"]["volatiles"] = ["confusion"]
+        observer = Mock()
+        with self.assertRaises(EngineWorldUnsupported):
+            battle_spec_from_payload(payload, _override(), dex=dex, construction_observer=observer)
+        observer.assert_not_called()
 
 
 class RealEngineSmokeTests(unittest.TestCase):

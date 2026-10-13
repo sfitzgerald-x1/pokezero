@@ -1,0 +1,32 @@
+name: World construction observer contracts
+on:
+  pull_request:
+    paths:
+      - src/pokezero/engine_world.py
+      - tests/test_engine_world.py
+      - .github/workflows/world-construction-observer.yml
+  push:
+    branches: [main]
+    paths:
+      - src/pokezero/engine_world.py
+      - tests/test_engine_world.py
+      - .github/workflows/world-construction-observer.yml
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run authored world construction and observer contracts
+        env:
+          PYTHONPATH: src:tests
+        run: >-
+          python -B -S -m unittest test_engine_world.WorldConstructionObserverTests
+          test_engine_world.BattleSpecConstructionTests -v

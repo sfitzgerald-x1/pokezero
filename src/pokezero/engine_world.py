@@ -30,7 +30,9 @@ for poke-engine's construction conventions; no code is copied from it.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from copy import deepcopy
+from dataclasses import asdict, dataclass, replace
+import warnings
 from typing import Any, Mapping, Sequence
 
 from .dex import ShowdownDex, normalize_id
@@ -394,6 +396,7 @@ def battle_spec_from_payload(
     truant_slots: Sequence[str] = (),
     transformed_slots: Mapping[str, str] | None = None,
     rng: Any | None = None,
+    construction_observer: Any | None = None,
 ) -> EngineWorld:
     """Pure construction: public materialization payload + sampled teams -> spec.
 
@@ -612,11 +615,20 @@ def battle_spec_from_payload(
         weather=weather,
         weather_turns_remaining=weather_turns,
     )
-    return EngineWorld(
+    world = EngineWorld(
         spec=spec,
         slot_sides={"p1": "side_one", "p2": "side_two"},
         party_species=party_species,
     )
+    if construction_observer is not None:
+        try:
+            # Copies are controller-only telemetry. An observer cannot mutate
+            # the actual draw, public overlay or constructed search world.
+            construction_observer(dict(payload=deepcopy(dict(payload)), override=deepcopy(asdict(override)),
+                world=deepcopy(asdict(world))))
+        except Exception as error:
+            warnings.warn(f"construction_observer raised: {type(error).__name__}",RuntimeWarning)
+    return world
 
 
 # Showdown gives every copied slot `pp = Math.min(5, move.pp)` where `move` is the
@@ -1076,6 +1088,7 @@ def world_battle_spec(
     truant_slots: Sequence[str] = (),
     transformed_slots: Mapping[str, str] | None = None,
     rng: Any | None = None,
+    construction_observer: Any | None = None,
 ) -> EngineWorld:
     """Construct the engine world for a live public branch point.
 
@@ -1104,6 +1117,7 @@ def world_battle_spec(
         truant_slots=truant_slots,
         transformed_slots=transformed_slots,
         rng=rng,
+        **({"construction_observer":construction_observer} if construction_observer is not None else {}),
     )
 
 
