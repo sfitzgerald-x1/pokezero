@@ -6,6 +6,9 @@ on:
       - 'src/pokezero/mcts_eval/search_over_raw_statistics.py'
       - 'scripts/calibrate_search_over_raw_joint.py'
       - 'tests/test_search_over_raw_statistics.py'
+      - 'src/pokezero/mcts_eval/search_over_raw_t_candidate.py'
+      - 'scripts/calibrate_search_over_raw_t_candidate.py'
+      - 'tests/test_search_over_raw_t_candidate.py'
       - '.github/workflows/confirmatory-statistics.yml'
   push:
     branches: [main]
@@ -13,6 +16,9 @@ on:
       - 'src/pokezero/mcts_eval/search_over_raw_statistics.py'
       - 'scripts/calibrate_search_over_raw_joint.py'
       - 'tests/test_search_over_raw_statistics.py'
+      - 'src/pokezero/mcts_eval/search_over_raw_t_candidate.py'
+      - 'scripts/calibrate_search_over_raw_t_candidate.py'
+      - 'tests/test_search_over_raw_t_candidate.py'
       - '.github/workflows/confirmatory-statistics.yml'
 
 permissions:
@@ -34,4 +40,4 @@ jobs:
       - name: Verify exact-cell joins and bounded joint inference
         env:
           PYTHONPATH: src:tests:scripts
-        run: python -m unittest test_search_over_raw_statistics -v
+        run: python -m unittest test_search_over_raw_statistics test_search_over_raw_t_candidate -v
