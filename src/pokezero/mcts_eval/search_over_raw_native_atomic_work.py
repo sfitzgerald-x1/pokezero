@@ -369,7 +369,13 @@ def validate_timed_native_report(report, *, state_sha256, requested_iterations,
     completed = 0
     for round in report["atomic_work"]["rounds"]:
         if round["status"] == "COMMITTED":
-            require(round["accepted"] == min(batch_size, requested_iterations-completed),
+            # Native collection ends when either traversal capacity OR deferred
+            # model-row capacity is reached. One expansion can price several
+            # chance branches, so a complete round need not have batch_size
+            # traversals. validate_native_report already reconstructs every
+            # pending row and backup; an invented row count cannot pass it.
+            require(round["accepted"] == min(batch_size, requested_iterations-completed)
+                or len(round["row_value_bits"]) >= batch_size,
                 "timed native commit is not a whole batch")
             completed += round["accepted"]
     return dict(validated, schema="pokezero.search-over-raw.timed-native-prefix.v1",

@@ -280,6 +280,35 @@ class TimedNativeReportTests(unittest.TestCase):
         for report in cases:
             with self.subTest(report=report["iterations"]),self.assertRaises(ValueError): self.read(report)
 
+    def test_model_row_cap_can_complete_a_round_with_fewer_traversals(self):
+        report = timed_report(1)
+        report["atomic_work"]["batch_size"] = 2
+        before = deepcopy(report)
+        result = self.read(report, batch_size=2)
+        self.assertEqual((result["completed_iterations"], result["remaining_iterations"],
+            result["committed_rounds"]), (1, 63, 1))
+        self.assertEqual(len(report["atomic_work"]["rounds"][0]["row_value_bits"]), 2)
+        self.assertEqual(report, before)
+        self.assertFalse(result["runtime_qualified"])
+        self.assertFalse(result["owning_process_validated"])
+        self.assertFalse(result["on_time_deployability_established"])
+        self.assertFalse(result["independent_terminal_labels"])
+        report["atomic_work"]["batch_size"] = 16
+        with self.assertRaisesRegex(ValueError, "not a whole batch"):
+            self.read(report)
+
+    def test_model_row_cap_cannot_be_forged_with_missing_or_extra_prices(self):
+        for change in ("missing", "extra"):
+            report = timed_report(1)
+            report["atomic_work"]["batch_size"] = 2
+            prices = report["atomic_work"]["rounds"][0]["row_value_bits"]
+            if change == "missing":
+                prices.pop()
+            else:
+                prices.append(_bits(.5))
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.read(report, batch_size=2)
+
     def test_foreign_args_and_malformed_duration_count_or_scope_refuse(self):
         for key, value in dict(time_budget_ms=True, time_budget_enabled=False,
             remaining_iterations=True, requested_iterations=16, time_budget_elapsed_ms=float("nan"),
