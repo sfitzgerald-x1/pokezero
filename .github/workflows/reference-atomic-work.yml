@@ -7,6 +7,8 @@ on:
       - 'src/pokezero/mcts_eval/search_over_raw_atomic_work.py'
       - 'tests/test_paper_reference*.py'
       - 'tests/test_search_over_raw_atomic_work.py'
+      - 'src/pokezero/foulplay_bridge.py'
+      - 'tests/test_foulplay_trajectory_reference.py'
       - '.github/workflows/reference-atomic-work.yml'
   push:
     branches: [main]
@@ -15,6 +17,8 @@ on:
       - 'src/pokezero/mcts_eval/search_over_raw_atomic_work.py'
       - 'tests/test_paper_reference*.py'
       - 'tests/test_search_over_raw_atomic_work.py'
+      - 'src/pokezero/foulplay_bridge.py'
+      - 'tests/test_foulplay_trajectory_reference.py'
       - '.github/workflows/reference-atomic-work.yml'
 
 permissions:
@@ -38,3 +42,20 @@ jobs:
           python -m unittest
           test_search_over_raw_atomic_work test_paper_reference
           test_paper_reference_exchange test_paper_reference_parallel -v
+
+  controlled-bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install bridge protocol dependency only
+        run: python -m pip install -e .
+      - name: Test owned reference bridge with authored roots and real toy workers
+        env:
+          PYTHONPATH: src:tests
+        run: python -m unittest test_foulplay_trajectory_reference -v

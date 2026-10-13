@@ -759,6 +759,13 @@ class ControlledFoulPlayConfig:
     max_decision_rounds: int = 250
     format_id: str = "gen3randombattle"
     policy_mode: str = "root-puct"
+    # Candidate-only opt-in reference settings; None preserves legacy modes.
+    reference_seconds: float | None = None
+    reference_workers: int | None = None
+    reference_alpha: float | None = None
+    reference_beta: float | None = None
+    reference_max_transitions: int | None = None
+    reference_allow_earlier_compatible_template: bool | None = None
     # HEAD-TO-HEAD. "foul-play" keeps the existing opponent; anything else puts a SECOND
     # pokezero policy in the opponent seat, built from the SAME checkpoint under that mode.
     # Same checkpoint on purpose: the question is what the search buys over the model it
@@ -962,8 +969,22 @@ class ControlledFoulPlayConfig:
                 raise ValueError("foulplay_mcts_iterations must be positive when set.")
         if self.max_decision_rounds <= 0:
             raise ValueError("max_decision_rounds must be positive.")
-        if self.policy_mode not in {"raw", "root-puct", "engine-mcts"}:
-            raise ValueError("policy_mode must be 'raw', 'root-puct', or 'engine-mcts'.")
+        if self.policy_mode not in {"raw", "root-puct", "engine-mcts", "trajectory-reference"}:
+            raise ValueError("unknown policy_mode; expected raw, root-puct, engine-mcts, or trajectory-reference")
+        reference_fields = (
+            "reference_seconds", "reference_workers", "reference_alpha", "reference_beta",
+            "reference_max_transitions", "reference_allow_earlier_compatible_template")
+        if self.policy_mode == "trajectory-reference":
+            _reference_policy_config(self)
+            if (self.device not in (None, "cpu") or self.temperature != 1.
+                    or self.value_checkpoint is not None or self.format_id != "gen3randombattle"):
+                raise ValueError("trajectory-reference requires CPU, temperature 1, the unchanged value checkpoint and gen3randombattle")
+            if self.allow_search_fallback or not self.belief_set_source_enabled():
+                raise ValueError("trajectory-reference requires --no-search-fallback and --belief-set-source on")
+            if self.opponent_policy_mode not in {"foul-play", "raw"}:
+                raise ValueError("trajectory-reference supports only foul-play or raw opponents")
+        elif any(getattr(self, name) is not None for name in reference_fields):
+            raise ValueError("reference settings require policy_mode='trajectory-reference'")
         if self.live_continuation_smoke:
             if self.games != 1:
                 raise ValueError("live_continuation_smoke requires exactly one source game.")
@@ -2018,15 +2039,15 @@ class ControlledFoulPlayOpponentCrash:
 
 
 def _engine_policy_stats(policy: Any, policy_mode: str) -> Mapping[str, Any] | None:
-    """``EngineMctsStats.to_dict()`` for an engine-mcts run, else None.
+    """Mode-specific search stats for native or trajectory-reference runs.
 
     Deliberately NOT a ``hasattr`` probe over an arbitrary policy: outside
-    engine-mcts there is no engine searcher and None is the honest answer,
-    while inside it a missing serializer is a contract break that should raise
+    these two search modes None is the honest answer, while inside either
+    a missing serializer is a contract break that should raise
     rather than quietly produce an empty telemetry block (the failure mode that
     left every acceptance shard with ``"policy_stats": {}``).
     """
-    if policy_mode != "engine-mcts":
+    if policy_mode not in {"engine-mcts", "trajectory-reference"}:
         return None
     return policy.stats.to_dict()
 
@@ -2045,8 +2066,8 @@ class ControlledFoulPlayBenchmarkResult:
     #: the run, not of any decision -- and it is the one fact that decides whether the
     #: contention reading exists.
     foulplay_start_method: Mapping[str, Any] | None = None
-    # EngineMctsStats.to_dict() for the run's engine policy, or None outside
-    # engine-mcts mode. This is the ONLY path by which
+    # Search stats for engine-mcts or the opt-in trajectory-reference policy.
+    # This is the ONLY path by which native
     # search_wall_per_searched_decision -- the field the 20 s/turn rejection
     # rule is defined on -- reaches a shard summary; policy_timing measures the
     # bridge-level per-decision wall, which is a different quantity (it counts
@@ -2517,6 +2538,14 @@ class ControlledFoulPlayBenchmarkResult:
             payload["root_puct"]["fallback_reasons"] = dict(sorted(root_fallback_reasons.items()))
         if root_fallback_categories:
             payload["root_puct"]["fallback_categories"] = dict(sorted(root_fallback_categories.items()))
+        if self.config.policy_mode == "trajectory-reference":
+            payload["trajectory_reference"] = {
+                **_reference_policy_config(self.config).to_dict(),
+                "checkpoint_sha256": self.checkpoint_sha256,
+                "policy_stats": self.policy_stats,
+                "status": ("REFUSED" if (self.policy_stats or {}).get("refusals")
+                    else "COMPLETE" if self.completed_games == self.config.games else "PARTIAL"),
+            }
         return payload
 
 
@@ -5823,75 +5852,106 @@ async def run_controlled_foulplay_benchmark(
         rollout_config=rollout_config,
         policy_id=policy_id,
     )
-    benchmark_policy_id = policy.policy_id if hasattr(policy, "policy_id") else policy_id
-    # The opponent arm. `replace(config, policy_mode=...)` reuses _build_policy verbatim,
-    # so the opponent is constructed by exactly the same code as the pokezero seat -- a
-    # separate construction path could differ in a way that showed up as a strength
-    # difference. The engine axes (depth/sims/worlds) come along in the config, which is
-    # what makes "engine-mcts at depth N versus raw" a one-flag change.
-    opponent_policy: Policy | None = None
-    if config.opponent_policy_mode != "foul-play":
-        opponent_policy = _build_policy(
-            # opponent_policy_mode is reset to the default here on purpose. This derived
-            # config describes ONE policy being built, not a head-to-head pairing, and
-            # leaving it set would make policy_mode == opponent_policy_mode and trip the
-            # mirror-match guard on a configuration that is not a mirror at all. (It did:
-            # engine-mcts vs raw was refused as a mirror until this line was fixed.)
-            config=_opponent_seat_config(config),
-            model=model,
-            result=result,
-            value_model=value_model,
-            value_result=value_result,
-            env_config=env_config,
-            rollout_config=rollout_config,
-            policy_id=f"{policy_id}-opp-{config.opponent_policy_mode}",
+    reference_result: ControlledFoulPlayBenchmarkResult | None = None
+
+    def reference_progress(snapshot: ControlledFoulPlayBenchmarkResult) -> None:
+        nonlocal reference_result
+        reference_result = snapshot
+        if progress_callback is not None:
+            progress_callback(snapshot)
+
+    try:
+        benchmark_policy_id = policy.policy_id if hasattr(policy, "policy_id") else policy_id
+        # The opponent arm. `replace(config, policy_mode=...)` reuses _build_policy verbatim,
+        # so the opponent is constructed by exactly the same code as the pokezero seat -- a
+        # separate construction path could differ in a way that showed up as a strength
+        # difference. The engine axes (depth/sims/worlds) come along in the config, which is
+        # what makes "engine-mcts at depth N versus raw" a one-flag change.
+        opponent_policy: Policy | None = None
+        if config.opponent_policy_mode != "foul-play":
+            opponent_policy = _build_policy(
+                # opponent_policy_mode is reset to the default here on purpose. This derived
+                # config describes ONE policy being built, not a head-to-head pairing, and
+                # leaving it set would make policy_mode == opponent_policy_mode and trip the
+                # mirror-match guard on a configuration that is not a mirror at all. (It did:
+                # engine-mcts vs raw was refused as a mirror until this line was fixed.)
+                config=_opponent_seat_config(config),
+                model=model,
+                result=result,
+                value_model=value_model,
+                value_result=value_result,
+                env_config=env_config,
+                rollout_config=rollout_config,
+                policy_id=f"{policy_id}-opp-{config.opponent_policy_mode}",
+            )
+        live_continuation_probe = (
+            _LiveFoulPlayContinuationProbe(
+                config=config,
+                model=model,
+                result=result,
+                value_model=value_model,
+                value_result=value_result,
+                env_config=env_config,
+                rollout_config=rollout_config,
+                policy_id=policy_id,
+                successor_capture_callback=live_continuation_oracle_successor_capture_callback,
+            )
+            if config.live_continuation_smoke
+            else None
         )
-    live_continuation_probe = (
-        _LiveFoulPlayContinuationProbe(
-            config=config,
-            model=model,
-            result=result,
-            value_model=value_model,
-            value_result=value_result,
-            env_config=env_config,
-            rollout_config=rollout_config,
-            policy_id=policy_id,
-            successor_capture_callback=live_continuation_oracle_successor_capture_callback,
+        live_continuation_oracle_controller = (
+            _LiveFoulPlayContinuationOracleController(
+                config=config,
+                model=model,
+                result=result,
+                value_model=value_model,
+                value_result=value_result,
+                env_config=env_config,
+                rollout_config=rollout_config,
+                policy_id=policy_id,
+                successor_capture_callback=live_continuation_oracle_successor_capture_callback,
+            )
+            if config.live_continuation_oracle
+            else None
         )
-        if config.live_continuation_smoke
-        else None
-    )
-    live_continuation_oracle_controller = (
-        _LiveFoulPlayContinuationOracleController(
-            config=config,
-            model=model,
-            result=result,
-            value_model=value_model,
-            value_result=value_result,
-            env_config=env_config,
-            rollout_config=rollout_config,
-            policy_id=policy_id,
-            successor_capture_callback=live_continuation_oracle_successor_capture_callback,
+        benchmark_result = await _run_controlled_foulplay_games(
+            config,
+            policy=policy,
+            opponent_policy=opponent_policy,
+            policy_id=benchmark_policy_id,
+            vocab=vocab,
+            dex=dex,
+            observation_spec=observation_spec,
+            feature_masks=feature_masks,
+            checkpoint_sha256=checkpoint_sha256,
+            value_leaf_provenance=value_leaf_provenance,
+            progress_callback=(reference_progress
+                if config.policy_mode == "trajectory-reference" else progress_callback),
+            trajectory_callback=trajectory_callback,
+            live_continuation_probe=live_continuation_probe,
+            live_continuation_oracle_controller=live_continuation_oracle_controller,
         )
-        if config.live_continuation_oracle
-        else None
-    )
-    return await _run_controlled_foulplay_games(
-        config,
-        policy=policy,
-        opponent_policy=opponent_policy,
-        policy_id=benchmark_policy_id,
-        vocab=vocab,
-        dex=dex,
-        observation_spec=observation_spec,
-        feature_masks=feature_masks,
-        checkpoint_sha256=checkpoint_sha256,
-        value_leaf_provenance=value_leaf_provenance,
-        progress_callback=progress_callback,
-        trajectory_callback=trajectory_callback,
-        live_continuation_probe=live_continuation_probe,
-        live_continuation_oracle_controller=live_continuation_oracle_controller,
-    )
+        if config.policy_mode == "trajectory-reference":
+            reference_result = benchmark_result
+        return benchmark_result
+    except BaseException as error:
+        if config.policy_mode == "trajectory-reference" and not policy.stats.refusals:
+            policy.record_failure("benchmark", error)
+            reference_progress(replace(reference_result, policy_stats=policy.stats.to_dict())
+                if reference_result is not None else ControlledFoulPlayBenchmarkResult(
+                    config=config, policy_id=policy.policy_id, games=(),
+                    checkpoint_sha256=checkpoint_sha256, policy_stats=policy.stats.to_dict()))
+        raise
+    finally:
+        if config.policy_mode == "trajectory-reference":
+            try:
+                policy.close()
+            except BaseException as error:
+                policy.record_failure("pool_cleanup", error)
+                policy.stats.last_decision["cleanup_error_type"] = type(error).__name__
+                if reference_result is not None:
+                    reference_progress(replace(reference_result, policy_stats=policy.stats.to_dict()))
+                raise
 
 
 async def _run_controlled_foulplay_games(
@@ -6017,6 +6077,19 @@ async def _run_controlled_foulplay_games(
                         refusal_recorder=refusal_capture.health(),
                     )
                 )
+    except BaseException as error:
+        if config.policy_mode == "trajectory-reference":
+            policy.record_failure("controlled_bridge", error)
+            if progress_callback is not None:
+                progress_callback(ControlledFoulPlayBenchmarkResult(
+                    config=config, policy_id=policy_id, games=tuple(game_results),
+                    checkpoint_sha256=checkpoint_sha256,
+                    foulplay_random_seed_schedule=foulplay_random_seed_schedule[:len(game_results)],
+                    value_leaf_provenance=value_leaf_provenance,
+                    foulplay_start_method=foulplay_start_method,
+                    policy_stats=_engine_policy_stats(policy, config.policy_mode),
+                    refusal_recorder=refusal_capture.health()))
+        raise
     finally:
         # EACH teardown in its own `finally`, so one raising cannot skip the next.
         # Flat statements here meant a `bridge.close()` that raised skipped BOTH
@@ -6728,6 +6801,12 @@ def _opponent_seat_config(config: ControlledFoulPlayConfig) -> ControlledFoulPla
         # rejects. Cleared for the same reason opponent_policy_mode is.
         "opponent_engine_depth": None,
         "opponent_engine_sims": None,
+        "reference_seconds": None,
+        "reference_workers": None,
+        "reference_alpha": None,
+        "reference_beta": None,
+        "reference_max_transitions": None,
+        "reference_allow_earlier_compatible_template": None,
     }
     # Per-seat axes. Applied BEFORE the engine-only clearing below so that an axis
     # override on a non-engine opponent is still inert rather than silently retained.
@@ -6740,6 +6819,23 @@ def _opponent_seat_config(config: ControlledFoulPlayConfig) -> ControlledFoulPla
             if getattr(config, name, cleared) != cleared:
                 overrides[name] = cleared
     return replace(config, **overrides)
+
+
+def _reference_policy_config(config: ControlledFoulPlayConfig):
+    from .mcts_eval.paper_reference_policy import ReferencePolicyConfig
+
+    if config.reference_seconds is None:
+        raise ValueError("trajectory-reference requires an explicit --reference-seconds ceiling")
+    return ReferencePolicyConfig(
+        decision_seconds=config.reference_seconds,
+        workers=20 if config.reference_workers is None else config.reference_workers,
+        alpha=.5 if config.reference_alpha is None else config.reference_alpha,
+        beta=1. if config.reference_beta is None else config.reference_beta,
+        max_transitions=256 if config.reference_max_transitions is None else config.reference_max_transitions,
+        allow_earlier_compatible_template=(False
+            if config.reference_allow_earlier_compatible_template is None
+            else config.reference_allow_earlier_compatible_template),
+    )
 
 
 def _build_policy(
@@ -6779,6 +6875,24 @@ def _build_policy(
 
     if config.policy_mode == "raw":
         return raw_policy(policy_id)
+
+    if config.policy_mode == "trajectory-reference":
+        from .mcts_eval.paper_reference_policy import TrajectoryReferencePolicy
+        from .mcts_eval.paper_reference_runtime import ShowdownWorkerFactory
+        from .mcts_eval.paper_reference_showdown import ChampionEvaluator
+
+        # Refuse unsupported model overrides before any worker/simulator starts.
+        ChampionEvaluator(raw_policy(policy_id))
+        if raw_checkpoint_sha256 is None:
+            raise ValueError("trajectory-reference requires a readable pinned checkpoint")
+        source = load_gen3_randbat_source_cached(config.showdown_root)
+        return TrajectoryReferencePolicy(config=_reference_policy_config(config),
+            factory=ShowdownWorkerFactory(raw_checkpoint, raw_checkpoint_sha256,
+                str(config.showdown_root), source.metadata.source_hash,
+                allow_earlier_compatible_template=(
+                    _reference_policy_config(config).allow_earlier_compatible_template),
+                node_binary=config.node_binary),
+            policy_id=policy_id)
 
     if config.policy_mode == "engine-mcts":
         # Native Rust MCTS over sampled belief worlds with in-crate TorchScript
@@ -9099,10 +9213,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap.")
     parser.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     parser.add_argument(
-        "--policy-mode", choices=("raw", "root-puct", "engine-mcts"), default="root-puct",
+        "--policy-mode", choices=("raw", "root-puct", "engine-mcts", "trajectory-reference"), default="root-puct",
         help="raw = the checkpoint's own argmax; root-puct = the Python root search; "
-             "engine-mcts = the native Rust search over sampled belief worlds.",
+             "engine-mcts = native Rust search; trajectory-reference = opt-in persistent "
+             "CPU workers (requires reference ceiling, belief source on, no fallback).",
     )
+    parser.add_argument("--reference-seconds", type=float, default=None,
+        help="Explicit trajectory-reference decision ceiling, excluding separately reported pool startup.")
+    parser.add_argument("--reference-workers", type=int, default=None,
+        help="Reference workers, 1..20; omitted resolves to the historical 20-worker recipe.")
+    parser.add_argument("--reference-alpha", type=float, default=None, help="Reference alpha (default .5).")
+    parser.add_argument("--reference-beta", type=float, default=None, help="Reference beta (default 1).")
+    parser.add_argument("--reference-max-transitions", type=int, default=None,
+        help="Reference trajectory safety limit (default 256).")
+    parser.add_argument("--reference-allow-earlier-compatible-template", action="store_true", default=None,
+        help="Explicit reference completion adaptation; strict forcing is the default.")
     parser.add_argument("--opponent-engine-depth", type=int, default=None,
         help="Engine depth for the OPPONENT seat. Defaults to --engine-depth. Set it to "
              "compare two budgets head-to-head, e.g. --engine-depth 3 --engine-sims 2048 "
@@ -9496,6 +9621,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def build_comparison_arg_parser() -> argparse.ArgumentParser:
     parser = build_arg_parser()
     _remove_optional_argument(parser, "--policy-mode")
+    for option in ("--reference-seconds", "--reference-workers", "--reference-alpha",
+                   "--reference-beta", "--reference-max-transitions",
+                   "--reference-allow-earlier-compatible-template"):
+        _remove_optional_argument(parser, option)
     # The comparison driver runs BOTH arms against foul-play by construction, so a
     # head-to-head opponent is meaningless here -- and accepting the flag while ignoring
     # it would be worse than refusing it. Removed rather than defaulted, which also keeps
@@ -9576,6 +9705,12 @@ def _config_from_args(
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
         policy_mode=policy_mode if policy_mode is not None else args.policy_mode,
+        reference_seconds=getattr(args, "reference_seconds", None),
+        reference_workers=getattr(args, "reference_workers", None),
+        reference_alpha=getattr(args, "reference_alpha", None),
+        reference_beta=getattr(args, "reference_beta", None),
+        reference_max_transitions=getattr(args, "reference_max_transitions", None),
+        reference_allow_earlier_compatible_template=getattr(args, "reference_allow_earlier_compatible_template", None),
         # getattr with a default: the comparison driver strips --policy-mode from its
         # parser (_remove_optional_argument) and other entry points build Namespaces that
         # never saw this flag. A bare args.opponent_policy_mode would AttributeError on
