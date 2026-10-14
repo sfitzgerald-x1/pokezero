@@ -766,11 +766,20 @@ class LocalShowdownEnv:
         deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
         deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
         reference_rest_sleep: bool = False,
+        reference_consumed_items: bool = False,
+        reference_encore_durations: Mapping[str, int] | None = None,
+        reference_induced_sleep: Mapping[str, Mapping[str, int]] | None = None,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
         if not isinstance(reference_rest_sleep, bool):
             raise LocalShowdownError("Reference Rest opt-in must be boolean.")
+        if not isinstance(reference_consumed_items, bool):
+            raise LocalShowdownError("Reference consumed-item opt-in must be boolean.")
+        if reference_consumed_items and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
+            raise LocalShowdownError("Reference consumed items require Gen 3.")
+        if reference_consumed_items and state.observation_format_id == "gen3customgame":
+            _validate_reference_rest_names(state)
         if reference_rest_sleep and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
             raise LocalShowdownError("Reference Rest requires the Gen 3 public ledger.")
         if reference_rest_sleep and state.observation_format_id == "gen3customgame":
@@ -787,10 +796,17 @@ class LocalShowdownEnv:
                 "type": "materialize",
                 "battleId": self._battle_token,
                 "referenceRestSleep": reference_rest_sleep,
+                "referenceInducedSleep": dict(reference_induced_sleep) if reference_induced_sleep is not None else None,
+                "referenceRulesFormat": state.observation_format_id if reference_induced_sleep is not None else None,
+                "referenceConsumedItems": reference_consumed_items,
+                "referenceEncoreDurations": dict(reference_encore_durations) if reference_encore_durations is not None else None,
                 "publicState": _public_materialization_payload(
                     state,
                     deferred_opponent_actions=deferred_opponent_actions,
                     deferred_opponent_action_priors=deferred_opponent_action_priors,
+                    reference_consumed_items=reference_consumed_items,
+                    reference_encore=reference_encore_durations is not None,
+                    reference_induced_sleep=reference_induced_sleep is not None,
                 ),
             },
             "materialized",
@@ -2319,6 +2335,9 @@ def _public_materialization_payload(
     *,
     deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
     deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
+    reference_consumed_items: bool = False,
+    reference_encore: bool = False,
+    reference_induced_sleep: bool = False,
 ) -> dict[str, Any]:
     # A live action request is a protocol boundary: the preceding action has
     # finished even if the omniscient stream reached the request before its
@@ -2346,6 +2365,7 @@ def _public_materialization_payload(
             rows,
             belief_snapshot.side(player),
             blockers,
+            consumed_items=_public_consumed_item_history(state, player) if reference_consumed_items else None,
         )
         _apply_traced_ability_materialization_state(rows, replay.traced_ability.get(player))
         _apply_rest_sleep_provenance(rows, replay, player)
@@ -2407,6 +2427,7 @@ def _public_materialization_payload(
             # duration, the move-slot lock, and the same-turn redirect the engine already
             # implements -- silently never happens.
             "lastUsedMove": replay.last_used_move.get(player) or "",
+            **({"referenceEncore": _public_reference_encore(state, player)} if reference_encore else {}),
             # gen3 Truant loaf parity for the active mon: True = loafs on its next move
             # attempt, False = acts, None = no holder OR a genuinely unknown phase. Unknown
             # includes a truncated prefix and a full-prefix Trace acquisition whose residual
@@ -2463,6 +2484,14 @@ def _public_materialization_payload(
         for priors in deferred_priors.values()
     ):
         raise ValueError("Direct materialization received invalid deferred opponent move priors.")
+    if reference_induced_sleep:
+        from .mcts_eval.paper_reference_sleep import induced_sleep_certificates
+        certificates = induced_sleep_certificates(state)
+        for side, public_side in sides.items():
+            for row in public_side['pokemon']:
+                key = side + ':' + _normalize_identifier(row['species'])
+                if key in certificates and 'slp' in str(row.get('condition', '')).split():
+                    row['referenceInducedSleep'] = certificates[key]
     return {
         "turn": replay.turn_number,
         "weather": replay.weather,
@@ -2729,15 +2758,17 @@ def _apply_public_item_materialization_state(
     rows: list[dict[str, Any]],
     beliefs: Sequence[RevealedPokemonBelief],
     blockers: set[str],
+    *,
+    consumed_items: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> None:
     """Attach only protocol-confirmed live item state to direct-world rows.
 
     A sampled set's item describes the battle-start assignment. Trick can publicly replace
     that item later, so starting the sampled world alone silently recreates the old holder.
     The belief engine records an audited ``current_public_item`` only for the corresponding
-    protocol surface. Removals and unaudited mutations intentionally remain blockers: this
-    constructor has no complete item-history representation, and guessing would create a
-    mechanically false world.
+    protocol surface. Removals remain blockers by default. The reference-only
+    consumption ledger can discharge a positive, unmutated berry/White Herb
+    consumption, with history; unknown mutations and other removals still refuse.
     """
 
     rows_by_species: dict[str, list[dict[str, Any]]] = {}
@@ -2755,6 +2786,10 @@ def _apply_public_item_materialization_state(
             blockers.add(f"item-state-ambiguous:{species or 'unknown'}")
             continue
         if belief.item_removed:
+            consumed = (consumed_items or {}).get(_materialization_identifier(species))
+            if not belief.item_mutated and consumed is not None:
+                matching_rows[0]["consumedItemState"] = dict(consumed)
+                continue
             blockers.add(f"item-state-removed:{species}")
             continue
         current_item = belief.current_public_item
@@ -2762,6 +2797,97 @@ def _apply_public_item_materialization_state(
             blockers.add(f"item-state-unconfirmed:{species}")
             continue
         matching_rows[0]["currentItem"] = current_item
+
+
+def _public_consumed_item_history(
+    state: PublicBattleMaterializationState, player: PlayerId,
+) -> dict[str, dict[str, Any]]:
+    """Gen 3 berry/White Herb history, from public lines only; no guessed removals.
+
+    Item loss is not merely an empty current item: Recycle needs lastItem. The
+    consumed/ate flags persist on the bench; nextTurn clears usedItemThisTurn
+    only for the active Pokemon. Unknown item operations remain blocked.
+    Random-battle species names (or validated nickname-free custom fixtures)
+    provide identities; duplicate species are separately refused by the caller.
+    """
+    consumed: dict[str, dict[str, Any]] = {}
+    active = None
+    for event in state.replay.public_events:
+        parts = event.raw_line.split("|")
+        if len(parts) < 2:
+            continue
+        kind = parts[1]
+        if kind == "turn":
+            if active in consumed:
+                consumed[active]["usedItemThisTurn"] = False
+            continue
+        if len(parts) < 3 or parts[2][:2] != player:
+            continue
+        identity = _materialization_identifier(parts[2].partition(":")[2])
+        if kind in {"switch", "drag", "replace"}:
+            active = identity
+        if kind not in {"-item", "-enditem"}:
+            continue
+        consumed.pop(identity, None)
+        if kind != "-enditem" or len(parts) < 4:
+            continue
+        item = _materialization_identifier(parts[3])
+        tags = parts[4:]
+        berry = item.endswith("berry") and tags == ["[eat]"]
+        if berry or (item == "whiteherb" and not any(tags)):
+            consumed[identity] = {"id": item, "usedItemThisTurn": True, "ateBerry": berry}
+    return consumed
+
+
+def _public_reference_encore(state: PublicBattleMaterializationState, player: PlayerId) -> dict[str, Any] | None:
+    """Public lock and conditional support; never reads a hidden duration.
+
+    Gen 3 rolls 3..6, adds one tick if the target already acted, then pays a
+    tick at residual. Only ordinary, post-upkeep move boundaries are supported;
+    an ambiguous mid-turn boundary is not assigned a fabricated clock.
+    """
+    if "encore" not in state.replay.volatiles.get(player, ()):
+        return None
+    if state.observation_format_id != "gen3randombattle" and state.observation_format_id != "gen3customgame":
+        raise LocalShowdownError("Reference Encore requires Gen 3.")
+    if state.self_request.get('forceSwitch') or state.deferred_opponent_action_player is not None:
+        raise LocalShowdownError("Reference Encore needs an ordinary post-upkeep boundary.")
+    acted, moves, active = set(), {}, {}
+    lock = None
+    for event in state.replay.public_events:
+        parts = event.raw_line.split('|')
+        kind = parts[1] if len(parts) > 1 else ''
+        if kind == 'turn':
+            acted.clear()
+        elif kind == 'upkeep' and lock is not None:
+            lock['paid_residuals'] += 1
+        elif len(parts) >= 3:
+            side = parts[2][:2]
+            if kind in {'switch', 'drag', 'replace'}:
+                active[side] = parts[2]
+                moves.pop(side, None)
+                if side == player:
+                    lock = None
+            elif kind == 'move' and len(parts) >= 4:
+                moves[side] = _materialization_identifier(parts[3])
+                acted.add(side)
+            elif kind == 'cant':
+                acted.add(side)
+            elif kind == '-start' and side == player and len(parts) >= 4 and parts[3] == 'Encore':
+                move = moves.get(side)
+                if move is None or parts[2] != active.get(side):
+                    raise LocalShowdownError("Reference Encore lacks a public locked move/identity.")
+                lock = {'move': move, 'after_target_acted': side in acted, 'paid_residuals': 0}
+            elif side == player and (kind == 'faint' or kind == '-end' and len(parts) >= 4 and parts[3] == 'Encore'):
+                lock = None
+    if lock is None or lock['paid_residuals'] != state.replay.encore_elapsed.get(player):
+        raise LocalShowdownError("Reference Encore lacks a complete residual ledger.")
+    offset = int(lock['after_target_acted'])
+    remaining = [d + offset - lock['paid_residuals'] for d in range(3, 7)
+        if d + offset > lock['paid_residuals']]
+    if not remaining:
+        raise LocalShowdownError("Reference Encore has impossible surviving duration.")
+    return {**lock, 'remaining_candidates': remaining}
 
 
 def _mark_legacy_rest_refund_pending(row: dict[str, Any]) -> None:

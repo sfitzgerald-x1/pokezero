@@ -33,10 +33,29 @@ export function bindReferenceRestSources(serializedSide, sideId) {
   // Bind AFTER active-first / actor-known team reordering. A Rest source is the
   // sleeper itself (Sleep Clause exempt), never the opponent or a stale slot.
   for (const [index, pokemon] of serializedSide.pokemon.entries()) {
-    if (pokemon.status === "slp") {
+    if (pokemon.status === "slp" && !pokemon.statusState.referenceInducedSource) {
       const self = `[Pokemon:${sideId}${"abcdef"[index]}]`;
       pokemon.statusState.source = self;
       pokemon.statusState.target = self;
     }
   }
+}
+
+export function referenceInducedSleepState(certificate, ability, draw) {
+  const {attempts, refunded, skipped, survival, source_player, source_name} = certificate;
+  if (![attempts, refunded, skipped].every(n => Number.isSafeInteger(n) && n >= 0) ||
+      refunded + skipped > attempts || !Array.isArray(survival) ||
+      !['p1','p2'].includes(source_player) || typeof source_name !== 'string') {
+    throw new Error('Induced sleep requires valid public provenance.');
+  }
+  const cost = String(ability).toLowerCase().replace(/[^a-z0-9]/g,'') === 'earlybird' ? 2 : 1;
+  const start = draw?.startTime;
+  if (!draw || Object.keys(draw).sort().join(',') !== 'skippedTime,startTime,time' ||
+      !Number.isInteger(start) || start < 2 || start > 5 ||
+      survival.some(row => !Array.isArray(row) || row.length !== 2 ||
+        !row.every(n => Number.isSafeInteger(n) && n >= 0) || start - row[0] * cost + row[1] <= 0) ||
+      draw.time !== start - attempts * cost + refunded || draw.time <= 0 || draw.skippedTime !== skipped) {
+    throw new Error('Induced sleep draw contradicts public conditioning.');
+  }
+  return {id:'slp', effectOrder:0, ...draw, referenceInducedSource:{side:source_player, name:source_name}};
 }

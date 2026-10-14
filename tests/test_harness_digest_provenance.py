@@ -123,6 +123,8 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/investment.py",
         "src/pokezero/linear_policy.py",
         "src/pokezero/local_showdown.py",
+        # The opt-in reference sleep certificate is reached from local_showdown.
+        "src/pokezero/mcts_eval/paper_reference_sleep.py",
         "src/pokezero/mcts_diagnostics.py",
         "src/pokezero/neural_policy.py",
         "src/pokezero/neural_selfplay.py",

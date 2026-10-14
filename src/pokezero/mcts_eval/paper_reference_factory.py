@@ -17,10 +17,11 @@ from typing import Any
 
 from .paper_reference import ReferenceRefusal
 from .paper_reference_sampling import KnownSetTraits, PaperHiddenTeamSampler
+from .paper_reference_sleep import induced_sleep_certificates, induced_sleep_support
 from .paper_reference_showdown import ChampionEvaluator, ShowdownTrajectoryWorld, decision_state
 from ..determinization import _self_team_from_metadata_result, player_belief_view_from_payload
 from ..env import BattleStartOverride
-from ..local_showdown import LocalShowdownEnv, PublicBattleMaterializationState
+from ..local_showdown import LocalShowdownEnv, PublicBattleMaterializationState, _public_reference_encore
 from ..public_decision_corpus import _public_belief_view
 from ..randbat import Gen3RandbatSource, canonical_gen3_randbat_species_id
 from ..showdown import _pokemon_metadata, _self_team_from_request
@@ -58,7 +59,8 @@ def _maximum_hp(condition: str | None) -> int | None:
 class PublicRootWorldFactory:
     def __init__(self, *, env: LocalShowdownEnv, state: PublicBattleMaterializationState,
                  observation: Any, evaluator: ChampionEvaluator, set_source: Gen3RandbatSource,
-                 allow_earlier_compatible_template: bool = False) -> None:
+                 allow_earlier_compatible_template: bool = False,
+                 max_known_set_draws: int = 10) -> None:
         if state.replay.requests:
             raise ReferenceRefusal("public root must strip replay request payloads")
         if state.deferred_opponent_action_player is not None:
@@ -112,7 +114,8 @@ class PublicRootWorldFactory:
         self.env, self.state, self.evaluator = env, state, evaluator
         self.own_team = own_team
         self.sampler = PaperHiddenTeamSampler(env, set_source=set_source,
-            allow_earlier_compatible_template=allow_earlier_compatible_template)
+            allow_earlier_compatible_template=allow_earlier_compatible_template,
+            max_known_set_draws=max_known_set_draws)
         self.active = False
         self.receipts: list[dict[str, Any]] = []
 
@@ -132,8 +135,29 @@ class PublicRootWorldFactory:
                 opponent: pack_team(draw.team)}, observation_format_id="gen3randombattle")
             seed = hidden_rng.getrandbits(32)
             evidence["materialization_seed"] = seed
+            durations, conditioning = {}, {}
+            for side in ('p1', 'p2'):
+                certificate = _public_reference_encore(self.state, side)
+                if certificate is not None:
+                    durations[side] = hidden_rng.choice(certificate['remaining_candidates'])
+                    conditioning[side] = {**certificate, 'sampled_remaining': durations[side]}
+            evidence['encore_conditioning'] = conditioning
+            sleep_draws, sleep_conditioning = {}, {}
+            teams = {self.state.player_id: self.own_team, opponent: draw.team}
+            for key, certificate in induced_sleep_certificates(self.state).items():
+                side, species = key.split(':', 1)
+                candidates = [mon for mon in teams[side] if re.sub('[^a-z0-9]', '', mon.species.lower()) == species]
+                if len(candidates) != 1:
+                    raise ReferenceRefusal('induced sleep cannot match public victim to sampled party')
+                support = induced_sleep_support(certificate, candidates[0].ability)
+                if not support:
+                    raise ReferenceRefusal('induced sleep sampled ability contradicts public survival')
+                sleep_draws[key] = hidden_rng.choice(support)
+                sleep_conditioning[key] = dict(certificate=certificate, support=support, sampled=sleep_draws[key])
+            evidence['induced_sleep_conditioning'] = sleep_conditioning
             self.env.materialize_public_world(state=self.state, start_override=override, seed=seed,
-                reference_rest_sleep=True)
+                reference_rest_sleep=True, reference_consumed_items=True,
+                reference_encore_durations=durations, reference_induced_sleep=sleep_draws)
             if decision_state(self.env.observe(self.state.player_id), player=self.state.player_id) != self.root:
                 raise ReferenceRefusal("fresh sampled world does not preserve exact player-known root")
             evidence["status"] = "ROOT_VALIDATED"
