@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import contextlib
-from dataclasses import replace
+from copy import deepcopy
+from dataclasses import asdict, replace
 import sys
 from types import ModuleType, SimpleNamespace
 import unittest
+from unittest.mock import Mock
+import warnings
 
 from pokezero.poke_engine_adapter import (
     BattleSpec,
@@ -186,6 +189,88 @@ class BuildPokeEngineStateTest(unittest.TestCase):
             module=engine,
         )
         self.assertEqual(state.kwargs["side_one"].pokemon[0].types, ("fire", "flying"))
+
+
+class ConstructionObserverTest(unittest.TestCase):
+    def test_default_off_and_explicit_none_do_not_serialize_or_change_construction(self) -> None:
+        spec = minimal_gen3_fixture()
+        before = asdict(spec)
+        expected = build_poke_engine_state(spec, module=fake_construction_module())
+        for options in ({}, {"construction_observer": None}):
+            engine = fake_construction_module()
+            class UnserializedState(RecordingState):
+                to_string = Mock(side_effect=AssertionError("default path must not serialize"))
+            engine.State = UnserializedState
+            with self.subTest(options=options):
+                state = build_poke_engine_state(spec, module=engine, **options)
+                self.assertEqual(state.kwargs, expected.kwargs)
+                UnserializedState.to_string.assert_not_called()
+                self.assertEqual(asdict(spec), before)
+
+    def test_observer_receives_one_original_state_text_and_complete_detached_spec(self) -> None:
+        engine = fake_construction_module()
+        original = "native:é|private:☃"
+        class SerializedState(RecordingState):
+            def to_string(self):
+                return original
+        engine.State = SerializedState
+        spec = minimal_gen3_fixture()
+        events = []
+        state = build_poke_engine_state(spec, module=engine, construction_observer=events.append)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(set(events[0]), {"spec", "native_state"})
+        self.assertEqual(events[0]["spec"], asdict(spec))
+        self.assertIs(type(events[0]["native_state"]), str)
+        self.assertEqual(events[0]["native_state"].encode("utf-8"), original.encode("utf-8"))
+        events[0]["native_state"] = "substitution"
+        self.assertEqual(state.to_string(), original)
+
+    def test_observer_mutation_cannot_change_spec_or_built_state(self) -> None:
+        base = minimal_gen3_fixture()
+        spec = replace(base, side_one=replace(base.side_one, side_conditions={"spikes": 2}))
+        before = deepcopy(asdict(spec))
+        def mutate(event):
+            event["spec"]["side_one"]["side_conditions"].clear()
+            event["spec"]["side_one"]["pokemon"][0]["moves"][0]["pp"] = 0
+            event["spec"].clear()
+            event["native_state"] = "substitution"
+        state = build_poke_engine_state(spec, module=fake_construction_module(), construction_observer=mutate)
+        self.assertEqual(asdict(spec), before)
+        self.assertEqual(state.kwargs["side_one"].side_conditions.spikes, 2)
+        self.assertEqual(state.kwargs["side_one"].pokemon[0].moves[0].pp,
+            before["side_one"]["pokemon"][0]["moves"][0]["pp"])
+        self.assertEqual(state.to_string(), "ORIG")
+
+    def test_callback_failure_warns_only_its_type_and_preserves_built_state(self) -> None:
+        spec = minimal_gen3_fixture()
+        before = asdict(spec)
+        observer = Mock(side_effect=ValueError("PRIVATE_CALLBACK_SENTINEL"))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            state = build_poke_engine_state(spec, module=fake_construction_module(), construction_observer=observer)
+        observer.assert_called_once()
+        self.assertEqual(state.to_string(), "ORIG")
+        self.assertEqual(asdict(spec), before)
+        self.assertEqual(len(caught), 1)
+        self.assertIs(caught[0].category, RuntimeWarning)
+        self.assertEqual(str(caught[0].message), "native construction_observer raised: ValueError")
+        self.assertNotIn("PRIVATE_CALLBACK_SENTINEL", str(caught[0].message))
+
+    def test_serialization_failure_does_not_invoke_observer_or_disclose_private_message(self) -> None:
+        engine = fake_construction_module()
+        class RefusingState(RecordingState):
+            def to_string(self):
+                raise RuntimeError("PRIVATE_SERIALIZATION_SENTINEL")
+        engine.State = RefusingState
+        observer = Mock()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            state = build_poke_engine_state(minimal_gen3_fixture(), module=engine, construction_observer=observer)
+        self.assertIsInstance(state, RefusingState)
+        observer.assert_not_called()
+        self.assertEqual(len(caught), 1)
+        self.assertEqual(str(caught[0].message), "native construction_observer raised: RuntimeError")
+        self.assertNotIn("PRIVATE_SERIALIZATION_SENTINEL", str(caught[0].message))
 
 
 class BuildPokeEngineStateValidationTest(unittest.TestCase):
