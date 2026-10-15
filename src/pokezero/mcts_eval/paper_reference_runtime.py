@@ -41,6 +41,7 @@ class ShowdownWorkerFactory:
     set_source_hash: str
     # Explicit bounded completion adaptation; defaults preserve strict forcing.
     allow_earlier_compatible_template: bool = False
+    node_binary: str = "node"
 
     def __call__(self, index):
         return _ShowdownRuntime(self, index)
@@ -66,7 +67,8 @@ class _ShowdownRuntime:
             exploration_epsilon=0., sampling_temperature=1., family_gated_selection=False)
         self.evaluator = ChampionEvaluator(policy)
         config = env_config_with_policy_spec_masks(LocalShowdownConfig(
-            showdown_root=Path(binding.showdown_root), set_belief_source=True),
+            showdown_root=Path(binding.showdown_root), node_binary=binding.node_binary,
+            set_belief_source=True),
             [f"neural:{checkpoint}"], context="opt-in twenty-worker paper reference")
         self.env = LocalShowdownEnv(config)
         self.source = source

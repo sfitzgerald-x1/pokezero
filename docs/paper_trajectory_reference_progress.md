@@ -3,8 +3,59 @@
 This opt-in implementation now includes twenty persistent worker processes.
 The bounded comparison is executed; see
 [comparison results](paper_trajectory_reference_comparison_20261005.md).
-It found no demonstrated action-quality gain. Production policies do not import it, and
+It found no demonstrated action-quality gain. Legacy policy modes do not import the
+new reference policy wrapper. An explicit controlled-bridge mode is now available;
 implementation tests are not a paper reproduction or a playing-strength result.
+
+## Controlled bridge integration
+
+The controlled Foul Play runner accepts `--policy-mode trajectory-reference`.
+It requires an explicit `--reference-seconds` ceiling, `--belief-set-source on`
+and `--no-search-fallback`. It supports either external Foul Play or
+`--opponent-policy-mode raw`, from either subject seat. The existing raw,
+root-PUCT and native modes retain their defaults and summary shape.
+
+The resolved recipe records twenty CPU workers, alpha 0.5, beta 1, a ten-trajectory
+exchange batch and a 256-transition safety limit unless explicitly overridden.
+The worker count may be set from one to twenty. Earlier-compatible completion
+is separately opt-in through `--reference-allow-earlier-compatible-template`;
+strict completion remains the default. Separate value checkpoints, non-CPU
+devices, temperature changes and unsupported actor-critic histories refuse
+rather than becoming ignored settings. The custom Node executable is bound
+into the worker factory.
+
+Only the captured actor/public root crosses the worker boundary. The live
+context, trajectory, opposing private request and Foul Play commitment are not
+sent. Workers persist within a run; own statistics accumulate within each
+battle and reset when the battle identity changes. Summaries distinguish new
+completed trajectories from cumulative root visits. A forced single legal
+action needs no worker and is labelled forced, not raw fallback. Zero new
+work, public-input drift, worker failure and malformed selectors refuse and
+prevent another decision from restarting the same policy.
+
+Checkpoint, catalog and executable bindings survive in both successful and
+refused summaries, independently of the last-decision metadata.
+Pool startup is separately measured. Public-root capture and the subsequent
+search count against the decision ceiling; overruns remain visible. The outer
+owner closes its pool on success, opponent-construction failure and bridge
+failure. Partial summaries preserve completed games while reporting a refused
+run, including after a cleanup error. Failed-attempt wall time and incomplete
+observed partial-work counters are distinct from accepted work. CPU is explicitly
+uninstrumented, and complete workflow-cost and scientific qualification remain
+false. This older runtime does not provide the newer staged atomic-work hooks.
+
+The final parent regression passed 98 tests in 17.667 seconds without skips.
+It includes the actual CLI and bridge entry, public-only transport into real
+spawned toy workers, both opponent routes, p2 subject play, cumulative reuse,
+zero work after a populated tree, selector corruption and failure cleanup.
+It launches no model/Showdown games. Astra independently passed all seventeen
+focused tests in 8.452 seconds without skips and cleared this implementation,
+including CLI persistence, unsupported-model and failed-startup cases. Its
+final binding/refusal check also passed independently. Two initial authored-fixture runs
+failed (wrong game-result fields and an incomplete fake external process);
+those failures remain failures, not accepted evidence. The required two-seed
+model/game qualification and pinned Foul Play execution package remain separate
+unfinished work before scientific launch.
 
 ## First registered comparison and bounded repair
 
