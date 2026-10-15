@@ -73,8 +73,8 @@ def read_raw_selection(selected, *, configuration, runtime, root_id, statistics_
     mask = tuple(legal_action_mask)
     require(type(statistics_root_id) is str and statistics_root_id
         and root_id == statistics_root_id+":raw" and type(selection_seed) is int
-        and 0 <= selection_seed < 2**64 and all(type(v) is bool for v in mask) and sum(mask) >= 2,
-        "non-forced raw root/seed/mask required")
+        and 0 <= selection_seed < 2**64 and all(type(v) is bool for v in mask) and sum(mask) >= 1,
+        "raw root/seed and nonempty legal mask required")
     require(type(selected) is dict and selected.get("status") == "SELECTED"
         and selected.get("root_id") == root_id and selected.get("statistics_root_id") == statistics_root_id
         and type(selected.get("selection_seed")) is int and selected["selection_seed"] == selection_seed
@@ -154,7 +154,7 @@ class RawSelectionJob:
         require(public_request_witness(request)["public_request_sha256"] == self.expected_public_request_sha256
             and request.set_source_hash == self.checkpoint_contract.showdown_source_sha256
             and self.root_id == self.statistics_root_id+":raw" and type(self.selection_seed) is int
-            and 0 <= self.selection_seed < 2**64 and sum(request.observation.legal_action_mask) >= 2,
+            and 0 <= self.selection_seed < 2**64 and sum(request.observation.legal_action_mask) >= 1,
             "raw archived public root/seed drift")
         object.__setattr__(self, "context", replace(public, observation=request.observation,
             requested_observations={public.player_id:request.observation}, public_materialization_state=request.state))

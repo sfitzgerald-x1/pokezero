@@ -50,7 +50,7 @@ def runtime(configuration,checkpoint_sha="b"*64, *, compact=False):
     return value
 
 
-def selected_fixture(configuration,observed_runtime,*,zero=False,elapsed=.02,decision_round=3,compact=False):
+def selected_fixture(configuration,observed_runtime,*,zero=False,elapsed=.02,decision_round=3,compact=False,forced=False):
     recorder=NativeWorldInputs(BINDING,4096,record_atomic_work=True,record_timed_atomic_work=True,
         record_compact_atomic_work=compact)
     for _ in range(4):construct(recorder)
@@ -69,6 +69,9 @@ def selected_fixture(configuration,observed_runtime,*,zero=False,elapsed=.02,dec
     evidence.update(total_iterations=0 if zero else 16,root_action="action:0")
     evidence["consumed_world_inputs"]=native_manifest(recorder,0 if zero else 16)
     engine=evidence["engine_mcts"]
+    if forced:
+        engine["override"]["root_allocation"]["arms"]=[dict(action_index=0,
+            visit_share=1.,model_prior=1.,reported_prior=1.)]
     engine["aggregated_choices_basis"]="deadline_prefix"
     engine["joint_actions"]["native_invocations"]=[dict(world_seed=7,belief_multiplicity=4,
         witness=deepcopy(report["joint_action_witness"]))]
@@ -110,10 +113,10 @@ def selected_fixture(configuration,observed_runtime,*,zero=False,elapsed=.02,dec
     return selected
 
 
-def read_selection(selected,configuration,observed_runtime):
+def read_selection(selected,configuration,observed_runtime,*,mask=MASK):
     return read_native_timed_selection(selected,configuration=configuration,runtime_configuration=observed_runtime,
         runtime_sha256=digest(observed_runtime),root_id="root:"+configuration.identity,
-        statistics_root_id="root",selection_seed=7,consumed_binding=BINDING,legal_action_mask=MASK,
+        statistics_root_id="root",selection_seed=7,consumed_binding=BINDING,legal_action_mask=mask,
         decision_round=3,contract=NativeTimedRunContract())
 
 
@@ -124,6 +127,7 @@ class AuthoredTimedJob:
     zero: bool=False
     behavior: str="normal"
     adapter_elapsed: float=.02
+    forced: bool=False
     synthetic_process_fixture=True
 
     def __call__(self,ownership,phase):
@@ -131,7 +135,7 @@ class AuthoredTimedJob:
         if self.behavior=="failure":raise RuntimeError("authored worker failure")
         if self.behavior=="timeout":time.sleep(2.)
         selected=selected_fixture(self.configuration,self.observed_runtime,zero=self.zero,elapsed=self.adapter_elapsed,
-            compact=self.observed_runtime.get("compact_native_atomic_work") is True)
+            compact=self.observed_runtime.get("compact_native_atomic_work") is True,forced=self.forced)
         time.sleep(self.adapter_elapsed+.01)
         phase("cleanup")
         if self.behavior=="cleanup":raise RuntimeError("authored cleanup failure")
@@ -139,6 +143,27 @@ class AuthoredTimedJob:
 
 
 class NativeTimedReadoutTests(unittest.TestCase):
+    def test_forced_positive_and_zero_work_have_distinct_truthful_status(self):
+        mask=(True,)+(False,)*8
+        for leaf in ("model","hp_fraction"):
+            cfg=SearchConfiguration("incumbent",leaf=leaf,seconds=1.);observed=runtime(cfg)
+            for zero in (False,True):
+                selected=selected_fixture(cfg,observed,zero=zero,forced=True)
+                result=read_selection(selected,cfg,observed,mask=mask)
+                self.assertEqual(result["accepted_units"],0 if zero else 16)
+                self.assertEqual(selected["action"],None if zero else 0)
+                self.assertEqual(selected["status"],"UNQUALIFIED_AT_CEILING" if zero else "SELECTED")
+                forged=deepcopy(selected)
+                if zero:forged.update(status="SELECTED",action=0)
+                else:forged["evidence"]["total_iterations"]=0
+                with self.assertRaises((ValueError,RuntimeError)):read_selection(forged,cfg,observed,mask=mask)
+
+    def test_empty_and_nonboolean_timed_masks_remain_rejected(self):
+        cfg=SearchConfiguration("incumbent",seconds=1.);observed=runtime(cfg)
+        for mask in ((False,)*9,(1,)+(False,)*8):
+            with self.subTest(mask=mask),self.assertRaises(ValueError):
+                read_selection(selected_fixture(cfg,observed,forced=True),cfg,observed,mask=mask)
+
     def test_distinct_contract_and_supported_configs_not_fixed_work(self):
         for values in (dict(iterations_per_world=16),dict(batch_size=True),dict(worlds=20),
                 dict(emergency_watchdog_seconds=30)):
@@ -234,10 +259,10 @@ class TimedContext:
 
 
 class NativeTimedJobWiringTests(unittest.TestCase):
-    def job(self,leaf="model",seconds=1.):
+    def job(self,leaf="model",seconds=1.,mask=MASK):
         cfg=SearchConfiguration("incumbent",leaf=leaf,seconds=seconds)
         observed=runtime(cfg);state=SyntheticPublicState(SyntheticBelief())
-        observation=SimpleNamespace(legal_action_mask=MASK)
+        observation=SimpleNamespace(legal_action_mask=mask)
         context=TimedContext("p1",observation,{"p1":observation,"p2":"private-canary"},state)
         request=SimpleNamespace(state=state,observation=observation,set_source_hash=BINDING["set_source_hash"])
         with patch("pokezero.mcts_eval.head_to_head.public_only_context",side_effect=lambda c:c), \
@@ -245,6 +270,12 @@ class NativeTimedJobWiringTests(unittest.TestCase):
                 patch("pokezero.mcts_eval.search_over_raw_timed_run._binding",return_value=BINDING):
             return NativeTimedAdapterJob(cfg,SimpleNamespace(showdown_source_sha256=BINDING["set_source_hash"],
                 checkpoint_sha256="b"*64),"authored-showdown",context,"root:"+cfg.identity,7,"root",observed)
+
+    def test_forced_job_does_not_filter_or_replace_the_sampled_root(self):
+        job=self.job(mask=(True,)+(False,)*8)
+        self.assertEqual((job.root_id,job.statistics_root_id,job.selection_seed),
+            ("root:"+job.configuration.identity,"root",7))
+        self.assertEqual(job._legal_action_mask,(True,)+(False,)*8)
 
     def adapter(self,job,zero=False):
         cfg=SimpleNamespace(search_depth=6,search_sims=4096,search_batch=16,worlds=4,model_world_workers=1,
@@ -389,19 +420,27 @@ class NativeTimedOwnerTests(unittest.TestCase):
         self.cfg=SearchConfiguration("incumbent",seconds=1.)
         self.runtime=runtime(self.cfg,self.files[str(self.checkpoint)])
 
-    def run_fixture(self,zero=False,behavior="normal",directory=None,adapter_elapsed=.02):
-        job=AuthoredTimedJob(self.cfg,self.runtime,zero,behavior,adapter_elapsed)
+    def run_fixture(self,zero=False,behavior="normal",directory=None,adapter_elapsed=.02,forced=False):
+        job=AuthoredTimedJob(self.cfg,self.runtime,zero,behavior,adapter_elapsed,forced)
         directory=directory or self.root/"attempt"
         terminal=_supervise_owned_job(job,directory=directory,binding_sha256=RUN_BINDING,
             verify_admission=lambda:None,contract=NativeTimedRunContract(),kind="native-timed-run",work_phase="selection",
-            validate_result=lambda s:read_selection(s,self.cfg,self.runtime),
+            validate_result=lambda s:read_selection(s,self.cfg,self.runtime,mask=(True,)+(False,)*8 if forced else MASK),
             _synthetic_watchdog_seconds=.5 if behavior=="timeout" else None)
         inputs=dict(directory=directory,job_sha256=hashlib.sha256(pickle.dumps(job)).hexdigest(),binding_sha256=RUN_BINDING,
             configuration=self.cfg,root_id="root:"+self.cfg.identity,statistics_root_id="root",selection_seed=7,
             runtime_configuration=self.runtime,runtime_sha256=digest(self.runtime),consumed_binding=BINDING,
-            legal_action_mask=MASK,decision_round=3,file_hashes=self.files,checkpoint_path=str(self.checkpoint),
+            legal_action_mask=(True,)+(False,)*8 if forced else MASK,decision_round=3,file_hashes=self.files,checkpoint_path=str(self.checkpoint),
             checkpoint_sha256=self.files[str(self.checkpoint)],showdown_root=str(self.showdown))
         return terminal,inputs
+
+    def test_forced_owned_positive_and_zero_returns_keep_real_work_accounting(self):
+        for zero in (False,True):
+            terminal,inputs=self.run_fixture(zero=zero,forced=True,directory=self.root/str(zero))
+            self.assertEqual(terminal["supervisor_exit_code"],0,terminal)
+            reader=NativeTimedRunValidator(**inputs,allow_synthetic=True)
+            self.assertEqual(reader(terminal["result"]),digest(terminal["result"]))
+            self.assertEqual(reader.last_validation["actual_work"]["accepted_units"],0 if zero else 16)
 
     def load(self,inputs,name):return json.loads((inputs["directory"]/name).read_bytes())
     def write(self,inputs,name,value):(inputs["directory"]/name).write_text(json.dumps(value))

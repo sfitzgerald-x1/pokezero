@@ -1,5 +1,6 @@
 import json
 import random
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 
@@ -109,6 +110,26 @@ class SourceCollectorTest(unittest.TestCase):
         won, lost = self.collect(SourceEnv(winner="p1")), self.collect(SourceEnv(winner="p2"))
         self.assertEqual(won["roots"], lost["roots"])
         self.assertEqual(won["eligible_catalog_sha256"], lost["eligible_catalog_sha256"])
+
+    def test_forced_requests_stay_in_original_catalog_and_priority_slots(self):
+        class ForcedSourceEnv(SourceEnv):
+            def observe(self, seat):
+                observation=super().observe(seat)
+                return replace(observation,legal_action_mask=(True,)+(False,)*(ACTION_COUNT-1),
+                    metadata={**observation.metadata,"action_candidates":[
+                        {"action_index":0,"kind":"move","move_id":"tackle"}]})
+        normal=self.collect(SourceEnv())
+        policies={}
+        for seat in ("p1","p2"):
+            policy=FakeChampion();policy.action=0;policy.distribution=[1.]+[0.]*(ACTION_COUNT-1)
+            policies[seat]=AuditedRawPolicy(policy,checkpoint_sha256=SHA)
+        forced=collect_raw_source(self.contract,panel="exploration",source_seed=self.seed,
+            env=ForcedSourceEnv(),policies=policies)
+        self.assertEqual(forced["eligible_requests"],12)
+        self.assertEqual([(r["root_id"],r["source_request_index"]) for r in forced["roots"]],
+            [(r["root_id"],r["source_request_index"]) for r in normal["roots"]])
+        self.assertTrue(all(sum(r["public_record"]["current_legal_action_mask"]) == 1 for r in forced["roots"]))
+        self.assertEqual(forced["missing_root_ids"],[])
 
     def test_excluded_nonopening_rule_does_not_change_default_panel(self):
         self.contract["exclude_opening_requests"] = True

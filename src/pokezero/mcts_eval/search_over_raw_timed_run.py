@@ -119,8 +119,8 @@ def _read_native_timed_selection(selected, *, configuration, runtime_configurati
         and root_id == statistics_root_id+":"+configuration.identity
         and type(selection_seed) is int and 0 <= selection_seed < 2**64
         and type(legal_action_mask) in (list, tuple) and all(type(v) is bool for v in legal_action_mask)
-        and sum(legal_action_mask) >= 2 and (decision_round is None or type(decision_round) is int),
-        "prospective non-forced native timed root and legal surface required")
+        and sum(legal_action_mask) >= 1 and (decision_round is None or type(decision_round) is int),
+        "prospective native timed root and nonempty legal surface required")
     expected = dict(root_id=root_id, statistics_root_id=statistics_root_id,
         configuration_sha256=configuration.identity, selection_seed=selection_seed,
         runtime_sha256=runtime_sha256)
@@ -262,8 +262,8 @@ class NativeTimedAdapterJob:
         require(type(self.statistics_root_id) is str and self.statistics_root_id
             and self.root_id == self.statistics_root_id+":"+self.configuration.identity
             and type(self.selection_seed) is int and 0 <= self.selection_seed < 2**64
-            and all(type(v) is bool for v in self._legal_action_mask) and sum(self._legal_action_mask) >= 2,
-            "exact non-forced timed root/selection seed required")
+            and all(type(v) is bool for v in self._legal_action_mask) and sum(self._legal_action_mask) >= 1,
+            "exact timed root/selection seed and nonempty legal mask required")
         require((self.expected_public_request_sha256 is not None) ==
             ("full_public_request_observation" in self.expected_runtime_configuration),
             "native job full-public runtime/hash scope mismatch")
@@ -425,7 +425,7 @@ class NativeTimedRunValidator:
             and root_id == statistics_root_id+":"+self._root_suffix(configuration)
             and type(selection_seed) is int and 0 <= selection_seed < 2**64
             and type(legal_action_mask) in (list,tuple) and all(type(v) is bool for v in legal_action_mask)
-            and sum(legal_action_mask) >= 2 and (decision_round is None or type(decision_round) is int),
+            and sum(legal_action_mask) >= 1 and (decision_round is None or type(decision_round) is int),
             "external timed job/root/seed/legal surface bindings required")
         require(type(checkpoint_path) is str and str(Path(checkpoint_path).resolve()) == checkpoint_path
             and type(showdown_root) is str and str(Path(showdown_root).resolve()) == showdown_root,

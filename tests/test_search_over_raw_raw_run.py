@@ -34,14 +34,17 @@ def witness():
         private_source_snapshot_included=False, runtime_qualified=False)
 
 
-def selected_fixture(cfg, runtime):
-    return dict(root_id="root:raw", statistics_root_id="root", selection_seed=7,
+def selected_fixture(cfg, runtime, *, forced=False):
+    selected = dict(root_id="root:raw", statistics_root_id="root", selection_seed=7,
         configuration_sha256=cfg.identity, runtime_sha256=digest(runtime), action=0, status="SELECTED",
         elapsed_seconds=.005, nominal_search_seconds=cfg.seconds, exceeded_nominal_seconds=False,
         independent_root_statistics=True, scientific_strength_evidence=False,
         raw_selection_run_contract=RawSelectionRunContract().receipt(), observed_runtime_configuration=deepcopy(runtime),
         evidence=dict(selector="deterministic_masked_argmax", model_forwards=1, legal_actions=[0,2],
             priors=[.5,.5], signed_value=.2, consumed_binding=deepcopy(BINDING), public_request_witness=witness()))
+    if forced:
+        selected["evidence"].update(legal_actions=[0], priors=[1.])
+    return selected
 
 
 @dataclass(frozen=True)
@@ -49,12 +52,13 @@ class ToyRawOwner:
     cfg: object
     runtime: dict
     fail: bool = False
+    forced: bool = False
     synthetic_process_fixture = True
 
     def __call__(self, ownership, phase):
         phase("startup"); phase("selection")
         if self.fail: raise RuntimeError("authored raw failure")
-        selected = selected_fixture(self.cfg, self.runtime)
+        selected = selected_fixture(self.cfg, self.runtime, forced=self.forced)
         time.sleep(.01)
         phase("cleanup")
         return selected
@@ -88,22 +92,55 @@ class RawOwnerTests(unittest.TestCase):
         self.cfg = SearchConfiguration("raw", seconds=1.)
         self.runtime = raw_runtime(self.cfg, self.files[str(self.checkpoint)], BINDING["set_source_hash"])
 
-    def reader(self, directory, job, allow_synthetic=True):
+    def reader(self, directory, job, allow_synthetic=True, mask=(True,False,True)):
         return RawSelectionRunValidator(directory=directory, job_sha256=hashlib.sha256(pickle.dumps(job)).hexdigest(),
             binding_sha256=RUN_SHA, configuration=self.cfg, root_id="root:raw", statistics_root_id="root",
             selection_seed=7, runtime_configuration=self.runtime, runtime_sha256=digest(self.runtime),
-            consumed_binding=BINDING, legal_action_mask=(True,False,True), decision_round=None,
+            consumed_binding=BINDING, legal_action_mask=mask, decision_round=None,
             file_hashes=self.files, checkpoint_path=str(self.checkpoint), checkpoint_sha256=self.files[str(self.checkpoint)],
             showdown_root=str(self.showdown), public_request_sha256=PUBLIC_SHA, allow_synthetic=allow_synthetic)
 
-    def run_owner(self, fail=False):
-        job = ToyRawOwner(self.cfg, self.runtime, fail)
+    def run_owner(self, fail=False, *, forced=False):
+        job = ToyRawOwner(self.cfg, self.runtime, fail, forced)
         directory = self.root/"owner"
-        reader = self.reader(directory,job)
+        reader = self.reader(directory,job,mask=(True,False,False) if forced else (True,False,True))
         terminal = _supervise_owned_job(job,directory=directory,binding_sha256=RUN_SHA,
             verify_admission=lambda:None,contract=RawSelectionRunContract(),kind="raw-selection-run",
             work_phase="selection",validate_result=reader._read_work)
         return terminal,reader,directory,job
+
+    def test_forced_owned_raw_still_requires_one_forward_and_no_search(self):
+        terminal,reader,_,_=self.run_owner(forced=True)
+        self.assertEqual(terminal["supervisor_exit_code"],0,terminal)
+        self.assertEqual(reader(terminal["result"]),digest(terminal["result"]))
+        work=reader.last_validation["actual_work"]
+        self.assertEqual((work["observed_model_forwards"],work["accepted_units"]),(1,0))
+        selected=deepcopy(terminal["result"]);selected["evidence"]["model_forwards"]=0
+        with self.assertRaises(ValueError):reader._read_work(selected)
+
+    def test_forced_raw_job_preserves_root_seed_and_exact_legal_mask(self):
+        from pokezero.mcts_eval.paper_reference_runtime import PublicRootRequest
+        state=SyntheticPublicState(SyntheticBelief())
+        observation=SimpleNamespace(legal_action_mask=(True,False,False))
+        context=TimedContext("p1",observation,{"p1":observation},state)
+        request=PublicRootRequest(state=state,observation=observation,set_source_hash=BINDING["set_source_hash"])
+        with patch("pokezero.mcts_eval.head_to_head.public_only_context",side_effect=lambda c:c), \
+                patch("pokezero.mcts_eval.paper_reference_runtime.PublicRootRequest.capture",return_value=request), \
+                patch("pokezero.mcts_eval.search_over_raw_raw_run._binding",return_value=BINDING), \
+                patch("pokezero.mcts_eval.search_over_raw_raw_run.public_request_witness",return_value=witness()):
+            job=RawSelectionJob(self.cfg,SimpleNamespace(checkpoint_path=str(self.checkpoint),
+                checkpoint_sha256=self.files[str(self.checkpoint)],showdown_source_sha256=BINDING["set_source_hash"]),
+                str(self.showdown),context,"root:raw",7,"root",self.runtime,PUBLIC_SHA)
+            self.assertEqual(job.read_selection(selected_fixture(self.cfg,self.runtime,forced=True))["action"],0)
+        self.assertEqual((job.root_id,job.statistics_root_id,job.selection_seed),("root:raw","root",7))
+        self.assertEqual(job._mask,(True,False,False))
+
+    def test_empty_and_nonboolean_raw_masks_remain_rejected(self):
+        for mask in ((False,False,False),(1,False,False)):
+            with self.subTest(mask=mask),self.assertRaises(ValueError):
+                read_raw_selection(selected_fixture(self.cfg,self.runtime,forced=True),configuration=self.cfg,
+                    runtime=self.runtime,root_id="root:raw",statistics_root_id="root",selection_seed=7,
+                    consumed_binding=BINDING,legal_action_mask=mask,public_request_sha256=PUBLIC_SHA)
 
     def test_owned_control_is_distinct_normal_completion_not_search_or_qualification(self):
         terminal,reader,directory,job = self.run_owner()
