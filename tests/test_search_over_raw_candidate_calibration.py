@@ -47,6 +47,35 @@ class CandidateCalibrationTests(unittest.TestCase):
         self.assertFalse(result["method_adopted"])
         self.assertEqual(result["scientific_calls"], 0)
 
+    def test_joint_third_refusal_stops_both_without_terminal_claim(self):
+        lower = np.full((2, 256, 2), .5)
+        upper = lower.copy()
+        refused = np.zeros((2, 256), bool)
+        refused[0, [2, 5, 9]] = True
+        for method in ("empirical_bernstein", "studentized_signflip"):
+            result = cal.joint_candidate(lower, upper, refused, method)
+            np.testing.assert_array_equal(result["stop"], [10, 128])
+            np.testing.assert_array_equal(result["crossed"], [[False, False], [True, True]])
+
+    def test_joint_unknown_bounds_retained_and_no_suffix_inference(self):
+        lower = np.full((2, 256, 2), .5)
+        upper = lower.copy()
+        # Shared unknown raw score: known candidate .5 implies [-.5, .5].
+        lower[0, 0] = -.5
+        # Uncertainty only after the fixed look is not observed.
+        lower[1, 200:203] = -1
+        upper[1, 200:203] = 1
+        result = cal.joint_candidate(lower, upper, np.zeros((2, 256), bool), "empirical_bernstein")
+        np.testing.assert_array_equal(result["abstains"], [[True, True], [False, False]])
+        np.testing.assert_array_equal(result["stop"], [128, 128])
+        self.assertTrue(np.all(result["crossed"][1]))
+
+    def test_joint_bernstein_matches_fixed_look_formula(self):
+        values = np.random.default_rng(7).choice((-.25, 0., .25), (4, 256, 2))
+        result = cal.joint_candidate(values, values, np.zeros((4, 256), bool), "empirical_bernstein")
+        expected = cal.empirical_bernstein_reject(values[:, :128].transpose(0, 2, 1))
+        np.testing.assert_array_equal(result["crossed"], expected)
+
 
 if __name__ == "__main__":
     unittest.main()
