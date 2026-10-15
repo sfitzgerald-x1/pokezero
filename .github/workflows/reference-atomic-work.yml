@@ -37,4 +37,5 @@ jobs:
         run: >-
           python -m unittest
           test_search_over_raw_atomic_work test_paper_reference
-          test_paper_reference_exchange test_paper_reference_parallel -v
+          test_paper_reference_exchange test_paper_reference_parallel
+          test_paper_reference_cleanup -v

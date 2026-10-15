@@ -1,0 +1,30 @@
+name: Native boundary record contracts
+on:
+  pull_request:
+    paths:
+      - src/pokezero/mcts_eval/search_over_raw_native_boundary_records.py
+      - tests/test_search_over_raw_native_boundary_records.py
+      - .github/workflows/native-boundary-records.yml
+  push:
+    branches: [main]
+    paths:
+      - src/pokezero/mcts_eval/search_over_raw_native_boundary_records.py
+      - tests/test_search_over_raw_native_boundary_records.py
+      - .github/workflows/native-boundary-records.yml
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run standard-library native record contracts
+        env:
+          PYTHONPATH: src:tests
+        run: python -B -S -m unittest test_search_over_raw_native_boundary_records -v
