@@ -1,0 +1,48 @@
+name: Protocol channel filter contracts
+on:
+  pull_request:
+    paths:
+      - src/pokezero/mcts_eval/search_over_raw_protocol_channels.py
+      - tests/test_search_over_raw_protocol_channels.py
+      - .github/workflows/protocol-channel-filter.yml
+  push:
+    branches: [main]
+    paths:
+      - src/pokezero/mcts_eval/search_over_raw_protocol_channels.py
+      - tests/test_search_over_raw_protocol_channels.py
+      - .github/workflows/protocol-channel-filter.yml
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Checkout pinned Pokemon Showdown filter
+        uses: actions/checkout@v5
+        with:
+          repository: smogon/pokemon-showdown
+          ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
+          path: .ci/pokemon-showdown
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22.22.2"
+          cache: npm
+          cache-dependency-path: .ci/pokemon-showdown/package-lock.json
+      - name: Build pinned filter source
+        run: |
+          npm ci --prefix .ci/pokemon-showdown
+          npm run build --prefix .ci/pokemon-showdown
+          test -f .ci/pokemon-showdown/dist/sim/battle.js
+      - name: Run strict channel contracts and pure upstream comparison
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+          PYTHONPATH: src:tests
+        run: python -B -S -m unittest test_search_over_raw_protocol_channels -v
