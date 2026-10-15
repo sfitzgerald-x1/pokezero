@@ -112,7 +112,8 @@ def reconciled_contract(namespace, *, panels, excluded_seeds, source_review, inp
 
 
 def validate_contract(contract):
-    if contract.get("schema") == "pokezero.search-over-raw.bounded-a2-exploration.v1":
+    if contract.get("schema") in ("pokezero.search-over-raw.bounded-a2-exploration.v1",
+            "pokezero.search-over-raw.bounded-a1-exploration.v1"):
         from .search_over_raw_bounded_a2 import validate_contract as validate_bounded
         return validate_bounded(contract)
     require(contract.get("schema") == SCHEMA, "reconciled v3 contract required; no legacy upgrade")

@@ -14,17 +14,18 @@ def main(argv=None):
     parser.add_argument("--ledger",type=Path)
     parser.add_argument("--entry-spec",type=Path,required=True)
     parser.add_argument("--bounded-a2",action="store_true")
+    parser.add_argument("--bounded-a1",action="store_true")
     parser.add_argument("--entry-review",type=Path)
     parser.add_argument("--check",action="store_true")
     parser.add_argument("--cost-directory",type=Path)
     parser.add_argument("--cost-watchdog-seconds",type=float,default=86400.)
     parser.add_argument("--cost-child",type=Path,help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
-    if args.bounded_a2:
-        if args.ledger is not None or args.entry_review is None or args.cost_directory is not None or args.cost_child is not None:
-            parser.error("bounded A2 requires --entry-review and its own fixed enclosing owner; no ledger/cost override")
+    if args.bounded_a2 or args.bounded_a1:
+        if args.bounded_a2 and args.bounded_a1 or args.ledger is not None or args.entry_review is None or args.cost_directory is not None or args.cost_child is not None:
+            parser.error("select one bounded pair with --entry-review and its own owner; no ledger/cost override")
         from pokezero.mcts_eval.search_over_raw_bounded_a2 import run
-        result=run(args.entry_spec,args.entry_review,check=args.check)
+        result=run(args.entry_spec,args.entry_review,check=args.check,expected_experiment="A1" if args.bounded_a1 else "A2")
         print(json.dumps(result),flush=True)
         return result.get("supervisor_exit_code",0)
     if args.ledger is None or args.entry_review is not None:

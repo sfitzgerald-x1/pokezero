@@ -3,6 +3,9 @@ from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from pokezero.mcts_eval import search_over_raw_bounded_a2 as a2
 from pokezero.mcts_eval.search_over_raw import digest
@@ -10,9 +13,9 @@ from pokezero.mcts_eval.search_over_raw_reconciled import validate_contract, Rec
 from pokezero.mcts_eval.search_over_raw_ledger import _write_new
 
 
-def specimen():
+def specimen(stage="A2"):
     return dict(contract=a2.contract("5aa69871-fcb8-41f6-ad9e-9868f8ec58c1",list(range(100,132)),
-        [1,2,3],dict(path="/bound/steer.md",sha256="a"*64)))
+        [1,2,3],dict(path="/bound/steer.md",sha256="a"*64),stage=stage))
 
 
 class BoundedA2Tests(unittest.TestCase):
@@ -98,3 +101,55 @@ class BoundedA2Tests(unittest.TestCase):
         self.assertEqual(counts[model.identity]["REFUSED"],1)
         self.assertEqual(counts[model.identity]["UNVALIDATED"],1)
         self.assertEqual(sum(counts[model.identity].values()),8)
+
+    def test_a1_is_exact_public_oracle_model_pair_and_never_same_day_retry(self):
+        c=specimen("A1")["contract"]
+        validate_contract(c)
+        self.assertEqual([(cfg.arm,cfg.belief,cfg.leaf,cfg.seconds,cfg.workers)
+            for cfg in a2.configurations("A1")],[
+                ("raw","public","model",1.,1),("incumbent","public","model",1.,1),
+                ("incumbent","oracle","model",1.,1)])
+        class Before(datetime):
+            @classmethod
+            def now(cls,tz=None):return cls(2026,10,16,6,59,59,tzinfo=timezone.utc)
+        class After(datetime):
+            @classmethod
+            def now(cls,tz=None):return cls(2026,10,16,7,0,0,tzinfo=timezone.utc)
+        with patch("datetime.datetime",Before),self.assertRaisesRegex(ValueError,"not a same-day"):
+            a2.calendar_admission(c)
+        with patch("datetime.datetime",After):a2.calendar_admission(c)
+        changed=deepcopy(c);changed["not_before_utc"]="2026-10-15T07:00:00Z"
+        with self.assertRaises(ValueError):validate_contract(changed)
+
+    def test_a1_empty_readout_retains_direct_and_raw_comparisons(self):
+        r=a2.summarize(specimen("A1"),[],dict(elapsed_wall_seconds=1.,
+            cpu_seconds_including_reaped_children=1.,supervisor_exit_code=1,worker_exit_code=1))
+        self.assertEqual(set(r["beliefs"]),{"public","oracle"})
+        self.assertNotIn("leaves",r)
+        for comparison in [*r["beliefs"].values(),r["oracle_minus_public"]]:
+            self.assertEqual(comparison["fixed_seed_weighted_mean_bounds"],[-1.,1.])
+            self.assertIsNone(comparison["mean_delta"])
+        self.assertEqual(r["continuation_alias_cell_counts"]["oracle"]["UNSTARTED"],1600)
+
+    def test_a1_direct_contrast_cancels_unknown_shared_raw(self):
+        public,oracle=a2.configurations("A1")[1:]
+        evidence=dict(actions={"raw":0,public.identity:1,oracle.identity:2},
+            validated_outcome_sha256={f"{action}:{rep}":"a"*64 for action in (1,2) for rep in range(8)})
+        outcomes=[dict(action=action,replicate=rep,status="COMPLETE",signed_outcome=score)
+            for action,score in ((1,-1),(2,1)) for rep in range(8)]
+        self.assertEqual(a2.direct_belief_interval(evidence,outcomes),[1.,1.])
+        evidence["actions"][oracle.identity]=1
+        self.assertEqual(a2.direct_belief_interval(evidence,[]),[0.,0.])
+        evidence["actions"].pop(public.identity)
+        self.assertEqual(a2.direct_belief_interval(evidence,[]),[-1.,1.])
+
+    def test_a1_runtime_keeps_matching_original_observers_without_future_truth(self):
+        checkpoint=SimpleNamespace(checkpoint_sha256="a"*64,showdown_source_sha256="b"*16)
+        public,oracle=a2.configurations("A1")[1:]
+        p,o=(a2.runtime_recipe(cfg,checkpoint,"A1") for cfg in (public,oracle))
+        for runtime in (p,o):
+            self.assertNotIn("original_actor_annotation_handoff",runtime)
+            self.assertNotIn("compact_native_atomic_work",runtime)
+            self.assertNotIn("team_oracle",runtime)
+        for field in ("incumbent","native_atomic_work","timed_native_atomic_work","full_public_request_observation"):
+            self.assertEqual(p[field],o[field])
