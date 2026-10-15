@@ -185,11 +185,18 @@ class ParallelReferenceTests(unittest.TestCase):
                     pool.search(Request(), ROOT, battle_id="b", seed=1, **args)
 
     @unittest.skipUnless(os.name == "posix", "POSIX isolated child process group")
-    def test_close_reaches_own_stopped_simulator_child_after_worker_exits(self):
-        with ParallelTrajectorySearch(ReferenceConfig(.5, 1), StoppedChildRuntime, workers=1) as pool:
+    def test_close_reaches_stopped_child_before_leader_release_and_refuses(self):
+        pool = ParallelTrajectorySearch(ReferenceConfig(.5, 1), StoppedChildRuntime, workers=1)
+        with self.assertRaisesRegex(ParallelRefusal, "cleanup refused"), pool:
             result = pool.search(Request(), ROOT, battle_id="b", seed=1, trajectories_per_worker=1)
             child = result.worker_receipts[0]["evidence"]["child_pid"]
             self.assertEqual(result.worker_receipts[0]["evidence"]["group"], result.worker_pids[0])
+        record = pool.cleanup_evidence["workers"][0]
+        self.assertEqual(pool.cleanup_evidence["status"], "REFUSED")
+        self.assertEqual(record["before_reap"]["state"], "LIVE")
+        self.assertTrue(record["group_signalled_before_reap"])
+        self.assertEqual(record["actual_exitcode"], -signal.SIGKILL)
+        self.assertTrue(record["terminal_reaped"])
         # An orphan can briefly remain a dead zombie pending OS reaping; never
         # mistake that for a live/stopped simulator still consuming resources.
         status = subprocess.run(["ps", "-o", "stat=", "-p", str(child)],
