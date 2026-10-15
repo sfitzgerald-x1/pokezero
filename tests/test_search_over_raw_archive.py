@@ -606,6 +606,25 @@ class ActualSourceBoundaryArchiveTests(unittest.TestCase):
         return dict(root_id="excluded:root", source_request_index=record.turn_index,
             public_record=public, public_record_sha256=digest(public))
 
+    def test_explicit_end_ack_waits_for_all_actual_stream_eof(self):
+        """Existing excluded seed only; no champion or scientific-run replay."""
+        self.collect()
+        token = self.env._battle_token
+        self.env._send_command(dict(type="end",battleId=token))
+        events = []
+        import time
+        deadline = time.monotonic()+8.
+        while time.monotonic() < deadline:
+            event = self.env._read_event(timeout=max(.001,deadline-time.monotonic()))
+            if event is None:continue
+            events.append(event)
+            if event.get("type") == "ended":break
+        self.assertTrue(events and events[-1] == dict(type="ended",battleId=token))
+        self.assertEqual(sorted(e["stream"] for e in events if e.get("type") == "stream_end"),
+            ["omniscient","p1","p2"])
+        self.assertTrue(all(e.get("type") == "stream_end" and e.get("battleId") == token for e in events[:-1]))
+        self.env._battle_token = None
+
     def test_actual_midgame_binds_canonical_record_to_private_snapshot(self):
         result = self.collect()
         root = self.root(result)

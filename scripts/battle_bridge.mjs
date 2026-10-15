@@ -95,6 +95,7 @@ function newBattleState(battleId) {
     battleId,
     battleStream: null,
     streams: null,
+    streamPumps: [],
     boundaryRequests: {},
     boundaryGeneration: 0,
     boundaryRequestGeneration: null,
@@ -245,12 +246,38 @@ function isActionableRequest(request) {
 
 async function teardownBattle(battle) {
   if (battle && battle.streams) {
+    const invalidate = () => {
+      battle.readyEpoch += 1;
+      battle.readyScheduled = false;
+      battle.terminalScheduled = false;
+    };
+    invalidate();
+    let failure;
     try {
       await battle.streams.omniscient.writeEnd();
     } catch (error) {
-      // best-effort teardown; the stream may already be ending
+      failure = error;
+    }
+    // writeEnd closes the upstream simulator, but getPlayerStreams forwards
+    // EOF asynchronously. An `ended` acknowledgement must follow the actual
+    // three reader EOF events, not merely submission of the end request.
+    let timer;
+    try {
+      const results = await Promise.race([
+        Promise.allSettled(battle.streamPumps || []),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Battle stream teardown timed out.")), 5000);
+        }),
+      ]);
+      invalidate();
+      if (failure) throw failure;
+      const rejected = results.find(result => result.status === "rejected");
+      if (rejected) throw rejected.reason;
+    } finally {
+      clearTimeout(timer);
     }
     battle.streams = null;
+    battle.streamPumps = [];
   }
 }
 
@@ -268,7 +295,11 @@ async function startBattle(command) {
   battle.battleStream = battleStream;
   battle.streams = getPlayerStreams(battleStream);
   for (const name of ["omniscient", "p1", "p2"]) {
-    listenToStream(battle, name, battle.streams[name]);
+    const pump = listenToStream(battle, name, battle.streams[name], true);
+    // Preserve the rejected original promise for teardown without an
+    // unhandled rejection while the command reader is still active.
+    void pump.catch(() => {});
+    battle.streamPumps.push(pump);
   }
 
   const formatid = command.formatid || "gen3randombattle";
