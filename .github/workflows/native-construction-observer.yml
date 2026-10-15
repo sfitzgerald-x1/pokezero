@@ -1,0 +1,32 @@
+name: Native construction observer contracts
+on:
+  pull_request:
+    paths:
+      - src/pokezero/poke_engine_adapter.py
+      - src/pokezero/poke_engine_backend.py
+      - tests/test_poke_engine_adapter.py
+      - .github/workflows/native-construction-observer.yml
+  push:
+    branches: [main]
+    paths:
+      - src/pokezero/poke_engine_adapter.py
+      - src/pokezero/poke_engine_backend.py
+      - tests/test_poke_engine_adapter.py
+      - .github/workflows/native-construction-observer.yml
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run standard-library adapter and observer contracts
+        env:
+          PYTHONPATH: src:tests
+        run: python -B -S -m unittest test_poke_engine_adapter -v

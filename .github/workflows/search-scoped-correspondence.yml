@@ -1,0 +1,30 @@
+name: Search scoped correspondence contracts
+on:
+  pull_request:
+    paths:
+      - src/pokezero/mcts_eval/search_over_raw_correspondence.py
+      - tests/test_search_over_raw_correspondence.py
+      - .github/workflows/search-scoped-correspondence.yml
+  push:
+    branches: [main]
+    paths:
+      - src/pokezero/mcts_eval/search_over_raw_correspondence.py
+      - tests/test_search_over_raw_correspondence.py
+      - .github/workflows/search-scoped-correspondence.yml
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run standalone contracts
+        env:
+          PYTHONPATH: src:tests
+        run: python -B -m unittest test_search_over_raw_correspondence -v

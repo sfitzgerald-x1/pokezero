@@ -16,7 +16,10 @@ import multiprocessing as mp
 from multiprocessing.connection import wait
 import os
 import pickle
+import select
 import signal
+import struct
+import subprocess
 import time
 import traceback
 from typing import Any, Callable, Protocol
@@ -70,11 +73,23 @@ def _worker(connection, index, runtime_factory, config):
     runtime, prepared = None, None
     phase, decision = "startup", None
     started = time.perf_counter()
+    original_popen = subprocess.Popen
+    observed_children = []
+
+    class OwnedPopen(original_popen):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            observed_children.append(self)
+
     try:
         # Own an isolated group, including this worker's simulator children.
         # A stopped/hung bridge cannot execute EOF cleanup after Python exits.
         if os.name == "posix":
             os.setsid()
+        connection.send(("isolation", index, os.getpid(), os.getpgrp()))
+        if connection.recv() != ("isolation_ack", index):
+            raise ReferenceRefusal("runtime construction lacks original isolation acknowledgement")
+        subprocess.Popen = OwnedPopen
         runtime = runtime_factory(index)
         search = TrajectorySearch(config)
         battle_id, sequence = None, 0
@@ -144,15 +159,115 @@ def _worker(connection, index, runtime_factory, config):
         except (BrokenPipeError, EOFError, OSError):
             pass
     finally:
+        close_error = None
         if runtime is not None:
             try:
                 runtime.close()
             except BaseException as error:
-                try:
-                    connection.send(("close_error", index, str(error)))
-                except (BrokenPipeError, EOFError, OSError):
-                    pass
+                close_error = f"{type(error).__name__}: {error}"
+        subprocess.Popen = original_popen
+        live = [child.pid for child in observed_children if child.poll() is None]
+        try:
+            # Remain the live group leader until the owner either releases a
+            # clean runtime or freezes/signals this exact unreaped scope.
+            connection.send(("cleanup_ready", index, os.getpid(), close_error, live))
+            while connection.recv() != ("cleanup_ack", index):
+                pass  # A queued close command is not permission to exit.
+        except (BrokenPipeError, EOFError, OSError):
+            pass
         connection.close()
+
+
+def _nonreaping_state(process):
+    """Never call multiprocessing poll/is_alive/exitcode before group cleanup."""
+    if process.pid is None:
+        return {"state": "NOT_STARTED", "exitcode": None}
+    cached = process._popen.returncode
+    if cached is not None:
+        return {"state": "ALREADY_REAPED", "exitcode": cached}
+    try:
+        event = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+    except ChildProcessError:
+        return {"state": "OWNERSHIP_LOST", "exitcode": None}
+    if event is not None and event.si_code in (os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED):
+        return {"state": "TERMINAL_UNREAPED", "exitcode":
+            event.si_status if event.si_code == os.CLD_EXITED else -event.si_status}
+    return {"state": "LIVE", "exitcode": None}
+
+
+def _freeze_original_leader(process, group):
+    if group != process.pid or _nonreaping_state(process)["state"] != "LIVE":
+        return False
+    try:
+        os.kill(process.pid, signal.SIGSTOP)
+        until = time.perf_counter() + 1.
+        while time.perf_counter() < until:
+            event = os.waitid(os.P_PID, process.pid,
+                os.WSTOPPED | os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if event is not None:
+                return (event.si_code == os.CLD_STOPPED
+                    and os.getpgid(process.pid) == process.pid
+                    and os.getsid(process.pid) == process.pid)
+            time.sleep(.01)
+    except (ProcessLookupError, ChildProcessError):
+        return False
+    return False
+
+
+def _signal_reported_children(owner, children):
+    """Only original direct handles while their worker's reaping is frozen.
+
+    This does not discover descendants or certify escaped grandchild closure.
+    """
+    signalled = []
+    for pid in children:
+        try:
+            parent = subprocess.run(["ps", "-p", str(pid), "-o", "ppid="],
+                capture_output=True, text=True, timeout=1., check=False)
+            if parent.returncode == 0 and int(parent.stdout.strip()) == owner:
+                os.kill(pid, signal.SIGKILL)
+                signalled.append(pid)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass  # Missing identity is uncertainty, never a guessed signal.
+    return signalled
+
+
+def _bounded_message(connection, deadline):
+    """Complete CPython POSIX Pipe framing, not just initial readability.
+
+    An incomplete frame poisons transport: no retry/reassembly from a new
+    worker. Exclusive ownership means no concurrent reads of this connection.
+    """
+    fd = connection.fileno()
+    blocking = os.get_blocking(fd)
+    os.set_blocking(fd, False)
+
+    def read_exact(size):
+        parts = bytearray()
+        while len(parts) < size:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise ReferenceRefusal("worker transport frame completion timed out")
+            if not select.select([fd], [], [], min(.05, remaining))[0]:
+                continue
+            try:
+                chunk = os.read(fd, min(65536, size - len(parts)))
+            except BlockingIOError:
+                continue
+            if not chunk:
+                raise EOFError("worker closed during transport frame")
+            parts.extend(chunk)
+        return parts
+
+    try:
+        size, = struct.unpack("!i", read_exact(4))
+        if size == -1:
+            size, = struct.unpack("!Q", read_exact(8))
+        if not 0 < size <= 64 * 1024 * 1024:
+            raise ReferenceRefusal("worker transport frame outside 64MiB limit")
+        return pickle.loads(read_exact(size))
+    finally:
+        os.set_blocking(fd, blocking)
 
 
 class ParallelTrajectorySearch:
@@ -172,6 +287,8 @@ class ParallelTrajectorySearch:
                 or type(transport_timeout) not in (int, float)
                 or not math.isfinite(transport_timeout) or transport_timeout <= 0):
             raise ReferenceRefusal("invalid parallel worker/exchange/timeout contract")
+        if os.name != "posix" or not all(hasattr(os, name) for name in ("waitid", "WNOWAIT")):
+            raise ReferenceRefusal("non-reaping POSIX worker ownership required")
         self.workers, self.batch_size = workers, batch_size
         self.transport_timeout = transport_timeout
         self._closed = self._poisoned = False
@@ -182,6 +299,8 @@ class ParallelTrajectorySearch:
         self.worker_pids = ()
         self.startup_seconds = 0.0
         self.last_evidence = {}
+        self.cleanup_evidence = {"status": "NOT_STARTED", "workers": [],
+            "complete_descendant_accounting": False, "cpu_accounting_complete": False}
         started = time.perf_counter()
         context = mp.get_context("spawn")
         try:
@@ -192,16 +311,26 @@ class ParallelTrajectorySearch:
                 self._connections.append(parent)
                 self._processes.append(process)
                 process.start()
+                # Process.start() polls older children. A terminal leader that
+                # it reaped loses signalling authority; never infer otherwise.
+                for prior in self._processes[:-1]:
+                    if _nonreaping_state(prior)["state"] != "LIVE":
+                        self._fail("worker ownership lost during pool startup", [])
                 child.close()
             pending = set(range(workers))
             pids = {}
             while pending:
                 for index, message in self._receive(pending):
+                    if message[0] == "isolation":
+                        self._record_isolation(index, message)
+                        continue
                     if message[0] != "boot" or message[1] != index:
                         self._fail("reference worker failed during startup", [message])
                     pids[index] = message[2]
+                    if message[2] != self._processes[index].pid:
+                        self._fail("worker boot differs from actual child", [message])
                     if os.name == "posix":
-                        if message[4] != message[2]:
+                        if message[4] != message[2] or self._owned_groups.get(index) != message[2]:
                             self._fail("worker process group is not isolated/owned", [message])
                         self._owned_groups[index] = message[4]
                     pending.remove(index)
@@ -210,8 +339,21 @@ class ParallelTrajectorySearch:
                 self._fail("reference workers are not distinct processes", [])
             self.startup_seconds = time.perf_counter() - started
         except BaseException:
-            self.close()
+            try:
+                self.close()
+            except ParallelRefusal:
+                pass  # Preserve startup error; cleanup_evidence remains bound.
             raise
+
+    def _record_isolation(self, index, message):
+        if (len(message) != 4 or message[1] != index or type(message[2]) is not int
+                or message[2] != self._processes[index].pid or message[3] != message[2]
+                or index in self._owned_groups
+                or _nonreaping_state(self._processes[index])["state"] != "LIVE"
+                or os.getpgid(message[2]) != message[2] or os.getsid(message[2]) != message[2]):
+            self._fail("worker isolation receipt differs from actual child", [message])
+        self._owned_groups[index] = message[3]
+        self._connections[index].send(("isolation_ack", index))
 
     def _fail(self, message, errors):
         self._poisoned = True
@@ -219,19 +361,19 @@ class ParallelTrajectorySearch:
         raise ParallelRefusal(message, self.last_evidence)
 
     def _receive(self, pending):
+        deadline = time.perf_counter() + self.transport_timeout
         ready = wait([self._connections[i] for i in sorted(pending)], timeout=self.transport_timeout)
         if not ready:
             self._fail("reference worker transport stalled; no silent retry", [
-                {"worker": i, "alive": self._processes[i].is_alive(),
-                 "exitcode": self._processes[i].exitcode} for i in sorted(pending)])
+                {"worker": i, **_nonreaping_state(self._processes[i])} for i in sorted(pending)])
         indices = {self._connections[i]: i for i in pending}
         for connection in ready:
             index = indices[connection]
             try:
-                yield index, connection.recv()
-            except (EOFError, OSError) as error:
+                yield index, _bounded_message(connection, deadline)
+            except (EOFError, OSError, ReferenceRefusal, pickle.UnpicklingError) as error:
                 self._fail("reference worker connection was lost", [
-                    {"worker": index, "error": str(error), "exitcode": self._processes[index].exitcode}])
+                    {"worker": index, "error": str(error), **_nonreaping_state(self._processes[index])}])
 
     def search(self, public_request: Any, root: DecisionState, *, battle_id: str, seed: int,
                trajectories_per_worker: int | None = None,
@@ -324,50 +466,138 @@ class ParallelTrajectorySearch:
         if self._closed:
             return
         self._closed = True
-        for connection in self._connections:
+        started = time.perf_counter()
+        replies, errors = {}, []
+        for index, connection in enumerate(self._connections):
             try:
                 connection.send(("close",))
             except (BrokenPipeError, EOFError, OSError):
                 pass
-        # Bounded cleanup of these OWN processes. No process discovery/killing.
-        until = time.perf_counter() + 2.
-        for index, process in enumerate(self._processes):
-            if process.pid is not None:
-                process.join(timeout=max(0., until - time.perf_counter()))
-                if process.is_alive():
-                    if os.name == "posix" and index not in self._owned_groups:
-                        try:
-                            if os.getpgid(process.pid) == process.pid:
-                                self._owned_groups[index] = process.pid
-                        except ProcessLookupError:
-                            pass
-                    process.terminate()
-                    process.join(timeout=2.)
-        if os.name == "posix":
-            remaining = []
-            for group in self._owned_groups.values():
+            except BaseException as error:
+                errors.append({"worker": index, "error": type(error).__name__})
+        # One shared grace interval, not workers * runtime-close grace. Leaders
+        # wait for acknowledgement and are never reaped during this interval.
+        until = time.perf_counter() + 6.
+        pending = {i for i, p in enumerate(self._processes) if p.pid is not None}
+        while pending and time.perf_counter() < until:
+            try:
+                ready = wait([self._connections[i] for i in pending], timeout=min(.05, max(0., until - time.perf_counter())))
+            except BaseException as error:
+                errors.append({"transport_wait_error": type(error).__name__})
+                break  # Still attempt every original worker below.
+            for i in tuple(pending):
                 try:
-                    os.killpg(group, signal.SIGTERM)
-                    remaining.append(group)
-                except ProcessLookupError:
-                    pass
-            if remaining:
-                time.sleep(.2)
-                for group in remaining:
-                    try:
-                        os.killpg(group, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-        # A stubborn worker is owned too; don't leave it running after close.
-        for process in self._processes:
-            if process.pid is not None and process.is_alive():
-                process.kill()
-                process.join(timeout=2.)
+                    if self._connections[i] not in ready:
+                        if _nonreaping_state(self._processes[i])["state"] != "LIVE":
+                            errors.append({"worker": i, "error": "leader terminated before cleanup handshake"})
+                            pending.remove(i)
+                        continue
+                    message = _bounded_message(self._connections[i], until)
+                    if not isinstance(message, (tuple, list)) or not message:
+                        raise ReferenceRefusal("malformed cleanup transport envelope")
+                    if message[0] == "isolation":
+                        self._record_isolation(i, message)
+                    elif message[0] == "cleanup_ready":
+                        if (len(message) != 5 or message[1] != i or message[2] != self._processes[i].pid
+                                or message[3] is not None and not isinstance(message[3], str)
+                                or not isinstance(message[4], list)
+                                or any(type(pid) is not int or pid <= 1 for pid in message[4])):
+                            raise ReferenceRefusal("malformed cleanup handshake")
+                        replies[i] = message
+                        pending.remove(i)
+                    elif message[0] not in ("boot", "error", "done", "update"):
+                        raise ReferenceRefusal("unexpected cleanup transport")
+                except BaseException as error:
+                    errors.append({"worker": i, "error": f"{type(error).__name__}: {error}"})
+                    pending.remove(i)
+        records = []
+        for index, process in enumerate(self._processes):
+            if process.pid is None:
+                continue
+            record = self._close_original_worker(index, process, replies.get(index))
+            records.append(record)
+            if (record["forced"] or record["before_reap"]["state"] != "LIVE"
+                    or record["actual_exitcode"] != 0 or record["cleanup_exceptions"]):
+                errors.append(record)
         for connection in self._connections:
-            connection.close()
+            try:
+                connection.close()
+            except BaseException as error:
+                errors.append({"connection_close_error": type(error).__name__})
+        self.cleanup_evidence = {"status": "REFUSED" if errors else "CLEAN_OBSERVED_SCOPE",
+            "workers": records, "errors": errors, "wall_seconds": time.perf_counter() - started,
+            "complete_descendant_accounting": False, "cpu_accounting_complete": False}
+        self.last_evidence["cleanup"] = self.cleanup_evidence
+        if errors:
+            self._poisoned = True
+            raise ParallelRefusal("reference worker cleanup refused", self.last_evidence)
+
+    def _close_original_worker(self, index, process, reply):
+        before = {"state": "INSPECTION_FAILED", "exitcode": None}
+        actual = before
+        forced = not reply or reply[3] is not None or bool(reply[4])
+        group_signalled = False
+        children_signalled, exceptions = [], []
+        try:
+            before = _nonreaping_state(process)
+            if before["state"] == "LIVE" and not forced:
+                try:
+                    self._connections[index].send(("cleanup_ack", index))
+                except (BrokenPipeError, EOFError, OSError):
+                    forced = True
+            if forced and before["state"] == "LIVE":
+                if _freeze_original_leader(process, self._owned_groups.get(index)):
+                    children_signalled = _signal_reported_children(process.pid, reply[4] if reply else [])
+                    if _nonreaping_state(process)["state"] == "LIVE":
+                        os.killpg(process.pid, signal.SIGKILL)
+                        group_signalled = True
+                elif _nonreaping_state(process)["state"] == "LIVE":
+                    # Only this owned unreaped process, not an unvalidated group.
+                    os.kill(process.pid, signal.SIGKILL)
+        except BaseException as error:
+            forced = True
+            exceptions.append(f"{type(error).__name__}: {error}")
+            try:
+                if _nonreaping_state(process)["state"] == "LIVE":
+                    os.kill(process.pid, signal.SIGKILL)  # Exact unreaped child only.
+            except BaseException as fallback_error:
+                exceptions.append(f"{type(fallback_error).__name__}: {fallback_error}")
+        finally:
+            # FIRST reaping operation; no group signal follows it, including
+            # fallback paths. An exception cannot strand later owned workers.
+            try:
+                process.join(timeout=2.)
+                actual = _nonreaping_state(process)
+                if actual["state"] == "LIVE":
+                    forced = True
+                    os.kill(process.pid, signal.SIGKILL)
+                    process.join(timeout=2.)
+                    actual = _nonreaping_state(process)
+            except BaseException as error:
+                exceptions.append(f"{type(error).__name__}: {error}")
+                try:
+                    if _nonreaping_state(process)["state"] == "LIVE":
+                        os.kill(process.pid, signal.SIGKILL)
+                    process.join(timeout=2.)
+                    actual = _nonreaping_state(process)
+                except BaseException as final_error:
+                    exceptions.append(f"{type(final_error).__name__}: {final_error}")
+        return {"worker": index, "pid": process.pid, "before_reap": before,
+            "runtime_close_error": reply[3] if reply else None,
+            "live_children_reported": reply[4] if reply else None,
+            "group_signalled_before_reap": group_signalled,
+            "reported_children_signalled": children_signalled,
+            "forced": forced, "actual_exitcode": actual["exitcode"],
+            "terminal_reaped": actual["state"] == "ALREADY_REAPED",
+            "cleanup_exceptions": exceptions}
 
     def __enter__(self):
         return self
 
-    def __exit__(self, *_):
-        self.close()
+    def __exit__(self, exc_type, *_):
+        try:
+            self.close()
+        except ParallelRefusal:
+            if exc_type is None:
+                raise
+            # Retain cleanup refusal without masking an existing search failure.

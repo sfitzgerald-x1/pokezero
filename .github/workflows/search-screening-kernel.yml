@@ -1,0 +1,30 @@
+name: Search screening kernel contracts
+on:
+  pull_request:
+    paths:
+      - src/pokezero/mcts_eval/search_over_raw_screening.py
+      - tests/test_search_over_raw_screening.py
+      - .github/workflows/search-screening-kernel.yml
+  push:
+    branches: [main]
+    paths:
+      - src/pokezero/mcts_eval/search_over_raw_screening.py
+      - tests/test_search_over_raw_screening.py
+      - .github/workflows/search-screening-kernel.yml
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Run standalone contracts
+        env:
+          PYTHONPATH: src:tests
+        run: python -m unittest test_search_over_raw_screening -v
