@@ -112,6 +112,9 @@ def reconciled_contract(namespace, *, panels, excluded_seeds, source_review, inp
 
 
 def validate_contract(contract):
+    if contract.get("schema") == "pokezero.search-over-raw.bounded-a2-exploration.v1":
+        from .search_over_raw_bounded_a2 import validate_contract as validate_bounded
+        return validate_bounded(contract)
     require(contract.get("schema") == SCHEMA, "reconciled v3 contract required; no legacy upgrade")
     expected = reconciled_contract(contract["namespace"], panels=contract["panels"],
         excluded_seeds=contract["excluded_seeds"], source_review=contract["source_review"],
@@ -266,6 +269,7 @@ class ReconciledPhaseALedger:
         self.directory = Path(directory).resolve()
         envelope = _load(self.directory / "contract.json")
         self.contract = envelope["contract"]
+        require(self.contract.get("schema") == SCHEMA, "bounded exploration cannot enter the staged or holdout ledger")
         self.contract_sha256 = envelope["contract_sha256"]
         require(digest(self.contract) == self.contract_sha256, "ledger contract digest mismatch")
         validate_contract(self.contract)
