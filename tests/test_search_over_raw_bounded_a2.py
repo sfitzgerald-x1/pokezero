@@ -3,8 +3,6 @@ from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
-from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from pokezero.mcts_eval import search_over_raw_bounded_a2 as a2
@@ -102,24 +100,28 @@ class BoundedA2Tests(unittest.TestCase):
         self.assertEqual(counts[model.identity]["UNVALIDATED"],1)
         self.assertEqual(sum(counts[model.identity].values()),8)
 
-    def test_a1_is_exact_public_oracle_model_pair_and_never_same_day_retry(self):
+    def test_a1_is_exact_public_oracle_model_pair_without_calendar_gate(self):
         c=specimen("A1")["contract"]
         validate_contract(c)
         self.assertEqual([(cfg.arm,cfg.belief,cfg.leaf,cfg.seconds,cfg.workers)
             for cfg in a2.configurations("A1")],[
                 ("raw","public","model",1.,1),("incumbent","public","model",1.,1),
                 ("incumbent","oracle","model",1.,1)])
-        class Before(datetime):
-            @classmethod
-            def now(cls,tz=None):return cls(2026,10,16,6,59,59,tzinfo=timezone.utc)
-        class After(datetime):
-            @classmethod
-            def now(cls,tz=None):return cls(2026,10,16,7,0,0,tzinfo=timezone.utc)
-        with patch("datetime.datetime",Before),self.assertRaisesRegex(ValueError,"not a same-day"):
-            a2.calendar_admission(c)
-        with patch("datetime.datetime",After):a2.calendar_admission(c)
+        self.assertNotIn("not_before_utc",c)
+        self.assertFalse(hasattr(a2,"calendar_admission"))
         changed=deepcopy(c);changed["not_before_utc"]="2026-10-15T07:00:00Z"
         with self.assertRaises(ValueError):validate_contract(changed)
+
+    def test_addendum_is_bound_separately_without_changing_original_authority(self):
+        old=specimen("A1")["contract"]
+        amendment=dict(path="/bound/addendum.md",sha256="b"*64)
+        c=a2.contract(old["namespace"],old["panels"]["exploration"]["seeds"],old["excluded_seeds"],
+            old["authority"],stage="A1",authority_addendum=amendment)
+        validate_contract(c)
+        self.assertEqual(c["authority"],old["authority"])
+        self.assertEqual(c["authority_addendum"],amendment)
+        c["authority_addendum"]["extra"]=True
+        with self.assertRaises(ValueError):validate_contract(c)
 
     def test_a1_empty_readout_retains_direct_and_raw_comparisons(self):
         r=a2.summarize(specimen("A1"),[],dict(elapsed_wall_seconds=1.,

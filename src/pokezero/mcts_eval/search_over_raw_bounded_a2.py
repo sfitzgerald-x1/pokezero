@@ -40,7 +40,7 @@ def configurations(stage="A2"):
         for leaf in ("model", "hp_fraction"))
 
 
-def contract(namespace, seeds, excluded_seeds, authority, *, stage="A2"):
+def contract(namespace, seeds, excluded_seeds, authority, *, stage="A2", authority_addendum=None):
     """Data only: caller supplies a prospectively frozen fresh seed roster."""
     import uuid
     require(type(namespace) is str and str(uuid.UUID(namespace)) == namespace,
@@ -67,16 +67,19 @@ def contract(namespace, seeds, excluded_seeds, authority, *, stage="A2"):
         attempt_wall_seconds=WALL_SECONDS, retries_permitted=False,
         collection_authorized=True, execution_ready=False, runtime_qualified=False,
         holdout_authorized=False, phase_b_authorized=False)
-    if stage == "A1":
-        # Scott authorized A1 on the following local calendar day, not as a
-        # same-day continuation/retry of the failed A2 scientific attempt.
-        result["not_before_utc"] = "2026-10-16T07:00:00Z"
+    if authority_addendum is not None:
+        require(type(authority_addendum) is dict and set(authority_addendum) == {"path","sha256"}
+            and Path(authority_addendum["path"]).is_absolute()
+            and type(authority_addendum["sha256"]) is str and len(authority_addendum["sha256"]) == 64,
+            "explicit unchanged steer addendum required")
+        result["authority_addendum"] = deepcopy(authority_addendum)
     return result
 
 
 def validate_contract(value):
     expected = contract(value["namespace"], value["panels"]["exploration"]["seeds"],
-        value["excluded_seeds"], value["authority"],stage=experiment(value))
+        value["excluded_seeds"], value["authority"],stage=experiment(value),
+        authority_addendum=value.get("authority_addendum"))
     require(digest(value) == digest(expected), "bounded A2 contract drift; no extra stages or changed denominator")
 
 
@@ -108,15 +111,8 @@ def runtime_recipe(cfg, checkpoint, stage):
     return value
 
 
-def calendar_admission(value):
-    from datetime import datetime, timezone
-    if experiment(value) == "A1":
-        require(datetime.now(timezone.utc) >= datetime.fromisoformat(value["not_before_utc"].replace("Z","+00:00")),
-            "A1 collection is authorized on October16 Pacific, not a same-day A2 retry")
-
-
 def prepare_entry(directory, *, checkpoint_path, checkpoint_sha256, showdown_root,
-        model_path, tables_path, authority_path, exposure_files, stage="A2"):
+        model_path, tables_path, authority_path, exposure_files, stage="A2", authority_addendum_path=None):
     """Freeze one entry without launching a source or claiming qualification.
 
     This consumes no scientific attempt. The resulting exact spec still needs
@@ -158,7 +154,10 @@ def prepare_entry(directory, *, checkpoint_path, checkpoint_sha256, showdown_roo
         if seed not in excluded and seed not in seeds:seeds.append(seed)
     checkpoint_path,showdown_root,model_path,tables_path,authority_path = (
         str(Path(p).resolve()) for p in (checkpoint_path,showdown_root,model_path,tables_path,authority_path))
-    c = contract(str(uuid.uuid4()),seeds,sorted(excluded),dict(path=authority_path,sha256=_sha(authority_path)),stage=stage)
+    addendum = None if authority_addendum_path is None else dict(
+        path=str(Path(authority_addendum_path).resolve()),sha256=_sha(authority_addendum_path))
+    c = contract(str(uuid.uuid4()),seeds,sorted(excluded),dict(path=authority_path,sha256=_sha(authority_path)),
+        stage=stage,authority_addendum=addendum)
     source = load_gen3_randbat_source_cached(showdown_root)
     checkpoint = resolve_checkpoint_contract(checkpoint_path,expected_sha256=checkpoint_sha256,
         model_device="cpu",showdown_root=showdown_root,showdown_source_sha256=source.metadata.source_hash,
@@ -170,13 +169,15 @@ def prepare_entry(directory, *, checkpoint_path, checkpoint_sha256, showdown_roo
     files = {**runtime["files"],**fixed_work_reader_source_hashes(),
         str(Path(sys.executable).resolve()):_sha(Path(sys.executable).resolve())}
     directory = Path(directory).resolve()
+    authority_files = {authority_path:_sha(authority_path)}
+    if addendum is not None:authority_files[addendum["path"]] = addendum["sha256"]
     spec = dict(schema=c["schema"]+".entry",contract=c,output_directory=str(directory/"run"),
         source_config=_state_payload(config),continuation_config=_state_payload(config),
         checkpoint_contract=_state_payload(checkpoint),source_runtime=runtime,continuation_runtime=deepcopy(runtime),
         selector_files=files,raw_runtime=raw_runtime(configurations(stage)[0],checkpoint_sha256,source.metadata.source_hash),
         recipes={cfg.identity:runtime_recipe(cfg,checkpoint,stage)
             for cfg in configurations(stage)[1:]}, exposure_inventory=inventory,
-        input_hashes={**files,**inventory,authority_path:_sha(authority_path)})
+        input_hashes={**files,**inventory,**authority_files})
     directory.mkdir(parents=True,exist_ok=False,mode=0o700)
     path = directory/"entry-spec.json"
     _write_new(path,spec)
@@ -220,6 +221,9 @@ def read_spec(path, *, expected_sha=None):
         spec["contract"]["authority"]["path"]:spec["contract"]["authority"]["sha256"]}
     require(type(spec["exposure_inventory"]) is dict and spec["exposure_inventory"], "bound exposure inventory required")
     files.update(spec["exposure_inventory"])
+    if "authority_addendum" in spec["contract"]:
+        amendment = spec["contract"]["authority_addendum"]
+        files[amendment["path"]] = amendment["sha256"]
     require(digest(files) == digest(spec["input_hashes"])
         and all(_sha(p) == sha for p, sha in files.items()), "entry code, exposure or runtime bytes changed")
     return spec, config, continuation, checkpoint
@@ -454,13 +458,11 @@ class BoundedA2Job:
     spec_sha256: str
     def __call__(self, ownership, phase):
         spec,config,continuation,checkpoint = read_spec(self.spec_path,expected_sha=self.spec_sha256)
-        calendar_admission(spec["contract"])
         status = "BOUNDED_"+experiment(spec["contract"])+"_RECORDED"
         output = Path(spec["output_directory"])
         began = time.monotonic()
         def guard():
             read_spec(self.spec_path,expected_sha=self.spec_sha256)
-            calendar_admission(spec["contract"])
             return True
         phase("selection")
         try:
@@ -581,7 +583,6 @@ def run(spec_path, review_path, *, check=False, expected_experiment="A2"):
         reviewer="Astra",reviewed_before_first_source_work=True,production_qualification_required=False,
         holdout_authorized=False), "actual one-time independent entry review required")
     if check:return dict(status="BOUNDED_"+stage+"_ENTRY_CHECKED",worker_launched=False)
-    calendar_admission(spec["contract"])
     output = Path(spec["output_directory"])
     output.mkdir(parents=True,exist_ok=False,mode=0o700)
     (output/"completed-roots").mkdir()
