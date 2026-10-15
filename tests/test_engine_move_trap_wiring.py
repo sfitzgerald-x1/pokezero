@@ -23,9 +23,12 @@ shared one), mirroring tests/test_engine_attract_immobilization.py:
 
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 import sys
+from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -111,13 +114,25 @@ class MoveTrapWheelTests(unittest.TestCase):
             str(poke_engine.State.from_string(serialized).to_string()), serialized
         )
 
-    def test_the_engine_honours_the_trap_by_refusing_the_switch(self) -> None:
-        # The capability that actually matters downstream: a trapped side must
-        # not be able to switch. Driving the switch anyway is the sharpest
-        # observable the binding exposes — on a wheel that dropped the volatile
-        # the trapped side simply switches.
-        state = build_poke_engine_state(_trapped_spec())
-        self.assertIn("TRAPPED", str(state.to_string()).upper())
+    def test_the_engine_honours_the_trap_by_excluding_switch_search_options(self) -> None:
+        # A retained token is not behavioral evidence. Query the wheel's actual
+        # root option inventory through its real MCTS wrapper, including a
+        # control proving the reserve is otherwise an available switch. This
+        # tests search admission, not execution of an illegally forced switch.
+        spec = _trapped_spec()
+        untrapped = replace(spec, side_one=replace(spec.side_one, volatile_statuses=()))
+        inventories = []
+        for candidate in (untrapped, spec):
+            state = build_poke_engine_state(candidate)
+            original = state.to_string()
+            result = poke_engine.monte_carlo_tree_search(state, iterations=1, threads=1, seed=17)
+            self.assertEqual(result.total_visits, 1)
+            inventories.append({row.move_choice for row in result.side_one})
+            self.assertEqual(state.to_string(), original, "option probe must not mutate the root")
+        self.assertIn("switch blissey", inventories[0], "control must expose the available reserve")
+        self.assertNotIn("switch blissey", inventories[1], "trapped search must not plan an illegal escape")
+        self.assertEqual(inventories[0] - {"switch blissey"}, inventories[1])
+        self.assertTrue({"splash", "bodyslam"} <= inventories[1])
 
 
 class MoveTrapStaleWheelTests(unittest.TestCase):
@@ -165,6 +180,21 @@ class MoveTrapStaleWheelTests(unittest.TestCase):
 
         with self.assertRaises(PokeEngineMoveTrapUnsupportedError):
             require_move_trap_support(_Empty())
+
+    def test_behavior_guard_rejects_retained_token_with_illegal_switch_options(self) -> None:
+        # The former check would pass this mutant: serialization retains the
+        # token, but the root search still offers the forbidden reserve.
+        search = Mock(return_value=SimpleNamespace(total_visits=1, side_one=[
+            SimpleNamespace(move_choice=name) for name in ("splash", "bodyslam", "switch blissey")]))
+        engine = SimpleNamespace(monte_carlo_tree_search=search)
+        state = SimpleNamespace(to_string=lambda: "retained TRAPPED token")
+        with patch(__name__ + ".poke_engine", engine), \
+                patch(__name__ + ".build_poke_engine_state", return_value=state), \
+                self.assertRaisesRegex(AssertionError, "trapped search must not plan"):
+            MoveTrapWheelTests(
+                "test_the_engine_honours_the_trap_by_excluding_switch_search_options"
+            ).test_the_engine_honours_the_trap_by_excluding_switch_search_options()
+        self.assertEqual(search.call_count, 2)
 
 
 if __name__ == "__main__":
