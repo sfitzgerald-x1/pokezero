@@ -10,6 +10,7 @@ import {installChanceTrace} from "./battle_bridge_chance_trace.mjs";
 import {rejectUnknownMembership} from "./battle_bridge_membership.mjs";
 import {createIsolatedGen3PartyGenerator} from "./battle_bridge_gen3_party.mjs";
 import {copyDeserializationAliases} from "./battle_bridge_owned_snapshot.mjs";
+import {createOwnedContinuations} from "./battle_bridge_owned_continuation.mjs";
 import {referenceRestState, bindReferenceRestSources, referenceInducedSleepState} from "./battle_bridge_reference_rest.mjs";
 import {applyReferenceTurnClocks, applyReferenceRechargePP} from "./battle_bridge_reference_turn_clocks.mjs";
 import {refreshReferenceTrapping} from "./battle_bridge_reference_trapping.mjs";
@@ -65,6 +66,8 @@ try {
 const DEFAULT_BATTLE_ID = "default";
 const battles = new Map();
 const searchSnapshots = new Map();
+const ownedContinuations = createOwnedContinuations({BattleStream, getPlayerStreams, State,
+  battles, newBattleState, listenToStream, actionableRequestedPlayers, emit});
 const generateIsolatedUnknownParty = createIsolatedGen3PartyGenerator(Teams);
 let nextSearchSnapshotId = 1;
 
@@ -111,8 +114,8 @@ function emitStreamChunk(battle, stream, chunk) {
   }
 }
 
-function listenToStream(battle, name, stream) {
-  void (async () => {
+function listenToStream(battle, name, stream, strict = false) {
+  return (async () => {
     try {
       for await (const chunk of stream) {
         emitStreamChunk(battle, name, chunk);
@@ -120,6 +123,7 @@ function listenToStream(battle, name, stream) {
       emitForBattle(battle, { type: "stream_end", battleId: battle.battleId, stream: name });
     } catch (error) {
       emitForBattle(battle, { type: "error", battleId: battle.battleId, stream: name, message: error.message });
+      if (strict) throw error;
     }
   })();
 }
@@ -1599,7 +1603,10 @@ function reorderSerializedSide(serializedSide, originalIndices) {
   for (const [newIndex, oldIndex] of originalIndices.entries()) {
     const pokemon = serializedSide.pokemon[newIndex];
     pokemon.position = newIndex;
-    pokemon.isActive = newIndex === 0;
+    // A fainted positional active remains side.active[0] until replacement,
+    // but Showdown's faintMessages clears Pokemon.isActive. Reordering must
+    // not revive that flag or suppress the pending replacement semantics.
+    pokemon.isActive = newIndex === 0 && !pokemon.fainted;
     reorderedTeam[originalIndexByCurrentIndex[oldIndex]] = newIndex + 1;
   }
   serializedSide.team = encodeTeamOrder(reorderedTeam);
@@ -2052,6 +2059,7 @@ async function endBattle(command) {
 }
 
 async function closeAll() {
+  await ownedContinuations.shutdown();
   for (const battle of battles.values()) {
     await teardownBattle(battle);
   }
@@ -2061,6 +2069,10 @@ async function closeAll() {
 }
 
 async function handleCommand(command) {
+  return ownedContinuations.execute(command, () => dispatchCommand(command));
+}
+
+async function dispatchCommand(command) {
   switch (command.type) {
     case "start":
       await startBattle(command);
@@ -2142,5 +2154,8 @@ rl.on("line", line => {
 });
 
 rl.on("close", () => {
-  void closeAll().finally(() => process.exit(0));
+  void closeAll().then(() => process.exit(0), error => {
+    emit({type: "error", message: error.message});
+    process.exit(1);
+  });
 });

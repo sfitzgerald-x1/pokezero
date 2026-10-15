@@ -458,6 +458,11 @@ class LocalShowdownEnv:
         self._latest_requests: dict[PlayerId, Mapping[str, Any]] = {}
         self._latest_turn = 0
         self._terminal: TerminalState | None = None
+        # Prospective outcome audit only. Default-off observation is inside the
+        # actual transport path; it never substitutes for protocol application.
+        self._bridge_evidence_observer = None
+        self._bridge_process_observer = None  # Prospective owning-run audit only.
+        self._bridge_boundary_observer = None  # Private post-selection boundary transport only.
         self._last_step_had_error = False
         # Cumulative bridge counters are sampled by Root-PUCT before and after one
         # decision. They intentionally live outside battle reset state so a warm
@@ -628,6 +633,14 @@ class LocalShowdownEnv:
         format_id: BattleFormat = "gen3randombattle",
         start_override: BattleStartOverride | None,
     ) -> None:
+        owner = getattr(self, "_bridge_process_observer", None)
+        if owner is not None:
+            # A prospective one-shot source owner forbids warm reuse and owns
+            # wait4 exclusively. Other owning auditors must not reset at all.
+            begin = getattr(owner, "begin_owned_reset", None)
+            if begin is None:
+                raise LocalShowdownError("Owned auditor cannot reset a source environment.")
+            begin(self, seed, format_id, start_override)
         previous_token = self._battle_token
         self._battle_id = f"local-{format_id}-{seed}"
         self._format_id = format_id
@@ -663,7 +676,7 @@ class LocalShowdownEnv:
         # Reuse a live bridge process across battles (warm pool); only spawn when there is none or
         # the previous one died. Stale events from the prior battle carry previous_token and are
         # ignored by _apply_event, so a clean queue drain is not required.
-        reuse = self._process is not None and self._process.poll() is None
+        reuse = owner is None and self._process is not None and self._process.poll() is None
         if not reuse:
             self.close()  # clean up a dead process / drain threads, then spawn fresh
             self._validate_runtime()
@@ -680,8 +693,14 @@ class LocalShowdownEnv:
                     "players": _start_players_payload(start_override),
                 }
             )
-        except Exception:
-            self.close()
+        except Exception as error:
+            if owner is None:
+                self.close()
+            else:
+                try:
+                    self.close()
+                except BaseException as cleanup:
+                    error.add_note("Owned source reset cleanup failed: " + type(cleanup).__name__)
             raise
 
     def requested_players(self) -> tuple[PlayerId, ...]:
@@ -745,10 +764,17 @@ class LocalShowdownEnv:
         # exposing either player's request payload.
         overlay_started_at = time.perf_counter() if root_puct_branch_observation else None
         try:
-            return replace(
+            observed = replace(
                 observation,
                 metadata={**dict(observation.metadata), "belief_view": state.belief_view.to_overlay_payload()},
             )
+            # Prospective source-only hook. Historical owners do not implement
+            # it; it neither substitutes an observation nor changes the policy.
+            owner = getattr(self, "_bridge_process_observer", None)
+            callback = getattr(owner, "actor_observation", None)
+            if callback is not None:
+                callback(self, player, observed)
+            return observed
         finally:
             if overlay_started_at is not None:
                 self._root_puct_branch_belief_overlay_projection_seconds += max(
@@ -1514,6 +1540,8 @@ class LocalShowdownEnv:
 
     def step(self, actions: Mapping[PlayerId, int]) -> StepResult:
         choices = self._choices_for_actions(actions)
+        if self._bridge_evidence_observer is not None:
+            self._bridge_evidence_observer.actions(actions, choices)
         return self._submit_step_choices(
             choices=choices,
             payload={"type": "choices", "battleId": self._battle_token, "choices": choices},
@@ -1679,6 +1707,10 @@ class LocalShowdownEnv:
         return self._terminal
 
     def close(self) -> None:
+        owner = getattr(self, "_bridge_process_observer", None)
+        if owner is not None:
+            owner.close(self)
+            return
         process = self._process
         if process is None:
             return
@@ -1753,6 +1785,9 @@ class LocalShowdownEnv:
             bufsize=1,
             env=env,
         )
+        owner = getattr(self, "_bridge_process_observer", None)
+        if owner is not None:
+            owner.started(self, self._process)
         if self._process.stdout is None:
             raise LocalShowdownError("Bridge stdout was not created.")
         self._stdout_queue = queue.Queue()
@@ -1889,10 +1924,19 @@ class LocalShowdownEnv:
             self._bridge_node_processing_count += 1
 
     def _send_command(self, payload: Mapping[str, Any]) -> None:
-        if self._process is None or self._process.stdin is None or self._process.poll() is not None:
+        owner = getattr(self, "_bridge_process_observer", None)
+        if self._process is None or self._process.stdin is None or (
+                self._process.returncode is not None if owner is not None else self._process.poll() is not None):
             raise LocalShowdownError(self._bridge_exit_message())
         self._process.stdin.write(f"{json.dumps(payload, separators=(',', ':'))}\n")
         self._process.stdin.flush()
+        if self._bridge_evidence_observer is not None:
+            self._bridge_evidence_observer.command(payload)
+        if owner is not None:
+            owner.command(payload)
+        boundary_observer = getattr(self, "_bridge_boundary_observer", None)
+        if boundary_observer is not None:
+            boundary_observer.command(payload)
 
     def _read_until_boundary(self) -> Mapping[str, Any]:
         deadline = time.monotonic() + self.config.read_timeout_seconds
@@ -1921,6 +1965,14 @@ class LocalShowdownEnv:
             raise LocalShowdownError(f"Bridge emitted invalid JSON: {line.rstrip()}") from exc
         if not isinstance(event, Mapping):
             raise LocalShowdownError(f"Bridge emitted non-object event: {event!r}")
+        if self._bridge_evidence_observer is not None:
+            self._bridge_evidence_observer.event(event)
+        owner = getattr(self, "_bridge_process_observer", None)
+        if owner is not None:
+            owner.event(event)
+        boundary_observer = getattr(self, "_bridge_boundary_observer", None)
+        if boundary_observer is not None:
+            boundary_observer.event(event)
         return event
 
     def _read_until_event_type(self, event_type: str) -> Mapping[str, Any]:
@@ -2278,11 +2330,13 @@ class LocalShowdownEnv:
         return f"Timed out waiting for BattleStream bridge output. {self._bridge_exit_message()}"
 
     def _bridge_exit_message(self) -> str:
-        if self._process is not None and self._process.poll() is not None:
+        owner = getattr(self, "_bridge_process_observer", None)
+        if self._process is not None and (
+                self._process.returncode is not None if owner is not None else self._process.poll() is not None):
             stderr = "\n".join(self._stderr_lines[-20:])
             suffix = f" Stderr:\n{stderr}" if stderr else ""
             return f"BattleStream bridge exited with status {self._process.returncode}.{suffix}"
-        return "BattleStream bridge is still running."
+        return "BattleStream bridge exit is not yet reaped." if owner is not None else "BattleStream bridge is still running."
 
 
 def showdown_seed_from_int(seed: int) -> str:

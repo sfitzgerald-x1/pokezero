@@ -259,7 +259,7 @@ class ParallelReferenceTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "POSIX isolated child process group")
     def test_close_reaches_own_stopped_simulator_child_after_worker_exits(self):
-        with ParallelTrajectorySearch(ReferenceConfig(.5, 1), StoppedChildRuntime, workers=1) as pool:
+        with self.assertRaises(ParallelRefusal), ParallelTrajectorySearch(ReferenceConfig(.5, 1), StoppedChildRuntime, workers=1) as pool:
             result = pool.search(Request(), ROOT, battle_id="b", seed=1, trajectories_per_worker=1)
             child = result.worker_receipts[0]["evidence"]["child_pid"]
             self.assertEqual(result.worker_receipts[0]["evidence"]["group"], result.worker_pids[0])

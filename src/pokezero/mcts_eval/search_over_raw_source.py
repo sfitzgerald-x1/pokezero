@@ -23,7 +23,8 @@ class AuditedRawPolicy:
     the same law usable by the continuation evaluator without losing history.
     """
 
-    def __init__(self, policy: Any, *, checkpoint_sha256: str, public_context_sink=None) -> None:
+    def __init__(self, policy: Any, *, checkpoint_sha256: str, public_context_sink=None,
+                 actor_history=None) -> None:
         require(len(checkpoint_sha256) == 64
             and all(c in "0123456789abcdef" for c in checkpoint_sha256), "invalid checkpoint digest")
         require(policy.weights_sha256 == checkpoint_sha256, "raw checkpoint binding mismatch")
@@ -37,13 +38,19 @@ class AuditedRawPolicy:
         self.policy_id = "search-over-raw-source:" + checkpoint_sha256
         self.verified_decisions = 0
         self.public_context_sink = public_context_sink
+        self.actor_history = actor_history  # Private prospective input witness; default absent.
 
     def reset(self) -> None:
         self.policy.reset()
         self.verified_decisions = 0
 
     def select_action(self, observation: Any, *, rng: Any) -> Any:
+        history = self.actor_history
+        token = history.policy_input(observation) if history is not None else None
         decision = self.policy.select_action(observation, rng=rng)
+        require(self.actor_history is history, "original raw policy actor witness changed during selection")
+        if history is not None:
+            history.check_policy_input(token, observation)
         row = decision.metadata.get("policy_distribution")
         mask = observation.legal_action_mask
         require(isinstance(row, (list, tuple)) and len(row) == len(mask),
@@ -141,7 +148,7 @@ def source_roots(contract: Mapping, *, panel: str, source_seed: int,
 def collect_raw_source(contract: Mapping, *, panel: str, source_seed: int,
                        env: Any, policies: Mapping[str, AuditedRawPolicy],
                        max_decision_rounds: int = 250, decision_sink=None,
-                       sealed_pre_step_sink=None) -> dict:
+                       sealed_pre_step_sink=None, _trusted_result_sink=None) -> dict:
     """Use the production rollout driver; return only selected public roots.
 
     The caller owns env lifecycle, durable attempts and runtime qualification.
@@ -168,4 +175,8 @@ def collect_raw_source(contract: Mapping, *, panel: str, source_seed: int,
         decision_boundaries=result.decision_round_count,
         checkpoint_sha256=policies["p1"].policy.weights_sha256,
         verified_raw_decisions=sum(p.verified_decisions for p in {id(p): p for p in policies.values()}.values()))
+    # Auditor-only in-process join. Neither the trajectory nor private source
+    # snapshots are added to the public receipt or worker transport.
+    if _trusted_result_sink is not None:
+        _trusted_result_sink(result)
     return receipt

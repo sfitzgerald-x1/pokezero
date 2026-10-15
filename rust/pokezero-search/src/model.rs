@@ -1139,6 +1139,8 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     record_joint_actions: bool,
     raw_policy: Option<&crate::raw_policy_leaf::RawPolicyLeaf>,
     mut visited_values: Option<&mut crate::visited_value::VisitedValueBank>,
+    record_atomic_work: bool,
+    record_compact_atomic_work: bool,
 ) -> PyResult<String> {
     if visited_values.as_ref().is_some_and(|bank| bank.expired()) {
         return Err(PyValueError::new_err("visited value: original producer deadline expired before native search"));
@@ -1156,9 +1158,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         fpu_reduction,
     };
     let mut tree = Tree::from_root(&state)?;
-    if record_joint_actions {
+    if record_joint_actions || record_atomic_work {
         tree.joint_action_visits = Some(Default::default());
     }
+    let mut atomic_rounds = Vec::new();
+    let mut atomic_initial = None;
     let mut counters = SearchCounters::default();
     // Within-round selection collisions, per seat (stage 0 of the selection
     // tuning plan). Only THIS core carries it: it is the only one that batches
@@ -1204,7 +1208,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             Some(started + std::time::Duration::from_millis(ms)),
         _ => None,
     };
-    let raw_deadline = match (native_raw_deadline, visited_values.as_ref().map(|bank| bank.deadline())) {
+    let raw_deadline = match (native_raw_deadline, visited_values.as_ref().and_then(|bank| bank.deadline())) {
         (Some(native), Some(original)) => Some(native.min(original)),
         (native, original) => native.or(original),
     };
@@ -1367,6 +1371,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             }
         }
         let traversal_budget = batch_size.min(iterations - completed);
+        let atomic_before = record_atomic_work.then(|| crate::atomic_work::snapshot(&tree));
+        if record_compact_atomic_work && atomic_initial.is_none() {
+            atomic_initial = atomic_before.clone();
+        }
         let mut round_reservation = raw_terminal.then(|| crate::tree::RoundReservation::new(&tree));
         let mut traversals: Vec<Traversal> = Vec::with_capacity(traversal_budget);
         let mut pending: Vec<crate::encoder::EncodedArrays> = Vec::new();
@@ -1838,7 +1846,18 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 raw_stats.cancelled_traversals += traversals.len();
                 raw_stats.cancelled_rows += rollout_rows.len();
                 raw_stats.discarded_terminal_rows += raw_stats.terminal - terminal_before;
+                let atomic_collected = record_atomic_work.then(|| crate::atomic_work::snapshot(&tree));
                 round_reservation.take().expect("raw reservation journal").cancel(&mut tree, &traversals)?;
+                if let Some(before) = atomic_before {
+                    let collected = atomic_collected.expect("opt-in snapshot");
+                    if record_compact_atomic_work {
+                        crate::atomic_work::cancel_compact_round(&tree, &traversals, before,
+                            collected, &mut atomic_rounds)?;
+                    } else {
+                        crate::atomic_work::cancel_round(&tree, &traversals, before,
+                            collected, &mut atomic_rounds);
+                    }
+                }
                 time_budget_exhausted = true;
                 break;
             }
@@ -1885,8 +1904,17 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             model_values
         };
         let finalize_started = Instant::now();
-        for traversal in &traversals {
-            finalize(&mut tree, traversal, &row_values);
+        if let Some(before) = atomic_before {
+            if record_compact_atomic_work {
+                crate::atomic_work::commit_compact_round(&mut tree, &traversals, &row_values,
+                    before, &mut atomic_rounds)?;
+            } else {
+                crate::atomic_work::commit_round(&mut tree, &traversals, &row_values, before, &mut atomic_rounds);
+            }
+        } else {
+            for traversal in &traversals {
+                finalize(&mut tree, traversal, &row_values);
+            }
         }
         tree_nanos += finalize_started.elapsed().as_nanos();
         completed += traversals.len();
@@ -2034,6 +2062,17 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         Some(witness) => format!("{extra},\"joint_action_witness\":{witness}"),
         None => extra,
     };
+    let extra = if record_atomic_work {
+        let work = if record_compact_atomic_work {
+            crate::atomic_work::compact_report(&outcome.tree,
+                atomic_initial.unwrap_or_else(|| crate::atomic_work::snapshot(&outcome.tree)),
+                atomic_rounds, completed, state_str, iterations, batch_size, seed)?
+        } else {
+            crate::atomic_work::report(&outcome.tree, atomic_rounds, completed,
+                state_str, iterations, batch_size, seed)?
+        };
+        format!("{extra},\"atomic_work\":{work}")
+    } else { extra };
     // Deadline fields are appended only for the opt-in path: a historical
     // fixed-work report remains byte-for-byte on its old schema. An overrun is
     // not hidden -- it is the cost of finishing the final complete batch rather
@@ -2520,6 +2559,9 @@ impl NativeLeafModel {
         raw_policy_callbacks = None,
         raw_policy_request_orders = None,
         visited_value_bank = None,
+        record_atomic_work = false,
+        // Appended opt-in only. Existing calls keep the v1 recorder/ABI slots.
+        record_compact_atomic_work = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -2557,7 +2599,12 @@ impl NativeLeafModel {
         raw_policy_callbacks: Option<Vec<Py<PyAny>>>,
         raw_policy_request_orders: Option<Vec<Vec<String>>>,
         visited_value_bank: Option<Py<crate::visited_value::NativeVisitedValueBank>>,
+        record_atomic_work: bool,
+        record_compact_atomic_work: bool,
     ) -> PyResult<String> {
+        if record_compact_atomic_work && !record_atomic_work {
+            return Err(PyValueError::new_err("compact atomic work requires explicit atomic observation"));
+        }
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
                 "iterations and batch_size must be > 0",
@@ -2720,6 +2767,14 @@ impl NativeLeafModel {
             Some(handle) => Some(handle.borrow_mut(py).begin()?),
             None => None,
         };
+        if visited.as_ref().is_some_and(|bank| bank.fixed_work_capture)
+            && (time_budget_ms.is_some() || !matches!(rollout_mode, None | Some(EncodedLeafMode::ModelValue))) {
+            return Err(PyValueError::new_err("searched ancestry: fixed-work model capture forbids native deadline and evaluator overrides"));
+        }
+        if visited.as_ref().is_some_and(|bank| bank.fixed_work_native_labels)
+            && (time_budget_ms.is_some() || !matches!(rollout_mode, None | Some(EncodedLeafMode::ModelValue))) {
+            return Err(PyValueError::new_err("native fixed-work value probe requires original model leaves and no search-decision deadline"));
+        }
         let (result, visited) = py.detach(move || {
             let spec = self.evaluator.spec();
             // Contain poke-engine's own panics, AND carry the sub-case counts out of
@@ -2784,6 +2839,8 @@ impl NativeLeafModel {
                     record_joint_actions,
                     raw_policy.as_ref(),
                     visited.as_mut(),
+                    record_atomic_work,
+                    record_compact_atomic_work,
                 )
             });
             (result, visited)

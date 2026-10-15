@@ -205,7 +205,8 @@ class PublicRootWorldFactory:
 
     def install_diagnostic_oracle(self, team):
         from .search_over_raw_oracle import OracleTeamSampler
-        if getattr(self, 'active', False) or getattr(self, 'receipts', ()) or getattr(self, 'history_population', None):
+        if (getattr(self, 'active', False) or getattr(self, 'receipts', ())
+                or getattr(self, 'history_population', None) or getattr(self,'constant_chance_plan',None) is not None):
             raise ReferenceRefusal('cannot replace a sampled or retained belief with oracle truth')
         self.sampler = OracleTeamSampler(team, self.set_source)
         self.diagnostic_oracle_team = team
@@ -234,9 +235,12 @@ class PublicRootWorldFactory:
                 # Observation is inside the same decision clock. Crossing it
                 # cannot turn an unfinished world into accepted search work.
                 self.check_sampling_deadline()
-            except BaseException:
-                world.close()
+            except BaseException as primary:
                 evidence.pop('sampled_original_team', None)
+                try:
+                    world.close()
+                except BaseException as cleanup:
+                    primary.add_note('Sampled team observation cleanup also failed: '+type(cleanup).__name__)
                 raise
         return world
 

@@ -30,6 +30,7 @@ pub(crate) struct RawPolicyLeafStats {
     pub terminal: usize,
     pub cap_refusals: usize,
     pub dead_end_refusals: usize,
+    pub certified_empty_delta_boundaries: usize,
     pub plies: usize,
     pub provider_calls: usize,
     pub policy_evals: usize,
@@ -203,6 +204,43 @@ pub(crate) fn label_price(
     deadline: Option<Instant>, stats: &mut RawPolicyLeafStats,
     lossy: &mut crate::abort_telemetry::LossySubcaseLedger,
 ) -> PyResult<TerminalLabel> {
+    label_price_with_private_diagnostic(leaf, key, ordinal, ctx, meta, meta_ctx, cfg,
+        deadline, stats, lossy, false, false)
+}
+
+/// State may be unchanged on a miss/no-effect turn. Only the existing
+/// attribution-safe renderer can attest its chronological progress. WAIT,
+/// replacement, absent actions and repeated/non-progressing turns are not
+/// repaired by this law; those shapes still refuse.
+pub(crate) fn certified_empty_delta_progress(rendered: &crate::events::RenderedEvents,
+    ctx: &EventContext, one: &MoveChoice, two: &MoveChoice) -> bool {
+    let move_choice = |choice: &MoveChoice| matches!(choice, MoveChoice::Move(_) | MoveChoice::Struggle);
+    let turn = format!("|turn|{}", ctx.turn + 1);
+    move_choice(one) && move_choice(two) && !rendered.is_attribution_unsafe()
+        && rendered.turn_completed
+        && rendered.lines.iter().filter(|line| line.starts_with("|turn|")).count() == 1
+        && rendered.lines.iter().any(|line| line == &turn)
+        && rendered.lines.iter().filter(|line| line.as_str() == "|upkeep").count() == 1
+        && rendered.lines.iter().all(|line| !["|switch|", "|drag|", "|replace|", "|faint|", "|win|", "|tie|"]
+            .into_iter().any(|prefix| line.starts_with(prefix)))
+        && ["p1a: ", "p2a: "].into_iter().all(|seat| {
+            rendered.lines.iter().filter(|line| line.starts_with(&format!("|move|{seat}"))
+                || line.starts_with(&format!("|cant|{seat}"))).count() == 1
+        })
+}
+
+/// Fixed-native diagnostic controller only. Error attributes retain PRIVATE
+/// pre-state and branch coordinates; provider callbacks/public receipts must
+/// never receive them. Refusal type, text and continuation behavior are unchanged.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn label_price_with_private_diagnostic(
+    leaf: &State, key: (usize, usize), ordinal: u64, ctx: &EventContext,
+    meta: &LeafMeta, meta_ctx: &LeafMetaCtx, cfg: &RawPolicyLeaf,
+    deadline: Option<Instant>, stats: &mut RawPolicyLeafStats,
+    lossy: &mut crate::abort_telemetry::LossySubcaseLedger,
+    private_empty_delta_diagnostic: bool,
+    certified_empty_delta_law: bool,
+) -> PyResult<TerminalLabel> {
     if expired(deadline) { return Ok(TerminalLabel::Deadline); }
     let bridges = [cfg.bridges[0].fork_at(key)?, cfg.bridges[1].fork_at(key)?];
     let mut state = leaf.clone();
@@ -241,12 +279,48 @@ pub(crate) fn label_price(
             }
             let selected = crate::sample_branch_index(&mut rng, &branches);
             let instructions = &branches[selected].instruction_list;
-            if instructions.is_empty() {
+            let original_state = if instructions.is_empty() && certified_empty_delta_law {
+                Some(state.serialize())
+            } else { None };
+            let early_render = if instructions.is_empty() && certified_empty_delta_law {
+                Some(crate::events::render_branch_events(&mut state, &s1, &s2,
+                    instructions, cfg.branch_on_damage, &ctx))
+            } else { None };
+            let certified = branches[selected].percentage > 0. && early_render.as_ref().is_some_and(|rendered|
+                original_state.as_ref() == Some(&state.serialize())
+                    && certified_empty_delta_progress(rendered, &ctx, &s1, &s2));
+            if instructions.is_empty() && !certified {
                 stats.dead_end_refusals += 1;
-                return Err(PyValueError::new_err("raw policy terminal: nonterminal dead end"));
+                let error = PyValueError::new_err("raw policy terminal: nonterminal dead end");
+                if private_empty_delta_diagnostic {
+                    let diagnostic = serde_json::json!({
+                        "schema":"pokezero.native-empty-delta.private-diagnostic.v1",
+                        "private_controller_only":true, "continuation_accepted":false,
+                        "scientific_calibration_evidence":false,
+                        "pre_state":state.serialize(), "parent":parent, "ply":ply,
+                        "seed":cfg.seed, "leaf_ordinal":ordinal,
+                        "context":{"p1":ctx.species[0], "p2":ctx.species[1],
+                            "turn":ctx.turn, "hp_percent":ctx.hp_percent},
+                        "side_one_choice":s1.to_string(&state.side_one),
+                        "side_two_choice":s2.to_string(&state.side_two),
+                        "branch_on_damage":cfg.branch_on_damage,
+                        "selected_branch_index":selected,
+                        "probabilities":branches.iter().map(|b| b.percentage).collect::<Vec<_>>(),
+                        "instruction_counts":branches.iter().map(|b| b.instruction_list.len()).collect::<Vec<_>>(),
+                        "selected_instruction_count":instructions.len(),
+                    }).to_string();
+                    // This is an error witness, not a second export allowance.
+                    if diagnostic.len() <= 8 * 1024 * 1024 {
+                        Python::attach(|py| {
+                            let _ = error.value(py).setattr("private_native_empty_delta_json", diagnostic);
+                        });
+                    }
+                }
+                return Err(error);
             }
-            let rendered = crate::events::render_branch_events(
-                &mut state, &s1, &s2, instructions, cfg.branch_on_damage, &ctx);
+            if certified { stats.certified_empty_delta_boundaries += 1; }
+            let rendered = early_render.unwrap_or_else(|| crate::events::render_branch_events(
+                &mut state, &s1, &s2, instructions, cfg.branch_on_damage, &ctx));
             for subcase in &rendered.lossy_subcases { lossy.record(subcase); }
             crate::events::reject_attribution_unsafe(&rendered, "raw policy terminal")?;
             meta = crate::leaf::evolve_leaf_meta_with_status_transitions(
@@ -355,6 +429,66 @@ pub(crate) mod tests {
         assert_eq!(stats.terminal, 0);
         assert_eq!(stats.plies, 1);
         assert_eq!(stats.cap_refusals, 1);
+    }
+
+    #[test]
+    fn progressing_empty_delta_is_opt_in_counted_and_never_scored_at_cap() {
+        let (mut state, ctx, meta, _) = fixture(true, 2);
+        for side in [&mut state.side_one, &mut state.side_two] {
+            side.get_active().replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+            side.get_active().moves.m0.pp = 32;
+        }
+        let callback = Python::attach(|py| PyModule::from_code(py,
+            c_str!("import json\ndef choose(payload):\n    row = json.loads(payload)['native_request_bundle']['native_action_indices']\n    return [float(i == 0) for i in range(len(row))]\n"),
+            c_str!("empty_delta_fixture.py"), c_str!("empty_delta_fixture")).unwrap()
+            .getattr("choose").unwrap().unbind());
+        let bridge = |side_one| PolicyOpponentBridge::new(Python::attach(|py|callback.clone_ref(py)),
+            side_one, ctx.species[usize::from(!side_one)].clone(),
+            [("splash".into(),64)].into(), [("splash".into(),40)].into(),
+            if side_one {state.side_one.clone()} else {state.side_two.clone()}, ctx.clone());
+        let cfg = RawPolicyLeaf {bridges:[bridge(true),bridge(false)],max_plies:2,seed:17,branch_on_damage:true};
+        for b in &cfg.bridges { b.record(None,(0,0),&[],&ctx,&meta).unwrap(); }
+        let before = state.serialize();
+        let mut old = RawPolicyLeafStats::default();
+        let error = label_price(&state,(0,0),0,&ctx,&meta,&LeafMetaCtx::default(),&cfg,
+            None,&mut old,&mut Default::default()).unwrap_err();
+        assert!(error.to_string().contains("nonterminal dead end"));
+        assert_eq!(old.certified_empty_delta_boundaries,0);
+        let mut current = RawPolicyLeafStats::default();
+        assert_eq!(label_price_with_private_diagnostic(&state,(0,0),0,&ctx,&meta,&LeafMetaCtx::default(),
+            &cfg,None,&mut current,&mut Default::default(),true,true).unwrap(),TerminalLabel::Capped);
+        assert_eq!((current.plies,current.certified_empty_delta_boundaries,current.provider_calls),(2,2,4));
+        assert_eq!((current.terminal,current.dead_end_refusals,current.cap_refusals),(0,0,1));
+        assert_eq!(state.serialize(),before);
+        assert_eq!(cfg.bridges[0].provider_calls.get(),0);
+        assert_eq!(cfg.bridges[1].provider_calls.get(),0);
+    }
+
+    #[test]
+    fn empty_delta_certificate_requires_two_attributed_nonterminal_actions_and_one_next_turn() {
+        let ctx = EventContext {species:[vec!["Charmander".into()],vec!["Squirtle".into()]],
+            turn:1,hp_percent:[false,false]};
+        let valid = || crate::events::RenderedEvents {lines:vec!["|move|p1a: Charmander|Splash|p1a: Charmander".into(),
+            "|move|p2a: Squirtle|Splash|p2a: Squirtle".into(),"|upkeep".into(),"|turn|2".into()],
+            turn_completed:true,..Default::default()};
+        let choice = MoveChoice::Move(PokemonMoveIndex::M0);
+        assert!(certified_empty_delta_progress(&valid(),&ctx,&choice,&choice));
+        for kind in 0..8 {
+            let mut rendered = valid();
+            match kind {
+                0 => {rendered.lines.remove(0);},
+                1 => rendered.lines.push(rendered.lines[0].clone()),
+                2 => rendered.lines[3] = "|turn|1".into(),
+                3 => rendered.lines.push("|turn|2".into()),
+                4 => {rendered.lines.remove(2);},
+                5 => rendered.lines.push("|win|p1".into()),
+                6 => rendered.turn_completed = false,
+                _ => rendered.attribution_unsafe.push("authored mutation".into()),
+            }
+            assert!(!certified_empty_delta_progress(&rendered,&ctx,&choice,&choice),"mutant {kind}");
+        }
+        assert!(!certified_empty_delta_progress(&valid(),&ctx,&MoveChoice::None,&choice));
+        assert!(!certified_empty_delta_progress(&valid(),&ctx,&MoveChoice::Switch(poke_engine::state::PokemonIndex::P1),&choice));
     }
 
     #[test]

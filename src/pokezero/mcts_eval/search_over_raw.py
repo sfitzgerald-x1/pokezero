@@ -159,11 +159,67 @@ def _raw_action(legal: Sequence[int], priors: Sequence[float]) -> int:
     return legal[max(range(len(legal)), key=lambda i: (priors[i], -legal[i]))]
 
 
+def _run_continuation_cell(env, snapshot, subject, action, replicate, evaluator,
+                           namespace, root_id, max_boundaries, observer, lifecycle, *, raw_from_start=False,
+                           boundary_sink=None):
+    if lifecycle is None:
+        env.restore(snapshot)
+    else:
+        lifecycle.restore(snapshot)
+    require(env.terminal() is None, "continuation source root is already terminal")
+    for step in range(max_boundaries + 1):
+        terminal = env.terminal()
+        if terminal is not None:
+            return dict(status="CAPPED" if terminal.capped else "COMPLETE",
+                signed_outcome=None if terminal.capped else
+                0 if terminal.winner is None else 1 if terminal.winner == subject else -1,
+                boundaries=step)
+        if step == max_boundaries:
+            break
+        requested = env.requested_players()
+        require(requested and set(requested) <= {"p1", "p2"}, "invalid nonterminal request boundary")
+        if step == 0:
+            require(subject in requested, "source root omits the candidate request")
+        choices = {}
+        policy_receipts = {} if observer is not None else None
+        for seat in requested:
+            observation = env.observe(seat)
+            legal, priors = evaluator(observation)
+            argmax = _raw_action(legal, priors)
+            if raw_from_start:
+                choices[seat] = argmax
+            elif step == 0 and seat == subject:
+                require(action in legal, "selected action is illegal at source root")
+                choices[seat] = action
+            elif step == 0:
+                draw = random.Random(rng_seed(namespace, root_id, replicate, step,
+                    "opponent")).random() * math.fsum(priors)
+                cumulative = 0.0
+                choices[seat] = legal[-1]
+                for candidate, prior in zip(legal, priors):
+                    cumulative += prior
+                    if draw < cumulative:
+                        choices[seat] = candidate
+                        break
+            else:
+                choices[seat] = argmax
+            if policy_receipts is not None:
+                policy_receipts[seat] = observer.policy_receipt(observation, legal, priors)
+        if observer is not None:
+            observer.boundary(step, requested, policy_receipts, choices)
+        env.reseed_simulator_rng(rng_seed(namespace, root_id, replicate, step, "chance"))
+        env.step(choices)
+        if boundary_sink is not None:
+            boundary_sink(step+1)
+    return dict(status="CAPPED", signed_outcome=None, boundaries=max_boundaries)
+
+
 def paired_continuations(*, env: Any, snapshot: object, subject: str,
                          actions: Mapping[str, int], evaluator: Callable,
                          namespace: str, root_id: str, max_boundaries: int = 200,
                          outcome_sink=None, attempt_sink=None, cached_outcomes=None,
-                         reuse_sink=None) -> dict:
+                         reuse_sink=None, continuation_observer=None,
+                         continuation_lifecycle=None) -> dict:
     """Oct5 audit law, retaining identical actions and terminal uncertainty.
 
     Oracle snapshots are used AFTER action selection. The evaluator returns
@@ -175,6 +231,8 @@ def paired_continuations(*, env: Any, snapshot: object, subject: str,
     require(actions and all(type(a) is int and a >= 0 for a in actions.values()),
         "frozen legal action indices required")
     require(type(max_boundaries) is int and max_boundaries > 0, "positive continuation cap required")
+    require(continuation_lifecycle is None or (continuation_lifecycle.env is env
+        and continuation_observer is not None), "owned lifecycle requires its observed auditor environment")
     cached = {}
     if cached_outcomes is not None:
         require(cached_outcomes["root_id"] == root_id
@@ -207,47 +265,25 @@ def paired_continuations(*, env: Any, snapshot: object, subject: str,
                 continue  # Capped outcomes are reused as null, never retried.
             if attempt_sink is not None:
                 attempt_sink(dict(root_id=root_id, action=action, replicate=replicate))
-            env.restore(snapshot)
-            require(env.terminal() is None, "continuation source root is already terminal")
-            result = None
-            for step in range(max_boundaries + 1):
-                terminal = env.terminal()
-                if terminal is not None:
-                    result = dict(status="CAPPED" if terminal.capped else "COMPLETE",
-                        signed_outcome=None if terminal.capped else
-                        0 if terminal.winner is None else 1 if terminal.winner == subject else -1,
-                        boundaries=step)
-                    break
-                if step == max_boundaries:
-                    break
-                requested = env.requested_players()
-                require(requested and set(requested) <= {"p1", "p2"},
-                    "invalid nonterminal request boundary")
-                if step == 0:
-                    require(subject in requested, "source root omits the candidate request")
-                choices = {}
-                for seat in requested:
-                    legal, priors = evaluator(env.observe(seat))
-                    argmax = _raw_action(legal, priors)
-                    if step == 0 and seat == subject:
-                        require(action in legal, "selected action is illegal at source root")
-                        choices[seat] = action
-                    elif step == 0:
-                        draw = random.Random(rng_seed(namespace, root_id, replicate, step,
-                            "opponent")).random() * math.fsum(priors)
-                        cumulative = 0.0
-                        choices[seat] = legal[-1]
-                        for candidate, prior in zip(legal, priors):
-                            cumulative += prior
-                            if draw < cumulative:
-                                choices[seat] = candidate
-                                break
-                    else:
-                        choices[seat] = argmax
-                env.reseed_simulator_rng(rng_seed(namespace, root_id, replicate, step, "chance"))
-                env.step(choices)
-            rows.append(dict(action=action, replicate=replicate,
-                **(result or dict(status="CAPPED", signed_outcome=None, boundaries=max_boundaries))))
+            law = dict(root_id=root_id, action=action, replicate=replicate,
+                subject=subject, namespace=namespace, max_boundaries=max_boundaries)
+            if continuation_lifecycle is not None:
+                continuation_lifecycle.prepare(snapshot, law)
+            try:
+                if continuation_observer is not None:
+                    continuation_observer.begin_cell(snapshot, **law)
+                result = _run_continuation_cell(env, snapshot, subject, action, replicate,
+                    evaluator, namespace, root_id, max_boundaries,
+                    continuation_observer, continuation_lifecycle)
+                if continuation_lifecycle is not None:
+                    continuation_lifecycle.release()
+            except BaseException as primary:
+                if continuation_lifecycle is not None:
+                    continuation_lifecycle.abort(primary)
+                raise
+            rows.append(dict(action=action, replicate=replicate, **result))
+            if continuation_observer is not None:
+                continuation_observer.finish_cell(dict(root_id=root_id, **rows[-1]))
             if outcome_sink is not None:
                 outcome_sink(dict(root_id=root_id, **rows[-1]))
     result = dict(root_id=root_id, actions=dict(actions), outcomes=rows,

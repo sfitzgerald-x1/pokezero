@@ -51,6 +51,15 @@ def _snapshot(value: Mapping) -> dict:
 
 
 class PhaseALedger:
+    def __new__(cls, directory):
+        # Explicit schema dispatch; never reinterpret or upgrade old evidence.
+        if cls is PhaseALedger:
+            envelope = _load(Path(directory).resolve() / "contract.json")
+            if envelope["contract"].get("schema") == "pokezero.search-over-raw.phase-a.v3":
+                from .search_over_raw_reconciled import ReconciledPhaseALedger
+                return ReconciledPhaseALedger(directory)
+        return super().__new__(cls)
+
     def __init__(self, directory: Path | str) -> None:
         self.directory = Path(directory).resolve()
         envelope = _load(self.directory / "contract.json")
@@ -61,6 +70,9 @@ class PhaseALedger:
 
     @classmethod
     def create(cls, directory: Path | str, contract: Mapping) -> "PhaseALedger":
+        if contract.get("schema") == "pokezero.search-over-raw.phase-a.v3":
+            from .search_over_raw_reconciled import ReconciledPhaseALedger
+            return ReconciledPhaseALedger.create(directory, contract)
         directory = Path(directory).resolve()
         _validation_design(contract)
         # Validate canonicalizability before creating anything.

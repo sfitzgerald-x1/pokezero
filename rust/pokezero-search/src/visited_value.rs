@@ -14,36 +14,14 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use crate::events::EventContext;
 use crate::leaf::{LeafMeta, LeafMetaCtx};
-use crate::raw_policy_leaf::{label_price, RawPolicyLeaf, RawPolicyLeafStats, TerminalLabel};
+use crate::raw_policy_leaf::{label_price, label_price_with_private_diagnostic,
+    RawPolicyLeaf, RawPolicyLeafStats, TerminalLabel};
 use crate::tree::BranchSeam;
+use crate::searched_ancestry::{SearchedLines, sample_priority};
 
 fn refuse(message: &str) -> PyErr { PyValueError::new_err(message.to_owned()) }
 fn hash(bytes: &[u8]) -> String { format!("{:x}", Sha256::digest(bytes)) }
 
-/// Opt-in ancestry of the ACTUAL priced branches, not regenerated support.
-/// All retained serialized ancestry shares the existing private payload cap.
-#[derive(Default)]
-struct SearchedLines {
-    root: String,
-    steps: BTreeMap<(usize, usize), Value>,
-    bytes: usize,
-}
-
-impl SearchedLines {
-    fn path(&self, key: (usize, usize)) -> PyResult<Vec<Value>> {
-        let mut cursor = Some(key);
-        let mut reverse = Vec::new();
-        while let Some(key) = cursor {
-            if reverse.len() >= 64 { return Err(refuse("searched line: ancestry cap/cycle")); }
-            let step = self.steps.get(&key).ok_or_else(|| refuse("searched line: missing actual ancestor"))?;
-            cursor = serde_json::from_value(step["parent"].clone())
-                .map_err(|_| refuse("searched line: invalid parent identity"))?;
-            reverse.push(step.clone());
-        }
-        reverse.reverse();
-        Ok(reverse)
-    }
-}
 fn seeded(namespace: &str, seed: u64, worker: usize, root: &str, ordinal: usize,
     replicate: Option<usize>) -> u64 {
     let mut parts = vec![json!(namespace), json!(seed), json!(worker), json!(root), json!(ordinal)];
@@ -63,6 +41,7 @@ struct Frontier {
     state_sha256: String,
     payload_bytes: usize,
     prediction: Option<f32>,
+    model_self_value01_bits: Option<u32>,
 }
 
 impl Frontier {
@@ -86,6 +65,10 @@ pub(crate) struct VisitedValueBank {
     maximum_payload_bytes: usize,
     deadline_at: f64,
     deadline: Instant,
+    pub(crate) fixed_work_capture: bool,
+    pub(crate) fixed_work_native_labels: bool,
+    certified_empty_delta_labels: bool,
+    capture_native_edges: bool,
     self_side_one: Option<bool>,
     root_native_state_sha256: Option<String>,
     selection_report_sha256: Option<String>,
@@ -96,8 +79,13 @@ pub(crate) struct VisitedValueBank {
 }
 
 impl VisitedValueBank {
-    pub(crate) fn expired(&self) -> bool { Instant::now() >= self.deadline }
-    pub(crate) fn deadline(&self) -> Instant { self.deadline }
+    pub(crate) fn expired(&self) -> bool {
+        crate::searched_ancestry::capture_expired(self.fixed_work_capture || self.fixed_work_native_labels,
+            Instant::now() >= self.deadline)
+    }
+    pub(crate) fn deadline(&self) -> Option<Instant> {
+        if self.fixed_work_capture || self.fixed_work_native_labels { None } else { Some(self.deadline) }
+    }
     pub(crate) fn bind_root(&mut self, state_str: &str) -> PyResult<()> {
         self.root_native_state_sha256 = Some(hash(state_str.as_bytes()));
         if let Some(lines) = &mut self.searched_lines {
@@ -115,7 +103,9 @@ impl VisitedValueBank {
             || !deadline_at.is_finite() {
             return Err(refuse("visited value: invalid root/sampling/deadline/payload contract"));
         }
-        Ok(Self { seed, worker, root, keep, maximum_payload_bytes, deadline_at, deadline,
+        Ok(Self { seed, worker, root, keep, maximum_payload_bytes, deadline_at, deadline, fixed_work_capture: false,
+            fixed_work_native_labels: false, certified_empty_delta_labels: false,
+            capture_native_edges: false,
             self_side_one: None, root_native_state_sha256: None, selection_report_sha256: None,
             seen: 0, bytes: 0, rows: BTreeMap::new(), searched_lines: None })
     }
@@ -139,10 +129,11 @@ impl VisitedValueBank {
             json!({ "kind": kind, "engine_id": action.to_string(side) })
         };
         let key = (seam.chance, seam.branch_index);
-        let step = json!({ "key": key, "parent": seam.parent, "depth": seam.depth,
+        let mut step = json!({ "key": key, "parent": seam.parent, "depth": seam.depth,
             "before": before, "after": state.serialize(), "branch_on_damage": seam.branch_on_damage,
             "side_one_choice": choice(seam.s1, &pre.side_one),
             "side_two_choice": choice(seam.s2, &pre.side_two) });
+        if self.capture_native_edges { step["native_edge"] = crate::native_edge::capture(state,seam); }
         if lines.steps.contains_key(&key) { return Err(refuse("searched line: duplicate branch identity")); }
         let size = serde_json::to_vec(&step).expect("finite private strings").len();
         let total = lines.bytes.checked_add(size).and_then(|v| v.checked_add(self.bytes))
@@ -165,7 +156,7 @@ impl VisitedValueBank {
         }
         self.self_side_one = Some(self_side_one);
         let ordinal = self.seen.checked_add(row).ok_or_else(|| refuse("visited ordinal overflow"))?;
-        let priority = seeded("visited-model-sample.v1", self.seed, self.worker, &self.root, ordinal, None);
+        let priority = sample_priority(self.seed, self.worker, &self.root, ordinal);
         let identity = (priority, ordinal);
         if self.rows.len() == self.keep && identity >= *self.rows.last_key_value().unwrap().0 {
             return Ok(());
@@ -175,7 +166,7 @@ impl VisitedValueBank {
             raw: RawPolicyLeaf { bridges: [raw.bridges[0].fork_at(key)?, raw.bridges[1].fork_at(key)?],
                 max_plies: 250, seed: self.seed, branch_on_damage: raw.branch_on_damage },
             snapshot_sha256: String::new(), state_sha256: hash(state.serialize().as_bytes()),
-            payload_bytes: 0, prediction: None,
+            payload_bytes: 0, prediction: None, model_self_value01_bits: None,
         };
         let payload = item.payload()?;
         item.snapshot_sha256 = hash(&payload);
@@ -203,6 +194,7 @@ impl VisitedValueBank {
                 let value = self_values01.get(*ordinal - self.seen)
                     .ok_or_else(|| refuse("visited value: prediction/frontier row mismatch"))?;
                 item.prediction = Some(2.0 * value - 1.0); // SELF frame, before tree reflection.
+                item.model_self_value01_bits = Some(value.to_bits());
             }
         }
         self.seen += self_values01.len();
@@ -230,8 +222,14 @@ impl VisitedValueBank {
                     item.raw.bridges[1].fork_at(item.key)?], max_plies: 250, seed,
                     branch_on_damage: item.raw.branch_on_damage };
                 let mut stats = RawPolicyLeafStats::default();
-                let terminal = label_price(&item.state, item.key, 0, &item.ctx, &item.meta,
-                    &item.meta_ctx, &cfg, Some(self.deadline), &mut stats, lossy)?;
+                let terminal = if self.fixed_work_native_labels {
+                    label_price_with_private_diagnostic(&item.state, item.key, 0, &item.ctx, &item.meta,
+                        &item.meta_ctx, &cfg, self.deadline(), &mut stats, lossy, true,
+                        self.certified_empty_delta_labels)?
+                } else {
+                    label_price(&item.state, item.key, 0, &item.ctx, &item.meta,
+                        &item.meta_ctx, &cfg, self.deadline(), &mut stats, lossy)?
+                };
                 let (status, outcome) = match terminal {
                     TerminalLabel::Terminal(value) => ("COMPLETE", Some(if self.self_side_one.unwrap() {
                         2.0 * value - 1.0
@@ -239,15 +237,24 @@ impl VisitedValueBank {
                     TerminalLabel::Capped => ("CAPPED_UNCERTAIN", None),
                     TerminalLabel::Deadline => ("DEADLINE_UNCERTAIN", None),
                 };
-                labels.push(json!({ "replicate": replicate, "status": status,
+                let mut label = json!({ "replicate": replicate, "status": status,
                     "signed_outcome": outcome, "boundaries": stats.plies,
-                    "continuation_policy": "raw_argmax_both_seats", "seed": seed }));
+                    "continuation_policy": "raw_argmax_both_seats", "seed": seed });
+                if self.certified_empty_delta_labels {
+                    label["certified_empty_delta_boundaries"] = json!(stats.certified_empty_delta_boundaries);
+                }
+                labels.push(label);
             }
-            leaves.push(json!({ "evaluation_ordinal": ordinal, "priority": priority,
+            let mut leaf = json!({ "evaluation_ordinal": ordinal, "priority": priority,
                 "native_state_sha256": item.state_sha256, "snapshot_sha256": item.snapshot_sha256,
-                "model_signed_value": item.prediction.unwrap(), "labels": labels }));
+                "model_signed_value": item.prediction.unwrap(), "labels": labels });
+            if self.fixed_work_native_labels {
+                leaf["model_self_value01_bits"] = json!(item.model_self_value01_bits
+                    .ok_or_else(|| refuse("native fixed-work original prediction bits missing"))?);
+            }
+            leaves.push(leaf);
         }
-        Ok(json!({ "schema": "pokezero.native-visited-value.engineering.v1",
+        let mut result = json!({ "schema": "pokezero.native-visited-value.engineering.v1",
             "worker": self.worker, "root_information_key": self.root,
             "sample_seed": self.seed, "original_deadline_at": self.deadline_at,
             "root_native_state_sha256": self.root_native_state_sha256,
@@ -261,7 +268,24 @@ impl VisitedValueBank {
             "label_engine": "poke_engine_unqualified_against_showdown",
             "searched_line_showdown_fidelity": false, "scientific_calibration_evidence": false,
             "scientific_strength_evidence": false, "labels_used_for_backup": false,
-            "private_frontiers_exported": false, "instrumentation_can_change_selection": true }))
+            "private_frontiers_exported": false, "instrumentation_can_change_selection": true });
+        if self.fixed_work_native_labels {
+            result["schema"] = json!("pokezero.native-visited-value.fixed-work-native.v2");
+            result.as_object_mut().unwrap().remove("original_deadline_at");
+            result["search_decision_ceiling"] = Value::Null;
+            result["label_deadline"] = Value::Null;
+            result["external_emergency_watchdog_required"] = json!(true);
+            result["native_actor_history_law"] = json!("original_retained_sampled_native_private_bridges");
+            result["independent_showdown_labels"] = json!(false);
+            result["deployment_eligible"] = json!(false);
+            result["resource_cost_complete"] = json!(false);
+            result["model_self_side_one"] = json!(self.self_side_one);
+            if self.certified_empty_delta_labels {
+                result["schema"] = json!("pokezero.native-visited-value.fixed-work-native.v3");
+                result["empty_delta_progress_law"] = json!("attributed_native_two_actor_turn_no_redraw.v1");
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -292,20 +316,33 @@ impl NativeVisitedValueBank {
 impl NativeVisitedValueBank {
     #[new]
     #[pyo3(signature = (sample_seed, worker, root_information_key, original_deadline_at,
-        leaves_per_native_invocation=2, maximum_payload_bytes=8388608, capture_searched_lines=false))]
+        leaves_per_native_invocation=2, maximum_payload_bytes=8388608, capture_searched_lines=false,
+        fixed_work_capture=false, capture_native_edges=false, fixed_work_native_labels=false,
+        certified_empty_delta_labels=false))]
     fn py_new(py: Python<'_>, sample_seed: u64, worker: usize, root_information_key: String,
         original_deadline_at: f64, leaves_per_native_invocation: usize,
-        maximum_payload_bytes: usize, capture_searched_lines: bool) -> PyResult<Self> {
+        maximum_payload_bytes: usize, capture_searched_lines: bool, fixed_work_capture: bool,
+        capture_native_edges: bool, fixed_work_native_labels: bool, certified_empty_delta_labels: bool) -> PyResult<Self> {
         let now: f64 = py.import("time")?.getattr("perf_counter")?.call0()?.extract()?;
         let remaining = original_deadline_at - now;
-        if !original_deadline_at.is_finite() || !remaining.is_finite() || remaining > 14400.0 {
+        if !original_deadline_at.is_finite() || (!(fixed_work_capture || fixed_work_native_labels)
+                && (!remaining.is_finite() || remaining > 14400.0))
+            || (fixed_work_native_labels && (original_deadline_at != 0.0 || capture_searched_lines
+                || fixed_work_capture || capture_native_edges))
+            || (fixed_work_capture && !capture_searched_lines) || (capture_native_edges && !fixed_work_capture)
+            || (certified_empty_delta_labels && !fixed_work_native_labels) {
             return Err(refuse("visited value: finite original producer deadline within four hours required"));
         }
-        let deadline = Instant::now().checked_add(Duration::from_secs_f64(remaining.max(0.0)))
+        let deadline = Instant::now().checked_add(Duration::from_secs_f64(
+            if fixed_work_capture || fixed_work_native_labels { 0.0 } else { remaining.max(0.0) }))
             .ok_or_else(|| refuse("visited value: deadline overflow"))?;
         let mut bank = VisitedValueBank::new(sample_seed, worker, root_information_key,
             leaves_per_native_invocation, maximum_payload_bytes, original_deadline_at, deadline)?;
         if capture_searched_lines { bank.searched_lines = Some(SearchedLines::default()); }
+        bank.fixed_work_capture = fixed_work_capture;
+        bank.fixed_work_native_labels = fixed_work_native_labels;
+        bank.certified_empty_delta_labels = certified_empty_delta_labels;
+        bank.capture_native_edges = capture_native_edges;
         Ok(Self { bank: Some(bank),
             ready: false, taken: false, closed: false })
     }
@@ -317,6 +354,70 @@ impl NativeVisitedValueBank {
         py.detach(move || crate::abort_telemetry::guarded_search_with_ledger(|lossy| bank.label(lossy).map(|v| v.to_string())))
     }
 
+    /// PRIVATE post-selection export for a new prospective owning run. This
+    /// takes the bank before validation and never invokes a label provider.
+    /// Evaluation events include cancelled rounds: they are NOT accepted work.
+    fn export_searched_ancestry(&mut self) -> PyResult<String> {
+        if !self.ready { return Err(refuse("searched ancestry: successful selection required")); }
+        self.ready = false;
+        let bank = self.bank.take().ok_or_else(|| refuse("searched ancestry: already consumed"))?;
+        if !bank.fixed_work_capture { return Err(refuse("searched ancestry: prospective fixed-work capture required")); }
+        if bank.expired() { return Err(refuse("searched ancestry: original deadline expired")); }
+        let lines = bank.searched_lines.as_ref()
+            .ok_or_else(|| refuse("searched ancestry: capture was not enabled"))?;
+        if bank.root_native_state_sha256.as_deref() != Some(hash(lines.root.as_bytes()).as_str())
+            || bank.selection_report_sha256.is_none() || bank.rows.len() != bank.keep.min(bank.seen) {
+            return Err(refuse("searched ancestry: root/selection/reservoir binding missing"));
+        }
+        let mut expected = std::collections::BTreeSet::new();
+        for ordinal in 0..bank.seen {
+            expected.insert((sample_priority(bank.seed, bank.worker, &bank.root, ordinal), ordinal));
+            if expected.len() > bank.keep { expected.pop_last(); }
+        }
+        if expected.into_iter().collect::<Vec<_>>() != bank.rows.keys().copied().collect::<Vec<_>>() {
+            return Err(refuse("searched ancestry: actual evaluation reservoir drift"));
+        }
+        let mut evaluations = Vec::new();
+        for ((priority, ordinal), item) in &bank.rows {
+            if hash(&item.payload()?) != item.snapshot_sha256 || item.prediction.is_none()
+                || item.model_self_value01_bits.is_none() {
+                return Err(refuse("searched ancestry: private frontier mutated or unpriced"));
+            }
+            let path = lines.path(item.key)?;
+            let frontier = item.state.serialize();
+            if path.last().and_then(|step| step["after"].as_str()) != Some(frontier.as_str()) {
+                return Err(refuse("searched ancestry: endpoint is not the actual evaluated frontier"));
+            }
+            evaluations.push(json!({"priority": priority, "branch_key": item.key,
+                "model_self_value01_bits":item.model_self_value01_bits,
+                "native_state_sha256": item.state_sha256,
+                "private_frontier_sha256": item.snapshot_sha256,
+                "capture": {"root_native_state": lines.root, "steps": path,
+                    "native_frontier": frontier, "model_signed_value": item.prediction,
+                    "evaluation_ordinal": ordinal, "private_controller_only": true}}));
+        }
+        let payload = json!({"schema":if bank.capture_native_edges {
+                "pokezero.native-searched-ancestry.private-owned.v2" } else { "pokezero.native-searched-ancestry.private-owned.v1" },
+            "root_native_state_sha256":bank.root_native_state_sha256,
+            "selection_report_utf8_sha256":bank.selection_report_sha256,
+            "root_information_key":bank.root, "sample_seed":bank.seed, "worker":bank.worker,
+            "model_self_side_one":bank.self_side_one,
+            "model_evaluations_seen":bank.seen, "leaves_per_native_invocation":bank.keep,
+            "maximum_payload_bytes":bank.maximum_payload_bytes,
+            "retained_private_payload_bytes":bank.bytes + lines.bytes,
+            "evaluations":evaluations, "event_population":"actual_model_evaluations_including_cancelled_rounds",
+            "private_controller_only":true, "labels_used_for_backup":false,
+            "fixed_work_capture":true,
+            "full_world_equivalence":false, "runtime_qualified":false});
+        let encoded = payload.to_string();
+        // Repeated ancestors in the exported representation also cost memory;
+        // do not call the reservoir's internal cap an export-size guarantee.
+        if encoded.len() > bank.maximum_payload_bytes {
+            return Err(refuse("searched ancestry: exported private payload cap reached"));
+        }
+        Ok(encoded)
+    }
+
     /// Trusted PRIVATE diagnostic controller, not a raw-policy provider. Takes
     /// the bank before invoking Python, including on exceptions or reentry.
     /// The only returned evidence is a bounded, whitelisted engineering result.
@@ -324,6 +425,7 @@ impl NativeVisitedValueBank {
         if !self.ready { return Err(refuse("searched line: successful selection required")); }
         self.ready = false;
         let bank = self.bank.take().ok_or_else(|| refuse("searched line: already consumed"))?;
+        if bank.fixed_work_capture { return Err(refuse("searched line: fixed-work capture uses prospective export only")); }
         let lines = bank.searched_lines.as_ref().ok_or_else(|| refuse("searched line: capture was not enabled"))?;
         let mut results = Vec::new();
         for ((priority, ordinal), item) in &bank.rows {

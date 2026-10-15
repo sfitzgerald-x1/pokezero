@@ -4,7 +4,7 @@ The trusted controller extracts original sets from opening requests. Workers
 receive those sets plus a canonical public root, not a live source snapshot,
 opponent observation or committed action. Public reconstruction stays intact.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 
 from .paper_reference import ReferenceRefusal
@@ -52,14 +52,16 @@ class TeamOracle:
     def capture(cls, snapshot, request, source):
         """Trusted-controller API only; snapshot is discarded after extraction."""
         from ..local_showdown import LocalShowdownSnapshot
-        require(isinstance(snapshot, LocalShowdownSnapshot) and isinstance(request, PublicRootRequest)
+        from .search_over_raw_world_inputs import _state_payload
+        require(type(snapshot) is LocalShowdownSnapshot and type(request) is PublicRootRequest
             and snapshot.terminal is None and request.state.replay.requests == {}
             and request.set_source_hash == source.metadata.source_hash,
             "oracle requires a bound nonterminal source snapshot and public root")
         subject = request.state.player_id
-        require(subject in {"p1", "p2"} and snapshot.latest_requests.get(subject) == request.state.self_request
-            and snapshot.first_requests.get(subject) == request.state.self_initial_request
-            and snapshot.replay.public_events == request.state.replay.public_events
+        require(subject in {"p1", "p2"} and digest(snapshot.latest_requests.get(subject)) == digest(request.state.self_request)
+            and digest(snapshot.first_requests.get(subject)) == digest(request.state.self_initial_request)
+            and digest(_state_payload(snapshot.replay.public_events))
+                == digest(_state_payload(request.state.replay.public_events))
             and snapshot.observation_format_id == request.state.observation_format_id == "gen3randombattle",
             "oracle source does not match actor/public root")
         own = opening_team(request.state.self_initial_request, subject, source)
@@ -69,7 +71,7 @@ class TeamOracle:
             team_sha256(own), team, team_sha256(team))
 
     def validate(self, request, source):
-        require(isinstance(request, PublicRootRequest) and self.subject == request.state.player_id
+        require(type(request) is PublicRootRequest and self.subject == request.state.player_id
             and self.set_source_hash == request.set_source_hash == source.metadata.source_hash
             and self.root_binding == public_root_binding(request)
             and self.own_team_sha256 == team_sha256(opening_team(
@@ -124,27 +126,122 @@ class OracleWorkerFactory:
         return _OracleRuntime(self.base(index))
 
 
+class _OracleSampleWorld:
+    """Keep the factory's timing interface while guarding actual sampling."""
+    __slots__ = ("_factory", "_sample")
+
+    def __init__(self, factory, sample):
+        object.__setattr__(self,"_factory",factory)
+        object.__setattr__(self,"_sample",sample)
+
+    def __call__(self, rng):
+        return self._sample(rng)
+
+    def __getattr__(self, name):
+        return getattr(self._factory,name)
+
+    def __setattr__(self, name, value):
+        if name in self.__slots__:
+            raise AttributeError("oracle sampling guard is immutable")
+        setattr(self._factory,name,value)
+
+
 class _OracleRuntime:
     def __init__(self, base):
         self.base = base
 
     def prepare(self, request):
         from .paper_reference_factory import PublicRootWorldFactory
-        from .paper_reference_parallel import PreparedDecision
-        require(isinstance(request, OracleRootRequest), "oracle worker requires explicit diagnostic transport")
+        from .search_over_raw_world_inputs import public_request_witness,_state_payload
+        require(type(request) is OracleRootRequest and type(request.oracle) is TeamOracle,
+            "oracle worker requires explicit diagnostic transport")
         request.oracle.validate(request.public, self.base.source)
-        prepared = self.base.prepare(request.public)
+        public_before = public_request_witness(request.public)
+        oracle_before = digest(_state_payload(request.oracle))
+        catalog_before = digest(_state_payload(self.base.source))
+        prepared = self.base.prepare_team_oracle(request.public,request.oracle)
         factory = prepared.sample_world
         require(isinstance(factory, PublicRootWorldFactory), "oracle requires genuine public reconstruction")
-        factory.install_diagnostic_oracle(request.oracle.opponent_team)
+        def actual_construction():
+            # Compare the bound clones actually used by reconstruction, not just
+            # the independently retained transport. Strip only catalog transport
+            # using the same public law, including every pending ancestor.
+            def public_state(state):
+                from ..local_showdown import PublicBattleMaterializationState
+                require(type(state) is PublicBattleMaterializationState
+                    and state.belief_engine.set_source is self.base.source,
+                    "actual oracle construction catalog changed")
+                engine=state.belief_engine.clone();engine.set_source=None
+                return replace(state,belief_engine=engine)
+            def public_pending(pending, depth=0):
+                if pending is None:return None
+                from .paper_reference_pending import PendingPolicyTransition
+                require(isinstance(pending,PendingPolicyTransition) and depth <= 200,
+                    "actual oracle pending ancestry malformed or exceeds bound")
+                return replace(pending,before_state=public_state(pending.before_state),
+                    prior_transition=public_pending(pending.prior_transition,depth+1))
+            actual=PublicRootRequest(public_state(factory.state),request.public.observation,
+                request.public.set_source_hash,public_pending(factory.pending_transition))
+            expected=decision_state(request.public.observation,player=request.public.state.player_id)
+            require(factory.set_source is self.base.source
+                and factory.env is self.base.env and factory.evaluator is self.base.evaluator
+                and digest(public_request_witness(actual)) == digest(public_before)
+                and type(factory.root) is type(expected)
+                and factory.root.key == expected.key and factory.root.actions == expected.actions
+                and type(factory.root.faint_count) is int and factory.root.faint_count == expected.faint_count
+                and team_sha256(factory.own_team) == request.oracle.own_team_sha256,
+                "actual oracle construction/public transport changed")
+            return digest(dict(state=_state_payload(factory.state),
+                pending=_state_payload(factory.pending_transition),known=_state_payload(factory.known),
+                own_team_sha256=team_sha256(factory.own_team),root=dict(key=factory.root.key.hex(),
+                    actions=factory.root.actions,faint_count=factory.root.faint_count)))
+        construction_before=actual_construction()
+        def actual_projection():
+            request.oracle.validate(request.public,self.base.source)
+            require(digest(public_request_witness(request.public)) == digest(public_before)
+                and digest(_state_payload(request.oracle)) == oracle_before
+                and digest(_state_payload(self.base.source)) == catalog_before
+                and type(factory.sampler) is OracleTeamSampler
+                and actual_construction() == construction_before
+                and factory.sampler.source is self.base.source
+                and factory.sampler.sha256 == request.oracle.opponent_team_sha256
+                and team_sha256(factory.sampler.team) == request.oracle.opponent_team_sha256
+                and team_sha256(factory.diagnostic_oracle_team) == request.oracle.opponent_team_sha256,
+                "actual oracle construction/public transport changed")
+            return dict(schema="pokezero.search-over-raw.reference-oracle-preparation.v1",
+                oracle=request.oracle.receipt(),public_request_witness=public_before,
+                actual_sampler_team_sha256=factory.sampler.sha256,
+                actual_construction_sha256=construction_before,
+                oracle_payload_sha256=oracle_before,reconstruction_catalog_sha256=catalog_before,
+                installed_before_chance_planning=True,source_snapshot_transported=False,
+                committed_opponent_action_transported=False,deployable=False,runtime_qualified=False)
+        actual_projection()
+
+        def sample(rng):
+            actual_projection()
+            world = prepared.sample_world(rng)
+            try:
+                actual_projection()
+                return world
+            except BaseException as error:
+                try:
+                    world.close()
+                except BaseException as cleanup:
+                    error.add_note("oracle world cleanup also failed: "+type(cleanup).__name__)
+                raise
 
         def evidence():
+            before = actual_projection()
             result = prepared.evidence()
+            require(digest(actual_projection()) == digest(before),
+                "oracle construction changed during evidence export")
+            require(type(result) is dict and "team_oracle" not in result
+                and "team_oracle_preparation" not in result,"oracle observation collision")
             result["team_oracle"] = request.oracle.receipt()
+            result["team_oracle_preparation"] = before
             return result
 
-        return PreparedDecision(prepared.root, prepared.evaluate_root, factory, evidence,
-            prepared.set_sampling_deadline)
+        return replace(prepared,sample_world=_OracleSampleWorld(factory,sample),evidence=evidence)
 
     def close(self):
         self.base.close()

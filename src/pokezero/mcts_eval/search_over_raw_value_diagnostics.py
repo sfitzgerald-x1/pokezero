@@ -142,8 +142,9 @@ class VisitedValueBank:
         if len(self.rows) == self.contract.leaves_per_worker and (priority, ordinal) >= max(self.rows):
             return
         # This is the ACTUAL sampled search world, not the source-game snapshot.
+        observation = self._capture_observation(world, state)
         require(world.env.terminal() is None and world.subject in world.env.requested_players()
-            and decision_state(world.env.observe(world.subject), player=world.subject) == state,
+            and decision_state(observation, player=world.subject) == state,
             "prediction and visited-state binding differ")
         snapshot = deepcopy(world.env.snapshot())
         payload = pickle.dumps(snapshot, protocol=5)
@@ -156,7 +157,11 @@ class VisitedValueBank:
         self.bytes = total
         self.rows[(priority, ordinal)] = dict(snapshot=snapshot, size=size, env=world.env,
             evaluator=world.evaluator, state=state, subject=world.subject,
-            snapshot_sha256=hashlib.sha256(payload).hexdigest(), model_signed_value=model.value)
+            snapshot_sha256=hashlib.sha256(payload).hexdigest(), model_signed_value=model.value,
+            observation=deepcopy(observation))
+
+    def _capture_observation(self, world, state):
+        return world.env.observe(world.subject)
 
     def label(self, progress_sink=None):
         require(not self.closed, "visited-value labels cannot be retried")
@@ -538,19 +543,27 @@ class _ValueRuntime:
         if self.bank is not None:
             self.bank.close()
         prepared = self.base.prepare(request)
-        self.bank = bank = VisitedValueBank(self.contract, worker=self.index, root_key=prepared.root.key)
+        self.bank = bank = self._new_bank(prepared.root.key)
 
         def sample_world(rng):
             world = prepared.sample_world(rng)
-            if isinstance(world, ReferenceLeafWorld):
-                # Capture the genuine model prediction before alternative pricing.
-                world.observe_model = lambda state, model: bank.observe(world.world, state, model)
-                return world
-            require(isinstance(world, ShowdownTrajectoryWorld), "genuine reference world required")
-            return _ObservedWorld(world, bank)
+            from .search_over_raw_world_inputs import ReferenceInputWorld
+            def instrument(owned):
+                if isinstance(owned,ReferenceInputWorld):
+                    owned.world=instrument(owned.world)
+                    return owned
+                if isinstance(owned,ReferenceLeafWorld):
+                    owned.observe_model=lambda state,model:bank.observe(owned.world,state,model)
+                    return owned
+                require(isinstance(owned,ShowdownTrajectoryWorld),"genuine reference world required")
+                return _ObservedWorld(owned,bank)
+            return instrument(world)
 
         return PreparedDecision(prepared.root, prepared.evaluate_root, sample_world,
-            prepared.evidence, prepared.set_sampling_deadline, bank.label)
+            prepared.evidence, prepared.set_sampling_deadline, bank.label, prepared.atomic_work)
+
+    def _new_bank(self, root_key):
+        return VisitedValueBank(self.contract, worker=self.index, root_key=root_key)
 
     def close(self):
         try:

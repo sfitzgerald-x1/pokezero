@@ -9,6 +9,7 @@
 //! Search quality is explicitly NOT the goal of this skeleton.
 
 pub mod abort_telemetry;
+pub(crate) mod atomic_work;
 pub mod encoder;
 pub mod envstep;
 pub mod events;
@@ -29,6 +30,9 @@ pub(crate) mod raw_policy_leaf;
 #[cfg(feature = "model")]
 pub(crate) mod visited_value;
 pub mod rollout;
+pub mod scoped_boundary;
+pub mod native_edge;
+pub(crate) mod searched_ancestry;
 pub mod tree;
 
 use std::hint::black_box;
@@ -467,6 +471,9 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(envstep::env_options, m)?)?;
     m.add_function(wrap_pyfunction!(envstep::env_step, m)?)?;
     m.add_function(wrap_pyfunction!(envstep::env_battle_over, m)?)?;
+    m.add_function(wrap_pyfunction!(scoped_boundary::native_scoped_boundary, m)?)?;
+    m.add_function(wrap_pyfunction!(native_edge::native_edge_support, m)?)?;
+    m.add_function(wrap_pyfunction!(native_edge::native_scoped_successor_support, m)?)?;
     m.add_function(wrap_pyfunction!(policy_request::sampled_policy_request, m)?)?;
     m.add_class::<encoder::NativeEncoder>()?;
     m.add_class::<leaf::PyLeafEncoder>()?;

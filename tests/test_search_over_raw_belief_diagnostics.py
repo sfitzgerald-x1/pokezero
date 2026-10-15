@@ -152,6 +152,19 @@ class BeliefDiagnosticsTests(unittest.TestCase):
         self.assertEqual(evidence["sampled_original_team"]["members"], truth()["members"])
         self.assertEqual(world.evaluator.call_count, 0)
 
+    def test_clock_expiry_is_preserved_when_observation_cleanup_also_fails(self):
+        factory=object.__new__(PublicRootWorldFactory)
+        factory.team_diagnostic_root_binding="b"*64
+        factory.check_sampling_deadline=Mock(side_effect=SamplingDeadlineExceeded("expired"))
+        world=Mock(close=Mock(side_effect=RuntimeError("PRIVATE_CLEANUP")))
+        evidence=dict(status="ROOT_VALIDATED")
+        def capture(*args):evidence["sampled_original_team"]={"temporary":True}
+        with patch("pokezero.mcts_eval.search_over_raw_belief_diagnostics.capture_sampled_team",side_effect=capture):
+            with self.assertRaises(SamplingDeadlineExceeded) as raised:factory._observe_team(world,evidence)
+        self.assertNotIn("sampled_original_team",evidence)
+        self.assertEqual(raised.exception.__notes__,["Sampled team observation cleanup also failed: RuntimeError"])
+        self.assertNotIn("PRIVATE_CLEANUP",str(raised.exception.__notes__))
+
     def test_actual_draw_hash_and_selected_particle_ancestry_are_required(self):
         from pokezero.mcts_eval.paper_reference_sampling import HiddenTeamDraw
         draw = HiddenTeamDraw(team(), (), (), team_sha256(team()))

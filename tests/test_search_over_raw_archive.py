@@ -1,4 +1,6 @@
 """Sealed/public binding checks including actual excluded Showdown boundaries."""
+from copy import deepcopy
+from dataclasses import dataclass, replace
 import json
 import os
 from pathlib import Path
@@ -13,6 +15,199 @@ from pokezero.mcts_eval.search_over_raw_archive import SealedSourceArchive, Seal
 from pokezero.policy import PolicyDecision
 from pokezero.rollout import RolloutConfig, RolloutDriver
 import qualify_search_over_raw_source as DRIVER
+
+
+@dataclass(frozen=True)
+class AuthoredPrivateBoundary:
+    audit_only: dict
+
+
+class ExplorationRootCrosswalkTests(unittest.TestCase):
+    """Actual Python capture seams; authored states, never a source game."""
+    def setUp(self):
+        from test_search_over_raw_reconciled import ReconciledLedgerTest
+        from test_search_over_raw_source import SourceEnv
+        from pokezero.belief import PublicBattleBeliefEngine
+        from pokezero.local_showdown import PublicBattleMaterializationState
+        from pokezero.policy import PolicyContext
+        from pokezero.trajectory import BattleTrajectory, TrajectoryStep
+        from pokezero.env import TerminalState
+        from pokezero.showdown import parse_showdown_replay
+        from pokezero.mcts_eval.search_over_raw_source import source_roots
+        fixture = ReconciledLedgerTest(); fixture.setUp(); self.addCleanup(fixture.tearDown)
+        self.contract = fixture.contract
+        seed = self.contract["panels"]["exploration"]["seeds"][0]
+        observation = SourceEnv().observe("p1")
+        observation = replace(observation, metadata={**observation.metadata,
+            "belief_view": {**observation.metadata["belief_view"], "marker": True},
+            "self_team": [], "opponent_team": [], "private_canary": "not-actor-input"})
+        engine = PublicBattleBeliefEngine(format_id="gen3randombattle",
+            set_source=SimpleNamespace(metadata=SimpleNamespace(source_hash="a"*64)))
+        state = PublicBattleMaterializationState("p1", "gen3randombattle", "gen3randombattle",
+            parse_showdown_replay([], battle_id="authored-boundary"), engine,
+            self_request={"active": [{"moves": [{"id": "tackle", "pp": 15}]}]})
+        self.context = PolicyContext("p1", 0, "authored-boundary", "gen3randombattle", seed,
+            observation, ("p1", "p2"), BattleTrajectory("authored-boundary", "gen3randombattle", seed),
+            requested_observations={"p1": observation, "p2": "private-never-input"},
+            requested_legal_action_masks={"p1": observation.legal_action_mask}, public_materialization_state=state)
+        self.archive = SealedSourceArchive(); self.addCleanup(self.archive.close)
+        self.archive.capture_public(self.context, 0)
+        self.archive.capture_private(SimpleNamespace(requested_players=("p1",), decision_round_index=0,
+            seed=seed, battle_id="authored-boundary", decisions={"p1":SimpleNamespace(action_index=0)},
+            snapshot=AuthoredPrivateBoundary({"canary": "private-source-snapshot"})))
+        trajectory = BattleTrajectory("authored-boundary", "gen3randombattle", seed)
+        trajectory.append(TrajectoryStep("p1", 0, observation, observation.legal_action_mask, 0))
+        trajectory.record_terminal(TerminalState("p1", 1))
+        self.source = source_roots(self.contract, panel="exploration", source_seed=seed, trajectory=trajectory)
+        self.root_id = self.source["roots"][0]["root_id"]
+
+    def bind(self, **kwargs):
+        from pokezero.mcts_eval.search_over_raw_archive import archived_exploration_root_binding
+        return archived_exploration_root_binding(self.archive, kwargs.get("source", self.source),
+            contract=kwargs.get("contract", self.contract), root_id=kwargs.get("root_id", self.root_id))
+
+    def test_actual_archive_crosswalk_preserves_missing_slots_and_keeps_snapshot_private(self):
+        result = self.bind()
+        self.assertEqual(result["public_record_sha256"], self.source["roots"][0]["public_record_sha256"])
+        self.assertNotEqual(result["public_record_sha256"], result["public_request_witness"]["public_request_sha256"])
+        self.assertEqual(len(result["missing_source_root_ids"]), 6)
+        self.assertNotIn("private-source-snapshot", json.dumps(result))
+        self.assertNotIn("not-actor-input", json.dumps(result))
+        for flag in ("source_policy_validated", "source_terminal_validated", "source_freshness_validated",
+                     "runtime_qualified", "collection_authorized", "holdout_authorized"):
+            self.assertFalse(result[flag])
+
+    def test_full_request_includes_pending_and_fields_omitted_by_information_key(self):
+        from pokezero.mcts_eval.paper_reference_runtime import PublicRootRequest
+        from pokezero.mcts_eval.paper_reference_pending import PendingPolicyTransition
+        from pokezero.mcts_eval.search_over_raw_world_inputs import public_request_witness
+        context, _, _ = self.archive.selected(self.source["roots"][0])
+        request = PublicRootRequest.capture(context.public_materialization_state, context.observation)
+        base = public_request_witness(request)
+        changed = public_request_witness(replace(request, state=replace(request.state,
+            self_move_states={"p1:known":({"pp":14},)})))
+        self.assertEqual(base["consumed_binding"], changed["consumed_binding"])
+        self.assertNotEqual(base["public_request_sha256"], changed["public_request_sha256"])
+        pending = PendingPolicyTransition.capture(request, 0)
+        changed = public_request_witness(replace(request, pending_transition=pending))
+        self.assertEqual(base["consumed_binding"], changed["consumed_binding"])
+        self.assertNotEqual(base["public_request_sha256"], changed["public_request_sha256"])
+
+    def test_missing_holdout_and_coercion_aliases_cannot_attach(self):
+        for key, value in (("seed", 0.), ("turn_index", False), ("recorded_action_index", 0.)):
+            source = deepcopy(self.source); public = source["roots"][0]["public_record"]
+            public[key] = value
+            sha = digest(public); source["roots"][0]["public_record_sha256"] = sha
+            source["eligible_public_records"][0]["public_record_sha256"] = sha
+            source["eligible_catalog_sha256"] = digest(source["eligible_public_records"])
+            with self.assertRaises(ValueError): self.bind(source=source)
+        for source in (dict(self.source, panel="validation"), dict(self.source, source_seed=False),
+                       dict(self.source, eligible_requests=True)):
+            with self.assertRaises(ValueError): self.bind(source=source)
+        with self.assertRaises(ValueError): self.bind(root_id=self.source["missing_root_ids"][0])
+        self.archive.close()
+        with self.assertRaises(ValueError): self.bind()
+
+    def test_rehashed_preserved_metadata_alias_is_not_the_actual_archive(self):
+        from pokezero.public_decision_corpus import PublicDecisionRecord, public_decision_id
+        source = deepcopy(self.source)
+        record = PublicDecisionRecord.from_dict(source["roots"][0]["public_record"])
+        forged = replace(record, public_belief_view={**record.public_belief_view, "marker": 1})
+        forged = replace(forged, decision_id=public_decision_id(forged)).to_dict()
+        self.assertEqual(forged["public_belief_view"], record.public_belief_view)  # Python's alias, not canonical identity.
+        self.assertNotEqual(digest(forged["public_belief_view"]), digest(record.public_belief_view))
+        source["roots"][0].update(public_record=forged, public_record_sha256=digest(forged))
+        source["eligible_public_records"][0]["public_record_sha256"] = digest(forged)
+        source["eligible_catalog_sha256"] = digest(source["eligible_public_records"])
+        with self.assertRaisesRegex(ValueError, "history/belief differs"):
+            self.bind(source=source)
+
+    def test_prepared_job_has_only_actual_public_transport_and_does_not_launch(self):
+        from pokezero.mcts_eval.search_over_raw_archive import prepare_archived_fixed_work_job
+        from pokezero.mcts_eval.search_over_raw import SearchConfiguration
+        with unittest.mock.patch("subprocess.Popen") as launch:
+            job, bound = prepare_archived_fixed_work_job(self.archive, self.source,
+                contract=self.contract, root_id=self.root_id, configuration=SearchConfiguration("incumbent", seconds=1.),
+                checkpoint_contract=SimpleNamespace(showdown_source_sha256="a"*64),
+                showdown_root="not-a-runtime", runtime_sha256="b"*64)
+        launch.assert_not_called()
+        self.assertEqual(job.expected_public_request_sha256, bound["public_request_witness"]["public_request_sha256"])
+        self.assertEqual(job._consumed_binding, bound["public_request_witness"]["consumed_binding"])
+        self.assertEqual(set(job.context.requested_observations), {"p1"})
+        self.assertIsNone(job.context.public_materialization_state.belief_engine.set_source)
+        self.assertNotIn(b"private-source-snapshot", pickle.dumps(job))
+
+    def test_actual_native_sampling_attempt_observes_full_request_and_refuses_drift(self):
+        from pokezero.mcts_eval.search_over_raw_world_inputs import NativeWorldInputs
+        bound = self.bind()["public_request_witness"]
+        recorder = NativeWorldInputs(bound["consumed_binding"], 16, expected_public_request=bound)
+        recorder.attempt(self.context, 0, None)
+        self.assertEqual(recorder.public_request_observations, [dict(ordinal=0, witness=bound)])
+        changed = replace(self.context, public_materialization_state=replace(
+            self.context.public_materialization_state, self_move_states={"p1:known":({"pp":14},)}))
+        with self.assertRaisesRegex(ValueError, "differs from archived transport"):
+            recorder.attempt(changed, 1, None)
+        self.assertTrue(recorder.errors)
+
+    def test_reference_fixed_work_preparation_binds_real_public_slot_and_never_launches(self):
+        from pokezero.mcts_eval.search_over_raw_archive import prepare_archived_reference_fixed_work_job
+        from pokezero.mcts_eval.search_over_raw import SearchConfiguration
+        from pokezero.mcts_eval.paper_reference_runtime import ShowdownWorkerFactory
+        checkpoint=SimpleNamespace(checkpoint_path="unused-model",checkpoint_sha256="b"*64,
+            showdown_root="unused-simulator",showdown_source_sha256="a"*64)
+        factory=ShowdownWorkerFactory(checkpoint.checkpoint_path,checkpoint.checkpoint_sha256,
+            checkpoint.showdown_root,checkpoint.showdown_source_sha256)
+        for leaf in ("model","hp_fraction","raw_rollout"):
+            cfg=SearchConfiguration("reference",leaf=leaf,workers=20,seconds=1.)
+            with self.subTest(leaf=leaf),unittest.mock.patch("subprocess.Popen") as launch:
+                job,bound=prepare_archived_reference_fixed_work_job(self.archive,self.source,
+                    contract=self.contract,root_id=self.root_id,configuration=cfg,
+                    checkpoint_contract=checkpoint,showdown_root=checkpoint.showdown_root,
+                    runtime_sha256="c"*64,reference_factory=factory)
+            launch.assert_not_called()
+            self.assertEqual(job.expected_public_request_sha256,bound["public_request_witness"]["public_request_sha256"])
+            self.assertEqual(job._consumed_binding,bound["public_request_witness"]["consumed_binding"])
+            self.assertEqual(job.selection_seed,bound["slot"]["source_seed"])
+            self.assertEqual(job.reference_factory,factory);self.assertIsNot(job.reference_factory,factory)
+            self.assertEqual(set(job.context.requested_observations),{"p1"})
+            self.assertIsNone(job.context.public_materialization_state.belief_engine.set_source)
+            self.assertNotIn(b"private-source-snapshot",pickle.dumps(job))
+        for changed in (replace(factory,checkpoint_sha256="d"*64),replace(factory,showdown_root="other"),
+                replace(factory,set_source_hash="e"*64)):
+            with unittest.mock.patch("subprocess.Popen") as launch,self.assertRaisesRegex(ValueError,"original champion"):
+                prepare_archived_reference_fixed_work_job(self.archive,self.source,contract=self.contract,
+                    root_id=self.root_id,configuration=cfg,checkpoint_contract=checkpoint,
+                    showdown_root=checkpoint.showdown_root,runtime_sha256="c"*64,reference_factory=changed)
+            launch.assert_not_called()
+
+    def test_reference_fixed_work_builder_rejects_valid_alternate_job_envelopes(self):
+        from pokezero.mcts_eval.search_over_raw_archive import prepare_archived_reference_fixed_work_job
+        from pokezero.mcts_eval.search_over_raw import SearchConfiguration
+        from pokezero.mcts_eval.paper_reference_runtime import ShowdownWorkerFactory
+        import pokezero.mcts_eval.search_over_raw_supervision as supervision
+        original=supervision.FixedWorkAdapterJob
+        checkpoint=SimpleNamespace(checkpoint_path="unused-model",checkpoint_sha256="b"*64,
+            showdown_root="unused-simulator",showdown_source_sha256="a"*64)
+        factory=ShowdownWorkerFactory(checkpoint.checkpoint_path,checkpoint.checkpoint_sha256,
+            checkpoint.showdown_root,checkpoint.showdown_source_sha256)
+        cfg=SearchConfiguration("reference",workers=20,seconds=1.)
+        for mode in ("seed","runtime","roots","checkpoint","simulator","configuration"):
+            def construct(**kwargs):
+                if mode=="seed":kwargs["selection_seed"]+=1
+                elif mode=="runtime":kwargs["expected_runtime_sha256"]="d"*64
+                elif mode=="roots":kwargs.update(statistics_root_id="other",root_id="other:"+cfg.identity)
+                elif mode=="checkpoint":kwargs["checkpoint_contract"]=SimpleNamespace(**vars(checkpoint),model_device="other")
+                elif mode=="simulator":kwargs["showdown_root"]="other"
+                else:
+                    changed=replace(cfg,leaf="hp_fraction")
+                    kwargs.update(configuration=changed,root_id=kwargs["statistics_root_id"]+":"+changed.identity)
+                return original(**kwargs)
+            with self.subTest(mode=mode),unittest.mock.patch.object(supervision,"FixedWorkAdapterJob",side_effect=construct),\
+                    unittest.mock.patch("subprocess.Popen") as launch,self.assertRaisesRegex(ValueError,"original prospective envelope"):
+                prepare_archived_reference_fixed_work_job(self.archive,self.source,contract=self.contract,
+                    root_id=self.root_id,configuration=cfg,checkpoint_contract=checkpoint,
+                    showdown_root=checkpoint.showdown_root,runtime_sha256="c"*64,reference_factory=factory)
+            launch.assert_not_called()
 
 
 class SourceQualificationAdmissionTests(unittest.TestCase):

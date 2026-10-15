@@ -4750,6 +4750,8 @@ class EngineMctsPolicy:
     #: to watch is worse than no instrument.
     _world_observer: Any | None = None
     _world_attempt_observer: Any | None = None
+    _world_construction_observer: Any | None = None
+    _native_construction_observer: Any | None = None
     _policy_opponent_diagnostics: Any | None = None
     _value_diagnostic_session: Any | None = None
 
@@ -5174,8 +5176,12 @@ class EngineMctsPolicy:
                     truant_slots=truant_slots,
                     transformed_slots=transformed_slots,
                     rng=rng,
+                    **({"construction_observer":self._world_construction_observer}
+                        if self._world_construction_observer is not None else {}),
                 )
-                state = build_poke_engine_state(world.spec, module=self._module)
+                state = build_poke_engine_state(world.spec, module=self._module,
+                    **({"construction_observer":self._native_construction_observer}
+                        if self._native_construction_observer is not None else {}))
             except PokeEngineAttractUnsupportedError as error:
                 # Upstream accepts ATTRACT but ignores its 50% Gen 3
                 # immobilization. The adapter proves the local patch before it

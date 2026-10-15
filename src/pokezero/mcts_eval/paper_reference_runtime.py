@@ -112,14 +112,15 @@ class ShowdownWorkerFactory:
 
 class _ShowdownRuntime:
     def __init__(self, binding, index):
-        import torch
         from ..collection import env_config_with_policy_spec_masks
         from ..local_showdown import LocalShowdownConfig, LocalShowdownEnv
-        from ..neural_policy import load_transformer_policy
+        from ..neural_policy import load_transformer_policy, require_torch
         from ..randbat import load_gen3_randbat_source_cached
 
+        torch = require_torch()
         torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
+        if torch.get_num_interop_threads() != 1:
+            torch.set_num_interop_threads(1)
         checkpoint = Path(binding.checkpoint)
         if hashlib.sha256(checkpoint.read_bytes()).hexdigest() != binding.checkpoint_sha256:
             raise ReferenceRefusal("worker champion checkpoint digest drift")
@@ -162,6 +163,22 @@ class _ShowdownRuntime:
             raise
 
     def prepare(self, public_request):
+        return self._prepare(public_request)
+
+    def prepare_team_oracle(self, public_request, oracle):
+        """Explicit team-only diagnostic, installed before any chance planning."""
+        from .search_over_raw_oracle import TeamOracle
+        if type(oracle) is not TeamOracle:
+            raise ReferenceRefusal('original-team diagnostic projection required')
+        oracle.validate(public_request,self.source)
+        # Retaining a public-sampled population would silently change the oracle
+        # conditioning law. This diagnostic is a fresh root, not a prefix-reuse
+        # amendment, and does not constrain the public deployment lane.
+        if getattr(self,'history_prefix_reuse',False):
+            raise ReferenceRefusal('team oracle requires fresh construction without prefix reuse')
+        return self._prepare(public_request,diagnostic_oracle_team=oracle.opponent_team)
+
+    def _prepare(self, public_request, *, diagnostic_oracle_team=None):
         previous_factory = getattr(self, 'prepared_factory', None)
         if previous_factory is not None and not getattr(self, 'history_prefix_reuse', False):
             previous_factory.close()
@@ -212,7 +229,9 @@ class _ShowdownRuntime:
             public_anchor_constraints=getattr(self, 'public_anchor_constraints', False),
             guide_anchor_genders=getattr(self, 'guide_anchor_genders', False),
             early_encore_potential=getattr(self, 'early_encore_potential', False),
-            collect_phase_timing=getattr(self, 'collect_phase_timing', False))
+            collect_phase_timing=getattr(self, 'collect_phase_timing', False),
+            **({"diagnostic_oracle_team":diagnostic_oracle_team}
+                if diagnostic_oracle_team is not None else {}))
         lifecycle = None
         if getattr(self, 'history_prefix_reuse', False):
             lifecycle = dict(schema='pokezero.conditioning-prefix-lifecycle.v1',

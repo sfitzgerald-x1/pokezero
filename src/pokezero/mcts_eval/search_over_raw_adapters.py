@@ -48,19 +48,24 @@ def validate_reference_work(measured) -> None:
         measured.result.trajectories, measured.result.transitions), "reference aggregate work drift")
 
 
-def _incumbent_runtime(contract, showdown_root, seconds, *, leaf="model", policy_opponent_diagnostics=None):
+def _incumbent_runtime(contract, showdown_root, seconds, *, leaf="model", policy_opponent_diagnostics=None,
+                       fixed_work_iterations=None):
     from .manifest import SearchConfig
     from .policy_opponent_profile import make_profile_decider
 
     require(leaf in ("model", "hp_fraction", "raw_rollout"), "incumbent leaf requires an implemented model-tree valuation")
+    require(fixed_work_iterations is None or (type(fixed_work_iterations) is int and fixed_work_iterations == 16),
+        "fixed-work diagnostic requires sixteen iterations in each of four unchanged worlds")
     decider = make_profile_decider(contract, showdown_root, arm="incumbent_mcts",
-        mode="matched_deadline", opponent_seed=0, deadline_ms=round(seconds * 1000),
-        native_batch_guard_ms=64,
+        mode="fixed_work" if fixed_work_iterations is not None else "matched_deadline",
+        opponent_seed=0, deadline_ms=round(seconds * 1000),
+        native_batch_guard_ms=64 if fixed_work_iterations is None else 0,
         **({"policy_opponent_diagnostics": policy_opponent_diagnostics}
            if policy_opponent_diagnostics is not None else {}),
         **({"model_leaf_override": "raw_policy_terminal" if leaf == "raw_rollout" else leaf}
            if leaf != "model" else {}))
-    config = SearchConfig(depth=6, sims=4096, batch=16, worlds=4, inference_mode="local")
+    config = SearchConfig(depth=6, sims=4096 if fixed_work_iterations is None else fixed_work_iterations,
+        batch=16, worlds=4, inference_mode="local")
     try:
         return decider, decider._policy_for(config), config
     except BaseException:
@@ -102,10 +107,36 @@ class PublicModelSearchAdapter:
     def _selection_evidence(self, evidence, request):
         return evidence
 
+    def _make_incumbent_runtime(self, contract, showdown_root, policy_opponent_diagnostics):
+        return _incumbent_runtime(contract, showdown_root, self.configuration.seconds,
+            **({"policy_opponent_diagnostics": policy_opponent_diagnostics}
+               if policy_opponent_diagnostics is not None else {}),
+            **({"leaf": self.configuration.leaf} if self.configuration.leaf != "model" else {}))
+
+    def _validate_incumbent_selection(self, evidence, mask, selection_seed):
+        from .policy_opponent_profile import validate_selection
+        validate_selection(evidence, arm="incumbent_mcts", mode="matched_deadline",
+            config=self._search_config, mask=mask, opponent_seed=selection_seed,
+            deadline_ms=round(self.configuration.seconds*1000), native_batch_guard_ms=64,
+            **({"model_leaf_override": "raw_policy_terminal"
+                if self.configuration.leaf == "raw_rollout" else self.configuration.leaf}
+                if self.configuration.leaf != "model" else {}))
+
+    def _search_reference(self, request, root, statistics_root, selection_seed, started):
+        remaining = self.configuration.seconds - (time.perf_counter()-started)
+        require(remaining > 0, "reference ceiling expired during public capture")
+        return self._pool.search(self._diagnostic_request(request), root,
+            battle_id="search-over-raw-root:"+statistics_root, seed=selection_seed,
+            deadline_seconds=remaining)
+
+    def _execution_receipt(self, elapsed, evidence):
+        return dict(nominal_search_seconds=self.configuration.seconds,
+            exceeded_nominal_seconds=self.configuration.arm != "raw" and elapsed > self.configuration.seconds)
+
     def __init__(self, configuration: SearchConfiguration, *, checkpoint_contract,
                  showdown_root: str, evaluator=None, reference_factory=None,
                  initial_dispatch_workers: int = 6, policy_opponent_diagnostics=None,
-                 owned_process_receipts=None, value_diagnostics=None):
+                 owned_process_receipts=None, value_diagnostics=None, owned_value_recipe=None):
         from .paper_reference_runtime import ShowdownWorkerFactory
 
         self._check_configuration(configuration)
@@ -116,6 +147,18 @@ class PublicModelSearchAdapter:
                     and value_diagnostics.incumbent_sampling == "per_native_invocation.v1")),
                 "visited-value diagnostics require an explicit supported arm/sampling contract")
         self._value_diagnostics, self._pending_value_diagnostics = value_diagnostics, None
+        self._owned_value_recipe = owned_value_recipe
+        if owned_value_recipe is not None:
+            from .search_over_raw_reference_values import ReferenceValueLabelRecipe
+            from .search_over_raw_fixed_work import FixedWorkDiagnosticAdapter
+            require(type(owned_value_recipe) is ReferenceValueLabelRecipe and value_diagnostics is None
+                and isinstance(self, FixedWorkDiagnosticAdapter) and configuration.arm == "reference"
+                and configuration.leaf in {"model", "hp_fraction"} and owned_process_receipts is not None,
+                "owned visited labels require the distinct fixed-work reference model/HP lane")
+            require(owned_value_recipe.runtime["checkpoint_path"] == checkpoint_contract.checkpoint_path
+                and owned_value_recipe.runtime["files"][checkpoint_contract.checkpoint_path]
+                    == checkpoint_contract.checkpoint_sha256,
+                "owned label recipe differs from actual reference champion")
         if policy_opponent_diagnostics is not None:
             from ..policy_opponent_diagnostics import PolicyOpponentDiagnostics
             require(type(policy_opponent_diagnostics) is PolicyOpponentDiagnostics
@@ -176,11 +219,8 @@ class PublicModelSearchAdapter:
                 enabled=True, publishes_before_detachment=True, qualifies_uninstrumented_runtime=False)
             self.runtime_sha256 = digest(self.runtime_configuration)
         if configuration.arm == "incumbent":
-            self._decider, self._native, self._search_config = _incumbent_runtime(
-                checkpoint_contract, showdown_root, configuration.seconds,
-                **({"policy_opponent_diagnostics": policy_opponent_diagnostics}
-                   if policy_opponent_diagnostics is not None else {}),
-                **({"leaf": configuration.leaf} if configuration.leaf != "model" else {}))
+            self._decider, self._native, self._search_config = self._make_incumbent_runtime(
+                checkpoint_contract, showdown_root, policy_opponent_diagnostics)
             if value_diagnostics is not None:
                 try:
                     self._native.prepare_visited_value_runtime()
@@ -213,6 +253,11 @@ class PublicModelSearchAdapter:
                     tree="unchanged_trajectory_reference", priors="unchanged_champion")
                 self.runtime_sha256 = digest(self.runtime_configuration)
             factory = self._reference_worker_factory(reference_factory)
+            if owned_value_recipe is not None:
+                from .search_over_raw_reference_values import ReferenceOwnedValueFactory
+                factory = ReferenceOwnedValueFactory(factory, owned_value_recipe)
+                self.runtime_configuration["owned_reference_value_recipe"] = owned_value_recipe.receipt()
+                self.runtime_sha256 = digest(self.runtime_configuration)
             if value_diagnostics is not None:
                 from .search_over_raw_value_diagnostics import ReferenceValueDiagnosticFactory
                 factory = ReferenceValueDiagnosticFactory(factory, value_diagnostics)
@@ -239,6 +284,8 @@ class PublicModelSearchAdapter:
         self._attempted.add(root_id)
         self._attempted_statistics_roots.add(statistics_root)
         started = time.perf_counter()
+        if getattr(self, "_timed_native_atomic_work", False):
+            self._selection_started_monotonic = started
         try:
             require(context.player_id in context.requested_players
                 and context.trajectory.terminal is None, "nonterminal candidate request required")
@@ -262,7 +309,6 @@ class PublicModelSearchAdapter:
                 evidence = dict(selector="deterministic_masked_argmax", model_forwards=1,
                     legal_actions=list(legal), priors=list(evaluation.priors), signed_value=evaluation.value)
             elif arm == "incumbent":
-                from .policy_opponent_profile import validate_selection
                 self._native.reset()
                 if self.configuration.leaf == "raw_rollout":
                     self._native._config = replace(self._native._config, rollout_seed=selection_seed)
@@ -287,12 +333,7 @@ class PublicModelSearchAdapter:
                     model_evals=after["model_evals"]-before["model_evals"],
                     engine_mcts=dict(decision.metadata.get("engine_mcts", {})))
                 if sum(mask) > 1:
-                    validate_selection(evidence, arm="incumbent_mcts", mode="matched_deadline",
-                        config=self._search_config, mask=mask, opponent_seed=selection_seed,
-                        deadline_ms=round(self.configuration.seconds*1000), native_batch_guard_ms=64,
-                        **({"model_leaf_override": "raw_policy_terminal"
-                            if self.configuration.leaf == "raw_rollout" else self.configuration.leaf}
-                            if self.configuration.leaf != "model" else {}))
+                    self._validate_incumbent_selection(evidence, mask, selection_seed)
                 else:
                     require(not evidence["fallbacks"] and not evidence["prior_fallbacks"], "forced root fell back")
                 if self.configuration.leaf != "model" and sum(mask) > 1:
@@ -302,10 +343,11 @@ class PublicModelSearchAdapter:
                             else self.configuration.leaf)
             else:
                 root = decision_state(request.observation, player=public.player_id)
-                remaining = self.configuration.seconds - (time.perf_counter()-started)
-                require(remaining > 0, "reference ceiling expired during public capture")
-                measured = self._pool.search(self._diagnostic_request(request), root, battle_id="search-over-raw-root:"+statistics_root,
-                    seed=selection_seed, deadline_seconds=remaining)
+                measured = self._search_reference(request, root, statistics_root, selection_seed, started)
+                if getattr(self, "_timed_reference_atomic_work", False) and measured.result.trajectories == 0:
+                    return self._reference_zero_selection(measured, request, root_id=root_id,
+                        statistics_root_id=statistics_root_id, statistics_root=statistics_root,
+                        selection_seed=selection_seed, started=started)
                 validate_reference_work(measured)
                 self._validate_diagnostic_work(measured)
                 if self.configuration.leaf != "model":
@@ -328,10 +370,9 @@ class PublicModelSearchAdapter:
                    if statistics_root_id is not None else {}),
                 runtime_sha256=self.runtime_sha256,
                 action=action, status="SELECTED", elapsed_seconds=elapsed,
-                nominal_search_seconds=self.configuration.seconds,
-                exceeded_nominal_seconds=arm != "raw" and elapsed > self.configuration.seconds,
+                **self._execution_receipt(elapsed, evidence),
                 evidence=evidence, independent_root_statistics=True, scientific_strength_evidence=False)
-            if self._value_diagnostics is not None:
+            if self._value_diagnostics is not None or self._owned_value_recipe is not None:
                 self._pending_value_diagnostics = (selected, digest(selected), measured)
             return selected
         except BaseException as error:
@@ -350,7 +391,7 @@ class PublicModelSearchAdapter:
             raise
 
     def finish_value_diagnostics(self, selected):
-        require(not self._closed and not self._poisoned and self._pending_value_diagnostics is not None,
+        require(getattr(self,"_owned_value_recipe",None) is None and not self._closed and not self._poisoned and self._pending_value_diagnostics is not None,
             "no live selected decision for visited-value labels")
         receipt, binding, measured = self._pending_value_diagnostics
         require(selected is receipt and digest(selected) == binding, "visited-value selected receipt changed")
@@ -366,6 +407,23 @@ class PublicModelSearchAdapter:
                 selected_receipt_sha256=binding, configuration_sha256=self.configuration.identity,
                 runtime_sha256=self.runtime_sha256, workers=workers,
                 labels_used_for_backup=False, scientific_strength_evidence=False)
+        except BaseException:
+            self._poisoned = True
+            raise
+
+    def finish_owned_reference_values(self, selected):
+        require(self._owned_value_recipe is not None and not self._closed and not self._poisoned
+            and self._pending_value_diagnostics is not None, "live owned reference value selection required")
+        receipt, binding, measured = self._pending_value_diagnostics
+        require(selected is receipt and digest(selected) == binding, "owned reference selected receipt changed")
+        self._pending_value_diagnostics = None
+        try:
+            values = self._pool.finish_diagnostics(measured)
+            self.close()  # Parent readback needs actual normal generation exits.
+            from .search_over_raw_reference_values import read_completed_reference_values
+            summary = read_completed_reference_values(self._pool, measured, values, self._owned_value_recipe)
+            return dict(schema="pokezero.selected-owned-reference-values.v1", root_id=selected["root_id"],
+                selected_receipt_sha256=binding, values=values, summary=summary)
         except BaseException:
             self._poisoned = True
             raise
