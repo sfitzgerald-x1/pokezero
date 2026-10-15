@@ -2542,7 +2542,9 @@ class ControlledFoulPlayBenchmarkResult:
             payload["trajectory_reference"] = {
                 **_reference_policy_config(self.config).to_dict(),
                 "checkpoint_sha256": self.checkpoint_sha256,
-                "policy_stats": self.policy_stats,
+                "policy_stats": (
+                    self.policy_stats
+                ),
                 "status": ("REFUSED" if (self.policy_stats or {}).get("refusals")
                     else "COMPLETE" if self.completed_games == self.config.games else "PARTIAL"),
             }

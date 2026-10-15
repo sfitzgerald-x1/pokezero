@@ -40,7 +40,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery.json"
+# The original receipt remains historical evidence; current-tree coverage comes
+# from a separate complete execution of the unchanged original battery.
+ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261015_reference.json"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import mutate_rollout_leaf_witness as harness  # noqa: E402
@@ -104,6 +106,12 @@ class RolloutLeafWitnessMutationBatteryTest(unittest.TestCase):
     def test_the_mutated_files_have_not_changed_since_the_recorded_run(self) -> None:
         """The counts are about a TREE. A recorded sweep over a tree that has since
         moved says nothing about this one."""
+        historical = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery.json"
+        self.assertEqual(
+            _sha256(historical),
+            "de99eed67b6570ba37c10584a470ab2416d738d672de86be9fad9e8d6fb4a3cc",
+            "the original receipt must remain unchanged, not relabelled as current",
+        )
         # TARGETS ARE NO LONGER ALL IN ONE DIRECTORY. B1's independent-deletion
         # mutants edit `scripts/foulplay_paired_eval.py` and
         # `scripts/foulplay_power_report.py` -- the two READ-path call sites, which are
