@@ -1002,7 +1002,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t6.reasons_incomplete` | 9 |
 | `t6.reasons_sound` | 13 |
 | `t6.rows_foreclosed_over_section_4_population_only` | R1, R23, R24 |
-| `t6.section_4_population_anchor` | reports/c138_known_gaps_ledger.md:601 |
+| `t6.section_4_population_anchor` | reports/c138_known_gaps_ledger.md:609 |
 | `t6.verdicts_unreachable` | 26 |
 | `t6.verdicts_withdrawn` | 1 |
 | `t6.workflow_steps_checking_out_showdown` | 1 |
