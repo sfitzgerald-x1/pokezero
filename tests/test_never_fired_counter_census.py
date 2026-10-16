@@ -229,13 +229,14 @@ _EXPECTED_COUNTER_ARTIFACTS = 408
 # The taxonomies, derived from source rather than transcribed.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_WORLD_UNSUPPORTED_REASONS = 41
+_EXPECTED_WORLD_UNSUPPORTED_REASONS = 43
 _EXPECTED_DIVERGENCE_CLASSES = 19
 
-# The 10 of 41 `EngineWorldUnsupported` reasons with nonzero recorded evidence somewhere
-# in the corpus. `substitute_origin_unknown` is the new, explicitly unmeasured 41st reason;
-# it must NOT be silently added to this fired set just because it was introduced after the
-# historical corpus. This list is not "fires in the c136 windows", which
+# The 10 of 43 `EngineWorldUnsupported` reasons with nonzero recorded evidence somewhere
+# in the corpus. `substitute_origin_unknown`, `transform_self_moves_malformed` and
+# `transform_self_hidden_power_unknown` were added after the historical measurements.
+# Their engineering fixtures are not new corpus measurements, so they must NOT be added
+# to this fired set. This list is not "fires in the c136 windows", which
 # is only four of them (`encore_move_unknown`, `materialization_blocker`,
 # `self_request_state_unsupported`, `volatile_unsupported`). The other six fired in
 # earlier eras or in the `docs/audit_artifacts` search grids, and a closed exit is not a
