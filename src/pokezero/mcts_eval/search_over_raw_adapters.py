@@ -54,8 +54,9 @@ def _incumbent_runtime(contract, showdown_root, seconds, *, leaf="model", policy
     from .policy_opponent_profile import make_profile_decider
 
     require(leaf in ("model", "hp_fraction", "raw_rollout"), "incumbent leaf requires an implemented model-tree valuation")
-    require(fixed_work_iterations is None or (type(fixed_work_iterations) is int and fixed_work_iterations == 16),
-        "fixed-work diagnostic requires sixteen iterations in each of four unchanged worlds")
+    require(fixed_work_iterations is None or (type(fixed_work_iterations) is int
+        and fixed_work_iterations in {16,80,256,1024}),
+        "fixed work requires a prospectively bound 64/320/1024/4096 total allocation over four worlds")
     decider = make_profile_decider(contract, showdown_root, arm="incumbent_mcts",
         mode="fixed_work" if fixed_work_iterations is not None else "matched_deadline",
         opponent_seed=0, deadline_ms=round(seconds * 1000),

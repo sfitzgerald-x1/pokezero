@@ -24,6 +24,27 @@ class RootInputUnavailable(ValueError):
     pass
 
 
+def capture_actor_boundary(env, archive, context, history=None):
+    """Called only by the original audited raw policy at its live source seam."""
+    from .search_over_raw_annotation_boundary import ActorAnnotationBoundary,_CAPTURE_ORIGIN
+    from .paper_reference_runtime import PublicRootRequest
+    from ..local_showdown import LocalShowdownEnv
+    from ..public_decision_corpus import PublicObservation
+    require(type(env) is LocalShowdownEnv and history is None,
+        "root probe requires the original live source seam without history replay")
+    pending = archive._public[context.decision_round_index][1]
+    request = PublicRootRequest.capture(context.public_materialization_state,
+        context.observation,pending_transition=pending)
+    actual = PublicRootRequest.capture(env.public_materialization_state("p1"),
+        context.observation,pending_transition=pending)
+    require(public_request_witness(actual) == public_request_witness(request),
+        "actual source root differs from archived request")
+    return ActorAnnotationBoundary(deepcopy(env._state_for_player("p1")),
+        PublicObservation.from_observation(context.observation),
+        public_request_witness(request)["public_request_sha256"],
+        bool(env.tier2_residuals_active()),_capture_origin=_CAPTURE_ORIGIN)
+
+
 def make_contract(namespace, seeds, excluded, authority):
     require(type(seeds) is list and len(seeds) == len(set(seeds)) == 32
         and all(type(s) is int and 0 <= s < 2**32 for s in seeds)
@@ -128,7 +149,8 @@ def encode_call(call, rows, observation, native, tables):
         native_option_priors=actual, native_recomputed_option_priors=gathered)
 
 
-def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=None, evidence_path=None):
+def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=None, evidence_path=None,
+                   accepted_iterations=64, leaf="model"):
     """Run the unchanged fixed-work constructor and native search; never labels."""
     from .search_over_raw_adapters import _incumbent_runtime
     from .search_over_raw_world_inputs import NativeWorldInputs,NativeInputHandle,_binding,validate_fixed_work_inputs
@@ -137,7 +159,12 @@ def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=
     from ..env import BattleStartOverride
     request = PublicRootRequest.capture(context.public_materialization_state,context.observation,pending_transition=pending)
     boundary.validate(request,checkpoint)
-    decider, policy, _ = _incumbent_runtime(checkpoint,checkpoint.showdown_root,1.,fixed_work_iterations=16)
+    require(type(accepted_iterations) is int and accepted_iterations in {64,320,1024,4096}
+        and leaf in {"model","hp_fraction"} and (oracle is None or leaf == "model"),
+        "explicit fixed total work and supported public leaf required")
+    per_world = accepted_iterations//4
+    decider, policy, _ = _incumbent_runtime(checkpoint,checkpoint.showdown_root,1.,
+        leaf=leaf,fixed_work_iterations=per_world)
     original = policy._native
     try:
         policy._annotation_source = boundary
@@ -147,7 +174,7 @@ def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=
             own = opening_team(request.state.self_initial_request,"p1",policy._set_source)
             policy._fixed_override = BattleStartOverride(player_teams={"p1":pack_team(own),
                 "p2":pack_team(oracle.opponent_team)},observation_format_id="gen3randombattle")
-        recorder = NativeWorldInputs(_binding(request),16,deadline_limited=False,record_atomic_work=True,
+        recorder = NativeWorldInputs(_binding(request),per_world,deadline_limited=False,record_atomic_work=True,
             record_construction=True,record_public_fold=True,expected_public_request=public_request_witness(request),
             pending_transition=pending)
         policy._world_attempt_observer = recorder.attempt
@@ -159,7 +186,24 @@ def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=
             "diagnostic cannot inherit a wall-clock decision ceiling")
         # Direct diagnostic dispatch deliberately includes forced roots rather
         # than production's single-action shortcut, so oracle calls are observed.
-        decision = policy._search(context,rng=random.Random(seed))
+        try:
+            decision = policy._search(context,rng=random.Random(seed))
+        except BaseException as error:
+            if evidence_path is not None:
+                from .search_over_raw_supervision import _safe_error_frames
+                try:
+                    _write_new(evidence_path,dict(status="UNVALIDATED_NATIVE_FAILURE",
+                        error_type=type(error).__name__,error_frames=_safe_error_frames(error),
+                        rows=recorder.rows,calls=recorder.calls))
+                except BaseException as receipt_error:
+                    raise error from receipt_error
+            # A specific adapter precondition, not a generic ValueError waiver.
+            # The representation is unsearchable; it receives no action/score.
+            if type(error) is ValueError and any(str(error).startswith(side+
+                    ".last_used_move must be 'move:<slot>' or 'switch:<idx>' with a numeric index")
+                    for side in ("side_one","side_two")):
+                raise RootInputUnavailable("engine_last_used_move_unrepresentable") from error
+            raise
         evidence = dict(total_iterations=policy.stats.total_iterations)
         manifest = recorder.finish(evidence,attempted=policy.stats.worlds_attempted,
             constructed=policy.stats.worlds_constructed,searched=policy.stats.worlds_searched)
@@ -169,7 +213,8 @@ def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=
                 search_metadata=decision.metadata))
         validate_fixed_work_inputs(evidence,arm="incumbent",binding=_binding(request),
             statistics_root_id=context.battle_id,construction_required=True,
-            expected_public_request_sha256=boundary.public_request_sha256,native_public_fold_required=True)
+            expected_public_request_sha256=boundary.public_request_sha256,native_public_fold_required=True,
+            iterations_per_world=per_world)
         from ..engine_search import _latch_encoder_tables_to_model_config
         from ..neural_policy import load_transformer_model_config
         # Production latches exporter defaults to the pinned checkpoint masks.
@@ -220,7 +265,11 @@ def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=
                 require(arm["model_prior"] is not None and arm["action_index"] is not None
                     and abs(arm["model_prior"]-actual_vector[arm["action_index"]]) < 2e-5,
                     "recorded model-prior telemetry differs from actual aggregate")
-        return dict(worlds=worlds,aggregated_prior=aggregate,calls=calls,
+        require(type(decision.action_index) is int and 0 <= decision.action_index < width
+            and context.observation.legal_action_mask[decision.action_index],
+            "fixed search returned no legal original action")
+        return dict(action=decision.action_index,leaf=leaf,accepted_target=accepted_iterations,
+            worlds=worlds,aggregated_prior=aggregate,calls=calls,
             actual_aggregated_prior=actual_vector,actual_model_argmax=None if override is None else override["model_argmax"],
             actual_native_evidence=manifest,search_metadata=decision.metadata,
             fixed_iterations=policy.stats.total_iterations,oracle_receipt=oracle.receipt() if oracle else None)
@@ -252,24 +301,7 @@ class RootPriorJob:
             for seed in spec["contract"]["panels"]["exploration"]["seeds"]:
                 captures = {}
                 def capture(env, archive, context, action, history):
-                    # Original audited raw-policy callback; no unused whole-
-                    # game actor-history recorder or extra observe() call.
-                    from .search_over_raw_annotation_boundary import _CAPTURE_ORIGIN
-                    from ..local_showdown import LocalShowdownEnv
-                    pending = archive._public[context.decision_round_index][1]
-                    require(type(env) is LocalShowdownEnv and history is None,
-                        "root probe requires the original live source seam without history replay")
-                    request = PublicRootRequest.capture(context.public_materialization_state,
-                        context.observation,pending_transition=pending)
-                    actual = PublicRootRequest.capture(env.public_materialization_state("p1"),
-                        context.observation,pending_transition=pending)
-                    require(public_request_witness(actual) == public_request_witness(request),
-                        "actual source root differs from archived request")
-                    captures[context.decision_round_index] = ActorAnnotationBoundary(
-                        deepcopy(env._state_for_player("p1")),
-                        PublicObservation.from_observation(context.observation),
-                        public_request_witness(request)["public_request_sha256"],
-                        bool(env.tier2_residuals_active()),_capture_origin=_CAPTURE_ORIGIN)
+                    captures[context.decision_round_index] = capture_actor_boundary(env,archive,context,history)
                 def guard():
                     require(time.time()-began < 3600,"root-prior emergency calendar cap")
                     require(hashlib.sha256(Path(self.spec_path).read_bytes()).hexdigest() == self.entry_sha256,

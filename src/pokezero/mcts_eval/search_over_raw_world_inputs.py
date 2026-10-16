@@ -802,7 +802,7 @@ def validate_timed_native_inputs(evidence, *, binding, iterations_per_world, bat
 
 def validate_fixed_work_inputs(evidence, *, arm, binding, statistics_root_id, construction_required=False,
                                expected_public_request_sha256=None, native_public_fold_required=False,
-                               compact_native_atomic_work=False):
+                               compact_native_atomic_work=False, iterations_per_world=16):
     """Observed input and commit reconciliation before result persistence.
 
     The actual adapter observes dispatch/return and owned first-use seams. This
@@ -810,6 +810,9 @@ def validate_fixed_work_inputs(evidence, *, arm, binding, statistics_root_id, co
     commits/exports/cleanup and native float32 atomic backups. Independent
     terminal-label truth and runtime qualification remain separate.
     """
+    require(type(iterations_per_world) is int and iterations_per_world in {16,80,256,1024}
+        and (arm == "incumbent" or iterations_per_world == 16),
+        "explicit supported native fixed allocation required; legacy default remains sixteen per world")
     require(arm in {"incumbent", "reference"} and type(evidence) is dict
         and type(statistics_root_id) is str and bool(statistics_root_id)
         and type(binding) is dict and set(binding) == {
@@ -900,7 +903,7 @@ def validate_fixed_work_inputs(evidence, *, arm, binding, statistics_root_id, co
                 and type(call.get("call_ordinal")) is int and call["call_ordinal"] == ordinal
                 and type(call.get("multiplicity")) is int and call["multiplicity"] == len(indices)
                 and type(call.get("requested_iterations")) is int
-                and call["requested_iterations"] == 16 * len(indices)
+                and call["requested_iterations"] == iterations_per_world * len(indices)
                 and type(call.get("completed_iterations")) is int
                 and call["completed_iterations"] == call["requested_iterations"]
                 and call.get("deadline_limited") is False and call.get("status") == "RETURNED"
@@ -928,7 +931,8 @@ def validate_fixed_work_inputs(evidence, *, arm, binding, statistics_root_id, co
                 "native atomic validation receipt drift")
             covered.extend(indices)
         require(sorted(covered) == list(range(4))
-            and type(evidence.get("total_iterations")) is int and evidence["total_iterations"] == 64,
+            and type(evidence.get("total_iterations")) is int
+            and evidence["total_iterations"] == 4*iterations_per_world,
             "native fixed input/work coverage drift")
     return digest(manifest)
 
