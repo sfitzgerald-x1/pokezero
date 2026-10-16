@@ -63,12 +63,17 @@ class CompareTest(unittest.TestCase):
         self.assertTrue(math.isfinite(out["kl"]))
         self.assertEqual(out["tv"], 0.5)
 
-    def test_gate_uses_unrounded_distance_and_keeps_full_precision_vectors(self) -> None:
+    def test_gate_uses_unrounded_distance_and_keeps_pre_display_vectors(self) -> None:
         out = live.compare({0: .75, 1: .25}, {0: .750000001, 1: .249999999})
         self.assertGreater(out["tv"], 0.)
         self.assertEqual(round(out["tv"], 4), 0.)
-        self.assertEqual(out["native_prior_full_precision"]["0"], .750000001)
+        self.assertEqual(out["native_prior_pre_display"]["0"], .750000001)
         self.assertFalse(live.gate_verdict([{"variants": {"sampled4": out}}], ["sampled4"], 0.)["passed"])
+
+    def test_exact_witness_does_not_renormalize_away_proportional_differences(self) -> None:
+        out=live.compare({0:.75,1:.25},{0:.75000075,1:.25000025})
+        self.assertEqual(out["native_prior_pre_display"],{"0":.75000075,"1":.25000025})
+        self.assertEqual(out["native_prior"],{"0":.75,"1":.25})
 
 
 class FindKeyTest(unittest.TestCase):
@@ -117,6 +122,19 @@ class ArchivedRootsTest(unittest.TestCase):
 
 
 class BindingDriftTest(unittest.TestCase):
+    def test_unsupported_model_tree_hp_leaf_refuses_before_inputs_or_runtime(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(live,"EngineMctsConfig",object))
+            binding=stack.enter_context(patch.object(live,"input_binding"))
+            engine=stack.enter_context(patch.object(live,"EngineMctsPolicy"))
+            env=stack.enter_context(patch.object(live,"LocalShowdownEnv"))
+            with self.assertRaises(SystemExit) as refused:
+                live.main(["--checkpoint","/missing/checkpoint","--model-ts","/missing/model",
+                    "--tables","/missing/tables","--showdown-root","/missing/showdown",
+                    "--seeds","12","--leaf","hp_fraction","--out","/missing/report.json"])
+            self.assertEqual(refused.exception.code,2)
+            binding.assert_not_called();engine.assert_not_called();env.assert_not_called()
+
     def test_drift_before_reload_or_final_publication_keeps_report_incomplete(self):
         for seeds in ([12,13],[12]):
             with self.subTest(seeds=seeds),tempfile.TemporaryDirectory() as folder,ExitStack() as stack:

@@ -25,8 +25,10 @@ fresh worlds at every boundary from one per-game stream, closer to a live collec
 
 With --collector-report, exit status instead enforces the separate exact collector-native
 versus independently rerun live-native gate on the collector's declared roster. It requires
-full-precision distributions, complete action mapping, original boundary fingerprints and
+pre-display production aggregates, complete action mapping, original boundary fingerprints and
 matching code/runtime/configuration bindings; it never substitutes the raw/native tolerance.
+Native serializer quantization remains part of this quantity; original model float32 priors
+are not recovered or claimed equal.
 
 Usage:
     PYTHONPATH=src python scripts/live_root_prior_check.py --checkpoint <ckpt.pt> --model-ts <model_ts.pt> \
@@ -100,6 +102,7 @@ def gate_verdict(rows: list[dict[str, Any]], variants: list[str], gate_tv: float
 
 
 def compare(py: dict[int, float], nat: dict[int, float]) -> dict[str, Any]:
+    original_native = dict(nat)
     z = sum(nat.values()) or 1.0
     nat = {a: v / z for a, v in nat.items()}
     pa = max(py, key=py.get)
@@ -109,7 +112,7 @@ def compare(py: dict[int, float], nat: dict[int, float]) -> dict[str, Any]:
     return dict(python_argmax=pa, native_argmax=na, agree=(pa == na), tv=tv, kl=kl,
                 native_prior={str(a): round(v, 5) for a, v in sorted(nat.items())},
                 python_prior={str(a): round(v, 5) for a, v in sorted(py.items())},
-                native_prior_full_precision={str(a): v for a, v in sorted(nat.items())},
+                native_prior_pre_display={str(a): v for a, v in sorted(original_native.items())},
                 python_prior_full_precision={str(a): v for a, v in sorted(py.items())})
 
 
@@ -127,12 +130,16 @@ def main(argv=None) -> int:
     parser.add_argument("--variants", nargs="+", choices=("sampled4", "sampled1", "oracle"),
                         default=["sampled4", "sampled1", "oracle"])
     parser.add_argument("--leaf", choices=("model", "hp_fraction"), default="model")
+    parser.add_argument("--strict-fallbacks",action="store_true",
+        help="match a strict collector; refusals remain explicit unavailable comparisons")
     parser.add_argument("--collector-report", type=Path,
         help="require exact unrounded collector-native/live-native correspondence on its declared roster")
     parser.add_argument("--dump-first-metadata", action="store_true")
     parser.add_argument("--gate-tv", type=float, default=0.1, help="exit 1 if any decision exceeds this total variation or flips the argmax")
     parser.add_argument("--world-rng", choices=("per-decision", "per-game"), default="per-decision")
     args = parser.parse_args(argv)
+    if args.leaf=="hp_fraction" and not hasattr(EngineMctsConfig,"model_leaf_override"):
+        parser.error("this runtime does not implement the model-tree HP leaf override")
     if args.out.exists():
         parser.error("out must be a fresh path; historical evidence cannot be overwritten")
     if args.sims <= 0 or len(set(args.seeds)) != len(args.seeds) or len(set(args.variants)) != len(args.variants):
@@ -154,11 +161,14 @@ def main(argv=None) -> int:
 
     def engine_config(worlds: int) -> EngineMctsConfig:
         return EngineMctsConfig(
-                worlds=worlds, search_time_ms=5000, threads=1, leaf_eval=args.leaf,
+                worlds=worlds, search_time_ms=5000, threads=1, leaf_eval="model",
                 model_path=str(args.model_ts), checkpoint_path=str(args.checkpoint), model_device="cpu",
                 tables_path=str(args.tables), search_sims=args.sims, search_batch=16, search_depth=6,
                 c_puct=1.4, deep_ko_split=True, model_priors=True, use_opponent_priors=False,
-                override_telemetry=True, early_stop=False, model_world_workers=1,
+                override_telemetry=True, root_prior_exact_aggregate=True,
+                early_stop=False, model_world_workers=1,
+                strict_fallbacks=args.strict_fallbacks or args.leaf=="hp_fraction",
+                **({"model_leaf_override":"hp_fraction"} if args.leaf=="hp_fraction" else {}),
             )
 
     templates = {name: engine_config(4 if name == "sampled4" else 1) for name in args.variants}
@@ -239,7 +249,14 @@ def main(argv=None) -> int:
                         row["variants"][name] = dict(error="no root_allocation arms in metadata", keys=list(md.keys())[:12])
                         continue
                     unmapped = sum(1 for a in arms if a.get("action_index") is None)
-                    nat = {int(a["action_index"]): float(a.get("model_prior", 0.0)) for a in arms if a.get("action_index") is not None}
+                    pre_display = all("model_prior_pre_display" in a for a in arms)
+                    prior_field = "model_prior_pre_display" if pre_display else "model_prior"
+                    try:
+                        nat = {int(a["action_index"]): float(a[prior_field])
+                            for a in arms if a.get("action_index") is not None}
+                    except (TypeError, ValueError, KeyError):
+                        row["variants"][name] = dict(error="native prior is unavailable")
+                        continue
                     mapped_count = sum(a.get("action_index") is not None for a in arms)
                     if mapped_count != len(nat):
                         row["variants"][name] = dict(error="duplicate native action mapping")
@@ -252,6 +269,9 @@ def main(argv=None) -> int:
                             row["variants"][name] = dict(error="every arm lacks an action_index", unmapped_arms=unmapped)
                         continue
                     out = compare(py, nat)
+                    out["prior_precision"] = "production_aggregate_before_python_display" if pre_display else "legacy_six_decimal"
+                    if not pre_display:
+                        out.pop("native_prior_pre_display")
                     if unmapped:
                         out["unmapped_arms"] = unmapped
                     out.update(engine_action=d.action_index, model_argmax=find_key(md, "model_argmax"),

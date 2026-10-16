@@ -1,7 +1,9 @@
 """Exact collector-to-live correspondence, distinct from raw/native parity.
 
 This reader checks declared inputs, boundary identity, complete action mapping
-and unrounded distributions. It is not a source-process or outcome validator.
+and production aggregates before Python display rounding. Upstream native
+serializer quantization is retained; original model float32s are not recovered.
+It is not a source-process or outcome validator.
 """
 from __future__ import annotations
 
@@ -121,9 +123,9 @@ def _vector(row, variant):
     item = row["variants"][variant]
     if "error" in item or item.get("unmapped_arms", 0) != 0:
         raise ValueError("unavailable or partially mapped native prior")
-    prior = item.get("native_prior_full_precision")
+    prior = item.get("native_prior_pre_display")
     if type(prior) is not dict or set(prior) != {str(a) for a in legal}:
-        raise ValueError("full-precision prior over every legal action required")
+        raise ValueError("pre-display production aggregate over every legal action required")
     values = [prior[str(a)] for a in sorted(legal)]
     if any(type(p) not in (int, float) or not math.isfinite(p) or p < 0 for p in values) \
             or not math.isclose(math.fsum(values), 1., rel_tol=0., abs_tol=2e-5):
@@ -141,7 +143,7 @@ def exact_collector_gate(collector, live):
     """
     errors = []
     if collector.get("schema") != SCHEMA or live.get("schema") != SCHEMA:
-        errors.append("full_precision_report_schema_required")
+        errors.append("pre_display_aggregate_report_schema_required")
     if collector.get("complete") is not True or live.get("complete") is not True:
         errors.append("both_reports_must_be_closed")
     bindings = collector.get("bindings")
@@ -192,6 +194,7 @@ def exact_collector_gate(collector, live):
         except (KeyError, TypeError, ValueError) as error:
             errors.append(dict(seed=key[0], round=key[1], variant=key[2], reason=str(error)))
     return dict(comparison="collector_native_vs_independent_live_native", gate_tv=0.,
+        prior_quantity="production aggregate before Python display rounding; upstream native serializer quantization retained",
         expected=len(expected), compared=compared, mismatches=mismatches, errors=errors,
         passed=bool(expected) and compared == len(expected) and not errors and not mismatches,
         scope="declared roster/input correspondence only; not source, work-count, outcome or panel-completeness qualification")

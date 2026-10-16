@@ -20,7 +20,7 @@ class ExactCollectorGateTests(unittest.TestCase):
         return dict(schema=SCHEMA, complete=True, bindings=binding,
             expected=[dict(seed=12, round=7, variant="sampled4")],
             rows=[dict(seed=12, round=7, boundary_sha256="c"*64, legal=[0, 2],
-                variants={"sampled4": dict(native_prior_full_precision={"0": .75, "2": .25})})])
+                variants={"sampled4": dict(native_prior_pre_display={"0": .75, "2": .25})})])
 
     def test_exact_join_passes_and_live_extras_do_not_replace_expected_boundaries(self):
         left=self.report();right=deepcopy(left)
@@ -32,7 +32,7 @@ class ExactCollectorGateTests(unittest.TestCase):
 
     def test_tiny_difference_fails_before_display_rounding(self):
         left=self.report();right=deepcopy(left)
-        right["rows"][0]["variants"]["sampled4"]["native_prior_full_precision"]={"0":.750000001,"2":.249999999}
+        right["rows"][0]["variants"]["sampled4"]["native_prior_pre_display"]={"0":.750000001,"2":.249999999}
         verdict=exact_collector_gate(left,right)
         self.assertFalse(verdict["passed"])
         self.assertGreater(verdict["mismatches"][0]["tv"],0.)
@@ -40,7 +40,7 @@ class ExactCollectorGateTests(unittest.TestCase):
 
     def test_never_renormalizes_changed_recorded_values_to_make_them_equal(self):
         left=self.report();right=deepcopy(left)
-        right["rows"][0]["variants"]["sampled4"]["native_prior_full_precision"]={"0":.75000075,"2":.25000025}
+        right["rows"][0]["variants"]["sampled4"]["native_prior_pre_display"]={"0":.75000075,"2":.25000025}
         self.assertFalse(exact_collector_gate(left,right)["passed"])
 
     def test_requires_closed_reports_exact_inputs_and_nonempty_unique_roster(self):
@@ -67,11 +67,11 @@ class ExactCollectorGateTests(unittest.TestCase):
             elif mode=="duplicate":right["rows"].append(deepcopy(row))
             elif mode=="boundary":row["boundary_sha256"]="d"*64
             elif mode=="legal":row["legal"]=[0,1]
-            elif mode=="rounded":item["native_prior"]=item.pop("native_prior_full_precision")
+            elif mode=="rounded":item["native_prior"]=item.pop("native_prior_pre_display")
             elif mode=="unmapped":item["unmapped_arms"]=1
             elif mode=="error":item["error"]="fallback"
             elif mode=="boolean_index":row["round"]=True
-            else:item["native_prior_full_precision"]["2"]={
+            else:item["native_prior_pre_display"]["2"]={
                 "negative":-.25,"boolean":True,"nan":float("nan"),"not_normalized":.5}[mode]
             with self.subTest(mode=mode):self.assertFalse(exact_collector_gate(left,right)["passed"])
 
