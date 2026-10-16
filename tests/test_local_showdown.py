@@ -494,6 +494,70 @@ class BranchObservationTimingTest(unittest.TestCase):
 
 @unittest.skipIf(integration_config() is None, "requires node and built Pokemon Showdown checkout")
 class LocalShowdownIntegrationTest(unittest.TestCase):
+    def test_actionable_snapshot_preserves_original_forced_switch_public_request(self) -> None:
+        from pokezero.mcts_eval.search_over_raw import digest
+        from pokezero.mcts_eval.search_over_raw_world_inputs import _state_payload
+
+        config = integration_config()
+        assert config is not None
+        config = replace(config, set_belief_source=True)
+        teams = BattleStartOverride(player_teams={
+            "p1": pack_team((
+                FixturePokemon(species="Magikarp", ability="Swift Swim", moves=("Splash",), level=1),
+                FixturePokemon(species="Snorlax", ability="Immunity", moves=("Body Slam",), level=80),
+            )),
+            "p2": pack_team((
+                FixturePokemon(species="Mewtwo", ability="Pressure", moves=("Psychic",), level=100),
+            )),
+        })
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=17, start_override=teams)
+            env.step({"p1": 0, "p2": 0})
+            observation = env.observe("p1")
+            original = env.public_materialization_state("p1")
+            self.assertEqual(original.self_request.get("forceSwitch"), [True])
+            snapshot = env.snapshot_actionable_boundary()
+            self.assertEqual(snapshot.latest_requests["p1"], original.self_request)
+            with LocalShowdownEnv(config) as restored:
+                restored._restore_local_snapshot_state(snapshot)
+                actual = restored.public_materialization_state("p1")
+                self.assertEqual(digest(_state_payload(actual)), digest(_state_payload(original)))
+                self.assertEqual(restored.observe("p1"), observation)
+
+    def test_actionable_snapshot_preserves_residual_faint_request(self) -> None:
+        from pokezero.mcts_eval.search_over_raw import digest
+        from pokezero.mcts_eval.search_over_raw_world_inputs import _state_payload
+
+        config = integration_config()
+        assert config is not None
+        config = replace(config, set_belief_source=True)
+        teams = BattleStartOverride(player_teams={
+            "p1": pack_team((
+                FixturePokemon(species="Magikarp", ability="Swift Swim", moves=("Tackle",), level=1),
+                FixturePokemon(species="Snorlax", ability="Immunity", moves=("Body Slam",), level=80),
+            )),
+            "p2": pack_team((
+                FixturePokemon(species="Tyranitar", ability="Sand Stream", moves=("Splash",),
+                    item="Leftovers", level=80),
+            )),
+        })
+        with LocalShowdownEnv(config) as env:
+            env.reset_with_start_override(seed=17, start_override=teams)
+            for _ in range(20):
+                env.step({"p1": 0, "p2": 0})
+                if env._latest_requests["p1"].get("forceSwitch"):
+                    break
+            observation = env.observe("p1")
+            original = env.public_materialization_state("p1")
+            self.assertEqual(original.self_request.get("forceSwitch"), [True])
+            snapshot = env.snapshot_actionable_boundary()
+            self.assertEqual(snapshot.latest_requests["p1"], original.self_request)
+            with LocalShowdownEnv(config) as restored:
+                restored._restore_local_snapshot_state(snapshot)
+                actual = restored.public_materialization_state("p1")
+                self.assertEqual(digest(_state_payload(actual)), digest(_state_payload(original)))
+                self.assertEqual(restored.observe("p1"), observation)
+
     def test_scenario_materialization_latches_active_hp_pp_and_can_step(self) -> None:
         config = integration_config()
         assert config is not None

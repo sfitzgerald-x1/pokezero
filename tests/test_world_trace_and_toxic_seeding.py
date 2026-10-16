@@ -41,6 +41,28 @@ from pokezero.showdown import ShowdownPokemon, _ReplayParser, _update_toxic_stag
 class ToxicStageParserTest(unittest.TestCase):
     """W2, parser half — which status lines end the ramp."""
 
+    def test_pending_faint_roundtrips_after_upkeep_before_forced_replacement(self) -> None:
+        for side in ("p1", "p2"):
+            with self.subTest(side=side):
+                parser = _ReplayParser("pending-faint-after-upkeep", complete_prefix=True)
+                parser.feed([
+                    "|switch|p1a: One|One, L80, M|100/100",
+                    "|switch|p2a: Two|Two, L80, F|100/100",
+                    "|turn|1",
+                    f"|-damage|{side}a: {'One' if side == 'p1' else 'Two'}|0 fnt|[from] Sandstorm",
+                    f"|faint|{side}a: {'One' if side == 'p1' else 'Two'}",
+                    "|upkeep",
+                ])
+                snapshot = parser.snapshot()
+                self.assertTrue(snapshot.post_upkeep_window)
+                self.assertTrue(snapshot.toxic_faint_replacement_pending[side])
+                restored = _ReplayParser.from_snapshot(snapshot)
+                self.assertEqual(restored.snapshot(), snapshot)
+                suffix = [f"|switch|{side}a: Replacement|Replacement, L80, M|90/100 tox", "|turn|2"]
+                parser.feed(suffix)
+                restored.feed(suffix)
+                self.assertEqual(restored.snapshot(), parser.snapshot())
+
     @staticmethod
     def _percentage_reentry_parser(event: str, *, include_second_tick: bool = False) -> _ReplayParser:
         """Return a public `/100` Toxic re-entry through an ordinary or forced switch.

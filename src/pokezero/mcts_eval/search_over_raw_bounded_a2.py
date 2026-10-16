@@ -457,6 +457,7 @@ class BoundedA2Job:
     spec_path: str
     spec_sha256: str
     def __call__(self, ownership, phase):
+        phase("startup")
         spec,config,continuation,checkpoint = read_spec(self.spec_path,expected_sha=self.spec_sha256)
         status = "BOUNDED_"+experiment(spec["contract"])+"_RECORDED"
         output = Path(spec["output_directory"])

@@ -3,6 +3,7 @@ from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from types import SimpleNamespace
 
 from pokezero.mcts_eval import search_over_raw_bounded_a2 as a2
@@ -17,6 +18,22 @@ def specimen(stage="A2"):
 
 
 class BoundedA2Tests(unittest.TestCase):
+    def test_clean_worker_return_has_all_required_supervisor_phases(self):
+        from pokezero.mcts_eval.search_over_raw_supervision import _phase_costs
+        import time
+
+        with tempfile.TemporaryDirectory() as directory:
+            spec = specimen()
+            spec["output_directory"] = directory
+            spec["contract"]["panels"]["exploration"]["seeds"] = []
+            phases = []
+            with patch.object(a2, "read_spec", return_value=(spec, None, None, None)):
+                result = a2.BoundedA2Job("/authored/spec.json", "a"*64)(
+                    None, lambda name: phases.append(dict(phase=name, monotonic_seconds=time.monotonic())))
+            self.assertEqual(result["status"], "BOUNDED_A2_RECORDED")
+            self.assertEqual([row["phase"] for row in phases], ["startup", "selection", "cleanup"])
+            self.assertGreaterEqual(_phase_costs(phases, time.monotonic())["startup_wall_seconds"], 0.)
+
     def test_exact_two_leaf_contract_exploration_only(self):
         c=specimen()["contract"]
         validate_contract(c)

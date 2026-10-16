@@ -2248,7 +2248,10 @@ class _ReplayParser:
             parser.toxic_faint_replacement_pending[slot] = (
                 snapshot_faint_replacement_pending.get(slot) is True
                 and parser.toxic_faint_replacement_invalid[slot] is False
-                and snapshot_post_upkeep_window is False
+                # A canonical faint can precede the turn's upkeep while its
+                # forced replacement is still pending. Preserve that live
+                # latch on either side of upkeep; malformed windows were
+                # already rejected above, not repaired into provenance.
                 and isinstance(expected_ident, str)
                 and _is_active_protocol_ident(expected_ident)
                 and _is_current_public_active(active)
