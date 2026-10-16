@@ -17,9 +17,9 @@ from test_search_over_raw_native_atomic_work import native_report
 
 
 class FixedExplorationTests(unittest.TestCase):
-    def contract(self,total=320):
+    def contract(self,total=320,*,compact=False):
         return fixed.contract("51f8beec-d601-4fdc-ab73-f0517cd05001",list(range(100,132)),[1,2,3],
-            dict(path="/authored/steer",sha256="a"*64),total)
+            dict(path="/authored/steer",sha256="a"*64),total,compact=compact)
 
     def test_total_budget_is_not_four_times_the_requested_work_or_a_deadline(self):
         for total,per_world,leaves in ((320,80,["model","hp_fraction"]),(1024,256,["model"]),(4096,1024,["model"])):
@@ -114,7 +114,8 @@ class FixedExplorationTests(unittest.TestCase):
         from test_search_over_raw_outcome_run import OutcomeRunTests,SyntheticContinuationJob
         from test_search_over_raw_outcomes import BINDING,NAMESPACE
         from pokezero.mcts_eval.search_over_raw_outcome_run import OwningRunValidator
-        for admit_synthetic in (True,False):
+        for admit_synthetic,total,compact in ((True,320,False),(False,320,False),
+                (True,4096,True),(False,4096,True)):
             fixture=OutcomeRunTests();fixture.setUp()
             try:
                 binding=deepcopy(BINDING)
@@ -127,12 +128,12 @@ class FixedExplorationTests(unittest.TestCase):
                 source=dict(source_seed=binding["source_seed"],roots=[root],missing_root_ids=[])
                 checkpoint=SimpleNamespace(showdown_root="/authored",checkpoint_sha256="a"*64,
                     showdown_source_sha256="a"*64)
-                spec=dict(contract={**self.contract(),"namespace":NAMESPACE},source_runtime=fixture.runtime,
+                spec=dict(contract={**self.contract(total,compact=compact),"namespace":NAMESPACE},source_runtime=fixture.runtime,
                     output_directory=str(fixture.root),checkpoint_contract={})
                 raw_job=Mock(return_value=dict(action=0))
                 def select(*args,leaf,**kwargs):
                     return dict(action=1 if leaf=="model" else 0,actual_native_evidence={},actual_model_argmax=0,
-                        accepted_target=320,fixed_iterations=320)
+                        accepted_target=total,fixed_iterations=total)
                 def reader(**kwargs):
                     return OwningRunValidator(**kwargs,allow_synthetic=admit_synthetic)
                 with patch("pokezero.mcts_eval.search_over_raw_archive.retained_archive_root_identity",return_value="frozen"), \
@@ -152,7 +153,9 @@ class FixedExplorationTests(unittest.TestCase):
                         SimpleNamespace(validate=Mock()),directory,{},Mock())
                     row["receipt_files"]=fixed._pins(directory)
                     self.assertEqual(fixed.read_completed_root(spec,row,source),row)
-                    raw_reader.assert_called_once();self.assertEqual(native_reader.call_count,2)
+                    self.assertEqual(native_reader.call_args.kwargs["compact_fixed_public_fold"],compact)
+                    raw_reader.assert_called_once()
+                    self.assertEqual(native_reader.call_count,len(spec["contract"]["leaves"]))
                     for key,value in (("actions",dict(raw=0,model=0)),("intervals",{}),("cells",[])):
                         changed={**row,key:value}
                         with self.assertRaises(ValueError):fixed.read_completed_root(spec,changed,source)
@@ -161,8 +164,9 @@ class FixedExplorationTests(unittest.TestCase):
                 self.assertEqual(len(row["cells"]),16)  # HP aliases raw; never a third bank.
                 self.assertEqual({c["validated"] for c in row["cells"]},{admit_synthetic})
                 self.assertEqual(row["intervals"]["model"],[0.,0.] if admit_synthetic else [-1.,1.])
-                self.assertEqual(row["intervals"]["hp_fraction"],[0.,0.])
-                self.assertEqual(row["actions"],dict(raw=0,model=1,hp_fraction=0))
+                if not compact:self.assertEqual(row["intervals"]["hp_fraction"],[0.,0.])
+                self.assertEqual(row["actions"],dict(raw=0,model=1) if compact
+                    else dict(raw=0,model=1,hp_fraction=0))
             finally:fixture.doCleanups()
 
     def test_prepared_entry_requires_complete_inventory_and_exact_checkpoint_runtime_join(self):
@@ -190,6 +194,10 @@ class FixedExplorationTests(unittest.TestCase):
                     lambda s:s.update(checkpoint_contract=_state_payload(replace(checkpoint,model_sha256="b"*64)))):
                 changed=deepcopy(spec);mutate(changed);path.write_text(json.dumps(changed))
                 with self.assertRaises(ValueError):fixed.read_spec(path)
+            compact=fixed.prepare(fixture.root/"compact-entry",parent,authority,4096,compact=True)
+            prepared,_,_=fixed.read_spec(Path(compact["entry_spec"]))
+            self.assertEqual(prepared["schema"],fixed.COMPACT_SCHEMA+".entry")
+            self.assertEqual(prepared["contract"]["native_atomic_encoding"],"native-atomic-backups-compact-v2")
         finally:fixture.doCleanups()
 
 

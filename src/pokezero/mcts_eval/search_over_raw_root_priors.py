@@ -150,7 +150,7 @@ def encode_call(call, rows, observation, native, tables):
 
 
 def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=None, evidence_path=None,
-                   accepted_iterations=64, leaf="model"):
+                   accepted_iterations=64, leaf="model", compact_native_atomic_work=False):
     """Run the unchanged fixed-work constructor and native search; never labels."""
     from .search_over_raw_adapters import _incumbent_runtime
     from .search_over_raw_world_inputs import NativeWorldInputs,NativeInputHandle,_binding,validate_fixed_work_inputs
@@ -162,6 +162,9 @@ def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=
     require(type(accepted_iterations) is int and accepted_iterations in {64,320,1024,4096}
         and leaf in {"model","hp_fraction"} and (oracle is None or leaf == "model"),
         "explicit fixed total work and supported public leaf required")
+    require(type(compact_native_atomic_work) is bool and (not compact_native_atomic_work or
+        accepted_iterations == 4096 and leaf == "model" and oracle is None),
+        "compact public-fold measurement is the separately bound fixed4096 model route only")
     per_world = accepted_iterations//4
     decider, policy, _ = _incumbent_runtime(checkpoint,checkpoint.showdown_root,1.,
         leaf=leaf,fixed_work_iterations=per_world)
@@ -176,7 +179,8 @@ def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=
                 "p2":pack_team(oracle.opponent_team)},observation_format_id="gen3randombattle")
         recorder = NativeWorldInputs(_binding(request),per_world,deadline_limited=False,record_atomic_work=True,
             record_construction=True,record_public_fold=True,expected_public_request=public_request_witness(request),
-            pending_transition=pending)
+            pending_transition=pending,
+            **({"record_compact_atomic_work":True} if compact_native_atomic_work else {}))
         policy._world_attempt_observer = recorder.attempt
         policy._world_observer = recorder.constructed
         policy._world_construction_observer = recorder.world_built
@@ -214,7 +218,8 @@ def native_measure(context, boundary, checkpoint, seed, *, pending=None, oracle=
         validate_fixed_work_inputs(evidence,arm="incumbent",binding=_binding(request),
             statistics_root_id=context.battle_id,construction_required=True,
             expected_public_request_sha256=boundary.public_request_sha256,native_public_fold_required=True,
-            iterations_per_world=per_world)
+            iterations_per_world=per_world,compact_native_atomic_work=compact_native_atomic_work,
+            compact_fixed_public_fold=compact_native_atomic_work)
         from ..engine_search import _latch_encoder_tables_to_model_config
         from ..neural_policy import load_transformer_model_config
         # Production latches exporter defaults to the pinned checkpoint masks.

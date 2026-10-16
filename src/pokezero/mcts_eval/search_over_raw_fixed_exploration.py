@@ -19,15 +19,18 @@ from .search_over_raw_root_priors import capture_actor_boundary,native_measure,R
 from .search_over_raw_world_inputs import _state_payload,public_request_witness,compare_world_inputs
 
 SCHEMA="pokezero.search-over-raw.fixed-total-exploration.v1"
+COMPACT_SCHEMA="pokezero.search-over-raw.fixed-total-exploration.compact-v2"
 
 
-def contract(namespace,seeds,excluded,authority,total):
+def contract(namespace,seeds,excluded,authority,total,*,compact=False):
     from .search_over_raw_bounded_a2 import contract as bounded_contract
     c=bounded_contract(namespace,seeds,excluded,authority)
     for name in ("schema","configurations","attempt_wall_seconds","execution_ready"):
         c.pop(name)
     require(type(total) is int and total in {320,1024,4096},"reviewed total accepted iteration budget required")
-    return dict(c,schema=SCHEMA,accepted_native_iterations_total=total,
+    require(type(compact) is bool and (not compact or total==4096),
+        "compact evidence is separately scoped to the fixed4096 exploration")
+    result=dict(c,schema=COMPACT_SCHEMA if compact else SCHEMA,accepted_native_iterations_total=total,
         native_iterations_per_world=total//4,native_worlds=4,native_batch=16,
         leaves=["model","hp_fraction"] if total==320 else ["model"],
         wall_clock_search_budget=None,emergency_calendar_seconds=28800,
@@ -35,11 +38,16 @@ def contract(namespace,seeds,excluded,authority,total):
         raw_control="one original archived public-request forward",
         continuation_alias_rule="eight cells per unique selected action, including all-raw aliases",
         complete_case_inference_authorized=False)
+    if compact:
+        from .search_over_raw_native_atomic_compact import SCHEMA as ENCODING
+        result["native_atomic_encoding"]=ENCODING
+    return result
 
 
 def validate_contract(c):
     require(digest(c)==digest(contract(c["namespace"],c["panels"]["exploration"]["seeds"],
-        c["excluded_seeds"],c["authority"],c["accepted_native_iterations_total"])),"fixed-work exploration contract drift")
+        c["excluded_seeds"],c["authority"],c["accepted_native_iterations_total"],
+        compact=c.get("schema")==COMPACT_SCHEMA)),"fixed-work exploration contract drift")
 
 
 def read_spec(path):
@@ -51,7 +59,7 @@ def read_spec(path):
     s=json.loads(Path(path).read_bytes())
     require(set(s)=={"schema","contract","source_config","checkpoint_contract","source_runtime",
         "exposure_inventory","input_hashes","output_directory","interpretation"}
-        and s["schema"]==SCHEMA+".entry","exact fixed-work entry schema required")
+        and s["schema"]==s["contract"]["schema"]+".entry","exact fixed-work entry schema required")
     validate_contract(s["contract"])
     config,checkpoint=_decode(s["source_config"]),_decode(s["checkpoint_contract"])
     source_recipe(config,checkpoint,s["source_runtime"],capture_actor_history=False)
@@ -66,7 +74,7 @@ def read_spec(path):
     return s,config,checkpoint
 
 
-def prepare(directory,parent_entry,authority_path,total):
+def prepare(directory,parent_entry,authority_path,total,*,compact=False):
     import secrets
     import sys
     import uuid
@@ -82,7 +90,8 @@ def prepare(directory,parent_entry,authority_path,total):
         seed=secrets.randbits(32)
         if seed not in excluded and seed not in seeds:seeds.append(seed)
     authority_path=Path(authority_path).resolve()
-    c=contract(str(uuid.uuid4()),seeds,excluded,dict(path=str(authority_path),sha256=sha(authority_path)),total)
+    c=contract(str(uuid.uuid4()),seeds,excluded,dict(path=str(authority_path),sha256=sha(authority_path)),total,
+        compact=compact)
     exposure={**parent["exposure_inventory"],str(parent_path):sha(parent_path)}
     require(all(sha(p)==h for p,h in exposure.items()),"prior exposure evidence drift")
     extras=[p for p in parent["input_hashes"] if p.endswith((".so",".dylib"))]
@@ -93,7 +102,7 @@ def prepare(directory,parent_entry,authority_path,total):
         str(authority_path):sha(authority_path),str(Path(sys.executable).resolve()):sha(Path(sys.executable).resolve()),
         str(cli):sha(cli)}
     directory=Path(directory).resolve();directory.mkdir(parents=True,exist_ok=False,mode=0o700)
-    s=dict(schema=SCHEMA+".entry",contract=c,source_config=_state_payload(config),
+    s=dict(schema=c["schema"]+".entry",contract=c,source_config=_state_payload(config),
         checkpoint_contract=_state_payload(checkpoint),source_runtime=runtime,
         exposure_inventory=exposure,input_hashes=files,output_directory=str(directory/"run"),
         interpretation="Exploratory fixed TOTAL native work, not seconds or per-world nominal sims. Eight paired raw-policy continuations per unique selected action; missing/refused/unvalidated cells stay uncertain. No holdout, strength claim, or historical-roster reuse.")
@@ -139,7 +148,8 @@ def measure_root(s,config,checkpoint,archive,source,root,boundary,directory,owne
         try:
             selection=native_measure(context,boundary,checkpoint,source["source_seed"],pending=pending,
                 accepted_iterations=s["contract"]["accepted_native_iterations_total"],leaf=leaf,
-                evidence_path=directory/(leaf+"-native-inputs.json"))
+                evidence_path=directory/(leaf+"-native-inputs.json"),
+                **({"compact_native_atomic_work":True} if s["contract"]["schema"]==COMPACT_SCHEMA else {}))
             selections[leaf]=selection;actions[leaf]=selection["action"]
             _write_new(directory/(leaf+"-selected.json"),selection)
         except RootInputUnavailable as error:
@@ -241,7 +251,9 @@ def read_completed_root(s,row,source):
         validate_fixed_work_inputs(dict(total_iterations=sel["fixed_iterations"],consumed_world_inputs=sel["actual_native_evidence"]),
             arm="incumbent",binding=witness["consumed_binding"],statistics_root_id=accepted["native_statistics_root_id"],
             construction_required=True,expected_public_request_sha256=witness["public_request_sha256"],
-            native_public_fold_required=True,iterations_per_world=s["contract"]["native_iterations_per_world"])
+            native_public_fold_required=True,iterations_per_world=s["contract"]["native_iterations_per_world"],
+            compact_native_atomic_work=s["contract"]["schema"]==COMPACT_SCHEMA,
+            compact_fixed_public_fold=s["contract"]["schema"]==COMPACT_SCHEMA)
         actions[leaf]=sel["action"]
     if len(selections)==2:
         require(compare_world_inputs(selections["model"]["actual_native_evidence"],selections["hp_fraction"]["actual_native_evidence"])
@@ -340,7 +352,7 @@ def summarize(s,rows,terminal):
         for status in ("COMPLETE","REFUSED","CAPPED","UNSTARTED")}
     cell_counts["VALIDATED_COMPLETE"]=sum(cell["validated"] is True for cell in actual_cells)
     cell_counts["UNVALIDATED_COMPLETE"]=sum(cell["status"]=="COMPLETE" and cell["validated"] is not True for cell in actual_cells)
-    return dict(schema=SCHEMA+".readout",planned_roots=200,planned_seeds=32,recorded_roots=len(rows),
+    result=dict(schema=c["schema"]+".readout",planned_roots=200,planned_seeds=32,recorded_roots=len(rows),
         accepted_iterations_total=c["accepted_native_iterations_total"],iterations_per_world=c["native_iterations_per_world"],
         effects=effects,unique_observed_continuation_cells=cell_counts,
         supervisor_exit_code=terminal["supervisor_exit_code"],worker_exit_code=terminal["worker_exit_code"],
@@ -348,6 +360,9 @@ def summarize(s,rows,terminal):
         cpu_seconds=terminal["cpu_seconds_including_reaped_children"],
         complete_case_scope="descriptive observed roots; not full-panel inference",scientific_strength_claim=False,
         holdout_authorized=False,phase_b_authorized=False,retraining_authorized=False)
+    if c["schema"]==COMPACT_SCHEMA:
+        result["native_atomic_encoding"]=c["native_atomic_encoding"]
+    return result
 
 
 def run(path,review_path):

@@ -802,7 +802,8 @@ def validate_timed_native_inputs(evidence, *, binding, iterations_per_world, bat
 
 def validate_fixed_work_inputs(evidence, *, arm, binding, statistics_root_id, construction_required=False,
                                expected_public_request_sha256=None, native_public_fold_required=False,
-                               compact_native_atomic_work=False, iterations_per_world=16):
+                               compact_native_atomic_work=False, iterations_per_world=16,
+                               compact_fixed_public_fold=False):
     """Observed input and commit reconciliation before result persistence.
 
     The actual adapter observes dispatch/return and owned first-use seams. This
@@ -818,9 +819,14 @@ def validate_fixed_work_inputs(evidence, *, arm, binding, statistics_root_id, co
         and type(binding) is dict and set(binding) == {
             "root_binding", "subject", "set_source_hash", "information_key"},
         "fixed-work input evidence required")
+    require(type(compact_fixed_public_fold) is bool and (not compact_fixed_public_fold or
+        compact_native_atomic_work is True and native_public_fold_required is True
+        and construction_required is True and expected_public_request_sha256 is not None
+        and arm == "incumbent" and iterations_per_world == 1024),
+        "prospective compact public-fold route requires exact fixed4096 construction scope")
     require(type(compact_native_atomic_work) is bool and (not compact_native_atomic_work
-        or arm == "incumbent" and not native_public_fold_required),
-        "prospective compact fixed-work scope required; existing public-fold lane remains v1")
+        or arm == "incumbent" and (not native_public_fold_required or compact_fixed_public_fold)),
+        "prospective compact fixed-work scope required; legacy public-fold lane remains v1")
     manifest = evidence.get("consumed_world_inputs")
     require(type(manifest) is dict and all(manifest.get(key) == value for key, value in binding.items())
         and manifest.get("arm") == arm, "diagnostic consumed-input root binding drift")

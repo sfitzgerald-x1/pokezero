@@ -10,12 +10,15 @@ if __name__=="__main__":
     p.add_argument("mode",choices=("prepare","run"))
     p.add_argument("--directory",type=Path);p.add_argument("--parent-entry",type=Path)
     p.add_argument("--authority",type=Path);p.add_argument("--accepted-total",type=int,choices=(320,1024,4096))
+    p.add_argument("--compact-native-evidence",action="store_true",
+        help="prepare the separately reviewed fixed4096 compact evidence contract")
     p.add_argument("--entry-spec",type=Path);p.add_argument("--entry-review",type=Path)
     a=p.parse_args()
     if a.mode=="prepare":
         if not all((a.directory,a.parent_entry,a.authority,a.accepted_total)):p.error("prepare needs directory, parent-entry, authority, accepted-total")
-        result=prepare(a.directory,a.parent_entry,a.authority,a.accepted_total)
+        result=prepare(a.directory,a.parent_entry,a.authority,a.accepted_total,compact=a.compact_native_evidence)
     else:
+        if a.compact_native_evidence:p.error("run takes its evidence format from the reviewed entry")
         if not all((a.entry_spec,a.entry_review)):p.error("run needs entry-spec and entry-review")
         result=run(a.entry_spec,a.entry_review)
     print(json.dumps(result,sort_keys=True),flush=True)
