@@ -190,6 +190,23 @@ class FixedWorkAdapterJob:
                 adapter.close()
 
 
+def _safe_error_frames(failure):
+    """Repository code sites only; no messages, source lines, locals or paths."""
+    root = Path(__file__).resolve().parents[1]
+    frames, trace = [], failure.__traceback__
+    while trace is not None:
+        try:
+            relative = Path(trace.tb_frame.f_code.co_filename).resolve().relative_to(root)
+        except (OSError, ValueError, RuntimeError):
+            pass
+        else:
+            if relative.suffix == ".py":
+                frames.append(dict(module="pokezero." + ".".join(relative.with_suffix("").parts),
+                    function=trace.tb_frame.f_code.co_name, line=trace.tb_lineno))
+        trace = trace.tb_next
+    return frames[-16:]
+
+
 def _worker(directory, binding):
     """Starts scientific work only after parent publishes this exact ownership."""
     directory = Path(directory)
@@ -198,7 +215,7 @@ def _worker(directory, binding):
         require(name in {"startup", "selection", "continuations", "boundaries", "materialization", "cleanup"}, "unknown owned job phase")
         phases.append(dict(phase=name, monotonic_seconds=time.perf_counter()))
     began = time.perf_counter()
-    result, error = None, None
+    result, error, error_frames = None, None, None
     journal_writer = None
     try:
         header = json.loads(sys.stdin.buffer.read())
@@ -218,6 +235,12 @@ def _worker(directory, binding):
                 result = job(ownership, phase)
     except BaseException as failure:
         error = type(failure).__name__
+        try:
+            error_frames = _safe_error_frames(failure)
+        except BaseException:
+            # Auxiliary diagnostics must never bypass the original failure
+            # receipt or the live owner hold needed for descendant cleanup.
+            error_frames = []
     pending_cleanup = (bool(list((directory / "owned-groups" / "active").glob("group-*.json")))
         or bool(list((directory / "delegated-groups" / "active").glob("child-*.json"))))
     if pending_cleanup:
@@ -227,6 +250,8 @@ def _worker(directory, binding):
         error_type=error, phases=phases, worker_wall_seconds=time.perf_counter()-began,
         terminal_monotonic_seconds=terminal_at,
         binding_sha256=binding, worker_pid=os.getpid(), exit_code=0 if error is None else 1)
+    if error_frames is not None:
+        receipt["error_frames"] = error_frames
     if journal_writer is not None:
         receipt["attempt_journal_writer_close_sha256"] = journal_writer.close_sha256
     if pending_cleanup:

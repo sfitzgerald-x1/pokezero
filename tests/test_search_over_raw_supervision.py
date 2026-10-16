@@ -250,7 +250,7 @@ class SyntheticJob:
             close_owned_generations(receipts,{i:SimpleNamespace(pid=child.pid,exitcode=exits[i])
                 for i,child in children.items()})
             return dict(synthetic=True,child_pids=[child.pid for child in children.values()])
-        if self.mode in {"cpu_child", "hang_child", "leak_child"}:
+        if self.mode in {"cpu_child", "hang_child", "leak_child", "frame_fail_child"}:
             code = ("import sys,time,resource,json; sys.stdin.buffer.read(); "
                 "began=time.process_time(); "
                 "exec('while time.process_time()-began<.12: pass'); "
@@ -260,8 +260,13 @@ class SyntheticJob:
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, start_new_session=True)
             path = record_owned_process(child.pid, ownership)
             child.stdin.close()
-            if self.mode == "leak_child":
+            if self.mode in {"leak_child", "frame_fail_child"}:
                 phase("cleanup")
+                if self.mode == "frame_fail_child":
+                    def broken_capture(_failure):
+                        raise OSError("PRIVATE_CAPTURE_ERROR")
+                    phase.__globals__["_safe_error_frames"] = broken_capture
+                    raise RuntimeError("PRIVATE_ORIGINAL_ERROR")
                 return dict(synthetic=True, child_pid=child.pid)
             output = child.stdout.read()
             code = child.wait()
@@ -278,6 +283,10 @@ class SyntheticJob:
         phase("cleanup")
         if self.mode == "fail":
             raise RuntimeError("PRIVATE_DETAIL_MUST_NOT_BE_REPORTED")
+        if self.mode == "contract_fail":
+            from pokezero.mcts_eval.policy_opponent_profile import validate_selection
+            validate_selection({}, arm="incumbent_mcts", mode="matched_deadline", config=None,
+                mask=(), opponent_seed=0, deadline_ms=1000, native_batch_guard_ms=64)
         return dict(synthetic=True)
 
 
@@ -406,7 +415,40 @@ class FixedWorkSupervisionTests(unittest.TestCase):
         value = self.run_job("fail")
         self.assertEqual(value["worker_exit_code"], 1)
         self.assertNotIn("PRIVATE_DETAIL", (self.root / "attempt" / "terminal.json").read_text())
-        self.assertEqual(json.loads((self.root / "attempt" / "worker-result.json").read_text())["error_type"], "RuntimeError")
+        raw = (self.root / "attempt" / "worker-result.json").read_text()
+        self.assertNotIn("PRIVATE_DETAIL", raw)
+        self.assertNotIn(str(self.root), raw)
+        self.assertEqual(json.loads(raw)["error_type"], "RuntimeError")
+
+    def test_failure_keeps_bounded_repository_code_sites_without_payloads(self):
+        value = self.run_job("contract_fail")
+        self.assertEqual(value["worker_exit_code"], 1)
+        raw = (self.root / "attempt" / "worker-result.json").read_text()
+        worker = json.loads(raw)
+        self.assertEqual(worker["error_type"], "ContractError")
+        frames = worker["error_frames"]
+        self.assertTrue(0 < len(frames) <= 16)
+        self.assertTrue(any(row["module"] == "pokezero.mcts_eval.policy_opponent_profile"
+            and row["function"] == "validate_selection" for row in frames))
+        self.assertTrue(all(set(row) == {"module", "function", "line"}
+            and row["module"].startswith("pokezero.") and type(row["line"]) is int
+            and row["line"] > 0 for row in frames))
+        self.assertNotIn("profile has no serialized selected action", raw)
+        self.assertNotIn(str(self.root), raw)
+        self.assertFalse(value["cpu_wall_cost_complete"])
+
+    def test_frame_capture_failure_preserves_original_receipt_and_owned_cleanup(self):
+        value = self.run_job("frame_fail_child")
+        raw = (self.root / "attempt" / "worker-result.json").read_text()
+        worker = json.loads(raw)
+        self.assertEqual(worker["error_type"], "RuntimeError")
+        self.assertEqual(worker["error_frames"], [])
+        self.assertTrue(worker["cleanup_pending"])
+        self.assertNotIn("PRIVATE_", raw)
+        self.assertNotEqual(value["worker_exit_code"], 0)
+        self.assertEqual(value["status"], "OPERATIONAL_STOP")
+        self.assertFalse(value["cpu_wall_cost_complete"])
+        self.assertFalse(live_owned_groups(set(value["owned_groups"])))
 
     def test_exit_zero_without_terminal_evidence_is_not_success(self):
         value = self.run_job("exit_zero")
