@@ -1074,6 +1074,8 @@ class EngineMctsConfig:
     # An on-by-default field would make a Python-only update break a running
     # image.
     override_telemetry: bool = False
+    # Opt-in pre-display production aggregate; native quantization is retained.
+    root_prior_exact_aggregate: bool = False
     # Read, but never play, the acting-seat Q-max root recommendation beside the
     # production visit-max recommendation.  This is deliberately narrower than
     # a selectable policy: it is the one-world, full-budget experiment from the
@@ -1364,6 +1366,10 @@ class EngineMctsConfig:
                     "here weaken the opponent in the direction that flatters this arm. Set "
                     "the ack only after checking cores against the run's shard concurrency."
                 )
+        if type(self.root_prior_exact_aggregate) is not bool or (
+            self.root_prior_exact_aggregate and not self.override_telemetry
+        ):
+            raise ValueError("root_prior_exact_aggregate requires boolean opt-in and override_telemetry")
         if self.rollout_leaf_shadow:
             if self.leaf_eval != "model":
                 raise ValueError(
@@ -8365,6 +8371,9 @@ class EngineMctsPolicy:
                         if cause is not None
                         else round(arms.prior_share.get(choice, 0.0) / worlds, 6)
                     ),
+                    **({"model_prior_pre_display": (
+                        None if cause is not None else arms.prior_share.get(choice, 0.0) / worlds
+                    )} if self._config.root_prior_exact_aggregate else {}),
                 }
                 for choice in allocation_choices
             ],
