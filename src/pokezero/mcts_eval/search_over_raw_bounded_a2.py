@@ -257,7 +257,7 @@ def continuation_counts(evidence, outcomes, stage="A2"):
 
 
 def collect_source(spec, config, checkpoint, seed, directory, guard, *, root_capture=None,
-                   capture_actor_history=True):
+                   capture_actor_history=True,live_capture_factory=None):
     """Same source policy and independent bridge reader as the staged route."""
     from .search_over_raw_source_run import (SourceProcessOwner, _production_components,
         read_source_owner, source_recipe, _policies_identity)
@@ -271,9 +271,12 @@ def collect_source(spec, config, checkpoint, seed, directory, guard, *, root_cap
     directory.mkdir(parents=True, exist_ok=False)
     c = spec["contract"]
     require(type(capture_actor_history) is bool,"explicit source actor-history scope required")
+    live_recipe=spec["contract"].get("live_shadow")
+    require((live_recipe is None)==(live_capture_factory is None),"explicit live source factory/recipe required")
     _write_new(directory/"claim.json", dict(schema="pokezero.search-over-raw.source-attempt.v1",
         contract_sha256=digest(c), source_seed=seed, source_sha256=None,
-        recipe_sha256=digest(source_recipe(config,checkpoint,spec["source_runtime"],capture_actor_history=capture_actor_history)),
+        recipe_sha256=digest(source_recipe(config,checkpoint,spec["source_runtime"],
+            capture_actor_history=capture_actor_history,live_shadow=live_recipe)),
         runtime_sha256=digest(spec["source_runtime"]), source_review_sha256=digest(c["authority"]),
         auditor_binding_sha256=scope.binding, auditor_pid=scope.pid, synthetic_process_fixture=False,
         retry_authorized=False, holdout_authorized=False))
@@ -282,6 +285,7 @@ def collect_source(spec, config, checkpoint, seed, directory, guard, *, root_cap
     archive = SealedSourceArchive()
     try:
         env, raw = _production_components(config,checkpoint)
+        live_capture=None if live_capture_factory is None else live_capture_factory(env)
         history = SourceActorHistoryCapture(config) if capture_actor_history else None
         def capture(context, action):
             archive.capture_public(context, action)
@@ -289,7 +293,8 @@ def collect_source(spec, config, checkpoint, seed, directory, guard, *, root_cap
                 root_capture(env, archive, context, action, history)
         policies = {seat:AuditedRawPolicy(raw[seat], checkpoint_sha256=checkpoint.checkpoint_sha256,
             public_context_sink=capture if seat == "p1" else None,
-            actor_history=history if seat == "p1" else None) for seat in ("p1","p2")}
+            actor_history=history if seat == "p1" else None,
+            live_context_sink=live_capture if seat=="p1" else None) for seat in ("p1","p2")}
         identity = _policies_identity(policies)
         owner = SourceProcessOwner(source_seed=seed, actor_history=history, directory=directory,
             ownership=dict(controller_pid=scope.pid,registration_sha256=scope.binding,
@@ -304,14 +309,15 @@ def collect_source(spec, config, checkpoint, seed, directory, guard, *, root_cap
         with owner.installed(env):
             guard()
             source = collect_raw_source(c,panel="exploration",source_seed=seed,env=env,policies=policies,
-                max_decision_rounds=250,sealed_pre_step_sink=archive.capture_private,_trusted_result_sink=accept)
+                max_decision_rounds=250,sealed_pre_step_sink=archive.capture_private,_trusted_result_sink=accept,
+                live_shadow=None if live_capture is None else dict(capture=live_capture,recipe=live_recipe))
             require(identity == _policies_identity(policies) and driver, "source policy drift")
             owner.seal(source)
             env.close()
         driver["source_sha256"] = digest(source)
         _write_new(directory/"source.json",source)
         _write_new(directory/"driver.json",driver)
-        readout = read_source_owner(directory,source,spec["source_runtime"],c)
+        readout = read_source_owner(directory,source,spec["source_runtime"],c,live_shadow=live_recipe)
         require(readout["source_pipeline_validated"], "source pipeline not validated")
         frozen = {r["root_id"]:retained_archive_root_identity(archive,r["source_request_index"])
             for r in source["roots"]}

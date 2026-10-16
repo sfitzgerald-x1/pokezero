@@ -163,6 +163,44 @@ class SourceCollectorTest(unittest.TestCase):
         self.assertEqual(seen[0][1], 1)
         self.assertEqual(set(seen[0][0].requested_observations), {"p1"})
 
+    def test_live_shadow_requires_explicit_contract_and_cannot_claim_search_free_source(self):
+        class AuthoredShadow:
+            def __init__(self):self.rounds=[]
+            def __call__(self,context,decision):self.rounds.append(context.decision_round_index)
+            def manifest(self,recipe):return {"recipe_sha256":digest(recipe),"rounds":self.rounds}
+        shadow=AuthoredShadow();recipe={"authored":True}
+        policies={s:AuditedRawPolicy(FakeChampion(),checkpoint_sha256=SHA,
+            live_context_sink=shadow if s=="p1" else None) for s in ("p1","p2")}
+        env=SourceEnv()
+        with self.assertRaisesRegex(ValueError,"explicit versioned"):
+            collect_raw_source(self.contract,panel="exploration",source_seed=self.seed,env=env,policies=policies)
+        self.assertEqual(env.calls,[])
+        contract={**self.contract,"live_shadow":recipe}
+        receipt=collect_raw_source(contract,panel="exploration",source_seed=self.seed,env=env,policies=policies,
+            live_shadow={"capture":shadow,"recipe":recipe})
+        self.assertEqual(receipt["schema"],"pokezero.search-over-raw.source-live-shadow.v2")
+        self.assertIs(receipt["search_invoked"],True)
+        self.assertEqual(shadow.rounds,list(range(12)))
+        self.assertTrue(all(actions=={"p1":1,"p2":1} for actions in env.calls))
+        legacy=self.collect(SourceEnv())
+        self.assertEqual([r["source_request_index"] for r in receipt["roots"]],
+            [r["source_request_index"] for r in legacy["roots"]])
+
+    def test_canonical_showdown_tie_is_retained_as_source_terminal_evidence(self):
+        from pokezero.mcts_eval.search_over_raw_source_run import _source_trace,_match_source_trace
+        from pokezero.local_showdown import showdown_seed_from_int
+        records=[_source_trace("command",dict(type="start",battleId="authored",formatid="gen3randombattle",
+            seed=showdown_seed_from_int(self.seed))),
+            _source_trace("event",dict(type="started",battleId="authored",formatid="gen3randombattle",
+                seed=showdown_seed_from_int(self.seed))),
+            _source_trace("event",dict(type="stream",stream="omniscient",battleId="authored",lines=["|tie"])),
+            _source_trace("event",dict(type="terminal",battleId="authored"))]
+        self.assertEqual(records[2]["terminal_markers"],["|tie"])
+        _match_source_trace({"status":"COMPLETE"},records,self.seed)
+        records[2]["terminal_markers"]=[]
+        with self.assertRaisesRegex(ValueError,"observed source terminal"):
+            _match_source_trace({"status":"COMPLETE"},records,self.seed)
+
     def test_short_game_keeps_missing_registered_slots(self):
         result = self.collect(SourceEnv(rounds=2))
         self.assertEqual(len(result["roots"]), 2)

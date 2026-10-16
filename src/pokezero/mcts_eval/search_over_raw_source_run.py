@@ -27,7 +27,7 @@ from .search_over_raw_source import AuditedRawPolicy, collect_raw_source, valida
 from .search_over_raw_world_inputs import _state_payload
 
 
-def source_recipe(config, checkpoint_contract, bridge_runtime, *, capture_actor_history=False):
+def source_recipe(config, checkpoint_contract, bridge_runtime, *, capture_actor_history=False,live_shadow=None):
     """Reviewable recipe only; does not load a policy or reset an environment."""
     from .resolver import CheckpointContract
     from ..local_showdown import LocalShowdownConfig
@@ -57,6 +57,11 @@ def source_recipe(config, checkpoint_contract, bridge_runtime, *, capture_actor_
             actual_observation_and_raw_input=True, private_retention=True,
             original_observation_origin_retained=True,
             encoding_mismatch_is_unavailable=True, policy_encoding_changed=False)
+    if live_shadow is not None:
+        from .search_over_raw_live_capture import shadow_recipe
+        require(not capture_actor_history and digest(live_shadow)==digest(shadow_recipe(checkpoint_contract,
+            total=live_shadow["total"],leaves=live_shadow["leaves"])),"exact explicit live shadow recipe required")
+        result.update(schema="pokezero.search-over-raw.source-recipe-live-shadow.v2",live_shadow=deepcopy(live_shadow))
     return result
 
 
@@ -104,8 +109,8 @@ def _source_trace(kind, payload):
     if kind == "event" and payload.get("type") == "stream" and payload.get("stream") == "omniscient":
         lines = payload.get("lines")
         require(type(lines) is list and all(type(line) is str for line in lines), "source protocol lines malformed")
-        markers=[line for line in lines if line.startswith("|win|") or line == "|tie|"]
-        require(all(line in {"|win|PokeZero p1","|win|PokeZero p2","|tie|"} for line in markers),
+        markers=[line for line in lines if line.startswith("|win|") or line in {"|tie","|tie|"}]
+        require(all(line in {"|win|PokeZero p1","|win|PokeZero p2","|tie","|tie|"} for line in markers),
             "unknown source terminal identity")
         value["terminal_markers"] = markers
     return value
@@ -228,7 +233,7 @@ def _match_source_trace(source, records, seed):
     terminals = [r for r in records if r["kind"] == "event" and r["type"] == "terminal"]
     if source["status"] == "COMPLETE":
         require(len(markers) == len(terminals) == 1 and markers[0] in {
-            "|win|PokeZero p1","|win|PokeZero p2","|tie|"}, "observed source terminal required")
+            "|win|PokeZero p1","|win|PokeZero p2","|tie","|tie|"}, "observed source terminal required")
     else:
         require(source["status"] == "UNCERTAIN_SOURCE" and not markers and not terminals,
             "capped source cannot acquire terminal evidence")
@@ -334,7 +339,8 @@ def _policies_identity(policies):
             and p.family_gated_selection is False and p.history_mask_k is None
             and p.result.model_config.window_size == 1 and p.forward_fn == p._default_forward
             and p.record_policy_distribution is True, "raw source policy law changed")
-        rows[seat] = dict(auditor_id=id(auditor),policy_id=id(p),actor_history_id=id(auditor.actor_history),checkpoint=p.weights_sha256,
+        rows[seat] = dict(auditor_id=id(auditor),policy_id=id(p),actor_history_id=id(auditor.actor_history),
+            live_context_sink_id=id(auditor.live_context_sink),checkpoint=p.weights_sha256,
             config=_state_payload(p.result.model_config),forward_id=id(getattr(p.forward_fn,"__func__",p.forward_fn)))
     return digest(rows)
 
@@ -587,19 +593,21 @@ def collect_owned_exploration_panel(ledger, **source_inputs):
         raise
 
 
-def read_source_owner(directory, source, runtime, contract):
+def read_source_owner(directory, source, runtime, contract,*,live_shadow=None):
     """Independent durable source lifecycle reader; no physics/inference claim."""
     directory = _path(directory)
     original = {p.name:p.read_bytes() for p in directory.glob("*.json")}
     claim,driver,launch,closed,trace = (_load(directory/name) for name in (
         "claim.json","driver.json","bridge-launch.json","bridge-close.json","bridge-transport.json"))
+    from .search_over_raw_live_capture import SOURCE_SCHEMA
+    live=live_shadow is not None
     require(set(original)=={"claim.json","driver.json","bridge-launch.json","bridge-close.json",
         "bridge-transport.json","source.json"} and type(source) is dict
-        and source.get("schema")=="pokezero.search-over-raw.source.v1"
+        and source.get("schema")== (SOURCE_SCHEMA if live else "pokezero.search-over-raw.source.v1")
         and source["contract_sha256"]==digest(contract) and type(source["source_seed"]) is int
         and source["source_seed"] in contract["panels"]["exploration"]["seeds"]
         and source["source_policy"]=="raw_argmax_both_seats" and source["replacement_seeds"]==[]
-        and source["scientific_strength_evidence"] is False and source["search_invoked"] is False
+        and source["scientific_strength_evidence"] is False and source["search_invoked"] is live
         and source["checkpoint_sha256"]==runtime["files"][runtime["checkpoint_path"]]
         and type(source["elapsed_seconds"]) in (float,int) and math.isfinite(source["elapsed_seconds"])
         and source["elapsed_seconds"]>=0, "exact unpromoted original source partition required")
@@ -629,6 +637,17 @@ def read_source_owner(directory, source, runtime, contract):
         and source["decision_boundaries"] == driver["decision_boundaries"]
         and source["verified_raw_decisions"] == sum(driver["decisions_by_seat"].values()),
         "actual source driver decision accounting differs")
+    if live:
+        shadow=source.get("live_shadow",{})
+        invocations=shadow.get("invocations",[])
+        indices=[row["round"] for row in invocations]
+        require(contract.get("live_shadow")==live_shadow and shadow.get("recipe_sha256")==digest(live_shadow)
+            and shadow.get("source_seed")==source["source_seed"] and shadow.get("source_play_uses_search") is False
+            and len(invocations)==driver["decisions_by_seat"]["p1"] and indices==sorted(set(indices))
+            and all(type(i) is int and 0<=i<driver["decision_boundaries"] for i in indices)
+            and all(set(row)=={"round","rows"} and set(row["rows"])==set(live_shadow["leaves"])
+                and all(_sha(sha) for sha in row["rows"].values()) for row in invocations),
+            "original live shadow source invocation witness required")
     if source["status"] == "COMPLETE":
         validate_source_receipt(source,source["source_seed"],contract=contract,panel="exploration")
         require(driver["terminal_capped"] is False, "completed source driver was capped")

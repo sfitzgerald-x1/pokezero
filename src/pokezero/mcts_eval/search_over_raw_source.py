@@ -24,7 +24,7 @@ class AuditedRawPolicy:
     """
 
     def __init__(self, policy: Any, *, checkpoint_sha256: str, public_context_sink=None,
-                 actor_history=None) -> None:
+                 actor_history=None, live_context_sink=None) -> None:
         require(len(checkpoint_sha256) == 64
             and all(c in "0123456789abcdef" for c in checkpoint_sha256), "invalid checkpoint digest")
         require(policy.weights_sha256 == checkpoint_sha256, "raw checkpoint binding mismatch")
@@ -39,6 +39,7 @@ class AuditedRawPolicy:
         self.verified_decisions = 0
         self.public_context_sink = public_context_sink
         self.actor_history = actor_history  # Private prospective input witness; default absent.
+        self.live_context_sink = live_context_sink  # Optional shadow observer, not source selection.
 
     def reset(self) -> None:
         self.policy.reset()
@@ -71,6 +72,9 @@ class AuditedRawPolicy:
         if self.public_context_sink is not None:
             from .head_to_head import public_only_context
             self.public_context_sink(public_only_context(context), decision.action_index)
+        if self.live_context_sink is not None:
+            from .head_to_head import public_only_context
+            self.live_context_sink(public_only_context(context),decision)
         return decision
 
 
@@ -148,7 +152,8 @@ def source_roots(contract: Mapping, *, panel: str, source_seed: int,
 def collect_raw_source(contract: Mapping, *, panel: str, source_seed: int,
                        env: Any, policies: Mapping[str, AuditedRawPolicy],
                        max_decision_rounds: int = 250, decision_sink=None,
-                       sealed_pre_step_sink=None, _trusted_result_sink=None) -> dict:
+                       sealed_pre_step_sink=None, _trusted_result_sink=None,
+                       live_shadow=None) -> dict:
     """Use the production rollout driver; return only selected public roots.
 
     The caller owns env lifecycle, durable attempts and runtime qualification.
@@ -164,6 +169,12 @@ def collect_raw_source(contract: Mapping, *, panel: str, source_seed: int,
     require(policies["p1"].policy.weights_sha256 == policies["p2"].policy.weights_sha256,
         "source seats must share the same champion")
     require(type(max_decision_rounds) is int and max_decision_rounds > 0, "invalid source cap")
+    hooked=[seat for seat,p in policies.items() if p.live_context_sink is not None]
+    require((live_shadow is None and not hooked) or (type(live_shadow) is dict
+        and set(live_shadow)=={"capture","recipe"} and hooked==["p1"]
+        and policies["p1"].live_context_sink is live_shadow["capture"]
+        and contract.get("live_shadow")==live_shadow["recipe"]),
+        "live search requires its explicit versioned source contract")
     started = time.perf_counter()
     result = RolloutDriver(env=env, policies=policies, config=RolloutConfig(
         max_decision_rounds=max_decision_rounds, hide_opponent_legal_action_masks=True,
@@ -175,6 +186,10 @@ def collect_raw_source(contract: Mapping, *, panel: str, source_seed: int,
         decision_boundaries=result.decision_round_count,
         checkpoint_sha256=policies["p1"].policy.weights_sha256,
         verified_raw_decisions=sum(p.verified_decisions for p in {id(p): p for p in policies.values()}.values()))
+    if live_shadow is not None:
+        from .search_over_raw_live_capture import SOURCE_SCHEMA
+        receipt.update(schema=SOURCE_SCHEMA,search_invoked=True,
+            live_shadow=live_shadow["capture"].manifest(live_shadow["recipe"]))
     # Auditor-only in-process join. Neither the trajectory nor private source
     # snapshots are added to the public receipt or worker transport.
     if _trusted_result_sink is not None:
