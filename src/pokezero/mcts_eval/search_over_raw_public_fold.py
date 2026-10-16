@@ -12,6 +12,7 @@ from pathlib import Path
 from .search_over_raw import digest, require
 
 SCHEMA = "pokezero.search-over-raw.native-construction-public-fold.v1"
+DISPATCH_SCHEMA = "pokezero.search-over-raw.native-dispatch-inputs.v1"
 MAXIMUM_BYTES = 8 * 1024 * 1024
 
 
@@ -27,7 +28,73 @@ def runtime_receipt():
         at_actual_attempt_and_constructed_callbacks=True, pending_transition_included=True,
         private_source_snapshot_included=False, catalog_included=False,
         labels_produced=False, instrumentation_can_change_selection=True,
+        native_dispatch_inputs=dict(schema=DISPATCH_SCHEMA,
+            exact_already_hashed_payload=True, private_controller_only=True,
+            fixed_work_only=True, historical_payloads_reconstructed=False),
         source_hashes=source_hashes(), runtime_qualified=False)
+
+
+def retain_dispatch_inputs(payload):
+    """Private copy of the exact already-hashed call payload; never a redraw."""
+    import json
+    require(type(payload) is dict and len(json.dumps(payload, sort_keys=True,
+        separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode()) <= MAXIMUM_BYTES,
+        "native dispatch input retention cap exceeded")
+    return dict(schema=DISPATCH_SCHEMA, payload=deepcopy(payload), private_controller_only=True)
+
+
+def read_dispatch_inputs(call, *, rows, expected_tables=None):
+    """Check exact call content and original construction joins, without encoding.
+
+    Owning process/file validation remains with FixedWorkRunValidator. A later
+    encoder diagnostic must also supply the independently pinned tables; this
+    helper alone does not establish loaded model or binary correspondence.
+    """
+    before = digest(dict(call=call, rows=rows, tables=expected_tables))
+    capture = call.get("dispatch_inputs")
+    require(type(capture) is dict and set(capture) == {"schema", "payload", "private_controller_only"}
+        and capture["schema"] == DISPATCH_SCHEMA and capture["private_controller_only"] is True
+        and call.get("deadline_limited") is False,
+        "reviewed fixed-work native dispatch input capture required")
+    payload = capture["payload"]
+    require(type(payload) is dict and set(payload) == {
+        "state", "context", "public_inputs", "chance_seed", "fold", "tables", "world_sha256"}
+        and digest(payload) == call.get("input_sha256")
+        and type(payload["state"]) is str and payload["state"]
+        and type(payload["context"]) is dict and type(payload["public_inputs"]) is dict
+        and type(payload["fold"]) is dict and type(payload["tables"]) is dict
+        and type(payload["chance_seed"]) is int,
+        "retained native dispatch content differs from original joint input hash")
+    # Also enforce the retention cap on completed evidence.
+    require(retain_dispatch_inputs(payload) == capture, "native dispatch capture drift")
+    parameters = call.get("native_call_parameters")
+    require(type(parameters) is dict and type(parameters.get("chance_seed")) is int
+        and parameters["chance_seed"] == payload["chance_seed"],
+        "retained dispatch chance seed differs from actual call parameters")
+    indices = call.get("construction_ordinals")
+    require(type(indices) is list and indices and all(type(i) is int for i in indices)
+        and len(set(indices)) == len(indices), "original dispatch construction roster required")
+    by_ordinal = {row["ordinal"]: row for row in rows}
+    require(len(by_ordinal) == len(rows) and all(i in by_ordinal for i in indices),
+        "dispatch construction ordinal missing or duplicated")
+    for ordinal in indices:
+        row = by_ordinal[ordinal]
+        events = row["construction_receipt"]["events"]
+        require(row["call_ordinal"] == call["call_ordinal"]
+            and row["input_sha256"] == call["input_sha256"]
+            and row["constructed_sha256"] == payload["world_sha256"]
+            and row["native_state_utf8_sha256"] == parameters["state_sha256"]
+            and digest(payload["state"]) == row["state_sha256"]
+            and events[1]["kind"] == "native_built"
+            and events[1]["value"]["native_state"] == payload["state"]
+            and all(payload["context"].get(seat) == list(row["party_species"][seat])
+                for seat in ("p1", "p2")), "retained dispatch differs from original construction")
+    if expected_tables is not None:
+        require(type(expected_tables) is dict and digest(payload["tables"]) == digest(expected_tables),
+            "retained dispatch tables differ from independently pinned tables")
+    require(before == digest(dict(call=call, rows=rows, tables=expected_tables)),
+        "dispatch inputs changed during read")
+    return deepcopy(payload)
 
 
 def capture_request(context, pending_transition):

@@ -178,6 +178,7 @@ class NativeWorldInputs:
             record_construction and expected_public_request is not None and not deadline_limited),
             "public fold retention requires prospective fixed construction/full-request observation")
         self.record_public_fold = record_public_fold
+        self._original_public_fold_scope = record_public_fold
         self.public_fold_attempt = None
         self.rows, self.calls, self.errors = [], [], []
         self.expected_public_request = deepcopy(expected_public_request)
@@ -251,6 +252,8 @@ class NativeWorldInputs:
         actual = (self.record_atomic_work, self.record_timed_atomic_work, self.record_compact_atomic_work)
         require(all(type(value) is bool for value in actual) and actual == self._original_atomic_scope,
             "original native observation encoding scope changed")
+        require(self.record_public_fold is self._original_public_fold_scope,
+            "original native public-fold capture scope changed")
 
     def dispatch(self, args):
         """Observe EXACT args sent to native, before the call, without draws."""
@@ -276,15 +279,19 @@ class NativeWorldInputs:
             "native dispatch/constructed multiplicity drift")
         require(len({row["constructed_sha256"] for row in candidates}) == 1,
             "identical native states conceal different constructed worlds")
+        payload = dict(state=args[0], context=ctx,
+            public_inputs=json.loads(args[4]), chance_seed=args[9],
+            fold=_state_payload(fold_payload), tables=json.loads(args[3]),
+            world_sha256=candidates[0]["constructed_sha256"])
         witness = dict(call_ordinal=len(self.calls),
             construction_ordinals=[row["ordinal"] for row in candidates],
             multiplicity=len(candidates), requested_iterations=args[1],
             deadline_limited=self.deadline_limited,
-            input_sha256=digest(dict(state=args[0], context=ctx,
-                public_inputs=json.loads(args[4]), chance_seed=args[9],
-                fold=_state_payload(fold_payload), tables=json.loads(args[3]),
-                world_sha256=candidates[0]["constructed_sha256"])),
+            input_sha256=digest(payload),
             status="DISPATCHED", completed_iterations=None)
+        if self.record_public_fold:
+            from .search_over_raw_public_fold import retain_dispatch_inputs
+            witness["dispatch_inputs"] = retain_dispatch_inputs(payload)
         self.calls.append(witness)
         if self.record_atomic_work:
             from .search_over_raw_native_atomic_work import state_hash
@@ -825,14 +832,18 @@ def validate_fixed_work_inputs(evidence, *, arm, binding, statistics_root_id, co
         arm == "incumbent" and construction_required and expected_public_request_sha256 is not None),
         "prospective native public-fold validation scope required")
     if native_public_fold_required:
-        from .search_over_raw_public_fold import read_construction_public_fold
+        from .search_over_raw_public_fold import read_construction_public_fold, read_dispatch_inputs
         for ordinal, row in enumerate(rows):
             read_construction_public_fold(row.get("public_fold_capture"), ordinal=ordinal,
                 construction_receipt=row["construction_receipt"], consumed_binding=binding,
                 public_request_sha256=expected_public_request_sha256)
+        for call in manifest.get("calls", []):
+            read_dispatch_inputs(call, rows=rows)
     else:
         require(all("public_fold_capture" not in row for row in rows),
             "unreviewed public-fold capture cannot enter ordinary fixed-work evidence")
+        require(all("dispatch_inputs" not in call for call in manifest.get("calls", [])),
+            "unreviewed dispatch-input retention cannot enter ordinary fixed-work evidence")
     require(len(rows) == (4 if arm == "incumbent" else 80), "diagnostic input allocation incomplete")
     if expected_public_request_sha256 is not None:
         require(type(expected_public_request_sha256) is str

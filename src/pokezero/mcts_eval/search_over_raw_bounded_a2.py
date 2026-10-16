@@ -256,7 +256,8 @@ def continuation_counts(evidence, outcomes, stage="A2"):
     return result
 
 
-def collect_source(spec, config, checkpoint, seed, directory, guard):
+def collect_source(spec, config, checkpoint, seed, directory, guard, *, root_capture=None,
+                   capture_actor_history=True):
     """Same source policy and independent bridge reader as the staged route."""
     from .search_over_raw_source_run import (SourceProcessOwner, _production_components,
         read_source_owner, source_recipe, _policies_identity)
@@ -269,19 +270,25 @@ def collect_source(spec, config, checkpoint, seed, directory, guard):
     require(scope is not None and scope.pid == os.getpid(), "original externally owned auditor required")
     directory.mkdir(parents=True, exist_ok=False)
     c = spec["contract"]
+    require(type(capture_actor_history) is bool,"explicit source actor-history scope required")
     _write_new(directory/"claim.json", dict(schema="pokezero.search-over-raw.source-attempt.v1",
         contract_sha256=digest(c), source_seed=seed, source_sha256=None,
-        recipe_sha256=digest(source_recipe(config,checkpoint,spec["source_runtime"],capture_actor_history=True)),
+        recipe_sha256=digest(source_recipe(config,checkpoint,spec["source_runtime"],capture_actor_history=capture_actor_history)),
         runtime_sha256=digest(spec["source_runtime"]), source_review_sha256=digest(c["authority"]),
         auditor_binding_sha256=scope.binding, auditor_pid=scope.pid, synthetic_process_fixture=False,
         retry_authorized=False, holdout_authorized=False))
     env = None
+    primary_error = None
     archive = SealedSourceArchive()
     try:
         env, raw = _production_components(config,checkpoint)
-        history = SourceActorHistoryCapture(config)
+        history = SourceActorHistoryCapture(config) if capture_actor_history else None
+        def capture(context, action):
+            archive.capture_public(context, action)
+            if root_capture is not None:
+                root_capture(env, archive, context, action, history)
         policies = {seat:AuditedRawPolicy(raw[seat], checkpoint_sha256=checkpoint.checkpoint_sha256,
-            public_context_sink=archive.capture_public if seat == "p1" else None,
+            public_context_sink=capture if seat == "p1" else None,
             actor_history=history if seat == "p1" else None) for seat in ("p1","p2")}
         identity = _policies_identity(policies)
         owner = SourceProcessOwner(source_seed=seed, actor_history=history, directory=directory,
@@ -310,11 +317,21 @@ def collect_source(spec, config, checkpoint, seed, directory, guard):
             for r in source["roots"]}
         guard()
         return archive, source, frozen
-    except BaseException:
-        archive.close()
+    except BaseException as error:
+        primary_error = error
+        try:
+            archive.close()
+        except BaseException as cleanup_error:
+            raise error from cleanup_error
         raise
     finally:
-        if env is not None and env._process is not None: env.close()
+        if env is not None and env._process is not None:
+            try:
+                env.close()
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    raise primary_error from cleanup_error
+                raise
 
 
 def select(spec, config, checkpoint, archive, source, root, cfg, directory, guard):
@@ -466,6 +483,7 @@ class BoundedA2Job:
             read_spec(self.spec_path,expected_sha=self.spec_sha256)
             return True
         phase("selection")
+        consecutive_unavailable = 0
         try:
             for seed in spec["contract"]["panels"]["exploration"]["seeds"]:
                 if time.monotonic()-began >= WALL_SECONDS: break
@@ -481,9 +499,10 @@ class BoundedA2Job:
                             output/"roots"/digest(root["root_id"]),guard)
                         _write_new(output/"completed-roots"/(digest(root["root_id"])+".json"),row)
                         print(json.dumps(dict(root_id=root["root_id"],status="ROOT_RECORDED")),flush=True)
-                        if len(row["input_unavailable"]) == 2:
+                        consecutive_unavailable = consecutive_unavailable+1 if row["input_unavailable"] else 0
+                        if consecutive_unavailable >= 3:
                             _write_new(output/"input-stop.json",dict(root_id=root["root_id"],
-                                reasons=row["input_unavailable"],retry_authorized=False))
+                                reasons=row["input_unavailable"],consecutive_unavailable=3,retry_authorized=False))
                             return dict(status=status,holdout_authorized=False)
                 finally:
                     if archive is not None: archive.close()
@@ -630,6 +649,6 @@ def run(spec_path, review_path, *, check=False, expected_experiment="A2"):
     readout["rejected_root_receipts"] = rejected
     readout["stop_reason"] = "wall_cap" if terminal["supervisor_exit_code"] == 124 else (
         "operational_failure" if terminal["supervisor_exit_code"] else "fixed_roster_attempt_finished")
-    if (output/"input-stop.json").exists():readout["stop_reason"] = "both_actor_inputs_unavailable"
+    if (output/"input-stop.json").exists():readout["stop_reason"] = "three_consecutive_input_unavailable"
     _write_new(output/"readout.json",readout)
     return readout

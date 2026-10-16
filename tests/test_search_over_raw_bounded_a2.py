@@ -3,6 +3,8 @@ from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
+import os
+from contextlib import nullcontext
 from unittest.mock import patch
 from types import SimpleNamespace
 
@@ -18,6 +20,49 @@ def specimen(stage="A2"):
 
 
 class BoundedA2Tests(unittest.TestCase):
+    def test_source_cleanup_preserves_primary_failure_and_still_runs(self):
+        from unittest.mock import Mock
+        from pokezero.mcts_eval import search_over_raw_source_run as source_run
+        from pokezero.mcts_eval import search_over_raw_source as source
+        with tempfile.TemporaryDirectory() as directory:
+            env=SimpleNamespace(_process=object(),close=Mock(side_effect=RuntimeError("cleanup")))
+            owner=SimpleNamespace(installed=lambda env:nullcontext())
+            spec=specimen();spec["source_runtime"]={}
+            checkpoint=SimpleNamespace(checkpoint_sha256="a"*64)
+            scope=SimpleNamespace(pid=os.getpid(),binding="b"*64,directory=Path(directory))
+            with patch("pokezero.mcts_eval.search_over_raw_nested_ownership.current_scope",return_value=scope), \
+                    patch.object(source_run,"source_recipe",return_value={}), \
+                    patch.object(source_run,"_production_components",return_value=(env,{"p1":None,"p2":None})), \
+                    patch.object(source_run,"_policies_identity",return_value=None), \
+                    patch.object(source_run,"SourceProcessOwner",return_value=owner), \
+                    patch.object(source,"AuditedRawPolicy",return_value=object()), \
+                    patch.object(source,"collect_raw_source",side_effect=KeyError("primary")):
+                with self.assertRaises(KeyError) as caught:
+                    a2.collect_source(spec,None,checkpoint,100,Path(directory)/"source",lambda:True,
+                        root_capture=lambda *args:None,capture_actor_history=False)
+            env.close.assert_called_once()
+            self.assertIsInstance(caught.exception.__cause__,RuntimeError)
+
+    def test_unavailable_roots_continue_until_three_consecutive_and_success_resets(self):
+        for unavailable, expected_calls in (([True]*7,3),([True,True,False,True,True,True,False],6),
+                ([True,False,False,False,False,False,False],7)):
+            with self.subTest(unavailable=unavailable), tempfile.TemporaryDirectory() as directory:
+                spec=specimen();spec["output_directory"]=directory
+                slots=spec["contract"]["panels"]["exploration"]["root_slots"][:7]
+                spec["contract"]["panels"]["exploration"]["seeds"]=[slots[0]["source_seed"]]
+                roots=[dict(root_id=r["root_id"],source_request_index=i) for i,r in enumerate(slots)]
+                (Path(directory)/"completed-roots").mkdir()
+                archive=SimpleNamespace(close=lambda:None)
+                rows=[dict(input_unavailable={"one_arm":"unavailable"} if flag else {}) for flag in unavailable]
+                with patch.object(a2,"read_spec",return_value=(spec,None,None,None)), \
+                        patch.object(a2,"collect_source",return_value=(archive,dict(roots=roots),
+                            {r["root_id"]:"same" for r in roots})), \
+                        patch("pokezero.mcts_eval.search_over_raw_archive.retained_archive_root_identity",return_value="same"), \
+                        patch.object(a2,"measure_root",side_effect=rows) as measure:
+                    a2.BoundedA2Job("/authored/spec.json","a"*64)(None,lambda name:None)
+                self.assertEqual(measure.call_count,expected_calls)
+                self.assertEqual((Path(directory)/"input-stop.json").exists(),expected_calls < 7)
+
     def test_clean_worker_return_has_all_required_supervisor_phases(self):
         from pokezero.mcts_eval.search_over_raw_supervision import _phase_costs
         import time

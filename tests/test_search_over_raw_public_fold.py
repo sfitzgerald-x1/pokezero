@@ -13,7 +13,7 @@ from pokezero.mcts_eval.search_over_raw_world_inputs import (
 from pokezero.mcts_eval.search_over_raw_ancestry import NativeAncestryContract
 from pokezero.mcts_eval.search_over_raw_fixed_work import FixedWorkDiagnosticContract
 from pokezero.mcts_eval.search_over_raw_public_fold import (
-    capture_request, read_construction_public_fold, runtime_receipt)
+    capture_request, read_construction_public_fold, read_dispatch_inputs, runtime_receipt)
 from pokezero.mcts_eval.search_over_raw_diagnostic_producer import fixed_work_runtime_recipe, diagnostic_manifest
 import test_search_over_raw_archive as archive_fixture
 import test_search_over_raw_construction as construction_fixture
@@ -47,6 +47,77 @@ class ConstructionPublicFoldTests(unittest.TestCase):
             construction_receipt=row["construction_receipt"], consumed_binding=self.witness["consumed_binding"],
             public_request_sha256=self.witness["public_request_sha256"],
             expected_request=self.request if request is None else request)
+
+    def dispatch_fixture(self, enabled=True):
+        from test_search_over_raw_world_inputs import arguments
+        recorder = self.recorder(enabled)
+        for _ in range(4):
+            world, state = self.construct(recorder)
+        args = arguments(text=state.to_string(), iterations=64)
+        args[5] = json.dumps({seat:list(world.party_species[seat]) for seat in ("p1", "p2")} | {"turn":3})
+        return recorder, args, recorder.dispatch(args)
+
+    def test_dispatch_retains_exact_already_hashed_payload_only_in_explicit_fixed_lane(self):
+        recorder, args, call = self.dispatch_fixture()
+        payload = read_dispatch_inputs(call, rows=recorder.rows, expected_tables={"tables":True})
+        self.assertEqual(digest(payload), call["input_sha256"])
+        self.assertEqual(payload["fold"], _state_payload(args[6].to_payload()))
+        self.assertTrue(call["dispatch_inputs"]["private_controller_only"])
+        self.assertEqual(call["construction_ordinals"], list(range(4)))
+        # Returned data cannot mutate the retained call or original inputs.
+        payload["context"]["p1"].clear()
+        read_dispatch_inputs(call, rows=recorder.rows)
+        ordinary, _, ordinary_call = self.dispatch_fixture(False)
+        self.assertNotIn("dispatch_inputs", ordinary_call)
+        self.assertEqual(call["input_sha256"], ordinary_call["input_sha256"])
+        self.assertFalse(ordinary.record_public_fold)
+        self.assertTrue(runtime_receipt()["native_dispatch_inputs"]["fixed_work_only"])
+
+    def test_dispatch_reads_native_fold_once_and_does_not_reconstruct_after_hash(self):
+        recorder, args, _ = self.dispatch_fixture()
+        # Use a fresh recorder: each construction can be dispatched only once.
+        recorder = self.recorder()
+        for _ in range(4): self.construct(recorder)
+        class Fold:
+            calls = 0
+            def to_payload(self):
+                self.calls += 1
+                return {"history":[self.calls]}
+        fold = Fold(); args[6] = fold
+        call = recorder.dispatch(args)
+        self.assertEqual(fold.calls, 1)
+        self.assertEqual(read_dispatch_inputs(call, rows=recorder.rows)["fold"],
+            _state_payload({"history":[1]}))
+
+    def test_dispatch_reader_rejects_drift_missing_capture_and_wrong_external_tables(self):
+        recorder, _, original = self.dispatch_fixture()
+        for mode in ("missing", "state", "fold", "tables", "context", "seed", "call_seed", "world", "timed", "scope"):
+            call = deepcopy(original)
+            capture = call["dispatch_inputs"]
+            if mode == "missing": call.pop("dispatch_inputs")
+            elif mode == "state": capture["payload"]["state"] = "changed"
+            elif mode == "fold": capture["payload"]["fold"] = {"mapping":[]}
+            elif mode == "tables": capture["payload"]["tables"] = {"tables":False}
+            elif mode == "context": capture["payload"]["context"]["turn"] += 1
+            elif mode == "seed": capture["payload"]["chance_seed"] += 1
+            elif mode == "call_seed": call["native_call_parameters"]["chance_seed"] += 1
+            elif mode == "world": capture["payload"]["world_sha256"] = "a"*64
+            elif mode == "timed": call["deadline_limited"] = True
+            else: capture["private_controller_only"] = False
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                read_dispatch_inputs(call, rows=recorder.rows)
+        with self.assertRaisesRegex(ValueError, "independently pinned tables"):
+            read_dispatch_inputs(original, rows=recorder.rows, expected_tables={"tables":False})
+        rows = deepcopy(recorder.rows)
+        rows[0]["construction_receipt"]["events"][1]["value"]["native_state"] = "substitution"
+        with self.assertRaisesRegex(ValueError, "original construction"):
+            read_dispatch_inputs(original, rows=rows)
+
+    def test_public_fold_scope_cannot_be_enabled_after_recorder_creation(self):
+        recorder, args, _ = self.dispatch_fixture(False)
+        recorder.record_public_fold = True
+        with self.assertRaisesRegex(ValueError, "public-fold capture scope"):
+            recorder.dispatch(args)
 
     def test_actual_attempt_and_constructor_capture_exact_full_public_request(self):
         recorder = self.recorder(); self.construct(recorder)
@@ -133,6 +204,26 @@ class ConstructionPublicFoldTests(unittest.TestCase):
             record = json.loads(path.read_text()); record["result"] = changed
             path.write_text(json.dumps(record))
         with self.assertRaises(ValueError): reader(changed)
+        self.assertIsNone(reader.last_validation)
+
+    def test_completed_owner_rejects_durably_missing_dispatch_payload(self):
+        fixture = consumed_fixture.ArchivedDiagnosticAttachmentTests()
+        self.addCleanup(fixture.doCleanups)
+        _, selected, reader = fixture.fixture(record_public_fold=True)
+        self.assertEqual(reader(selected), digest(selected))
+        manifest = selected["evidence"]["consumed_world_inputs"]
+        for call in manifest["calls"]:
+            read_dispatch_inputs(call, rows=manifest["rows"], expected_tables={"tables":True})
+        changed = deepcopy(selected)
+        changed["evidence"]["consumed_world_inputs"]["calls"][0].pop("dispatch_inputs")
+        # A consistently rewritten child result cannot bypass the independent
+        # owning reader's required actual-input content check.
+        for name in ("worker-result.json", "terminal.json"):
+            path = reader.directory / name
+            record = json.loads(path.read_text()); record["result"] = changed
+            path.write_text(json.dumps(record))
+        with self.assertRaisesRegex(ValueError, "dispatch input capture"):
+            reader(changed)
         self.assertIsNone(reader.last_validation)
 
     def test_prospective_runtime_matches_actual_adapter_and_is_not_original_runtime(self):

@@ -283,10 +283,14 @@ class SyntheticJob:
         phase("cleanup")
         if self.mode == "fail":
             raise RuntimeError("PRIVATE_DETAIL_MUST_NOT_BE_REPORTED")
-        if self.mode == "contract_fail":
+        if self.mode in {"contract_fail", "contract_fail_during_cleanup"}:
             from pokezero.mcts_eval.policy_opponent_profile import validate_selection
-            validate_selection({}, arm="incumbent_mcts", mode="matched_deadline", config=None,
-                mask=(), opponent_seed=0, deadline_ms=1000, native_batch_guard_ms=64)
+            try:
+                validate_selection({}, arm="incumbent_mcts", mode="matched_deadline", config=None,
+                    mask=(), opponent_seed=0, deadline_ms=1000, native_batch_guard_ms=64)
+            finally:
+                if self.mode == "contract_fail_during_cleanup":
+                    raise RuntimeError("PRIVATE_CLEANUP_DETAIL")
         return dict(synthetic=True)
 
 
@@ -449,6 +453,16 @@ class FixedWorkSupervisionTests(unittest.TestCase):
         self.assertEqual(value["status"], "OPERATIONAL_STOP")
         self.assertFalse(value["cpu_wall_cost_complete"])
         self.assertFalse(live_owned_groups(set(value["owned_groups"])))
+
+    def test_cleanup_error_does_not_hide_primary_repository_failure_site(self):
+        value = self.run_job("contract_fail_during_cleanup")
+        raw = (self.root / "attempt" / "worker-result.json").read_text()
+        worker = json.loads(raw)
+        self.assertEqual(worker["error_type"],"RuntimeError")
+        self.assertTrue(any(r["module"] == "pokezero.mcts_eval.policy_opponent_profile"
+            and r["function"] == "validate_selection" for r in worker["error_frames"]))
+        self.assertLessEqual(len(worker["error_frames"]),16)
+        self.assertNotIn("PRIVATE_CLEANUP_DETAIL",raw)
 
     def test_exit_zero_without_terminal_evidence_is_not_success(self):
         value = self.run_job("exit_zero")

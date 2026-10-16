@@ -193,17 +193,23 @@ class FixedWorkAdapterJob:
 def _safe_error_frames(failure):
     """Repository code sites only; no messages, source lines, locals or paths."""
     root = Path(__file__).resolve().parents[1]
-    frames, trace = [], failure.__traceback__
-    while trace is not None:
-        try:
-            relative = Path(trace.tb_frame.f_code.co_filename).resolve().relative_to(root)
-        except (OSError, ValueError, RuntimeError):
-            pass
-        else:
-            if relative.suffix == ".py":
-                frames.append(dict(module="pokezero." + ".".join(relative.with_suffix("").parts),
-                    function=trace.tb_frame.f_code.co_name, line=trace.tb_lineno))
-        trace = trace.tb_next
+    frames, seen = [], set()
+    # A strict cleanup can raise while another exception is active. Preserve
+    # that original code site too, without persisting messages or payloads.
+    while failure is not None and id(failure) not in seen and len(seen) < 4:
+        seen.add(id(failure))
+        trace = failure.__traceback__
+        while trace is not None:
+            try:
+                relative = Path(trace.tb_frame.f_code.co_filename).resolve().relative_to(root)
+            except (OSError, ValueError, RuntimeError):
+                pass
+            else:
+                if relative.suffix == ".py":
+                    frames.append(dict(module="pokezero." + ".".join(relative.with_suffix("").parts),
+                        function=trace.tb_frame.f_code.co_name, line=trace.tb_lineno))
+            trace = trace.tb_next
+        failure = failure.__cause__ or failure.__context__
     return frames[-16:]
 
 
