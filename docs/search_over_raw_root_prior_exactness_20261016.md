@@ -110,9 +110,13 @@ and the live check used the r4 entry's own TorchScript export, encoder tables, c
 environment configuration digest.
 
 Any collector that selects actions away from the live boundary, or from a branch that modifies
-the engine path, must pass this gate before its results are read: total variation at or below
-0.001 between its native root prior and the live `EngineMctsPolicy` root prior on every root of
-a fresh panel, measured with `scripts/live_root_prior_check.py`, whose exit status enforces it.
+the engine path, must pass this gate before its results are read: argmax agreement and total variation at or
+below 0.1 between its native root prior and the policy's distribution on every root of a fresh
+panel, measured with `scripts/live_root_prior_check.py`, whose exit status enforces it. The bound
+sits above main's own numeric residual (at most 0.09, same argmax) and well below the collector
+pattern (median 0.42). On main the reference configuration fails the default gate on three of
+1,801 decisions, all in the game-1612591941 move-surface class, which any run on those seeds
+should expect and attribute.
 The simplest way to pass it is to select at the live boundary, as the check does, and run
 continuations from the sealed snapshot afterwards.
 

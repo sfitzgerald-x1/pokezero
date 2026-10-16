@@ -87,6 +87,11 @@ class GateVerdictTest(unittest.TestCase):
         self.assertFalse(verdict["passed"])
         self.assertEqual(verdict["variants"]["b"], {"measured": 0, "agree": 0, "over_gate": 0, "errors": 1, "max_tv": 0.0})
 
+    def test_argmax_flip_within_tv_bound_and_unmeasured_variant_both_fail(self) -> None:
+        flip = [self._row(a={"agree": False, "tv": 0.05})]
+        self.assertFalse(live.gate_verdict(flip, ["a"], 0.1)["passed"])
+        self.assertFalse(live.gate_verdict([self._row(a={"agree": True, "tv": 0.0})], ["a", "never_written"], 0.1)["passed"])
+
 
 class ArchivedRootsTest(unittest.TestCase):
     def test_reads_roots_from_source_json_and_tolerates_missing_seed(self) -> None:

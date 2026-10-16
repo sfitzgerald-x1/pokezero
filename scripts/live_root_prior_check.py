@@ -13,8 +13,12 @@ compares it with the raw policy's masked distribution: argmax agreement, total v
 If `oracle` agrees with the raw policy but `sampled*` do not, the root encoding depends on the
 sampled hidden state. If `oracle` also disagrees, the live path differs from the parity gate.
 
-Exit status is the gate: 0 only if every measured decision has total variation at or below
-`--gate-tv` (default 0.001) under every variant and no variant errored. A root with a single
+Exit status is the gate: 0 only if every measured decision agrees on the argmax and has total
+variation at or below `--gate-tv` under every variant, every variant measured at least one
+decision, and no variant errored. The default of 0.1 sits above main's own numeric residual
+(at most 0.09, same argmax) and well below the collector pattern this gate exists to catch
+(median 0.42 on disagreement roots). On main the reference configuration fails the default
+gate only on the three game-1612591941 rows of the move-surface class. A root with a single
 legal action has no choice and counts as exact. `--world-rng per-decision` (default) reseeds the
 belief sampler with the game seed at every boundary, so a run is reproducible; `per-game` draws
 fresh worlds at every boundary from one per-game stream, closer to a live collector.
@@ -67,16 +71,21 @@ def find_key(obj: Any, key: str, depth: int = 0):
 
 
 def gate_verdict(rows: list[dict[str, Any]], variants: list[str], gate_tv: float) -> dict[str, Any]:
-    """Summarize rows against the gate; `passed` is False on any error or any TV above gate_tv."""
+    """Summarize rows against the gate.
+
+    `passed` is False on any error, any argmax disagreement, any TV above gate_tv, or a variant
+    that measured nothing (a vacuous pass is not a pass).
+    """
     out: dict[str, Any] = {"gate_tv": gate_tv, "rows": len(rows), "variants": {}, "passed": True}
     for v in variants:
         measured = [r for r in rows if "tv" in r["variants"].get(v, {})]
         errors = [r for r in rows if "error" in r["variants"].get(v, {})]
         over = [r for r in measured if r["variants"][v]["tv"] > gate_tv]
-        out["variants"][v] = {"measured": len(measured), "agree": sum(1 for r in measured if r["variants"][v]["agree"]),
+        disagree = [r for r in measured if not r["variants"][v]["agree"]]
+        out["variants"][v] = {"measured": len(measured), "agree": len(measured) - len(disagree),
                               "over_gate": len(over), "errors": len(errors),
                               "max_tv": max((r["variants"][v]["tv"] for r in measured), default=0.0)}
-        if over or errors:
+        if over or errors or disagree or not measured:
             out["passed"] = False
     return out
 
@@ -106,7 +115,7 @@ def main(argv=None) -> int:
     parser.add_argument("--sims", type=int, default=64)
     parser.add_argument("--variants", nargs="+", default=["sampled4", "sampled1", "oracle"])
     parser.add_argument("--dump-first-metadata", action="store_true")
-    parser.add_argument("--gate-tv", type=float, default=0.001, help="exit 1 if any decision exceeds this total variation")
+    parser.add_argument("--gate-tv", type=float, default=0.1, help="exit 1 if any decision exceeds this total variation or flips the argmax")
     parser.add_argument("--world-rng", choices=("per-decision", "per-game"), default="per-decision")
     args = parser.parse_args(argv)
 
