@@ -3175,14 +3175,18 @@ def _request_active_moves(request: Mapping[str, Any]) -> list[dict[str, Any]]:
         maxpp = move.get("maxpp")
         if not isinstance(pp, int) or not isinstance(maxpp, int):
             continue
-        copied.append(
-            {
-                "id": move["id"],
-                "pp": pp,
-                "maxpp": maxpp,
-                "disabled": bool(move.get("disabled")),
-            }
-        )
+        copied_move = {
+            "id": move["id"],
+            "pp": pp,
+            "maxpp": maxpp,
+            "disabled": bool(move.get("disabled")),
+        }
+        # Gen 3's actor request exposes Hidden Power's copied type AND power
+        # in this display name (Pokemon.getMoves). Do not reconstruct either
+        # from a belief-sampled Transform donor.
+        if normalize_id(move["id"]).startswith("hiddenpower") and isinstance(move.get("move"), str):
+            copied_move["move"] = move["move"]
+        copied.append(copied_move)
     return copied
 
 
