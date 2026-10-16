@@ -456,7 +456,11 @@ FIRED_IN_CORPUS_WORLD_UNSUPPORTED = frozenset(
 # historical inventory until a new C153-shaped measurement explicitly retires
 # it. The live corpus census still sees every current reason; this exception is
 # only about what the old wide-seed measurement can claim.
-POST_CENSUS_UNMEASURED_WORLD_UNSUPPORTED = frozenset({"substitute_origin_unknown"})
+POST_CENSUS_UNMEASURED_WORLD_UNSUPPORTED = frozenset({
+    "substitute_origin_unknown",
+    "transform_self_moves_malformed",
+    "transform_self_hidden_power_unknown",
+})
 
 
 def world_unsupported_reasons_measured_by_c153() -> set[str]:
