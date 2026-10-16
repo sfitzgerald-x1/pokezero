@@ -23,6 +23,11 @@ legal action has no choice and counts as exact. `--world-rng per-decision` (defa
 belief sampler with the game seed at every boundary, so a run is reproducible; `per-game` draws
 fresh worlds at every boundary from one per-game stream, closer to a live collector.
 
+With --collector-report, exit status instead enforces the separate exact collector-native
+versus independently rerun live-native gate on the collector's declared roster. It requires
+full-precision distributions, complete action mapping, original boundary fingerprints and
+matching code/runtime/configuration bindings; it never substitutes the raw/native tolerance.
+
 Usage:
     PYTHONPATH=src python scripts/live_root_prior_check.py --checkpoint <ckpt.pt> --model-ts <model_ts.pt> \
         --tables <encoder_tables.json> --showdown-root <showdown> --seeds S1 S2 ... --out report.json [--sims 64]
@@ -30,6 +35,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import random
@@ -50,6 +56,9 @@ from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv  # noq
 from pokezero.neural_policy import load_transformer_policy  # noqa: E402
 from pokezero.randbat import load_gen3_randbat_source_cached  # noqa: E402
 from pokezero.rollout import RolloutConfig, continue_rollout_from_current_state  # noqa: E402
+from pokezero.root_prior_correspondence import (  # noqa: E402
+    SCHEMA, boundary_fingerprint, exact_collector_gate, fingerprint, input_binding,
+)
 
 
 def find_key(obj: Any, key: str, depth: int = 0):
@@ -97,9 +106,11 @@ def compare(py: dict[int, float], nat: dict[int, float]) -> dict[str, Any]:
     na = max(nat, key=nat.get) if nat else None
     tv = 0.5 * sum(abs(py.get(a, 0.0) - nat.get(a, 0.0)) for a in set(py) | set(nat))
     kl = sum(p * math.log(p / max(nat.get(a, 0.0), 1e-9)) for a, p in py.items() if p > 1e-12)
-    return dict(python_argmax=pa, native_argmax=na, agree=(pa == na), tv=round(tv, 4), kl=round(kl, 4),
+    return dict(python_argmax=pa, native_argmax=na, agree=(pa == na), tv=tv, kl=kl,
                 native_prior={str(a): round(v, 5) for a, v in sorted(nat.items())},
-                python_prior={str(a): round(v, 5) for a, v in sorted(py.items())})
+                python_prior={str(a): round(v, 5) for a, v in sorted(py.items())},
+                native_prior_full_precision={str(a): v for a, v in sorted(nat.items())},
+                python_prior_full_precision={str(a): v for a, v in sorted(py.items())})
 
 
 def main(argv=None) -> int:
@@ -113,11 +124,25 @@ def main(argv=None) -> int:
     parser.add_argument("--format-id", default="gen3randombattle")
     parser.add_argument("--max-decision-rounds", type=int, default=250)
     parser.add_argument("--sims", type=int, default=64)
-    parser.add_argument("--variants", nargs="+", default=["sampled4", "sampled1", "oracle"])
+    parser.add_argument("--variants", nargs="+", choices=("sampled4", "sampled1", "oracle"),
+                        default=["sampled4", "sampled1", "oracle"])
+    parser.add_argument("--leaf", choices=("model", "hp_fraction"), default="model")
+    parser.add_argument("--collector-report", type=Path,
+        help="require exact unrounded collector-native/live-native correspondence on its declared roster")
     parser.add_argument("--dump-first-metadata", action="store_true")
     parser.add_argument("--gate-tv", type=float, default=0.1, help="exit 1 if any decision exceeds this total variation or flips the argmax")
     parser.add_argument("--world-rng", choices=("per-decision", "per-game"), default="per-decision")
     args = parser.parse_args(argv)
+    if args.out.exists():
+        parser.error("out must be a fresh path; historical evidence cannot be overwritten")
+    if args.sims <= 0 or len(set(args.seeds)) != len(args.seeds) or len(set(args.variants)) != len(args.variants):
+        parser.error("positive work and unique seeds/variants required")
+    if not math.isfinite(args.gate_tv) or args.gate_tv < 0:
+        parser.error("gate-tv must be finite and nonnegative")
+    collector = json.loads(args.collector_report.read_text()) if args.collector_report else None
+    original_artifacts = {name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in (("checkpoint_sha256", args.checkpoint),
+            ("model_sha256", args.model_ts), ("tables_sha256", args.tables))}
 
     base = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
     config = env_config_with_policy_spec_masks(base, ["neural:" + str(args.checkpoint)], context="live_root_prior_check")
@@ -127,17 +152,33 @@ def main(argv=None) -> int:
     set_source = load_gen3_randbat_source_cached(showdown_root)
     annotation_source = EnvTier2AnnotationSource(env)
 
-    def engine(worlds: int, fixed_override=None, tag: str = "") -> EngineMctsPolicy:
-        policy = EngineMctsPolicy(
-            dex=dex, set_source=set_source, policy_id=f"live-check-{tag}",
-            fixed_override=fixed_override, annotation_source=annotation_source,
-            config=EngineMctsConfig(
-                worlds=worlds, search_time_ms=5000, threads=1, leaf_eval="model",
+    def engine_config(worlds: int) -> EngineMctsConfig:
+        return EngineMctsConfig(
+                worlds=worlds, search_time_ms=5000, threads=1, leaf_eval=args.leaf,
                 model_path=str(args.model_ts), checkpoint_path=str(args.checkpoint), model_device="cpu",
                 tables_path=str(args.tables), search_sims=args.sims, search_batch=16, search_depth=6,
                 c_puct=1.4, deep_ko_split=True, model_priors=True, use_opponent_priors=False,
                 override_telemetry=True, early_stop=False, model_world_workers=1,
-            ),
+            )
+
+    templates = {name: engine_config(4 if name == "sampled4" else 1) for name in args.variants}
+    def current_binding():
+        return input_binding(config, checkpoint=args.checkpoint, model_ts=args.model_ts,
+            tables=args.tables, selectors=templates, world_rng=args.world_rng)
+
+    bindings = current_binding()
+    if any(bindings.get(name) != sha for name, sha in original_artifacts.items()):
+        raise ValueError("checkpoint/export changed while constructing source configuration")
+
+    def check_bindings():
+        if fingerprint(current_binding()) != fingerprint(bindings):
+            raise ValueError("live check inputs changed; incomplete report is not a gate pass")
+
+    def engine(worlds: int, fixed_override=None, tag: str = "") -> EngineMctsPolicy:
+        policy = EngineMctsPolicy(
+            dex=dex, set_source=set_source, policy_id=f"live-check-{tag}",
+            fixed_override=fixed_override, annotation_source=annotation_source,
+            config=engine_config(worlds),
         )
         policy.warm_model_runtime()
         return policy
@@ -146,6 +187,7 @@ def main(argv=None) -> int:
     dumped = {"done": False}
     try:
         for seed in args.seeds:
+            check_bindings()  # Before a new source start or any model reload.
             battle_id = f"live-check:{args.format_id}:{seed}"
             env.reset(seed=seed, format_id=args.format_id)
             true_teams = _true_teams_from_bridge_snapshot(env.snapshot().bridge_snapshot)
@@ -173,7 +215,8 @@ def main(argv=None) -> int:
                 z = sum(py.values()) or 1.0
                 py = {a: v / z for a, v in py.items()}
                 row = dict(seed=seed, round=context.decision_round_index, turn=context.observation.metadata.get("turn_number"),
-                           raw_action=decision.action_index, legal=legal, variants={})
+                           raw_action=decision.action_index, legal=legal,
+                           boundary_sha256=boundary_fingerprint(context), variants={})
                 for name, pol in engines.items():
                     started = time.perf_counter()
                     try:
@@ -197,6 +240,10 @@ def main(argv=None) -> int:
                         continue
                     unmapped = sum(1 for a in arms if a.get("action_index") is None)
                     nat = {int(a["action_index"]): float(a.get("model_prior", 0.0)) for a in arms if a.get("action_index") is not None}
+                    mapped_count = sum(a.get("action_index") is not None for a in arms)
+                    if mapped_count != len(nat):
+                        row["variants"][name] = dict(error="duplicate native action mapping")
+                        continue
                     if not nat:
                         if len(legal) == 1:  # no choice to make; the native side reports no mappable arm
                             row["variants"][name] = dict(python_argmax=legal[0], native_argmax=legal[0], agree=True, tv=0.0, kl=0.0,
@@ -223,12 +270,24 @@ def main(argv=None) -> int:
             summary = {v: sum(1 for r in rows if r["seed"] == seed and r["variants"].get(v, {}).get("agree")) for v in engines}
             errors = {v: sum(1 for r in rows if r["seed"] == seed and "error" in r["variants"].get(v, {})) for v in engines}
             print(json.dumps(dict(seed=seed, p1_decisions=n, turns=result.terminal.turn_count, agree=summary, errors=errors)), flush=True)
-            args.out.write_text(json.dumps(dict(rows=rows, complete=False), indent=1) + "\n")  # incremental, survives a crash
+            check_bindings()
+            args.out.write_text(json.dumps(dict(schema=SCHEMA, rows=rows, complete=False,
+                bindings=bindings), indent=1, allow_nan=False) + "\n")  # incremental, survives a crash
     finally:
         env.close()
+    check_bindings()  # Never label a mixed-input or post-drift report complete.
     verdict = gate_verdict(rows, list(args.variants), args.gate_tv)
-    args.out.write_text(json.dumps(dict(rows=rows, complete=True, gate=verdict, world_rng=args.world_rng), indent=1) + "\n")
+    report = dict(schema=SCHEMA, rows=rows, complete=True, bindings=bindings,
+        gate=verdict, world_rng=args.world_rng)
+    if collector is not None:
+        report["collector_gate"] = exact_collector_gate(collector, report)
+    args.out.write_text(json.dumps(report, indent=1, allow_nan=False) + "\n")
     print("== gate:", json.dumps(verdict))
+    if collector is not None:
+        print("== collector gate:", json.dumps(report["collector_gate"]))
+        # Raw/native parity is a different diagnostic. Only collector/live
+        # exactness is the handoff gate; known raw/native residuals are retained.
+        return 0 if report["collector_gate"]["passed"] else 1
     return 0 if verdict["passed"] else 1
 
 

@@ -8,12 +8,17 @@ into verdicts are deterministic and tested here.
 from __future__ import annotations
 
 import importlib.util
+from contextlib import ExitStack
+from copy import deepcopy
+import hashlib
 import json
 import math
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 _SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
@@ -57,6 +62,13 @@ class CompareTest(unittest.TestCase):
         out = live.compare({0: 0.5, 1: 0.5}, {0: 1.0, 1: 0.0})
         self.assertTrue(math.isfinite(out["kl"]))
         self.assertEqual(out["tv"], 0.5)
+
+    def test_gate_uses_unrounded_distance_and_keeps_full_precision_vectors(self) -> None:
+        out = live.compare({0: .75, 1: .25}, {0: .750000001, 1: .249999999})
+        self.assertGreater(out["tv"], 0.)
+        self.assertEqual(round(out["tv"], 4), 0.)
+        self.assertEqual(out["native_prior_full_precision"]["0"], .750000001)
+        self.assertFalse(live.gate_verdict([{"variants": {"sampled4": out}}], ["sampled4"], 0.)["passed"])
 
 
 class FindKeyTest(unittest.TestCase):
@@ -102,6 +114,40 @@ class ArchivedRootsTest(unittest.TestCase):
             (seed_dir / "source.json").write_text(json.dumps({"roots": [{"root_id": "exploration:123:0", "source_request_index": 4}]}))
             self.assertEqual(regen.archived_roots(run, 123)[0]["root_id"], "exploration:123:0")
             self.assertEqual(regen.archived_roots(run, 999), [])
+
+
+class BindingDriftTest(unittest.TestCase):
+    def test_drift_before_reload_or_final_publication_keeps_report_incomplete(self):
+        for seeds in ([12,13],[12]):
+            with self.subTest(seeds=seeds),tempfile.TemporaryDirectory() as folder,ExitStack() as stack:
+                root=Path(folder);artifact=root/"authored-input"
+                artifact.write_bytes(b"authored")
+                sha=hashlib.sha256(b"authored").hexdigest()
+                original={name:sha for name in ("checkpoint_sha256","model_sha256","tables_sha256")}
+                changed={**original,"model_sha256":"d"*64}
+                bind=stack.enter_context(patch.object(live,"input_binding",side_effect=[
+                    deepcopy(original),deepcopy(original),deepcopy(original),changed]))
+                config=SimpleNamespace(resolved_showdown_root=lambda:root)
+                stack.enter_context(patch.object(live,"env_config_with_policy_spec_masks",return_value=config))
+                env=Mock();env.snapshot.return_value.bridge_snapshot={}
+                stack.enter_context(patch.object(live,"LocalShowdownEnv",return_value=env))
+                stack.enter_context(patch.object(live,"load_showdown_dex_cached"))
+                stack.enter_context(patch.object(live,"load_gen3_randbat_source_cached"))
+                stack.enter_context(patch.object(live,"_true_teams_from_bridge_snapshot",return_value={
+                    "p1":{"packed":"own"},"p2":{"packed":"opponent"}}))
+                engine=stack.enter_context(patch.object(live,"EngineMctsPolicy"))
+                stack.enter_context(patch.object(live,"load_transformer_policy"))
+                stack.enter_context(patch.object(live,"continue_rollout_from_current_state",
+                    return_value=SimpleNamespace(terminal=SimpleNamespace(turn_count=1))))
+                out=root/"out.json"
+                args=["--checkpoint",str(artifact),"--model-ts",str(artifact),"--tables",str(artifact),
+                    "--showdown-root",str(root),"--seeds",*[str(s) for s in seeds],
+                    "--variants","sampled4","--out",str(out)]
+                with self.assertRaisesRegex(ValueError,"inputs changed"):live.main(args)
+                self.assertEqual(bind.call_count,4)
+                self.assertEqual(engine.call_count,1)  # Never reload after drift.
+                self.assertIs(json.loads(out.read_text())["complete"],False)
+                env.close.assert_called_once()
 
 
 if __name__ == "__main__":
