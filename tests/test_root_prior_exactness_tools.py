@@ -146,7 +146,7 @@ class BindingDriftTest(unittest.TestCase):
                 bind=stack.enter_context(patch.object(live,"input_binding",side_effect=[
                     deepcopy(original),deepcopy(original),deepcopy(original),changed]))
                 config=SimpleNamespace(resolved_showdown_root=lambda:root)
-                stack.enter_context(patch.object(live,"env_config_with_policy_spec_masks",return_value=config))
+                derive=stack.enter_context(patch.object(live,"env_config_with_policy_spec_masks",return_value=config))
                 env=Mock();env.snapshot.return_value.bridge_snapshot={}
                 stack.enter_context(patch.object(live,"LocalShowdownEnv",return_value=env))
                 stack.enter_context(patch.object(live,"load_showdown_dex_cached"))
@@ -159,9 +159,12 @@ class BindingDriftTest(unittest.TestCase):
                     return_value=SimpleNamespace(terminal=SimpleNamespace(turn_count=1))))
                 out=root/"out.json"
                 args=["--checkpoint",str(artifact),"--model-ts",str(artifact),"--tables",str(artifact),
-                    "--showdown-root",str(root),"--seeds",*[str(s) for s in seeds],
+                    "--showdown-root",str(root),"--bridge-path",str(artifact),"--seeds",*[str(s) for s in seeds],
                     "--variants","sampled4","--out",str(out)]
-                with self.assertRaisesRegex(ValueError,"inputs changed"):live.main(args)
+                guard=Mock()
+                with self.assertRaisesRegex(ValueError,"inputs changed"):live.main(args,boundary_guard=guard)
+                self.assertEqual(guard.call_count,len(seeds))
+                self.assertEqual(derive.call_args.args[0].resolved_bridge_path(),artifact.resolve())
                 self.assertEqual(bind.call_count,4)
                 self.assertEqual(engine.call_count,1)  # Never reload after drift.
                 self.assertIs(json.loads(out.read_text())["complete"],False)

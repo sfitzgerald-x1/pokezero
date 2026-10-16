@@ -116,12 +116,14 @@ def compare(py: dict[int, float], nat: dict[int, float]) -> dict[str, Any]:
                 python_prior_full_precision={str(a): v for a, v in sorted(py.items())})
 
 
-def main(argv=None) -> int:
+def main(argv=None, *, boundary_guard=None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--model-ts", type=Path, required=True)
     parser.add_argument("--tables", type=Path, required=True)
     parser.add_argument("--showdown-root", type=Path, required=True)
+    parser.add_argument("--bridge-path",type=Path,
+        help="match an explicitly pinned collector bridge rather than the local default")
     parser.add_argument("--seeds", type=int, nargs="+", required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--format-id", default="gen3randombattle")
@@ -151,7 +153,7 @@ def main(argv=None) -> int:
         for name, path in (("checkpoint_sha256", args.checkpoint),
             ("model_sha256", args.model_ts), ("tables_sha256", args.tables))}
 
-    base = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
+    base = LocalShowdownConfig(showdown_root=args.showdown_root,bridge_path=args.bridge_path,set_belief_source=True)
     config = env_config_with_policy_spec_masks(base, ["neural:" + str(args.checkpoint)], context="live_root_prior_check")
     env = LocalShowdownEnv(config)
     showdown_root = config.resolved_showdown_root()
@@ -197,6 +199,7 @@ def main(argv=None) -> int:
     dumped = {"done": False}
     try:
         for seed in args.seeds:
+            if boundary_guard is not None:boundary_guard()
             check_bindings()  # Before a new source start or any model reload.
             battle_id = f"live-check:{args.format_id}:{seed}"
             env.reset(seed=seed, format_id=args.format_id)
@@ -217,6 +220,7 @@ def main(argv=None) -> int:
             game_rngs = {name: random.Random(seed) for name in engines}
 
             def _sink(context, decision, seed=seed, engines=engines, game_rngs=game_rngs):
+                if boundary_guard is not None:boundary_guard()
                 if context.player_id != "p1":
                     return
                 dist = decision.metadata.get("policy_distribution")
@@ -228,6 +232,7 @@ def main(argv=None) -> int:
                            raw_action=decision.action_index, legal=legal,
                            boundary_sha256=boundary_fingerprint(context), variants={})
                 for name, pol in engines.items():
+                    if boundary_guard is not None:boundary_guard()
                     started = time.perf_counter()
                     try:
                         rng = game_rngs[name] if args.world_rng == "per-game" else random.Random(seed)
@@ -235,6 +240,7 @@ def main(argv=None) -> int:
                     except Exception as error:  # noqa: BLE001
                         row["variants"][name] = dict(error=f"{type(error).__name__}: {str(error)[:200]}")
                         continue
+                    if boundary_guard is not None:boundary_guard()
                     md = dict(d.metadata)
                     if args.dump_first_metadata and not dumped["done"]:
                         dumped["done"] = True
