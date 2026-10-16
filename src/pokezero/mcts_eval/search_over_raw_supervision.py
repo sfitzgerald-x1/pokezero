@@ -504,7 +504,7 @@ def supervise_fixed_work(job, *, directory, binding_sha256, verify_admission,
 
 def _supervise_owned_job(job, *, directory, binding_sha256, verify_admission, contract,
                          kind, work_phase, validate_result, diagnostic_incomplete_policy=None,
-                         _synthetic_watchdog_seconds=None):
+                         _synthetic_watchdog_seconds=None,calendar_deadline_utc_seconds=None):
     """Shared one-shot wait ownership; wrappers retain their distinct work law."""
     require(os.name == "posix" and hasattr(os, "wait4"), "POSIX wait4 supervision required")
     require(kind in ("fixed-work", "outcome-run", "boundary-run", "materialization-run", "native-timed-run", "actor-annotated-native-timed-run", "native-oracle-timed-run", "reference-timed-run", "reference-oracle-timed-run", "raw-selection-run", "staged-exploration-run") and callable(verify_admission)
@@ -512,6 +512,9 @@ def _supervise_owned_job(job, *, directory, binding_sha256, verify_admission, co
     require(type(binding_sha256) is str and len(binding_sha256) == 64
         and all(c in "0123456789abcdef" for c in binding_sha256), "bound attempt hash required")
     require(verify_admission() is not False, "caller refused diagnostic admission")
+    require(calendar_deadline_utc_seconds is None or (type(calendar_deadline_utc_seconds) in (int,float)
+        and math.isfinite(calendar_deadline_utc_seconds) and calendar_deadline_utc_seconds>time.time()),
+        "calendar deadline must be a finite future UTC time")
     scope = current_scope()
     if scope is not None:
         check_capacity(scope)  # Refuse exhausted depth/inventory before any spawn.
@@ -552,6 +555,8 @@ def _supervise_owned_job(job, *, directory, binding_sha256, verify_admission, co
         retry_authorized=False, synthetic_process_fixture=getattr(job, "synthetic_process_fixture", False) is True)
     if declaration is not None:claim["attempt_declaration"] = declaration
     if policy is not None: claim["diagnostic_incomplete_policy"] = policy
+    if calendar_deadline_utc_seconds is not None:
+        claim["calendar_deadline_utc_seconds"]=calendar_deadline_utc_seconds
     _save_new(directory / "claim.json", claim)
     with (directory / "job.pickle").open("xb") as stream:
         os.fchmod(stream.fileno(), 0o600)  # Outcome jobs may carry private frozen roots.
@@ -614,7 +619,8 @@ def _supervise_owned_job(job, *, directory, binding_sha256, verify_admission, co
                     reaped, groups = _stop_and_reap(directory, process, birth, binding_sha256,
                         depth=0 if scope is None else scope.depth + 1)
                     break
-            if time.perf_counter() >= deadline:
+            if time.perf_counter() >= deadline or (calendar_deadline_utc_seconds is not None
+                    and time.time()>=calendar_deadline_utc_seconds):
                 timed_out = True
                 reaped, groups = _stop_and_reap(directory, process, birth, binding_sha256,
                     depth=0 if scope is None else scope.depth + 1)
@@ -625,6 +631,8 @@ def _supervise_owned_job(job, *, directory, binding_sha256, verify_admission, co
                     memory.sample(timeout=min(measurement_protocol()["query_timeout_seconds"],remaining))
             time.sleep(.02)
         process.returncode = reaped[0]  # wait4—not disappearance—owns exit status.
+        if calendar_deadline_utc_seconds is not None and time.time()>=calendar_deadline_utc_seconds:
+            timed_out=True
         require(not timed_out, "diagnostic emergency watchdog reached")
         require(reaped[0] == 0, "diagnostic worker nonzero exit")
         groups = _groups(directory, process.pid, binding_sha256)
@@ -736,6 +744,8 @@ def _supervise_owned_job(job, *, directory, binding_sha256, verify_admission, co
         peak_tree_memory_measured=False, deployment_eligible=False, runtime_qualified=False,
         retries_permitted=False, holdout_authorized=False,
         result=worker["result"] if complete else None)
+    if calendar_deadline_utc_seconds is not None:
+        receipt["calendar_deadline_utc_seconds"]=calendar_deadline_utc_seconds
     if declaration is not None:
         writer_close_sha,journal_error=None,None
         if process is not None and reaped is not None:
