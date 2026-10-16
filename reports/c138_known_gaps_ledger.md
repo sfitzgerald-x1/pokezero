@@ -390,7 +390,7 @@ corrections below now mark in place:
   is how H14 went wrong, and then H13.
 
 Mechanized, because prose has now failed here four times:
-**`tests/test_never_fired_counter_census.py`** derives the 41 current refusal reasons from
+**`tests/test_never_fired_counter_census.py`** derives the 43 current refusal reasons from
 `src/pokezero/engine_world.py` and the 19 divergence classes from `classify_divergence` by AST,
 scans all 347 artifacts under both matching shapes, and asserts the fired/never-fired partition
 as **exact set equality in both directions** — so a counter that starts firing is red, and so is
@@ -404,6 +404,14 @@ and C153's wide census predate that exit, so their zeros do **not** measure it. 
 the source-derived 41-reason taxonomy and in the list below as **NEW / UNMEASURED**, not folded
 into C153's 29 verified legacy negatives or its rule-of-three bound. A later corpus run must
 either exercise it or retire it with a reachability proof.
+
+**Added October 16, 2026:** `transform_self_moves_malformed` refuses an invalid or
+conflicting acting-side copied-move request; `transform_self_hidden_power_unknown`
+refuses copied Hidden Power without request-known type and power. Both are **NEW /
+UNMEASURED** in the historical scientific corpus. Authored regression fixtures exercise
+these guards but do not extend C153's measured negatives or establish their incidence in
+real games. They bring the current source taxonomy to 43 reasons; the historical fired
+set and measurement denominators remain unchanged.
 
 ✅ **RE-MEASURED OUTSIDE THE WINDOWS 2026-08-08 (C153), and this is the instrument §8's newest
 rule was missing.** Every list in this section was a *corpus* result: `test_never_fired_counter_census.py`
