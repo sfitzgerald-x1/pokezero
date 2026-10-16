@@ -50,7 +50,8 @@ def archived_roots(run_dir: Path, seed: int) -> list[dict[str, Any]]:
     path = run_dir / "sources" / str(seed) / "source.json"
     if not path.exists():
         return []
-    return list(json.load(open(path))["roots"])
+    with path.open() as handle:
+        return list(json.load(handle)["roots"])
 
 
 def main(argv=None) -> int:

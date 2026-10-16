@@ -67,6 +67,27 @@ class FindKeyTest(unittest.TestCase):
         self.assertIsNone(live.find_key({"a": 1}, "missing"))
 
 
+class GateVerdictTest(unittest.TestCase):
+    def _row(self, **variants):
+        return {"variants": variants}
+
+    def test_passes_only_when_every_variant_is_within_gate_and_error_free(self) -> None:
+        rows = [self._row(a={"agree": True, "tv": 0.0}), self._row(a={"agree": True, "tv": 0.0005})]
+        verdict = live.gate_verdict(rows, ["a"], 0.001)
+        self.assertTrue(verdict["passed"])
+        self.assertEqual(verdict["variants"]["a"]["over_gate"], 0)
+        verdict = live.gate_verdict(rows + [self._row(a={"agree": True, "tv": 0.02})], ["a"], 0.001)
+        self.assertFalse(verdict["passed"])
+        self.assertEqual(verdict["variants"]["a"]["over_gate"], 1)
+        self.assertAlmostEqual(verdict["variants"]["a"]["max_tv"], 0.02)
+
+    def test_errors_fail_the_gate_and_are_counted(self) -> None:
+        rows = [self._row(a={"agree": True, "tv": 0.0}, b={"error": "boom"})]
+        verdict = live.gate_verdict(rows, ["a", "b"], 0.001)
+        self.assertFalse(verdict["passed"])
+        self.assertEqual(verdict["variants"]["b"], {"measured": 0, "agree": 0, "over_gate": 0, "errors": 1, "max_tv": 0.0})
+
+
 class ArchivedRootsTest(unittest.TestCase):
     def test_reads_roots_from_source_json_and_tolerates_missing_seed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

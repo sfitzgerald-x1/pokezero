@@ -13,6 +13,12 @@ compares it with the raw policy's masked distribution: argmax agreement, total v
 If `oracle` agrees with the raw policy but `sampled*` do not, the root encoding depends on the
 sampled hidden state. If `oracle` also disagrees, the live path differs from the parity gate.
 
+Exit status is the gate: 0 only if every measured decision has total variation at or below
+`--gate-tv` (default 0.001) under every variant and no variant errored. A root with a single
+legal action has no choice and counts as exact. `--world-rng per-decision` (default) reseeds the
+belief sampler with the game seed at every boundary, so a run is reproducible; `per-game` draws
+fresh worlds at every boundary from one per-game stream, closer to a live collector.
+
 Usage:
     PYTHONPATH=src python scripts/live_root_prior_check.py --checkpoint <ckpt.pt> --model-ts <model_ts.pt> \
         --tables <encoder_tables.json> --showdown-root <showdown> --seeds S1 S2 ... --out report.json [--sims 64]
@@ -60,6 +66,21 @@ def find_key(obj: Any, key: str, depth: int = 0):
     return None
 
 
+def gate_verdict(rows: list[dict[str, Any]], variants: list[str], gate_tv: float) -> dict[str, Any]:
+    """Summarize rows against the gate; `passed` is False on any error or any TV above gate_tv."""
+    out: dict[str, Any] = {"gate_tv": gate_tv, "rows": len(rows), "variants": {}, "passed": True}
+    for v in variants:
+        measured = [r for r in rows if "tv" in r["variants"].get(v, {})]
+        errors = [r for r in rows if "error" in r["variants"].get(v, {})]
+        over = [r for r in measured if r["variants"][v]["tv"] > gate_tv]
+        out["variants"][v] = {"measured": len(measured), "agree": sum(1 for r in measured if r["variants"][v]["agree"]),
+                              "over_gate": len(over), "errors": len(errors),
+                              "max_tv": max((r["variants"][v]["tv"] for r in measured), default=0.0)}
+        if over or errors:
+            out["passed"] = False
+    return out
+
+
 def compare(py: dict[int, float], nat: dict[int, float]) -> dict[str, Any]:
     z = sum(nat.values()) or 1.0
     nat = {a: v / z for a, v in nat.items()}
@@ -85,6 +106,8 @@ def main(argv=None) -> int:
     parser.add_argument("--sims", type=int, default=64)
     parser.add_argument("--variants", nargs="+", default=["sampled4", "sampled1", "oracle"])
     parser.add_argument("--dump-first-metadata", action="store_true")
+    parser.add_argument("--gate-tv", type=float, default=0.001, help="exit 1 if any decision exceeds this total variation")
+    parser.add_argument("--world-rng", choices=("per-decision", "per-game"), default="per-decision")
     args = parser.parse_args(argv)
 
     base = LocalShowdownConfig(showdown_root=args.showdown_root, set_belief_source=True)
@@ -130,7 +153,9 @@ def main(argv=None) -> int:
             for p in raw.values():
                 p.record_policy_distribution = True
 
-            def _sink(context, decision, seed=seed, engines=engines):
+            game_rngs = {name: random.Random(seed) for name in engines}
+
+            def _sink(context, decision, seed=seed, engines=engines, game_rngs=game_rngs):
                 if context.player_id != "p1":
                     return
                 dist = decision.metadata.get("policy_distribution")
@@ -143,7 +168,8 @@ def main(argv=None) -> int:
                 for name, pol in engines.items():
                     started = time.perf_counter()
                     try:
-                        d = pol.select_action_with_context(context, rng=random.Random(seed))
+                        rng = game_rngs[name] if args.world_rng == "per-game" else random.Random(seed)
+                        d = pol.select_action_with_context(context, rng=rng)
                     except Exception as error:  # noqa: BLE001
                         row["variants"][name] = dict(error=f"{type(error).__name__}: {str(error)[:200]}")
                         continue
@@ -163,7 +189,11 @@ def main(argv=None) -> int:
                     unmapped = sum(1 for a in arms if a.get("action_index") is None)
                     nat = {int(a["action_index"]): float(a.get("model_prior", 0.0)) for a in arms if a.get("action_index") is not None}
                     if not nat:
-                        row["variants"][name] = dict(error="every arm lacks an action_index", unmapped_arms=unmapped)
+                        if len(legal) == 1:  # no choice to make; the native side reports no mappable arm
+                            row["variants"][name] = dict(python_argmax=legal[0], native_argmax=legal[0], agree=True, tv=0.0, kl=0.0,
+                                                         forced_single_action=True, unmapped_arms=unmapped)
+                        else:
+                            row["variants"][name] = dict(error="every arm lacks an action_index", unmapped_arms=unmapped)
                         continue
                     out = compare(py, nat)
                     if unmapped:
@@ -187,10 +217,10 @@ def main(argv=None) -> int:
             args.out.write_text(json.dumps(dict(rows=rows, complete=False), indent=1) + "\n")  # incremental, survives a crash
     finally:
         env.close()
-    args.out.write_text(json.dumps(dict(rows=rows, complete=True), indent=1) + "\n")
-    total = len(rows)
-    print("== overall:", {v: f"{sum(1 for r in rows if r['variants'].get(v, {}).get('agree'))}/{total}" for v in args.variants})
-    return 0
+    verdict = gate_verdict(rows, list(args.variants), args.gate_tv)
+    args.out.write_text(json.dumps(dict(rows=rows, complete=True, gate=verdict, world_rng=args.world_rng), indent=1) + "\n")
+    print("== gate:", json.dumps(verdict))
+    return 0 if verdict["passed"] else 1
 
 
 if __name__ == "__main__":
