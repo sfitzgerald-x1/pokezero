@@ -116,4 +116,6 @@ Related evidence: the [1024 panel](search_over_raw_live1024_20261017.md),
 [runtime preservation PR](https://github.com/sfitzgerald-x1/pokezero/pull/1508),
 and [landed deviation arithmetic](https://github.com/sfitzgerald-x1/pokezero/pull/1532).
 Different fresh-source panels do not isolate a budget effect. Holdout, Phase B
-search arms and retraining remain closed. The full goal remains incomplete.
+search arms and retraining remain closed. The [amended research-plan closeout](search_over_raw_closeout_20261017.md)
+records completion of the prescribed work, not a search gain or completion of
+this capped study.
