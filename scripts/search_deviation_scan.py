@@ -3,7 +3,7 @@
 Replays seeded raw-versus-raw source games (same construction as scripts/regen_root_corpus.py) and at every p1
 boundary runs main's production EngineMctsPolicy (model priors, model leaf, four belief worlds) at several
 per-world iteration budgets, recording for each: raw's action, the search's action, the native prior argmax,
-the search argmax, the root Q gap and visit gap, and the iterations completed. No continuations are played;
+the search argmax, the root Q gap and visit gap, and the worlds searched. No continuations are played;
 on roots where the search keeps raw's action the paired contrast is identically zero, so this scan is the
 cheap half of a budget sweep and the sizing input for a deviation-triggered panel.
 
@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import statistics
 import sys
 import time
 from pathlib import Path
@@ -63,12 +64,12 @@ def summarize(rows: list[dict[str, Any]], budgets: list[int]) -> dict[str, Any]:
         override = [r for r in have if r["budgets"][key].get("search_argmax") is not None
                     and r["budgets"][key].get("model_argmax") is not None
                     and r["budgets"][key]["search_argmax"] != r["budgets"][key]["model_argmax"]]
-        qg = sorted(r["budgets"][key]["root_q_gap"] for r in dev if isinstance(r["budgets"][key].get("root_q_gap"), (int, float)))
-        secs = sorted(r["budgets"][key]["seconds"] for r in have)
+        qg = [r["budgets"][key]["root_q_gap"] for r in dev if isinstance(r["budgets"][key].get("root_q_gap"), (int, float))]
+        secs = [r["budgets"][key]["seconds"] for r in have]
         out[key] = {"decisions": len(have), "deviations": len(dev), "deviation_rate": (len(dev) / len(have)) if have else None,
                     "prior_argmax_mismatch": len(prior_mismatch), "tree_overrides": len(override),
-                    "deviation_root_q_gap_median": (qg[len(qg) // 2] if qg else None),
-                    "seconds_median": (secs[len(secs) // 2] if secs else None), "errors": sum(1 for r in rows if "error" in r["budgets"].get(key, {}))}
+                    "deviation_root_q_gap_median": (statistics.median(qg) if qg else None),
+                    "seconds_median": (statistics.median(secs) if secs else None), "errors": sum(1 for r in rows if "error" in r["budgets"].get(key, {}))}
     return out
 
 
@@ -145,7 +146,7 @@ def main(argv=None) -> int:
                     row["budgets"][str(sims)] = dict(
                         action=d.action_index, model_argmax=ov.get("model_argmax"), search_argmax=ov.get("search_argmax"),
                         root_q_gap=ov.get("root_q_gap"), root_visit_gap=ov.get("root_visit_gap"),
-                        iterations=find_key(md, "completed_iterations"), worlds_searched=find_key(md, "worlds_searched"),
+                        worlds_searched=find_key(md, "worlds_searched"),
                         seconds=round(time.perf_counter() - started, 3))
                 rows.append(row)
 
