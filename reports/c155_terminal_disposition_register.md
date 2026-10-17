@@ -796,8 +796,8 @@ head; the scan resolves **44** of them and leaves **none** unresolved. No invoca
 comment remains. The own-policy integration, inherited-selector parser, and frozen-root roster
 gates are included, as is the 109-test paper trajectory reference step added by #1504; the counts
 were re-derived from executable workflow bodies. The guarded 13-test synthetic Struggle
-adapter step, both three-test fresh native and model-wheel Struggle steps, and the six-test
-model live-path work-separation fixture step are included.
+adapter step, both three-test fresh native and model-wheel Struggle steps, and the 13-test
+root-prior normalization and model live-path work-separation fixture step are included.
 
 (Was 36/1/35. #1384 added the guarded opponent request-order source pins. Re-derived from the
 merged workflow and scanner rather than incremented.)

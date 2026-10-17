@@ -1143,12 +1143,13 @@ jobs:
           set -euo pipefail
           python scripts/harness_digest.py --print
 
-      - name: Model live-path work separation fixtures
+      - name: Root prior normalization and live-path work separation fixtures
         run: |
           set -o pipefail
-          python -m unittest tests.test_live_prior_work_separation -v 2>&1 \
+          python -m unittest tests.test_root_prior_aggregation \
+            tests.test_live_prior_work_separation -v 2>&1 \
             | tee /tmp/live-prior-work-separation.log
-          grep -qx 'Ran 6 tests in .*' /tmp/live-prior-work-separation.log
+          grep -qx 'Ran 13 tests in .*' /tmp/live-prior-work-separation.log
           grep -qx 'OK' /tmp/live-prior-work-separation.log
 
       - name: Truth-injection differential instrument
