@@ -819,11 +819,10 @@ class CopiedMovesetLivePpTests(unittest.TestCase):
     every remaining decision of the battle.
 
     The fix is upstream of the mapper. With the request's own PP on the copy the
-    engine runs out exactly when Showdown does, ``get_all_options`` falls through
-    to its terminal ``MoveChoice::None`` push, and #1202's translation -- already
-    shipped, already gated on Struggle being the request's only action -- lands
-    it on ``struggle``. ``test_a_drained_copy_leaves_the_engine_no_move`` is the
-    link that says so at the engine rather than arguing it.
+    engine runs out when Showdown does. It now supplies synthetic Struggle,
+    alongside any live switches, rather than the old ``MoveChoice::None``
+    translation. The drained-copy regression below checks that native option
+    surface while preserving the copied real move slots.
     """
 
     def setUp(self) -> None:
@@ -1023,15 +1022,11 @@ class CopiedMovesetLivePpTests(unittest.TestCase):
              for move in ("bodyslam", "healbell", "wish", "protect")],
         )
 
-    def test_a_drained_copy_leaves_the_engine_no_move(self) -> None:
-        """The link to #1202, asserted at the engine rather than argued.
+    def test_a_drained_copy_offers_struggle_and_preserves_live_switches(self) -> None:
+        """Exhausted copied slots require synthetic Struggle, not a no-op.
 
-        #1202 translates the crate's forced-no-move token onto the request's
-        substituted ``struggle``. Reaching that gate needs the built world to
-        drive ``get_all_options`` to its terminal ``options.len() == 0`` push:
-        ``add_available_moves`` contributes nothing (every copied slot disabled)
-        AND ``add_switches`` contributes nothing (the fixture's only bench mon is
-        fainted). Both halves are separated below.
+        A live bench adds a switch without removing Struggle. The intact-PP
+        control must keep its real moves instead of substituting the action.
         """
 
         def move_choices(payload, *, bench: bool):
@@ -1052,17 +1047,13 @@ class CopiedMovesetLivePpTests(unittest.TestCase):
             move_choices(self._payload_all_usable(), bench=False),
             {"bodyslam", "healbell", "wish", "protect"},
         )
-        # Drained, no live bench: the engine has nothing, which is the token
-        # `_map_choices` resolves onto the request's `struggle`.
         self.assertEqual(
             move_choices(self._struggle_only(self._payload_unencored()), bench=False),
-            {"No Move"},
+            {"struggle"},
         )
-        # Drained WITH a live bench: the switch is enumerated, so the request
-        # offers `['struggle', 'switch:...']` and this is not the class.
-        self.assertNotIn(
-            "No Move",
+        self.assertEqual(
             move_choices(self._struggle_only(self._payload_unencored()), bench=True),
+            {"struggle", "switch swampert"},
         )
 
 
