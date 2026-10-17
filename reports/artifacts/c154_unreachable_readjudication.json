@@ -1986,7 +1986,7 @@
           }
         ]
       },
-      "demonstration": "`_build_pokemon_spec` raises at `src/pokezero/engine_world.py:2193` when `normalize_id(mon.nature)` (read at `:2191`) is outside `_NEUTRAL_NATURES` (`:56`). `mon` is a `FixturePokemon` and the production path builds it in `unpack_pokemon` from field 6 of the PACKED TEAM STRING at `src/pokezero/engine_world.py:333` -- the differential's own `scripts/engine_transition_differential.py:2396` hands it `true_teams[slot]['packed']` from the bridge snapshot. Natures are unset on 24,000 of 24,000 generated Pokemon, so field 6 is empty and `nature` is `\"\"`.",
+      "demonstration": "`_build_pokemon_spec` raises at `src/pokezero/engine_world.py:2195` when `normalize_id(mon.nature)` (read at `:2193`) is outside `_NEUTRAL_NATURES` (`:56`). `mon` is a `FixturePokemon` and the production path builds it in `unpack_pokemon` from field 6 of the PACKED TEAM STRING at `src/pokezero/engine_world.py:333` -- the differential's own `scripts/engine_transition_differential.py:2396` hands it `true_teams[slot]['packed']` from the bridge snapshot. Natures are unset on 24,000 of 24,000 generated Pokemon, so field 6 is empty and `nature` is `\"\"`.",
       "foreclosure": "ALL_CALLERS",
       "foreclosure_note": null,
       "instruments": [
