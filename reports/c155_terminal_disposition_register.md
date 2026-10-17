@@ -340,6 +340,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1503 qualified Pain Split HP projection | `policy_bridge.rs` distinguishes optional public `-sethp` qualifiers from a second HP owner, retaining strict malformed-owner refusal; the Python projection follows the same grammar. Historical profile image and receipts remain bound to the prior source | `a547a1c37b2d4650…` |
 | #1503 refused-position adapter repairs | `policy_request.rs` certifies committed-action WAIT during replacement instead of resampling; two phase regression tests. `policy_bridge.rs` retains private-safe refusal witnesses. Original study receipts remain unchanged | `369883e836b7fdfc…` |
 | #1506 Transform callback repair | `policy_bridge.rs` separates original and copied PP banks and preserves public Transform provenance; `policy_request.rs` retains original party identity and Gen 3 copied-slot PP Ups. `encoder.rs` and `model.rs` supply registered base PP. Historical study receipts and the fingerprint gate's OPEN status remain unchanged | `7249f80b10c42ddf…` |
+| #1531 synthetic Struggle | The added engine patch and manifest entry plus Struggle handling in `events.rs`, `leaf.rs`, `tree.rs`, `model.rs` and `policy_request.rs` move the source fingerprint. This identifies the new build inputs, not a qualification of them; historical sweeps and the fingerprint gate's OPEN status remain unchanged | `b1f8b7ee64a5ebc1…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -790,12 +791,12 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure: there are **41 executable** invocation sites at this
-head; the scan resolves **41** of them and leaves **none** unresolved. No invocation-carrying
+rather than inherited from #1205's figure: there are **43 executable** invocation sites at this
+head; the scan resolves **43** of them and leaves **none** unresolved. No invocation-carrying
 comment remains. The own-policy integration, inherited-selector parser, and frozen-root roster
 gates are included, as is the 109-test paper trajectory reference step added by #1504; the counts
 were re-derived from executable workflow bodies. The guarded 13-test synthetic Struggle
-adapter step is included.
+adapter step and both three-test fresh native and model-wheel Struggle steps are included.
 
 (Was 36/1/35. #1384 added the guarded opponent request-order source pins. Re-derived from the
 merged workflow and scanner rather than incremented.)
@@ -940,7 +941,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 409 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 78 |
+| `base.patch_stack` | 79 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -961,8 +962,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 15 |
-| `t1.hashed_input_files` | 99 |
-| `t1.head_fingerprint` | 7249f80b10c42ddf |
+| `t1.hashed_input_files` | 100 |
+| `t1.head_fingerprint` | b1f8b7ee64a5ebc1 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -980,12 +981,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6554 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6559 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6626 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6631 |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |
