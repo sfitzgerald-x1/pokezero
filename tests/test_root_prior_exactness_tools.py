@@ -121,6 +121,34 @@ class ArchivedRootsTest(unittest.TestCase):
             self.assertEqual(regen.archived_roots(run, 999), [])
 
 
+scan = _load("search_deviation_scan")
+
+
+class DeviationScanSummaryTest(unittest.TestCase):
+    def test_summary_counts_deviations_overrides_and_prior_mismatches(self) -> None:
+        rows = [
+            {"raw_action": 2, "budgets": {"80": {"action": 2, "model_argmax": 2, "search_argmax": 2, "root_q_gap": 0.02, "seconds": 0.9}}},
+            {"raw_action": 2, "budgets": {"80": {"action": 5, "model_argmax": 2, "search_argmax": 5, "root_q_gap": 0.04, "seconds": 1.1}}},  # tree override
+            {"raw_action": 2, "budgets": {"80": {"action": 6, "model_argmax": 2, "search_argmax": 6, "root_q_gap": 0.10, "seconds": 1.2}}},  # tree override
+            {"raw_action": 1, "budgets": {"80": {"action": 3, "model_argmax": 3, "search_argmax": 3, "root_q_gap": 0.30, "seconds": 1.0}}},  # prior mismatch, no override
+            {"raw_action": 1, "budgets": {"80": {"error": "boom"}}},
+        ]
+        out = scan.summarize(rows, [80])["80"]
+        self.assertEqual(out["decisions"], 4)
+        self.assertEqual(out["deviations"], 3)
+        self.assertAlmostEqual(out["deviation_rate"], 3 / 4)
+        self.assertEqual(out["tree_overrides"], 2)       # search_argmax != model_argmax
+        self.assertEqual(out["prior_argmax_mismatch"], 1)  # model_argmax != raw_action
+        self.assertEqual(out["errors"], 1)
+        self.assertAlmostEqual(out["deviation_root_q_gap_median"], 0.10)  # median of 0.04, 0.10, 0.30
+
+    def test_empty_budget_is_reported_without_division(self) -> None:
+        out = scan.summarize([], [256])["256"]
+        self.assertEqual(out["decisions"], 0)
+        self.assertIsNone(out["deviation_rate"])
+        self.assertIsNone(out["seconds_median"])
+
+
 class BindingDriftTest(unittest.TestCase):
     def test_unsupported_model_tree_hp_leaf_refuses_before_inputs_or_runtime(self):
         with ExitStack() as stack:
@@ -169,6 +197,7 @@ class BindingDriftTest(unittest.TestCase):
                 self.assertEqual(engine.call_count,1)  # Never reload after drift.
                 self.assertIs(json.loads(out.read_text())["complete"],False)
                 env.close.assert_called_once()
+
 
 
 if __name__ == "__main__":
