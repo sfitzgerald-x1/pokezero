@@ -1,0 +1,217 @@
+diff --git a/src/gen3/state.rs b/src/gen3/state.rs
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -61,6 +61,7 @@
+ #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
+ pub enum MoveChoice {
+     Move(PokemonMoveIndex),
++    Struggle,
+     Switch(PokemonIndex),
+     None,
+ }
+@@ -72,6 +73,7 @@
+                 format!("{}", side.get_active_immutable().moves[&index].id).to_lowercase()
+             }
+             MoveChoice::Switch(index) => format!("{}", side.pokemon[*index].id).to_lowercase(),
++            MoveChoice::Struggle => "struggle".to_string(),
+             MoveChoice::None => "No Move".to_string(),
+         }
+     }
+@@ -80,6 +82,9 @@
+         if s == "none" {
+             return Some(MoveChoice::None);
+         }
++        if s == "struggle" {
++            return Some(MoveChoice::Struggle);
++        }
+ 
+         let mut pkmn_iter = side.pokemon.into_iter();
+         while let Some(pkmn) = pkmn_iter.next() {
+@@ -251,6 +256,7 @@
+         encored: bool,
+         taunted: bool,
+     ) {
++        let start = vec.len();
+         let mut iter = self.moves.into_iter();
+         while let Some(p) = iter.next() {
+             // `Move::default()` deliberately retains a nonzero PP so a real
+@@ -280,9 +286,18 @@
+                 vec.push(MoveChoice::Move(iter.pokemon_move_index));
+             }
+         }
++        // Struggle is a synthetic action, not a replacement for a real slot.
++        // Add it before switches, even when the active has a live reserve.
++        if vec.len() == start && self.hp > 0 {
++            vec.push(MoveChoice::Struggle);
++        }
+     }
+ 
+     pub fn add_move_from_choice(&self, vec: &mut Vec<MoveChoice>, choice: Choices) {
++        if choice == Choices::STRUGGLE {
++            vec.push(MoveChoice::Struggle);
++            return;
++        }
+         let mut iter = self.moves.into_iter();
+         while let Some(p) = iter.next() {
+             if p.id == choice {
+@@ -543,7 +558,7 @@
+ 
+         if self.side_one.force_trapped {
+             s1_options.retain(|x| match x {
+-                MoveChoice::Move(_) => true,
++                MoveChoice::Move(_) | MoveChoice::Struggle => true,
+                 MoveChoice::Switch(_) => false,
+                 MoveChoice::None => true,
+             });
+@@ -568,7 +583,7 @@
+ 
+         if self.side_two.force_trapped {
+             s2_options.retain(|x| match x {
+-                MoveChoice::Move(_) => true,
++                MoveChoice::Move(_) | MoveChoice::Struggle => true,
+                 MoveChoice::Switch(_) => false,
+                 MoveChoice::None => true,
+             });
+diff --git a/src/state.rs b/src/state.rs
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -48,6 +48,8 @@
+ #[derive(Debug, PartialEq, Eq, Copy, Clone)]
+ pub enum LastUsedMove {
+     Move(PokemonMoveIndex),
++    #[cfg(feature = "gen3")]
++    Struggle,
+     Switch(PokemonIndex),
+     None,
+ }
+@@ -55,6 +57,8 @@
+     pub fn serialize(&self) -> String {
+         match self {
+             LastUsedMove::Move(move_index) => format!("move:{}", move_index.serialize()),
++            #[cfg(feature = "gen3")]
++            LastUsedMove::Struggle => "move:struggle".to_string(),
+             LastUsedMove::Switch(pkmn_index) => format!("switch:{}", pkmn_index.serialize()),
+             LastUsedMove::None => "move:none".to_string(),
+         }
+@@ -66,6 +70,10 @@
+                 if split[1] == "none" {
+                     LastUsedMove::None
+                 } else {
++                    #[cfg(feature = "gen3")]
++                    if split[1] == "struggle" {
++                        return LastUsedMove::Struggle;
++                    }
+                     LastUsedMove::Move(PokemonMoveIndex::deserialize(split[1]))
+                 }
+             }
+diff --git a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2615,7 +2615,7 @@
+         // `Pokemon.clearVolatile()` nulls `lastMove` on switch-out, so a fresh
+         // switch-in genuinely has none and Encore fails against it.
+         return match defending_side.last_used_move {
+-            LastUsedMove::None => true,
++            LastUsedMove::None | LastUsedMove::Struggle => true,
+             LastUsedMove::Switch(_) => true,
+             LastUsedMove::Move(move_index) => {
+                 let move_slot = &defender.moves[&move_index];
+@@ -3537,7 +3537,7 @@
+     }
+ 
+     let side = state.get_side(&attacking_side);
+-    if side
++    if choice.move_id != Choices::STRUGGLE && side
+         .volatile_statuses
+         .contains(&PokemonVolatileStatus::ENCORE)
+     {
+@@ -3796,7 +3796,9 @@
+     // at end of turn. Both are absent on the turn that STARTS the lock — the
+     // charge volatile is applied by the move's own effects, after this — so the
+     // first turn still pays exactly once and the next use pays again.
+-    if !choice.sleep_talk_move && !in_locked_turn(state, &attacking_side, locked_continuation) {
++    if choice.move_id != Choices::STRUGGLE
++        && !choice.sleep_talk_move
++        && !in_locked_turn(state, &attacking_side, locked_continuation) {
+         // most of the time pp decrement doesn't matter and just adds another
+         // instruction so we only decrement pp if the move is under 10 pp
+         // since that is when it starts to matter
+@@ -3846,12 +3848,24 @@
+     // accuracy roll on purpose — `moveUsed` precedes `useMove` in Showdown, so a
+     // move that misses, fails, or is blocked by Protect still counts as used.
+     if state.use_last_used_move && !choice.sleep_talk_move {
+-        set_last_used_move_as_move(
++        if choice.move_id == Choices::STRUGGLE {
++            let side = state.get_side(&attacking_side);
++            incoming_instructions.instruction_list.push(Instruction::SetLastUsedMove(
++                SetLastUsedMoveInstruction {
++                    side_ref: attacking_side,
++                    last_used_move: LastUsedMove::Struggle,
++                    previous_last_used_move: side.last_used_move,
++                },
++            ));
++            side.last_used_move = LastUsedMove::Struggle;
++        } else {
++            set_last_used_move_as_move(
+             state.get_side(&attacking_side),
+             choice.move_index,
+             attacking_side,
+             &mut incoming_instructions,
+-        );
++            );
++        }
+     }
+ 
+     if move_has_no_effect(state, &choice, &attacking_side) {
+@@ -5270,6 +5284,7 @@
+                 // decrement can take an already-empty slot negative, so an `== 0`
+                 // test would miss exactly the turn this is meant to catch.
+                 let out_of_pp = match side.last_used_move {
++                    LastUsedMove::Struggle => true,
+                     LastUsedMove::Move(move_index) => {
+                         side.get_active_immutable().moves[&move_index].pp <= 0
+                     }
+@@ -6416,6 +6431,9 @@
+         MoveChoice::Move(move_index) => {
+             side_one_choice = state.side_one.get_active().moves[move_index].choice.clone();
+             side_one_choice.move_index = *move_index;
++        }
++        MoveChoice::Struggle => {
++            side_one_choice = MOVES.get(&Choices::STRUGGLE).unwrap().clone();
+         }
+         MoveChoice::None => {
+             side_one_choice = Choice::default();
+@@ -6433,6 +6451,9 @@
+             side_two_choice = state.side_two.get_active().moves[move_index].choice.clone();
+             side_two_choice.move_index = *move_index;
+         }
++        MoveChoice::Struggle => {
++            side_two_choice = MOVES.get(&Choices::STRUGGLE).unwrap().clone();
++        }
+         MoveChoice::None => {
+             side_two_choice = Choice::default();
+         }
+diff --git a/src/gen3/items.rs b/src/gen3/items.rs
+--- a/src/gen3/items.rs
++++ b/src/gen3/items.rs
+@@ -392,7 +392,7 @@
+     let active_pkmn = attacking_side.get_active();
+     let defending_pkmn = defending_side.get_active();
+     match active_pkmn.item {
+-        Items::CHOICEBAND => {
++        Items::CHOICEBAND if choice.move_id != Choices::STRUGGLE => {
+             let ins = get_choice_move_disable_instructions(active_pkmn, side_ref, &choice.move_id);
+             for i in ins {
+                 state.apply_one_instruction(&i);
+diff --git a/src/gen3/choice_effects.rs b/src/gen3/choice_effects.rs
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -130,7 +130,7 @@
+             };
+         }
+         Choices::FAKEOUT => match attacking_side.last_used_move {
+-            LastUsedMove::Move(_) => attacker_choice.remove_all_effects(),
++            LastUsedMove::Move(_) | LastUsedMove::Struggle => attacker_choice.remove_all_effects(),
+             _ => {}
+         },
+         Choices::GROWTH => {

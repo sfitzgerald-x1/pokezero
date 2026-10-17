@@ -63,8 +63,8 @@ reliability guarantee.
 
 ## Evidence and remaining scope
 
-The owner's local evidence directory is
-`/Users/scott/Documents/New project/reports/search-over-raw-live320-exploration-20261016-r2/`.
+The evidence is retained outside this repository in the owner's local report
+collection, under `search-over-raw-live320-exploration-20261016-r2/`.
 It retains the entry, original source and continuation receipts,
 `run/readout.json`, `saved-data-analysis.json` and
 `independent-readout-review.json`. Original readout SHA-256:
