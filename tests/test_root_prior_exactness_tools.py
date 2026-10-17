@@ -8,12 +8,17 @@ into verdicts are deterministic and tested here.
 from __future__ import annotations
 
 import importlib.util
+from contextlib import ExitStack
+from copy import deepcopy
+import hashlib
 import json
 import math
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 _SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
@@ -57,6 +62,18 @@ class CompareTest(unittest.TestCase):
         out = live.compare({0: 0.5, 1: 0.5}, {0: 1.0, 1: 0.0})
         self.assertTrue(math.isfinite(out["kl"]))
         self.assertEqual(out["tv"], 0.5)
+
+    def test_gate_uses_unrounded_distance_and_keeps_pre_display_vectors(self) -> None:
+        out = live.compare({0: .75, 1: .25}, {0: .750000001, 1: .249999999})
+        self.assertGreater(out["tv"], 0.)
+        self.assertEqual(round(out["tv"], 4), 0.)
+        self.assertEqual(out["native_prior_pre_display"]["0"], .750000001)
+        self.assertFalse(live.gate_verdict([{"variants": {"sampled4": out}}], ["sampled4"], 0.)["passed"])
+
+    def test_exact_witness_does_not_renormalize_away_proportional_differences(self) -> None:
+        out=live.compare({0:.75,1:.25},{0:.75000075,1:.25000025})
+        self.assertEqual(out["native_prior_pre_display"],{"0":.75000075,"1":.25000025})
+        self.assertEqual(out["native_prior"],{"0":.75,"1":.25})
 
 
 class FindKeyTest(unittest.TestCase):
@@ -130,6 +147,57 @@ class DeviationScanSummaryTest(unittest.TestCase):
         self.assertEqual(out["decisions"], 0)
         self.assertIsNone(out["deviation_rate"])
         self.assertIsNone(out["seconds_median"])
+
+
+class BindingDriftTest(unittest.TestCase):
+    def test_unsupported_model_tree_hp_leaf_refuses_before_inputs_or_runtime(self):
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(live,"EngineMctsConfig",object))
+            binding=stack.enter_context(patch.object(live,"input_binding"))
+            engine=stack.enter_context(patch.object(live,"EngineMctsPolicy"))
+            env=stack.enter_context(patch.object(live,"LocalShowdownEnv"))
+            with self.assertRaises(SystemExit) as refused:
+                live.main(["--checkpoint","/missing/checkpoint","--model-ts","/missing/model",
+                    "--tables","/missing/tables","--showdown-root","/missing/showdown",
+                    "--seeds","12","--leaf","hp_fraction","--out","/missing/report.json"])
+            self.assertEqual(refused.exception.code,2)
+            binding.assert_not_called();engine.assert_not_called();env.assert_not_called()
+
+    def test_drift_before_reload_or_final_publication_keeps_report_incomplete(self):
+        for seeds in ([12,13],[12]):
+            with self.subTest(seeds=seeds),tempfile.TemporaryDirectory() as folder,ExitStack() as stack:
+                root=Path(folder);artifact=root/"authored-input"
+                artifact.write_bytes(b"authored")
+                sha=hashlib.sha256(b"authored").hexdigest()
+                original={name:sha for name in ("checkpoint_sha256","model_sha256","tables_sha256")}
+                changed={**original,"model_sha256":"d"*64}
+                bind=stack.enter_context(patch.object(live,"input_binding",side_effect=[
+                    deepcopy(original),deepcopy(original),deepcopy(original),changed]))
+                config=SimpleNamespace(resolved_showdown_root=lambda:root)
+                derive=stack.enter_context(patch.object(live,"env_config_with_policy_spec_masks",return_value=config))
+                env=Mock();env.snapshot.return_value.bridge_snapshot={}
+                stack.enter_context(patch.object(live,"LocalShowdownEnv",return_value=env))
+                stack.enter_context(patch.object(live,"load_showdown_dex_cached"))
+                stack.enter_context(patch.object(live,"load_gen3_randbat_source_cached"))
+                stack.enter_context(patch.object(live,"_true_teams_from_bridge_snapshot",return_value={
+                    "p1":{"packed":"own"},"p2":{"packed":"opponent"}}))
+                engine=stack.enter_context(patch.object(live,"EngineMctsPolicy"))
+                stack.enter_context(patch.object(live,"load_transformer_policy"))
+                stack.enter_context(patch.object(live,"continue_rollout_from_current_state",
+                    return_value=SimpleNamespace(terminal=SimpleNamespace(turn_count=1))))
+                out=root/"out.json"
+                args=["--checkpoint",str(artifact),"--model-ts",str(artifact),"--tables",str(artifact),
+                    "--showdown-root",str(root),"--bridge-path",str(artifact),"--seeds",*[str(s) for s in seeds],
+                    "--variants","sampled4","--out",str(out)]
+                guard=Mock()
+                with self.assertRaisesRegex(ValueError,"inputs changed"):live.main(args,boundary_guard=guard)
+                self.assertEqual(guard.call_count,len(seeds))
+                self.assertEqual(derive.call_args.args[0].resolved_bridge_path(),artifact.resolve())
+                self.assertEqual(bind.call_count,4)
+                self.assertEqual(engine.call_count,1)  # Never reload after drift.
+                self.assertIs(json.loads(out.read_text())["complete"],False)
+                env.close.assert_called_once()
+
 
 
 if __name__ == "__main__":

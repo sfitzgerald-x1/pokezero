@@ -1852,6 +1852,7 @@ impl LeafContext {
                     }
                 }
                 MoveChoice::None => {}
+                MoveChoice::Struggle => {}
             }
         }
 
@@ -1893,7 +1894,20 @@ impl LeafContext {
             return Ok((Value::Array(candidates), Value::Array(payload_moves)));
         }
         let moves_present = !force_switch_shape;
+        let struggling = self_options.contains(&MoveChoice::Struggle) && moves_present;
         for slot in 0..move_action_count {
+            if struggling {
+                let id = if slot == 0 { "struggle".to_string() } else { format!("slot{}", slot + 1) };
+                candidates.push(json!({
+                    "action_index": slot, "kind": "move", "legal": slot == 0,
+                    "move_slot": slot + 1, "move_id": id, "move_name": id,
+                    "disabled": slot != 0,
+                }));
+                if slot == 0 {
+                    payload_moves.push(json!({"id": "struggle", "disabled": false}));
+                }
+                continue;
+            }
             let entry = if moves_present {
                 engine_moves.get(slot).and_then(|entry| entry.as_ref())
             } else {
@@ -2290,6 +2304,9 @@ impl LeafContext {
         let mut unmapped_move_surface = UnmappedMoveSurfaceWitness::default();
         for option in options {
             let index = match option {
+                MoveChoice::Struggle => legal_action_index(&|obj| {
+                    obj.get("move_id").and_then(Value::as_str) == Some("struggle")
+                }),
                 MoveChoice::Move(engine_index) => {
                     let slot = engine_index.serialize().parse::<usize>().unwrap_or(usize::MAX);
                     if recharging && !force_switch_shape {
@@ -2340,6 +2357,9 @@ impl LeafContext {
                 }
             };
             if index.is_none() {
+                if matches!(option, MoveChoice::Struggle) {
+                    unmapped_move_surface.unexplained += 1;
+                }
                 if let MoveChoice::Move(engine_index) = option {
                     let slot = engine_index.serialize().parse::<usize>().unwrap_or(usize::MAX);
                     let candidate = candidates.iter().find_map(|candidate| {
@@ -2385,6 +2405,7 @@ impl LeafContext {
                                         MoveChoice::Switch(index) => {
                                             format!("switch:{}", index.serialize())
                                         }
+                                        MoveChoice::Struggle => "struggle".to_string(),
                                         MoveChoice::None => "none".to_string(),
                                     })
                                     .collect();
@@ -3549,6 +3570,18 @@ mod tests {
             vec![Some(2)],
             "M2 must retain its action-block position even when earlier engine slots are empty"
         );
+    }
+
+    #[test]
+    fn synthetic_struggle_maps_to_action_zero_and_preserves_switch_arms() {
+        let (ctx, mut state) = order_context(None);
+        state.side_one.get_active().moves[&poke_engine::state::PokemonMoveIndex::M0].pp = 0;
+        let options = state.get_all_options().0;
+        assert!(options.contains(&MoveChoice::Struggle));
+        let map = ctx.self_action_map(&state, &options, None, None, false).unwrap();
+        assert_eq!(map[options.iter().position(|o| *o == MoveChoice::Struggle).unwrap()], Some(0));
+        assert!(map.iter().all(Option::is_some));
+        assert!(map.iter().any(|i| i.is_some_and(|i| i >= 4)));
     }
 
     #[test]

@@ -1,0 +1,253 @@
+{
+  "schema": "pokezero.raw-foulplay-baseline-publication-extract.v1",
+  "scope": "Derived publication extract of the original corrected 64-game baseline, not a new run or replacement provenance receipt.",
+  "original_evidence_directory": "search-over-raw-foulplay-baseline-20261015-r2",
+  "original_evidence_sha256": {
+    "registration.json": "e5600874e2c00f0d8563e88eba94bed4a68e66ea0b94188bfdf82ca298c724af",
+    "readout.json": "741570c813e6a0dbc8cadde4f57f23be0ddff059cc2c521684fa9156d9540077",
+    "p1.json": "24e4f288f4f2e5f4645d83f1c45a9efb9b55e5c206581408723715fbb7a0419a",
+    "p2.json": "5f8394ae44ec253b7f958c8ddb762b0fdff7d4c6d458407ac6afc84c4800d5bb",
+    "independent-readout-review.json": "94b80fbf381e18c319233cfe092476d965e52597316adfdd0fdac3e4215709df"
+  },
+  "configuration": {
+    "format_id": "gen3randombattle",
+    "policy_mode": "raw",
+    "policy_id": "foundation-midscale-iter-9375",
+    "belief_set_source": true,
+    "belief_set_source_hash": "f5a5265143d423af",
+    "checkpoint_sha256": "0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be",
+    "pokezero_commit": "e0e2f1e34e089aad8cd76079a32b3d17c01e1bbc",
+    "showdown_commit": "f76228a1354b5d0f307ca2d16101294ad3a2308b",
+    "foulplay_commit": "9955255176688a877f8b3586ee7c6bda39df5fdb",
+    "foulplay_patch_file_sha256": {
+      "fp/battle_modifier.py": "11a6a39da864b43fcb7251d03794ca138244153aac7c80bf2ac2c4bad31c8b35",
+      "fp/websocket_client.py": "b7dfcb184d7a3b4356129d9bb01e9a8e3a61a76c239301e92e328eff55ffd1f4",
+      "tests/test_battle_modifiers.py": "6e244e16dd9102edcba0cd3a2ecdb176e3ede1055c7d5cb7e5002ca932df2c1e"
+    },
+    "foulplay_search_time_ms": 1000,
+    "foulplay_timing": "Original configured-1000-ms adaptive algorithm, ordinarily approximately two seconds of search per move plus setup; not a strict one-second whole-move ceiling. Iteration telemetry unavailable under observed spawn start method.",
+    "foulplay_random_seed": null,
+    "max_decision_rounds": 250
+  },
+  "score_columns": [
+    "source_seed",
+    "raw_score_as_p1",
+    "raw_score_as_p2"
+  ],
+  "paired_scores": [
+    [
+      440925938,
+      0,
+      1
+    ],
+    [
+      440925939,
+      0,
+      1
+    ],
+    [
+      440925940,
+      0,
+      1
+    ],
+    [
+      440925941,
+      0,
+      1
+    ],
+    [
+      440925942,
+      1,
+      0
+    ],
+    [
+      440925943,
+      0,
+      1
+    ],
+    [
+      440925944,
+      1,
+      1
+    ],
+    [
+      440925945,
+      1,
+      0
+    ],
+    [
+      440925946,
+      1,
+      1
+    ],
+    [
+      440925947,
+      1,
+      0
+    ],
+    [
+      440925948,
+      0,
+      1
+    ],
+    [
+      440925949,
+      0,
+      0
+    ],
+    [
+      440925950,
+      1,
+      1
+    ],
+    [
+      440925951,
+      1,
+      0
+    ],
+    [
+      440925952,
+      1,
+      1
+    ],
+    [
+      440925953,
+      1,
+      0
+    ],
+    [
+      440925954,
+      0,
+      1
+    ],
+    [
+      440925955,
+      1,
+      0
+    ],
+    [
+      440925956,
+      1,
+      0
+    ],
+    [
+      440925957,
+      1,
+      0
+    ],
+    [
+      440925958,
+      0,
+      1
+    ],
+    [
+      440925959,
+      1,
+      1
+    ],
+    [
+      440925960,
+      1,
+      1
+    ],
+    [
+      440925961,
+      1,
+      1
+    ],
+    [
+      440925962,
+      1,
+      1
+    ],
+    [
+      440925963,
+      1,
+      0
+    ],
+    [
+      440925964,
+      1,
+      1
+    ],
+    [
+      440925965,
+      1,
+      0
+    ],
+    [
+      440925966,
+      0,
+      1
+    ],
+    [
+      440925967,
+      0,
+      1
+    ],
+    [
+      440925968,
+      0,
+      0
+    ],
+    [
+      440925969,
+      0,
+      1
+    ]
+  ],
+  "readout": {
+    "games": 64,
+    "source_clusters": 32,
+    "wins": 39,
+    "losses": 25,
+    "ties": 0,
+    "capped_games": 0,
+    "missing_or_unvalidated_games": 0,
+    "win_score_mean": 0.609375,
+    "seat_results": {
+      "p1": {
+        "wins": 19,
+        "losses": 13,
+        "games": 32
+      },
+      "p2": {
+        "wins": 20,
+        "losses": 12,
+        "games": 32
+      }
+    },
+    "paired_seed_mean_score_counts": {
+      "0": 2,
+      "1": 9,
+      "0.5": 21
+    },
+    "descriptive_seed_clustered_95_interval": [
+      0.515625,
+      0.703125
+    ],
+    "interval_method": "Exact enumeration of the empirical nonparametric cluster bootstrap by convolution; each draw resamples 32 whole seed clusters, each containing both seats. Two-sided percentile interval.",
+    "interval_assumptions": "Independent representative source-seed clusters; games within each seed are not treated as independent.",
+    "observed_game_ending_process_failures": 0,
+    "actual_invocation_exit_codes": [
+      0,
+      0
+    ],
+    "decision_level_refusal_count": null,
+    "decision_level_refusal_telemetry_available": false,
+    "significance_claim": false,
+    "search_improvement_claim": false
+  },
+  "historical_failed_entry": {
+    "directory": "search-over-raw-foulplay-baseline-20261015-r1",
+    "actual_exit_code": 130,
+    "completed_games": 0,
+    "original_scores_remain_uncertain": true,
+    "pooled_into_this_extract": false
+  },
+  "original_independent_review": {
+    "reviewer": "Astra",
+    "decision": "CLEAR_COMPLETE_CORRECTED_R2_BASELINE_NO_SEARCH_STRENGTH_CLAIM",
+    "scope": "Review of the original source and readout; publication extraction receives a separate review."
+  }
+}

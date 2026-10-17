@@ -60,9 +60,9 @@ volatile change and none of them is evidence for it.
 The evidence that the Taunt route is closed is therefore written where it can FAIL:
 ``tests/test_engine_world_taunt.py`` (construction, counter, engine fidelity) and
 ``TauntStruggleOnlyReachesTheEngineTests`` below -- the lone-Blissey line, the only shape
-whose request offers ``['struggle']`` and NOTHING else, so the engine's
-``MoveChoice::None`` has to land on the pseudo-move. That 20th test is red in the null
-world.
+whose request offers ``['struggle']`` and NOTHING else. Its payload must disable the
+real slots; the native engine now supplies synthetic ``MoveChoice::Struggle`` rather
+than translating ``MoveChoice::None``. That 20th test is red in the null world.
 
 ``_TAUNT_STALL`` (used by ``BenchLeakTests``) keeps a live bench on purpose and so does
 NOT reach that shape; it exercises the payload only, which is what the bench leak is
@@ -395,8 +395,8 @@ _PP_STALL = BattleStartOverride(
 # TAUNT, WITH NO BENCH -- the only shape whose request is `['struggle']` and nothing
 # else. `_TAUNT_STALL` below keeps a Charmander, so Showdown offers a switch alongside
 # Struggle and poke-engine's `add_switches` has something to enumerate; with a LONE
-# all-status Blissey both are empty and `get_all_options` reaches its terminal
-# `MoveChoice::None` push. Blissey, not Bulbasaur, because every one of its four moves
+# all-status Blissey the native engine must retain synthetic Struggle without a
+# switch arm. Blissey, not Bulbasaur, because every one of its four moves
 # must be Status for Taunt alone to empty the moveset -- a PP-bearing attacking slot
 # would keep the request non-Struggle.
 _TAUNT_SOLO_STALL = BattleStartOverride(
@@ -622,12 +622,12 @@ class TauntStruggleOnlyReachesTheEngineTests(_LiveBase):
     `tests/test_engine_world_taunt.py::test_a_taunted_self_side_builds_instead_of_refusing`,
     so this one asserts the positive end to end.
 
-    What it does NOT assert, deliberately: which action search picks. That needs the
+    What it does NOT assert, deliberately: which native options are available. That needs the
     native wheel and lives in `test_engine_world_taunt.py`
-    (`test_a_lone_taunted_all_status_side_leaves_the_engine_no_move`).
+    (`test_taunted_all_status_side_offers_struggle_with_or_without_a_bench`).
     """
 
-    def test_a_lone_taunted_all_status_side_builds_a_world_with_no_option(self) -> None:
+    def test_a_lone_taunted_all_status_side_builds_a_world_with_unusable_real_slots(self) -> None:
         from pokezero.engine_world import world_battle_spec
 
         root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT)
@@ -656,9 +656,9 @@ class TauntStruggleOnlyReachesTheEngineTests(_LiveBase):
         self.assertIn("taunt", side.volatile_statuses)
         self.assertEqual(side.volatile_status_durations.get("taunt"), 1)
 
-        # 4. ...and it offers the engine nothing: every active slot unselectable, and no
-        #    live bench for `add_switches` to fall through to. Those two together are the
-        #    precondition for `MoveChoice::None`, which is what #1202's translation needs.
+        # 4. Every real active slot is unselectable and there is no live bench.
+        #    The native option test checks synthetic Struggle separately; these
+        #    payload assertions must not overwrite a real slot with the action.
         active = side.pokemon[side.active_index]
         self.assertTrue(
             all(spec.disabled or spec.pp == 0 for spec in active.moves),
@@ -785,8 +785,8 @@ class WhatReachesTheEngineTests(_LiveBase):
 
     `_move_specs` copies `(pp, disabled)` verbatim and `Pokemon::add_available_moves`
     (poke-engine 0.0.47 `genx/state.rs`) requires `!disabled && pp > 0`, so an all-disabled
-    active contributes no move option and `get_all_options` falls through to
-    `add_switches`. The Python binding does not export the option vector
+    active contributes no indexed move option. The patched engine adds synthetic
+    Struggle alongside live switches. The Python binding does not export the option vector
     (`poke_engine_legal_actions` records this as a known gap), so the assertion is on the
     MoveSpecs the engine reads.
 
@@ -795,7 +795,7 @@ class WhatReachesTheEngineTests(_LiveBase):
     `disabled` makes it unselectable.
     """
 
-    def test_the_constructed_world_offers_no_move_and_keeps_the_bench_usable(self) -> None:
+    def test_the_constructed_world_disables_real_moves_and_keeps_the_bench_usable(self) -> None:
         from pokezero.engine_world import world_battle_spec
 
         root = Path(os.environ.get("POKEZERO_SHOWDOWN_ROOT") or DEFAULT_SHOWDOWN_ROOT)
@@ -812,7 +812,7 @@ class WhatReachesTheEngineTests(_LiveBase):
         self.assertEqual(
             [(spec.id, spec.pp, spec.disabled) for spec in active.moves],
             [("sunnyday", 1, True), ("none", 0, True), ("none", 0, True), ("none", 0, True)],
-            "the world must offer the engine no selectable move at a Struggle boundary",
+            "real move slots must stay unselectable at a Struggle boundary",
         )
         benched = [p for i, p in enumerate(side.pokemon) if i != side.active_index]
         self.assertTrue(

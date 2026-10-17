@@ -204,7 +204,9 @@ _CORPUS_TREES = ("reports", "docs")
 # counter census reads the same JSON set as the terminal-disposition register.
 # 406 -> 407: the frozen paper-policy opponent roster adds one tracked selection
 # document, not a measurement. No historical JSON was removed or altered.
-_EXPECTED_COUNTER_ARTIFACTS = 408
+# 408 -> 409: PR 1527 adds raw_foulplay_baseline_20261015.json. Compared with
+# pre-publication 59d51244: exactly that path added under reports/docs, none removed.
+_EXPECTED_COUNTER_ARTIFACTS = 409
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
@@ -229,13 +231,14 @@ _EXPECTED_COUNTER_ARTIFACTS = 408
 # The taxonomies, derived from source rather than transcribed.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_WORLD_UNSUPPORTED_REASONS = 41
+_EXPECTED_WORLD_UNSUPPORTED_REASONS = 43
 _EXPECTED_DIVERGENCE_CLASSES = 19
 
-# The 10 of 41 `EngineWorldUnsupported` reasons with nonzero recorded evidence somewhere
-# in the corpus. `substitute_origin_unknown` is the new, explicitly unmeasured 41st reason;
-# it must NOT be silently added to this fired set just because it was introduced after the
-# historical corpus. This list is not "fires in the c136 windows", which
+# The 10 of 43 `EngineWorldUnsupported` reasons with nonzero recorded evidence somewhere
+# in the corpus. `substitute_origin_unknown`, `transform_self_moves_malformed` and
+# `transform_self_hidden_power_unknown` were added after the historical measurements.
+# Their engineering fixtures are not new corpus measurements, so they must NOT be added
+# to this fired set. This list is not "fires in the c136 windows", which
 # is only four of them (`encore_move_unknown`, `materialization_blocker`,
 # `self_request_state_unsupported`, `volatile_unsupported`). The other six fired in
 # earlier eras or in the `docs/audit_artifacts` search grids, and a closed exit is not a

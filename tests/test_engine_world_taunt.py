@@ -476,21 +476,11 @@ class TauntEngineFidelityTests(unittest.TestCase):
         self.assertIn("RemoveVolatileStatus SideTwo: TAUNT", flagged)
         self.assertNotIn("RemoveVolatileStatus SideTwo: TAUNT", derived)
 
-    def test_a_lone_taunted_all_status_side_leaves_the_engine_no_move(self) -> None:
-        """The composition with #1202, asserted at the engine rather than argued.
+    def test_taunted_all_status_side_offers_struggle_with_or_without_a_bench(self) -> None:
+        """No usable real move means Struggle, not a forced-no-move token.
 
-        #1202 translates the crate's forced-no-move token onto the request's substituted
-        `struggle`, gated on Struggle being the request's only legal action. That gate is
-        reachable through Taunt only if the built world actually drives the engine to
-        `MoveChoice::None` -- i.e. `add_available_moves` contributes nothing (every slot
-        Status, and TAUNTed) AND `add_switches` contributes nothing (no live bench), so
-        `get_all_options` falls through to its terminal `options.len() == 0` push.
-
-        Both halves are needed and the test separates them: with a live bench the engine
-        enumerates the switch instead, which is exactly why the corpus scenario
-        `struggle_taunt_stall` never reached this shape and why
-        `test_struggle_only_move_state.TauntStruggleOnlyReachesTheEngineTests` had to add
-        a bench-less fixture.
+        A live reserve adds a switch; it must not suppress Struggle. An untaunted
+        control keeps the two real moves and must not invent the synthetic action.
         """
 
         def options(*, taunted: bool, bench: bool) -> set[str]:
@@ -525,10 +515,8 @@ class TauntEngineFidelityTests(unittest.TestCase):
 
         # Anti-vacuity: untaunted, the same all-Status side has real options.
         self.assertEqual(options(taunted=False, bench=False), {_STATUS_MOVE, "lightscreen"})
-        # TAUNTed with no bench: nothing at all, so the engine emits its forced no-move.
-        self.assertEqual(options(taunted=True, bench=False), {"No Move"})
-        # TAUNTed WITH a bench: the switch is enumerated, so this is not the class.
-        self.assertNotIn("No Move", options(taunted=True, bench=True))
+        self.assertEqual(options(taunted=True, bench=False), {"struggle"})
+        self.assertEqual(options(taunted=True, bench=True), {"struggle", "switch starmie"})
 
     @staticmethod
     def _taunt_instructions(state) -> list[str]:

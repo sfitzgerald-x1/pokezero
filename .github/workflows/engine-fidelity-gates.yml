@@ -85,6 +85,7 @@ jobs:
             tests/test_engine_world_encore_transform.py
             tests/test_engine_world_encore_last_used.py
             tests/test_engine_world_taunt.py
+            tests/test_native_synthetic_struggle.py
             tests/test_engine_search.py
             tests/test_opponent_request_order.py
             tests/test_public_projection.py
@@ -282,6 +283,14 @@ jobs:
 
       - name: Build and install the gen3 engine and the search crate
         run: bash scripts/build_search_crate_engine.sh
+
+      - name: Synthetic Struggle on the freshly built native consumers
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_native_synthetic_struggle -v 2>&1 \
+            | tee /tmp/native-struggle.log
+          grep -qE 'Ran 3 tests' /tmp/native-struggle.log
+          grep -qE '^OK$' /tmp/native-struggle.log
 
       - name: Public projection oracle (direction 2)
         run: |
@@ -715,6 +724,14 @@ jobs:
             exit 1
           fi
 
+      - name: Synthetic Struggle last-move adapter capability
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_struggle_last_move_adapter -v 2>&1 \
+            | tee /tmp/struggle-last-move.log
+          grep -qE 'Ran 13 tests' /tmp/struggle-last-move.log
+          grep -qE '^OK$' /tmp/struggle-last-move.log
+
       - name: Encore public-lastUsedMove world-construction pins
         run: |
           set -o pipefail
@@ -761,8 +778,8 @@ jobs:
         run: |
           set -o pipefail
           python -m unittest tests.test_engine_search -v 2>&1 | tee /tmp/enginesearch.log
-          if ! grep -qE 'Ran 259 tests' /tmp/enginesearch.log; then
-            echo "::error::expected 259 engine-search tests; the suite shrank or grew"
+          if ! grep -qE 'Ran 260 tests' /tmp/enginesearch.log; then
+            echo "::error::expected 260 engine-search tests; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/enginesearch.log; then
@@ -809,8 +826,8 @@ jobs:
           fi
           passed=$(grep -oE '^test result: ok\. [0-9]+ passed' /tmp/cargo.log \
             | grep -oE '[0-9]+' | paste -sd+ - | bc)
-          if [ "${passed:-0}" -lt 519 ]; then
-            echo "::error::expected >= 519 crate tests, got ${passed:-0}"
+          if [ "${passed:-0}" -lt 533 ]; then
+            echo "::error::expected >= 533 crate tests, got ${passed:-0}"
             exit 1
           fi
           for pin in the_rendered_hazard_chip_is_tagged_from_spikes \
@@ -872,7 +889,21 @@ jobs:
                      every_fixture_still_sums_to_one_hundred_percent \
                      every_split_arm_reverts_cleanly \
                      a_band_whose_fan_bases_disagree_declines_the_split_and_keeps_one_arm \
-                     declining_the_split_keeps_the_branch_mass_at_one_hundred_percent; do
+                     declining_the_split_keeps_the_branch_mass_at_one_hundred_percent \
+                     leaf::tests::synthetic_struggle_maps_to_action_zero_and_preserves_switch_arms \
+                     policy_request::tests::synthetic_struggle_request_keeps_private_pp_banks_and_live_switches \
+                     exhausted_moves_offer_struggle_and_live_switches_on_both_seats \
+                     disabled_moves_with_positive_pp_offer_struggle \
+                     taunted_status_only_actor_can_struggle \
+                     enabled_real_move_suppresses_struggle \
+                     trapped_root_retains_struggle_not_a_noop \
+                     no_bench_actor_retains_struggle \
+                     recharge_and_replacement_waits_remain_noops \
+                     fainted_actor_never_gets_struggle \
+                     saved_struggle_commitment_survives_replacement \
+                     synthetic_action_parses_without_replacing_any_slot \
+                     struggle_hits_ghost_recoils_and_never_charges_pp_or_choice_locks \
+                     encore_cannot_redirect_struggle_to_exhausted_real_slot; do
             grep -qxE "test $pin \.\.\. ok" /tmp/cargo.log || {
               echo "::error::renderer pin $pin did not run"
               exit 1
@@ -965,6 +996,16 @@ jobs:
             exit 1
           fi
           python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
+
+      - name: Synthetic Struggle on the model wheel
+        run: |
+          set -o pipefail
+          struggle_torch_lib="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')"
+          export LD_LIBRARY_PATH="${struggle_torch_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          python -m unittest tests.test_native_synthetic_struggle -v 2>&1 \
+            | tee /tmp/model-struggle.log
+          grep -qE 'Ran 3 tests' /tmp/model-struggle.log
+          grep -qE '^OK$' /tmp/model-struggle.log
 
       - name: Private-safe own-policy opponent contracts on the model wheel
         env:

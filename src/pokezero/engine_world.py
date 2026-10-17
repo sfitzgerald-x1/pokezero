@@ -696,6 +696,46 @@ def _request_move_state_by_id(
     return state
 
 
+def _copied_self_request_moves(rows: Sequence[Mapping[str, Any]]) -> tuple[MoveSpec, ...]:
+    """The actor knows the complete copied moveset, not just its usability.
+
+    Keep request order: Encore and native actions use slot indices. Hidden
+    Power needs the request's full typed/powered id or its original display
+    name; a sampled donor's IVs are not evidence for the actor's known copy.
+    """
+    if not 1 <= len(rows) <= _MOVE_SLOT_LIMIT:
+        raise EngineWorldUnsupported("transform_self_moves_malformed", "invalid copied request size")
+    moves = []
+    identities = set()
+    for row in rows:
+        if not isinstance(row, Mapping) or not isinstance(row.get("id"), str):
+            raise EngineWorldUnsupported("transform_self_moves_malformed", "copied move id missing")
+        move_id = normalize_id(row["id"])
+        identity = "hiddenpower" if move_id.startswith("hiddenpower") else move_id
+        pp, disabled = row.get("pp"), row.get("disabled", False)
+        if not identity or identity in identities or identity in {"none", "struggle", "recharge"} \
+                or type(pp) is not int or pp < 0 or type(disabled) is not bool:
+            raise EngineWorldUnsupported("transform_self_moves_malformed", "invalid copied request move")
+        identities.add(identity)
+        if identity == "hiddenpower":
+            displayed = normalize_id(row.get("move", "")) if isinstance(row.get("move", ""), str) else ""
+            qualified = next((candidate for candidate in (displayed, move_id)
+                if any(candidate.startswith("hiddenpower" + kind)
+                    and len(candidate[len("hiddenpower" + kind):]) == 2
+                    and candidate[len("hiddenpower" + kind):].isdigit()
+                    and 30 <= int(candidate[len("hiddenpower" + kind):]) <= 70
+                    for kind in _HP_TYPE_ORDER)), None)
+            if qualified is None:
+                raise EngineWorldUnsupported("transform_self_hidden_power_unknown",
+                    "copied Hidden Power requires its request-known type and power")
+            if move_id not in {"hiddenpower", qualified[:-2], qualified}:
+                raise EngineWorldUnsupported("transform_self_moves_malformed", "conflicting Hidden Power request ids")
+            move_id = qualified
+        moves.append(MoveSpec(id=move_id, pp=pp, disabled=disabled))
+    moves.extend(MoveSpec(id="none", pp=0, disabled=True) for _ in range(_MOVE_SLOT_LIMIT - len(moves)))
+    return tuple(moves)
+
+
 def _apply_transform(
     sides: Mapping[str, SideSpec],
     transformed_slots: Mapping[str, str],
@@ -719,10 +759,11 @@ def _apply_transform(
     belief-sampled spread. Reading it here keeps the two sides consistent — a
     dex lookup would invent a spread the opponent's own party contradicts.
 
-    The copied moveset's IDENTITY comes from that sampled donor, but its
-    per-slot USABILITY does not: on our own seat the request reports the copy's
-    live PP and disable state, and ``_copied_move_spec`` overlays it. Read that
-    function for why re-seeding it was wrong.
+    For the acting seat, a nonempty complete request is authoritative for the
+    copied move identities, order, PP and disabled state. A sampled donor may
+    carry extra moves or omit known ones; it must not rewrite the actor's
+    disclosed copy. Opponent copies and request-suppressed/Struggle boundaries
+    retain the separate donor-based handling.
 
     Two things are deliberately NOT copied, because gen3 does not copy them:
     HP/maxhp (the transformer keeps its own, which is why a transformed Ditto
@@ -817,7 +858,8 @@ def _apply_transform(
             speed=donor.speed,
             ability=donor.ability,
             weight_kg=donor.weight_kg,
-            moves=tuple(
+            moves=_copied_self_request_moves(self_active_request_moves)
+            if is_self and self_active_request_moves else tuple(
                 _copied_move_spec(
                     move,
                     request_move_state=request_move_state if is_self else {},
@@ -847,61 +889,13 @@ def _copied_move_spec(
     request_move_state: Mapping[str, tuple[int, bool]],
     struggle_only: bool,
 ) -> Any:
-    """One slot of the copied moveset, with its LIVE usability.
+    """Fallback for opponent copies and actor request-suppressed boundaries.
 
-    THE DEFECT THIS CLOSES. ``_TRANSFORM_MOVE_PP`` is what Showdown writes at
-    the instant Transform resolves, and re-writing it on every world build says
-    the copy is always as fresh as it was on turn one. It is not: the
-    transformer spends that PP like any other, and Showdown reports the spend to
-    us on our own seat, in ``selfActiveMoves`` -- the RAW request, which for a
-    transformed active lists the COPIED moves (the same source
-    ``_build_side_spec`` already reads Encore's disable pattern off, and NOT the
-    active ROW, which stays the pre-Transform snapshot on purpose so the
-    transformer's own PP survives reversion). Every world therefore believed a
-    Ditto that had drained Surf to 0 still had five of them.
-
-    Measured on ``fb3h1-960111`` p2, a Ditto transformed into Suicune: at round
-    63 the request read ``surf 0/24 disabled, substitute 1/10, icebeam 0/10
-    disabled, calmmind 0/20 disabled`` while all eight worlds built
-    ``surf 5, rest 5, icebeam 5, calmmind 5``, none disabled. One round later
-    the real Ditto ran out entirely, Showdown substituted the Struggle
-    pseudo-move, and the engine -- still holding four full moves -- proposed
-    four of them against a request offering only ``struggle``. Nothing mapped:
-    ``choices_unmapped`` / ``all_unmapped_legality_mismatch``, on all 40
-    remaining rounds of the battle.
-
-    ``struggle_only`` is that last state, where the request publishes no move
-    rows at all to overlay and the only fact available is the one Showdown
-    already computed for every slot: none of them is usable. It is applied to
-    EVERY copied slot, including slots the sampled donor has and the real donor
-    does not, because the verdict is about the transformer, not the moveset.
-    PP is left pinned there rather than zeroed, exactly as
-    ``_apply_struggle_only_move_state`` leaves it: the Struggle request carries
-    no PP, and ``Pokemon::add_available_moves`` already refuses a disabled slot.
-
-    A slot the request does not name keeps ``_TRANSFORM_MOVE_PP``, and the reason
-    is NOT that the request has nothing to say about it. It says the opposite:
-    on our own seat the request enumerates the copy's ENTIRE moveset, so a slot
-    the sampled donor carries and the request does not name is PROVABLY not in
-    the real copy (``rest`` above, in five of the eight worlds -- the donor comes
-    from the belief-SAMPLED opposing party, which can carry a move the real
-    Suicune never had). Disabling it would remove a fiction, not invent a fact.
-
-    It is left usable so that the fiction stays COUNTABLE. An unusable slot is
-    silently absent from the engine's options; a usable one gets proposed, misses
-    the request, and lands in ``EngineSearchStats.unmapped_choices`` -- 16 on the
-    exemplar battle and 10 on the 60-game batch, which is the belief sampler's
-    moveset error made visible on a counter rather than swallowed by the world
-    builder. This class was found by that counter, and the burndown's stop
-    condition is read off it.
-
-    Note the asymmetry with the non-transformed self path, which does the other
-    thing: it refuses outright rather than invent PP for a slot with no
-    request-known snapshot (``self_pp_unknown``, :2490). The difference is who
-    owns the error. There the missing PP is OUR OWN Pokemon's and a guess would
-    be silently wrong; here the extra slot belongs to a sampled OPPONENT variant
-    that this world invented, and refusing every Transform world whose sampled
-    donor over-covers the real one would trade a counted miss for a refusal.
+    A nonempty authoritative actor request is handled by
+    ``_copied_self_request_moves`` before this function, including identity and
+    ordering. The opponent keeps the sampled donor's Transform seed. On an
+    actor Struggle-only request, every copied move is disabled without guessing
+    its missing PP. Empty locked/recharge requests alone are not that verdict.
     """
 
     move_id = normalize_id(move.id)
@@ -1852,6 +1846,8 @@ def _build_side_spec(
             # (`Pokemon.clearVolatile()`), and Encore correctly fails against it. The engine
             # has a distinct variant for exactly this.
             last_used_move = "switch:0"
+        elif last_used_move_id == "struggle":
+            last_used_move = "move:struggle"
         else:
             index = _resolve_encored_move_index(
                 party[active_index].moves,

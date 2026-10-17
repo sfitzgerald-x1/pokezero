@@ -6182,6 +6182,23 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             "model_choice": "beta",
         }])
 
+    def test_exact_prior_telemetry_precedes_six_decimal_display_rounding(self) -> None:
+        from dataclasses import replace
+        policy = self._policy(worlds=4)
+        policy._config = replace(policy._config,root_prior_exact_aggregate=True)
+        # Actual native serializers retain six-decimal terms. Aggregating four
+        # such terms still has information the Python display rounding loses.
+        priors = [.123456,.123457,.123456,.123458]
+        reports = [self._report([("alpha",60,.5,p),("beta",40,.5,1-p)],root_priors=[p,1-p]) for p in priors]
+        decision, _ = self._run(policy,reports,worlds=[self._world(str(i)) for i in range(4)])
+        prior = sum(priors)/4
+        arms = decision.metadata["engine_mcts"]["override"]["root_allocation"]["arms"]
+        self.assertEqual(arms[0]["model_prior"],round(prior,6))
+        self.assertEqual(arms[0]["model_prior_pre_display"],prior)
+        self.assertNotEqual(arms[0]["model_prior"],arms[0]["model_prior_pre_display"])
+        for value in (True,1):
+            with self.assertRaises(ValueError):EngineMctsConfig(root_prior_exact_aggregate=value)
+
     def test_measured_override_metadata_drives_the_sealed_audit_adapter(self) -> None:
         """The producer's actual envelope is admissible without move labels.
 
