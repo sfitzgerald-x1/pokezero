@@ -4,12 +4,16 @@ on:
     paths:
       - src/pokezero/mcts_eval/search_over_raw_screening.py
       - tests/test_search_over_raw_screening.py
+      - src/pokezero/mcts_eval/search_over_raw_deviations.py
+      - tests/test_search_over_raw_deviations.py
       - .github/workflows/search-screening-kernel.yml
   push:
     branches: [main]
     paths:
       - src/pokezero/mcts_eval/search_over_raw_screening.py
       - tests/test_search_over_raw_screening.py
+      - src/pokezero/mcts_eval/search_over_raw_deviations.py
+      - tests/test_search_over_raw_deviations.py
       - .github/workflows/search-screening-kernel.yml
 permissions:
   contents: read
@@ -27,4 +31,4 @@ jobs:
       - name: Run standalone contracts
         env:
           PYTHONPATH: src:tests
-        run: python -m unittest test_search_over_raw_screening -v
+        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations -v
