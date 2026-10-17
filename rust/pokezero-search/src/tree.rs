@@ -974,6 +974,7 @@ fn sample_branch_index(rng: &mut StdRng, branches: &[ChanceBranch]) -> usize {
 fn move_choice_to_choice(side: &Side, mc: &MoveChoice) -> Option<Choice> {
     match mc {
         MoveChoice::Move(index) => Some(side.get_active_immutable().moves[index].choice.clone()),
+        MoveChoice::Struggle => Some(poke_engine::choices::MOVES.get(&poke_engine::choices::Choices::STRUGGLE).unwrap().clone()),
         _ => None,
     }
 }
