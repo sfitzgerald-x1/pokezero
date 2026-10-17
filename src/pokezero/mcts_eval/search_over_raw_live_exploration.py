@@ -216,7 +216,8 @@ def measure_root(s,config,archive,source,root,rows,guard):
         information_key=witness["consumed_binding"]["information_key"],legal_action_mask=list(context.observation.legal_action_mask))
     cells={};acceptance=dict(entry_sha256=digest(s),root_binding=binding,archive_sha256=frozen,
         live_rows_sha256={leaf:digest(rows[leaf][index]) for leaf in rows},public_request_witness=witness)
-    if len(actions)>1:
+    if len(actions)>1 and (not s["contract"].get("deviation_triggered_continuations",False)
+            or len(set(actions.values()))>1):
         job=OwnedContinuationJob(deepcopy(config),deepcopy(snapshot),binding,deepcopy(s["source_runtime"]),
             "p1",actions,s["contract"]["namespace"])
         job_sha=hashlib.sha256(pickle.dumps(job)).hexdigest();inputs=digest(job.input_binding())
@@ -278,7 +279,8 @@ def read_completed_root(s,row,source,rows):
         else:unavailable[leaf]=item.get("error","live selection unavailable")
     require(actions==row["actions"] and unavailable==row["input_unavailable"],"live actions or refusals changed")
     cells={}
-    if len(actions)>1:
+    if len(actions)>1 and (not s["contract"].get("deviation_triggered_continuations",False)
+            or len(set(actions.values()))>1):
         payload=(directory/"outcomes/job.pickle").read_bytes()
         require(hashlib.sha256(payload).hexdigest()==acceptance["continuation_job_sha256"],"original continuation job changed")
         job=pickle.loads(payload)

@@ -60,7 +60,8 @@ def source_recipe(config, checkpoint_contract, bridge_runtime, *, capture_actor_
     if live_shadow is not None:
         from .search_over_raw_live_capture import shadow_recipe
         require(not capture_actor_history and digest(live_shadow)==digest(shadow_recipe(checkpoint_contract,
-            total=live_shadow["total"],leaves=live_shadow["leaves"])),"exact explicit live shadow recipe required")
+            total=live_shadow["total"],leaves=live_shadow["leaves"],
+            scan_policy=live_shadow.get("scan_policy"))),"exact explicit live shadow recipe required")
         result.update(schema="pokezero.search-over-raw.source-recipe-live-shadow.v2",live_shadow=deepcopy(live_shadow))
     return result
 

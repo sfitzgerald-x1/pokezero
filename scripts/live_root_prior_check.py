@@ -136,6 +136,8 @@ def main(argv=None, *, boundary_guard=None) -> int:
         help="match a strict collector; refusals remain explicit unavailable comparisons")
     parser.add_argument("--collector-report", type=Path,
         help="require exact unrounded collector-native/live-native correspondence on its declared roster")
+    parser.add_argument("--collector-prefix-only",action="store_true",
+        help="with a collector report, stop shadow search after its final declared boundary; raw source still finishes")
     parser.add_argument("--dump-first-metadata", action="store_true")
     parser.add_argument("--gate-tv", type=float, default=0.1, help="exit 1 if any decision exceeds this total variation or flips the argmax")
     parser.add_argument("--world-rng", choices=("per-decision", "per-game"), default="per-decision")
@@ -149,6 +151,16 @@ def main(argv=None, *, boundary_guard=None) -> int:
     if not math.isfinite(args.gate_tv) or args.gate_tv < 0:
         parser.error("gate-tv must be finite and nonnegative")
     collector = json.loads(args.collector_report.read_text()) if args.collector_report else None
+    if args.collector_prefix_only and collector is None:
+        parser.error("collector-prefix-only requires an explicit collector report")
+    prefix_ends = {}
+    if args.collector_prefix_only:
+        for row in collector["expected"]:
+            if type(row.get("seed")) is not int or type(row.get("round")) is not int or row["round"]<=0:
+                parser.error("collector prefix requires eligible seed/boundary identities")
+            prefix_ends[row["seed"]]=max(prefix_ends.get(row["seed"],0),row["round"])
+        if set(prefix_ends)!=set(args.seeds):
+            parser.error("collector prefix must declare every replayed seed")
     original_artifacts = {name: hashlib.sha256(path.read_bytes()).hexdigest()
         for name, path in (("checkpoint_sha256", args.checkpoint),
             ("model_sha256", args.model_ts), ("tables_sha256", args.tables))}
@@ -222,6 +234,8 @@ def main(argv=None, *, boundary_guard=None) -> int:
             def _sink(context, decision, seed=seed, engines=engines, game_rngs=game_rngs):
                 if boundary_guard is not None:boundary_guard()
                 if context.player_id != "p1":
+                    return
+                if args.collector_prefix_only and context.decision_round_index>prefix_ends[seed]:
                     return
                 dist = decision.metadata.get("policy_distribution")
                 legal = [i for i, ok in enumerate(context.observation.legal_action_mask) if ok]

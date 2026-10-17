@@ -17,15 +17,22 @@ from .search_over_raw import require
 SOURCE_SCHEMA="pokezero.search-over-raw.source-live-shadow.v2"
 
 
-def shadow_recipe(checkpoint,*,total,leaves):
+def shadow_recipe(checkpoint,*,total,leaves,scan_policy=None):
     from .search_over_raw_world_inputs import _state_payload
-    require(type(leaves) is list and leaves==(["model","hp_fraction"] if total==320 else ["model"]),
+    require(type(leaves) is list and (leaves==(["model","hp_fraction"] if total==320 else ["model"])
+        if scan_policy is None else total==4096 and leaves==["model","hp_fraction"]
+        and scan_policy=="chronological_deviation_scan_v1"),
         "original fixed-work leaves required")
-    return dict(schema="pokezero.search-over-raw.live-shadow-recipe.v1",total=total,
+    recipe=dict(schema="pokezero.search-over-raw.live-shadow-recipe.v1",total=total,
         leaves=list(leaves),selectors={leaf:_state_payload(selector_config(checkpoint,total=total,leaf=leaf))
             for leaf in leaves},world_rng="per-decision",selection_seed="source_seed",
         invocation_schedule="every p1 boundary including opening",
         source_play_uses_search=False,root_rule="unchanged completed-catalog seed priority")
+    if scan_policy is not None:
+        recipe.update(schema="pokezero.search-over-raw.live-shadow-recipe.v2",scan_policy=scan_policy,
+            invocation_schedule="opening warmup and every eligible p1 boundary until declared scan cutoff",
+            root_rule="all scanned eligible boundaries in source/request order; no quota sampling")
+    return recipe
 
 
 def selector_config(checkpoint, *, total, leaf):
