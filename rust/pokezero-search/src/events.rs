@@ -629,7 +629,7 @@ fn build_choice(state: &State, side: SideReference, mc: &MoveChoice) -> Choice {
             c.move_index = *move_index;
             c
         }
-        MoveChoice::Struggle => MOVES.get(&Choices::STRUGGLE).unwrap().clone(),
+        MoveChoice::Struggle => poke_engine::choices::MOVES.get(&Choices::STRUGGLE).unwrap().clone(),
         MoveChoice::None => Choice::default(),
     }
 }

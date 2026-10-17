@@ -65,8 +65,8 @@ and qualification games are excluded from these 90 results.
 
 ## Evidence and remaining scope
 
-The owner's local evidence is under
-`/Users/scott/Documents/New project/reports/`:
+The following paths are relative to the owner's local report collection,
+retained outside this repository:
 
 - `search-statistical-amendment-20261009-r1/bounds/RESULT.json` and
   `REPORT.txt` contain the original cellwise analysis and accepted terminal
