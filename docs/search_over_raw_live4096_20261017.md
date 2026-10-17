@@ -65,21 +65,51 @@ hoped-for positive pattern; these small diagnostic groups cannot establish
 harm or diagnose the value head. Medium-margin HP's descriptive conditional
 interval has a lower endpoint of exactly zero, not a positive screen.
 
-## Cost and next action
+## Screening limitation and disposition
+
+A bounded, posthoc synthetic sensitivity modeled first-hit stopping, source
+validation, shared raw outcomes, refusals and independent exploration/holdout
+leaf selection. In a prespecified skewed zero-effect family, selected rejection
+was 26/250 or 10.4% (pointwise 95% Monte Carlo interval 7.2–14.8%) with pooled
+weighting, and 9.6% (6.5–13.9%) with equal seed weights. These results do not
+clear the nominal one-sided 5% bootstrap procedure.
+
+This was an incumbent-only hypothetical procedure, not a measured-variance fit
+or full A1/A3/reference calibration. The counterexample assumed 48 eligible
+roots per source, 5% independent deviation membership per leaf, eight shared-raw
+paired cells and source effect +0.10 with probability 0.8 or -0.40 otherwise
+(mean zero). Capture and replay each cost an assumed two seconds per boundary.
+The 48 scenarios used 250 cohorts and 10,000 bootstrap draws each; intervals
+are pointwise, not simultaneous. No actual holdout was opened.
+
+Separately, exact quota-stratified resampling of the measured 320/1024 source
+profiles put fixed-200-root eligibility below 0.000000005% per 320 leaf and at
+0.0200% for 1024 model. Those are empirical-law power ceilings for unchanged
+action/deviation profiles, not population bounds. Missing cells were not
+complete-case scored; the incomplete 4096 panel was not fitted as a population.
+
+## Cost and next scientific decision
 
 Across all 21 completed sources, matched selector calls took about 190 minutes
 for capture and another 190 for correspondence replay. These are selector
-timing sums, not whole-workflow costs. Qualify a lower-work independent
-live-context prior check before proposing another collection. It must preserve
-the exact prior and live sampling contract; archived parity is no replacement.
-Then review a specific follow-up hypothesis with feasible source coverage.
-Do not select HP or repeat an unchanged budget panel from these averages.
+timing sums, not whole-workflow costs. If that 21-source average repeated,
+selector work alone would take about 9.7 hours for 32 sources, before
+continuations; this projection is not a runtime guarantee.
+
+No qualified candidate emerged. Do not select HP or repeat the unchanged budget
+panel. Further collection needs a specific hypothesis and feasible source
+coverage, not an extended cap. Cheaper correspondence work is optional, not an
+infrastructure prerequisite: the 21 completed sources passed their gates. This
+supersedes this document's earlier lower-work-gate-first recommendation.
 
 Astra independently reproduced the saved-data arithmetic and cleared the
 exact readout and supplement. Original receipts and the independent review
 remain in the owner's local report collection under
 search-over-raw-live4096-deviation-exploration-20261016-r1. This document does
-not publish the underlying dataset.
+not publish the underlying dataset. The subsequent independently reviewed
+eligibility calculation and noncertifying sensitivity are retained under
+pokezero-search-over-raw-parallel-checks-20261016 as
+measured_screen_eligibility.json and timed_deviation_screen_sensitivity.json.
 
 Related evidence: the [1024 panel](search_over_raw_live1024_20261017.md),
 [320 panel](search_over_raw_live320_20261016.md),
