@@ -6,6 +6,8 @@ on:
       - tests/test_search_over_raw_screening.py
       - src/pokezero/mcts_eval/search_over_raw_deviations.py
       - tests/test_search_over_raw_deviations.py
+      - scripts/calibrate_search_over_raw_sparse.py
+      - tests/test_search_over_raw_sparse_sensitivity.py
       - .github/workflows/search-screening-kernel.yml
   push:
     branches: [main]
@@ -14,6 +16,8 @@ on:
       - tests/test_search_over_raw_screening.py
       - src/pokezero/mcts_eval/search_over_raw_deviations.py
       - tests/test_search_over_raw_deviations.py
+      - scripts/calibrate_search_over_raw_sparse.py
+      - tests/test_search_over_raw_sparse_sensitivity.py
       - .github/workflows/search-screening-kernel.yml
 permissions:
   contents: read
@@ -28,7 +32,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+      - name: Install synthetic arithmetic dependency
+        run: python -m pip install 'numpy>=1.26,<3'
       - name: Run standalone contracts
         env:
           PYTHONPATH: src:tests
-        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations -v
+        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity -v
