@@ -206,7 +206,11 @@ _CORPUS_TREES = ("reports", "docs")
 # document, not a measurement. No historical JSON was removed or altered.
 # 408 -> 409: PR 1527 adds raw_foulplay_baseline_20261015.json. Compared with
 # pre-publication 59d51244: exactly that path added under reports/docs, none removed.
-_EXPECTED_COUNTER_ARTIFACTS = 409
+# 409 -> 410: PR 1537 adds the freshly executed rollout-leaf mutation receipt
+# `reports/artifacts/rollout_leaf_witness_mutation_battery_20261017_prior_normalization.json`.
+# Re-derived against main at 76ec2cdd: exactly that tracked JSON added under
+# reports/docs, none removed; both historical mutation receipts remain unchanged.
+_EXPECTED_COUNTER_ARTIFACTS = 410
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

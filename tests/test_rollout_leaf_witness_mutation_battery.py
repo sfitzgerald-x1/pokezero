@@ -40,9 +40,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-# The original receipt remains historical evidence; current-tree coverage comes
-# from a separate complete execution of the unchanged original battery.
-ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261015_reference.json"
+# Earlier receipts remain historical evidence; current-tree coverage comes
+# from a fresh complete execution of the unchanged original battery.
+ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261017_prior_normalization.json"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import mutate_rollout_leaf_witness as harness  # noqa: E402

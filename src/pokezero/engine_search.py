@@ -4133,7 +4133,9 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
             q_weighted[choice] += share * q_acting
         arm_priors = [entry.get("prior") for entry in entries]
         if entries and not any(prior is None for prior in arm_priors):
-            reported_total = sum(arm_priors) or 1.0
+            # Native arms are visit-sorted. Prior normalization must not depend
+            # on that order or the interpreter's builtin float-sum algorithm.
+            reported_total = math.fsum(arm_priors) or 1.0
             for entry, prior in zip(entries, arm_priors):
                 choice = entry["move"]
                 reported_prior_share[choice] += prior / reported_total
@@ -4160,7 +4162,7 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
             # than a missing one.
             arms_misaligned += 1
             continue
-        prior_total = sum(arm_priors) or 1.0
+        prior_total = math.fsum(arm_priors) or 1.0
         for entry, prior in zip(entries, arm_priors):
             prior_share[entry["move"]] += prior / prior_total
         if len(opponent_entries) >= 2:
@@ -4168,7 +4170,7 @@ def _aggregate_root_arms(world_runs: Sequence[Mapping[str, Any]]) -> _RootArmAgg
             if not any(prior is None for prior in opponent_arm_priors) and (
                 len(set(f"{prior:.6f}" for prior in opponent_arm_priors)) > 1
             ):
-                opponent_prior_total = sum(opponent_arm_priors) or 1.0
+                opponent_prior_total = math.fsum(opponent_arm_priors) or 1.0
                 for entry, prior in zip(opponent_entries, opponent_arm_priors):
                     opponent_prior_share[entry["move"]] += prior / opponent_prior_total
     # PRECEDENCE, from "the instrument is not installed" outwards to "this
