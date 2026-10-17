@@ -138,3 +138,24 @@ PYTHONPATH=src python scripts/live_root_prior_check.py --checkpoint <ckpt.pt> --
 ```
 
 Unit tests for the pure helpers: `python -m unittest tests.test_root_prior_exactness_tools`.
+
+## Addendum, October 17: deviation rate versus budget on the same games
+
+`scripts/search_deviation_scan.py` runs the production model-leaf search at several per-world
+iteration budgets at every p1 boundary of the same regenerated games and records, without
+playing continuations, whether the search left raw's action. On the 42 games (1,801 decisions),
+four public-belief worlds:
+
+| Iterations per world | Deviations from raw | Rate | Tree overrides | Native-prior mismatches | Median root Q gap on deviations | Seconds per decision |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 80 | 41 | 2.3% | 38 | 3 | 0.039 | 0.9 |
+| 256 | 76 | 4.2% | 73 | 3 | 0.030 | 2.5 |
+| 1,024 | 134 | 7.4% | 131 | 3 | 0.036 | 8.7 |
+
+Deviations nest across budgets (38 of 41 persist from 80 to 256 iterations, 71 of 76 from 256 to
+1,024) and concentrate where the raw policy's top two actions are close: at 80 iterations 34 of
+41 deviations have a top-two margin under 0.1, while at 1,024 iterations 32 of 134 have a margin
+above 0.3. On roots where the search keeps raw's action the paired contrast is identically zero,
+so the rate at a budget is the sizing input for a deviation-triggered panel: about 1,350 scanned
+roots per 100 deviation roots at 1,024 iterations per world. The three native-prior mismatches
+per budget are the live gate's residual on these games.
