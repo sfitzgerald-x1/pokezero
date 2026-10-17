@@ -69,6 +69,10 @@ class PokeEngineMoveTrapUnsupportedError(PokeEngineUnavailableError):
     """
 
 
+class PokeEngineStruggleLastMoveUnsupportedError(PokeEngineUnavailableError):
+    """The installed Python engine cannot preserve synthetic Struggle history."""
+
+
 class PokeEngineTransformRevertUnsupportedError(PokeEngineUnavailableError):
     """Raised when a spec carries a pre-transform base form the binding cannot take.
 
@@ -230,8 +234,8 @@ class SideSpec:
     slow_uturn_move: bool = False
     switch_out_move_second_saved_move: str = ""
     # Engine last-used-move token ("move:<slot>" / "switch:<idx>"); "" = unset.
-    # SHARP EDGE: the engine accepts only slot INDICES here — a move id is
-    # accepted at construction then panics inside generate_instructions.
+    # The reserved "move:struggle" token requires a checked patched runtime.
+    # Arbitrary move IDs remain invalid: older engines panic on those tokens.
     last_used_move: str = ""
     # Volatile duration counters by poke_engine.VolatileStatusDurations field
     # name (e.g. {"encore": 1}); empty = engine defaults.
@@ -323,6 +327,8 @@ def build_poke_engine_state(spec: BattleSpec, module: Any | None = None, *,
         require_pre_transform_support(engine)
     if _spec_requires_rest_turns(spec):
         require_rest_turns_support(engine)
+    if any(side.last_used_move == "move:struggle" for side in (spec.side_one, spec.side_two)):
+        require_struggle_last_move_support(engine)
 
     state = _build_poke_engine_state_unchecked(spec, engine)
     if construction_observer is not None:
@@ -354,6 +360,60 @@ def _build_poke_engine_state_unchecked(spec: BattleSpec, engine: Any) -> Any:
             spec.weather_turns_remaining, "weather_turns_remaining"
         )
     return engine.State(**kwargs)
+
+
+def require_struggle_last_move_support(engine: Any | None = None) -> None:
+    """Require both-seat serialization support, not general Struggle fidelity.
+
+    Python construction and the search crate are separate engine consumers.
+    A newer search crate does not prove that the Python wheel understands the
+    reserved token; the latter must preserve it through its own native parser.
+    """
+    engine = engine if engine is not None else require_poke_engine()
+    try:
+        supported = _cached_struggle_last_move_supported(engine)
+    except TypeError:  # Explicit unhashable test doubles are not cached.
+        supported = _struggle_last_move_supported(engine)
+    if not supported:
+        raise PokeEngineStruggleLastMoveUnsupportedError(
+            "Synthetic Struggle last-move state requires a matching patched "
+            "poke-engine Python wheel; rebuild both engine consumers from the "
+            "reviewed patch set."
+        )
+
+
+@lru_cache(maxsize=32)
+def _cached_struggle_last_move_supported(engine: Any) -> bool:
+    return _struggle_last_move_supported(engine)
+
+
+def _struggle_last_move_supported(engine: Any) -> bool:
+    state_type, side_type = getattr(engine, "State", None), getattr(engine, "Side", None)
+    if state_type is None or side_type is None:
+        return False
+    try:
+        for seat in ("side_one", "side_two"):
+            sides = {"side_one": side_type(), "side_two": side_type()}
+            sides[seat] = side_type(last_used_move="move:struggle")
+            state = state_type(**sides)
+            serialized = str(state.to_string())
+            if "move:struggle" not in serialized:
+                return False
+            restored = state_type.from_string(serialized)
+            if (getattr(getattr(restored, seat), "last_used_move", None) != "move:struggle"
+                    or str(restored.to_string()) != serialized):
+                return False
+        return True
+    except BaseException as error:
+        # Legacy PyO3 parsers raise PanicException (not Exception) on this exact
+        # token. Attribute that unsupported ABI without swallowing interrupts,
+        # SystemExit or unrelated BaseException failures.
+        if isinstance(error, Exception) or (
+            type(error).__module__ == "pyo3_runtime"
+            and type(error).__name__ == "PanicException"
+        ):
+            return False
+        raise
 
 
 def _spec_requires_move_trap(spec: BattleSpec) -> bool:
@@ -863,7 +923,7 @@ def _build_side(engine: Any, side: SideSpec, path: str) -> Any:
     if side.last_used_move:
         token = str(side.last_used_move)
         prefix, _, index = token.partition(":")
-        if prefix not in ("move", "switch") or not index.isdigit():
+        if token != "move:struggle" and (prefix not in ("move", "switch") or not index.isdigit()):
             raise ValueError(
                 f"{path}.last_used_move must be 'move:<slot>' or 'switch:<idx>' with a numeric "
                 f"index (engine panics on move ids), got {token!r}"

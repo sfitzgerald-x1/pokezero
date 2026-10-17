@@ -715,6 +715,14 @@ jobs:
             exit 1
           fi
 
+      - name: Synthetic Struggle last-move adapter capability
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_struggle_last_move_adapter -v 2>&1 \
+            | tee /tmp/struggle-last-move.log
+          grep -qE 'Ran 13 tests' /tmp/struggle-last-move.log
+          grep -qE '^OK$' /tmp/struggle-last-move.log
+
       - name: Encore public-lastUsedMove world-construction pins
         run: |
           set -o pipefail
