@@ -4592,6 +4592,7 @@ class EngineMctsPolicy:
     #: campaign_runs`. An instrument that crashes the search it was only supposed
     #: to watch is worse than no instrument.
     _world_observer: Any | None = None
+    _world_attempt_observer: Any | None = None
 
     def __init__(
         self,
@@ -4895,6 +4896,20 @@ class EngineMctsPolicy:
                 stacklevel=3,
             )
 
+    def _notify_world_attempt_observer(self, context, ordinal, override) -> None:
+        """Observe the actual draw without changing construction acceptance.
+
+        Consumers must reconcile missing callbacks with production attempt
+        counters. A draw is not proof that its world reached native search.
+        """
+        observer = self._world_attempt_observer
+        if observer is not None:
+            try:
+                observer(context, ordinal, override)
+            except Exception as error:  # noqa: BLE001 — telemetry never changes acceptance
+                warnings.warn(f"world_attempt_observer raised: {type(error).__name__}",
+                    EngineSearchFallbackWarning, stacklevel=3)
+
     def _search(self, context: PolicyContext, *, rng: random.Random) -> PolicyDecision:
         self._world_failures_before = dict(self.stats.world_failure_reasons)
         # This is the OUTER clock for a model decision: fold advancement, belief
@@ -4947,6 +4962,7 @@ class EngineMctsPolicy:
                     rng=rng,
                     witnessed_fallback=True,
                 )
+            self._notify_world_attempt_observer(context, attempts - 1, override)
             if override is None:
                 self.stats.world_failure_reasons[
                     f"belief_sample: {sample_failure or 'unknown'}"
