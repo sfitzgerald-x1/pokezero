@@ -8,6 +8,10 @@ on:
       - tests/test_search_over_raw_deviations.py
       - scripts/calibrate_search_over_raw_sparse.py
       - tests/test_search_over_raw_sparse_sensitivity.py
+      - src/pokezero/mcts_eval/search_over_raw_margin.py
+      - tests/test_search_over_raw_margin.py
+      - src/pokezero/mcts_eval/search_over_raw_budget16384.py
+      - tests/test_search_over_raw_budget16384.py
       - .github/workflows/search-screening-kernel.yml
   push:
     branches: [main]
@@ -18,6 +22,10 @@ on:
       - tests/test_search_over_raw_deviations.py
       - scripts/calibrate_search_over_raw_sparse.py
       - tests/test_search_over_raw_sparse_sensitivity.py
+      - src/pokezero/mcts_eval/search_over_raw_margin.py
+      - tests/test_search_over_raw_margin.py
+      - src/pokezero/mcts_eval/search_over_raw_budget16384.py
+      - tests/test_search_over_raw_budget16384.py
       - .github/workflows/search-screening-kernel.yml
 permissions:
   contents: read
@@ -37,4 +45,4 @@ jobs:
       - name: Run standalone contracts
         env:
           PYTHONPATH: src:tests
-        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity -v
+        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity test_search_over_raw_margin test_search_over_raw_budget16384 -v
