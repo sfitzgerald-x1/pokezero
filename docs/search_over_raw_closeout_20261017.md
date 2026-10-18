@@ -1,9 +1,12 @@
-# Search over raw amended plan closeout
+# Search over raw milestone audit — broader goal restored
 
-October 17, 2026. The October 10 research plan, as amended by Scott's October
-15–16 instructions, is implemented and evaluated. **No qualified search
-candidate emerged.** Completing this research plan does not mean demonstrating
-an improvement, clearing a screening method or completing the capped study.
+October 17, 2026. **The broader research goal is active and incomplete.** Scott
+explicitly restored it after rejecting the agent's premature whole-goal
+completion. This document inventories completed milestones; its earlier claim
+that those milestones completed the amended research plan is superseded.
+No qualified search candidate emerged, the screening method remains uncleared,
+and the capped study remains incomplete. The historical scientific receipts
+and results are unchanged.
 
 ## Requirements and evidence
 
@@ -35,11 +38,27 @@ Whole-procedure/reference-arm calibration, deployability and broader engine
 fidelity remain unestablished, not silently passed. Any future branch would
 require its applicable calibration, deployability and scoped fidelity evidence.
 
-The completion audit checked the governing instructions, merged publications,
-original terminal/readout review bindings and independently reviewed analysis.
-Historical receipts and their earlier status flags remain unchanged. Further
-collection requires a separately chosen scientific direction; a positive
-finding is not required to complete this amended research plan.
+The earlier audit checked completed work but incorrectly treated that work
+package as the entire research objective. In particular, the October 16
+root-prior handoff explicitly carried A1 forward as a tree-level question at
+A3 budgets. Root-prior correspondence does not answer that question.
+
+## Next authorized investigation
+
+Astra independently reviewed the restored path: a fresh, paired model-leaf
+comparison of one public-belief tree versus one true-team tree, each at 1,024
+iterations, with raw as the shared control. This asks about hidden-team input
+conditional on one-world search, not deployability or strategy fusion alone.
+Four repeated true-team worlds are not four independent trees: production
+concentrates duplicate completions into a larger tree. The one-world comparison
+avoids confounding information with that compute allocation.
+
+The concrete collection entry and its independent prospective review are still
+pending; no new run has launched. Retain fresh exposure-disjoint sources,
+live correspondence gates, deviation-triggered eight-replicate paired
+continuations, the complete scanned denominator and the existing eight-hour /
+2,000-root ceilings. Holdout, search-arm Phase B, new checkpoints and retraining
+remain closed. A diagnostic result does not itself clear any downstream gate.
 
 The owner's existing local report collection retains the measured eligibility
 and stopped-scan outputs under
