@@ -65,6 +65,24 @@ hoped-for positive pattern; these small diagnostic groups cannot establish
 harm or diagnose the value head. Medium-margin HP's descriptive conditional
 interval has a lower endpoint of exactly zero, not a positive screen.
 
+### Paired leaf diagnostic after goal restoration
+
+A posthoc same-root comparison reconstructed both contrasts directly from
+the saved eight-replicate action cells, checking their difference against the
+direct HP-minus-model action contrast. Among the 872 accepted roots, both
+leaves chose raw on 797 and the same nonraw action on 19. They never chose two
+different nonraw actions. Model alone overrode raw on 31 roots, averaging
+-6.65 pp versus raw; HP alone overrode on 25, averaging +2.50 pp.
+
+Thus HP's accepted-root advantage over model, +0.3082 pp, mostly reflects
+avoiding the model-only overrides, not finding superior alternative actions
+on common overrides. Source contribution sums were positive on five sources,
+negative on five and zero on eleven; one source supplied 79.1% of the net
+difference. This is not a value-head calibration measurement or leaf-selection
+screen. Retaining the 43 unknown reservations gives direct HP-minus-model
+identification bounds of -4.406 to +4.993 pp over all 915 roots. This extension
+changes no outcomes, roster, original readout or collection authority.
+
 ## Screening limitation and disposition
 
 A bounded, posthoc synthetic sensitivity modeled first-hit stopping, source
@@ -116,6 +134,7 @@ Related evidence: the [1024 panel](search_over_raw_live1024_20261017.md),
 [runtime preservation PR](https://github.com/sfitzgerald-x1/pokezero/pull/1508),
 and [landed deviation arithmetic](https://github.com/sfitzgerald-x1/pokezero/pull/1532).
 Different fresh-source panels do not isolate a budget effect. Holdout, Phase B
-search arms and retraining remain closed. The [amended research-plan closeout](search_over_raw_closeout_20261017.md)
-records completion of the prescribed work, not a search gain or completion of
-this capped study.
+search arms and retraining remain closed. The [milestone audit and restored
+research path](search_over_raw_closeout_20261017.md) corrects the premature
+whole-goal completion and identifies the unresolved tree-level A1 diagnostic.
+The broader goal is active; this capped study will not be resumed.
