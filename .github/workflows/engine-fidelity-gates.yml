@@ -1143,6 +1143,14 @@ jobs:
           set -euo pipefail
           python scripts/harness_digest.py --print
 
+      - name: Initial-team selected-field comparison fixtures
+        run: |
+          set -o pipefail
+          PYTHONPATH=src python -m unittest tests.test_initial_team_comparison -v 2>&1 \
+            | tee /tmp/initial-team-comparison.log
+          grep -qx 'Ran 9 tests in .*' /tmp/initial-team-comparison.log
+          grep -qx 'OK' /tmp/initial-team-comparison.log
+
       - name: Root prior normalization and live-path work separation fixtures
         run: |
           set -o pipefail
