@@ -210,7 +210,9 @@ _CORPUS_TREES = ("reports", "docs")
 # `reports/artifacts/rollout_leaf_witness_mutation_battery_20261017_prior_normalization.json`.
 # Re-derived against main at 76ec2cdd: exactly that tracked JSON added under
 # reports/docs, none removed; both historical mutation receipts remain unchanged.
-_EXPECTED_COUNTER_ARTIFACTS = 410
+# 410 -> 411: counter_artifacts() on the pre-refresh tree and current tree
+# differs only by the new information-capture mutation receipt; nothing removed.
+_EXPECTED_COUNTER_ARTIFACTS = 411
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
