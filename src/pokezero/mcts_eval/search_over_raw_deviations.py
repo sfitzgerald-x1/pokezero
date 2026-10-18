@@ -14,6 +14,7 @@ from typing import Mapping, Sequence
 from .search_over_raw_screening import paired_root_interval
 
 LEAVES = ("model", "hp_fraction")
+INFORMATION_ARMS = ("public", "oracle")
 TARGET_DEVIATIONS = 100
 MAX_ROOTS = 2000
 MAX_WALL_SECONDS = 28800
@@ -54,9 +55,16 @@ class ScannedRoot:
                  for value in (self.model, self.hp_fraction)), "invalid action identity")
 
     def deviation(self, leaf):
-        _require(leaf in LEAVES, "unsupported leaf")
-        action = getattr(self, leaf)
+        action = self.action(leaf)
         return None if action is None else action != self.raw
+
+    @property
+    def candidates(self):
+        return LEAVES
+
+    def action(self, name):
+        _require(name in self.candidates, "unsupported candidate")
+        return getattr(self, name)
 
     @property
     def continuation_actions(self):
@@ -72,6 +80,35 @@ class ScannedRoot:
         return tuple(sorted(actions | {self.raw}))
 
 
+@dataclass(frozen=True)
+class ScannedInformationRoot:
+    """Actual information-arm identities, never aliases for model/HP leaves."""
+    seed: int
+    request_index: int
+    raw: int
+    public: int | None
+    oracle: int | None
+
+    def __post_init__(self):
+        _require(type(self.seed) is int and 0 <= self.seed < 2**32
+                 and type(self.request_index) is int and self.request_index > 0,
+                 "original nonopening source boundary required")
+        _require(_action(self.raw) and all(a is None or _action(a)
+                 for a in (self.public, self.oracle)), "invalid action identity")
+
+    @property
+    def candidates(self):
+        return INFORMATION_ARMS
+
+    action = ScannedRoot.action
+    deviation = ScannedRoot.deviation
+
+    @property
+    def continuation_actions(self):
+        actions = {a for a in (self.public, self.oracle) if a is not None}
+        return tuple(sorted(actions | {self.raw})) if actions - {self.raw} else ()
+
+
 def root_intervals(root: ScannedRoot, outcomes: Mapping):
     """Retain missing/refused/unvalidated games as intervals, not losses.
 
@@ -79,14 +116,16 @@ def root_intervals(root: ScannedRoot, outcomes: Mapping):
     zero even when no games were played. The existing paired reader checks
     supplied cells, including malformed receipts on an alias.
     """
-    _require(isinstance(root, ScannedRoot), "validated scan identity required")
-    return {leaf: (-1., 1.) if getattr(root, leaf) is None else
-            paired_root_interval(getattr(root, leaf), root.raw, outcomes)
-            for leaf in LEAVES}
+    _require(isinstance(root, (ScannedRoot, ScannedInformationRoot)), "validated scan identity required")
+    return {leaf: (-1., 1.) if root.action(leaf) is None else
+            paired_root_interval(root.action(leaf), root.raw, outcomes)
+            for leaf in root.candidates}
 
 
 def validate_scan(roots: Sequence[ScannedRoot]):
-    _require(all(isinstance(root, ScannedRoot) for root in roots), "scan rows required")
+    _require(all(isinstance(root, (ScannedRoot, ScannedInformationRoot)) for root in roots), "scan rows required")
+    _require(not roots or all(r.candidates == roots[0].candidates for r in roots),
+             "cannot mix scientific comparisons")
     identities = [(root.seed, root.request_index) for root in roots]
     _require(len(identities) == len(set(identities)), "duplicate source boundary; no retries")
     _require(len(roots) <= MAX_ROOTS, "hard scanned-root cap exceeded")
@@ -110,7 +149,7 @@ def stop_reason(roots: Sequence[ScannedRoot], elapsed_seconds: float):
     if len(roots) >= MAX_ROOTS:
         return "ROOT_CAP"
     if all(sum(root.deviation(leaf) is True for root in roots) >= TARGET_DEVIATIONS
-           for leaf in LEAVES):
+           for leaf in (roots[0].candidates if roots else LEAVES)):
         return "DEVIATION_TARGET"
     return None
 
@@ -150,13 +189,14 @@ def summarize(roots: Sequence[ScannedRoot], intervals: Sequence[Mapping], *,
     """
     validate_scan(roots)
     _require(roots and len(roots) == len(intervals), "all scanned roots need intervals")
+    candidates = roots[0].candidates
     _require(weighting in {"pooled_roots", "equal_seed"}, "explicit weighting required")
     _require(type(bootstrap_seed) is int and type(bootstrap_draws) is int
              and bootstrap_draws >= 20, "bound bootstrap seed and >=20 draws required")
     grouped = {}
     for root, bounds in zip(roots, intervals):
-        _require(set(bounds) == set(LEAVES), "both leaves required on every scanned root")
-        for leaf in LEAVES:
+        _require(set(bounds) == set(candidates), "both candidates required on every scanned root")
+        for leaf in candidates:
             value = bounds[leaf]
             _require(isinstance(value, (tuple, list)) and len(value) == 2
                      and all(type(x) in (int, float) and math.isfinite(x) for x in value)
@@ -168,13 +208,13 @@ def summarize(roots: Sequence[ScannedRoot], intervals: Sequence[Mapping], *,
         grouped.setdefault(root.seed, []).append((root, bounds))
     groups = list(grouped.values())
     metrics = ("deviation_rate", "conditional_contrast", "overall_effect")
-    boot = {leaf: {metric: [[], []] for metric in metrics} for leaf in LEAVES}
+    boot = {leaf: {metric: [[], []] for metric in metrics} for leaf in candidates}
     conditional_statuses = {leaf: {status: 0 for status in
-        ("DEFINED", "UNDEFINED_NO_DEVIATIONS", "UNCERTAIN_MEMBERSHIP")} for leaf in LEAVES}
+        ("DEFINED", "UNDEFINED_NO_DEVIATIONS", "UNCERTAIN_MEMBERSHIP")} for leaf in candidates}
     rng = random.Random(bootstrap_seed)
     for _ in range(bootstrap_draws):
         sampled = [groups[i] for i in rng.choices(range(len(groups)), k=len(groups))]
-        for leaf in LEAVES:
+        for leaf in candidates:
             estimate = _aggregate(sampled, leaf, weighting)
             conditional_statuses[leaf][estimate["conditional_mean_status"]] += 1
             for metric in metrics:
@@ -183,7 +223,7 @@ def summarize(roots: Sequence[ScannedRoot], intervals: Sequence[Mapping], *,
                 for endpoint in (0, 1):
                     boot[leaf][metric][endpoint].append(estimate[metric][endpoint])
     result = {}
-    for leaf in LEAVES:
+    for leaf in candidates:
         estimate = _aggregate(groups, leaf, weighting)
         deviations = sum(root.deviation(leaf) is True for root in roots)
         unknown = sum(root.deviation(leaf) is None for root in roots)
@@ -204,7 +244,8 @@ def summarize(roots: Sequence[ScannedRoot], intervals: Sequence[Mapping], *,
             source_minimum_satisfied=len(groups) >= MIN_SOURCE_CLUSTERS,
             strictly_positive_lower_endpoint=lower > 0,
             screening_authorized=False, holdout_authorized=False)
-    return dict(schema="pokezero.search-over-raw.deviation-summary.v1", leaves=result,
+    return dict(schema="pokezero.search-over-raw.deviation-summary.v1",
+        **({"leaves":result} if candidates == LEAVES else {"candidates":result}),
         scanned_roots=len(roots), observed_source_clusters=len(groups), weighting=weighting,
         conditional_weighting="pooled deviations" if weighting == "pooled_roots" else
             "deviations weighted by inverse source root count",

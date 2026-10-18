@@ -164,5 +164,65 @@ class DeviationSummaryTest(unittest.TestCase):
                 self.report([root], [dict(model=value, hp_fraction=(0., 0.))])
 
 
+class InformationAccountingTest(unittest.TestCase):
+    def test_candidate_identity_is_not_a_leaf_label_alias(self):
+        root=m.ScannedInformationRoot(7,1,0,1,2)
+        self.assertEqual(root.candidates,("public","oracle"))
+        self.assertEqual(root.continuation_actions,(0,1,2))
+        self.assertEqual(set(m.root_intervals(root,{})),{"public","oracle"})
+        with self.assertRaises(ValueError):root.action("hp_fraction")
+        with self.assertRaises(ValueError):root.action("model")
+
+    def test_agreement_and_unknown_action_have_different_meanings(self):
+        root=m.ScannedInformationRoot(7,1,0,None,0)
+        self.assertEqual(root.continuation_actions,())
+        self.assertEqual(m.root_intervals(root,{}),dict(public=(-1.,1.),oracle=(0.,0.)))
+        self.assertIsNone(root.deviation("public"))
+        self.assertFalse(root.deviation("oracle"))
+
+    def test_alias_still_validates_supplied_cells(self):
+        with self.assertRaises(ValueError):
+            m.root_intervals(m.ScannedInformationRoot(7,1,0,0,0),
+                {(0,0):dict(status="REFUSED",validated=True,score=1.)})
+
+    def test_invalid_boundaries_and_mixed_scientific_comparisons_refuse(self):
+        for args in ((True,1,0,1,1),(7,0,0,1,1),(7,1,0,True,1),(7,1,0,1,-1)):
+            with self.assertRaises(ValueError):m.ScannedInformationRoot(*args)
+        with self.assertRaisesRegex(ValueError,"mix scientific"):
+            m.validate_scan([m.ScannedInformationRoot(7,1,0,1,1),m.ScannedRoot(8,1,0,1,1)])
+
+    def test_first_target_and_caps_use_both_actual_candidates(self):
+        roots=[m.ScannedInformationRoot(7,i+1,0,None,1) for i in range(100)]
+        self.assertIsNone(m.stop_reason(roots,0))
+        both=[m.ScannedInformationRoot(7,i+1,0,1,1) for i in range(100)]
+        self.assertEqual(m.stop_reason(both,0),"DEVIATION_TARGET")
+        self.assertEqual(m.stop_reason(both,28800),"WALL_CAP")
+        self.assertEqual(m.stop_reason([m.ScannedInformationRoot(7,i+1,0,None,None)
+            for i in range(2000)],0),"ROOT_CAP")
+
+    def test_information_summary_names_weighting_and_closed_screening(self):
+        roots=[m.ScannedInformationRoot(7,i+1,0,1,1) for i in range(3)]+[
+            m.ScannedInformationRoot(8,1,0,0,0)]
+        bounds=[dict(public=(.5,.5),oracle=(.5,.5))]*3+[dict(public=(0.,0.),oracle=(0.,0.))]
+        for weighting,expected in (("pooled_roots",.375),("equal_seed",.25)):
+            report=m.summarize(roots,bounds,weighting=weighting,bootstrap_seed=7,bootstrap_draws=100)
+            self.assertNotIn("leaves",report)
+            self.assertEqual(set(report["candidates"]),{"public","oracle"})
+            self.assertEqual(report["candidates"]["public"],report["candidates"]["oracle"])
+            row=report["candidates"]["oracle"]
+            self.assertEqual(row["identification_intervals"]["overall_effect"],(expected,expected))
+            self.assertFalse(row["screening_authorized"])
+            self.assertFalse(report["calibration_certified"])
+            self.assertFalse(row["source_minimum_satisfied"])
+
+    def test_unknown_information_arm_keeps_the_scanned_denominator(self):
+        roots=[m.ScannedInformationRoot(7,1,0,None,0),m.ScannedInformationRoot(8,1,0,1,0)]
+        bounds=[dict(public=(-1.,1.),oracle=(0.,0.)),dict(public=(.5,.5),oracle=(0.,0.))]
+        report=m.summarize(roots,bounds,bootstrap_seed=7,bootstrap_draws=100)
+        self.assertEqual(report["scanned_roots"],2)
+        self.assertEqual(report["candidates"]["public"]["identification_intervals"]["overall_effect"],(-.25,.75))
+        self.assertEqual(report["candidates"]["oracle"]["identification_intervals"]["overall_effect"],(0.,0.))
+
+
 if __name__ == "__main__":
     unittest.main()
