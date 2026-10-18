@@ -1160,6 +1160,15 @@ jobs:
           grep -qx 'Ran 13 tests in .*' /tmp/live-prior-work-separation.log
           grep -qx 'OK' /tmp/live-prior-work-separation.log
 
+      # No native wheel or real source is needed by the capture observer fixtures.
+      - name: Initial-team capture observer fixtures
+        run: |
+          set -o pipefail
+          PYTHONPATH=src python -m unittest tests.test_information_world_capture -v 2>&1 \
+            | tee /tmp/initial-team-capture.log
+          grep -qx 'Ran 8 tests in .*' /tmp/initial-team-capture.log
+          grep -qx 'OK' /tmp/initial-team-capture.log
+
       - name: Truth-injection differential instrument
         run: |
           set -o pipefail
