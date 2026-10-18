@@ -791,14 +791,14 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure: there are **45 executable** invocation sites at this
-head; the scan resolves **45** of them and leaves **none** unresolved. No invocation-carrying
+rather than inherited from #1205's figure: there are **46 executable** invocation sites at this
+head; the scan resolves **46** of them and leaves **none** unresolved. No invocation-carrying
 comment remains. The own-policy integration, inherited-selector parser, and frozen-root roster
 gates are included, as is the 109-test paper trajectory reference step added by #1504; the counts
 were re-derived from executable workflow bodies. The guarded 13-test synthetic Struggle
 adapter step, both three-test fresh native and model-wheel Struggle steps, and the 13-test
 root-prior normalization and model live-path work-separation fixture step are included. The
-eight-test initial-team capture observer step is included.
+eight-test initial-team capture observer and nine-test selected-field comparison steps are included.
 
 (Was 36/1/35. #1384 added the guarded opponent request-order source pins. Re-derived from the
 merged workflow and scanner rather than incremented.)
