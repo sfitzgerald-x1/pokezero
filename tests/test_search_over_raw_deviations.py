@@ -224,5 +224,68 @@ class InformationAccountingTest(unittest.TestCase):
         self.assertEqual(report["candidates"]["oracle"]["identification_intervals"]["overall_effect"],(0.,0.))
 
 
+class PairedInformationSummaryTest(unittest.TestCase):
+    def report(self, roots, intervals, **kwargs):
+        return m.paired_information_summary(roots, intervals, bootstrap_seed=7, draws=100, **kwargs)
+
+    def test_direct_alias_cancels_without_subtracting_marginal_bounds(self):
+        roots = [m.ScannedInformationRoot(7, 1, 0, 2, 2),
+                 m.ScannedInformationRoot(8, 1, 0, None, 2)]
+        report = self.report(roots, [(0., 0.), (-1., 1.)])
+        self.assertEqual(report["estimates"]["pooled_roots"]["identification_bounds"], [-.5, .5])
+        self.assertEqual(report["identified_roots"], 1)
+        self.assertEqual(report["unknown_action_pairs"], 1)
+        self.assertEqual(report["known_action_disagreements"], 0)
+        for pairs in ([(0., 0.), (0., 0.)], [(-1., 1.), (-1., 1.)]):
+            with self.assertRaises(ValueError):
+                self.report(roots, pairs)
+
+    def test_pooled_roots_and_equal_sources_remain_explicit(self):
+        roots = [m.ScannedInformationRoot(7, i, 0, 1, 2) for i in (1, 2, 3)] + [
+            m.ScannedInformationRoot(8, 1, 0, 0, 0)]
+        pairs = [(.5, .5)] * 3 + [(0., 0.)]
+        report = self.report(roots, pairs)
+        self.assertEqual(report["scanned_roots"], 4)
+        self.assertEqual(report["source_clusters"], 2)
+        self.assertEqual(report["known_action_disagreements"], 3)
+        self.assertEqual(report["estimates"]["pooled_roots"]["identification_bounds"], [.375, .375])
+        self.assertEqual(report["estimates"]["equal_seed"]["identification_bounds"], [.25, .25])
+        self.assertEqual(report, self.report(roots, pairs))
+        for key in ("screening_authorized", "calibration_certified", "scientific_strength_claim"):
+            self.assertIs(report[key], False)
+
+    def test_complete_disagreement_keeps_its_direct_sign(self):
+        root = m.ScannedInformationRoot(7, 1, 0, 1, 2)
+        report = self.report([root], [(-.25, -.25)])
+        for estimate in report["estimates"].values():
+            self.assertEqual(estimate["identification_bounds"], [-.25, -.25])
+            self.assertEqual(estimate["descriptive_seed_bootstrap_95"], [-.25, -.25])
+
+    def test_unknown_pairs_cannot_be_complete_case_zeros(self):
+        for root in (m.ScannedInformationRoot(7, 1, 0, None, 2),
+                     m.ScannedInformationRoot(7, 1, 0, 2, None),
+                     m.ScannedInformationRoot(7, 1, 0, None, None)):
+            self.assertEqual(self.report([root], [(-1., 1.)])["unknown_action_pairs"], 1)
+            with self.assertRaisesRegex(ValueError, "unknown information"):
+                self.report([root], [(0., 0.)])
+
+    def test_invalid_rosters_and_intervals_reject(self):
+        root = m.ScannedInformationRoot(7, 1, 0, 1, 2)
+        for roots, pairs in (([], []), ([root], []), ([root, root], [(0., 0.)] * 2),
+                             ([m.ScannedRoot(7, 1, 0, 1, 2)], [(0., 0.)])):
+            with self.assertRaises(ValueError):
+                self.report(roots, pairs)
+        for pair in (None, "00", [0], [0, 0, 0], [True, 1], [-1, float("nan")],
+                     [-1, float("inf")], [1, -1], [-2, 0]):
+            with self.assertRaises(ValueError):
+                self.report([root], [pair])
+
+    def test_bootstrap_parameters_are_bound(self):
+        root = m.ScannedInformationRoot(7, 1, 0, 1, 2)
+        for seed, draws in ((True, 100), ("7", 100), (7, 19), (7, True), (7, 20.)):
+            with self.assertRaises(ValueError):
+                m.paired_information_summary([root], [(0., 0.)], bootstrap_seed=seed, draws=draws)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -253,3 +253,51 @@ def summarize(roots: Sequence[ScannedRoot], intervals: Sequence[Mapping], *,
         resample_indices_shared=True, adaptive_stopping_validity_certified=False,
         complete_case_inference_authorized=False, calibration_certified=False,
         collection_authorized=False, phase_b_authorized=False, scientific_strength_claim=False)
+
+
+def paired_information_summary(roots, intervals, *, bootstrap_seed, draws=10000):
+    """Summarize direct oracle-minus-public intervals, not marginal bounds.
+
+    Callers must independently validate source, action and continuation cells
+    before supplying each direct interval. Shared accepted actions cancel;
+    unknown candidate membership stays uncertain on the full scanned roster.
+    This is descriptive arithmetic, not a calibrated screening procedure.
+    """
+    validate_scan(roots)
+    _require(roots and len(roots) == len(intervals), "complete paired scan intervals required")
+    _require(type(bootstrap_seed) is int and type(draws) is int and draws >= 20,
+             "bound bootstrap seed and >=20 draws required")
+    groups = {}
+    for root, pair in zip(roots, intervals):
+        _require(isinstance(root, ScannedInformationRoot)
+                 and isinstance(pair, (tuple, list)) and len(pair) == 2
+                 and all(type(x) in (int, float) and math.isfinite(x) for x in pair)
+                 and -1 <= pair[0] <= pair[1] <= 1, "finite direct contrast interval required")
+        if root.public is None or root.oracle is None:
+            _require(tuple(pair) == (-1., 1.), "unknown information membership must remain uncertain")
+        elif root.public == root.oracle:
+            _require(tuple(pair) == (0., 0.), "accepted information aliases must cancel")
+        groups.setdefault(root.seed, []).append(pair)
+    grouped = list(groups.values())
+
+    def mean(sample, weight):
+        weights = [1 / sum(map(len, sample))] * len(sample) if weight == "pooled_roots" else [
+            1 / (len(sample) * len(g)) for g in sample]
+        return [sum(w * p[j] for w, g in zip(weights, sample) for p in g) for j in (0, 1)]
+
+    rng = random.Random(bootstrap_seed)
+    boots = {w: [] for w in ("pooled_roots", "equal_seed")}
+    for _ in range(draws):
+        sampled = rng.choices(grouped, k=len(grouped))
+        for weight in boots:
+            boots[weight].append(mean(sampled, weight))
+    return dict(scanned_roots=len(roots), source_clusters=len(groups),
+        identified_roots=sum(a == b for a, b in intervals),
+        known_action_disagreements=sum(r.public is not None and r.oracle is not None
+                                     and r.public != r.oracle for r in roots),
+        unknown_action_pairs=sum(r.public is None or r.oracle is None for r in roots),
+        estimates={w: dict(identification_bounds=mean(grouped, w), descriptive_seed_bootstrap_95=[
+            sorted(p[0] for p in values)[int(.025 * draws)],
+            sorted(p[1] for p in values)[int(.975 * draws)]]) for w, values in boots.items()},
+        bootstrap_draws=draws, bootstrap_seed=bootstrap_seed,
+        screening_authorized=False, calibration_certified=False, scientific_strength_claim=False)
