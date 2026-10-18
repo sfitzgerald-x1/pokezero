@@ -30,6 +30,11 @@ matching code/runtime/configuration bindings; it never substitutes the raw/nativ
 Native serializer quantization remains part of this quantity; original model float32 priors
 are not recovered or claimed equal.
 
+With --prior-only --sims16, the independent replay instead permits exactly the
+declared 1024/4096-to-16 iteration change per world. Every declared prior still
+needs exact correspondence; final actions and full-budget work are not checked
+by this mode and require their separate original evidence.
+
 Usage:
     PYTHONPATH=src python scripts/live_root_prior_check.py --checkpoint <ckpt.pt> --model-ts <model_ts.pt> \
         --tables <encoder_tables.json> --showdown-root <showdown> --seeds S1 S2 ... --out report.json [--sims 64]
@@ -61,6 +66,7 @@ from pokezero.rollout import RolloutConfig, continue_rollout_from_current_state 
 from pokezero.root_prior_correspondence import (  # noqa: E402
     SCHEMA, boundary_fingerprint, exact_collector_gate, fingerprint, input_binding,
 )
+from pokezero.prior_only_correspondence import prior_only_binding, prior_only_collector_gate  # noqa: E402
 
 
 def find_key(obj: Any, key: str, depth: int = 0):
@@ -136,6 +142,8 @@ def main(argv=None, *, boundary_guard=None) -> int:
         help="match a strict collector; refusals remain explicit unavailable comparisons")
     parser.add_argument("--collector-report", type=Path,
         help="require exact unrounded collector-native/live-native correspondence on its declared roster")
+    parser.add_argument("--prior-only", action="store_true",
+        help="with collector-report and sims16, check every declared prior, not selected actions")
     parser.add_argument("--dump-first-metadata", action="store_true")
     parser.add_argument("--gate-tv", type=float, default=0.1, help="exit 1 if any decision exceeds this total variation or flips the argmax")
     parser.add_argument("--world-rng", choices=("per-decision", "per-game"), default="per-decision")
@@ -149,17 +157,15 @@ def main(argv=None, *, boundary_guard=None) -> int:
     if not math.isfinite(args.gate_tv) or args.gate_tv < 0:
         parser.error("gate-tv must be finite and nonnegative")
     collector = json.loads(args.collector_report.read_text()) if args.collector_report else None
+    if args.prior_only and (collector is None or args.sims != 16 or args.variants != ["sampled4"]):
+        parser.error("prior-only requires a collector report, sims16 and sampled4 only")
     original_artifacts = {name: hashlib.sha256(path.read_bytes()).hexdigest()
         for name, path in (("checkpoint_sha256", args.checkpoint),
             ("model_sha256", args.model_ts), ("tables_sha256", args.tables))}
 
     base = LocalShowdownConfig(showdown_root=args.showdown_root,bridge_path=args.bridge_path,set_belief_source=True)
     config = env_config_with_policy_spec_masks(base, ["neural:" + str(args.checkpoint)], context="live_root_prior_check")
-    env = LocalShowdownEnv(config)
     showdown_root = config.resolved_showdown_root()
-    dex = load_showdown_dex_cached(showdown_root)
-    set_source = load_gen3_randbat_source_cached(showdown_root)
-    annotation_source = EnvTier2AnnotationSource(env)
 
     def engine_config(worlds: int) -> EngineMctsConfig:
         return EngineMctsConfig(
@@ -179,8 +185,15 @@ def main(argv=None, *, boundary_guard=None) -> int:
             tables=args.tables, selectors=templates, world_rng=args.world_rng)
 
     bindings = current_binding()
+    if args.prior_only and fingerprint(bindings) != fingerprint(prior_only_binding(collector["bindings"])):
+        raise ValueError("prior-only input binding differs beyond the declared iteration budget")
     if any(bindings.get(name) != sha for name, sha in original_artifacts.items()):
         raise ValueError("checkpoint/export changed while constructing source configuration")
+
+    env = LocalShowdownEnv(config)
+    dex = load_showdown_dex_cached(showdown_root)
+    set_source = load_gen3_randbat_source_cached(showdown_root)
+    annotation_source = EnvTier2AnnotationSource(env)
 
     def check_bindings():
         if fingerprint(current_binding()) != fingerprint(bindings):
@@ -306,7 +319,7 @@ def main(argv=None, *, boundary_guard=None) -> int:
     report = dict(schema=SCHEMA, rows=rows, complete=True, bindings=bindings,
         gate=verdict, world_rng=args.world_rng)
     if collector is not None:
-        report["collector_gate"] = exact_collector_gate(collector, report)
+        report["collector_gate"] = (prior_only_collector_gate if args.prior_only else exact_collector_gate)(collector, report)
     args.out.write_text(json.dumps(report, indent=1, allow_nan=False) + "\n")
     print("== gate:", json.dumps(verdict))
     if collector is not None:
