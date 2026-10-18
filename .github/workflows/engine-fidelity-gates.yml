@@ -1169,6 +1169,14 @@ jobs:
           grep -qx 'Ran 8 tests in .*' /tmp/initial-team-capture.log
           grep -qx 'OK' /tmp/initial-team-capture.log
 
+      - name: Initial-team source integration fixtures
+        run: |
+          set -o pipefail
+          PYTHONPATH=src python -m unittest tests.test_initial_team_source_capture -v 2>&1 \
+            | tee /tmp/initial-team-source-capture.log
+          grep -qx 'Ran 12 tests in .*' /tmp/initial-team-source-capture.log
+          grep -qx 'OK' /tmp/initial-team-source-capture.log
+
       - name: Truth-injection differential instrument
         run: |
           set -o pipefail
