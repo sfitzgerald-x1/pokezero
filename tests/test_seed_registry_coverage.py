@@ -110,6 +110,12 @@ FIDELITY_SEED_FLOOR = 19_000_000
 GAMEPLAY_SELECTION = "docs/paper_policy_opponent_roster_20261004.json"
 GAMEPLAY_SELECTION_SHA256 = "fa76bc9966bba48f0dd474a2450b4c362e49ac1452db18c39b084a256d30ff7a"
 
+# Completed policy-only gameplay, not a simulator differential. Classification
+# binds both the exact path and bytes, just like the selection above; neither a
+# schema label nor a copy elsewhere can exempt a new fidelity-space document.
+GAMEPLAY_CONTROL = "docs/audit_artifacts/phase0_raw_sample_control_20261019.json"
+GAMEPLAY_CONTROL_SHA256 = "b3dabd51cd4b77d3f86a28f78f71eb9cbf0eed641c2b1a41ff470ab27cb881e8"
+
 # The registered final-holdout block, and the 60 seeds of it that C141 did not reach.
 FINAL_HOLDOUT_REGISTERED = (19_200_000, 19_200_199)
 FINAL_HOLDOUT_UNSWEPT_HEAD = (19_200_000, 19_200_059)
@@ -332,6 +338,12 @@ def fidelity_intervals(root: Path = REPO) -> dict[str, list[tuple[int, int]]]:
             # Parsed above, byte-bound here, independently validated by the
             # six-test roster gate. It cannot witness a fidelity measurement.
             continue
+        if relative == GAMEPLAY_CONTROL:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != GAMEPLAY_CONTROL_SHA256:
+                raise AssertionError("registered gameplay control bytes changed; re-audit namespace and provenance")
+            # This exact completed gameplay ledger cannot witness a fidelity
+            # sweep. All unknown paths retain the shape-agnostic rule below.
+            continue
         reaching = sorted(
             {
                 (low, high)
@@ -379,6 +391,47 @@ class GameplaySelectionNamespaceTests(unittest.TestCase):
         self.assertIn(GAMEPLAY_SELECTION, table)
         self.assertIn("selection only, NOT_LAUNCHED", table)
         self.assertEqual(len(REGISTERED_BANDS), 4)
+
+
+class GameplayControlNamespaceTests(unittest.TestCase):
+    def test_completed_control_is_not_a_fidelity_sweep_witness(self) -> None:
+        document = json.loads((REPO / GAMEPLAY_CONTROL).read_text())
+        # The skeptical extractor also sees design.seeds=32 (a count). Keep
+        # that below-floor interval visible rather than narrowing extraction.
+        self.assertEqual(set(_seed_intervals(document)),
+                         {(32, 32)} | {(seed, seed) for seed in range(3829143000, 3829143032)})
+        self.assertEqual([(row["seed"], row["raw_seat"]) for row in document["games"]],
+                         [(seed, seat) for seed in range(3829143000, 3829143032)
+                          for seat in ("p1", "p2")])
+        self.assertEqual(sum(row["raw_score"] for row in document["games"]), 38.5)
+        self.assertEqual(document["terminal"]["status"], "COLLECTION_FINISHED")
+        self.assertEqual(document["result"]["unknown"], 0)
+        self.assertNotIn(GAMEPLAY_CONTROL, fidelity_intervals())
+        self.assertEqual(len(REGISTERED_BANDS), 4)
+
+    def test_registered_control_drift_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / GAMEPLAY_CONTROL
+            path.parent.mkdir(parents=True)
+            path.write_bytes((REPO / GAMEPLAY_CONTROL).read_bytes() + b"\n")
+            with self.assertRaisesRegex(AssertionError, "control bytes changed"):
+                fidelity_intervals(root)
+
+    def test_control_schema_or_copy_elsewhere_cannot_hide_seeds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "docs/unregistered-control-copy.json"
+            path.parent.mkdir()
+            path.write_bytes((REPO / GAMEPLAY_CONTROL).read_bytes())
+            self.assertEqual(len(unregistered(fidelity_intervals(root))), 32)
+
+    def test_ledger_records_completed_gameplay_not_a_new_fidelity_band(self) -> None:
+        table = registry_table()
+        self.assertIn("gameplay policy control", table)
+        self.assertIn("`3,829,143,000`–`3,829,143,031`", table)
+        self.assertIn(GAMEPLAY_CONTROL, table)
+        self.assertIn("completed descriptive gameplay; not a fidelity sweep", table)
 
 
 def unregistered(
