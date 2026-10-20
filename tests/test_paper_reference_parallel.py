@@ -1,5 +1,6 @@
 """Real spawned-process exchange; no Pokémon playing-strength qualification."""
 from dataclasses import dataclass, replace
+import json
 import os
 import signal
 import subprocess
@@ -10,6 +11,7 @@ import unittest
 from pokezero.mcts_eval.paper_reference import Evaluation, ReferenceConfig, ReferenceRefusal
 from pokezero.mcts_eval.paper_reference_parallel import (
     ParallelRefusal, ParallelTrajectorySearch, PreparedDecision,
+    _exception_code_sites, sanitized_worker_failures,
 )
 from test_paper_reference import ROOT, ToyWorld, searcher
 
@@ -80,6 +82,60 @@ class UnserializableEvidenceRuntime(RefusedBatchRuntime):
 
 
 class ParallelReferenceTests(unittest.TestCase):
+    def test_failure_code_sites_keep_package_frames_not_private_exception_text(self):
+        try:
+            try:
+                ReferenceConfig(-1., 1.)
+            except ReferenceRefusal as error:
+                raise RuntimeError("PRIVATE_CANARY private request and absolute path") from error
+        except RuntimeError as error:
+            sites = _exception_code_sites(error)
+        self.assertEqual([row["category"] for row in sites], ["RuntimeError", "ReferenceRefusal"])
+        self.assertTrue(sites[1]["frames"])
+        self.assertEqual(sites[1]["frames"][-1]["file"], "mcts_eval/paper_reference.py")
+        self.assertGreater(sites[1]["frames"][-1]["line"], 0)
+        encoded = json.dumps(sites)
+        self.assertNotIn("PRIVATE_CANARY", encoded)
+        self.assertNotIn(str(__file__), encoded)
+        self.assertNotIn("test_paper_reference_parallel", encoded)
+
+    def test_worker_failure_projection_rejects_private_or_malformed_extra_fields(self):
+        import copy
+        entry = {"category": "ReferenceRefusal", "frames": [
+            {"file": "mcts_eval/paper_reference.py", "line": 1}]}
+        message = ("error", 0, 3, "trajectory_batch", "PRIVATE_CANARY", "PRIVATE_CANARY",
+                   {"sampling_diagnostic": "PRIVATE_CANARY", "error_code_sites": [entry]})
+        safe = sanitized_worker_failures([message])
+        self.assertEqual(safe, [{"worker": 0, "decision_id": 3, "phase": "trajectory_batch",
+                                 "error_code_sites": [entry]}])
+        self.assertNotIn("PRIVATE_CANARY", json.dumps(safe))
+        for invalid in ({**entry, "message": "PRIVATE_CANARY"},
+                        {**entry, "category": "PRIVATE_CANARY"},
+                        {**entry, "frames": [{"file": "/tmp/PRIVATE_CANARY.py", "line": 1}]},
+                        {**entry, "frames": [{"file": "../PRIVATE_CANARY.py", "line": 1}]},
+                        {**entry, "frames": [{"file": "mcts_eval/paper_reference.py", "line": True}]},
+                        {**entry, "frames": entry["frames"] * 9}):
+            changed = list(copy.deepcopy(message))
+            changed[6]["error_code_sites"] = [invalid]
+            with self.subTest(invalid=invalid):
+                self.assertEqual(sanitized_worker_failures([changed]), [])
+        changed = list(message)
+        changed[3] = ["PRIVATE_CANARY"]
+        self.assertEqual(sanitized_worker_failures([changed]), [])
+        changed = list(message)
+        changed[2] = 1 << 65536
+        self.assertEqual(sanitized_worker_failures([changed]), [])
+
+    def test_failure_code_sites_bound_causal_chains_and_cycles(self):
+        error = RuntimeError("PRIVATE_CANARY")
+        error.__cause__ = error
+        self.assertEqual(len(_exception_code_sites(error)), 1)
+        for _ in range(20):
+            child = RuntimeError("PRIVATE_CANARY")
+            child.__cause__ = error
+            error = child
+        self.assertEqual(len(_exception_code_sites(error)), 4)
+
     def test_actual_twenty_persistent_processes_exchange_every_ten_without_double_counts(self):
         with ParallelTrajectorySearch(ReferenceConfig(.5, 1), ToyRuntime) as pool:
             first = pool.search(Request(), ROOT, battle_id="b1", seed=1, trajectories_per_worker=12)
@@ -159,6 +215,10 @@ class ParallelReferenceTests(unittest.TestCase):
         extra = caught.exception.evidence['errors'][0][6]
         self.assertEqual(extra['sampling_diagnostic']['max_hp'], {'actual':256,'required':257})
         self.assertEqual(extra['partial_batch_evidence']['draws'][0]['status'], 'REFUSED')
+        safe = sanitized_worker_failures(caught.exception.evidence['errors'])
+        self.assertEqual(safe[0]['phase'], 'trajectory_batch')
+        self.assertTrue(safe[0]['error_code_sites'][0]['frames'])
+        self.assertNotIn('public HP mismatch', json.dumps(safe))
 
     def test_failed_evidence_sink_does_not_hide_original_worker_refusal(self):
         with ParallelTrajectorySearch(ReferenceConfig(.5,1), BrokenEvidenceRuntime, workers=1) as pool:
@@ -167,6 +227,7 @@ class ParallelReferenceTests(unittest.TestCase):
         message = caught.exception.evidence['errors'][0]
         self.assertIn('public HP mismatch', message[4])
         self.assertIn('diagnostic sink failed', message[6]['partial_batch_evidence_error'])
+        self.assertTrue(sanitized_worker_failures([message]))
 
     def test_unserializable_evidence_does_not_hide_original_worker_refusal(self):
         with ParallelTrajectorySearch(ReferenceConfig(.5,1), UnserializableEvidenceRuntime, workers=1) as pool:
@@ -175,6 +236,7 @@ class ParallelReferenceTests(unittest.TestCase):
         message = caught.exception.evidence['errors'][0]
         self.assertIn('public HP mismatch', message[4])
         self.assertIn('diagnostic_serialization_error', message[6])
+        self.assertTrue(sanitized_worker_failures([message]))
 
     def test_nonpaper_exchange_cadence_and_invalid_work_refuse(self):
         with self.assertRaises(ReferenceRefusal):
