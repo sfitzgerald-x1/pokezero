@@ -91,11 +91,13 @@ class PanelTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             entry, review, output = self.fixture_entry(directory)
             assertion = Mock()
-            with patch.object(panel, "verify"), \
+            with patch.object(panel.sys, "platform", "darwin"), \
+                    patch.object(panel, "verify"), \
                     patch.object(panel.time, "time", side_effect=[0, 86401, 86402]), \
                     patch.object(panel.subprocess, "Popen", return_value=assertion) as spawn:
                 self.assertEqual(panel.run(entry, review), 1)
             self.assertEqual(spawn.call_count, 1)  # Sleep assertion, never a worker.
+            self.assertEqual(spawn.call_args.args[0][0], "caffeinate")
             doc = json.loads((output / "terminal.json").read_text())
             self.assertEqual(doc["status"], "CALENDAR_CAP")
             self.assertEqual(doc["shards"], [])
@@ -106,7 +108,8 @@ class PanelTests(unittest.TestCase):
             assertion, worker = Mock(), Mock(pid=123456)
             worker.poll.return_value = 1
             worker.wait.return_value = 1
-            with patch.object(panel, "verify"), \
+            with patch.object(panel.sys, "platform", "darwin"), \
+                    patch.object(panel, "verify"), \
                     patch.object(panel, "group_exists", return_value=False), \
                     patch.object(panel.subprocess, "Popen", side_effect=[assertion, worker]):
                 self.assertEqual(panel.run(entry, review), 1)
@@ -114,6 +117,36 @@ class PanelTests(unittest.TestCase):
             self.assertEqual(doc["status"], "PROCESS_FAILURE")
             self.assertEqual(doc["shards"][0]["exit_code"], 1)
             self.assertEqual(doc["shards"][0]["observed_games"], 0)
+
+    def test_linux_calendar_cap_never_spawns_sleep_assertion_or_worker(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output = self.fixture_entry(directory)
+            with patch.object(panel.sys, "platform", "linux"), \
+                    patch.object(panel, "verify"), \
+                    patch.object(panel.time, "time", side_effect=[0, 86401, 86402]), \
+                    patch.object(panel.subprocess, "Popen") as spawn:
+                self.assertEqual(panel.run(entry, review), 1)
+            spawn.assert_not_called()
+            self.assertEqual(json.loads((output / "terminal.json").read_text())["status"],
+                             "CALENDAR_CAP")
+
+    def test_linux_failure_preserves_actual_worker_exit_without_caffeinate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output = self.fixture_entry(directory)
+            worker = Mock(pid=123456)
+            worker.poll.return_value = 1
+            worker.wait.return_value = 1
+            with patch.object(panel.sys, "platform", "linux"), \
+                    patch.object(panel, "verify"), \
+                    patch.object(panel, "group_exists", return_value=False), \
+                    patch.object(panel.subprocess, "Popen", return_value=worker) as spawn:
+                self.assertEqual(panel.run(entry, review), 1)
+            self.assertEqual(spawn.call_count, 1)
+            self.assertEqual(spawn.call_args.args[0][0], "fixture-python")
+            doc = json.loads((output / "terminal.json").read_text())
+            self.assertEqual(doc["status"], "PROCESS_FAILURE")
+            self.assertEqual(doc["shards"][0]["exit_code"], 1)
+            self.assertTrue(doc["shards"][0]["cleanup_ok"])
 
 
 if __name__ == "__main__":
