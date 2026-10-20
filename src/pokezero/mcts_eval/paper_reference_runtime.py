@@ -1,6 +1,7 @@
 """Spawn-safe public-only champion/Showdown runtime for reference workers."""
 from dataclasses import dataclass, replace
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -49,14 +50,20 @@ class ShowdownWorkerFactory:
 
 class _ShowdownRuntime:
     def __init__(self, binding, index):
-        import torch
         from ..collection import env_config_with_policy_spec_masks
         from ..local_showdown import LocalShowdownConfig, LocalShowdownEnv
-        from ..neural_policy import load_transformer_policy
+        from ..neural_policy import load_transformer_policy, require_torch
         from ..randbat import load_gen3_randbat_source_cached
 
-        torch.set_num_threads(1)
-        torch.set_num_interop_threads(1)
+        # The shared neural initializer owns Torch's one-shot inter-op setter.
+        # Preserve this worker's single-thread defaults without calling it twice
+        # when the spawned process inherits the registered thread environment.
+        for name in ("POKEZERO_TORCH_NUM_THREADS", "POKEZERO_TORCH_NUM_INTEROP_THREADS"):
+            if not os.environ.get(name):
+                os.environ[name] = "1"
+        torch = require_torch()
+        if torch.get_num_threads() != 1 or torch.get_num_interop_threads() != 1:
+            raise ReferenceRefusal("reference worker requires single-thread Torch pools")
         checkpoint = Path(binding.checkpoint)
         if hashlib.sha256(checkpoint.read_bytes()).hexdigest() != binding.checkpoint_sha256:
             raise ReferenceRefusal("worker champion checkpoint digest drift")
