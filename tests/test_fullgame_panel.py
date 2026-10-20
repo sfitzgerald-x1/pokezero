@@ -275,6 +275,48 @@ class PanelTests(unittest.TestCase):
             self.assertEqual(doc["shards"][0]["exit_code"], 1)
             self.assertEqual(doc["shards"][0]["observed_games"], 0)
 
+    def test_post_exit_drift_cannot_erase_primary_worker_failure(self):
+        for code, clean in ((1, True), (0, False)):
+            with self.subTest(code=code, clean=clean), tempfile.TemporaryDirectory() as directory:
+                entry, review, output = self.fixture_entry(directory)
+                worker = Mock(pid=123456)
+                worker.poll.return_value = code
+                with patch.object(panel.sys, "platform", "linux"), \
+                        patch.object(panel, "verify", side_effect=[None, None, ValueError("input changed: plan")]), \
+                        patch.object(panel, "stop_owned", return_value=(code, clean)), \
+                        patch.object(panel.subprocess, "Popen", return_value=worker) as spawn:
+                    self.assertEqual(panel.run(entry, review), 1)
+                terminal = json.loads((output / "terminal.json").read_text())
+                shard = json.loads((output / "candidate-p1-terminal.json").read_text())
+                self.assertEqual(terminal["status"], "PROCESS_FAILURE")
+                self.assertEqual(shard["exit_code"], code)
+                self.assertEqual(shard["cleanup_ok"], clean)
+                self.assertEqual(shard["observed_games"], 0)
+                self.assertEqual(terminal["shards"][0], shard)
+                self.assertEqual(terminal["post_exit_verification_error"],
+                                 {"error_type": "ValueError", "error": "input changed: plan"})
+                spawn.assert_called_once()
+
+    def test_post_exit_drift_on_clean_complete_child_remains_terminal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output = self.fixture_entry(directory)
+            worker = Mock(pid=123456)
+            worker.poll.return_value = 0
+            with patch.object(panel.sys, "platform", "linux"), \
+                    patch.object(panel, "verify", side_effect=[None, None, ValueError("input changed: plan")]), \
+                    patch.object(panel, "stop_owned", return_value=(0, True)), \
+                    patch.object(panel, "observed_count", return_value=128), \
+                    patch.object(panel.subprocess, "Popen", return_value=worker), \
+                    self.assertRaisesRegex(ValueError, "input changed: plan"):
+                panel.run(entry, review)
+            terminal = json.loads((output / "terminal.json").read_text())
+            shard = json.loads((output / "candidate-p1-terminal.json").read_text())
+            self.assertEqual(terminal["status"], "SUPERVISOR_FAILURE")
+            self.assertEqual(shard["exit_code"], 0)
+            self.assertEqual(shard["observed_games"], 128)
+            self.assertTrue(shard["cleanup_ok"])
+            self.assertIn("post_exit_verification_error", terminal)
+
     def test_linux_calendar_cap_never_spawns_sleep_assertion_or_worker(self):
         with tempfile.TemporaryDirectory() as directory:
             entry, review, output = self.fixture_entry(directory)
