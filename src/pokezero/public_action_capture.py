@@ -32,7 +32,17 @@ def public_action_round_from_protocol_lines(
         )
     if not actions:
         actions = {"p1": PublicActionIdentifier(kind="event", event_id=_UNRESOLVED_PUBLIC_EVENT_ID)}
-    return PublicResolvedActionRound(turn_index=turn_index, actions=actions)
+    transitions = []
+    for line in lines:
+        parts = str(line).split("|")
+        if len(parts) < 4 or parts[1] not in {"switch", "drag", "replace"}:
+            continue
+        player_id = _protocol_player_id(parts[2])
+        species = _protocol_identifier(parts[3].split(",", 1)[0])
+        if player_id is not None and species:
+            transitions.append(dict(player_id=player_id, kind=parts[1], species=species))
+    return PublicResolvedActionRound(turn_index=turn_index, actions=actions,
+                                     team_transitions=tuple(transitions))
 
 
 def public_action_identifiers_from_protocol_lines(

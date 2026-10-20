@@ -41,6 +41,7 @@ from pokezero.engine_search import (
 )
 from pokezero.policy import PolicyContext
 from pokezero.trajectory import BattleTrajectory, TrajectoryStep
+from pokezero.public_action_capture import public_action_round_from_protocol_lines
 
 PARTY = ["typhlosion", "smeargle", "absol", "vaporeon", "sharpedo", "deoxysdefense"]
 MASK = (True,) * 9
@@ -73,6 +74,12 @@ def switch_round(turn, species):
                                                    "switched_species": species}}}
 
 
+def exact_round(turn, *lines):
+    return public_action_round_from_protocol_lines(
+        lines, turn_index=turn, requested_players=("p1", "p2"),
+    ).to_dict()
+
+
 def context(steps, *, decision_round, active, switch_rounds=(), player_id="p1"):
     trajectory = BattleTrajectory(
         battle_id="b", format_id="gen3randombattle", seed=1,
@@ -93,6 +100,163 @@ def context(steps, *, decision_round, active, switch_rounds=(), player_id="p1"):
 
 
 class RequestOrderTest(unittest.TestCase):
+    def test_unindexed_drag_preserves_later_numeric_slot_constraints(self) -> None:
+        from pokezero.determinization import (
+            _public_opponent_team_index_constraints, _fixture_team_with_index_constraints,
+        )
+        rounds = [
+            public_action_round_from_protocol_lines(
+                ("|move|p2a: Typhlosion|Flamethrower|p1a: Lead",
+                 "|drag|p2a: Smeargle|Smeargle, L80|100/100"),
+                turn_index=0, requested_players=("p1", "p2"),
+            ).to_dict(),
+            public_action_round_from_protocol_lines(
+                ("|switch|p2a: Absol|Absol, L80|100/100",),
+                turn_index=1, requested_players=("p1", "p2"),
+            ).to_dict(),
+        ]
+        ctx = context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 0),
+             step("p1", 1, "Smeargle", 0), step("p2", 1, "Smeargle", 4)],
+            decision_round=2, active="Absol", switch_rounds=rounds,
+        )
+        pins = _public_opponent_team_index_constraints(ctx, opponent_slot="p2", team_size=6)
+        self.assertEqual(pins["typhlosion"], 0)
+        self.assertEqual(pins["absol"], 1)
+        team = tuple(SimpleNamespace(species=s, original_set=object()) for s in PARTY)
+        fitted = _fixture_team_with_index_constraints(
+            team, pins, team_size=6, public_context=ctx, opponent_slot="p2",
+        )
+        self.assertEqual([p.species for p in fitted[:3]], ["typhlosion", "absol", "smeargle"])
+        self.assertEqual({id(p) for p in fitted}, {id(p) for p in team})
+        self.assertEqual(opponent_request_order(ctx, [p.species for p in fitted]),
+                         ["absol", "smeargle", "typhlosion", *PARTY[3:]])
+
+    def test_exact_public_slice_applies_switch_then_drag_without_opponent_step(self) -> None:
+        lines = ("|switch|p2a: Smeargle|Smeargle, L80|100/100",
+                 "|move|p1a: Lead|Roar|p2a: Smeargle",
+                 "|drag|p2a: Absol|Absol, L80|100/100")
+        captured = public_action_round_from_protocol_lines(
+            lines, turn_index=0, requested_players=("p1", "p2"),
+        ).to_dict()
+        ctx = context([step("p1", 0, "Typhlosion", 0)], decision_round=1,
+                      active="Absol", switch_rounds=[captured])
+        ctx.observation.metadata["recent_public_events"] = list(lines)
+        self.assertEqual(opponent_request_order(ctx, PARTY),
+                         ["absol", "typhlosion", "smeargle", *PARTY[3:]])
+
+    def test_legacy_window_cannot_certify_missing_intermediate_swaps(self) -> None:
+        ctx = context([step("p1", 0, "Typhlosion", 0)], decision_round=1,
+                      active="Absol", switch_rounds=[switch_round(0, "Smeargle")])
+        ctx.observation.metadata["recent_public_events"] = [
+            "|switch|p2a: Smeargle|Smeargle, L80|100/100",
+            "|drag|p2a: Absol|Absol, L80|100/100",
+        ]
+        self.assertIsNone(opponent_request_order(ctx, PARTY))
+
+    def test_legacy_missing_selected_action_cannot_label_the_last_drag_as_a_switch(self) -> None:
+        ctx = context([step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 5)],
+                      decision_round=1, active="Smeargle")
+        ctx.observation.metadata["recent_public_events"] = [
+            "|switch|p2a: Absol|Absol, L80|100/100",
+            "|move|p1a: Lead|Roar|p2a: Absol",
+            "|drag|p2a: Smeargle|Smeargle, L80|100/100",
+        ]
+        result = opponent_request_order_resolution(ctx, PARTY, capture_failure_witness=True)
+        self.assertEqual(result.status, "rejected_public_order_walk")
+        self.assertEqual(result.failure_witness["site"], "recorded_switch_identity_unavailable")
+
+    def test_exact_empty_round_does_not_reapply_a_stale_switch(self) -> None:
+        ctx = context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 5),
+             step("p1", 1, "Absol", 0), step("p2", 1, "Absol", 0)],
+            decision_round=2, active="Absol",
+            switch_rounds=[exact_round(0, "|switch|p2a: Absol|Absol, L80|100/100"),
+                           exact_round(1, "|move|p2a: Absol|Bite|p1a: Lead")],
+        )
+        ctx.observation.metadata["recent_public_events"] = [
+            "|switch|p2a: Absol|Absol, L80|100/100"]
+        self.assertEqual(opponent_request_order(ctx, PARTY),
+                         ["absol", "smeargle", "typhlosion", *PARTY[3:]])
+
+    def test_repeated_identical_drag_lines_in_distinct_rounds_each_swap_once(self) -> None:
+        actives = ["Typhlosion", "Smeargle", "Typhlosion", "Smeargle"]
+        incoming = ["Smeargle", "Typhlosion", "Smeargle"]
+        ctx = context(
+            [step("p1", i, species, 0) for i, species in enumerate(actives[:3])],
+            decision_round=3, active=actives[-1], switch_rounds=[
+                exact_round(i, f"|drag|p2a: Rival|{species}, L80|100/100")
+                for i, species in enumerate(incoming)],
+        )
+        self.assertEqual(opponent_request_order(ctx, PARTY),
+                         ["smeargle", "typhlosion", *PARTY[2:]])
+
+    def test_cancelled_numeric_switch_does_not_bind_the_forced_replacement(self) -> None:
+        from pokezero.determinization import _public_opponent_team_index_constraints
+        ctx = context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 8)],
+            decision_round=1, active="Smeargle", switch_rounds=[exact_round(
+                0, "|move|p1a: Lead|Pursuit|p2a: Typhlosion",
+                "|faint|p2a: Typhlosion",
+                "|switch|p2a: Smeargle|Smeargle, L80|100/100")],
+        )
+        self.assertEqual(_public_opponent_team_index_constraints(ctx, opponent_slot="p2", team_size=6),
+                         {"typhlosion": 0})
+        self.assertEqual(opponent_request_order(ctx, PARTY),
+                         ["smeargle", "typhlosion", *PARTY[2:]])
+
+    def test_exact_round_cannot_restore_an_already_unknown_permutation(self) -> None:
+        ctx = context(
+            [step("p1", 0, "Typhlosion", 0), step("p1", 1, "Smeargle", 0)],
+            decision_round=2, active="Absol", switch_rounds=[
+                exact_round(1, "|drag|p2a: Absol|Absol, L80|100/100")],
+        )
+        self.assertEqual(opponent_request_order_resolution(ctx, PARTY).status, "lost_active_permutation")
+
+    def test_full_history_fit_checks_more_than_individual_pins(self) -> None:
+        from pokezero.determinization import _fixture_team_with_index_constraints
+        ctx = context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 0),
+             step("p1", 1, "Smeargle", 0), step("p2", 1, "Smeargle", 4)],
+            decision_round=2, active="Absol", switch_rounds=[
+                exact_round(0, "|drag|p2a: Smeargle|Smeargle, L80|100/100"),
+                exact_round(1, "|switch|p2a: Absol|Absol, L80|100/100")],
+        )
+        team = tuple(SimpleNamespace(species=s) for s in PARTY)
+        fitted = _fixture_team_with_index_constraints(
+            team, {"typhlosion": 0}, team_size=6, public_context=ctx, opponent_slot="p2")
+        self.assertEqual([p.species for p in fitted[:3]], ["typhlosion", "absol", "smeargle"])
+        self.assertIsNotNone(opponent_request_order(ctx, [p.species for p in fitted]))
+        self.assertIsNone(_fixture_team_with_index_constraints(
+            team, {"typhlosion": 0, "absol": 2}, team_size=6,
+            public_context=ctx, opponent_slot="p2"))
+
+    def test_exact_contradictions_and_identity_replacements_still_refuse(self) -> None:
+        from pokezero.determinization import _public_opponent_team_index_constraints
+        contradictory = context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 5),
+             step("p1", 1, "Absol", 0), step("p2", 1, "Absol", 4)],
+            decision_round=2, active="Typhlosion", switch_rounds=[
+                exact_round(0, "|switch|p2a: Absol|Absol, L80|100/100"),
+                exact_round(1, "|switch|p2a: Typhlosion|Typhlosion, L80|100/100")],
+        )
+        replaced = context([step("p1", 0, "Typhlosion", 0)], decision_round=1, active="Absol",
+                           switch_rounds=[exact_round(0, "|replace|p2a: Rival|Absol, L80|100/100")])
+        for ctx in (contradictory, replaced):
+            with self.subTest(ctx=ctx):
+                self.assertIsNone(opponent_request_order(ctx, PARTY))
+                self.assertIsNone(_public_opponent_team_index_constraints(ctx, opponent_slot="p2", team_size=6))
+
+    def test_captured_switch_requires_its_successful_transition_in_exact_slice(self) -> None:
+        captured = {**switch_round(0, "Absol"), "team_transitions": []}
+        for opponent_steps in ([], [step("p2", 0, "Typhlosion", 5)]):
+            ctx = context([step("p1", 0, "Typhlosion", 0), *opponent_steps],
+                          decision_round=1, active="Absol", switch_rounds=[captured])
+            with self.subTest(opponent_steps=opponent_steps):
+                result = opponent_request_order_resolution(ctx, PARTY, capture_failure_witness=True)
+                self.assertEqual(result.status, "rejected_public_order_walk")
+                self.assertEqual(result.failure_witness["site"], "recorded_switch_missing_from_public_slice")
+
     def _contradictory_switch_context(self, species, action):
         return context(
             [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 5),
@@ -147,7 +311,9 @@ class RequestOrderTest(unittest.TestCase):
         )
         witnessed_replacement = context(
             [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 0)],
-            decision_round=1, active="Absol",
+            decision_round=1, active="Absol", switch_rounds=[exact_round(
+                0, "|move|p2a: Typhlosion|Flamethrower|p1a: Lead",
+                "|switch|p2a: Absol|Absol, L80|250/250")],
         )
         witnessed_replacement.observation.metadata["recent_public_events"] = [
             "|switch|p2a: Absol|Absol, L80|250/250",
@@ -268,7 +434,9 @@ class RequestOrderTest(unittest.TestCase):
             ],
             decision_round=3,
             active="Vaporeon",
-            switch_rounds=[switch_round(0, "Absol")],
+            switch_rounds=[switch_round(0, "Absol"), exact_round(
+                1, "|move|p2a: Absol|Bite|p1a: Lead",
+                "|switch|p2a: Vaporeon|Vaporeon, L80|250/250")],
         )
         self.assertEqual(
             opponent_request_order(ctx, PARTY),
@@ -306,7 +474,9 @@ class RequestOrderTest(unittest.TestCase):
             ],
             decision_round=2,
             active="Vaporeon",
-            switch_rounds=[switch_round(0, "Absol")],
+            switch_rounds=[exact_round(
+                0, "|switch|p2a: Absol|Absol, L80|250/250",
+                "|switch|p2a: Vaporeon|Vaporeon, L80|250/250")],
         )
         self.assertEqual(
             opponent_request_order(ctx, PARTY),
@@ -329,7 +499,9 @@ class RequestOrderTest(unittest.TestCase):
             ],
             decision_round=3,
             active="Unown-C",
-            switch_rounds=[switch_round(0, "Absol")],
+            switch_rounds=[switch_round(0, "Absol"), exact_round(
+                1, "|move|p2a: Absol|Bite|p1a: Lead",
+                "|switch|p2a: Unown-C|Unown-C, L80|250/250")],
         )
         self.assertEqual(
             opponent_request_order(ctx, party),
