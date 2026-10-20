@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import time
 
 
@@ -112,7 +113,12 @@ def run(entry_path, review_path):
     terminal = dict(entry_sha256=entry_hash, supervisor_pid=os.getpid(),
                     started_unix=started, deadline_unix=deadline, status="RUNNING", shards=[])
     write(output / "launch.json", terminal)
-    assertion = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+    # The laptop needs its owned idle-sleep assertion; Linux workers do not
+    # provide caffeinate. This does not alter the common calendar deadline.
+    assertion = (
+        subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())])
+        if sys.platform == "darwin" else None
+    )
     try:
         for shard in entry["shards"]:
             if digest(entry_path) != entry_hash:
@@ -183,9 +189,10 @@ def run(entry_path, review_path):
         terminal["ended_unix"] = time.time()
         terminal["scientific_qualification"] = "UNREVIEWED"
         write(output / "terminal.json", terminal)
-        if assertion.poll() is None:
-            assertion.terminate()
-        assertion.wait(timeout=10)
+        if assertion is not None:
+            if assertion.poll() is None:
+                assertion.terminate()
+            assertion.wait(timeout=10)
     return 0 if terminal["status"] == "COLLECTION_ATTEMPT_COMPLETE" else 1
 
 
