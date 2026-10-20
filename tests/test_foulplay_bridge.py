@@ -4016,6 +4016,108 @@ class FoulPlayThinkParserTest(unittest.TestCase):
         self.assertIsNone(work.total_iterations)
 
 
+class ProcessLogPanicContextTest(unittest.TestCase):
+    def test_primary_panic_survives_secondary_traceback_overflow(self) -> None:
+        logs = _ProcessLogBuffer()
+        origin = "thread '<unnamed>' panicked at engine/search.rs:123:9:"
+        logs.append_stderr(origin)
+        logs.append_stderr("authored native invariant failure")
+        for index in range(350):
+            logs.append_stderr(f"secondary traceback frame {index}")
+        secondary = "_pickle.PicklingError: Can't pickle pyo3_runtime.PanicException"
+        logs.append_stderr(secondary)
+
+        error = FoulPlayProcessExitError(stage="choosing", returncode=1, log_tail=logs.tail())
+
+        self.assertIn(origin, str(error))
+        self.assertIn("authored native invariant failure", str(error))
+        self.assertIn(secondary, str(error))
+        self.assertEqual(error.returncode, 1)
+        self.assertEqual(error.stage, "choosing")
+        self.assertEqual(len(logs.stderr), 200)
+        self.assertEqual(len(logs._stderr_native_panic), 24)
+
+    def test_streams_keep_separate_bounded_first_contexts(self) -> None:
+        logs = _ProcessLogBuffer()
+        for append, label in ((logs.append_stdout, "stdout"), (logs.append_stderr, "stderr")):
+            append(f"thread '{label}' panicked at first.rs:1:1:")
+            for index in range(350):
+                append(f"{label} context {index}")
+            append(f"thread '{label}' panicked at later.rs:2:2:")
+            for index in range(250):
+                append(f"{label} later {index}")
+
+        text = logs.tail()
+        self.assertIn("thread 'stdout' panicked at first.rs:1:1:", text)
+        self.assertIn("thread 'stderr' panicked at first.rs:1:1:", text)
+        self.assertNotIn("later.rs", text)
+        self.assertLess(len(text.splitlines()), 150)
+        self.assertEqual(len(logs._stdout_native_panic), 24)
+        self.assertEqual(len(logs._stderr_native_panic), 24)
+        self.assertEqual(len(logs.stdout), 200)
+        self.assertEqual(len(logs.stderr), 200)
+
+    def test_pinned_context_clips_oversized_lines_with_disclosure(self) -> None:
+        logs = _ProcessLogBuffer()
+        logs.append_stderr("thread '<unnamed>' panicked at engine.rs:1:1:")
+        logs.append_stderr("x" * 100_000)
+        for index in range(350):
+            logs.append_stderr(f"frame {index}")
+
+        text = logs.tail()
+        self.assertIn("[truncated]", text)
+        self.assertNotIn("x" * 2048, text)
+        self.assertLess(len(text), 30_000)
+        self.assertEqual(logs._stderr_native_panic[1], "x" * 1024 + " [truncated]")
+
+    def test_actual_exit_error_preserves_context_without_changing_failure(self) -> None:
+        logs = _ProcessLogBuffer()
+        origin = "thread '<unnamed>' panicked at authored.rs:1:1:"
+        logs.append_stderr(origin)
+        for index in range(350):
+            logs.append_stderr(f"frame {index}")
+        process = _ThinkProcess()
+        process.returncode = 1
+
+        with self.assertRaises(FoulPlayProcessExitError) as caught:
+            asyncio.run(_wait_for_foulplay_choice_or_exit(
+                server=_ThinkServer(logs), battle_id="authored-battle",
+                process=process, logs=logs,
+            ))
+
+        self.assertEqual(caught.exception.stage, "choosing")
+        self.assertEqual(caught.exception.returncode, 1)
+        self.assertIn(origin, caught.exception.log_tail)
+
+    def test_without_a_panic_the_existing_tail_is_unchanged(self) -> None:
+        logs = _ProcessLogBuffer()
+        for index in range(250):
+            logs.append_stdout(f"out {index}")
+            logs.append_stderr(f"err {index}")
+
+        self.assertEqual(
+            logs.tail(),
+            "stderr:\n" + "\n".join(f"err {i}" for i in range(210, 250))
+            + "\n\nstdout:\n" + "\n".join(f"out {i}" for i in range(210, 250)),
+        )
+
+    def test_panic_retention_does_not_change_think_measurements(self) -> None:
+        logs = _ProcessLogBuffer()
+        lines = (_FOULPLAY_MARKER, "INFO     Sampling 2 battles at 1000ms each",
+                 "INFO     Iterations 0: 41234", "INFO     Iterations 1: 39871")
+        for line in lines:
+            logs.append_stdout(line)
+        logs.append_stdout("thread '<unnamed>' panicked at engine.rs:1:1:")
+        for index in range(350):
+            logs.append_stdout(f"traceback {index}")
+
+        measured = logs.think_lines_since(0)
+        self.assertEqual(measured.lines, lines)
+        self.assertEqual(measured.dropped, 0)
+        self.assertEqual(measured.cursor, 4)
+        self.assertEqual(_foulplay_think_work_from_log_lines(measured.lines).total_iterations, 81105)
+
+
 class ProcessLogBufferSliceTest(unittest.TestCase):
     """The instrument's own cursor buffer, separate from the crash ring."""
 

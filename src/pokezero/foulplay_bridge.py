@@ -3047,6 +3047,27 @@ class _ProcessLogSlice:
     cursor: int
 
 
+_NATIVE_PANIC_CONTEXT_LINES = 24
+_NATIVE_PANIC_LINE_CHARS = 1024
+
+
+def _capture_native_panic_context(context: list[str], line: str) -> None:
+    """Pin the first Rust panic marker and bounded following context, not its cause.
+
+    Nested Python/process-pool tracebacks can displace the original native panic
+    from both the crash ring and its displayed tail. This observation changes no
+    choice, work measurement, exception classification or retry behavior.
+    """
+
+    if not context and "panicked at" not in line:
+        return
+    if len(context) < _NATIVE_PANIC_CONTEXT_LINES:
+        clipped = line[:_NATIVE_PANIC_LINE_CHARS]
+        if len(line) > _NATIVE_PANIC_LINE_CHARS:
+            clipped += " [truncated]"
+        context.append(clipped)
+
+
 @dataclass
 class _ProcessLogBuffer:
     stdout: list[str] = field(default_factory=list)
@@ -3062,8 +3083,11 @@ class _ProcessLogBuffer:
     #: Total instrument-relevant lines EVER appended, not the buffered count. Cursors index
     #: this, so they stay meaningful across the bound's trimming.
     think_appended: int = 0
+    _stdout_native_panic: list[str] = field(default_factory=list, init=False, repr=False)
+    _stderr_native_panic: list[str] = field(default_factory=list, init=False, repr=False)
 
     def append_stdout(self, line: str) -> None:
+        _capture_native_panic_context(self._stdout_native_panic, line)
         self.stdout.append(line)
         if len(self.stdout) > 200:
             del self.stdout[: len(self.stdout) - 200]
@@ -3096,12 +3120,22 @@ class _ProcessLogBuffer:
         )
 
     def append_stderr(self, line: str) -> None:
+        _capture_native_panic_context(self._stderr_native_panic, line)
         self.stderr.append(line)
         if len(self.stderr) > 200:
             del self.stderr[: len(self.stderr) - 200]
 
     def tail(self) -> str:
         parts = []
+        for stream, context in (("stderr", self._stderr_native_panic),
+                                ("stdout", self._stdout_native_panic)):
+            if context:
+                parts.append(
+                    f"first native panic marker context ({stream}; at most "
+                    f"{_NATIVE_PANIC_CONTEXT_LINES} lines, "
+                    f"{_NATIVE_PANIC_LINE_CHARS} characters per line):\n"
+                    + "\n".join(context)
+                )
         if self.stderr:
             parts.append("stderr:\n" + "\n".join(self.stderr[-40:]))
         if self.stdout:
