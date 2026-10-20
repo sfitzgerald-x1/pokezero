@@ -1,5 +1,6 @@
 """Authored transport/process fixtures only: no scientific games or pods."""
 import importlib.util
+import copy
 import json
 import os
 from pathlib import Path
@@ -22,7 +23,7 @@ SHARDS = [["candidate-p1", "p1"], ["raw-p1", "p1"], ["candidate-p2", "p2"], ["ra
 
 
 class FixtureTransport:
-    def __init__(self, states=None, fail=None, drained=None):
+    def __init__(self, states=None, fail=None, drained=None, head_to_head=False):
         self.calls = []
         self.started = set()
         self.polls = {}
@@ -30,6 +31,7 @@ class FixtureTransport:
         self.fail = fail
         self.drained = drained
         self.observations = {}
+        self.head_to_head = head_to_head
 
     def preflight_pod(self, target):
         self.calls.append((target["name"], "pod"))
@@ -42,6 +44,12 @@ class FixtureTransport:
         if self.fail == (name, action):
             raise subprocess.TimeoutExpired(action, 15)
         if action == "preflight":
+            if self.head_to_head:
+                return dict(entry_sha256=target["entry_sha256"], seed_start=10 if name == "a" else 42,
+                            seed_count=32, calendar_seconds=86400,
+                            shards=coordinator.HEAD_TO_HEAD_SHARDS,
+                            comparison_kind=coordinator.HEAD_TO_HEAD_KIND,
+                            candidate_policy_mode="trajectory-reference", opponent_policy_mode="raw")
             return dict(entry_sha256=target["entry_sha256"], seed_start=10 if name == "a" else 74,
                         seed_count=64, calendar_seconds=86400, shards=SHARDS)
         if action == "start":
@@ -117,6 +125,74 @@ class CoordinatorTests(unittest.TestCase):
                 self.execute(entry, review, transport)
             self.assertFalse(output.exists())
             self.assertFalse(any(action == "start" for _name, action in transport.calls))
+
+    def test_head_to_head_two_seat_partitions_keep_one_clock_and_fixed_roster(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output, doc = self.controller_fixture(directory)
+            doc.update(comparison_kind=coordinator.HEAD_TO_HEAD_KIND, seed_count=64)
+            panel.write(entry, doc)
+            panel.write(review, dict(status="CLEAR", entry_sha256=panel.digest(entry)))
+            transport = FixtureTransport(head_to_head=True)
+            self.assertEqual(self.execute(entry, review, transport), 0)
+            terminal = coordinator.read(output / "terminal.json")
+            self.assertEqual(terminal["deadline_unix"], 86410)
+            self.assertEqual(terminal["scientific_qualification"], "UNREVIEWED")
+            for name in ("a", "b"):
+                self.assertEqual(transport.calls.count((name, "start")), 1)
+
+    def test_head_to_head_mode_cannot_waive_geometry_or_worker_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _entry, _review, _output, doc = self.controller_fixture(directory)
+            doc.update(comparison_kind=coordinator.HEAD_TO_HEAD_KIND, seed_count=64)
+            transport = FixtureTransport(head_to_head=True)
+            facts = [transport.call(t, "preflight") for t in doc["targets"]]
+            coordinator.validate_partitions(doc, facts)
+            defects = ("primary-default", "unknown-kind", "four-shards", "one-seat", "wrong-seat",
+                       "missing-worker-kind", "worker-kind", "opponent", "raw-candidate",
+                       "different-candidates", "missing-preflight", "extra-preflight", "gap", "overlap")
+            for defect in defects:
+                damaged_doc, damaged = copy.deepcopy(doc), copy.deepcopy(facts)
+                if defect == "primary-default":
+                    damaged_doc.pop("comparison_kind")
+                elif defect == "unknown-kind":
+                    damaged_doc["comparison_kind"] = "unregistered"
+                elif defect == "four-shards":
+                    damaged[0]["shards"] = SHARDS
+                elif defect == "one-seat":
+                    damaged[0]["shards"] = coordinator.HEAD_TO_HEAD_SHARDS[:1]
+                elif defect == "wrong-seat":
+                    damaged[0]["shards"][1][1] = "p1"
+                elif defect == "missing-worker-kind":
+                    damaged[0].pop("comparison_kind")
+                elif defect == "worker-kind":
+                    damaged[0]["comparison_kind"] = coordinator.PRIMARY_KIND
+                elif defect == "opponent":
+                    damaged[0]["opponent_policy_mode"] = "foulplay"
+                elif defect == "raw-candidate":
+                    damaged[0]["candidate_policy_mode"] = "raw"
+                elif defect == "different-candidates":
+                    damaged[0]["candidate_policy_mode"] = "engine-mcts"
+                elif defect == "missing-preflight":
+                    damaged.pop()
+                elif defect == "extra-preflight":
+                    damaged.append(copy.deepcopy(damaged[0]))
+                elif defect == "gap":
+                    damaged[1]["seed_start"] += 1
+                else:
+                    damaged[1]["seed_start"] -= 1
+                with self.subTest(defect=defect), self.assertRaises(ValueError):
+                    coordinator.validate_partitions(damaged_doc, damaged)
+
+    def test_primary_default_still_requires_all_four_shards(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _entry, _review, _output, doc = self.controller_fixture(directory)
+            transport = FixtureTransport()
+            facts = [transport.call(t, "preflight") for t in doc["targets"]]
+            coordinator.validate_partitions(doc, facts)
+            for fact in facts:
+                fact["shards"] = coordinator.HEAD_TO_HEAD_SHARDS
+            with self.assertRaises(ValueError):
+                coordinator.validate_partitions(doc, facts)
 
     def test_partition_overlap_gap_wrong_seats_and_same_node_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -325,6 +401,64 @@ class CoordinatorTests(unittest.TestCase):
                 panel.write(review, dict(status="CLEAR", entry_sha256=panel.digest(entry)))
                 with self.assertRaisesRegex(ValueError, "source is not bound"):
                     self.agent("preflight", entry, review, panel.digest(entry), None, "0-13", {})
+
+    def head_to_head_entry(self):
+        return dict(comparison_kind=coordinator.HEAD_TO_HEAD_KIND,
+                    common_arguments=["--opponent-policy-mode", "raw"],
+                    shards=[dict(name=name, seat=seat,
+                                 arguments=["--policy-mode", "trajectory-reference"])
+                            for name, seat in coordinator.HEAD_TO_HEAD_SHARDS])
+
+    def test_worker_preflight_derives_modes_from_actual_common_and_seat_arguments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, doc = self.agent_fixture(directory)
+            doc.update(self.head_to_head_entry())
+            panel.write(entry, doc)
+            panel.write(review, dict(status="CLEAR", entry_sha256=panel.digest(entry)))
+            with patch.object(panel, "verify"):
+                facts = self.agent("preflight", entry, review, panel.digest(entry), None, "0-13", {})
+            self.assertEqual(facts["comparison_kind"], coordinator.HEAD_TO_HEAD_KIND)
+            self.assertEqual(facts["candidate_policy_mode"], "trajectory-reference")
+            self.assertEqual(facts["opponent_policy_mode"], "raw")
+            self.assertEqual(facts["shards"], coordinator.HEAD_TO_HEAD_SHARDS)
+            self.assertFalse(Path(doc["run_directory"]).exists())
+
+    def test_head_to_head_actual_arguments_refuse_overrides_aliases_and_false_labels(self):
+        for defect in ("foulplay", "raw-candidate", "different-seats", "four-shards", "duplicate",
+                       "duplicate-common", "abbreviation", "equals", "alias-override", "missing",
+                       "missing-value", "not-list", "non-string", "unknown-kind"):
+            doc = self.head_to_head_entry()
+            args = doc["shards"][0]["arguments"]
+            if defect == "foulplay":
+                doc["common_arguments"][1] = "foulplay"
+            elif defect == "raw-candidate":
+                args[1] = "raw"
+            elif defect == "different-seats":
+                args[1] = "engine-mcts"
+            elif defect == "four-shards":
+                doc["shards"].append(dict(name="raw-p1", seat="p1", arguments=[]))
+            elif defect == "duplicate":
+                args.extend(["--policy-mode", "raw"])
+            elif defect == "duplicate-common":
+                doc["common_arguments"].extend(["--policy-mode", "raw"])
+            elif defect == "abbreviation":
+                args[0] = "--policy-mod"
+            elif defect == "equals":
+                args[:] = ["--policy-mode=trajectory-reference"]
+            elif defect == "alias-override":
+                args.extend(["--opponent-policy-mod=sampled"])
+            elif defect == "missing":
+                args[:] = []
+            elif defect == "missing-value":
+                args[:] = ["--policy-mode"]
+            elif defect == "not-list":
+                doc["common_arguments"] = "--opponent-policy-mode raw"
+            elif defect == "non-string":
+                args.append(None)
+            else:
+                doc["comparison_kind"] = "unregistered"
+            with self.subTest(defect=defect), self.assertRaises(ValueError):
+                coordinator.head_to_head_contract(doc)
 
     def test_permission_denial_is_reported_without_repeated_requests_or_bypass(self):
         target = dict(name="a", context="fixture", namespace="scott", pod="owned")

@@ -23,6 +23,58 @@ SPEC = importlib.util.spec_from_file_location(
 panel = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(panel)
 
+PRIMARY_KIND = "foulplay_matched_control"
+HEAD_TO_HEAD_KIND = "raw_head_to_head"
+PRIMARY_SHARDS = [["candidate-p1", "p1"], ["raw-p1", "p1"],
+                  ["candidate-p2", "p2"], ["raw-p2", "p2"]]
+HEAD_TO_HEAD_SHARDS = [["candidate-p1", "p1"], ["candidate-p2", "p2"]]
+
+
+def head_to_head_contract(entry):
+    """Derive the explicit secondary geometry from actual worker arguments.
+
+    Legacy primary entries keep their original four-shard contract. A label
+    alone cannot turn a Foul Play/control experiment into a head-to-head.
+    """
+    kind = entry.get("comparison_kind", PRIMARY_KIND)
+    if kind == PRIMARY_KIND:
+        return {}
+    if kind != HEAD_TO_HEAD_KIND:
+        raise ValueError("unknown comparison kind")
+    if [[s["name"], s["seat"]] for s in entry["shards"]] != HEAD_TO_HEAD_SHARDS:
+        raise ValueError("head-to-head requires both candidate seats and no raw-control shards")
+
+    def argument(argv, flag):
+        if not isinstance(argv, list) or any(not isinstance(token, str) for token in argv):
+            raise ValueError("worker arguments must be string arrays")
+        # argparse accepts abbreviated long flags and --flag=value. Refuse
+        # those aliases here rather than certify one value while it runs another.
+        if any(token.startswith("--") and flag.startswith(token.split("=", 1)[0])
+               and token != flag for token in argv):
+            raise ValueError("head-to-head critical arguments must use exact separate flags")
+        if argv.count(flag) != 1:
+            raise ValueError("head-to-head critical argument missing or repeated")
+        index = argv.index(flag)
+        if index + 1 == len(argv) or argv[index + 1].startswith("--"):
+            raise ValueError("head-to-head critical argument lacks a value")
+        return argv[index + 1]
+
+    modes = []
+    for shard in entry["shards"]:
+        common, specific = entry["common_arguments"], shard["arguments"]
+        if not isinstance(common, list) or not isinstance(specific, list):
+            raise ValueError("worker arguments must be string arrays")
+        argv = common + specific
+        if argument(argv, "--opponent-policy-mode") != "raw":
+            raise ValueError("head-to-head opponent must actually be raw")
+        mode = argument(argv, "--policy-mode")
+        if mode not in {"engine-mcts", "trajectory-reference"}:
+            raise ValueError("head-to-head candidate must be a registered search mode")
+        modes.append(mode)
+    if len(set(modes)) != 1:
+        raise ValueError("head-to-head candidate mode differs across seats")
+    return dict(comparison_kind=kind, candidate_policy_mode=modes[0], opponent_policy_mode="raw")
+
 
 def read(path):
     return json.loads(Path(path).read_text())
@@ -110,7 +162,8 @@ def agent(action, entry_path, review_path, expected, deadline, cpus, cursors,
             raise ValueError("worker partition already launched; no restart")
         return dict(entry_sha256=entry_hash, seed_start=entry["seed_start"],
                     seed_count=entry["seed_count"], calendar_seconds=entry["calendar_seconds"],
-                    shards=[[s["name"], s["seat"]] for s in entry["shards"]])
+                    shards=[[s["name"], s["seat"]] for s in entry["shards"]],
+                    **head_to_head_contract(entry))
     if action == "abort":
         panel.write(entry["coordination"]["abort_path"],
                     dict(entry_sha256=entry_hash, reason="GLOBAL_STOP", time_unix=time.time()))
@@ -210,7 +263,7 @@ class Transport:
 
 def validate_partitions(entry, preflights):
     targets = entry["targets"]
-    if len(targets) != 2 or len({t["name"] for t in targets}) != 2:
+    if len(targets) != 2 or len(preflights) != 2 or len({t["name"] for t in targets}) != 2:
         raise ValueError("exactly two named partitions required")
     if len({t["node_name"] for t in targets}) != 2 or len({t["pod_uid"] for t in targets}) != 2:
         raise ValueError("partitions require different reviewed pods and nodes")
@@ -218,17 +271,28 @@ def validate_partitions(entry, preflights):
         raise ValueError("unsafe partition name")
     if entry["calendar_seconds"] != 86400:
         raise ValueError("one 24-hour common clock required")
+    kind = entry.get("comparison_kind", PRIMARY_KIND)
+    if kind not in {PRIMARY_KIND, HEAD_TO_HEAD_KIND}:
+        raise ValueError("unknown comparison kind")
+    expected_shards = HEAD_TO_HEAD_SHARDS if kind == HEAD_TO_HEAD_KIND else PRIMARY_SHARDS
+    candidate_modes = set()
     seeds = []
     for target, facts in zip(targets, preflights):
         if facts["entry_sha256"] != target["entry_sha256"] or facts["calendar_seconds"] != 86400:
             raise ValueError("partition binding/cap changed")
-        if facts["shards"] != [["candidate-p1", "p1"], ["raw-p1", "p1"],
-                               ["candidate-p2", "p2"], ["raw-p2", "p2"]]:
-            raise ValueError("partition must retain both arms and both seats")
+        if facts.get("comparison_kind", PRIMARY_KIND) != kind or facts["shards"] != expected_shards:
+            raise ValueError("partition must retain its registered comparison and both seats")
+        if kind == HEAD_TO_HEAD_KIND:
+            if (facts.get("opponent_policy_mode") != "raw"
+                    or facts.get("candidate_policy_mode") not in {"engine-mcts", "trajectory-reference"}):
+                raise ValueError("head-to-head worker modes differ from the registered comparison")
+            candidate_modes.add(facts["candidate_policy_mode"])
         seeds += list(range(facts["seed_start"], facts["seed_start"] + facts["seed_count"]))
     planned = list(range(entry["seed_start"], entry["seed_start"] + entry["seed_count"]))
     if sorted(seeds) != planned:
         raise ValueError("partitions do not exactly cover the fixed roster")
+    if len(candidate_modes) > 1:
+        raise ValueError("head-to-head candidate mode differs across partitions")
 
 
 def save_snapshot(output, target, state):
