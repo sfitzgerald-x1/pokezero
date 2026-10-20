@@ -76,6 +76,67 @@ def paired_t(values):
                 screening_rule_passed=lower > 0)
 
 
+def paired_t_completion_box(lower, upper):
+    """Exact completion sensitivity for the approximate 128-seed t criterion.
+
+    Score endpoints must lie on the two-seat quarter-point grid. The lower
+    confidence endpoint is concave in the contrast vector, so its box minimum
+    occurs at a vertex. For a fixed integer sum S, only the largest squared
+    sum Q can minimize that endpoint. Dynamic programming therefore retains
+    at most 8*n+1 sums, without a missing-cell cutoff or imputation shortcut.
+
+    Exact refers to the finite optimization, NOT statistical coverage. This
+    arithmetic does not authorize changing an existing registration.
+    """
+    if len(lower) != PRIMARY_SEEDS or len(upper) != PRIMARY_SEEDS:
+        raise ValueError("all 128 registered contrast intervals required")
+    endpoints = []
+    for lo, hi in zip(lower, upper):
+        if any(type(v) not in (int, float) or not isfinite(v)
+               or not -1 <= v <= 1 or 4 * v != int(4 * v) for v in (lo, hi)):
+            raise ValueError("finite quarter-grid contrast endpoints required")
+        if lo > hi:
+            raise ValueError("ordered contrast interval required")
+        endpoints.append((int(4 * lo), int(4 * hi)))
+    unknown = sum(lo != hi for lo, hi in endpoints)
+    if unknown == 0:
+        return dict(paired_t(lower), unknown_seed_clusters=0,
+                    completion_optimization="EXACT_QUARTER_GRID", retained_sum_states=1)
+    common = dict(degrees_of_freedom=127, alpha=ALPHA, finite_sample_certified=False,
+                  nominal_one_sided_p=None, unknown_seed_clusters=unknown,
+                  completion_optimization="EXACT_QUARTER_GRID")
+    # Preserve the existing undefined-t behavior for every possible completion.
+    if max(lower) <= min(upper):
+        return dict(common, status="DEGENERATE_COMPLETION_POSSIBLE", lower=None,
+                    screening_rule_passed=False, retained_sum_states=0)
+    states = {0: (0, ())}
+    for lo, hi in endpoints:
+        following = {}
+        for total, (squares, witness) in states.items():
+            for value in ((lo,) if lo == hi else (lo, hi)):
+                new_total, new_squares = total + value, squares + value * value
+                if new_total not in following or new_squares > following[new_total][0]:
+                    following[new_total] = (new_squares, witness + (value,))
+        states = following
+    from scipy.stats import t
+
+    critical = float(t.isf(ALPHA, PRIMARY_SEEDS - 1))
+    candidates = []
+    for total, (squares, witness) in states.items():
+        # Integer arithmetic keeps the variance numerator exact.
+        variance_numerator = PRIMARY_SEEDS * squares - total * total
+        standard_error = sqrt(variance_numerator / (PRIMARY_SEEDS - 1)) / (4 * PRIMARY_SEEDS)
+        endpoint = total / (4 * PRIMARY_SEEDS) - critical * standard_error
+        candidates.append((endpoint, witness))
+    endpoint, witness = min(candidates)
+    # A numerical boundary is not evidence of strict passage.
+    numerical_guard = 1e-12
+    return dict(common, status="APPROXIMATE_FIXED_N_PAIRED_T_ALL_COMPLETIONS",
+                lower=endpoint, least_favorable_completion=[v / 4 for v in witness],
+                retained_sum_states=len(states), numerical_guard=numerical_guard,
+                screening_rule_passed=endpoint > numerical_guard)
+
+
 def summarize_pairs(seeds, candidate, control, *, terminal=False):
     """Join all registered cells; caller must establish durable run termination.
 
@@ -126,3 +187,45 @@ def summarize_pairs(seeds, candidate, control, *, terminal=False):
         deployability_qualified=False,
         interpretation="score units; multiply by100 for percentage points; nominal .025 per candidate, not familywise",
     )
+
+
+def summarize_capped_pairs(seeds, candidate, control, *, normal_complete_attempt=False):
+    """Explicit opt-in for prospectively registered cap-aware inference only.
+
+    Caller must independently establish actual exit zero, clean cleanup and
+    all registered cells attempted under the normal fixed-roster protocol.
+    Every uncapped outcome must be validated; only per-game round caps may
+    remain unknown. Live, stopped, globally capped, refused, failed, missing
+    or unvalidated-complete panels remain descriptive. This flag is an
+    attestation requirement, not a process/provenance validator.
+
+    The legacy summarize_pairs contract is unchanged. In particular this
+    function cannot amend the active OFF entry's advancement prohibition.
+    """
+    if type(normal_complete_attempt) is not bool:
+        raise ValueError("explicit normal-complete-attempt boolean required")
+    candidate, control = tuple(candidate), tuple(control)
+    result = summarize_pairs(seeds, candidate, control)
+    reason = "NORMAL_FULL_ATTEMPT_NOT_ATTESTED"
+    if normal_complete_attempt:
+        arms = [_index(candidate, seeds), _index(control, seeds)]
+        accounted = all(
+            (row := arm.get((seed, seat))) is not None
+            and (row.validated or row.status == "CAPPED")
+            for arm in arms for seed in seeds for seat in SEATS
+        )
+        reason = ("NON_PRIMARY_ROSTER" if len(seeds) != PRIMARY_SEEDS
+                  else "UNVALIDATED_OR_NON_CAP_CELL" if not accounted else None)
+    if reason is None:
+        inference = paired_t_completion_box([r["lower"] for r in result["per_seed"]],
+                                           [r["upper"] for r in result["per_seed"]])
+        result["primary_test"] = inference
+        result["screening_rule_passed"] = inference["screening_rule_passed"]
+        # This is the adverse bound on possible panel point effects, not a
+        # five-point lower-confidence-bound requirement or an identified mean.
+        result["deployment_point_rule_passed"] = bool(
+            inference["screening_rule_passed"] and result["identification_bounds"][0] >= 0.05
+        )
+    result["prospective_cap_aware_method"] = True
+    result["inference_unavailable_reason"] = reason
+    return result
