@@ -222,7 +222,22 @@ def run(entry_path, review_path, *, deadline_unix=None):
                 receipt.update(exit_code=code, cleanup_ok=cleanup_ok,
                                observed_games=observed_count(summary, entry["seed_start"], entry["seed_count"]))
                 terminal["shards"].append(receipt)
-                verify(entry)
+                # Preserve the actual child outcome before a later provenance
+                # check can raise. A failed input check must not erase a
+                # nonzero child exit or prevent its terminal receipt existing.
+                receipt["stop_reason"] = reason
+                write(output / (shard["name"] + "-terminal.json"), receipt)
+                try:
+                    verify(entry)
+                except Exception as error:
+                    failure = dict(error_type=type(error).__name__, error=str(error))
+                    terminal["post_exit_verification_error"] = failure
+                    receipt.update(post_exit_verification_error=failure, ended_unix=time.time())
+                    write(output / (shard["name"] + "-terminal.json"), receipt)
+                    if code != 0 or not cleanup_ok or reason is not None:
+                        terminal["status"] = reason or "PROCESS_FAILURE"
+                        break
+                    raise  # A clean child never excuses provenance drift.
                 # poll() may first observe an already-exited worker. Recheck at
                 # acceptance, after cleanup/provenance checks, so an exit zero
                 # cannot bypass a cap, peer abort or lost coordinator lease.
