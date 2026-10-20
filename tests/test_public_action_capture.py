@@ -6,6 +6,7 @@ from pokezero.public_action_capture import (
     public_action_rounds_from_trajectory_metadata,
 )
 from pokezero.trajectory import BattleTrajectory
+from pokezero.public_decision_corpus import PublicResolvedActionRound
 
 
 class PublicActionCaptureTest(unittest.TestCase):
@@ -27,6 +28,7 @@ class PublicActionCaptureTest(unittest.TestCase):
                     "p1": {"kind": "move", "move_id": "hiddenpowergrass"},
                     "p2": {"kind": "switch", "switched_species": "donphan"},
                 },
+                "team_transitions": [{"player_id": "p2", "kind": "switch", "species": "donphan"}],
             },
         )
 
@@ -49,6 +51,7 @@ class PublicActionCaptureTest(unittest.TestCase):
                         "p1": {"kind": "event", "event_id": "unresolved-public-event"},
                         "p2": {"kind": "event", "event_id": "cant:slp"},
                     },
+                    "team_transitions": [],
                 }
             ],
         )
@@ -73,3 +76,30 @@ class PublicActionCaptureTest(unittest.TestCase):
             action_round.to_dict()["actions"]["p1"],
             {"kind": "move", "move_id": "sleeptalk"},
         )
+
+    def test_ordered_public_transitions_round_trip_without_private_fields(self) -> None:
+        action_round = public_action_round_from_protocol_lines(
+            ("|switch|p2a: private nickname|Smeargle, L80|100/100",
+             "|drag|p1a: own nickname|Absol, L80|100/100",
+             "|drag|p2a: private nickname|Typhlosion, L80|100/100"),
+            turn_index=0, requested_players=("p1", "p2"),
+        )
+        expected = [dict(player_id="p2", kind="switch", species="smeargle"),
+                    dict(player_id="p1", kind="drag", species="absol"),
+                    dict(player_id="p2", kind="drag", species="typhlosion")]
+        payload = action_round.to_dict()
+        self.assertEqual(payload["team_transitions"], expected)
+        self.assertNotIn("nickname", str(payload))
+        self.assertEqual(PublicResolvedActionRound.from_dict(payload).to_dict(), payload)
+
+    def test_legacy_absent_and_exact_empty_boundaries_remain_distinct(self) -> None:
+        legacy = {"turn_index": 0, "actions": {"p1": {"kind": "move", "move_id": "surf"}}}
+        self.assertIsNone(PublicResolvedActionRound.from_dict(legacy).team_transitions)
+        self.assertEqual(PublicResolvedActionRound.from_dict(legacy).to_dict(), legacy)
+        empty = {**legacy, "team_transitions": []}
+        self.assertEqual(PublicResolvedActionRound.from_dict(empty).team_transitions, ())
+        self.assertEqual(PublicResolvedActionRound.from_dict(empty).to_dict(), empty)
+        for value in (None, "switch", {}, [None], [dict(player_id=[], kind="drag", species="absol")],
+                      [dict(player_id="p2", kind="drag", species="absol", private_request={})]):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                PublicResolvedActionRound.from_dict({**legacy, "team_transitions": value})

@@ -22,6 +22,7 @@ from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT, LocalShowdownConfig, 
 from pokezero.observation import PokeZeroObservationV0
 from pokezero.policy import PolicyContext
 from pokezero.public_decision_corpus import PublicActionIdentifier, PublicResolvedActionRound
+from pokezero.public_action_capture import public_action_round_from_protocol_lines
 from pokezero.randbat import Gen3RandbatSource
 from pokezero.replay_branching import replay_trajectory_branch
 from pokezero.search_policy import OpponentActionScenario
@@ -1416,6 +1417,9 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
                 action_index=4,
             )
         )
+        context.trajectory.metadata["public_resolved_action_rounds"] = [
+            PublicResolvedActionRound(0, {"p1": PublicActionIdentifier(
+                kind="switch", switched_species="arcanine")}).to_dict()]
         context = replace(context, decision_round_index=1, observation=round_1_observation)
 
         override = gen3_randbat_belief_start_override(
@@ -1496,6 +1500,9 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
                 action_index=4,
             )
         )
+        context.trajectory.metadata["public_resolved_action_rounds"] = [
+            PublicResolvedActionRound(0, {"p1": PublicActionIdentifier(
+                kind="switch", switched_species="arcanine")}).to_dict()]
         context = replace(context, decision_round_index=1, observation=round_1_observation)
 
         override = gen3_randbat_belief_start_override(
@@ -1584,6 +1591,9 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
                     action_index=action_index,
                 )
             )
+        context.trajectory.metadata["public_resolved_action_rounds"] = [
+            PublicResolvedActionRound(1, {"p1": PublicActionIdentifier(
+                kind="switch", switched_species="arcanine")}).to_dict()]
         context = replace(context, decision_round_index=2, observation=round_2_observation)
 
         override = gen3_randbat_belief_start_override(
@@ -1784,6 +1794,7 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
         *,
         final_active: str,
         final_events: "list[str] | None" = None,
+        exact_protocol_rounds: "list[list[str]] | None" = None,
     ):
         """Drive the public opponent-party tracker over a scripted set of rounds.
 
@@ -1838,6 +1849,10 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
                         },
                     ).to_dict()
                 )
+        if exact_protocol_rounds is not None:
+            captured = [public_action_round_from_protocol_lines(
+                lines, turn_index=i, requested_players=("p1", "p2"),
+            ).to_dict() for i, lines in enumerate(exact_protocol_rounds)]
         if captured:
             context.trajectory.metadata = {"public_resolved_action_rounds": captured}
         context = replace(
@@ -1851,6 +1866,17 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
             rng=random.Random(7),
             team_size=3,
         )
+
+    def test_materialization_fits_drag_history_before_the_later_numeric_switch(self) -> None:
+        override = self._run_opponent_party_rounds(
+            [("Xatu", [], 0, None), ("Tauros", [], 4, None)],
+            final_active="Arcanine", exact_protocol_rounds=[
+                ["|move|p1a: Xatu|Psychic|p2a: Lead",
+                 "|drag|p1a: Tauros|Tauros, L76|100/100"],
+                ["|switch|p1a: Arcanine|Arcanine, L78|100/100"],
+            ],
+        )
+        self._assert_recovered_party_order(override)
 
     def _assert_recovered_party_order(self, override) -> None:
         self.assertIsNotNone(
@@ -1985,6 +2011,9 @@ class Gen3RandbatBeliefStartOverrideTest(unittest.TestCase):
                 action_index=4,
             )
         )
+        context.trajectory.metadata["public_resolved_action_rounds"] = [
+            PublicResolvedActionRound(0, {"p1": PublicActionIdentifier(
+                kind="switch", switched_species="xatu")}).to_dict()]
         context = replace(context, decision_round_index=1, observation=round_1_observation)
 
         override = gen3_randbat_belief_start_override(

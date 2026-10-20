@@ -337,6 +337,9 @@ class PublicResolvedActionRound:
 
     turn_index: int
     actions: Mapping[str, PublicActionIdentifier]
+    # None is a legacy record with no exact transition-boundary evidence;
+    # an empty tuple is a newly captured round with no team transitions.
+    team_transitions: tuple[Mapping[str, str], ...] | None = None
 
     def __post_init__(self) -> None:
         if self.turn_index < 0:
@@ -348,9 +351,25 @@ class PublicResolvedActionRound:
             for player, action in sorted(self.actions.items())
         }
         object.__setattr__(self, "actions", normalized)
+        if self.team_transitions is not None:
+            transitions = []
+            for row in _sequence(self.team_transitions, "team_transitions"):
+                if (not isinstance(row, Mapping)
+                        or set(row) != {"player_id", "kind", "species"}
+                        or row["player_id"] not in ("p1", "p2")
+                        or row["kind"] not in ("switch", "drag", "replace")
+                        or not isinstance(row["species"], str)
+                        or not row["species"] or len(row["species"]) > 64
+                        or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789" for c in row["species"])):
+                    raise ValueError("invalid public team transition")
+                transitions.append(dict(row))
+            object.__setattr__(self, "team_transitions", tuple(transitions))
 
     def to_dict(self) -> dict[str, Any]:
-        return {"turn_index": self.turn_index, "actions": {player: action.to_dict() for player, action in self.actions.items()}}
+        result = {"turn_index": self.turn_index, "actions": {player: action.to_dict() for player, action in self.actions.items()}}
+        if self.team_transitions is not None:
+            result["team_transitions"] = [dict(row) for row in self.team_transitions]
+        return result
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "PublicResolvedActionRound":
@@ -360,6 +379,8 @@ class PublicResolvedActionRound:
                 str(player): PublicActionIdentifier.from_dict(_mapping(action, "public action identifier"))
                 for player, action in _mapping(payload.get("actions"), "actions").items()
             },
+            team_transitions=(tuple(_sequence(payload["team_transitions"], "team_transitions"))
+                              if "team_transitions" in payload else None),
         )
 
 

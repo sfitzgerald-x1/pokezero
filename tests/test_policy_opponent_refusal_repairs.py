@@ -14,7 +14,7 @@ from pokezero.public_decision_corpus import PublicActionIdentifier, PublicActorO
 from pokezero.public_replay_materializer import (
     PublicReplayError, replay_public_action_rounds, resolve_public_action_identifier,
 )
-from test_opponent_request_order import PARTY, context, step, switch_round
+from test_opponent_request_order import PARTY, context, step, switch_round, exact_round
 from test_source_root_replay import _record, _round
 
 
@@ -121,6 +121,11 @@ class RefusalRepairsTest(unittest.TestCase):
         ctx = context([step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 0),
                        step("p1", 1, "Absol", 0)], decision_round=2, active="Absol")
         self.assertIsNone(opponent_request_order_resolution(ctx, PARTY).order)
+        self.assertIsNone(opponent_request_order_resolution(ctx, PARTY, sampled_own_party=True).order)
+        ctx.trajectory.metadata["public_resolved_action_rounds"] = [exact_round(
+            0, "|drag|p2a: Absol|Absol, L80|100/100")]
+        self.assertEqual(opponent_request_order_resolution(ctx, PARTY).order,
+                         ("absol", "smeargle", "typhlosion", *PARTY[3:]))
         resolved = opponent_request_order_resolution(ctx, PARTY, sampled_own_party=True)
         self.assertEqual(resolved.order, ("absol", "smeargle", "typhlosion", *PARTY[3:]))
 
@@ -136,7 +141,9 @@ class RefusalRepairsTest(unittest.TestCase):
         # preserve both slot swaps, not an impossible switch-to-self refusal.
         drag_back = context([step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 4),
                              step("p1", 1, "Typhlosion", 0)],
-            decision_round=2, active="Typhlosion", switch_rounds=[switch_round(0, "Absol")])
+            decision_round=2, active="Typhlosion", switch_rounds=[exact_round(
+                0, "|switch|p2a: Absol|Absol, L80|100/100",
+                "|drag|p2a: Typhlosion|Typhlosion, L80|100/100")])
         self.assertEqual(opponent_request_order_resolution(drag_back, PARTY, sampled_own_party=True).order,
                          tuple(PARTY))
 

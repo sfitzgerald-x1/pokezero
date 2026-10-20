@@ -749,6 +749,26 @@ class FoulPlayBridgeTest(unittest.TestCase):
             {"kind": "switch", "switched_species": "pikachu"},
         )
 
+    def test_public_transition_capture_uses_cursor_not_rolling_text_overlap(self) -> None:
+        line = "|drag|p2a: Rival|Pikachu, L100|243/243"
+        state = _ControlledBattleState(
+            battle_id="public-repeat-round", seed=7, format_id="gen3randombattle",
+            public_lines=[line],
+        )
+        _capture_resolved_public_action_round(state, 0)  # Initial evidence is not round zero.
+        state.previous_requested_players = ("p1", "p2")
+        state.public_lines.extend(("|switch|p2a: Rival|Absol, L80|100/100", line))
+        _capture_resolved_public_action_round(state, 1)
+        state.public_lines.append(line)  # Identical text, a distinct actual event.
+        _capture_resolved_public_action_round(state, 2)
+        _capture_resolved_public_action_round(state, 3)  # No additional public lines.
+        self.assertEqual([round_.to_dict()["team_transitions"]
+                          for round_ in state.public_resolved_action_rounds], [
+            [dict(player_id="p2", kind="switch", species="absol"),
+             dict(player_id="p2", kind="drag", species="pikachu")],
+            [dict(player_id="p2", kind="drag", species="pikachu")], [],
+        ])
+
     def test_public_corpus_drag_does_not_invent_a_voluntary_switch(self) -> None:
         state = _ControlledBattleState(
             battle_id="public-drag-round",
