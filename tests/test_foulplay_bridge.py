@@ -1854,6 +1854,44 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertTrue(captured["config"].root_selector_shadow)
         self.assertTrue(captured["config"].strict_fallbacks)
 
+    def test_build_policy_honors_no_fallback_for_engine_without_shadow(self) -> None:
+        """The public no-fallback switch must reach the incumbent engine too."""
+        import pokezero.engine_search as engine_search
+
+        captured = {}
+
+        class FakeEnginePolicy:
+            def __init__(self, *, config=None, **_: object) -> None:
+                captured["config"] = config
+
+        fake_result = type(
+            "FakeTrainingResult", (),
+            {"model_config": type("FakeModelConfig", (), {"policy_id": "fake-base"})()},
+        )()
+        for allow_fallback in (True, False):
+            with self.subTest(allow_fallback=allow_fallback):
+                config = ControlledFoulPlayConfig(
+                    checkpoint=Path("checkpoint.pt"),
+                    showdown_root=Path("/showdown"),
+                    policy_mode="engine-mcts",
+                    engine_model_path=Path("/art/model_ts.pt"),
+                    engine_tables_path=Path("/art/encoder_tables.json"),
+                    allow_search_fallback=allow_fallback,
+                )
+                with patch.object(engine_search, "EngineMctsPolicy", FakeEnginePolicy), patch(
+                    "pokezero.foulplay_bridge.load_showdown_dex_cached", return_value=object()
+                ), patch(
+                    "pokezero.foulplay_bridge.load_gen3_randbat_source_cached",
+                    return_value=object(),
+                ):
+                    _build_policy(
+                        config=config, model=object(), result=fake_result,
+                        value_model=object(), value_result=fake_result,
+                        env_config=object(), rollout_config=object(), policy_id="fake-base",
+                    )
+                self.assertFalse(captured["config"].root_selector_shadow)
+                self.assertEqual(captured["config"].strict_fallbacks, not allow_fallback)
+
     def test_foulplay_process_command_seeds_python_random(self) -> None:
         config = ControlledFoulPlayConfig(
             checkpoint=Path("checkpoint.pt"),
