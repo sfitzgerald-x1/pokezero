@@ -1103,8 +1103,8 @@ jobs:
           set -o pipefail
           python -m unittest tests.test_seed_registry_coverage -v 2>&1 \
             | tee /tmp/seedregistry.log
-          if ! grep -qE 'Ran 45 tests' /tmp/seedregistry.log; then
-            echo "::error::expected 45 seed-registry pins; the suite shrank or grew"
+          if ! grep -qE 'Ran 49 tests' /tmp/seedregistry.log; then
+            echo "::error::expected 49 seed-registry pins; the suite shrank or grew"
             exit 1
           fi
           if ! grep -qE '^OK$' /tmp/seedregistry.log; then

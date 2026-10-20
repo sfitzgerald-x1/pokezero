@@ -2495,6 +2495,7 @@ namespace only:
 | fidelity differential, final holdout — the registered head C141 **did not reach** | `19,200,000`–`19,200,059` | the first 60 seeds of the registered block | **unswept, and contaminated.** No committed artifact covers these 60 seeds; 60 games were run over them before the guard existed |
 | fidelity differential, final holdout — C151 **RATIFIED replacement window** | `19,300,000`–`19,300,199` | the terminal one-shot measurement, re-registered on virgin seeds because the `19,200,000` block is burned | **RATIFIED (owner scott, 2026-08-08) and NOT YET SWEPT.** One sweep, ever, and only once the precondition holds: ledger terminal and engine fingerprint declared frozen for the claim. `reports/c151_final_holdout_rereg_prediction.md` is frozen as to window, protocol and preconditions; the trigger has not fired |
 | gameplay-root reuse | `2,026,100,100`–`2,026,100,107` | `docs/paper_policy_opponent_roster_20261004.json`, frozen selection from completed practical pilot s0, both seats at indices 0 and 9 | selection only, NOT_LAUNCHED; not a differential sweep or new strength measurement |
+| gameplay policy control | `3,829,143,000`–`3,829,143,031` | `docs/audit_artifacts/phase0_raw_sample_control_20261019.json`, current-champion raw versus sampled policy, 32 seeds and both seats | completed descriptive gameplay; not a fidelity sweep |
 
 **October 4 namespace amendment.** The dated gameplay seeds above exceed the
 fidelity floor numerically but serve a different purpose. The roster binds its
@@ -2505,6 +2506,16 @@ as gameplay selection, and refuses changed bytes. Copies and new schemas remain
 subject to the normal shape-agnostic containment check. The roster's own gate
 separately verifies selection structure. No fidelity band is widened, no reserved
 window is consumed, and selection does not certify replay eligibility or strength.
+
+**October 19 gameplay control index.** The completed policy-control ledger above
+is also outside the differential namespace despite its larger seed numbers.
+Its exact path and SHA-256
+`b3dabd51cd4b77d3f86a28f78f71eb9cbf0eed641c2b1a41ff470ab27cb881e8`
+are classified separately; changed bytes fail closed and copies at other paths
+remain subject to ordinary coverage. This indexes an already prospectively
+reviewed gameplay entry, not a new scientific registration or fidelity band.
+It records 38 wins, 25 losses and one genuine draw over 64 games; no simulator
+equivalence, population significance or search improvement follows from it.
 
 **C151 — the owner ratified a replacement window, burned the old block, and deferred the
 sweep.** Ratified **2026-08-08** by **scott**, in these words:
