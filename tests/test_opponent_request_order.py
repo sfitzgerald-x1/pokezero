@@ -249,11 +249,13 @@ class RequestOrderTest(unittest.TestCase):
 
     def test_captured_switch_requires_its_successful_transition_in_exact_slice(self) -> None:
         captured = {**switch_round(0, "Absol"), "team_transitions": []}
-        ctx = context([step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 5)],
-                      decision_round=1, active="Absol", switch_rounds=[captured])
-        result = opponent_request_order_resolution(ctx, PARTY, capture_failure_witness=True)
-        self.assertEqual(result.status, "rejected_public_order_walk")
-        self.assertEqual(result.failure_witness["site"], "recorded_switch_missing_from_public_slice")
+        for opponent_steps in ([], [step("p2", 0, "Typhlosion", 5)]):
+            ctx = context([step("p1", 0, "Typhlosion", 0), *opponent_steps],
+                          decision_round=1, active="Absol", switch_rounds=[captured])
+            with self.subTest(opponent_steps=opponent_steps):
+                result = opponent_request_order_resolution(ctx, PARTY, capture_failure_witness=True)
+                self.assertEqual(result.status, "rejected_public_order_walk")
+                self.assertEqual(result.failure_witness["site"], "recorded_switch_missing_from_public_slice")
 
     def _contradictory_switch_context(self, species, action):
         return context(

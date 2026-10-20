@@ -690,12 +690,12 @@ def _public_opponent_team_index_walk(
                 if transition["kind"] == "replace":
                     # Identity revelation is not a Showdown party-slot swap.
                     return reject("unsupported_public_replace", species=species)
-                indexed = (not indexed_consumed and transition["kind"] == "switch"
-                           and indexed_species is not None
-                           and species == _normalize_species_id(indexed_species)
-                           and bool(switch_steps))
-                if indexed:
+                selected_switch = (not indexed_consumed and transition["kind"] == "switch"
+                                   and indexed_species is not None
+                                   and species == _normalize_species_id(indexed_species))
+                if selected_switch:
                     indexed_consumed = True
+                indexed = selected_switch and bool(switch_steps)
                 original_index = constraints.get(species)
                 if original_index is None and party_index_by_species is not None:
                     original_index = party_index_by_species.get(species)
@@ -725,7 +725,7 @@ def _public_opponent_team_index_walk(
                     current_order, original_index, active_position=active_position,
                 )
                 active_species = species
-            if indexed_species is not None and switch_steps and not indexed_consumed:
+            if indexed_species is not None and not indexed_consumed:
                 return reject("recorded_switch_missing_from_public_slice", species=indexed_species)
             next_active = _public_opponent_active_species(own_observations.get(turn_index + 1))
             if (next_active is not None and (active_species is None or
