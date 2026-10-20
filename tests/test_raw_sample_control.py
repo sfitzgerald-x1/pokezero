@@ -31,7 +31,8 @@ class ControlTests(unittest.TestCase):
                      run_directory=str(Path(directory) / "run"),
                      environment=dict(PATH="/pinned:/usr/bin", **{key: "1" for key in (
                          "OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
-                         "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS")}),
+                         "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+                         "POKEZERO_TORCH_NUM_THREADS", "POKEZERO_TORCH_NUM_INTEROP_THREADS")}),
                      input_hashes={str(Path(control.__file__).resolve()): "runner",
                                    str(Path(control.panel.__file__).resolve()): "helper",
                                    "/weights": "fixture-sha", "/pinned/node": "node",
@@ -59,6 +60,20 @@ class ControlTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "exact entry"):
                     control.check(path, review)
                 verify.assert_not_called()
+
+    def test_torch_thread_initialization_has_one_owner_and_checks_readback(self):
+        torch = Mock()
+        torch.get_num_threads.return_value = 1
+        torch.get_num_interop_threads.return_value = 1
+        require = Mock(return_value=torch)
+        with patch.dict(sys.modules, {"pokezero.neural_policy": SimpleNamespace(require_torch=require)}):
+            self.assertIs(control.configure_torch(), torch)
+            require.assert_called_once_with()
+            torch.set_num_threads.assert_not_called()
+            torch.set_num_interop_threads.assert_not_called()
+            torch.get_num_interop_threads.return_value = 2
+            with self.assertRaisesRegex(ValueError, "resolved torch"):
+                control.configure_torch()
 
     def test_real_terminal_scores_and_caps_unknown(self):
         slot = dict(seed=1, raw_seat="p2")
