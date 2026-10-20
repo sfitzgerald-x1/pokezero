@@ -13,6 +13,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+analysis = [
+  "scipy>=1.14,<2",
+]
 neural = [
   # The native model-search extension links this exact libtorch ABI via
   # tch/torch-sys 0.26.0; keep environment resolution aligned with its

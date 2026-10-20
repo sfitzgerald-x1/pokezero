@@ -186,9 +186,10 @@ class CrateTorchScriptParityTest(unittest.TestCase):
         manifest_path = REPO / "exports" / "export_manifest.json"
         if not ts_path.exists() or not manifest_path.exists():
             self.skipTest("no exports/model_ts.pt artifact on this checkout")
-        shapes = json.loads(manifest_path.read_text())["input_shapes"]["categorical_ids"]
+        manifest = json.loads(manifest_path.read_text())
+        shapes = manifest["input_shapes"]["categorical_ids"]
         _, window, tokens, cat = shapes
-        num = json.loads(manifest_path.read_text())["input_shapes"]["numeric_features"][-1]
+        num = manifest["input_shapes"]["numeric_features"][-1]
         native = pokezero_search.NativeLeafModel(
             str(ts_path),
             device="cpu",
@@ -197,18 +198,15 @@ class CrateTorchScriptParityTest(unittest.TestCase):
             categorical_features=cat,
             numeric_features=num,
         )
-        from pokezero.neural_policy import TransformerPolicyConfig
+        from pokezero.neural_policy import load_transformer_model_config
 
-        config = TransformerPolicyConfig.compact_category(
-            category_vocab=("a", "b"),
-            category_oov_buckets=1,
-            categorical_feature_count=cat,
-            numeric_feature_count=num,
-            embedding_dim=16,
-            transformer_layers=1,
-            attention_heads=2,
-            feedforward_dim=32,
-            dropout=0.0,
+        # A fresh default config may have a different observation token count
+        # from this frozen export (e.g.151 versus23). Generate inputs from the
+        # actual checkpoint contract, not a synthetic architecture's defaults.
+        config = load_transformer_model_config(manifest["checkpoint"])
+        self.assertEqual(
+            (config.window_size, config.token_count, config.categorical_feature_count,
+             config.numeric_feature_count), (window, tokens, cat, num),
         )
         batch = 8
         inputs = self.export.make_random_inputs(config, batch, seed=606)
