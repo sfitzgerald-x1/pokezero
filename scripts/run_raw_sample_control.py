@@ -87,7 +87,8 @@ def check(entry_path, review_path):
     if entry["checkpoint_sha256"] != entry["input_hashes"][entry["checkpoint"]]:
         raise ValueError("checkpoint metadata differs from bound weights")
     for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
-                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+                 "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS",
+                 "POKEZERO_TORCH_NUM_THREADS", "POKEZERO_TORCH_NUM_INTEROP_THREADS"):
         if entry["environment"].get(name) != "1":
             raise ValueError("control requires single-thread policy execution")
     if Path(entry["environment"]["PATH"].split(os.pathsep)[0]) != Path(entry["node_binary"]).parent:
@@ -148,6 +149,16 @@ def play_game(entry, slot, model, result, env_config):
     return row, document
 
 
+def configure_torch():
+    # C806 owns the one-shot inter-op initialization through require_torch.
+    # Calling PyTorch's setter ourselves first makes its loader fail on re-entry.
+    from pokezero.neural_policy import require_torch
+    torch = require_torch()
+    if torch.get_num_threads() != 1 or torch.get_num_interop_threads() != 1:
+        raise ValueError("resolved torch thread pools differ from the entry")
+    return torch
+
+
 def worker(entry_path, review_path):
     entry = check(entry_path, review_path)
     launch_path = Path(entry["run_directory"]) / "launch.json"
@@ -168,7 +179,6 @@ def worker(entry_path, review_path):
     threading.Thread(target=guard_parent, args=(launch, entry["run_directory"]),
                      daemon=True).start()
     os.sched_setaffinity(0, {entry["cpu"]})
-    import torch
     from pokezero.local_showdown import LocalShowdownConfig, env_config_from_checkpoint_provenance
     from pokezero.neural_policy import (
         FreshValueHeadWarning, category_vocab_from_model_config,
@@ -176,8 +186,7 @@ def worker(entry_path, review_path):
         observation_spec_from_model_config,
     )
     from pokezero.randbat import load_gen3_randbat_source_cached
-    torch.set_num_threads(1)
-    torch.set_num_interop_threads(1)
+    configure_torch()
     warnings.simplefilter("error", FreshValueHeadWarning)
     source = load_gen3_randbat_source_cached(entry["showdown_root"])
     if source.metadata.source_hash != entry["catalog_source_hash"]:
