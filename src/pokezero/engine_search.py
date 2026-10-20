@@ -3908,10 +3908,12 @@ class OpponentRequestOrderResolution:
 
     order: tuple[str, ...] | None
     status: str
+    failure_witness: Mapping[str, object] | None = None
 
 
 def opponent_request_order_resolution(
     context, party_species, *, sampled_own_party: bool = False,
+    capture_failure_witness: bool = False,
 ) -> OpponentRequestOrderResolution:
     """Resolve the opponent request order and retain the fail-closed reason.
 
@@ -3968,6 +3970,7 @@ def opponent_request_order_resolution(
         # species — makes the public mapping ambiguous.
         return OpponentRequestOrderResolution(None, "duplicate_party")
     opponent_slot = "p2" if getattr(context, "player_id", "p1") == "p1" else "p1"
+    failure_witness: dict[str, object] = {}
     try:
         walk = _public_opponent_team_index_walk(
             context,
@@ -3975,11 +3978,18 @@ def opponent_request_order_resolution(
             team_size=len(party),
             party_index_by_species={species: index for index, species in enumerate(canonical_party)},
             **({"sampled_party_species": party} if sampled_own_party else {}),
+            **({"failure_witness": failure_witness} if capture_failure_witness else {}),
         )
     except Exception:  # noqa: BLE001 - never break search over telemetry
         return OpponentRequestOrderResolution(None, "public_order_walk_error")
     if walk is None:
-        return OpponentRequestOrderResolution(None, "rejected_public_order_walk")
+        if capture_failure_witness:
+            failure_witness.setdefault("site", "unclassified_public_order_walk")
+            failure_witness["sampled_party"] = [name[:64] for name in party[:6]]
+        return OpponentRequestOrderResolution(
+            None, "rejected_public_order_walk",
+            failure_witness if capture_failure_witness else None,
+        )
     _constraints, current_order, active_position = walk
     if active_position is None:
         # The walk stopped trusting its own permutation.
@@ -7041,6 +7051,14 @@ class EngineMctsPolicy:
                     f"round={getattr(context, 'decision_round_index', '?')} "
                     f"seat={getattr(context, 'player_id', '?')} reason={reason} "
                     f"count={root_prior_fallbacks}"
+                    + (
+                        " order_failure_witness=" + json.dumps(
+                            record["_opponent_order_failure_witness"],
+                            sort_keys=True, separators=(",", ":"),
+                        )
+                        if record.get("_opponent_order_failure_witness") is not None
+                        else ""
+                    )
                 )
             # Per-INVOCATION like the phase walls above: a conservatively
             # replayed world collided that many times twice and must report it.
@@ -7133,6 +7151,8 @@ class EngineMctsPolicy:
                 context,
                 world.party_species["p2" if context.player_id == "p1" else "p1"],
                 **({"sampled_own_party": True} if config.policy_opponent else {}),
+                **({"capture_failure_witness": True}
+                   if config.use_opponent_priors and config.strict_fallbacks else {}),
             )
             ctx_payload: dict[str, Any] = {
                 "p1": list(world.party_species["p1"]),
@@ -7172,6 +7192,12 @@ class EngineMctsPolicy:
                 record["_opponent_request_order_status"] = (
                     opponent_order_resolution.status
                 )
+                if opponent_order_resolution.failure_witness is not None:
+                    # Python-only failure evidence. Do not change native model
+                    # inputs, the status vocabulary, or any successful search.
+                    record["_opponent_order_failure_witness"] = dict(
+                        opponent_order_resolution.failure_witness
+                    )
             if config.policy_opponent:
                 if opponent_order_resolution.order is None:
                     raise EngineSearchWitnessError(

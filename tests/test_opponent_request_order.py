@@ -29,6 +29,7 @@ nothing.
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import re
 from types import SimpleNamespace
 import unittest
@@ -92,6 +93,107 @@ def context(steps, *, decision_round, active, switch_rounds=(), player_id="p1"):
 
 
 class RequestOrderTest(unittest.TestCase):
+    def _contradictory_switch_context(self, species, action):
+        return context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 5),
+             step("p1", 1, "Absol", 0), step("p2", 1, "Absol", action)],
+            decision_round=2, active=species,
+            switch_rounds=[switch_round(0, "Absol"), switch_round(1, species)],
+        )
+
+    def test_failure_witness_preserves_both_kinds_of_constraint_conflict(self) -> None:
+        for species, action, index in [
+            ("Typhlosion", 4, 1), ("Vaporeon", 5, 0), ("x" * 10000, 5, 0),
+        ]:
+            ctx = self._contradictory_switch_context(species, action)
+            plain = opponent_request_order_resolution(ctx, PARTY)
+            observed = opponent_request_order_resolution(
+                ctx, PARTY, capture_failure_witness=True,
+            )
+            with self.subTest(species=species):
+                self.assertEqual((observed.order, observed.status), (plain.order, plain.status))
+                self.assertEqual(observed.status, "rejected_public_order_walk")
+                self.assertIsNone(plain.failure_witness)
+                witness = observed.failure_witness
+                self.assertEqual(witness["site"], "switch_constraint_conflict")
+                self.assertEqual(witness["turn_index"], 1)
+                self.assertEqual(witness["species"], species.lower()[:64])
+                self.assertEqual(witness["requested_index"], index)
+                self.assertEqual(witness["action_index"], action)
+                self.assertEqual(witness["constraints"], {"typhlosion": 0, "absol": 2})
+                self.assertEqual(witness["current_order"], [2, 1, 0, 3, 4, 5])
+                self.assertEqual(witness["active_position"], 0)
+                self.assertEqual(witness["evidence_source"], "captured_public_action")
+                self.assertFalse(witness["sampled_party_mode"])
+                self.assertEqual(witness["sampled_party"], PARTY)
+                self.assertEqual(json.loads(json.dumps(witness)), witness)
+                self.assertLess(len(json.dumps(witness)), 2048)
+
+    def test_all_walk_rejection_sites_capture_without_changing_the_result(self) -> None:
+        from pokezero.determinization import _public_opponent_team_index_walk
+
+        opening = context([step("p1", 0, "Typhlosion", 0)],
+                          decision_round=1, active="Typhlosion")
+        missing_party = ["typhlosion", "smeargle", "ditto", "vaporeon", "sharpedo", "deoxysdefense"]
+        switched = self._contradictory_switch_context("Absol", 0)
+        sampled_same = context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 5)],
+            decision_round=1, active="Typhlosion",
+            switch_rounds=[switch_round(0, "Typhlosion")],
+        )
+        replaced = context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 0)],
+            decision_round=1, active="Absol",
+        )
+        witnessed_replacement = context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 0)],
+            decision_round=1, active="Absol",
+        )
+        witnessed_replacement.observation.metadata["recent_public_events"] = [
+            "|switch|p2a: Absol|Absol, L80|250/250",
+        ]
+        cases = [
+            ("nonpositive_team_size", opening, {"team_size": 0}),
+            ("invalid_sampled_party", opening, {"sampled_party_species": ["absol"]}),
+            ("initial_constraint_conflict", opening,
+             {"sampled_party_species": [PARTY[2], PARTY[1], PARTY[0], *PARTY[3:]]}),
+            ("sampled_switch_species_missing", switched,
+             {"sampled_party_species": missing_party}),
+            ("sampled_switch_to_active", sampled_same, {"sampled_party_species": PARTY}),
+            ("switch_constraint_conflict", self._contradictory_switch_context("Typhlosion", 4), {}),
+            ("sampled_observed_species_missing", replaced,
+             {"sampled_party_species": missing_party}),
+            ("replacement_constraint_conflict", witnessed_replacement,
+             {"party_index_by_species": {"absol": 0}}),
+        ]
+        for site, ctx, overrides in cases:
+            kwargs = {"opponent_slot": "p2", "team_size": 6, **overrides}
+            witness = {}
+            with self.subTest(site=site):
+                self.assertIsNone(_public_opponent_team_index_walk(ctx, **kwargs))
+                self.assertIsNone(_public_opponent_team_index_walk(
+                    ctx, **kwargs, failure_witness=witness,
+                ))
+                self.assertEqual(witness["site"], site)
+
+    def test_successful_walk_has_identical_order_and_no_failure_witness(self) -> None:
+        ctx = context(
+            [step("p1", 0, "Typhlosion", 0), step("p2", 0, "Typhlosion", 5),
+             step("p1", 1, "Absol", 0)],
+            decision_round=2, active="Absol", switch_rounds=[switch_round(0, "Absol")],
+        )
+        self.assertEqual(
+            opponent_request_order_resolution(ctx, PARTY),
+            opponent_request_order_resolution(ctx, PARTY, capture_failure_witness=True),
+        )
+
+    def test_unrelated_order_refusal_has_no_failure_witness(self) -> None:
+        ctx = context([step("p1", 0, "Typhlosion", 0)], decision_round=1,
+                      active="Typhlosion")
+        for party in ([], PARTY + [PARTY[0]]):
+            result = opponent_request_order_resolution(ctx, party, capture_failure_witness=True)
+            self.assertIsNone(result.failure_witness)
+
     def test_no_switches_is_the_party_order(self) -> None:
         ctx = context([step("p1", 0, "Typhlosion", 0)], decision_round=1,
                       active="Typhlosion")
