@@ -14,6 +14,8 @@ on:
       - tests/test_search_over_raw_budget16384.py
       - src/pokezero/mcts_eval/fullgame_strength.py
       - tests/test_fullgame_strength.py
+      - scripts/run_fullgame_panel.py
+      - tests/test_fullgame_panel.py
       - pyproject.toml
       - .github/workflows/search-screening-kernel.yml
   push:
@@ -31,6 +33,8 @@ on:
       - tests/test_search_over_raw_budget16384.py
       - src/pokezero/mcts_eval/fullgame_strength.py
       - tests/test_fullgame_strength.py
+      - scripts/run_fullgame_panel.py
+      - tests/test_fullgame_panel.py
       - pyproject.toml
       - .github/workflows/search-screening-kernel.yml
 permissions:
@@ -51,4 +55,4 @@ jobs:
       - name: Run standalone contracts
         env:
           PYTHONPATH: src:tests
-        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity test_search_over_raw_margin test_search_over_raw_budget16384 test_fullgame_strength -v
+        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity test_search_over_raw_margin test_search_over_raw_budget16384 test_fullgame_strength test_fullgame_panel -v

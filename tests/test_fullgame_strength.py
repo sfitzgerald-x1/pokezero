@@ -93,3 +93,16 @@ class FullgameStrengthTests(unittest.TestCase):
         self.assertTrue(result["screening_rule_passed"])
         self.assertLess(result["identified_point_estimate"], 0.05)
         self.assertFalse(result["deployment_point_rule_passed"])
+
+    def test_stopped_or_incomplete_panel_never_advances_even_if_favorable(self):
+        seeds = list(range(128))
+        control = [self.row(seed, seat, 0) for seed in seeds for seat in ("p1", "p2")]
+        candidate = [self.row(seed, seat, 1 if seed % 2 else 0.5)
+                     for seed in seeds for seat in ("p1", "p2")]
+        for partial_candidate, partial_control in ((candidate[:-1], control),
+                                                    (candidate, control[:-1])):
+            result = summarize_pairs(seeds, partial_candidate, partial_control, terminal=True)
+            self.assertGreater(result["identification_bounds"][0], 0.5)
+            self.assertFalse(result["complete_roster"])
+            self.assertIsNone(result["primary_test"])
+            self.assertFalse(result["screening_rule_passed"])

@@ -104,7 +104,11 @@ def summarize_pairs(seeds, candidate, control, *, terminal=False):
     lower = [r["lower"] for r in per_seed]
     upper = [r["upper"] for r in per_seed]
     identification_bounds = [fmean(lower), fmean(upper)]
-    inference = paired_t(lower) if terminal and len(seeds) == PRIMARY_SEEDS else None
+    # First-failure/calendar stopping can couple missing cells across clusters.
+    # Worst-case bounds remain descriptive, but an ordinary fixed-N t claim
+    # does not acquire valid coverage merely by filling that stopped roster.
+    complete_roster = known == [2 * len(seeds), 2 * len(seeds)]
+    inference = paired_t(lower) if terminal and complete_roster and len(seeds) == PRIMARY_SEEDS else None
     return dict(
         seed_clusters=len(seeds), planned_games_per_arm=2 * len(seeds),
         candidate_validated_games=known[0], control_validated_games=known[1],
@@ -112,6 +116,7 @@ def summarize_pairs(seeds, candidate, control, *, terminal=False):
         identified_point_estimate=(identification_bounds[0]
                                    if identification_bounds[0] == identification_bounds[1] else None),
         per_seed=per_seed, primary_test=inference,
+        complete_roster=complete_roster,
         screening_rule_passed=bool(inference and inference["screening_rule_passed"]),
         deployment_point_rule_passed=bool(inference and inference["screening_rule_passed"]
                                           and identification_bounds[0] >= 0.05),
