@@ -94,6 +94,11 @@ class RefusedRuntime(AuthoredRuntime):
         raise ReferenceRefusal("PRIVATE_CANARY refused")
 
 
+class RefusedStartupRuntime(AuthoredRuntime):
+    def __init__(self, index):
+        raise ReferenceRefusal("PRIVATE_CANARY worker startup refused")
+
+
 class DelayedRuntime(AuthoredRuntime):
     def prepare(self, request):
         if request.observation.numeric_features[0][0] == .9:
@@ -287,6 +292,10 @@ class TrajectoryReferenceBridgeTests(unittest.TestCase):
         self.assertEqual(stats["binding"]["set_source_hash"], CATALOG)
         self.assertEqual(stats["binding"]["checkpoint_sha256"], hashlib.sha256(b"authored-checkpoint").hexdigest())
         self.assertEqual(stats["last_decision"]["status"], "REFUSED")
+        failures = stats["last_decision"]["worker_failures"]
+        self.assertEqual(failures[0]["phase"], "public_root_preparation")
+        self.assertTrue(failures[0]["error_code_sites"][0]["frames"])
+        self.assertEqual(failures[0]["error_code_sites"][0]["category"], "ReferenceRefusal")
         self.assertNotIn("PRIVATE_CANARY", str(stats))
         self.assertTrue(all(not p.is_alive() for p in pools[0]._processes))
 
@@ -305,6 +314,43 @@ class TrajectoryReferenceBridgeTests(unittest.TestCase):
                 asyncio.run(bridge.run_controlled_foulplay_benchmark(cfg))
         self.assertTrue(policy._closed)
         self.assertTrue(all(not p.is_alive() for p in pool._processes))
+
+    def test_constructor_worker_refusal_retains_safe_sites_before_pool_assignment(self):
+        policy = self.policy()
+        self.addCleanup(policy.close)
+        observed = []
+        def make_pool(config, factory, **kwargs):
+            try:
+                return ParallelTrajectorySearch(config, RefusedStartupRuntime, **kwargs)
+            except reference.ParallelRefusal as error:
+                observed.append(error)
+                raise
+        with patch.object(reference, "ParallelTrajectorySearch", side_effect=make_pool):
+            with self.assertRaises(reference.ParallelRefusal):
+                policy.select_action_with_context(context(), rng=random.Random(1))
+        self.assertEqual(len(observed), 1)
+        self.assertIsNone(policy._pool)
+        last = policy.stats.last_decision
+        self.assertEqual(last["phase"], "pool_startup")
+        self.assertEqual(last["worker_failures"][0]["phase"], "startup")
+        self.assertTrue(last["worker_failures"][0]["error_code_sites"][0]["frames"])
+        self.assertNotIn("PRIVATE_CANARY", json.dumps(policy.stats.to_dict()))
+        with self.assertRaisesRegex(ReferenceRefusal, "no restart"):
+            policy.select_action_with_context(context(), rng=random.Random(1))
+
+    def test_malformed_diagnostic_cannot_make_refusal_summary_unserializable(self):
+        policy = self.policy()
+        self.addCleanup(policy.close)
+        error = reference.ParallelRefusal("original refusal", {"errors": [(
+            "error", 0, 1 << 65536, "trajectory_batch", "PRIVATE_CANARY", "PRIVATE_CANARY",
+            {"error_code_sites": [{"category": "ReferenceRefusal", "frames": []}]},
+        )]})
+        policy.record_failure("search", error)
+        self.assertEqual(policy.stats.refusals, 1)
+        self.assertEqual(policy.stats.last_decision["status"], "REFUSED")
+        self.assertNotIn("worker_failures", policy.stats.last_decision)
+        self.assertNotIn("PRIVATE_CANARY", json.dumps(policy.stats.to_dict()))
+        self.assertEqual(str(error), "original refusal")
 
     def test_zero_new_work_refuses_after_previous_work_without_stale_or_forced_fallback(self):
         policy = self.policy()

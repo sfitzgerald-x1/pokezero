@@ -15,6 +15,7 @@ import math
 import multiprocessing as mp
 from multiprocessing.connection import wait
 import os
+from pathlib import Path
 import pickle
 import select
 import signal
@@ -51,6 +52,85 @@ class ParallelRefusal(ReferenceRefusal):
     def __init__(self, message: str, evidence: dict[str, Any]):
         super().__init__(message)
         self.evidence = evidence
+
+
+_PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+_FAILURE_PHASES = frozenset({"startup", "public_root_preparation", "trajectory_batch",
+                           "statistics_exchange", "idle"})
+_ERROR_CATEGORIES = frozenset({"ReferenceRefusal", "ValueError", "TypeError", "KeyError",
+                              "RuntimeError", "OSError", "OtherException"})
+
+
+def _code_file(value):
+    """Accept only actual package source paths, never absolute/private paths."""
+    if (not isinstance(value, str) or not value.endswith(".py") or len(value) > 160
+            or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/." for c in value)):
+        return None
+    try:
+        path = (_PACKAGE_ROOT / value).resolve()
+        relative = path.relative_to(_PACKAGE_ROOT).as_posix()
+        return relative if relative == value and path.is_file() else None
+    except (OSError, ValueError, RuntimeError):
+        return None
+
+
+def _exception_code_sites(error):
+    """Bounded causal code locations only: no messages, locals or source text."""
+    chain, seen = [], set()
+    for _ in range(4):
+        if error is None or id(error) in seen:
+            break
+        seen.add(id(error))
+        category = ("ReferenceRefusal" if isinstance(error, ReferenceRefusal) else
+                    next((name for cls, name in ((ValueError, "ValueError"), (TypeError, "TypeError"),
+                         (KeyError, "KeyError"), (RuntimeError, "RuntimeError"), (OSError, "OSError"))
+                         if type(error) is cls), "OtherException"))
+        frames, trace = [], error.__traceback__
+        for _ in range(64):
+            if trace is None:
+                break
+            try:
+                relative = Path(trace.tb_frame.f_code.co_filename).resolve().relative_to(_PACKAGE_ROOT).as_posix()
+            except ValueError:
+                relative = None
+            if relative is not None and _code_file(relative) is not None:
+                frames.append({"file": relative, "line": trace.tb_lineno})
+            trace = trace.tb_next
+        chain.append({"category": category, "frames": frames[-8:]})
+        error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
+    return chain
+
+
+def sanitized_worker_failures(errors):
+    """Project internal error transports onto a closed, privacy-safe schema."""
+    result = []
+    if not isinstance(errors, (list, tuple)):
+        return result
+    for message in errors[:20]:
+        if (not isinstance(message, (list, tuple)) or len(message) != 7 or message[0] != "error"
+                or type(message[1]) is not int or not 0 <= message[1] < 20
+                or (message[2] is not None and (type(message[2]) is not int or not 0 <= message[2] < 2**64))
+                or message[3] not in tuple(_FAILURE_PHASES) or not isinstance(message[6], dict)):
+            continue
+        sites = message[6].get("error_code_sites")
+        if not isinstance(sites, list) or not 1 <= len(sites) <= 4:
+            continue
+        safe = []
+        for entry in sites:
+            if (not isinstance(entry, dict) or set(entry) != {"category", "frames"}
+                    or entry["category"] not in tuple(_ERROR_CATEGORIES)
+                    or not isinstance(entry["frames"], list) or len(entry["frames"]) > 8):
+                break
+            frames = entry["frames"]
+            if any(not isinstance(row, dict) or set(row) != {"file", "line"}
+                   or _code_file(row["file"]) is None or type(row["line"]) is not int
+                   or not 0 < row["line"] <= 10**7 for row in frames):
+                break
+            safe.append({"category": entry["category"], "frames": [dict(row) for row in frames]})
+        else:
+            result.append({"worker": message[1], "decision_id": message[2], "phase": message[3],
+                           "error_code_sites": safe})
+    return result
 
 
 @dataclass(frozen=True)
@@ -152,6 +232,12 @@ def _worker(connection, index, runtime_factory, config):
         except BaseException as evidence_error:
             failure_evidence = {"diagnostic_serialization_error":
                 f"{type(evidence_error).__name__}: {evidence_error}"}
+        # Kept even when the optional evidence sink failed or was unpicklable.
+        # Never let diagnostic construction replace the actual refusal.
+        try:
+            failure_evidence["error_code_sites"] = _exception_code_sites(error)
+        except Exception:
+            pass
         try:
             connection.send(("error", index, decision, phase,
                 f"{type(error).__name__}: {error}", traceback.format_exc(),

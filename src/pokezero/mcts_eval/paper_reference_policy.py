@@ -13,7 +13,7 @@ from typing import Any
 
 from ..policy import PolicyContext, PolicyDecision
 from .paper_reference import ReferenceConfig, ReferenceRefusal
-from .paper_reference_parallel import ParallelTrajectorySearch
+from .paper_reference_parallel import ParallelRefusal, ParallelTrajectorySearch, sanitized_worker_failures
 from .paper_reference_runtime import PublicRootRequest, ShowdownWorkerFactory
 from .paper_reference_showdown import decision_state
 
@@ -198,6 +198,12 @@ class TrajectoryReferencePolicy:
             # input. Retain structured status, not the full error transport.
             self.stats.last_decision = {"status": "REFUSED", "phase": phase,
                 "error_type": type(error).__name__, "raw_fallback": False}
+            # Constructor failures carry their own evidence: self._pool has
+            # not been assigned yet. Do not drop those worker startup sites.
+            if isinstance(error, ParallelRefusal) and isinstance(error.evidence, dict):
+                worker_failures = sanitized_worker_failures(error.evidence.get("errors", ()))
+                if worker_failures:
+                    self.stats.last_decision["worker_failures"] = worker_failures
             if (phase == "search" and self._pool is not None
                     and self._pool.last_evidence.get("status") != "COMPLETE"):
                 receipts = self._pool.last_evidence.get("receipts", ())

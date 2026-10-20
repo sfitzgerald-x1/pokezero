@@ -1048,7 +1048,7 @@ jobs:
             tests.test_paper_reference_showdown tests.test_battle_bridge_boundary_requests \
             tests.test_mcts_eval_timing_corpus -v 2>&1 \
             | tee /tmp/paper-reference.log
-          grep -qE 'Ran 109 tests' /tmp/paper-reference.log
+          grep -qE 'Ran 112 tests' /tmp/paper-reference.log
           grep -qE '^OK$' /tmp/paper-reference.log
           if grep -qE '^OK \(.*skipped=' /tmp/paper-reference.log; then
             echo "::error::the paper trajectory reference contracts must not skip"
