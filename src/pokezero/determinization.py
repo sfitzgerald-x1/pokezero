@@ -529,6 +529,7 @@ def _public_opponent_team_index_walk(
     team_size: int,
     party_index_by_species: Mapping[str, int] | None = None,
     sampled_party_species: Sequence[str] | None = None,
+    failure_witness: dict[str, object] | None = None,
 ) -> tuple[dict[str, int], list[int], int | None] | None:
     """Map public opponent switch targets back to recorded packed-team indices.
 
@@ -544,11 +545,45 @@ def _public_opponent_team_index_walk(
     can evolve its order without trusting another world's numeric labels.
     """
 
-    if team_size <= 0:
+    constraints: dict[str, int] = {}
+    current_order: list[int] = []
+    active_position: int | None = None
+    active_species: str | None = None
+    turn_index: int | None = None
+    evidence_source: str | None = None
+
+    def reject(
+        site: str, *, species: str | None = None,
+        team_index: int | None = None, action_index: int | None = None,
+    ) -> None:
+        # Observational only: snapshot the contradiction before returning the
+        # same None as before. Never re-walk, repair constraints, or read an
+        # opposing private request to make the permutation succeed.
+        if failure_witness is not None:
+            failure_witness.update({
+                "site": site,
+                "turn_index": turn_index,
+                "team_size": team_size,
+                "species": _normalize_species_id(species)[:64] if species else None,
+                "requested_index": team_index,
+                "action_index": action_index,
+                "evidence_source": evidence_source,
+                "sampled_party_mode": sampled_party_species is not None,
+                "active_species": (
+                    _normalize_species_id(active_species)[:64] if active_species else None
+                ),
+                "active_position": active_position,
+                "constraints": {
+                    key[:64]: value for key, value in list(constraints.items())[:6]
+                },
+                "current_order": list(current_order[:6]),
+            })
         return None
+
+    if team_size <= 0:
+        return reject("nonpositive_team_size")
     own_observations = _own_observations_by_decision_round(context)
     public_rounds = public_action_rounds_from_trajectory_metadata(context.trajectory)
-    constraints: dict[str, int] = {}
     if sampled_party_species is not None:
         # This is the hypothesized OWN party of the policy opponent, never the
         # real opposing request. Original slots are known *inside this sampled
@@ -557,14 +592,14 @@ def _public_opponent_team_index_walk(
         sampled = [_normalize_species_id(name) for name in sampled_party_species]
         if (len(sampled) != team_size or any(not name for name in sampled)
                 or len(set(sampled)) != team_size):
-            return None
+            return reject("invalid_sampled_party")
         constraints = {name: index for index, name in enumerate(sampled)}
     current_order = list(range(team_size))
-    active_position: int | None = None
-    active_species: str | None = None
     if own_observations:
         first_turn = min(own_observations)
         if first_turn == 0:
+            turn_index = first_turn
+            evidence_source = "initial_observed_active"
             active_species = _public_opponent_active_species(own_observations[first_turn])
             if active_species is not None:
                 if not _assign_team_index_constraint(
@@ -573,7 +608,8 @@ def _public_opponent_team_index_walk(
                     team_index=0,
                     team_size=team_size,
                 ):
-                    return None
+                    return reject("initial_constraint_conflict", species=active_species,
+                                  team_index=0)
                 active_position = 0
 
     opponent_steps_by_turn: dict[int, list[TrajectoryStep]] = {}
@@ -609,6 +645,7 @@ def _public_opponent_team_index_walk(
                 continue
             identifier = public_rounds.get(turn_index, None)
             public_action = identifier.actions.get(opponent_slot) if identifier is not None else None
+            evidence_source = "captured_public_action" if public_action is not None else None
             switch_species = (
                 public_action.switched_species
                 if public_action is not None and public_action.kind == "switch"
@@ -632,6 +669,7 @@ def _public_opponent_team_index_walk(
                     self_slot=context.player_id,
                     turn_index=turn_index,
                 )
+                evidence_source = "rolling_public_events"
             if switch_species is None:
                 continue
             target_position = switch_targets[switch_slot]
@@ -640,10 +678,12 @@ def _public_opponent_team_index_walk(
                 # resolve public identities in their own hypothesized party.
                 initial = constraints.get(_normalize_species_id(switch_species))
                 if initial is None:
-                    return None
+                    return reject("sampled_switch_species_missing", species=switch_species,
+                                  action_index=step.action_index)
                 target_position = current_order.index(initial)
                 if target_position == active_position:
-                    return None
+                    return reject("sampled_switch_to_active", species=switch_species,
+                                  team_index=initial, action_index=step.action_index)
             target_index = current_order[target_position]
             if not _assign_team_index_constraint(
                 constraints,
@@ -651,7 +691,8 @@ def _public_opponent_team_index_walk(
                 team_index=target_index,
                 team_size=team_size,
             ):
-                return None
+                return reject("switch_constraint_conflict", species=switch_species,
+                              team_index=target_index, action_index=step.action_index)
             current_order[active_position], current_order[target_position] = (
                 current_order[target_position],
                 current_order[active_position],
@@ -663,8 +704,9 @@ def _public_opponent_team_index_walk(
         if next_active is None:
             continue
         next_key = _normalize_species_id(next_active)
+        evidence_source = "observed_active"
         if sampled_party_species is not None and next_key not in constraints:
-            return None
+            return reject("sampled_observed_species_missing", species=next_active)
         if next_key in constraints:
             active_species = next_active
             active_position = _move_constrained_species_to_active_position(
@@ -686,6 +728,7 @@ def _public_opponent_team_index_walk(
                 self_slot=context.player_id,
                 turn_index=turn_index,
             )
+            evidence_source = "replacement_public_events"
             original_index = (
                 party_index_by_species.get(next_key)
                 if party_index_by_species is not None
@@ -704,7 +747,8 @@ def _public_opponent_team_index_walk(
                     team_index=original_index,
                     team_size=team_size,
                 ):
-                    return None
+                    return reject("replacement_constraint_conflict", species=next_active,
+                                  team_index=original_index)
                 recovered_position = _move_constrained_species_to_active_position(
                     current_order,
                     original_index,

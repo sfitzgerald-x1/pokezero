@@ -5107,6 +5107,30 @@ class RootDecisionTelemetryTest(unittest.TestCase):
             self._run(policy, [report])
         self.assertEqual(policy.stats.root_prior_fallbacks, 1)
 
+        # The walk witness belongs only in the terminal Python exception, not
+        # in the native context or a softened fallback result.
+        witness = {"site": "switch_constraint_conflict", "turn_index": 1,
+                   "species": "typhlosion", "requested_index": 1}
+        policy = self._policy(worlds=1, strict=True, opponent_priors=True)
+        report["root_prior_fallback_reason"] = None
+        report["opponent_request_order_status"] = "rejected_public_order_walk"
+        native = self._Native([report])
+        with (
+            patch("pokezero.engine_search.opponent_request_order_resolution", return_value=
+                  OpponentRequestOrderResolution(None, "rejected_public_order_walk", witness)) as resolution,
+            patch.object(type(self), "_Native", return_value=native),
+        ):
+            with self.assertRaises(EngineSearchFallbackError) as caught:
+                self._run(policy, [report])
+        message = str(caught.exception)
+        self.assertIn("reason=opponent_order_rejected_public_order_walk count=1", message)
+        self.assertEqual(json.loads(message.split(" order_failure_witness=", 1)[1]), witness)
+        self.assertEqual(policy.stats.root_prior_fallbacks, 1)
+        self.assertTrue(resolution.call_args.kwargs["capture_failure_witness"])
+        native_context = json.loads(native.calls[0][5])
+        self.assertNotIn("failure_witness", native_context)
+        self.assertNotIn("_opponent_order_failure_witness", native_context)
+
     def test_strict_opponent_prior_run_allows_only_lost_active_permutation(self) -> None:
         policy = self._policy(
             opponent_priors=True,
