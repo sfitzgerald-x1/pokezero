@@ -7030,7 +7030,18 @@ class EngineMctsPolicy:
                 ):
                     raise EngineSearchWitnessError(
                         "native_opponent_request_order_refusal_not_counted_at_root: "
-                        f"status={reported_order_status!r}"
+                        f"status={reported_order_status!r} "
+                        f"battle={getattr(context, 'battle_id', '?')} "
+                        f"round={getattr(context, 'decision_round_index', '?')} "
+                        f"seat={getattr(context, 'player_id', '?')}"
+                        + (
+                            " order_failure_witness=" + json.dumps(
+                                record["_opponent_order_failure_witness"],
+                                sort_keys=True, separators=(",", ":"),
+                            )
+                            if record.get("_opponent_order_failure_witness") is not None
+                            else ""
+                        )
                     )
             if (
                 config.strict_fallbacks

@@ -5131,6 +5131,45 @@ class RootDecisionTelemetryTest(unittest.TestCase):
         self.assertNotIn("failure_witness", native_context)
         self.assertNotIn("_opponent_order_failure_witness", native_context)
 
+    def test_uncounted_opponent_order_refusal_keeps_context_and_walk_witness(self) -> None:
+        """The zero-fallback refusal must not bypass the diagnostic witness."""
+        witness = {"site": "switch_constraint_conflict", "turn_index": 1,
+                   "species": "typhlosion", "requested_index": 1}
+        for captured in (None, witness):
+            with self.subTest(captured=captured):
+                policy = self._policy(worlds=1, strict=True, opponent_priors=True)
+                report = self._report(
+                    [("alpha", 60, 0.5, 0.2), ("beta", 40, 0.5, 0.8)],
+                    root_priors=[0.2, 0.8],
+                )
+                report["opponent_request_order_status"] = "rejected_public_order_walk"
+                ctx = self._context()
+                native = self._Native([report])
+                with (
+                    patch("pokezero.engine_search.opponent_request_order_resolution",
+                          return_value=OpponentRequestOrderResolution(
+                              None, "rejected_public_order_walk", captured,
+                          )) as resolution,
+                    patch.object(type(self), "_Native", return_value=native),
+                    self.assertRaises(EngineSearchWitnessError) as caught,
+                ):
+                    self._run(policy, [report], context=ctx)
+                message = str(caught.exception)
+                self.assertIn("native_opponent_request_order_refusal_not_counted_at_root", message)
+                self.assertIn("status='rejected_public_order_walk'", message)
+                self.assertIn(f"battle={ctx.battle_id}", message)
+                self.assertIn(f"round={ctx.decision_round_index}", message)
+                self.assertIn(f"seat={ctx.player_id}", message)
+                if captured is None:
+                    self.assertNotIn(" order_failure_witness=", message)
+                else:
+                    self.assertEqual(json.loads(message.split(" order_failure_witness=", 1)[1]), witness)
+                self.assertEqual(policy.stats.root_prior_fallbacks, 0)
+                self.assertTrue(resolution.call_args.kwargs["capture_failure_witness"])
+                native_context = json.loads(native.calls[0][5])
+                self.assertNotIn("failure_witness", native_context)
+                self.assertNotIn("_opponent_order_failure_witness", native_context)
+
     def test_strict_opponent_prior_run_allows_only_lost_active_permutation(self) -> None:
         policy = self._policy(
             opponent_priors=True,
