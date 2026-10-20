@@ -214,7 +214,9 @@ _CORPUS_TREES = ("reports", "docs")
 # differs only by the new information-capture mutation receipt; nothing removed.
 # 411 -> 412: against base b1c04172, the only reports/docs change is the
 # added 20261019_phase0 mutation receipt; no historical artifact changed or left.
-_EXPECTED_COUNTER_ARTIFACTS = 412
+# 412 -> 413: the public-order failure-context change adds one fresh execution
+# of the unchanged mutation battery. No historical reports/docs JSON changed.
+_EXPECTED_COUNTER_ARTIFACTS = 413
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
