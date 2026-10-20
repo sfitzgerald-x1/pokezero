@@ -696,6 +696,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertTrue(result.pokezero_won)
         self.assertFalse(result.tied)
         self.assertFalse(result.capped)
+        # This authored stub supplies a TerminalState but no actual public event.
+        # Recording must not turn that absence into a fabricated protocol witness.
+        self.assertEqual(result.to_dict()["terminal_witness"]["status"], "UNCORROBORATED")
 
     def test_public_corpus_rounds_use_protocol_identifiers_not_opponent_slots(self) -> None:
         state = _ControlledBattleState(
@@ -4014,6 +4017,61 @@ class FoulPlayThinkParserTest(unittest.TestCase):
 
         self.assertIn("sampling_line_malformed", work.miss_reasons)
         self.assertIsNone(work.total_iterations)
+
+
+class ControlledTerminalWitnessTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = ControlledFoulPlayConfig(checkpoint=Path("checkpoint.pt"), showdown_root=Path("/showdown"))
+
+    def witness(self, lines: list[str], terminal: TerminalState, rounds: int = 3, config=None) -> dict:
+        return foulplay_bridge._controlled_terminal_witness(
+            lines, terminal, config or self.config, decision_rounds=rounds,
+        )
+
+    def test_named_wins_and_mirrored_seats_keep_exact_mapping(self) -> None:
+        for seat in ("p1", "p2"):
+            config = ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"), showdown_root=Path("/showdown"), pokezero_player=seat,
+            )
+            for winner, name in ((config.pokezero_player, config.pokezero_username),
+                                 (config.foulplay_player, config.foulplay_username)):
+                with self.subTest(seat=seat, winner=winner):
+                    row = self.witness(["|win|" + name], TerminalState(winner=winner, turn_count=3), config=config)
+                    self.assertEqual(row["status"], "PUBLIC_WIN")
+                    self.assertEqual(row["players"][winner], name)
+                    self.assertEqual(row["public_terminal_line"], "|win|" + name)
+
+    def test_only_real_tie_protocol_corroborates_a_null_winner(self) -> None:
+        terminal = TerminalState(winner=None, turn_count=3)
+        for line in ("|tie", "|tie|"):
+            self.assertEqual(self.witness([line], terminal)["status"], "PUBLIC_TIE")
+        for lines in ([], ["|tier|gen3randombattle"], ["|win|unmapped-player"]):
+            self.assertEqual(self.witness(lines, terminal)["status"], "UNCORROBORATED")
+
+    def test_cap_origin_is_not_a_draw_and_conflicts_are_uncorroborated(self) -> None:
+        cap = TerminalState(winner=None, turn_count=250, capped=True)
+        row = self.witness([], cap, rounds=250)
+        self.assertEqual(row["status"], "ROUND_CAP")
+        self.assertTrue(row["capped"])
+        self.assertIsNone(row["public_terminal_line"])
+        self.assertEqual(self.witness(["|tie|"], cap, rounds=250)["status"], "UNCORROBORATED")
+        self.assertEqual(self.witness([], cap, rounds=249)["status"], "UNCORROBORATED")
+
+    def test_mismatched_public_winner_remains_visible(self) -> None:
+        terminal = TerminalState(winner="p1", turn_count=3)
+        row = self.witness(["|win|" + self.config.foulplay_username], terminal)
+        self.assertEqual(row["status"], "UNCORROBORATED")
+        self.assertEqual(row["public_terminal_line"], "|win|" + self.config.foulplay_username)
+
+    def test_result_serializes_witness_but_does_not_rewrite_legacy_scoring(self) -> None:
+        row = self.witness([], TerminalState(winner=None, turn_count=3))
+        result = ControlledFoulPlayGameResult(
+            battle_id="authored", seed=1, winner=None, pokezero_won=False, tied=True,
+            decision_rounds=3, pokezero_decisions=3, root_puct_searches=0, root_puct_fallbacks=0,
+            terminal_witness=row,
+        )
+        self.assertEqual(result.to_dict()["terminal_witness"], row)
+        self.assertEqual(result.outcome_score, 0.5)  # Not a validated scientific half-point.
 
 
 class ProcessLogPanicContextTest(unittest.TestCase):
