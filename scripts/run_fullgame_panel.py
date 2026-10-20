@@ -8,6 +8,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import signal
@@ -95,7 +96,44 @@ def stop_owned(process):
     return code, not group_exists(process.pid)
 
 
-def run(entry_path, review_path):
+def coordination_reason(entry, entry_hash, deadline, now):
+    """Fail closed on an absent coordinator without changing registered work."""
+    coordination = entry.get("coordination")
+    if coordination is None:
+        return None
+    if not isinstance(coordination, dict):
+        return "COORDINATION_INVALID"
+    lease = coordination.get("lease_path")
+    abort = coordination.get("abort_path")
+    timeout = coordination.get("lease_timeout_seconds")
+    if (not isinstance(lease, str) or not lease
+            or not isinstance(abort, str) or not abort or lease == abort
+            or type(timeout) not in (int, float)
+            or not math.isfinite(timeout) or not 0 < timeout <= 60):
+        return "COORDINATION_INVALID"
+    if Path(abort).exists():
+        return "COORDINATOR_ABORT"
+    try:
+        lease_path = Path(lease)
+        # Renewal is an atomic replacement on this worker's filesystem. The
+        # receiver's own mtime, not a caller-supplied future timestamp, is the
+        # liveness clock. A lease can never renew the scientific deadline.
+        with lease_path.open() as stream:
+            document = json.load(stream)
+            age = now - os.fstat(stream.fileno()).st_mtime
+        if (not isinstance(document, dict)
+                or document.get("entry_sha256") != entry_hash
+                or type(document.get("deadline_unix")) not in (int, float)
+                or document["deadline_unix"] != deadline or age < -1):
+            return "COORDINATION_INVALID"
+        return "COORDINATOR_LOST" if age > timeout else None
+    except FileNotFoundError:
+        return "COORDINATOR_LOST"
+    except (OSError, ValueError, TypeError):
+        return "COORDINATION_INVALID"
+
+
+def run(entry_path, review_path, *, deadline_unix=None):
     entry_path = Path(entry_path)
     entry_hash = digest(entry_path)
     entry = json.loads(entry_path.read_text())
@@ -103,15 +141,24 @@ def run(entry_path, review_path):
     if review.get("status") != "CLEAR" or review.get("entry_sha256") != entry_hash:
         raise ValueError("exact entry lacks independent CLEAR review")
     verify(entry)
+    started = time.time()
+    if entry.get("coordination") is not None and deadline_unix is None:
+        raise ValueError("coordinated collection requires its common absolute deadline")
+    if deadline_unix is not None and (
+        type(deadline_unix) not in (int, float) or not math.isfinite(deadline_unix)
+        or deadline_unix > started + entry["calendar_seconds"]
+    ):
+        raise ValueError("shared deadline must be finite and cannot extend the entry cap")
+    deadline = started + entry["calendar_seconds"] if deadline_unix is None else deadline_unix
     output = Path(entry["run_directory"])
     output.mkdir()  # Exclusive: never resume, overwrite or redraw this entry.
     env = {k: os.environ[k] for k in ("PATH", "TMPDIR", "LANG", "HOME") if k in os.environ}
     env.update(entry["environment"])
-    started = time.time()
-    deadline = started + entry["calendar_seconds"]
     worker = None
     terminal = dict(entry_sha256=entry_hash, supervisor_pid=os.getpid(),
-                    started_unix=started, deadline_unix=deadline, status="RUNNING", shards=[])
+                    started_unix=started, deadline_unix=deadline,
+                    deadline_source="entry_relative" if deadline_unix is None else "shared_absolute",
+                    status="RUNNING", shards=[])
     write(output / "launch.json", terminal)
     # The laptop needs its owned idle-sleep assertion; Linux workers do not
     # provide caffeinate. This does not alter the common calendar deadline.
@@ -124,8 +171,13 @@ def run(entry_path, review_path):
             if digest(entry_path) != entry_hash:
                 raise ValueError("registration changed during collection")
             verify(entry)
-            if time.time() >= deadline:
+            now = time.time()
+            if now >= deadline:
                 terminal["status"] = "CALENDAR_CAP"
+                break
+            reason = coordination_reason(entry, entry_hash, deadline, now)
+            if reason is not None:
+                terminal["status"] = reason
                 break
             summary = output / (shard["name"] + ".json")
             argv = [entry["python"], "-B", "-m", "pokezero.foulplay_bridge",
@@ -154,21 +206,32 @@ def run(entry_path, review_path):
                         last_progress = receipt["last_completion_unix"]
                         write(output / "progress.json", receipt)
                         print(json.dumps(receipt, sort_keys=True), flush=True)
-                    if time.time() >= deadline:
+                    now = time.time()
+                    if now >= deadline:
                         reason = "CALENDAR_CAP"
                         break
-                    if time.time() - last_progress >= entry["no_completion_seconds"]:
+                    reason = coordination_reason(entry, entry_hash, deadline, now)
+                    if reason is not None:
+                        break
+                    if now - last_progress >= entry["no_completion_seconds"]:
                         reason = "NO_COMPLETION_TIMEOUT"
                         break
                     time.sleep(5)
                 code, cleanup_ok = stop_owned(worker)
                 worker = None
-                receipt.update(exit_code=code, cleanup_ok=cleanup_ok, ended_unix=time.time(),
-                               observed_games=observed_count(summary, entry["seed_start"], entry["seed_count"]),
-                               stop_reason=reason)
-                write(output / (shard["name"] + "-terminal.json"), receipt)
+                receipt.update(exit_code=code, cleanup_ok=cleanup_ok,
+                               observed_games=observed_count(summary, entry["seed_start"], entry["seed_count"]))
                 terminal["shards"].append(receipt)
                 verify(entry)
+                # poll() may first observe an already-exited worker. Recheck at
+                # acceptance, after cleanup/provenance checks, so an exit zero
+                # cannot bypass a cap, peer abort or lost coordinator lease.
+                now = time.time()
+                if reason is None and code == 0 and cleanup_ok:
+                    reason = ("CALENDAR_CAP" if now >= deadline else
+                              coordination_reason(entry, entry_hash, deadline, now))
+                receipt.update(ended_unix=now, stop_reason=reason)
+                write(output / (shard["name"] + "-terminal.json"), receipt)
                 # Conservative first launch: unexplained failure stops everything.
                 # No automatic refusal classification or candidate restart.
                 if code != 0 or not cleanup_ok or reason is not None:
@@ -204,8 +267,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--entry", required=True)
     parser.add_argument("--review", required=True)
+    parser.add_argument("--deadline-unix", type=float,
+                        help="One coordinator-owned absolute deadline; never extends the entry cap.")
     args = parser.parse_args()
     # Shared local lock prevents this supervisor from overlapping another panel.
     with open("/tmp/pokezero-phase0-budget.lock", "a+") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        raise SystemExit(run(args.entry, args.review))
+        raise SystemExit(run(args.entry, args.review, deadline_unix=args.deadline_unix))
