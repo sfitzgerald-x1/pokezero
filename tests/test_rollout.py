@@ -409,6 +409,7 @@ class RolloutDriverTest(unittest.TestCase):
                         "p1": {"kind": "move", "move_id": "thunderbolt"},
                         "p2": {"kind": "move", "move_id": "earthquake"},
                     },
+                    "team_transitions": [],
                 }
             ],
         )
