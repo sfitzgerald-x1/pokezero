@@ -218,7 +218,9 @@ _CORPUS_TREES = ("reports", "docs")
 # of the unchanged mutation battery. No historical reports/docs JSON changed.
 # 413 -> 414: against base f731fd3e, exactly the completed gameplay-control
 # ledger is added under reports/docs; no historical JSON changed or was removed.
-_EXPECTED_COUNTER_ARTIFACTS = 414
+# 414 -> 415: the only added reports/docs JSON is the freshly executed
+# 20261020_terminal_evidence mutation receipt. All historical artifacts remain.
+_EXPECTED_COUNTER_ARTIFACTS = 415
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

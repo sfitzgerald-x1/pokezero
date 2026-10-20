@@ -1838,6 +1838,9 @@ class ControlledFoulPlayGameResult:
     # level carries only the health header, which is a property of the instrument
     # rather than of any one battle.
     refusal_records: tuple[RefusalRecord, ...] = ()
+    # Public terminal evidence only. Legacy callers without a witness remain explicit
+    # by omission; a generic null-winner termination is not proof of a genuine draw.
+    terminal_witness: Mapping[str, Any] | None = None
 
     @property
     def outcome_score(self) -> float:
@@ -1895,6 +1898,8 @@ class ControlledFoulPlayGameResult:
                 self.root_puct_start_override_replay_materializations
             ),
         }
+        if self.terminal_witness is not None:
+            payload["terminal_witness"] = dict(self.terminal_witness)
         if self.opponent_journal:
             # `opponent_MOVES`, deliberately NOT `opponent_journal`.
             #
@@ -3047,6 +3052,27 @@ class _ProcessLogSlice:
     cursor: int
 
 
+_NATIVE_PANIC_CONTEXT_LINES = 24
+_NATIVE_PANIC_LINE_CHARS = 1024
+
+
+def _capture_native_panic_context(context: list[str], line: str) -> None:
+    """Pin the first Rust panic marker and bounded following context, not its cause.
+
+    Nested Python/process-pool tracebacks can displace the original native panic
+    from both the crash ring and its displayed tail. This observation changes no
+    choice, work measurement, exception classification or retry behavior.
+    """
+
+    if not context and "panicked at" not in line:
+        return
+    if len(context) < _NATIVE_PANIC_CONTEXT_LINES:
+        clipped = line[:_NATIVE_PANIC_LINE_CHARS]
+        if len(line) > _NATIVE_PANIC_LINE_CHARS:
+            clipped += " [truncated]"
+        context.append(clipped)
+
+
 @dataclass
 class _ProcessLogBuffer:
     stdout: list[str] = field(default_factory=list)
@@ -3062,8 +3088,11 @@ class _ProcessLogBuffer:
     #: Total instrument-relevant lines EVER appended, not the buffered count. Cursors index
     #: this, so they stay meaningful across the bound's trimming.
     think_appended: int = 0
+    _stdout_native_panic: list[str] = field(default_factory=list, init=False, repr=False)
+    _stderr_native_panic: list[str] = field(default_factory=list, init=False, repr=False)
 
     def append_stdout(self, line: str) -> None:
+        _capture_native_panic_context(self._stdout_native_panic, line)
         self.stdout.append(line)
         if len(self.stdout) > 200:
             del self.stdout[: len(self.stdout) - 200]
@@ -3096,12 +3125,22 @@ class _ProcessLogBuffer:
         )
 
     def append_stderr(self, line: str) -> None:
+        _capture_native_panic_context(self._stderr_native_panic, line)
         self.stderr.append(line)
         if len(self.stderr) > 200:
             del self.stderr[: len(self.stderr) - 200]
 
     def tail(self) -> str:
         parts = []
+        for stream, context in (("stderr", self._stderr_native_panic),
+                                ("stdout", self._stdout_native_panic)):
+            if context:
+                parts.append(
+                    f"first native panic marker context ({stream}; at most "
+                    f"{_NATIVE_PANIC_CONTEXT_LINES} lines, "
+                    f"{_NATIVE_PANIC_LINE_CHARS} characters per line):\n"
+                    + "\n".join(context)
+                )
         if self.stderr:
             parts.append("stderr:\n" + "\n".join(self.stderr[-40:]))
         if self.stdout:
@@ -7658,6 +7697,9 @@ async def _run_single_game(
         battle_id=battle_id,
         seed=seed,
         winner=winner_name,
+        terminal_witness=_controlled_terminal_witness(
+            state.public_lines, terminal, config, decision_rounds=decision_round,
+        ),
         pokezero_won=winner_name == config.pokezero_username,
         tied=terminal.winner is None and not terminal.capped,
         capped=terminal.capped,
@@ -8844,6 +8886,38 @@ def _public_materialization_state(
             json.dumps(actor_requests[0] if actor_requests else request, separators=(",", ":"))
         ),
     )
+
+
+def _controlled_terminal_witness(
+    lines: Sequence[str], terminal: TerminalState, config: ControlledFoulPlayConfig,
+    *, decision_rounds: int,
+) -> dict[str, Any]:
+    """Preserve outcome evidence without changing legacy game/scoring semantics."""
+
+    public_line = next((line for line in lines if line.startswith("|win|")
+                        or line == "|tie" or line.startswith("|tie|")), None)
+    players = {config.pokezero_player: config.pokezero_username,
+               config.foulplay_player: config.foulplay_username}
+    status = "UNCORROBORATED"
+    if terminal.capped:
+        if public_line is None and terminal.winner is None and decision_rounds == config.max_decision_rounds:
+            status = "ROUND_CAP"
+    elif public_line is not None:
+        if public_line.startswith("|win|"):
+            if terminal.winner in players and public_line == "|win|" + players[terminal.winner]:
+                status = "PUBLIC_WIN"
+        elif terminal.winner is None:
+            status = "PUBLIC_TIE"
+    return {
+        "schema": "pokezero.controlled-terminal-witness.v1",
+        "status": status,
+        "public_terminal_line": public_line,
+        "players": players,
+        "winner_player": terminal.winner,
+        "capped": terminal.capped,
+        "decision_rounds": decision_rounds,
+        "max_decision_rounds": config.max_decision_rounds,
+    }
 
 
 def _terminal_from_public_lines(

@@ -696,6 +696,9 @@ class FoulPlayBridgeTest(unittest.TestCase):
         self.assertTrue(result.pokezero_won)
         self.assertFalse(result.tied)
         self.assertFalse(result.capped)
+        # This authored stub supplies a TerminalState but no actual public event.
+        # Recording must not turn that absence into a fabricated protocol witness.
+        self.assertEqual(result.to_dict()["terminal_witness"]["status"], "UNCORROBORATED")
 
     def test_public_corpus_rounds_use_protocol_identifiers_not_opponent_slots(self) -> None:
         state = _ControlledBattleState(
@@ -4014,6 +4017,163 @@ class FoulPlayThinkParserTest(unittest.TestCase):
 
         self.assertIn("sampling_line_malformed", work.miss_reasons)
         self.assertIsNone(work.total_iterations)
+
+
+class ControlledTerminalWitnessTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = ControlledFoulPlayConfig(checkpoint=Path("checkpoint.pt"), showdown_root=Path("/showdown"))
+
+    def witness(self, lines: list[str], terminal: TerminalState, rounds: int = 3, config=None) -> dict:
+        return foulplay_bridge._controlled_terminal_witness(
+            lines, terminal, config or self.config, decision_rounds=rounds,
+        )
+
+    def test_named_wins_and_mirrored_seats_keep_exact_mapping(self) -> None:
+        for seat in ("p1", "p2"):
+            config = ControlledFoulPlayConfig(
+                checkpoint=Path("checkpoint.pt"), showdown_root=Path("/showdown"), pokezero_player=seat,
+            )
+            for winner, name in ((config.pokezero_player, config.pokezero_username),
+                                 (config.foulplay_player, config.foulplay_username)):
+                with self.subTest(seat=seat, winner=winner):
+                    row = self.witness(["|win|" + name], TerminalState(winner=winner, turn_count=3), config=config)
+                    self.assertEqual(row["status"], "PUBLIC_WIN")
+                    self.assertEqual(row["players"][winner], name)
+                    self.assertEqual(row["public_terminal_line"], "|win|" + name)
+
+    def test_only_real_tie_protocol_corroborates_a_null_winner(self) -> None:
+        terminal = TerminalState(winner=None, turn_count=3)
+        for line in ("|tie", "|tie|"):
+            self.assertEqual(self.witness([line], terminal)["status"], "PUBLIC_TIE")
+        for lines in ([], ["|tier|gen3randombattle"], ["|win|unmapped-player"]):
+            self.assertEqual(self.witness(lines, terminal)["status"], "UNCORROBORATED")
+
+    def test_cap_origin_is_not_a_draw_and_conflicts_are_uncorroborated(self) -> None:
+        cap = TerminalState(winner=None, turn_count=250, capped=True)
+        row = self.witness([], cap, rounds=250)
+        self.assertEqual(row["status"], "ROUND_CAP")
+        self.assertTrue(row["capped"])
+        self.assertIsNone(row["public_terminal_line"])
+        self.assertEqual(self.witness(["|tie|"], cap, rounds=250)["status"], "UNCORROBORATED")
+        self.assertEqual(self.witness([], cap, rounds=249)["status"], "UNCORROBORATED")
+
+    def test_mismatched_public_winner_remains_visible(self) -> None:
+        terminal = TerminalState(winner="p1", turn_count=3)
+        row = self.witness(["|win|" + self.config.foulplay_username], terminal)
+        self.assertEqual(row["status"], "UNCORROBORATED")
+        self.assertEqual(row["public_terminal_line"], "|win|" + self.config.foulplay_username)
+
+    def test_result_serializes_witness_but_does_not_rewrite_legacy_scoring(self) -> None:
+        row = self.witness([], TerminalState(winner=None, turn_count=3))
+        result = ControlledFoulPlayGameResult(
+            battle_id="authored", seed=1, winner=None, pokezero_won=False, tied=True,
+            decision_rounds=3, pokezero_decisions=3, root_puct_searches=0, root_puct_fallbacks=0,
+            terminal_witness=row,
+        )
+        self.assertEqual(result.to_dict()["terminal_witness"], row)
+        self.assertEqual(result.outcome_score, 0.5)  # Not a validated scientific half-point.
+
+
+class ProcessLogPanicContextTest(unittest.TestCase):
+    def test_primary_panic_survives_secondary_traceback_overflow(self) -> None:
+        logs = _ProcessLogBuffer()
+        origin = "thread '<unnamed>' panicked at engine/search.rs:123:9:"
+        logs.append_stderr(origin)
+        logs.append_stderr("authored native invariant failure")
+        for index in range(350):
+            logs.append_stderr(f"secondary traceback frame {index}")
+        secondary = "_pickle.PicklingError: Can't pickle pyo3_runtime.PanicException"
+        logs.append_stderr(secondary)
+
+        error = FoulPlayProcessExitError(stage="choosing", returncode=1, log_tail=logs.tail())
+
+        self.assertIn(origin, str(error))
+        self.assertIn("authored native invariant failure", str(error))
+        self.assertIn(secondary, str(error))
+        self.assertEqual(error.returncode, 1)
+        self.assertEqual(error.stage, "choosing")
+        self.assertEqual(len(logs.stderr), 200)
+        self.assertEqual(len(logs._stderr_native_panic), 24)
+
+    def test_streams_keep_separate_bounded_first_contexts(self) -> None:
+        logs = _ProcessLogBuffer()
+        for append, label in ((logs.append_stdout, "stdout"), (logs.append_stderr, "stderr")):
+            append(f"thread '{label}' panicked at first.rs:1:1:")
+            for index in range(350):
+                append(f"{label} context {index}")
+            append(f"thread '{label}' panicked at later.rs:2:2:")
+            for index in range(250):
+                append(f"{label} later {index}")
+
+        text = logs.tail()
+        self.assertIn("thread 'stdout' panicked at first.rs:1:1:", text)
+        self.assertIn("thread 'stderr' panicked at first.rs:1:1:", text)
+        self.assertNotIn("later.rs", text)
+        self.assertLess(len(text.splitlines()), 150)
+        self.assertEqual(len(logs._stdout_native_panic), 24)
+        self.assertEqual(len(logs._stderr_native_panic), 24)
+        self.assertEqual(len(logs.stdout), 200)
+        self.assertEqual(len(logs.stderr), 200)
+
+    def test_pinned_context_clips_oversized_lines_with_disclosure(self) -> None:
+        logs = _ProcessLogBuffer()
+        logs.append_stderr("thread '<unnamed>' panicked at engine.rs:1:1:")
+        logs.append_stderr("x" * 100_000)
+        for index in range(350):
+            logs.append_stderr(f"frame {index}")
+
+        text = logs.tail()
+        self.assertIn("[truncated]", text)
+        self.assertNotIn("x" * 2048, text)
+        self.assertLess(len(text), 30_000)
+        self.assertEqual(logs._stderr_native_panic[1], "x" * 1024 + " [truncated]")
+
+    def test_actual_exit_error_preserves_context_without_changing_failure(self) -> None:
+        logs = _ProcessLogBuffer()
+        origin = "thread '<unnamed>' panicked at authored.rs:1:1:"
+        logs.append_stderr(origin)
+        for index in range(350):
+            logs.append_stderr(f"frame {index}")
+        process = _ThinkProcess()
+        process.returncode = 1
+
+        with self.assertRaises(FoulPlayProcessExitError) as caught:
+            asyncio.run(_wait_for_foulplay_choice_or_exit(
+                server=_ThinkServer(logs), battle_id="authored-battle",
+                process=process, logs=logs,
+            ))
+
+        self.assertEqual(caught.exception.stage, "choosing")
+        self.assertEqual(caught.exception.returncode, 1)
+        self.assertIn(origin, caught.exception.log_tail)
+
+    def test_without_a_panic_the_existing_tail_is_unchanged(self) -> None:
+        logs = _ProcessLogBuffer()
+        for index in range(250):
+            logs.append_stdout(f"out {index}")
+            logs.append_stderr(f"err {index}")
+
+        self.assertEqual(
+            logs.tail(),
+            "stderr:\n" + "\n".join(f"err {i}" for i in range(210, 250))
+            + "\n\nstdout:\n" + "\n".join(f"out {i}" for i in range(210, 250)),
+        )
+
+    def test_panic_retention_does_not_change_think_measurements(self) -> None:
+        logs = _ProcessLogBuffer()
+        lines = (_FOULPLAY_MARKER, "INFO     Sampling 2 battles at 1000ms each",
+                 "INFO     Iterations 0: 41234", "INFO     Iterations 1: 39871")
+        for line in lines:
+            logs.append_stdout(line)
+        logs.append_stdout("thread '<unnamed>' panicked at engine.rs:1:1:")
+        for index in range(350):
+            logs.append_stdout(f"traceback {index}")
+
+        measured = logs.think_lines_since(0)
+        self.assertEqual(measured.lines, lines)
+        self.assertEqual(measured.dropped, 0)
+        self.assertEqual(measured.cursor, 4)
+        self.assertEqual(_foulplay_think_work_from_log_lines(measured.lines).total_iterations, 81105)
 
 
 class ProcessLogBufferSliceTest(unittest.TestCase):
