@@ -42,7 +42,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 # Earlier receipts remain historical evidence; current-tree coverage comes
 # from a fresh complete execution of the unchanged original battery.
-ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261019_order_failure.json"
+ARTIFACT = ROOT / "reports" / "artifacts" / "rollout_leaf_witness_mutation_battery_20261020_terminal_evidence.json"
 
 sys.path.insert(0, str(ROOT / "scripts"))
 import mutate_rollout_leaf_witness as harness  # noqa: E402
