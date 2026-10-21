@@ -12,16 +12,24 @@ battle.p2.active[0].storedStats.spe=100;
 battle.updateSpeed();
 battle.makeChoices('switch 2','switch 2');
 const stages = [battle.p1.active[0].boosts.atk,battle.p2.active[0].boosts.atk];
-function forcedFixture(hazard) {
+function forcedFixture(hazard,suppression=false) {
   const b = new Battle({formatid:'gen3customgame',seed:[11,22,33,44]});
   b.setPlayer('p1',{name:'a',team:[set('Ditto','Limber'),set('Salamence','Intimidate'),set('Ditto','Limber')]});
   b.setPlayer('p2',{name:'b',team:[set('Ditto','Limber'),set('Salamence','Intimidate'),set('Ditto','Limber')]});
   b.p1.pokemon[1].storedStats.spe=300;
   b.p2.pokemon[1].storedStats.spe=100;
+  if(suppression) {
+    b.field.setWeather('raindance',b.p1.active[0],{effectType:'Ability',name:'Drizzle'});
+    b.p1.active[0].storedStats.spe=400;b.p2.active[0].storedStats.spe=100;
+    b.p1.pokemon[1].ability=b.p1.pokemon[1].baseAbility='swiftswim';
+    b.p2.pokemon[1].ability=b.p2.pokemon[1].baseAbility='cloudnine';
+    b.p1.pokemon[1].storedStats.spe=100;b.p2.pokemon[1].storedStats.spe=150;
+  }
   if(hazard) {
     // Ground the authored incoming fixtures and use exact HP for the oracle.
     for(const p of [b.p1.pokemon[1],b.p2.pokemon[1]]) {p.types=['Normal'];p.maxhp=101;p.hp=101;}
     b.p1.pokemon[1].hp=1;
+    if(suppression) b.p2.pokemon[1].hp=1;
     b.p1.addSideCondition('spikes');
     b.p2.addSideCondition('spikes');
   }
@@ -51,6 +59,7 @@ dex.abilities.get('intimidate').onStart.call({hint:()=>{},add:()=>{},boost:()=>{
   {adjacentFoes:()=>[{volatiles:{substitute:{}}}],side:{}});
 process.stdout.write(JSON.stringify({double_switch_attack_stages:stages,weather_start:weatherBattle.field.weather,
   spikes_damage:damages,natural_cure:{status:cured.status,counter:cured.counter},intimidate_substitute_drop_calls:drops,
-  forced_attack_stages:forcedFixture(false),forced_hazard_hp:forcedFixture(true)}));
+  forced_attack_stages:forcedFixture(false),forced_hazard_hp:forcedFixture(true),
+  forced_suppression_hazard_hp:forcedFixture(true,true)}));
 battle.destroy();
 weatherBattle.destroy();

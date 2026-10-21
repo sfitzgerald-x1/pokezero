@@ -187,6 +187,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     switch_first = jnp.where(speed[:,0] != speed[:,1],speed[:,1] > speed[:,0],draws[:,0,11] == 1).astype(jnp.int32)
     switch_faint = jnp.zeros_like(state.done)
     installed = jnp.zeros_like(switches)
+    callback_speed = jnp.zeros_like(speed)
     for order in range(2):
         side = jnp.where(order == 0,switch_first,1-switch_first)
         old_active = work.active[rows,side]
@@ -210,6 +211,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(**{name:value.at[rows,side,old_active].set(jnp.where(gate,0,old))})
         work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
             forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])))
+        # insertChoice snapshots each incoming callback's Speed now; a later
+        # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
+        callback_speed = callback_speed.at[rows,side].set(_speeds(work,table)[rows,side])
         if table.entry is not None:
             work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
             switch_faint |= knocked_out
@@ -217,10 +221,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         # Forced instaswitch actions(order3) install ALL entrants before any
         # runSwitch callback(order101). Ordinary switch actions(order103) do
         # not: their callbacks were resolved immediately above. Forced callback
-        # order uses incoming speeds, frozen before the first callback.
-        incoming_speed = _speeds(work,table)
-        first_entry = jnp.where(incoming_speed[:,0] != incoming_speed[:,1],
-            incoming_speed[:,1] > incoming_speed[:,0],draws[:,1,10] == 1).astype(jnp.int32)
+        # order uses each incoming speed frozen at its own insertion.
+        first_entry = jnp.where(callback_speed[:,0] != callback_speed[:,1],
+            callback_speed[:,1] > callback_speed[:,0],draws[:,1,10] == 1).astype(jnp.int32)
         for order in range(2):
             side = jnp.where(order == 0,first_entry,1-first_entry)
             continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)

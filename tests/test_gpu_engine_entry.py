@@ -188,6 +188,15 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(r.hp[0,:,1].tolist(),[0,101])
         self.assertEqual(int(r.weather[0]),self.w.NONE)
 
+    def test_later_cloudnine_does_not_resort_an_already_queued_swift_swim_entry(self):
+        s = self.live()._replace(weather=self.j.array([self.w.RAIN]))
+        s = s._replace(hp=s.hp.at[:,:,0].set(0).at[:,:,1].set(1),spikes=s.spikes.at[0].set(1),
+            ability=s.ability.at[0,0,1].set(8).at[0,1,1].set(10),
+            stats=s.stats.at[0,0,0,5].set(400).at[0,1,0,5].set(100)
+                .at[0,0,1,5].set(100).at[0,1,1,5].set(150))
+        r = self.play(s,[[4,4]])
+        self.assertEqual(r.hp[0,:,1].tolist(),[0,1])
+
     def test_last_mon_hazard_ko_ends_before_foe_residual(self):
         s = self.live()
         s = s._replace(hp=s.hp.at[0,0].set(0).at[0,0,1].set(1).at[0,1,0].set(50),
@@ -254,6 +263,7 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(actual["intimidate_substitute_drop_calls"],0)
         self.assertEqual(actual["forced_attack_stages"],[-1,-1])
         self.assertEqual(actual["forced_hazard_hp"],[0,101])
+        self.assertEqual(actual["forced_suppression_hazard_hp"],[0,1])
 
 
 if __name__ == "__main__":
