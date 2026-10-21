@@ -140,6 +140,13 @@ switching. Original-catalog damaging Fire moves thaw a struck frozen target;
 Hidden Power Fire and dynamically Fire Weather Ball do not. These are selected
 events, not general ability coverage.
 
+Pressure charges extra PP on actual eligible uses before accuracy, Protect or
+Substitute checks, using the current living foe after switching. The pinned
+target catalog—not damage category—distinguishes self/ally moves from attacks,
+field moves and Spikes. Non-Ghost Curse remains self-targeted; Ghost Curse
+targets the foe. Inability to act skips PP use, and exhausted moves use synthetic
+Struggle without another charge. Called and multi-turn moves remain placeholders.
+
 Speed Boost uses ordinary-turn age since entry: initial leads qualify on the
 first ordinary turn, ordinary switch-ins skip that turn's bonus, and forced
 replacement pseudo-turns do not age either side or run residuals. Selected
