@@ -7,9 +7,9 @@ Nothing here is imported by the existing battle collector or search runtime.
 
 ## Current implementation
 
-Day 1: batched structure-of-arrays storage, per-battle PRNG streams, and the
-nine-action layout. No transition, real-team pool, encoder, policy forward,
-fidelity result or games-per-second benchmark is implemented yet. Empty states
+Day 1: batched structure-of-arrays storage, per-battle PRNG streams, the
+nine-action layout, and an offline real-team generator/NPZ packer. No transition,
+encoder, policy forward, fidelity result or games-per-second benchmark is implemented yet. Empty states
 are storage fixtures and are terminal by default; they are not benchmark games.
 
 State has six party members per side; all fields are JAX arrays with a leading
@@ -42,6 +42,29 @@ passed the synchronized GPU probe and all nine state/action-mask tests. CUDA
 reported an unavailable FABRIC memory-handle path and successfully retried with
 simpler handle types; no permission or driver setting was changed. This proves
 the first device capability, not engine speed or game correctness.
+
+## Generate the offline team pool
+
+Use a pinned, compiled Showdown checkout with its runtime dependencies installed.
+The generator calls Showdown's real Gen 3 random-team generator, never a synthetic
+species/move sampler. Node runs only during this preparation, not the device step.
+
+```sh
+python -m gpu_engine.team_pool --showdown-root /path/to/pokemon-showdown \
+  --source-commit-label FULL_40_CHARACTER_COMMIT --teams 200000 \
+  --out /path/outside/checkout/real-teams-200000.npz
+python -m unittest discover -s tests -p test_gpu_engine_team_pool.py -v
+```
+
+The packer records the compiled source-tree digest, deterministic team seeds,
+Gen 3 stats/PP/Hidden Power, numeric vocabularies and actual move-slot frequencies.
+It requires the complete chronological stream and successful generator exit,
+publishes exclusively without overwriting, and uses no pickled object arrays.
+The source commit argument is a provenance label; the compiled-tree digest binds
+the actual generator input. Keep the resulting NPZ outside git. The frequency
+ledger starts with zero implemented coverage: generating teams does not establish
+transition coverage, game correctness or throughput. An actual 200,000-team
+generation remains a separate runtime validation, not a unit-test conclusion.
 
 ## Measurement contract
 
