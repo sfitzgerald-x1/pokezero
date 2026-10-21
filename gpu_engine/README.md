@@ -8,8 +8,9 @@ Nothing here is imported by the existing battle collector or search runtime.
 ## Current implementation
 
 Day 1: batched structure-of-arrays storage, per-battle PRNG streams, the
-nine-action layout, and an offline real-team generator/NPZ packer. No transition,
-encoder, policy forward, fidelity result or games-per-second benchmark is implemented yet. Empty states
+nine-action layout, an offline real-team generator/NPZ packer and incomplete
+turn integration. No complete transition, encoder, policy forward, fidelity result
+or games-per-second benchmark is implemented yet. Empty states
 are storage fixtures and are terminal by default; they are not benchmark games.
 
 State has six party members per side; all fields are JAX arrays with a leading
@@ -85,6 +86,27 @@ NODE=/path/to/node POKEZERO_SHOWDOWN_ROOT=/path/to/pokemon-showdown \
 The optional source oracle calls the pinned Showdown arithmetic functions on
 authored inputs. It is not the required 200-game divergence check. JIT/component
 checks likewise supply no games-per-second result.
+
+## Initial turn integration
+
+`transition.py` initializes real teams from the pool and connects fixed-shape
+action ordering, switches, PP, status action gates, static single-hit damage,
+major-status residuals, forced-replacement pseudo-turns and party exhaustion.
+Invalid live actions freeze that battle and return an explicit invalid flag;
+terminal battles remain unchanged. Every executed move is counted as a
+placeholder, including status moves that currently do nothing.
+
+This is an incomplete integration kernel. Confusion self-damage, Struggle recoil,
+items, abilities, weather, switch events, the full residual scheduler and special
+move effects are not integrated. Its arithmetic/turn fixtures and one-turn real
+team smoke do not qualify gameplay or supply the final throughput table. Pool
+move coverage remains zero until move effects and their required mechanics are
+implemented and verified. Do not use placeholder games for strength evidence.
+
+```sh
+POKEZERO_GPU_TEAM_POOL=/path/real-teams-200000.npz \
+  python -m unittest discover -s tests -p test_gpu_engine_transition.py -v
+```
 
 ## Measurement contract
 
