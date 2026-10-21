@@ -38,7 +38,7 @@ const result = rows.map(r => {
   if (!Number.isInteger(typeMod)) throw new Error('oracle expects power-of-two type modifiers');
   const target = {getMoveHitData:()=>({crit:r.critical}),runEffectiveness:()=>typeMod};
   return damage.call({battle},base,pokemon,target,
-    {type:'Water',category:r.physical?'Physical':'Special'},true);
+    {type:r.typeless?'???':'Water',category:r.physical?'Physical':'Special'},true);
 });
 const q12 = (v,n,d)=>Battle.prototype.modify.call({trunc:Dex.trunc},v,n,d);
 process.stdout.write(JSON.stringify({damage:result,

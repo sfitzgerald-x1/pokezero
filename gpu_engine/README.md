@@ -96,8 +96,13 @@ Invalid live actions freeze that battle and return an explicit invalid flag;
 terminal battles remain unchanged. Every executed move is counted as a
 placeholder, including status moves that currently do nothing.
 
-This is an incomplete integration kernel. Confusion self-damage, Struggle recoil,
-items, abilities, weather, switch events, the full residual scheduler and special
+Confusion now deals typeless, noncritical self-damage before PP use; Struggle is
+typeless and recoils for the rounded quarter of actual damage dealt, not max HP.
+Any faint cancels the remaining ordinary action, as in Gen 3 singles. Flinch is
+volatile bit 0, blocks before confusion and clears after an ordinary turn.
+
+This is an incomplete integration kernel. Items, abilities, weather, switch events,
+the full residual scheduler and special
 move effects are not integrated. Its arithmetic/turn fixtures and one-turn real
 team smoke do not qualify gameplay or supply the final throughput table. Pool
 move coverage remains zero until move effects and their required mechanics are

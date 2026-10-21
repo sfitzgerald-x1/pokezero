@@ -1,7 +1,7 @@
 """First lockstep turn integration; explicitly incomplete, not covered gameplay.
 
 All move effects are still placeholders: damaging moves use their static type
-and power; status moves are no-ops. Items, abilities, weather, volatiles and
+and power; status moves are no-ops. Items, abilities, weather, most volatiles and
 special move rules are not integrated. Do not use this kernel for strength or
 the final throughput/go-no-go table. It supplies the turn/PRNG/array plumbing
 needed to integrate those mechanics, with placeholder use returned explicitly.
@@ -15,7 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from . import mechanics as m
-from .state import BattleState, bench_indices, empty_state, legal_actions
+from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
 
 class MoveTable(NamedTuple):
@@ -92,7 +92,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     Actions must be integer [B,2]. Chance consumes the same fixed block per live
     battle, independent of branches. Dead/invalid battles remain byte-identical.
     The ordinary turn integrates switches, priority/speed, status action gates,
-    PP, static single-hit damage, major-status residuals and party exhaustion.
+    PP, confusion self-damage, Struggle recoil, static single-hit damage,
+    major-status residuals and party exhaustion. Flinch uses volatile bit 0.
     Switch events and all move effects remain placeholders, not fidelity claims.
     """
     if actions.shape != state.active.shape or not jnp.issubdtype(actions.dtype, jnp.integer):
@@ -142,21 +143,36 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     first = jnp.where(priority[:, 0] != priority[:, 1], priority[:, 1] > priority[:, 0],
         jnp.where(speed[:, 0] != speed[:, 1], speed[:, 1] > speed[:, 0], draws[:, 0, 0] == 1)).astype(jnp.int32)
     placeholders = jnp.zeros_like(state.turn)
+    moves_cancelled = jnp.zeros_like(state.done)
     for order in range(2):
         side = jnp.where(order == 0, first, 1 - first)
         foe = 1 - side
         move = moves[rows, side]
         chance = draws[rows, side]
-        eligible = live & ~replacement & ~switches[rows, side] & (_active(work.hp, work, side) > 0)
+        eligible = live & ~replacement & ~moves_cancelled & ~switches[rows, side] & (_active(work.hp, work, side) > 0)
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
-            paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3])
+            paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
+            flinched=(_active(work.volatile, work, side) & FLINCH) != 0)
         for name, value in (("status", before.status), ("status_counter", before.counter),
                             ("confusion_counter", before.confusion_counter)):
             current = getattr(work, name)
             work = work._replace(**{name: _set_active(current, work, side,
                 jnp.where(eligible, value, _active(current, work, side)))})
-        acts = eligible & before.can_act
+        own_stats = _active(work.stats, work, side)
+        own_boosts = _active(work.boosts, work, side)
+        confusion_damage = m.gen3_damage(level=_active(work.level, work, side), power=40,
+            attack=own_stats[:, 1], defense=own_stats[:, 2],
+            attack_stage=own_boosts[:, 0], defense_stage=own_boosts[:, 1],
+            typeless=True, burned=_active(work.status, work, side) == m.BRN,
+            roll=85 + chance[:, 5])
+        hp = _active(work.hp, work, side)
+        hp = jnp.where(eligible & before.confusion_self_hit, jnp.maximum(0, hp - confusion_damage), hp)
+        work = work._replace(hp=_set_active(work.hp, work, side, hp))
+        # Gen 3 singles cancels all queued actions after any faint, not only
+        # the fainted mon's move. A confusion self-KO therefore skips the foe.
+        moves_cancelled |= eligible & (hp == 0)
+        acts = eligible & before.can_act & ~moves_cancelled
         chosen_slot = slot[rows, side]
         active = work.active[rows, side]
         old_pp = work.pp[rows, side, active, chosen_slot]
@@ -168,7 +184,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         attack_boosts = _active(work.boosts, work, side)
         defense_boosts = _active(work.boosts, work, foe)
         physical = table.physical[move]
-        typ = table.type[move]
+        is_struggle = move == table.struggle
+        typ = jnp.where(is_struggle, 0, table.type[move])
         own_types = _active(work.types, work, side)
         foe_types = _active(work.types, work, foe)
         num = table.type_num[typ, foe_types[:, 0]] * table.type_num[typ, foe_types[:, 1]]
@@ -180,13 +197,21 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             defense_stage=jnp.where(physical, defense_boosts[:, 1], defense_boosts[:, 3]),
             physical=physical, critical=chance[:, 4] == 0,
             stab=jnp.any(own_types == typ[:, None], axis=1) & (typ != 0),
+            typeless=typ == 0,
             burned=_active(work.status, work, side) == m.BRN,
             effectiveness_num=num, effectiveness_den=den, immune=num == 0, roll=85 + chance[:, 5])
         hit = m.accuracy_hit(table.accuracy[move], attack_boosts[:, 5], defense_boosts[:, 6],
                              chance[:, 6], always_hit=table.always_hit[move])
         hp = _active(work.hp, work, foe)
-        hp = jnp.where(acts & hit, jnp.maximum(0, hp - damage), hp)
-        work = work._replace(hp=_set_active(work.hp, work, foe, hp))
+        dealt = jnp.where(acts & hit, jnp.minimum(hp, damage), 0)
+        foe_hp = hp - dealt
+        work = work._replace(hp=_set_active(work.hp, work, foe, foe_hp))
+        # Gen 3 Struggle uses round(actual damage / 4), not max HP / 4.
+        recoil = jnp.maximum(1, (dealt + 2) // 4)
+        hp = _active(work.hp, work, side)
+        hp = jnp.where(is_struggle & (dealt > 0), jnp.maximum(0, hp - recoil), hp)
+        work = work._replace(hp=_set_active(work.hp, work, side, hp))
+        moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
     # Residual scheduling beyond major statuses is not yet implemented.
     for side in range(2):
         battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)
@@ -201,5 +226,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     work = work._replace(done=done, winner=jnp.where(done, winner, -1),
         turn=state.turn + (live & ~replacement).astype(jnp.int32),
         forced_switch=(jnp.take_along_axis(work.hp, work.active[..., None], axis=2)[..., 0] <= 0) & alive)
+    ordinary = live & ~replacement
+    work = work._replace(volatile=jnp.where(ordinary[:, None, None],
+        work.volatile & jnp.uint32(~FLINCH & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     return StepResult(work, invalid, placeholders)

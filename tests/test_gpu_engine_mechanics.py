@@ -57,6 +57,10 @@ class MechanicsTests(unittest.TestCase):
         self.assertEqual(self.damage(screen=True,critical=True),172)
         self.assertEqual(self.damage(power=960,attack=1000,defense=1,critical=True),564228)
 
+    def test_identity_stab_event_is_skipped_only_for_typeless_moves(self):
+        self.assertEqual(self.damage(power=1300,attack=1000,defense=1),43426)
+        self.assertEqual(self.damage(power=1300,attack=1000,defense=1,typeless=True),1092002)
+
     def test_resolved_item_stat_multipliers_and_low_physical_floor(self):
         self.assertEqual(self.damage(attack_num=3,attack_den=2),128)
         self.assertEqual(self.damage(attack_num=2),170)
@@ -130,7 +134,7 @@ class MechanicsTests(unittest.TestCase):
     @unittest.skipUnless(NODE and SHOWDOWN, "requires pinned Showdown and Node arithmetic oracle")
     def test_against_pinned_showdown_arithmetic(self):
         defaults = dict(level=100,power=100,attack=200,defense=200,
-            attack_stage=0,defense_stage=0,physical=True,critical=False,stab=False,
+            attack_stage=0,defense_stage=0,physical=True,critical=False,stab=False,typeless=False,
             burned=False,guts=False,attack_num=1,attack_den=1,defense_num=1,
             defense_den=1,weather_num=1,weather_den=1,screen=False,
             effectiveness_num=1,effectiveness_den=1,immune=False,roll=100)
@@ -145,7 +149,9 @@ class MechanicsTests(unittest.TestCase):
             dict(weather_den=2,burned=True,critical=True,stab=True),
             dict(physical=False,attack_stage=-2,defense_stage=3,roll=87),
             dict(power=60000,attack=2000,defense=1,stab=True,critical=True),
-            dict(power=960,attack=1000,defense=1,critical=True,stab=False)]
+            dict(power=960,attack=1000,defense=1,critical=True,stab=False),
+            dict(power=1300,attack=1000,defense=1),
+            dict(power=1300,attack=1000,defense=1,typeless=True)]
         rows = [{**defaults,**c} for c in changes]
         helper = Path(__file__).with_name("gpu_damage_oracle.cjs")
         result = subprocess.run([NODE,str(helper),str(Path(SHOWDOWN).resolve())],
