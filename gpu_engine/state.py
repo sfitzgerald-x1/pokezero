@@ -1,0 +1,92 @@
+"""Batched structure-of-arrays state and nine-action layout for the spike.
+
+No battle transition is implemented here. Empty states are storage fixtures,
+not generated teams, and cannot supply games-per-second measurements.
+"""
+from __future__ import annotations
+
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+
+
+class BattleState(NamedTuple):
+    species: jax.Array             # [B,2,6]
+    level: jax.Array               # [B,2,6]
+    types: jax.Array               # [B,2,6,2]; type IDs require the pool vocabulary
+    stats: jax.Array               # [B,2,6,6]: HP,Atk,Def,SpA,SpD,Spe
+    hp: jax.Array                  # [B,2,6]
+    max_hp: jax.Array              # [B,2,6]
+    status: jax.Array              # [B,2,6]
+    status_counter: jax.Array      # [B,2,6]
+    moves: jax.Array               # [B,2,6,4]
+    pp: jax.Array                  # [B,2,6,4]
+    disabled: jax.Array            # [B,2,6,4]
+    item: jax.Array                # [B,2,6]
+    ability: jax.Array             # [B,2,6]
+    boosts: jax.Array              # [B,2,6,7]: Atk,Def,SpA,SpD,Spe,Acc,Eva
+    volatile: jax.Array            # [B,2,6], uint32 bitmask
+    confusion_counter: jax.Array   # [B,2,6]
+    protect_counter: jax.Array     # [B,2,6]
+    substitute_hp: jax.Array       # [B,2,6]
+    active: jax.Array              # [B,2]
+    trapped: jax.Array             # [B,2], resolved trap state, not ability logic
+    forced_switch: jax.Array       # [B,2]
+    spikes: jax.Array              # [B,2]
+    weather: jax.Array             # [B]
+    weather_counter: jax.Array     # [B]
+    turn: jax.Array                # [B]
+    keys: jax.Array                # [B,2] legacy uint32 PRNG keys, one per battle
+    done: jax.Array                # [B]
+    winner: jax.Array              # [B], -1 undecided,0/1 seat,2 tie
+
+
+def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
+    if type(batch_size) is not int or batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
+    if type(seed) is not int or not 0 <= seed < 2**32:
+        raise ValueError("seed must be an unsigned 32-bit integer")
+    b = batch_size
+    mon = lambda: jnp.zeros((b, 2, 6), dtype=jnp.int32)
+    side = lambda: jnp.zeros((b, 2), dtype=jnp.int32)
+    battle = lambda: jnp.zeros((b,), dtype=jnp.int32)
+    # fold_in keeps each battle's stream stable when the batch size changes.
+    keys = jax.vmap(jax.random.fold_in, in_axes=(None, 0))(
+        jax.random.PRNGKey(seed), jnp.arange(b, dtype=jnp.uint32))
+    return BattleState(
+        species=mon(), level=mon(), types=jnp.zeros((b, 2, 6, 2), jnp.int32),
+        stats=jnp.zeros((b, 2, 6, 6), jnp.int32), hp=mon(), max_hp=mon(),
+        status=mon(), status_counter=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
+        pp=jnp.zeros((b, 2, 6, 4), jnp.int32), disabled=jnp.zeros((b, 2, 6, 4), jnp.bool_),
+        item=mon(), ability=mon(), boosts=jnp.zeros((b, 2, 6, 7), jnp.int32),
+        volatile=jnp.zeros((b, 2, 6), jnp.uint32), confusion_counter=mon(),
+        protect_counter=mon(), substitute_hp=mon(), active=side(),
+        trapped=jnp.zeros((b, 2), jnp.bool_), forced_switch=jnp.zeros((b, 2), jnp.bool_),
+        spikes=side(), weather=battle(), weather_counter=battle(), turn=battle(),
+        keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32))
+
+
+def bench_indices(active: jax.Array) -> jax.Array:
+    """Action4..8 enumerate party slots in order, omitting the active slot."""
+    slots = jnp.arange(5, dtype=jnp.int32)
+    return slots + (slots >= active[..., None])
+
+
+def legal_actions(state: BattleState) -> jax.Array:
+    """PP/disabled/resolved-trap/faint mask; other move restrictions are pending.
+
+    If no move is usable, move-slot0 means synthetic Struggle. A transition must
+    distinguish that case from selecting the ordinary move in slot0.
+    """
+    active_hp = jnp.take_along_axis(state.hp, state.active[..., None], axis=2)[..., 0]
+    pp = jnp.take_along_axis(state.pp, state.active[..., None, None], axis=2)[..., 0, :]
+    disabled = jnp.take_along_axis(state.disabled, state.active[..., None, None], axis=2)[..., 0, :]
+    moves = (pp > 0) & ~disabled
+    moves = moves.at[..., 0].set(moves[..., 0] | ~jnp.any(moves, axis=-1))
+    forced = state.forced_switch | (active_hp <= 0)
+    moves &= ~forced[..., None]
+    bench_hp = jnp.take_along_axis(state.hp, bench_indices(state.active), axis=2)
+    switches = (bench_hp > 0) & (~state.trapped | forced)[..., None]
+    mask = jnp.concatenate((moves, switches), axis=-1)
+    return mask & ~state.done[:, None, None]
