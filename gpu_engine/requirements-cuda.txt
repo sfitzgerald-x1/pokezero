@@ -1,0 +1,2 @@
+# Day-one verified JAX version; CUDA 13 requires a compatible NVIDIA driver.
+jax[cuda13]==0.12.0
