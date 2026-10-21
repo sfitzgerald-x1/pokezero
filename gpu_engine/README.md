@@ -56,7 +56,7 @@ python -m gpu_engine.team_pool --showdown-root /path/to/pokemon-showdown \
 python -m unittest discover -s tests -p test_gpu_engine_team_pool.py -v
 ```
 
-The packer records the compiled source-tree digest, deterministic team seeds,
+The packer records the compiled source-tree and RNG-dependency digests, deterministic team seeds,
 Gen 3 stats/PP/Hidden Power, numeric vocabularies and actual move-slot frequencies.
 It requires the complete chronological stream and successful generator exit,
 publishes exclusively without overwriting, and uses no pickled object arrays.
@@ -65,6 +65,8 @@ the actual generator input. Keep the resulting NPZ outside git. The frequency
 ledger starts with zero implemented coverage: generating teams does not establish
 transition coverage, game correctness or throughput. An actual 200,000-team
 generation remains a separate runtime validation, not a unit-test conclusion.
+Short real movesets retain trailing zero-move/zero-PP slots, which are excluded
+from coverage counts. Cosmetic forms such as Unown-G retain distinct species IDs.
 
 ## Measurement contract
 

@@ -52,6 +52,21 @@ class PoolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "trailing"):
             self.run_fixture(fixture()+[{}])
 
+    def test_short_real_movesets_preserve_empty_slots_but_exclude_padding_from_coverage(self):
+        records = fixture()
+        mon = records[1]["members"][0]
+        mon.update(moves=[1,0,0,0], pp=[8,0,0,0])
+        arrays, header = self.run_fixture(records)
+        self.assertEqual(arrays["moves"][0,0].tolist(), [1,0,0,0])
+        self.assertEqual(header["move_slots"], 45)
+        self.assertEqual(header["tensor_move_slots"], 48)
+        self.assertNotIn("_none", [r["id"] for r in header["move_frequency"]])
+        for moves, pp in [([1,0,1,0],[8,0,8,0]), ([1,0,0,0],[8,8,0,0]),
+                          ([1,2,1,2],[8,16,8,-1])]:
+            mon.update(moves=moves, pp=pp)
+            with self.assertRaises(ValueError):
+                self.run_fixture(records)
+
     def test_invalid_shapes_ranges_and_ids_are_refused(self):
         for field, value in [("species", 99), ("level", 101), ("ivs", [32]*6),
                              ("evs", [252]*6), ("pp", [0]*4), ("types", [1]),
@@ -75,6 +90,15 @@ class PoolTests(unittest.TestCase):
 
 @unittest.skipUnless(NODE, "requires Node for the offline generator helper")
 class StatsTests(unittest.TestCase):
+    def test_generated_cosmetic_species_have_distinct_gen3_vocabulary_entries(self):
+        helper = ROOT / "gpu_engine/generate_teams.cjs"
+        code = ("const {gen3Species:f}=require(process.argv[1]);"
+                "const d={species:{all:()=>[{id:'unown',exists:true,gen:2,"
+                "cosmeticFormes:['Unown-G','Future']}],get:n=>({id:n,exists:true,"
+                "gen:n==='Future'?6:2})}};"
+                "if(JSON.stringify(f(d).map(s=>s.id))!==JSON.stringify(['unown','Unown-G']))process.exit(1);")
+        subprocess.run([NODE,"-e",code,str(helper)], check=True)
+
     def test_curse_retains_explicit_typeless_catalog_type(self):
         helper = ROOT / "gpu_engine/generate_teams.cjs"
         code = ("const {moveTypeId:f}=require(process.argv[1]);"

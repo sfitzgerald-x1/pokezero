@@ -17,6 +17,12 @@ function moveTypeId(type, types) {
   return index;
 }
 
+function gen3Species(dex) {
+  // Cosmetic forms such as Unown-G are generated but omitted by species.all().
+  return dex.species.all().flatMap(s => [s, ...(s.cosmeticFormes || []).map(
+    name => dex.species.get(name))]).filter(s => s.exists && s.gen <= 3);
+}
+
 function calculatedStats(base, ivs, evs, level, nature) {
   return STATS.map(s => {
     const core = Math.floor((2 * base[s] + ivs[s] + Math.floor(evs[s] / 4)) * level / 100);
@@ -54,7 +60,7 @@ async function generate(root, count, seedStart, sourceCommitLabel) {
   moveIds.add('struggle');
   for (const type of TYPES.filter(x => !['Normal'].includes(x))) moveIds.add('hiddenpower' + type.toLowerCase());
   const vocabulary = {
-    species: ids(dex.species.all().filter(x => x.exists && x.gen <= 3)),
+    species: ids(gen3Species(dex)),
     moves: ['_none', ...[...moveIds].sort()],
     items: ids(dex.items.all().filter(x => x.exists && x.gen <= 3)),
     abilities: ids(dex.abilities.all().filter(x => x.exists && x.gen <= 3)),
@@ -100,12 +106,13 @@ async function generate(root, count, seedStart, sourceCommitLabel) {
       const evs = Object.fromEntries(STATS.map(s => [s, mon.evs?.[s] ?? 0]));
       const nature = dex.natures.get(mon.nature || 'Serious');
       const hp = dex.getHiddenPower(ivs);
-      if (mon.moves.length !== 4) throw new Error('generator did not return four moves');
+      if (mon.moves.length < 1 || mon.moves.length > 4) throw new Error('invalid move count');
+      const paddedMoves = [...mon.moves, ...Array(4-mon.moves.length).fill(null)];
       return {species:id('species', species.id), level:mon.level || 100,
         types:[id('types',species.types[0]), id('types',species.types[1])],
         stats:calculatedStats(species.baseStats, ivs, evs, mon.level || 100, nature),
-        moves:mon.moves.map(x => id('moves',x)),
-        pp:mon.moves.map(x => {const m=dex.moves.get(x); return m.noPPBoosts ? m.pp : Math.floor(m.pp*8/5);}),
+        moves:paddedMoves.map(x => id('moves',x)),
+        pp:paddedMoves.map(x => {if (x === null) return 0; const m=dex.moves.get(x); return m.noPPBoosts ? m.pp : Math.floor(m.pp*8/5);}),
         item:id('items',mon.item), ability:id('abilities',mon.ability), nature:id('natures',nature.id),
         ivs:STATS.map(s => ivs[s]), evs:STATS.map(s => evs[s]),
         hidden_power_type:id('types',hp.type), hidden_power_power:hp.power};
@@ -115,7 +122,7 @@ async function generate(root, count, seedStart, sourceCommitLabel) {
   await emit({kind:'terminal', team_count:count});
 }
 
-module.exports = {calculatedStats, moveTypeId};
+module.exports = {calculatedStats, moveTypeId, gen3Species};
 if (require.main === module) {
   const [root, countText, seedText, sourceCommitLabel] = process.argv.slice(2);
   const count = Number(countText), seed = Number(seedText);

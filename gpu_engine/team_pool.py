@@ -52,7 +52,7 @@ def pack_stream(stream, *, count, seed_start):
                     or np.any(value < limits.min) or np.any(value > limits.max)):
                 raise ValueError(f"invalid shape/range/type for {key}")
             arrays[key][i] = value
-        if (np.any(arrays["stats"][i] <= 0) or np.any(arrays["pp"][i] <= 0)
+        if (np.any(arrays["stats"][i] <= 0)
                 or np.any(arrays["level"][i] < 1) or np.any(arrays["level"][i] > 100)):
             raise ValueError("nonpositive stats/PP or invalid level")
         for field, vocabulary in [("species", "species"), ("moves", "moves"),
@@ -61,9 +61,16 @@ def pack_stream(stream, *, count, seed_start):
                                   ("hidden_power_type", "types")]:
             if np.any(arrays[field][i] >= len(header["vocabulary"][vocabulary])):
                 raise ValueError(f"out-of-vocabulary {field}")
-        for field in ("species", "moves", "ability", "nature", "hidden_power_type"):
+        for field in ("species", "ability", "nature", "hidden_power_type"):
             if np.any(arrays[field][i] == 0):
                 raise ValueError(f"missing required {field}")
+        missing_move = arrays["moves"][i] == 0
+        if (np.any(np.all(missing_move, axis=-1))
+                or np.any((arrays["pp"][i] == 0) != missing_move)
+                or np.any(arrays["pp"][i] < 0)):
+            raise ValueError("each member needs a move; only empty move slots have zero PP")
+        if np.any(missing_move[:, :-1] & ~missing_move[:, 1:]):
+            raise ValueError("empty move slots must be trailing padding")
         if np.any(arrays["types"][i, :, 0] == 0):
             raise ValueError("missing primary type")
         if (np.any(arrays["hidden_power_power"][i] < 30)
@@ -86,7 +93,7 @@ def pack_stream(stream, *, count, seed_start):
         raise ValueError("missing clean terminal team count")
     if next(stream, None) is not None:
         raise ValueError("unexpected trailing team output")
-    values, counts = np.unique(arrays["moves"], return_counts=True)
+    values, counts = np.unique(arrays["moves"][arrays["moves"] != 0], return_counts=True)
     ranked = sorted(zip(values.tolist(), counts.tolist()), key=lambda x: (-x[1], x[0]))
     total = int(sum(counts))
     cumulative = 0
@@ -99,6 +106,7 @@ def pack_stream(stream, *, count, seed_start):
     target = next(i + 1 for i, r in enumerate(ledger) if r["cumulative_share"] >= 0.85)
     header.update(schema="pokezero.gpu-team-pool.v1", completed_teams=count,
                   move_slots=int(total), move_frequency=ledger, target85_move_count=target,
+                  tensor_move_slots=count * 24, empty_move_id=0,
                   frequency_basis="Actual generated move slots, not assumed catalog weights",
                   implemented_move_coverage=0.0, transition_implemented=False)
     arrays["metadata_utf8"] = np.frombuffer(json.dumps(header, sort_keys=True).encode(), dtype=np.uint8)
