@@ -204,7 +204,10 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     splits = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
     draws = jax.vmap(lambda key: jax.random.randint(key, (2, 12), 0,
         jnp.array([2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2], jnp.int32)))(splits[:, 1])
-    work = initialize(state,table,eligible=live)._replace(keys=splits[:, 0])
+    # nextTurn increments activeTurns before an ordinary request. switchIn
+    # later resets an entrant to zero, excluding its entry turn's Speed Boost.
+    age = state.active_turns + ((live & ~replacement)[:,None] & (active_hp > 0)).astype(jnp.int32)
+    work = initialize(state,table,eligible=live)._replace(keys=splits[:, 0],active_turns=age)
     work = _lum_update(work,table,live)
     # All action speeds are frozen before ordinary switches. In Gen 3 a
     # switch-in weather change does not reorder the remaining move queue.
@@ -238,7 +241,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             gate = do_switch[:,None] if old.ndim == 2 else do_switch
             work = work._replace(**{name:value.at[rows,side,old_active].set(jnp.where(gate,0,old))})
         work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
-            forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])))
+            forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])),
+            active_turns=work.active_turns.at[rows,side].set(jnp.where(do_switch,0,work.active_turns[rows,side])))
         # insertChoice snapshots each incoming callback's Speed now; a later
         # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
         callback_speed = callback_speed.at[rows,side].set(_speeds(work,table)[rows,side])
@@ -505,29 +509,38 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 _active(work.ability,work,side),_active(work.hp,work,side),
                 _active(work.max_hp,work,side),eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,hp))
-    # Both selected handlers have order10/priority0. The pinned comparator
-    # sorts SPEED before suborder: a faster status precedes a slower heal.
-    # At equal speed, both Leftovers(4) precede statuses(6), with independent
-    # per-suborder tie coins. Absent handlers are masked no-ops.
-    event_sides = jnp.array([0,1,0,1])
-    event_suborder = jnp.array([4,4,6,6])
-    tie = jnp.concatenate((draws[:,0,9,None] ^ sides,draws[:,1,9,None] ^ sides),axis=1)
+    # Selected order10/priority0 handlers snapshot SPEED before suborder.
+    # Equal-speed Speed Boost(3), Leftovers(4), status(6) use independent ties.
+    # Ability boosts do not re-sort the already queued residual handlers.
+    event_sides = jnp.array([0,1,0,1,0,1])
+    event_suborder = jnp.array([3,3,4,4,6,6])
+    tie = jnp.concatenate((draws[:,1,0,None] ^ sides,
+        draws[:,0,9,None] ^ sides,draws[:,1,9,None] ^ sides),axis=1)
     event_keys = -end_speed[:,event_sides]*32 + event_suborder[None,:]*2 + tie
     event_order = jnp.argsort(event_keys,axis=1)
-    for order in range(4):
+    for order in range(6):
         event = event_order[:,order]
         side = event % 2
-        heal_event = event < 2
+        ability_event = event < 2
+        heal_event = (event >= 2) & (event < 4)
+        status_event = event >= 4
         battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)
         eligible = live & ~replacement & battle_continues
         hp = _active(work.hp,work,side)
+        if table.entry is not None:
+            boosts = _active(work.boosts,work,side)
+            speed_boost = (eligible & ability_event & (hp > 0)
+                & (work.active_turns[rows,side] > 0)
+                & table.entry.speed_boost[_active(work.ability,work,side)])
+            boosts = boosts.at[:,4].set(jnp.where(speed_boost,jnp.minimum(6,boosts[:,4]+1),boosts[:,4]))
+            work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
         healed = hp
         if table.items is not None:
             healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
                 _active(work.max_hp,work,side),eligible=eligible & heal_event)
         residual = m.major_status_residual(hp,
             _active(work.max_hp, work, side), _active(work.status, work, side),
-            _active(work.status_counter, work, side), active=eligible & ~heal_event)
+            _active(work.status_counter, work, side), active=eligible & status_event)
         work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
             status_counter=_set_active(work.status_counter, work, side, residual.counter))
     alive = jnp.any(work.hp > 0, axis=2)
