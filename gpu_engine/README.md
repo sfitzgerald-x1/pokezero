@@ -154,6 +154,14 @@ residual handlers retain their snapshotted speed order after a boost; the
 ability does not re-sort already queued Leftovers or status events. This is
 authored component coverage, not a full-game fidelity result.
 
+Leech Seed applies after accuracy/Protect and fails on Grass or Substitute. It
+drains into the current living occupant of the opposite singles slot, including
+at full HP; switching the seeded holder clears it. Wish belongs to the side
+slot, cannot refresh while pending, and expires using the recipient's max HP
+before weather. Forced-replacement pseudo-turns do not tick either effect.
+Seed damage and healing finish together before checking for a win. Baton Pass,
+Liquid Ooze and wider event interactions remain pending.
+
 Guts now composes with the selected item multipliers in one Attack event,
 including confusion self-damage. It overrides the physical burn penalty without
 curing burn or preventing residual damage. Gen 3 Thick Fat modifies Fire/Ice

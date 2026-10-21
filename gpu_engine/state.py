@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 
 FLINCH = 1  # volatile bit 0; cleared at the end of each ordinary turn
+LEECH_SEED = 4  # volatile bit 2; opposite singles slot receives the drain
 
 
 class BattleState(NamedTuple):
@@ -39,6 +40,7 @@ class BattleState(NamedTuple):
     trapped: jax.Array             # [B,2], resolved trap state, not ability logic
     forced_switch: jax.Array       # [B,2]
     spikes: jax.Array              # [B,2]
+    wish_counter: jax.Array        # [B,2], slot condition; persists across switches
     weather: jax.Array             # [B]
     weather_counter: jax.Array     # [B]
     turn: jax.Array                # [B]
@@ -71,7 +73,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         entry_pending=jnp.zeros((b,2),jnp.bool_),
         active_turns=side(),
         trapped=jnp.zeros((b, 2), jnp.bool_), forced_switch=jnp.zeros((b, 2), jnp.bool_),
-        spikes=side(), weather=battle(), weather_counter=battle(), turn=battle(),
+        spikes=side(), wish_counter=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32))
 
 
