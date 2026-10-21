@@ -7,8 +7,8 @@ Nothing here is imported by the existing battle collector or search runtime.
 
 ## Current implementation
 
-Day 1: batched structure-of-arrays storage, per-battle PRNG streams, the
-nine-action layout, an offline real-team generator/NPZ packer and incomplete
+The spike has batched structure-of-arrays storage, per-battle PRNG streams, the
+nine-action layout, an offline real-team generator/NPZ packer and partial
 turn integration. No complete transition, encoder, policy forward, fidelity result
 or games-per-second benchmark is implemented yet. Empty states
 are storage fixtures and are terminal by default; they are not benchmark games.
@@ -127,7 +127,17 @@ Leftovers precedes status, but faster poison can end the game before slower
 Leftovers. Party exhaustion ends processing. Other items, item transfer
 or suppression, and ability interactions still require integration.
 
-This is an incomplete integration kernel. Remaining items, abilities, weather, switch events,
+Selected weather moves, suppression, damage/accuracy modifiers and chip are
+integrated. The absorption subset applies Water Absorb, Volt Absorb and Flash
+Fire after accuracy/Protect and before Substitute. Volt Absorb does not block
+Thunder Wave in Gen 3. Frozen holders cannot activate Flash Fire; Will-O-Wisp
+does not activate it when existing status, a Fire type or Substitute would
+already make the status fail. Flash Fire's Fire-damage modifier persists until
+switching. Original-catalog damaging Fire moves thaw a struck frozen target;
+Hidden Power Fire and dynamically Fire Weather Ball do not. These are selected
+events, not general ability coverage.
+
+This is an incomplete integration kernel. Remaining items, ability interactions, switch events,
 the full residual scheduler and remaining special move effects are not
 integrated. Its arithmetic/turn fixtures and one-turn real
 team smoke do not qualify gameplay or supply the final throughput table. Pool
