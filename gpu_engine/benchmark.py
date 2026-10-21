@@ -9,7 +9,9 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
 import platform
 import statistics
@@ -37,6 +39,24 @@ def summarize_samples(samples):
                 median_step_ms=statistics.median(samples), samples_ms=list(samples))
 
 
+def load_bound_pool(pool_path):
+    """Load and hash the same immutable byte snapshot, outside the clock."""
+    with Path(pool_path).open("rb") as source:
+        before = os.fstat(source.fileno())
+        payload = source.read()
+        after = os.fstat(source.fileno())
+    identity = lambda st: (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+    if identity(before) != identity(after) or len(payload) != after.st_size:
+        raise RuntimeError("team pool changed while reading")
+    # An atomic pathname replacement cannot change this snapshot or its digest.
+    # ctime is deliberately excluded: unlinking a stable open inode changes it.
+    with np.load(io.BytesIO(payload),allow_pickle=False) as archive:
+        metadata = json.loads(archive["metadata_utf8"].tobytes())
+        fields = ("species","level","types","stats","moves","pp","item","ability")
+        pool = {name:archive[name] for name in fields}
+    return pool, metadata, hashlib.sha256(payload).hexdigest()
+
+
 def render_markdown(result):
     rows = ["# Partial GPU core step timings", "",
         f"Hardware: {result['device']}; JAX {result['jax']}; backend GPU.", "",
@@ -55,16 +75,11 @@ def measure(pool_path, *, batches=(256,1024,2048,8192), repeats=100, warmup=5):
             or type(repeats) is not int or repeats < 2 or type(warmup) is not int or warmup < 1):
         raise ValueError("positive integer batches, >=2 repeats and >=1 warm-up required")
     device = sole_gpu()
-    with np.load(pool_path,allow_pickle=False) as archive:
-        metadata = json.loads(archive["metadata_utf8"].tobytes())
-        fields = ("species","level","types","stats","moves","pp","item","ability")
-        pool = {name:archive[name] for name in fields}
+    pool, metadata, pool_sha = load_bound_pool(pool_path)
     if (metadata.get("schema") != "pokezero.gpu-team-pool.v1"
             or metadata.get("completed_teams") != len(pool["species"])
             or len(pool["species"]) < 200000 or 2 * max(batches) > len(pool["species"])):
         raise ValueError("complete >=200000-team pool with enough distinct root teams required")
-    with Path(pool_path).open("rb") as source:
-        pool_sha = hashlib.file_digest(source,"sha256").hexdigest()
     source_hashes = {}
     for name in ("state.py","mechanics.py","effects.py","transition.py","benchmark.py"):
         with Path(__file__).with_name(name).open("rb") as source:
