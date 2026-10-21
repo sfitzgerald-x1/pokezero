@@ -63,8 +63,9 @@ def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=
                     // jnp.asarray(phase1_den,jnp.uint32))
     screen_factor = jnp.where(screen_active,jnp.uint32(2048),jnp.uint32(4096))
     phase_factor = (screen_factor*phase_factor + jnp.uint32(2048)) >> 12
-    phase_active = screen_active | (jnp.asarray(phase1_num) != 1) | (jnp.asarray(phase1_den) != 1)
-    base = jnp.where(phase_active,modify(base,phase_factor,4096),base)
+    # runEvent applies its Q12 modifier even when the chain stays identity.
+    # That unsigned wrap is observable on deliberately large authored inputs.
+    base = modify(base,phase_factor,4096)
     base = jnp.where((jnp.asarray(weather_num) != 1) | (jnp.asarray(weather_den) != 1),
                      modify(base, weather_num, weather_den), base)
     base = jnp.where(physical, jnp.maximum(1, base), base) + 2

@@ -59,7 +59,12 @@ class MechanicsTests(unittest.TestCase):
 
     def test_identity_stab_event_is_skipped_only_for_typeless_moves(self):
         self.assertEqual(self.damage(power=1300,attack=1000,defense=1),43426)
-        self.assertEqual(self.damage(power=1300,attack=1000,defense=1,typeless=True),1092002)
+        self.assertEqual(self.damage(power=1300,attack=1000,defense=1,typeless=True),43426)
+        # Phase1 identity wraps both. STAB has a separate identity wrap after
+        # +2, which only typed moves run. Choose that precise boundary.
+        args = dict(level=1,power=25,attack=1048575,defense=1,physical=False)
+        self.assertEqual(self.damage(**args),1)
+        self.assertEqual(self.damage(**args,typeless=True),1048577)
 
     def test_resolved_item_stat_multipliers_and_low_physical_floor(self):
         self.assertEqual(self.damage(attack_num=3,attack_den=2),128)
@@ -154,7 +159,9 @@ class MechanicsTests(unittest.TestCase):
             dict(power=60000,attack=2000,defense=1,stab=True,critical=True),
             dict(power=960,attack=1000,defense=1,critical=True,stab=False),
             dict(power=1300,attack=1000,defense=1),
-            dict(power=1300,attack=1000,defense=1,typeless=True)]
+            dict(power=1300,attack=1000,defense=1,typeless=True),
+            dict(level=1,power=25,attack=1048575,defense=1,physical=False),
+            dict(level=1,power=25,attack=1048575,defense=1,physical=False,typeless=True)]
         rows = [{**defaults,**c} for c in changes]
         helper = Path(__file__).with_name("gpu_damage_oracle.cjs")
         result = subprocess.run([NODE,str(helper),str(Path(SHOWDOWN).resolve())],
