@@ -68,6 +68,24 @@ generation remains a separate runtime validation, not a unit-test conclusion.
 Short real movesets retain trailing zero-move/zero-PP slots, which are excluded
 from coverage counts. Cosmetic forms such as Unown-G retain distinct species IDs.
 
+## Damage and status core components
+
+`mechanics.py` supplies batched Gen 3 damage arithmetic, separate accuracy/evasion
+stages, paralysis speed, before-move status transitions and major-status residuals.
+It preserves the pinned Showdown Q12 unsigned truncation and rounding, damage
+modifier order and toxic's floor-before-stage rule. The caller must still resolve
+items/abilities, move-specific effects and the full event scheduler. These helpers
+do not constitute a battle step or increase the pool's implemented-move coverage.
+
+```sh
+NODE=/path/to/node POKEZERO_SHOWDOWN_ROOT=/path/to/pokemon-showdown \
+  python -m unittest discover -s tests -p test_gpu_engine_mechanics.py -v
+```
+
+The optional source oracle calls the pinned Showdown arithmetic functions on
+authored inputs. It is not the required 200-game divergence check. JIT/component
+checks likewise supply no games-per-second result.
+
 ## Measurement contract
 
 Use real Showdown-generated teams (at least 200,000), a frequency-led coverage
