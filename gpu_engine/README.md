@@ -120,6 +120,23 @@ POKEZERO_GPU_TEAM_POOL=/path/real-teams-200000.npz \
   python -m unittest discover -s tests -p test_gpu_engine_transition.py -v
 ```
 
+## Early core step timing
+
+```sh
+python -m gpu_engine.benchmark --team-pool /path/real-teams-200000.npz \
+  --out-prefix /path/outside/checkout/partial-core-step
+```
+
+This preliminary diagnostic requires exactly one GPU and the full real-team
+pool. At batches 256, 1,024, 2,048 and 8,192 it repeats one fixed initial request,
+with five warm-ups and 100 synchronized wall-time samples after compilation.
+Host dispatch is included; setup and action sampling are excluded. The same
+team prefix is reused across batch sizes. Repetitions do not advance games.
+JSON retains samples, source/pool bindings and memory in use; Markdown reports
+mean step latency. Encoder, forward, end-to-end, game length, game rate and
+utilization remain unmeasured/null. Existing outputs are never overwritten.
+These are incomplete-core timings, not the final table or a go/no-go result.
+
 ## Measurement contract
 
 Use real Showdown-generated teams (at least 200,000), a frequency-led coverage
