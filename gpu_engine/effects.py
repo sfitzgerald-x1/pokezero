@@ -1,0 +1,55 @@
+"""Static tables for the initial major-status and self-effect move subset.
+
+These are explicit Gen 3 rules, not inference from names or base power. Items,
+abilities and the wider move/event surface still need integration. The full
+transition conservatively flags every move as a placeholder until qualification.
+"""
+from typing import NamedTuple
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from . import mechanics as m
+
+
+class MoveEffects(NamedTuple):
+    status: jax.Array             # [M], major status applied to foe
+    self_boosts: jax.Array        # [M,7]
+    heal_half: jax.Array          # [M], floor(max HP / 2)
+    rest: jax.Array               # [M], full heal and exactly three sleep counters
+    haze: jax.Array               # [M], clear both active mons' boosts
+    thunderwave: jax.Array        # [M], Ground immunity belongs to this move
+    status_immunity: jax.Array    # [7,18], type-based major-status immunity
+    ground_type: jax.Array
+
+
+def from_metadata(metadata):
+    names = metadata["vocabulary"]["moves"]
+    types = metadata["vocabulary"]["types"]
+    index = {name:i for i,name in enumerate(names)}
+    status = np.zeros(len(names),np.int32)
+    for name, value in {"toxic":m.TOX,"poisonpowder":m.PSN,"thunderwave":m.PAR,
+            "stunspore":m.PAR,"willowisp":m.BRN,"sleeppowder":m.SLP,
+            "hypnosis":m.SLP,"spore":m.SLP,"sing":m.SLP}.items():
+        if name in index: status[index[name]] = value
+    boosts = np.zeros((len(names),7),np.int32)
+    for name, values in {
+        "swordsdance":[2,0,0,0,0,0,0], "calmmind":[0,0,1,1,0,0,0],
+        "bulkup":[1,1,0,0,0,0,0], "agility":[0,0,0,0,2,0,0],
+        "amnesia":[0,0,0,2,0,0,0], "irondefense":[0,2,0,0,0,0,0],
+        "barrier":[0,2,0,0,0,0,0], "meditate":[1,0,0,0,0,0,0],
+        "howl":[1,0,0,0,0,0,0], "doubleteam":[0,0,0,0,0,0,1],
+    }.items():
+        if name in index: boosts[index[name]] = values
+    flags = lambda chosen: jnp.asarray([name in chosen for name in names])
+    immunity = np.zeros((7,len(types)),bool)
+    for value, blocked in ((m.BRN,["fire"]),(m.FRZ,["ice"]),
+                           (m.PSN,["poison","steel"]),(m.TOX,["poison","steel"])):
+        for name in blocked: immunity[value,types.index(name)] = True
+    # Electric types can be paralyzed in Gen 3. Ground only blocks Thunder Wave,
+    # not every route to paralysis (for example Stun Spore).
+    return MoveEffects(jnp.asarray(status),jnp.asarray(boosts),
+        flags({"recover","softboiled","milkdrink","slackoff"}),flags({"rest"}),
+        flags({"haze"}),flags({"thunderwave"}),jnp.asarray(immunity),
+        jnp.asarray(types.index("ground"),jnp.int32))

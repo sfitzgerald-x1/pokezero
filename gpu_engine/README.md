@@ -20,8 +20,8 @@ active slot. Move0 represents synthetic Struggle only when no move is usable.
 The initial mask handles PP, externally resolved disabled/trapped flags,
 forced replacement and fainted slots; Taunt, Encore, recharge and other
 restrictions still require the transition and are not claimed as supported.
-For unilateral forced replacement, the future transition must suppress the
-other seat's action; this mask is not yet a complete request-phase protocol.
+For unilateral forced replacement, the initial transition suppresses the
+other seat's action. The mask alone is not a complete request-phase protocol.
 
 ## Run the first device check
 
@@ -93,17 +93,24 @@ checks likewise supply no games-per-second result.
 action ordering, switches, PP, status action gates, static single-hit damage,
 major-status residuals, forced-replacement pseudo-turns and party exhaustion.
 Invalid live actions freeze that battle and return an explicit invalid flag;
-terminal battles remain unchanged. Every executed move is counted as a
-placeholder, including status moves that currently do nothing.
+terminal battles remain unchanged. Every executed move remains conservatively
+counted as a placeholder while required mechanics are incomplete.
 
 Confusion now deals typeless, noncritical self-damage before PP use; Struggle is
 typeless and recoils for the rounded quarter of actual damage dealt, not max HP.
 Any faint cancels the remaining ordinary action, as in Gen 3 singles. Flinch is
 volatile bit 0, blocks before confusion and clears after an ordinary turn.
 
+The explicit status/self-effect subset now applies Toxic, poison, paralysis,
+burn and sleep moves; Rest; Recover-class floor-half healing; self boosts and
+Haze. It handles existing-status/type/Substitute refusal, Gen 3 Electric-type
+paralysis eligibility and Thunder Wave's Ground immunity, sleep counters and
+boost clamping. Items/abilities can still alter these events and are not yet
+integrated, so this is not a move-coverage qualification.
+
 This is an incomplete integration kernel. Items, abilities, weather, switch events,
-the full residual scheduler and special
-move effects are not integrated. Its arithmetic/turn fixtures and one-turn real
+the full residual scheduler and remaining special move effects are not
+integrated. Its arithmetic/turn fixtures and one-turn real
 team smoke do not qualify gameplay or supply the final throughput table. Pool
 move coverage remains zero until move effects and their required mechanics are
 implemented and verified. Do not use placeholder games for strength evidence.
