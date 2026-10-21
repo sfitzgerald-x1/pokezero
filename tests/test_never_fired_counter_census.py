@@ -224,7 +224,9 @@ _CORPUS_TREES = ("reports", "docs")
 # secondary result JSON is added under reports/docs; no historical JSON changed.
 # 417 -> 418: against base 831373f4, only the fresh own-policy full-game
 # mutation receipt is added under reports/docs; no historical JSON changed.
-_EXPECTED_COUNTER_ARTIFACTS = 418
+# 418 -> 419: against base 0307f557, only the fresh refusal-log mutation
+# receipt is added under reports/docs; no historical JSON changed or was removed.
+_EXPECTED_COUNTER_ARTIFACTS = 419
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
