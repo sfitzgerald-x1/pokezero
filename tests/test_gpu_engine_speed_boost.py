@@ -43,7 +43,7 @@ class SpeedBoostTests(unittest.TestCase):
         for turn in range(1,9):
             s = self.play(s).state
             self.assertEqual((int(s.boosts[0,0,0,4]),int(s.active_turns[0,0])),(min(6,turn),turn))
-        self.assertEqual(s.boosts[0,0,0,[0,1,2,3,5,6]].tolist(),[0]*6)
+        self.assertEqual(s.boosts[0,0,0,self.j.array([0,1,2,3,5,6])].tolist(),[0]*6)
 
     def test_ordinary_switch_entry_skips_bonus_then_next_turn_applies(self):
         s = self.live()._replace(ability=self.live().ability.at[0,0,1].set(1))
