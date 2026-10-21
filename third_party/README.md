@@ -19,7 +19,9 @@ realistic strength yardstick than the max-damage baseline.
 
 ### Eval use (Gen 3 random battles)
 foul-play is an opponent bot, not a library. To run it as an eval opponent:
-1. In foul-play's own venv, install `poke-engine` built for **gen3** (`--features gen3`).
+1. In foul-play's own venv, install the pinned `poke-engine` source with the canonical
+   Gen 3 patch manifest using `scripts/setup_foulplay_eval.sh`. An upstream Gen 3
+   wheel that merely imports is not sufficient.
 2. Run foul-play with `--pokemon-format gen3randombattle` pointed at the local Showdown server.
 3. Have our bot challenge/accept it; score win rate over a milestone-size sample (≥300 games).
 
@@ -35,6 +37,13 @@ scripts/setup_foulplay_eval.sh
 POKEZERO_SHOWDOWN_ROOT=/path/to/pokemon-showdown \
   scripts/benchmark_vs_foulplay.sh runs/<...>/transformer-policy.pt 50 1000
 ```
+Setup reuses `scripts/setup_poke_engine.sh` and requires the exhausted-sleep search
+fixture in `scripts/verify_foulplay_poke_engine.py` to pass in Foul Play's own
+interpreter before reporting readiness. This is a focused capability check, not
+full-engine fidelity or the two-consumer PokeZero build certification. Use a fresh
+checkout and `FOULPLAY_VENV=/path/to/new/venv` to preserve a historical opponent
+environment; a new engine build must be bound prospectively in new experiments.
+
 `setup` applies `foulplay-local-nosec.patch` — a small env-gated change so foul-play claims its
 name with an empty assertion against a local `--no-security` server (it otherwise fetches a guest
 assertion from the hosted login server, which is invalid for a local server's challstr). The patch
