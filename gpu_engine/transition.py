@@ -17,6 +17,7 @@ import numpy as np
 
 from . import mechanics as m
 from . import items as held
+from . import weather as climate
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -33,6 +34,7 @@ class MoveTable(NamedTuple):
     struggle: jax.Array
     effects: MoveEffects | None = None
     items: held.ItemTable | None = None
+    weather: climate.WeatherTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -59,7 +61,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         jnp.asarray(np.where(chart == .5, 1, chart), jnp.int32),
         jnp.asarray(np.where(chart == .5, 2, 1), jnp.int32),
         jnp.asarray(metadata["vocabulary"]["moves"].index("struggle"), jnp.int32),
-        effects_from_metadata(metadata),held.from_metadata(metadata))
+        effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0) -> BattleState:
@@ -228,6 +230,14 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         foe_types = _active(work.types, work, foe)
         num = table.type_num[typ, foe_types[:, 0]] * table.type_num[typ, foe_types[:, 1]]
         den = table.type_den[typ, foe_types[:, 0]] * table.type_den[typ, foe_types[:, 1]]
+        weather_num,weather_den = (1,1)
+        accuracy,always_hit = table.accuracy[move],table.always_hit[move]
+        if table.weather is not None:
+            active_abilities = work.ability[rows[:,None],sides,work.active]
+            active_hp = work.hp[rows[:,None],sides,work.active]
+            effective_weather = climate.effective(table.weather,work.weather,active_abilities,active_hp)
+            weather_num,weather_den = climate.damage_modifier(table.weather,effective_weather,typ)
+            accuracy,always_hit = climate.thunder_accuracy(table.weather,effective_weather,move,accuracy,always_hit)
         damage = m.gen3_damage(level=_active(work.level, work, side), power=table.power[move],
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
@@ -235,12 +245,13 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             defense_stage=jnp.where(physical, defense_boosts[:, 1], defense_boosts[:, 3]),
             physical=physical, critical=chance[:, 4] == 0,
             attack_num=attack_num,attack_den=attack_den,
+            weather_num=weather_num,weather_den=weather_den,
             stab=jnp.any(own_types == typ[:, None], axis=1) & (typ != 0),
             typeless=typ == 0,
             burned=_active(work.status, work, side) == m.BRN,
             effectiveness_num=num, effectiveness_den=den, immune=num == 0, roll=85 + chance[:, 5])
-        hit = m.accuracy_hit(table.accuracy[move], attack_boosts[:, 5], defense_boosts[:, 6],
-                             chance[:, 6], always_hit=table.always_hit[move])
+        hit = m.accuracy_hit(accuracy, attack_boosts[:, 5], defense_boosts[:, 6],
+                             chance[:, 6], always_hit=always_hit)
         bypass_sub = jnp.zeros_like(acts)
         if table.effects is not None:
             hit &= ~(protected[rows,foe] & table.effects.protectable[move])
@@ -317,7 +328,25 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             lock = (acts & ~is_struggle & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
             work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,move,locked)))
         work = _lum_update(work,table,live & ~replacement)
+        if table.weather is not None:
+            weather,counter = climate.set_move(work.weather,work.weather_counter,
+                table.weather.move_weather[move],eligible=acts)
+            work = work._replace(weather=weather,weather_counter=counter)
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
+    if table.weather is not None:
+        ordinary = live & ~replacement & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
+        weather,counter = climate.residual_clock(work.weather,work.weather_counter,eligible=ordinary)
+        work = work._replace(weather=weather,weather_counter=counter)
+        active_abilities = work.ability[rows[:,None],sides,work.active]
+        active_hp = work.hp[rows[:,None],sides,work.active]
+        effective_weather = climate.effective(table.weather,weather,active_abilities,active_hp)
+        # The field weather handler runs Weather on BOTH actives before
+        # faintMessages/checkWin. A double last-mon weather KO is a Gen 3 tie.
+        for side in range(2):
+            hp = climate.chip(table.weather,effective_weather,_active(work.types,work,side),
+                _active(work.ability,work,side),_active(work.hp,work,side),
+                _active(work.max_hp,work,side),eligible=ordinary)
+            work = work._replace(hp=_set_active(work.hp,work,side,hp))
     # Both selected handlers have order10/priority0. The pinned comparator
     # sorts SPEED before suborder: a faster status precedes a slower heal.
     # At equal speed, both Leftovers(4) precede statuses(6), with independent
