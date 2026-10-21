@@ -12,6 +12,26 @@ battle.p2.active[0].storedStats.spe=100;
 battle.updateSpeed();
 battle.makeChoices('switch 2','switch 2');
 const stages = [battle.p1.active[0].boosts.atk,battle.p2.active[0].boosts.atk];
+function forcedFixture(hazard) {
+  const b = new Battle({formatid:'gen3customgame',seed:[11,22,33,44]});
+  b.setPlayer('p1',{name:'a',team:[set('Ditto','Limber'),set('Salamence','Intimidate'),set('Ditto','Limber')]});
+  b.setPlayer('p2',{name:'b',team:[set('Ditto','Limber'),set('Salamence','Intimidate'),set('Ditto','Limber')]});
+  b.p1.pokemon[1].storedStats.spe=300;
+  b.p2.pokemon[1].storedStats.spe=100;
+  if(hazard) {
+    // Ground the authored incoming fixtures and use exact HP for the oracle.
+    for(const p of [b.p1.pokemon[1],b.p2.pokemon[1]]) {p.types=['Normal'];p.maxhp=101;p.hp=101;}
+    b.p1.pokemon[1].hp=1;
+    b.p1.addSideCondition('spikes');
+    b.p2.addSideCondition('spikes');
+  }
+  b.p1.active[0].faint();b.p2.active[0].faint();b.faintMessages();
+  b.checkFainted();b.midTurn=true;b.makeRequest('switch');
+  b.makeChoices('switch 2','switch 2');
+  const result = hazard ? [b.p1.active[0].hp,b.p2.active[0].hp]
+    : [b.p1.active[0].boosts.atk,b.p2.active[0].boosts.atk];
+  b.destroy();return result;
+}
 const weatherBattle = new Battle({formatid:'gen3customgame',seed:[11,22,33,44]});
 const fast = {...set('Kyogre','Drizzle'),nature:'Timid',evs:{spe:252}};
 const slow = {...set('Groudon','Drought'),nature:'Brave',ivs:{spe:0}};
@@ -30,6 +50,7 @@ let drops=0;
 dex.abilities.get('intimidate').onStart.call({hint:()=>{},add:()=>{},boost:()=>{drops++;}},
   {adjacentFoes:()=>[{volatiles:{substitute:{}}}],side:{}});
 process.stdout.write(JSON.stringify({double_switch_attack_stages:stages,weather_start:weatherBattle.field.weather,
-  spikes_damage:damages,natural_cure:{status:cured.status,counter:cured.counter},intimidate_substitute_drop_calls:drops}));
+  spikes_damage:damages,natural_cure:{status:cured.status,counter:cured.counter},intimidate_substitute_drop_calls:drops,
+  forced_attack_stages:forcedFixture(false),forced_hazard_hp:forcedFixture(true)}));
 battle.destroy();
 weatherBattle.destroy();

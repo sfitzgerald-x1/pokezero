@@ -186,11 +186,13 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     target = jnp.take_along_axis(bench, jnp.clip(actions - 4, 0, 4)[..., None], axis=2)[..., 0]
     switch_first = jnp.where(speed[:,0] != speed[:,1],speed[:,1] > speed[:,0],draws[:,0,11] == 1).astype(jnp.int32)
     switch_faint = jnp.zeros_like(state.done)
+    installed = jnp.zeros_like(switches)
     for order in range(2):
         side = jnp.where(order == 0,switch_first,1-switch_first)
         old_active = work.active[rows,side]
         continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         do_switch = switches[rows,side] & continues & (~switch_faint | replacement)
+        installed = installed.at[rows,side].set(do_switch)
         old_hp = work.hp[rows,side,old_active]
         old_status = work.status[rows,side,old_active]
         cure = old_hp <= 0
@@ -209,7 +211,22 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
             forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])))
         if table.entry is not None:
-            work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch)
+            work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
+            switch_faint |= knocked_out
+    if table.entry is not None:
+        # Forced instaswitch actions(order3) install ALL entrants before any
+        # runSwitch callback(order101). Ordinary switch actions(order103) do
+        # not: their callbacks were resolved immediately above. Forced callback
+        # order uses incoming speeds, frozen before the first callback.
+        incoming_speed = _speeds(work,table)
+        first_entry = jnp.where(incoming_speed[:,0] != incoming_speed[:,1],
+            incoming_speed[:,1] > incoming_speed[:,0],draws[:,1,10] == 1).astype(jnp.int32)
+        for order in range(2):
+            side = jnp.where(order == 0,first_entry,1-first_entry)
+            continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
+            eligible = replacement & installed[rows,side] & continues & ~switch_faint
+            work,knocked_out = arrival.enter(work,side,table.entry,eligible=eligible)
+            # A hazard KO cancels subsequent queued runSwitch callbacks too.
             switch_faint |= knocked_out
     work = _lum_update(work,table,live)
     slot = jnp.clip(actions, 0, 3)

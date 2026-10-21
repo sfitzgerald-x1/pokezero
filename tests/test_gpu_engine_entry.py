@@ -164,6 +164,30 @@ class EntryTests(unittest.TestCase):
         self.assertEqual((int(r.hp[0,0,1]),int(r.hp[0,1,0]),int(r.weather_counter[0]),int(r.turn[0])),(89,101,2,0))
         self.assertEqual(int(r.boosts[0,1,0,0]),-1)
 
+    def test_both_forced_entrants_exist_before_either_intimidate(self):
+        s = self.live()
+        s = s._replace(hp=s.hp.at[:,:,0].set(0),ability=s.ability.at[:,:,1].set(4))
+        r = self.play(s,[[4,4]])
+        self.assertEqual(r.active.tolist(),[[1,1]])
+        self.assertEqual(r.boosts[0,:,1,0].tolist(),[-1,-1])
+        self.assertEqual(int(r.turn[0]),0)
+
+    def test_forced_weather_order_uses_incoming_not_fainted_outgoing_speed(self):
+        s = self.live()
+        s = s._replace(hp=s.hp.at[:,:,0].set(0),ability=s.ability.at[0,0,1].set(1).at[0,1,1].set(2),
+            stats=s.stats.at[0,0,0,5].set(900).at[0,1,0,5].set(100).at[0,0,1,5].set(100).at[0,1,1,5].set(400))
+        r = self.play(s,[[4,4]])
+        self.assertEqual((int(r.weather[0]),int(r.weather_counter[0])),(self.w.RAIN,0))
+
+    def test_forced_hazard_ko_cancels_later_callback_not_already_installed_entrant(self):
+        s = self.live()
+        s = s._replace(hp=s.hp.at[:,:,0].set(0).at[0,0,1].set(1),spikes=s.spikes.at[0].set(1),
+            ability=s.ability.at[0,1,1].set(2))
+        r = self.play(s,[[4,4]])
+        self.assertEqual(r.active.tolist(),[[1,1]])
+        self.assertEqual(r.hp[0,:,1].tolist(),[0,101])
+        self.assertEqual(int(r.weather[0]),self.w.NONE)
+
     def test_last_mon_hazard_ko_ends_before_foe_residual(self):
         s = self.live()
         s = s._replace(hp=s.hp.at[0,0].set(0).at[0,0,1].set(1).at[0,1,0].set(50),
@@ -228,6 +252,8 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(actual["spikes_damage"],[12,16,25])
         self.assertEqual(actual["natural_cure"],{"status":"","counter":0})
         self.assertEqual(actual["intimidate_substitute_drop_calls"],0)
+        self.assertEqual(actual["forced_attack_stages"],[-1,-1])
+        self.assertEqual(actual["forced_hazard_hp"],[0,101])
 
 
 if __name__ == "__main__":
