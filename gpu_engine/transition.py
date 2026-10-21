@@ -20,6 +20,7 @@ from . import items as held
 from . import weather as climate
 from . import absorption as absorb
 from . import entry as arrival
+from . import combat as traits
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -39,6 +40,7 @@ class MoveTable(NamedTuple):
     weather: climate.WeatherTable | None = None
     entry: arrival.EntryTable | None = None
     absorption: absorb.AbsorptionTable | None = None
+    combat: traits.CombatTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -66,7 +68,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         jnp.asarray(np.where(chart == .5, 2, 1), jnp.int32),
         jnp.asarray(metadata["vocabulary"]["moves"].index("struggle"), jnp.int32),
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
-        arrival.from_metadata(metadata),absorb.from_metadata(metadata))
+        arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -156,6 +158,24 @@ class StepResult(NamedTuple):
     placeholder_moves: jax.Array   # [B]; every executed move is still a placeholder
 
 
+def action_mask(state,table):
+    """Current request mask with selected ability traps, without cached state.
+
+    Use this rather than state.legal_actions for table-backed battle requests.
+    Computing traps here immediately reflects switches/faints and preserves the
+    original state byte-for-byte for invalid and terminal requests.
+    """
+    mask = legal_actions(state)
+    if table.combat is None:
+        return mask
+    rows,sides = jnp.arange(state.hp.shape[0])[:,None],jnp.arange(2)[None,:]
+    hp = state.hp[rows,sides,state.active]
+    trapped = traits.switch_trapped(table.combat,state.ability[rows,sides,state.active],
+        state.types[rows,sides,state.active],hp)
+    forced = state.forced_switch | (hp <= 0)
+    return jnp.concatenate((mask[...,:4],mask[...,4:] & ~(trapped & ~forced)[...,None]),axis=-1)
+
+
 def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult:
     """Static-shape two-action turn, with forced replacement as a pseudo-turn.
 
@@ -175,7 +195,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     forced = state.forced_switch | (active_hp <= 0)
     replacement = jnp.any(forced, axis=1)
     requested = ~replacement[:, None] | forced
-    valid = jnp.take_along_axis(legal_actions(state), jnp.clip(actions, 0, 8)[..., None], axis=2)[..., 0]
+    valid = jnp.take_along_axis(action_mask(state,table), jnp.clip(actions, 0, 8)[..., None], axis=2)[..., 0]
     invalid = ~state.done & jnp.any(requested & (~valid | (actions < 0) | (actions > 8)), axis=1)
     live = ~state.done & ~invalid
     splits = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
@@ -278,10 +298,17 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         if table.items is not None:
             confusion_num,confusion_den = held.attack_modifier(table.items,
                 _active(work.item,work,side),_active(work.species,work,side),jnp.ones_like(eligible))
+        guts = jnp.zeros_like(eligible)
+        if table.combat is not None:
+            ability = _active(work.ability,work,side)
+            guts = table.combat.guts[ability]
+            confusion_num,confusion_den = traits.attack_modifier(table.combat,ability,
+                _active(work.status,work,side),True,item_num=confusion_num,item_den=confusion_den)
         confusion_damage = m.gen3_damage(level=_active(work.level, work, side), power=40,
             attack=own_stats[:, 1], defense=own_stats[:, 2],
             attack_stage=own_boosts[:, 0], defense_stage=own_boosts[:, 1],
             typeless=True, burned=_active(work.status, work, side) == m.BRN,
+            guts=guts,
             attack_num=confusion_num,attack_den=confusion_den,
             roll=85 + chance[:, 5])
         hp = _active(work.hp, work, side)
@@ -306,6 +333,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         if table.items is not None:
             attack_num,attack_den = held.attack_modifier(table.items,
                 _active(work.item,work,side),_active(work.species,work,side),physical)
+        if table.combat is not None:
+            attack_num,attack_den = traits.attack_modifier(table.combat,_active(work.ability,work,side),
+                _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den)
         is_struggle = move == table.struggle
         typ = jnp.where(is_struggle, 0, table.type[move])
         own_types = _active(work.types, work, side)
@@ -326,7 +356,10 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         phase1_num,phase1_den = (1,1)
         if table.absorption is not None:
             phase1_num,phase1_den = absorb.damage_phase1(table.absorption,typ,_active(work.volatile,work,side))
-        damage = m.gen3_damage(level=_active(work.level, work, side), power=table.power[move],
+        power = table.power[move]
+        if table.combat is not None:
+            power = traits.base_power(table.combat,_active(work.ability,work,foe),typ,power)
+        damage = m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
             attack_stage=jnp.where(physical, attack_boosts[:, 0], attack_boosts[:, 2]),
@@ -338,6 +371,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             stab=jnp.any(own_types == typ[:, None], axis=1) & (typ != 0),
             typeless=typ == 0,
             burned=_active(work.status, work, side) == m.BRN,
+            guts=guts,
             effectiveness_num=num, effectiveness_den=den, immune=immune, roll=85 + chance[:, 5])
         hit = m.accuracy_hit(accuracy, attack_boosts[:, 5], defense_boosts[:, 6],
                              chance[:, 6], always_hit=always_hit)
