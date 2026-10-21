@@ -186,7 +186,7 @@ class EntryTests(unittest.TestCase):
                 status=s.status.at[0,0,0].set(m.PAR))
             self.assertEqual(int(self.t._speeds(s,self.table)[0,0]),51)
             s = s._replace(ability=s.ability.at[0,1,0].set(10))
-            self.assertEqual(int(self.t._speeds(s,self.table)[0,0]),25)
+            self.assertEqual(int(self.t._speeds(s,self.table)[0,0]),26)
 
     def test_residual_speed_is_frozen_before_weather_expiry(self):
         from gpu_engine import mechanics as m

@@ -20,7 +20,7 @@ weatherBattle.setPlayer('p2',{name:'b',team:[slow]});
 const spikes = dex.moves.get('spikes').condition;
 const damages=[1,2,3].map(layers=>{
   let damage=0;
-  spikes.onSwitchIn.call({effectState:{layers},damage:n=>{damage=Math.max(1,Math.floor(n));}},
+  spikes.onEntryHazard.call({effectState:{layers},damage:n=>{damage=Math.max(1,Math.floor(n));}},
     {isGrounded:()=>true,hasItem:()=>false,maxhp:101});
   return damage;
 });
