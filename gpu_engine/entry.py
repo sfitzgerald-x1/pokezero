@@ -1,4 +1,4 @@
-"""Selected Gen 3 entry effects; not full switching or ability coverage.
+"""Selected Gen 3 ability tables and entry effects; not full coverage.
 
 The inherited Gen 4 runSwitch applies hazards before Ability Start. Ordinary
 switches and their runSwitch callbacks resolve one at a time, not together.
@@ -23,6 +23,7 @@ class EntryTable(NamedTuple):
     flying_type: jax.Array
     ground_type: jax.Array
     spikes_move: jax.Array
+    speed_boost: jax.Array
 
 
 def from_metadata(metadata):
@@ -33,7 +34,7 @@ def from_metadata(metadata):
         flag({"intimidate"}),flag({"naturalcure"}),flag({"levitate"}),
         flag({"clearbody","whitesmoke","hypercutter"}),flag({"swiftswim"}),flag({"chlorophyll"}),
         jnp.asarray(vocab["types"].index("flying")),jnp.asarray(vocab["types"].index("ground")),
-        jnp.asarray([name == "spikes" for name in vocab["moves"]]))
+        jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}))
 
 
 def speed_modifier(table,ability,effective_weather,speed):
