@@ -20,7 +20,13 @@ const result = rows.map(r => {
       if (name === 'WeatherModifyDamage' && (r.weather_num !== 1 || r.weather_den !== 1)) {
         return this.modify(value,r.weather_num,r.weather_den);
       }
-      if (name === 'ModifyDamagePhase1' && r.screen && !r.critical) return this.modify(value,1,2);
+      if (name === 'ModifyDamagePhase1') {
+        let changed = r.screen && !r.critical ? this.modify(value,1,2) : value;
+        if (r.phase1_num !== 1 || r.phase1_den !== 1) {
+          changed = this.modify(changed,r.phase1_num,r.phase1_den);
+        }
+        return changed;
+      }
       return value;
     },
   };

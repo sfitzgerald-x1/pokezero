@@ -38,7 +38,7 @@ def boosted_stat(stat, stage):
 def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=0,
                 physical=True, critical=False, stab=False, typeless=False, burned=False, guts=False,
                 attack_num=1, attack_den=1, defense_num=1, defense_den=1,
-                weather_num=1, weather_den=1, screen=False,
+                weather_num=1, weather_den=1, phase1_num=1, phase1_den=1, screen=False,
                 effectiveness_num=1, effectiveness_den=1, immune=False, roll=100):
     """Singles damage with resolved stat/weather/type modifiers and roll 85..100.
 
@@ -57,6 +57,8 @@ def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=
             // defe.astype(jnp.uint32) // 50).astype(jnp.int32)
     base = jnp.where(physical & burned & ~jnp.asarray(guts), modify(base, 1, 2), base)
     base = jnp.where(screen & ~jnp.asarray(critical), modify(base, 1, 2), base)
+    base = jnp.where((jnp.asarray(phase1_num) != 1) | (jnp.asarray(phase1_den) != 1),
+                     modify(base, phase1_num, phase1_den), base)
     base = jnp.where((jnp.asarray(weather_num) != 1) | (jnp.asarray(weather_den) != 1),
                      modify(base, weather_num, weather_den), base)
     base = jnp.where(physical, jnp.maximum(1, base), base) + 2

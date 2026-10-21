@@ -136,9 +136,11 @@ class MechanicsTests(unittest.TestCase):
         defaults = dict(level=100,power=100,attack=200,defense=200,
             attack_stage=0,defense_stage=0,physical=True,critical=False,stab=False,typeless=False,
             burned=False,guts=False,attack_num=1,attack_den=1,defense_num=1,
-            defense_den=1,weather_num=1,weather_den=1,screen=False,
+            defense_den=1,weather_num=1,weather_den=1,phase1_num=1,phase1_den=1,screen=False,
             effectiveness_num=1,effectiveness_den=1,immune=False,roll=100)
-        changes = [{},dict(burned=True),dict(critical=True,attack_stage=-3,defense_stage=4),
+        changes = [{},dict(burned=True),dict(phase1_num=3,phase1_den=2),
+            dict(phase1_num=3,phase1_den=2,weather_num=3,weather_den=2,burned=True),
+            dict(critical=True,attack_stage=-3,defense_stage=4),
             dict(stab=True,roll=85),dict(weather_num=3,weather_den=2,screen=True),
             dict(attack=337,defense=153,attack_stage=3,defense_stage=-2,
                  attack_num=3,attack_den=2,critical=True,stab=True,roll=91),
