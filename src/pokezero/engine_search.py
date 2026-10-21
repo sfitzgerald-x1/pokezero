@@ -92,6 +92,52 @@ class EngineSearchFallbackError(RuntimeError):
     """Raised instead of falling back when ``strict_fallbacks`` is set."""
 
 
+def _note_policy_opponent_refusal(error: Exception) -> None:
+    """Retain bounded legal-surface facts in stderr without logging a world.
+
+    Python tracebacks omit custom exception attributes. The native constructor
+    already attaches this diagnostic; notes make its safe subset durable when
+    the refusal propagates before the first completed-game summary. This is
+    instrumentation only: it cannot relax either legal surface or acceptance.
+    """
+    try:
+        raw = getattr(error, "policy_opponent_diagnostic", None)
+        if not isinstance(raw, str) or len(raw) > 131072:
+            return
+        diagnostic = json.loads(raw)
+        if (not isinstance(diagnostic, dict)
+                or diagnostic.get("schema") != "policy-opponent-refusal-v1"
+                or diagnostic.get("kind") != "legal_surface_mismatch"
+                or diagnostic.get("diagnostic_only_not_policy_input") is not True):
+            return
+        safe = {"schema": diagnostic["schema"], "kind": diagnostic["kind"],
+                "diagnostic_only_not_policy_input": True}
+        for key in ("root", "force_switch", "waiting", "recharging"):
+            if type(diagnostic.get(key)) is bool:
+                safe[key] = diagnostic[key]
+        for key in ("active_index", "node_depth"):
+            value = diagnostic.get(key)
+            if type(value) is int and 0 <= value <= 65535:
+                safe[key] = value
+        if diagnostic.get("seat") in ("p1", "p2"):
+            safe["seat"] = diagnostic["seat"]
+        for key in ("native_action_indices", "private_action_indices"):
+            value = diagnostic.get(key)
+            if (isinstance(value, list) and len(value) <= 9
+                    and all(type(x) is int and 0 <= x < 9 for x in value)):
+                safe[key] = value
+        for key in ("own_volatile_statuses", "own_last_used_move"):
+            value = diagnostic.get(key)
+            if isinstance(value, str) and len(value) <= 2048:
+                safe[key] = value
+        # Deliberately omit sampled_own_side, request_order, branch lines,
+        # arbitrary extension keys and all full-state/opposing-private data.
+        error.add_note("policy_opponent_refusal: " + json.dumps(safe, sort_keys=True))
+    except Exception:
+        # Diagnostic failure never masks/reclassifies the original refusal.
+        return
+
+
 def validate_native_joint_action_witness(report: Mapping[str, Any]) -> dict[str, Any]:
     """Validate finalized, node-local pairs; never infer them from arm visits.
 
@@ -6794,6 +6840,8 @@ class EngineMctsPolicy:
                 self._absorb_aborted_lossy_subcases(error)
                 if config.policy_opponent or config.record_joint_actions:
                     finalize_time_budget()
+                    if config.policy_opponent:
+                        _note_policy_opponent_refusal(error)
                     raise EngineSearchWitnessError(
                         f"{'policy opponent' if config.policy_opponent else 'joint-action measurement'} world refused (chance seed={record['seed']}): {reason}"
                     ) from error

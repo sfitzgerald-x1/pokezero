@@ -108,7 +108,8 @@ class PolicyOpponentEngineTests(unittest.TestCase):
         self.assertEqual(policy.stats.worlds_attempted, 1)
 
     def run_policy(self, *, workers=1, deadline=None, bad=None, provider_error=False,
-                   report_override=None, order_missing=False, joint=False, sampled=True):
+                   report_override=None, order_missing=False, joint=False, sampled=True,
+                   native_error=None):
         policy = Fixtures._policy(workers=workers, deadline_ms=deadline)
         policy._config = replace(policy._config, strict_fallbacks=True,
                                  policy_opponent=sampled, policy_opponent_seed=13 if sampled else None,
@@ -120,6 +121,8 @@ class PolicyOpponentEngineTests(unittest.TestCase):
             def search_batched_multi_encoded(_self, *args, **kwargs):
                 calls.append((args, kwargs))
                 if args[0] == bad:
+                    if native_error is not None:
+                        raise native_error
                     raise ValueError("registered provider refused this world")
                 report = (Fixtures._timed_report(60, 40, time_budget_ms=args[-1])
                           if deadline is not None else Fixtures._report(60, 40))
@@ -207,6 +210,25 @@ class PolicyOpponentEngineTests(unittest.TestCase):
             for sampled in (False, True):
                 with self.assertRaisesRegex(EngineSearchWitnessError, "world refused"):
                     self.run_policy(workers=workers, bad="b", joint=True, sampled=sampled)
+
+    def test_native_refusal_diagnostic_survives_unchanged_fatal_boundary(self):
+        import traceback
+        for workers,deadline in ((1,None),(2,None),(1,1000),(2,1000)):
+            error = ValueError("native and private-knowledge legal surfaces differ")
+            error.policy_opponent_diagnostic = json.dumps({
+                "schema":"policy-opponent-refusal-v1","kind":"legal_surface_mismatch",
+                "diagnostic_only_not_policy_input":True,"seat":"p2","root":False,
+                "native_action_indices":[0],"private_action_indices":[0,4],"node_depth":2,
+                "sampled_own_side":"OMIT_FULL_SIDE","opposing_private":"OMIT_OPPONENT"})
+            with self.subTest(workers=workers,deadline=deadline):
+                with self.assertRaisesRegex(EngineSearchWitnessError,"world refused") as caught:
+                    self.run_policy(workers=workers,deadline=deadline,bad="b",native_error=error)
+                self.assertIs(caught.exception.__cause__,error)
+                text = "".join(traceback.format_exception(caught.exception))
+                self.assertIn('"private_action_indices": [0, 4]',text)
+                self.assertIn('"node_depth": 2',text)
+                self.assertNotIn("OMIT_FULL_SIDE",text)
+                self.assertNotIn("OMIT_OPPONENT",text)
 
     def test_provider_setup_failure_cannot_fall_back(self):
         for workers in (1, 2):
