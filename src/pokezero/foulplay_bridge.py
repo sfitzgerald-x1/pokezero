@@ -799,6 +799,10 @@ class ControlledFoulPlayConfig:
     # Opponent-side model priors in the native search (campaign cells B/E).
     # Default OFF -- flag-off must reproduce the uniform-opponent search.
     engine_opponent_priors: bool = False
+    # Identity-carrying opponent sampling from the champion's own policy.
+    # Separate from the auxiliary slot-index opponent head above.
+    engine_policy_opponent: bool = False
+    engine_policy_opponent_seed: int | None = None
     # First-play-urgency reduction in the native search (selection-tuning stage
     # 2 cells). None = the crate's flat 0.5 for unvisited arms, which is what
     # every recorded result was produced under; a float r is the KataGo-style
@@ -944,6 +948,21 @@ class ControlledFoulPlayConfig:
     live_continuation_oracle_progress_dir: Path | None = None
 
     def __post_init__(self) -> None:
+        if type(self.engine_policy_opponent) is not bool:
+            raise ValueError("engine_policy_opponent must be boolean.")
+        if self.engine_policy_opponent:
+            if self.policy_mode != "engine-mcts":
+                raise ValueError("engine_policy_opponent requires policy_mode='engine-mcts'.")
+            if (type(self.engine_policy_opponent_seed) is not int
+                    or not 0 <= self.engine_policy_opponent_seed < 2**64):
+                raise ValueError("engine_policy_opponent requires an explicit unsigned 64-bit seed.")
+            if self.engine_opponent_priors or not self.engine_model_priors:
+                raise ValueError("engine_policy_opponent requires subject priors and no auxiliary opponent priors.")
+            if (self.allow_search_fallback or self.engine_early_stop
+                    or self.engine_depth_min is not None or self.engine_worlds_min is not None):
+                raise ValueError("engine_policy_opponent requires strict fallback refusal and fixed work.")
+        elif self.engine_policy_opponent_seed is not None:
+            raise ValueError("engine_policy_opponent_seed requires engine_policy_opponent=True.")
         # The opponent seat's DISPLAY NAME follows who actually sits there. Left at the
         # default, a head-to-head shard records `winner: "FoulPlayBot"` for a game the raw
         # model won -- observed on the first 16k probe -- and `_winner_name` /
@@ -2354,6 +2373,8 @@ class ControlledFoulPlayBenchmarkResult:
                 # Part of the cell's identity, not a footnote: cells B and E
                 # are read entirely against whether this was on.
                 "opponent_priors": self.config.engine_opponent_priors,
+                "policy_opponent": self.config.engine_policy_opponent,
+                "policy_opponent_seed": self.config.engine_policy_opponent_seed,
                 # Same standing: a stage-2 cell is read entirely against which
                 # reduction it ran at, so the value belongs in the cell's
                 # identity block and not only in the launch command.
@@ -6804,6 +6825,8 @@ def _validate_external_paths(config: ControlledFoulPlayConfig) -> None:
 # write a witness claiming an instrument that never ran -- so the opponent-seat config has
 # to CLEAR them rather than suppress the checks.
 _ENGINE_ONLY_FIELDS: tuple[tuple[str, Any], ...] = (
+    ("engine_policy_opponent", False),
+    ("engine_policy_opponent_seed", None),
     ("engine_oracle_belief", False),
     ("engine_override_telemetry", False),
     ("engine_root_selector_shadow", False),
@@ -6955,6 +6978,7 @@ def _build_policy(
             set_source=load_gen3_randbat_source_cached(config.showdown_root),
             policy_id=(
                 f"{policy_id}+engine-mcts-d{config.engine_depth}-s{config.engine_sims}"
+                + ("-policy-opponent" if config.engine_policy_opponent else "")
                 + (
                     f"-wp{config.engine_model_world_workers}"
                     if config.engine_model_world_workers != 1
@@ -6975,6 +6999,8 @@ def _build_policy(
                 c_puct=config.engine_c_puct,
                 model_priors=config.engine_model_priors,
                 use_opponent_priors=config.engine_opponent_priors,
+                policy_opponent=config.engine_policy_opponent,
+                policy_opponent_seed=config.engine_policy_opponent_seed,
                 fpu_reduction=config.engine_fpu_reduction,
                 override_telemetry=config.engine_override_telemetry,
                 root_selector_shadow=config.engine_root_selector_shadow,
@@ -9347,6 +9373,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         help="Seed the OPPONENT seat's priors from the checkpoint's "
                              "opponent action head (default: uniform, as every recorded "
                              "result was produced).")
+    parser.add_argument("--engine-policy-opponent", action="store_true",
+                        help="Sample in-tree opponent actions from the champion's own "
+                             "identity-carrying policy. Requires an explicit seed, "
+                             "fixed work, subject priors and --no-search-fallback; "
+                             "incompatible with --engine-opponent-priors.")
+    parser.add_argument("--engine-policy-opponent-seed", type=int, default=None,
+                        help="Explicit unsigned 64-bit seed for own-policy opponent sampling.")
     parser.add_argument("--engine-fpu-reduction", type=float, default=None,
                         help="First-play-urgency reduction for unvisited arms in the "
                              "native search: an unvisited child is priced at the parent "
@@ -9807,6 +9840,8 @@ def _config_from_args(
         engine_c_puct=getattr(args, "engine_c_puct", 1.4),
         engine_model_priors=not getattr(args, "no_engine_model_priors", False),
         engine_opponent_priors=getattr(args, "engine_opponent_priors", False),
+        engine_policy_opponent=getattr(args, "engine_policy_opponent", False),
+        engine_policy_opponent_seed=getattr(args, "engine_policy_opponent_seed", None),
         engine_fpu_reduction=getattr(args, "engine_fpu_reduction", None),
         engine_override_telemetry=getattr(args, "engine_override_telemetry", False),
         engine_root_selector_shadow=getattr(args, "engine_root_selector_shadow", False),
