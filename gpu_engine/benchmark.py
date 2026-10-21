@@ -81,9 +81,9 @@ def measure(pool_path, *, batches=(256,1024,2048,8192), repeats=100, warmup=5):
             or len(pool["species"]) < 200000 or 2 * max(batches) > len(pool["species"])):
         raise ValueError("complete >=200000-team pool with enough distinct root teams required")
     source_hashes = {}
-    for name in ("state.py","mechanics.py","effects.py","transition.py","benchmark.py"):
-        with Path(__file__).with_name(name).open("rb") as source:
-            source_hashes[name] = hashlib.file_digest(source,"sha256").hexdigest()
+    for source_path in sorted(Path(__file__).parent.glob("*.py")):
+        with source_path.open("rb") as source:
+            source_hashes[source_path.name] = hashlib.file_digest(source,"sha256").hexdigest()
     table = tables_from_metadata(metadata)
     compiled_step = jax.jit(step)
     sample_actions = jax.jit(jax.vmap(lambda key,mask: jax.random.categorical(
