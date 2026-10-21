@@ -57,14 +57,16 @@ class MechanicsTests(unittest.TestCase):
         self.assertEqual(self.damage(screen=True,critical=True),172)
         self.assertEqual(self.damage(power=960,attack=1000,defense=1,critical=True),564228)
 
-    def test_identity_stab_event_is_skipped_only_for_typeless_moves(self):
+    def test_identity_damage_events_match_unsigned_source_boundaries(self):
         self.assertEqual(self.damage(power=1300,attack=1000,defense=1),43426)
         self.assertEqual(self.damage(power=1300,attack=1000,defense=1,typeless=True),43426)
-        # Phase1 identity wraps both. STAB has a separate identity wrap after
-        # +2, which only typed moves run. Choose that precise boundary.
+        # Phase2 also wraps after +2, before the optional typed STAB event.
         args = dict(level=1,power=25,attack=1048575,defense=1,physical=False)
         self.assertEqual(self.damage(**args),1)
-        self.assertEqual(self.damage(**args,typeless=True),1048577)
+        self.assertEqual(self.damage(**args,typeless=True),1)
+        # Type effectiveness precedes a final identity event, not randomization.
+        self.assertEqual(self.damage(power=960,attack=1000,defense=1,
+            critical=True,effectiveness_num=4),159760)
 
     def test_resolved_item_stat_multipliers_and_low_physical_floor(self):
         self.assertEqual(self.damage(attack_num=3,attack_den=2),128)
@@ -158,6 +160,7 @@ class MechanicsTests(unittest.TestCase):
             dict(physical=False,attack_stage=-2,defense_stage=3,roll=87),
             dict(power=60000,attack=2000,defense=1,stab=True,critical=True),
             dict(power=960,attack=1000,defense=1,critical=True,stab=False),
+            dict(power=960,attack=1000,defense=1,critical=True,effectiveness_num=4),
             dict(power=1300,attack=1000,defense=1),
             dict(power=1300,attack=1000,defense=1,typeless=True),
             dict(level=1,power=25,attack=1048575,defense=1,physical=False),

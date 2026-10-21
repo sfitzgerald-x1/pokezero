@@ -66,14 +66,15 @@ def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=
     # runEvent applies its Q12 modifier even when the chain stays identity.
     # That unsigned wrap is observable on deliberately large authored inputs.
     base = modify(base,phase_factor,4096)
-    base = jnp.where((jnp.asarray(weather_num) != 1) | (jnp.asarray(weather_den) != 1),
-                     modify(base, weather_num, weather_den), base)
+    base = modify(base, weather_num, weather_den)
     base = jnp.where(physical, jnp.maximum(1, base), base) + 2
     base = jnp.where(critical, modify(base, 2), base)
+    base = modify(base)  # ModifyDamagePhase2 integer event, including identity
     # Typed moves run the Q12 STAB event even when its multiplier is identity.
     # Confusion/Struggle's ??? type skips that event altogether.
     base = jnp.where(typeless, base, modify(base, jnp.where(stab, 3, 1), jnp.where(stab, 2, 1)))
     base = base * effectiveness_num // effectiveness_den
+    base = modify(base)  # final ModifyDamage event before randomization
     damage = jnp.maximum(1, (base.astype(jnp.uint32)
                             * jnp.asarray(roll, jnp.uint32) // 100).astype(jnp.int32))
     return jnp.where(immune | (jnp.asarray(power) <= 0), 0, damage)

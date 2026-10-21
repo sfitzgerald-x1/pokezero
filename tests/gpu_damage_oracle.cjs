@@ -28,7 +28,9 @@ const result = rows.map(r => {
         }
         return this.modify(value,chain.event.modifier);
       }
-      return value;
+      // Battle.runEvent applies identity Q12 to nonnegative integer relay
+      // values too (Phase2, final ModifyDamage and unmodified weather).
+      return Number.isInteger(value) && value >= 0 ? this.modify(value,1) : value;
     },
   };
   const stat = (value,stage) => Pokemon.prototype.calculateStat.call(
