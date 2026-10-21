@@ -2,7 +2,7 @@
 
 All moves are still flagged placeholders: damaging moves use static type and
 power, and only the explicit major-status/self-effect subset is integrated.
-Most items, abilities, weather, most volatiles and
+Most abilities, switch effects, volatiles and
 special move rules are not integrated. Do not use this kernel for strength or
 the final throughput/go-no-go table. It supplies the turn/PRNG/array plumbing
 needed to integrate those mechanics, with placeholder use returned explicitly.
@@ -19,6 +19,7 @@ from . import mechanics as m
 from . import items as held
 from . import weather as climate
 from . import absorption as absorb
+from . import entry as arrival
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -36,6 +37,7 @@ class MoveTable(NamedTuple):
     effects: MoveEffects | None = None
     items: held.ItemTable | None = None
     weather: climate.WeatherTable | None = None
+    entry: arrival.EntryTable | None = None
     absorption: absorb.AbsorptionTable | None = None
 
 
@@ -64,10 +66,10 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         jnp.asarray(np.where(chart == .5, 2, 1), jnp.int32),
         jnp.asarray(metadata["vocabulary"]["moves"].index("struggle"), jnp.int32),
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
-        absorb.from_metadata(metadata))
+        arrival.from_metadata(metadata),absorb.from_metadata(metadata))
 
 
-def state_from_pool(pool, team_indices, *, seed=0) -> BattleState:
+def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
     """Initialize a fixed selection of two real teams per battle without redraws."""
     indices = np.asarray(team_indices)
     if (indices.ndim != 2 or indices.shape[1] != 2 or indices.shape[0] == 0
@@ -78,7 +80,9 @@ def state_from_pool(pool, team_indices, *, seed=0) -> BattleState:
     values = {name: jnp.asarray(pool[name][indices], jnp.int32)
               for name in ("species", "level", "types", "stats", "moves", "pp", "item", "ability")}
     hp = values["stats"][..., 0]
-    return state._replace(**values, hp=hp, max_hp=hp, done=jnp.zeros_like(state.done))
+    state = state._replace(**values, hp=hp, max_hp=hp, done=jnp.zeros_like(state.done),
+        entry_pending=jnp.ones_like(state.entry_pending))
+    return initialize(state,table) if table is not None else state
 
 
 def _active(value, state, side):
@@ -101,6 +105,49 @@ def _lum_update(state,table,eligible):
         for name,value in zip(("item","status","status_counter","confusion_counter"),result):
             state = state._replace(**{name:_set_active(getattr(state,name),state,side,value)})
     return state
+
+
+def _speeds(state,table):
+    rows,sides = jnp.arange(state.hp.shape[0])[:,None],jnp.arange(2)[None,:]
+    stats = state.stats[rows,sides,state.active]
+    boosts = state.boosts[rows,sides,state.active]
+    status = state.status[rows,sides,state.active]
+    speed = m.boosted_stat(stats[...,5],boosts[...,4])
+    if table.entry is not None:
+        ability = state.ability[rows,sides,state.active]
+        weather = state.weather
+        if table.weather is not None:
+            weather = climate.effective(table.weather,weather,ability,state.hp[rows,sides,state.active])
+        speed = arrival.speed_modifier(table.entry,ability,weather[:,None],speed)
+    # Gen 3 paralysis is applied after the other Speed modifiers.
+    live_speed = m.paralyzed_speed(speed,status == m.PAR)
+    # faintMessages clears boosts; status/ability handlers no longer run for
+    # fainted holders. Their pending instaswitch still has an outgoing speed.
+    return jnp.where(state.hp[rows,sides,state.active] > 0,live_speed,stats[...,5])
+
+
+def initialize(state,table,*,eligible=True):
+    """Resolve initial entries before building the first policy observation.
+
+    No turn, residual, hazard or ordinary-step RNG is consumed. A dedicated
+    fold-in stream resolves initial speed ties, so explicit initialization and
+    step's compatibility initialization produce identical ordinary trajectories.
+    """
+    if table.entry is None:
+        return state
+    rows = jnp.arange(state.hp.shape[0])
+    live = ~state.done & jnp.asarray(eligible)
+    speed = _speeds(state,table)
+    coin = jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,314159),(),0,2))(state.keys)
+    first = jnp.where(speed[:,0] != speed[:,1],speed[:,1] > speed[:,0],coin == 1).astype(jnp.int32)
+    pending_battle = live & jnp.any(state.entry_pending,axis=1)
+    for order in range(2):
+        side = jnp.where(order == 0,first,1-first)
+        pending = live & state.entry_pending[rows,side]
+        state,_ = arrival.enter(state,side,table.entry,eligible=pending,hazards=False)
+        state = state._replace(entry_pending=state.entry_pending.at[rows,side].set(
+            state.entry_pending[rows,side] & ~pending))
+    return _lum_update(state,table,pending_battle)
 
 
 class StepResult(NamedTuple):
@@ -132,28 +179,63 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     invalid = ~state.done & jnp.any(requested & (~valid | (actions < 0) | (actions > 8)), axis=1)
     live = ~state.done & ~invalid
     splits = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
-    draws = jax.vmap(lambda key: jax.random.randint(key, (2, 10), 0,
-        jnp.array([2, 100, 100, 100, 16, 16, 100, 4, 8, 2], jnp.int32)))(splits[:, 1])
-    work = state._replace(keys=splits[:, 0])
+    draws = jax.vmap(lambda key: jax.random.randint(key, (2, 12), 0,
+        jnp.array([2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2], jnp.int32)))(splits[:, 1])
+    work = initialize(state,table,eligible=live)._replace(keys=splits[:, 0])
+    work = _lum_update(work,table,live)
+    # All action speeds are frozen before ordinary switches. In Gen 3 a
+    # switch-in weather change does not reorder the remaining move queue.
+    speed = _speeds(work,table)
     switches = live[:, None] & requested & (actions >= 4)
     bench = bench_indices(state.active)
     target = jnp.take_along_axis(bench, jnp.clip(actions - 4, 0, 4)[..., None], axis=2)[..., 0]
-    work = work._replace(active=jnp.where(switches, target, state.active),
-                         forced_switch=jnp.where(switches, False, state.forced_switch))
-    # Ordinary switching drops boosts and toxic escalation on the departing mon.
-    old_boosts = state.boosts[rows[:, None], sides, state.active]
-    boosts = state.boosts.at[rows[:, None], sides, state.active].set(
-        jnp.where(switches[..., None], 0, old_boosts))
-    old_counter = state.status_counter[rows[:, None], sides, state.active]
-    toxic = state.status[rows[:, None], sides, state.active] == m.TOX
-    counters = state.status_counter.at[rows[:, None], sides, state.active].set(
-        jnp.where(switches & toxic, 0, old_counter))
-    work = work._replace(boosts=boosts, status_counter=counters)
-    for name in ("volatile", "confusion_counter", "protect_counter", "substitute_hp", "choice_move"):
-        value = getattr(work, name)
-        old = value[rows[:, None], sides, state.active]
-        work = work._replace(**{name: value.at[rows[:, None], sides, state.active].set(
-            jnp.where(switches, 0, old))})
+    switch_first = jnp.where(speed[:,0] != speed[:,1],speed[:,1] > speed[:,0],draws[:,0,11] == 1).astype(jnp.int32)
+    switch_faint = jnp.zeros_like(state.done)
+    installed = jnp.zeros_like(switches)
+    callback_speed = jnp.zeros_like(speed)
+    for order in range(2):
+        side = jnp.where(order == 0,switch_first,1-switch_first)
+        old_active = work.active[rows,side]
+        continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
+        do_switch = switches[rows,side] & continues & (~switch_faint | replacement)
+        installed = installed.at[rows,side].set(do_switch)
+        old_hp = work.hp[rows,side,old_active]
+        old_status = work.status[rows,side,old_active]
+        cure = old_hp <= 0
+        if table.entry is not None:
+            cure |= table.entry.natural_cure[work.ability[rows,side,old_active]]
+        work = work._replace(status=work.status.at[rows,side,old_active].set(
+            jnp.where(do_switch & cure,m.NONE,old_status)))
+        counter = work.status_counter[rows,side,old_active]
+        work = work._replace(status_counter=work.status_counter.at[rows,side,old_active].set(
+            jnp.where(do_switch & (cure | (old_status == m.TOX)),0,counter)))
+        for name in ("boosts","volatile","confusion_counter","protect_counter","substitute_hp","choice_move"):
+            value = getattr(work,name)
+            old = value[rows,side,old_active]
+            gate = do_switch[:,None] if old.ndim == 2 else do_switch
+            work = work._replace(**{name:value.at[rows,side,old_active].set(jnp.where(gate,0,old))})
+        work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
+            forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])))
+        # insertChoice snapshots each incoming callback's Speed now; a later
+        # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
+        callback_speed = callback_speed.at[rows,side].set(_speeds(work,table)[rows,side])
+        if table.entry is not None:
+            work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
+            switch_faint |= knocked_out
+    if table.entry is not None:
+        # Forced instaswitch actions(order3) install ALL entrants before any
+        # runSwitch callback(order101). Ordinary switch actions(order103) do
+        # not: their callbacks were resolved immediately above. Forced callback
+        # order uses each incoming speed frozen at its own insertion.
+        first_entry = jnp.where(callback_speed[:,0] != callback_speed[:,1],
+            callback_speed[:,1] > callback_speed[:,0],draws[:,1,10] == 1).astype(jnp.int32)
+        for order in range(2):
+            side = jnp.where(order == 0,first_entry,1-first_entry)
+            continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
+            eligible = replacement & installed[rows,side] & continues & ~switch_faint
+            work,knocked_out = arrival.enter(work,side,table.entry,eligible=eligible)
+            # A hazard KO cancels subsequent queued runSwitch callbacks too.
+            switch_faint |= knocked_out
     work = _lum_update(work,table,live)
     slot = jnp.clip(actions, 0, 3)
     pp = state.pp[rows[:, None], sides, state.active]
@@ -164,14 +246,11 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     struggle = ~jnp.any(usable, axis=-1)
     moves = state.moves[rows[:, None], sides, state.active, slot]
     moves = jnp.where(struggle, table.struggle, moves)
-    stats = state.stats[rows[:, None], sides, state.active]
-    speed = m.boosted_stat(stats[..., 5], old_boosts[..., 4])
-    speed = m.paralyzed_speed(speed, work.status[rows[:, None], sides, state.active] == m.PAR)
     priority = table.priority[moves]
     first = jnp.where(priority[:, 0] != priority[:, 1], priority[:, 1] > priority[:, 0],
         jnp.where(speed[:, 0] != speed[:, 1], speed[:, 1] > speed[:, 0], draws[:, 0, 0] == 1)).astype(jnp.int32)
     placeholders = jnp.zeros_like(state.turn)
-    moves_cancelled = jnp.zeros_like(state.done)
+    moves_cancelled = switch_faint
     protected = jnp.zeros_like(state.active,dtype=jnp.bool_)
     enduring = jnp.zeros_like(protected)
     # Stall lasts through the next ordinary turn unless refreshed by success.
@@ -233,6 +312,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         foe_types = _active(work.types, work, foe)
         num = table.type_num[typ, foe_types[:, 0]] * table.type_num[typ, foe_types[:, 1]]
         den = table.type_den[typ, foe_types[:, 0]] * table.type_den[typ, foe_types[:, 1]]
+        immune = num == 0
+        if table.entry is not None:
+            immune |= (typ == table.entry.ground_type) & table.entry.levitate[_active(work.ability,work,foe)]
         weather_num,weather_den = (1,1)
         accuracy,always_hit = table.accuracy[move],table.always_hit[move]
         if table.weather is not None:
@@ -256,7 +338,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             stab=jnp.any(own_types == typ[:, None], axis=1) & (typ != 0),
             typeless=typ == 0,
             burned=_active(work.status, work, side) == m.BRN,
-            effectiveness_num=num, effectiveness_den=den, immune=num == 0, roll=85 + chance[:, 5])
+            effectiveness_num=num, effectiveness_den=den, immune=immune, roll=85 + chance[:, 5])
         hit = m.accuracy_hit(accuracy, attack_boosts[:, 5], defense_boosts[:, 6],
                              chance[:, 6], always_hit=always_hit)
         bypass_sub = jnp.zeros_like(acts)
@@ -361,7 +443,13 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             weather,counter = climate.set_move(work.weather,work.weather_counter,
                 table.weather.move_weather[move],eligible=acts)
             work = work._replace(weather=weather,weather_counter=counter)
+        if table.entry is not None:
+            old_layers = work.spikes[rows,foe]
+            work = work._replace(spikes=work.spikes.at[rows,foe].set(jnp.where(
+                acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
+    # Residual handler speeds are snapshotted before weather expiry/upkeep.
+    end_speed = _speeds(work,table)
     if table.weather is not None:
         ordinary = live & ~replacement & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         weather,counter = climate.residual_clock(work.weather,work.weather_counter,eligible=ordinary)
@@ -380,10 +468,6 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     # sorts SPEED before suborder: a faster status precedes a slower heal.
     # At equal speed, both Leftovers(4) precede statuses(6), with independent
     # per-suborder tie coins. Absent handlers are masked no-ops.
-    end_stats = work.stats[rows[:,None],sides,work.active]
-    end_boosts = work.boosts[rows[:,None],sides,work.active]
-    end_status = work.status[rows[:,None],sides,work.active]
-    end_speed = m.paralyzed_speed(m.boosted_stat(end_stats[...,5],end_boosts[...,4]),end_status == m.PAR)
     event_sides = jnp.array([0,1,0,1])
     event_suborder = jnp.array([4,4,6,6])
     tie = jnp.concatenate((draws[:,0,9,None] ^ sides,draws[:,1,9,None] ^ sides),axis=1)

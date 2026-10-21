@@ -100,7 +100,7 @@ def measure(pool_path, *, batches=(256,1024,2048,8192), repeats=100, warmup=5):
         timing="Synchronized whole-result wall time including host dispatch; initialization/action sampling/compilation/warm-up excluded",
         rows=[])
     for batch in batches:
-        state = state_from_pool(pool,np.arange(2*batch).reshape(batch,2),seed=20261021)
+        state = state_from_pool(pool,np.arange(2*batch).reshape(batch,2),seed=20261021,table=table)
         actions = sample_actions(state.keys,legal_actions(state))
         jax.block_until_ready((state,actions,table))
         first = compiled_step(state,actions,table)
