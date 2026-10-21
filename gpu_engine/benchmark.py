@@ -21,8 +21,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .state import legal_actions
-from .transition import state_from_pool, step, tables_from_metadata
+from .transition import action_mask, state_from_pool, step, tables_from_metadata
 
 
 def sole_gpu():
@@ -101,7 +100,7 @@ def measure(pool_path, *, batches=(256,1024,2048,8192), repeats=100, warmup=5):
         rows=[])
     for batch in batches:
         state = state_from_pool(pool,np.arange(2*batch).reshape(batch,2),seed=20261021,table=table)
-        actions = sample_actions(state.keys,legal_actions(state))
+        actions = sample_actions(state.keys,action_mask(state,table))
         jax.block_until_ready((state,actions,table))
         first = compiled_step(state,actions,table)
         jax.block_until_ready(first)

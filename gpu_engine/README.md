@@ -17,8 +17,11 @@ State has six party members per side; all fields are JAX arrays with a leading
 batch dimension. Types, status, items, abilities and moves require the eventual
 team pool's vocabulary. Bench actions enumerate party order excluding the
 active slot. Move0 represents synthetic Struggle only when no move is usable.
-The initial mask handles PP, Choice Band locking, externally resolved disabled/trapped flags,
-forced replacement and fainted slots; Taunt, Encore, recharge and other
+The structural mask handles PP, Choice Band locking, externally resolved disabled/trapped flags,
+forced replacement and fainted slots. Table-backed callers must use
+`transition.action_mask(state, table)`, which additionally resolves current active
+ability traps and is also used by the step validator and benchmark sampler.
+Taunt, Encore, recharge and other
 restrictions still require the transition and are not claimed as supported.
 For unilateral forced replacement, the initial transition suppresses the
 other seat's action. The mask alone is not a complete request-phase protocol.
@@ -136,6 +139,15 @@ already make the status fail. Flash Fire's Fire-damage modifier persists until
 switching. Original-catalog damaging Fire moves thaw a struck frozen target;
 Hidden Power Fire and dynamically Fire Weather Ball do not. These are selected
 events, not general ability coverage.
+
+Guts now composes with the selected item multipliers in one Attack event,
+including confusion self-damage. It overrides the physical burn penalty without
+curing burn or preventing residual damage. Gen 3 Thick Fat modifies Fire/Ice
+base power, not Attack or final damage. Arena Trap, Magnet Pull and Shadow Tag
+restrict voluntary switches through the current request mask; forced switches
+remain legal. Bench/fainted trappers do not bind, and Gen 3 does not give Ghosts
+or other Shadow Tag holders their later-generation exemptions. Move traps and
+Baton Pass remain pending.
 
 This is an incomplete integration kernel. Remaining items, ability interactions, switch events,
 the full residual scheduler and remaining special move effects are not
