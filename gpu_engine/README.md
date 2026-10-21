@@ -108,6 +108,15 @@ paralysis eligibility and Thunder Wave's Ground immunity, sleep counters and
 boost clamping. Items/abilities can still alter these events and are not yet
 integrated, so this is not a move-coverage qualification.
 
+Substitute now costs the floored quarter of max HP, absorbs single-hit damage
+without spill and preserves actual sub-damage for Struggle recoil. Protect and
+Detect block moves according to the pinned catalog's protect flag; Endure limits
+direct move damage to leave one HP, not residuals or recoil. Their shared Gen 3
+stall chance halves to a minimum of one eighth and expires after an unrefreshed
+ordinary turn. They fail as the last queued move. This remains a partial surface:
+multi-hit, item/ability interactions, Baton Pass and the wider event system are
+not qualified by these authored component fixtures.
+
 This is an incomplete integration kernel. Items, abilities, weather, switch events,
 the full residual scheduler and remaining special move effects are not
 integrated. Its arithmetic/turn fixtures and one-turn real
