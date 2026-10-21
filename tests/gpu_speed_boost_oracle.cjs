@@ -24,8 +24,8 @@ forced.makeChoices('move 1','move 1');forcedStages.push(forced.p1.active[0].boos
 forced.destroy();
 const queue=create();
 const left=queue.p1.active[0],right=queue.p2.active[0];
-left.setAbility('limber');left.setItem('leftovers');left.maxhp=100;left.hp=50;
-right.setAbility('speedboost');right.maxhp=100;right.hp=1;right.setStatus('psn');
+left.setAbility('limber');left.setItem('leftovers');left.maxhp=left.baseMaxhp=100;left.hp=50;
+right.setAbility('speedboost');right.maxhp=right.baseMaxhp=100;right.hp=1;right.setStatus('psn');
 for(const side of queue.sides) {
   side.pokemon[1].hp=0;side.pokemon[1].fainted=true;side.pokemonLeft=1;
   side.active[0].storedStats.spe=200;side.active[0].updateSpeed();side.active[0].activeTurns=1;
