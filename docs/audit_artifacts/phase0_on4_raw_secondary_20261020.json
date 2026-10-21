@@ -1,0 +1,168 @@
+{
+  "schema": "pokezero.phase0-secondary-public-result.v1",
+  "date": "2026-10-20",
+  "status": "CLEAR_DESCRIPTIVE_COMPLETE_ATTEMPT_WITH_ONE_CAP",
+  "comparison": "ON four worlds x256 depth6 versus deterministic raw argmax, unchanged champion",
+  "source": {
+    "collector_commit": "ac6e3c58c2a86d2db6739236600f1c355a67508d",
+    "controller_commit": "03dcf0169ba7743e1d9295db666d91d3eae50dce",
+    "checkpoint_sha256": "0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be",
+    "entry_sha256": "1f1cca92aef1ef555c3bcd45141d74a3cf2886e79fa0dd5ffe58cd0dcae8dcf1",
+    "independent_readout_sha256": "c0474a8f72933f25f07b4d7afea278be7c1bed3e1a69a8e91a72a2601f53b33c",
+    "input_summary_sha256": {
+      "candidate_p1": "4b7c4069860edeb35c06b3c429d3475a6290f5685f33f3c2ab351a74fd8da682",
+      "candidate_p2": "5317ec06c5a5a03309722d38a3cd773a51197d2250507d55145cd0ce33bad884"
+    }
+  },
+  "roster": {
+    "seed_start": 3829141000,
+    "seed_count": 64,
+    "candidate_seats": [
+      "p1",
+      "p2"
+    ],
+    "fixed_cells": 128
+  },
+  "counts": {
+    "wins": 68,
+    "losses": 57,
+    "genuine_draws": 2,
+    "caps": 1,
+    "total_fixed_cells": 128
+  },
+  "per_seat": {
+    "p1": {
+      "losses": 27,
+      "wins": 34,
+      "caps": 1,
+      "draws": 2
+    },
+    "p2": {
+      "wins": 34,
+      "losses": 30
+    }
+  },
+  "candidate_score_bounds": [
+    0.5390625,
+    0.546875
+  ],
+  "excess_over_even_bounds": [
+    0.0390625,
+    0.046875
+  ],
+  "aggregation": "Outcome.bounds: validated COMPLETE scores are points; cap remains [0,1]. Average both seats within each seed, then all64 seed endpoints.",
+  "capped_cell": {
+    "seed": 3829141002,
+    "seat": "p1",
+    "rounds": 250,
+    "bounds": [
+      0,
+      1
+    ],
+    "legacy_half_point_ignored": true
+  },
+  "lifecycle": {
+    "actual_outer_exit": 0,
+    "actual_shard_exits": [
+      0,
+      0
+    ],
+    "cleanup_verified": true,
+    "elapsed_seconds": 13860.660834789276
+  },
+  "work": {
+    "searched_decisions": 6643,
+    "total_iterations": 6802432,
+    "iterations_per_decision": 1024,
+    "world_allocations": 26572,
+    "unique_worlds": 26131,
+    "collapsed_allocations": 441,
+    "root_rows_dropped": 0,
+    "candidate_fallbacks": 0,
+    "candidate_refusals": 0,
+    "candidate_recorder_trustworthy": true,
+    "raw_refusal_telemetry": "unavailable"
+  },
+  "priors": {
+    "projection_decisions": 6096,
+    "omissions": 547,
+    "opponent_No_Move": 530,
+    "acting_No_Move": 1,
+    "other_conservative_omissions": 16,
+    "scope": "Nonzero projection in at least one native world per qualifying decision, not all-world coverage."
+  },
+  "policy_timing_seconds": {
+    "decisions": 6643,
+    "mean_policy_seconds": 1.9331233337177092,
+    "median_policy_seconds": 1.7782937502488494,
+    "p95_nearest_rank_policy_seconds": 3.328392124734819
+  },
+  "interpretation": "Fixed-roster descriptive missing-outcome bounds, not confidence intervals, population effect or significance. Cannot replace failed FoulPlay primary or qualify advancement, deployment or training.",
+  "validation_scope": "Saved public-terminal provenance, exact seed-seat roster, source/input hashes and actual lifecycle receipts. Not protocol replay or full simulator equivalence.",
+  "per_seed": [
+    {"seed":3829141000,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141001,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141002,"p1":[0,1],"p2":[0,0],"mean":[0,0.5]},
+    {"seed":3829141003,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141004,"p1":[0,0],"p2":[0,0],"mean":[0,0]},
+    {"seed":3829141005,"p1":[1,1],"p2":[1,1],"mean":[1,1]},
+    {"seed":3829141006,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141007,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141008,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141009,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141010,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141011,"p1":[1,1],"p2":[1,1],"mean":[1,1]},
+    {"seed":3829141012,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141013,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141014,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141015,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141016,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141017,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141018,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141019,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141020,"p1":[1,1],"p2":[1,1],"mean":[1,1]},
+    {"seed":3829141021,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141022,"p1":[1,1],"p2":[1,1],"mean":[1,1]},
+    {"seed":3829141023,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141024,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141025,"p1":[1,1],"p2":[1,1],"mean":[1,1]},
+    {"seed":3829141026,"p1":[0,0],"p2":[0,0],"mean":[0,0]},
+    {"seed":3829141027,"p1":[0,0],"p2":[0,0],"mean":[0,0]},
+    {"seed":3829141028,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141029,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141030,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141031,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141032,"p1":[1,1],"p2":[1,1],"mean":[1,1]},
+    {"seed":3829141033,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141034,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141035,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141036,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141037,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141038,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141039,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141040,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141041,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141042,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141043,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141044,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141045,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141046,"p1":[0.5,0.5],"p2":[1,1],"mean":[0.75,0.75]},
+    {"seed":3829141047,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141048,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141049,"p1":[0.5,0.5],"p2":[1,1],"mean":[0.75,0.75]},
+    {"seed":3829141050,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141051,"p1":[1,1],"p2":[1,1],"mean":[1,1]},
+    {"seed":3829141052,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141053,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141054,"p1":[1,1],"p2":[1,1],"mean":[1,1]},
+    {"seed":3829141055,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141056,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141057,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141058,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141059,"p1":[1,1],"p2":[1,1],"mean":[1,1]},
+    {"seed":3829141060,"p1":[1,1],"p2":[0,0],"mean":[0.5,0.5]},
+    {"seed":3829141061,"p1":[0,0],"p2":[0,0],"mean":[0,0]},
+    {"seed":3829141062,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]},
+    {"seed":3829141063,"p1":[0,0],"p2":[1,1],"mean":[0.5,0.5]}
+  ]
+}
