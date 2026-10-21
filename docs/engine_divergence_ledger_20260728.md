@@ -2496,6 +2496,7 @@ namespace only:
 | fidelity differential, final holdout — C151 **RATIFIED replacement window** | `19,300,000`–`19,300,199` | the terminal one-shot measurement, re-registered on virgin seeds because the `19,200,000` block is burned | **RATIFIED (owner scott, 2026-08-08) and NOT YET SWEPT.** One sweep, ever, and only once the precondition holds: ledger terminal and engine fingerprint declared frozen for the claim. `reports/c151_final_holdout_rereg_prediction.md` is frozen as to window, protocol and preconditions; the trigger has not fired |
 | gameplay-root reuse | `2,026,100,100`–`2,026,100,107` | `docs/paper_policy_opponent_roster_20261004.json`, frozen selection from completed practical pilot s0, both seats at indices 0 and 9 | selection only, NOT_LAUNCHED; not a differential sweep or new strength measurement |
 | gameplay policy control | `3,829,143,000`–`3,829,143,031` | `docs/audit_artifacts/phase0_raw_sample_control_20261019.json`, current-champion raw versus sampled policy, 32 seeds and both seats | completed descriptive gameplay; not a fidelity sweep |
+| gameplay ON4 versus raw secondary | `3,829,141,000`–`3,829,141,063` | `docs/audit_artifacts/phase0_on4_raw_secondary_20261020.json`, original 64-seed two-seat full-game comparison | 127 validated outcomes and one unknown cap; descriptive gameplay, not a fidelity sweep |
 
 **October 4 namespace amendment.** The dated gameplay seeds above exceed the
 fidelity floor numerically but serve a different purpose. The roster binds its
@@ -2516,6 +2517,15 @@ remain subject to ordinary coverage. This indexes an already prospectively
 reviewed gameplay entry, not a new scientific registration or fidelity band.
 It records 38 wins, 25 losses and one genuine draw over 64 games; no simulator
 equivalence, population significance or search improvement follows from it.
+
+**October 20 gameplay secondary index.** The independently reviewed ON4 versus
+raw result is classified only by its exact path and bytes, SHA-256
+`1575915721c6a4a3d5a1a86139a352d8847a9178ab7be808539397659b92af50`.
+Changed bytes fail closed; identical copies elsewhere remain subject to normal
+coverage. The original 64 seeds and both seats yielded 68 wins, 57 losses, two
+public ties and one cap retained as unknown. This indexes completed gameplay,
+not a new seed allocation, differential band or fidelity measurement. No
+statistical significance or Foul Play qualification follows from these bounds.
 
 **C151 — the owner ratified a replacement window, burned the old block, and deferred the
 sweep.** Ratified **2026-08-08** by **scott**, in these words:
