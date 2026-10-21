@@ -22,6 +22,11 @@ class MoveEffects(NamedTuple):
     thunderwave: jax.Array        # [M], Ground immunity belongs to this move
     status_immunity: jax.Array    # [7,18], type-based major-status immunity
     ground_type: jax.Array
+    substitute: jax.Array
+    protect: jax.Array
+    endure: jax.Array
+    protectable: jax.Array         # actual pinned move flags, not category inference
+    bypass_sub: jax.Array
 
 
 def from_metadata(metadata):
@@ -49,7 +54,23 @@ def from_metadata(metadata):
         for name in blocked: immunity[value,types.index(name)] = True
     # Electric types can be paralyzed in Gen 3. Ground only blocks Thunder Wave,
     # not every route to paralysis (for example Stun Spore).
+    rows = metadata.get("moves")
+    if rows is not None and len(rows) != len(names):
+        raise ValueError("move metadata/vocabulary mismatch")
+    move_flag = lambda flag: jnp.asarray([
+        bool(row and row.get("flags",{}).get(flag)) for row in rows
+    ]) if rows is not None else jnp.zeros(len(names),bool)
     return MoveEffects(jnp.asarray(status),jnp.asarray(boosts),
         flags({"recover","softboiled","milkdrink","slackoff"}),flags({"rest"}),
         flags({"haze"}),flags({"thunderwave"}),jnp.asarray(immunity),
-        jnp.asarray(types.index("ground"),jnp.int32))
+        jnp.asarray(types.index("ground"),jnp.int32),flags({"substitute"}),
+        flags({"protect","detect"}),flags({"endure"}),move_flag("protect"),move_flag("bypasssub"))
+
+
+def stall_success(counter, roll):
+    """Gen 3 consecutive Protect/Detect/Endure: 1, 1/2, 1/4, then 1/8.
+
+    Counter is the next attempt's denominator (zero means no active stall).
+    Roll is uniform integer [0,8); a successful attempt stores min(8,2*counter).
+    """
+    return roll < 8 // jnp.maximum(1,counter)

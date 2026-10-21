@@ -16,7 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from . import mechanics as m
-from .effects import MoveEffects, from_metadata as effects_from_metadata
+from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
 
@@ -112,8 +112,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     invalid = ~state.done & jnp.any(requested & (~valid | (actions < 0) | (actions > 8)), axis=1)
     live = ~state.done & ~invalid
     splits = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
-    draws = jax.vmap(lambda key: jax.random.randint(key, (2, 8), 0,
-        jnp.array([2, 100, 100, 100, 16, 16, 100, 4], jnp.int32)))(splits[:, 1])
+    draws = jax.vmap(lambda key: jax.random.randint(key, (2, 9), 0,
+        jnp.array([2, 100, 100, 100, 16, 16, 100, 4, 8], jnp.int32)))(splits[:, 1])
     work = state._replace(keys=splits[:, 0])
     switches = live[:, None] & requested & (actions >= 4)
     bench = bench_indices(state.active)
@@ -148,6 +148,12 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         jnp.where(speed[:, 0] != speed[:, 1], speed[:, 1] > speed[:, 0], draws[:, 0, 0] == 1)).astype(jnp.int32)
     placeholders = jnp.zeros_like(state.turn)
     moves_cancelled = jnp.zeros_like(state.done)
+    protected = jnp.zeros_like(state.active,dtype=jnp.bool_)
+    enduring = jnp.zeros_like(protected)
+    # Stall lasts through the next ordinary turn unless refreshed by success.
+    old_stall = work.protect_counter
+    work = work._replace(protect_counter=jnp.where(
+        (live & ~replacement)[:,None,None],0,work.protect_counter))
     for order in range(2):
         side = jnp.where(order == 0, first, 1 - first)
         foe = 1 - side
@@ -206,10 +212,19 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             effectiveness_num=num, effectiveness_den=den, immune=num == 0, roll=85 + chance[:, 5])
         hit = m.accuracy_hit(table.accuracy[move], attack_boosts[:, 5], defense_boosts[:, 6],
                              chance[:, 6], always_hit=table.always_hit[move])
+        bypass_sub = jnp.zeros_like(acts)
+        if table.effects is not None:
+            hit &= ~(protected[rows,foe] & table.effects.protectable[move])
+            bypass_sub = table.effects.bypass_sub[move]
         hp = _active(work.hp, work, foe)
-        dealt = jnp.where(acts & hit, jnp.minimum(hp, damage), 0)
-        foe_hp = hp - dealt
-        work = work._replace(hp=_set_active(work.hp, work, foe, foe_hp))
+        sub_hp = _active(work.substitute_hp,work,foe)
+        hits_sub = (sub_hp > 0) & ~bypass_sub
+        capacity = jnp.where(hits_sub,sub_hp,jnp.where(enduring[rows,foe],jnp.maximum(0,hp-1),hp))
+        dealt = jnp.where(acts & hit,jnp.minimum(capacity,damage),0)
+        foe_hp = hp - jnp.where(hits_sub,0,dealt)
+        work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
+            substitute_hp=_set_active(work.substitute_hp,work,foe,
+                sub_hp - jnp.where(hits_sub,dealt,0)))
         # Gen 3 Struggle uses round(actual damage / 4), not max HP / 4.
         recoil = jnp.maximum(1, (dealt + 2) // 4)
         hp = _active(work.hp, work, side)
@@ -217,9 +232,28 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         work = work._replace(hp=_set_active(work.hp, work, side, hp))
         if table.effects is not None:
             effects = table.effects
+            # Protect/Endure fail if there is no queued move left (including
+            # when the foe switched before move execution). A failed use or a
+            # non-stalling turn lets the previous stall counter expire.
+            stall = (acts & (effects.protect[move] | effects.endure[move])
+                & (order == 0) & ~switches[rows,foe])
+            count = _active(old_stall,work,side)
+            stall &= stall_success(count,chance[:,8])
+            protected = protected.at[rows,side].set(stall & effects.protect[move])
+            enduring = enduring.at[rows,side].set(stall & effects.endure[move])
+            work = work._replace(protect_counter=_set_active(work.protect_counter,work,side,
+                jnp.where(stall,jnp.minimum(8,jnp.maximum(2,count*2)),
+                          _active(work.protect_counter,work,side))))
             # Self effects use the active actor, never the opposing target.
             hp = _active(work.hp, work, side)
             max_hp = _active(work.max_hp, work, side)
+            sub_hp = _active(work.substitute_hp,work,side)
+            creates_sub = (acts & effects.substitute[move] & (sub_hp == 0)
+                & (max_hp > 1) & (hp * 4 > max_hp))
+            cost = max_hp // 4
+            hp -= jnp.where(creates_sub,cost,0)
+            work = work._replace(substitute_hp=_set_active(work.substitute_hp,work,side,
+                jnp.where(creates_sub,cost,sub_hp)))
             restored = jnp.minimum(max_hp,hp + max_hp // 2)
             hp = jnp.where(acts & effects.heal_half[move],restored,hp)
             rest = (acts & effects.rest[move] & (hp < max_hp)
@@ -243,7 +277,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             immune |= effects.thunderwave[move] & jnp.any(target_types == effects.ground_type,axis=1)
             apply_status = (acts & hit & (status != m.NONE) & ~immune
                 & (_active(work.hp,work,foe) > 0) & (_active(work.status,work,foe) == m.NONE)
-                & (_active(work.substitute_hp,work,foe) == 0))
+                & ((_active(work.substitute_hp,work,foe) == 0) | effects.bypass_sub[move]))
             work = work._replace(status=_set_active(work.status,work,foe,
                 jnp.where(apply_status,status,_active(work.status,work,foe))),
                 status_counter=_set_active(work.status_counter,work,foe,
