@@ -126,12 +126,9 @@ def _note_policy_opponent_refusal(error: Exception) -> None:
             if (isinstance(value, list) and len(value) <= 9
                     and all(type(x) is int and 0 <= x < 9 for x in value)):
                 safe[key] = value
-        for key in ("own_volatile_statuses", "own_last_used_move"):
-            value = diagnostic.get(key)
-            if isinstance(value, str) and len(value) <= 2048:
-                safe[key] = value
-        # Deliberately omit sampled_own_side, request_order, branch lines,
-        # arbitrary extension keys and all full-state/opposing-private data.
+        # No free-form native labels: malformed transport can hide a state
+        # payload even under an otherwise expected volatile/last-move key.
+        # Also omit sampled_own_side, request_order, branch lines and extensions.
         error.add_note("policy_opponent_refusal: " + json.dumps(safe, sort_keys=True))
     except Exception:
         # Diagnostic failure never masks/reclassifies the original refusal.

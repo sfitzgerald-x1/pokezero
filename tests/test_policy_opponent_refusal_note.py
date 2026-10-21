@@ -59,8 +59,19 @@ class PolicyOpponentRefusalNoteTests(unittest.TestCase):
         self.assertNotIn("\n",note)
         self.assertNotIn("\x1b",note)
         parsed = json.loads(note.split(": ",1)[1])
-        for key in ("root","active_index","node_depth","native_action_indices","private_action_indices","own_volatile_statuses"):
+        for key in ("root","active_index","node_depth","native_action_indices","private_action_indices",
+                    "own_volatile_statuses","own_last_used_move"):
             self.assertNotIn(key,parsed)
+
+    def test_expected_free_text_keys_cannot_smuggle_private_payloads(self):
+        forbidden = '{"opposing_private":"FORBIDDEN_OPPONENT_PAYLOAD"}'
+        d = self.diagnostic() | {"own_volatile_statuses":forbidden,"own_last_used_move":forbidden}
+        e = self.error(d)
+        _note_policy_opponent_refusal(e)
+        note, = e.__notes__
+        self.assertNotIn("FORBIDDEN_OPPONENT_PAYLOAD",note)
+        self.assertNotIn("own_volatile_statuses",note)
+        self.assertNotIn("own_last_used_move",note)
 
     def test_missing_or_broken_optional_attribute_never_masks_failure(self):
         class Broken(ValueError):
