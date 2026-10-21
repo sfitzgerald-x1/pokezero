@@ -21,6 +21,7 @@ from . import weather as climate
 from . import absorption as absorb
 from . import entry as arrival
 from . import combat as traits
+from . import pressure as pp_cost
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -41,6 +42,7 @@ class MoveTable(NamedTuple):
     entry: arrival.EntryTable | None = None
     absorption: absorb.AbsorptionTable | None = None
     combat: traits.CombatTable | None = None
+    pressure: pp_cost.PressureTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -68,7 +70,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         jnp.asarray(np.where(chart == .5, 2, 1), jnp.int32),
         jnp.asarray(metadata["vocabulary"]["moves"].index("struggle"), jnp.int32),
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
-        arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata))
+        arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
+        pp_cost.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -321,8 +324,12 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         chosen_slot = slot[rows, side]
         active = work.active[rows, side]
         old_pp = work.pp[rows, side, active, chosen_slot]
+        used_pp = 1
+        if table.pressure is not None:
+            used_pp = pp_cost.cost(table.pressure,move,_active(work.types,work,side),
+                _active(work.ability,work,foe),_active(work.hp,work,foe))
         work = work._replace(pp=work.pp.at[rows, side, active, chosen_slot].set(
-            jnp.where(acts & ~struggle[rows, side], jnp.maximum(0, old_pp - 1), old_pp)))
+            jnp.where(acts & ~struggle[rows, side], jnp.maximum(0, old_pp - used_pp), old_pp)))
         placeholders += acts.astype(jnp.int32)
         attack_stats = _active(work.stats, work, side)
         defense_stats = _active(work.stats, work, foe)

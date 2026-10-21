@@ -140,6 +140,13 @@ switching. Original-catalog damaging Fire moves thaw a struck frozen target;
 Hidden Power Fire and dynamically Fire Weather Ball do not. These are selected
 events, not general ability coverage.
 
+Pressure charges extra PP on actual eligible uses before accuracy, Protect or
+Substitute checks, using the current living foe after switching. The pinned
+target catalog—not damage category—distinguishes self/ally moves from attacks,
+field moves and Spikes. Non-Ghost Curse remains self-targeted; Ghost Curse
+targets the foe. Inability to act skips PP use, and exhausted moves use synthetic
+Struggle without another charge. Called and multi-turn moves remain placeholders.
+
 Guts now composes with the selected item multipliers in one Attack event,
 including confusion self-damage. It overrides the physical burn penalty without
 curing burn or preventing residual damage. Gen 3 Thick Fat modifies Fire/Ice
