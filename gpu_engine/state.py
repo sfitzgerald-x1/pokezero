@@ -34,6 +34,7 @@ class BattleState(NamedTuple):
     protect_counter: jax.Array     # [B,2,6]
     substitute_hp: jax.Array       # [B,2,6]
     active: jax.Array              # [B,2]
+    entry_pending: jax.Array       # [B,2], initial Ability Start not yet resolved
     trapped: jax.Array             # [B,2], resolved trap state, not ability logic
     forced_switch: jax.Array       # [B,2]
     spikes: jax.Array              # [B,2]
@@ -66,6 +67,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         item=mon(), ability=mon(), boosts=jnp.zeros((b, 2, 6, 7), jnp.int32),
         volatile=jnp.zeros((b, 2, 6), jnp.uint32), confusion_counter=mon(),
         protect_counter=mon(), substitute_hp=mon(), active=side(),
+        entry_pending=jnp.zeros((b,2),jnp.bool_),
         trapped=jnp.zeros((b, 2), jnp.bool_), forced_switch=jnp.zeros((b, 2), jnp.bool_),
         spikes=side(), weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32))
