@@ -10,6 +10,8 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
+FLINCH = 1  # volatile bit 0; cleared at the end of each ordinary turn
+
 
 class BattleState(NamedTuple):
     species: jax.Array             # [B,2,6]

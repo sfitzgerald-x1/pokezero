@@ -45,9 +45,10 @@ class TransitionTests(unittest.TestCase):
         self.assertEqual(r.state.turn.tolist(),[1])
 
     def test_priority_can_override_speed(self):
-        s = self.live()._replace(moves=self.live().moves.at[0,1,0,0].set(3))
-        table = self.table._replace(priority=self.table.priority.at[3].set(1),
-                                   power=self.table.power.at[3].set(1000))
+        # Distinct ordinary priority attack, not the table's Struggle ID.
+        s = self.live()._replace(moves=self.live().moves.at[0,1,0,0].set(2))
+        table = self.table._replace(priority=self.table.priority.at[2].set(1),
+            power=self.table.power.at[2].set(1000), physical=self.table.physical.at[2].set(True))
         r = self.t.step(s,self.jnp.zeros((1,2),self.jnp.int32),table)
         self.assertEqual(r.state.hp[0,:,0].tolist(),[0,100])
 
@@ -106,6 +107,82 @@ class TransitionTests(unittest.TestCase):
                 self.assertEqual(r.state.status_counter[0,0,0].item(),2)
                 self.assertEqual(r.state.done.tolist(),[True])
                 self.assertEqual(r.state.winner.tolist(),[0])
+
+    def test_confusion_self_damage_blocks_pp_and_uses_own_stats(self):
+        s = self.live(64)
+        s = s._replace(confusion_counter=s.confusion_counter.at[:,0,0].set(2),
+            stats=s.stats.at[:,1,0,2].set(1),
+            moves=self.jnp.full_like(s.moves,2), status=s.status.at[:,1,0].set(self.m.SLP),
+            status_counter=s.status_counter.at[:,1,0].set(3))
+        r = self.t.step(s,self.jnp.zeros((64,2),self.jnp.int32),self.table)
+        hp = r.state.hp[:,0,0]
+        hit = hp < 100
+        self.assertTrue(bool(self.jnp.any(hit) & self.jnp.any(~hit)))
+        self.assertTrue(bool(self.jnp.all(~hit | ((hp >= 65) & (hp <= 71)))))
+        self.assertTrue(bool(self.jnp.all(r.state.pp[:,0,0,0] == self.jnp.where(hit,10,9))))
+        self.assertTrue(bool(self.jnp.all(r.state.confusion_counter[:,0,0] == 1)))
+        self.assertTrue(bool(self.jnp.all(r.state.hp[:,1,0] == 100)))
+
+    def test_confusion_self_ko_cancels_foe_action_but_not_eligible_residuals(self):
+        s = self.live(64)
+        s = s._replace(hp=s.hp.at[:,0,0].set(1),
+            confusion_counter=s.confusion_counter.at[:,0,0].set(2),
+            moves=self.jnp.full_like(s.moves,2),status=s.status.at[:,1,0].set(self.m.PSN))
+        r = self.t.step(s,self.jnp.zeros((64,2),self.jnp.int32),self.table)
+        ko = r.state.hp[:,0,0] == 0
+        self.assertTrue(bool(self.jnp.any(ko)))
+        self.assertTrue(bool(self.jnp.all(~ko | (r.state.pp[:,1,0,0] == 10))))
+        self.assertTrue(bool(self.jnp.all(r.state.hp[:,1,0] == 88)))
+        self.assertFalse(bool(self.jnp.any(r.state.done)))
+
+    def test_confusion_last_mon_ko_ends_before_foe_move_and_residual(self):
+        s = self.live(64)
+        s = s._replace(hp=s.hp.at[:,0,0].set(1).at[:,0,1:].set(0),
+            confusion_counter=s.confusion_counter.at[:,0,0].set(2),
+            moves=self.jnp.full_like(s.moves,2),status=s.status.at[:,1,0].set(self.m.PSN))
+        r = self.t.step(s,self.jnp.zeros((64,2),self.jnp.int32),self.table)
+        ko = r.state.hp[:,0,0] == 0
+        self.assertTrue(bool(self.jnp.any(ko)))
+        self.assertTrue(bool(self.jnp.all(~ko | ((r.state.hp[:,1,0] == 100)
+            & (r.state.pp[:,1,0,0] == 10) & r.state.done & (r.state.winner == 1)))))
+
+    def test_struggle_is_typeless_no_stab_and_recoils_from_actual_damage(self):
+        s = self.live(64)
+        s = s._replace(pp=s.pp.at[:,0].set(0), types=s.types.at[:,1,0,0].set(8),
+            status=s.status.at[:,1,0].set(self.m.SLP),status_counter=s.status_counter.at[:,1,0].set(3))
+        table = self.table._replace(type=self.table.type.at[3].set(1),
+                                   type_num=self.table.type_num.at[1,8].set(0))
+        r = self.t.step(s,self.jnp.zeros((64,2),self.jnp.int32),table)
+        damage = 100 - r.state.hp[:,1,0]
+        self.assertTrue(bool(self.jnp.all((damage >= 37) & (damage <= 88))))
+        self.assertTrue(bool(self.jnp.all(r.state.hp[:,0,0] == 100 - self.jnp.maximum(1,(damage+2)//4))))
+        self.assertTrue(bool(self.jnp.all(r.state.pp[:,0,0,0] == 0)))
+        s = s._replace(hp=s.hp.at[:,1,0].set(2))
+        r = self.t.step(s,self.jnp.zeros((64,2),self.jnp.int32),table)
+        self.assertTrue(bool(self.jnp.all(r.state.hp[:,0,0] == 99)))
+
+    def test_struggle_self_ko_cancels_remaining_move_and_double_ko_ties(self):
+        s = self.live()
+        s = s._replace(pp=s.pp.at[:,0].set(0),hp=s.hp.at[0,0,0].set(1),
+                       moves=s.moves.at[0,1,0,0].set(2))
+        r = self.t.step(s,self.jnp.zeros((1,2),self.jnp.int32),self.table)
+        self.assertEqual(r.state.hp[0,0,0].item(),0)
+        self.assertEqual(r.state.pp[0,1,0,0].item(),10)
+        s = s._replace(hp=s.hp.at[:,:,1:].set(0).at[0,1,0].set(1))
+        r = self.t.step(s,self.jnp.zeros((1,2),self.jnp.int32),self.table)
+        self.assertEqual(r.state.hp[0,:,0].tolist(),[0,0])
+        self.assertEqual(r.state.winner.tolist(),[2])
+
+    def test_flinch_precedes_confusion_and_clears_after_turn(self):
+        from gpu_engine.state import FLINCH
+        s = self.live()
+        s = s._replace(volatile=s.volatile.at[0,0,0].set(FLINCH | 8),
+            confusion_counter=s.confusion_counter.at[0,0,0].set(3),
+            moves=self.jnp.full_like(s.moves,2))
+        r = self.t.step(s,self.jnp.zeros((1,2),self.jnp.int32),self.table)
+        self.assertEqual(r.state.pp[0,0,0,0].item(),10)
+        self.assertEqual(r.state.confusion_counter[0,0,0].item(),3)
+        self.assertEqual(r.state.volatile[0,0,0].item(),8)
 
     def test_jit_matches_eager_and_per_battle_stream_is_batch_invariant(self):
         j = self.jnp

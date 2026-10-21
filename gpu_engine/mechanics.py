@@ -36,7 +36,7 @@ def boosted_stat(stat, stage):
 
 
 def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=0,
-                physical=True, critical=False, stab=False, burned=False, guts=False,
+                physical=True, critical=False, stab=False, typeless=False, burned=False, guts=False,
                 attack_num=1, attack_den=1, defense_num=1, defense_den=1,
                 weather_num=1, weather_den=1, screen=False,
                 effectiveness_num=1, effectiveness_den=1, immune=False, roll=100):
@@ -61,7 +61,9 @@ def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=
                      modify(base, weather_num, weather_den), base)
     base = jnp.where(physical, jnp.maximum(1, base), base) + 2
     base = jnp.where(critical, modify(base, 2), base)
-    base = jnp.where(stab, modify(base, 3, 2), base)
+    # Typed moves run the Q12 STAB event even when its multiplier is identity.
+    # Confusion/Struggle's ??? type skips that event altogether.
+    base = jnp.where(typeless, base, modify(base, jnp.where(stab, 3, 1), jnp.where(stab, 2, 1)))
     base = base * effectiveness_num // effectiveness_den
     damage = jnp.maximum(1, (base.astype(jnp.uint32)
                             * jnp.asarray(roll, jnp.uint32) // 100).astype(jnp.int32))
