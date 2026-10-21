@@ -57,9 +57,16 @@ class MechanicsTests(unittest.TestCase):
         self.assertEqual(self.damage(screen=True,critical=True),172)
         self.assertEqual(self.damage(power=960,attack=1000,defense=1,critical=True),564228)
 
-    def test_identity_stab_event_is_skipped_only_for_typeless_moves(self):
+    def test_identity_damage_events_match_unsigned_source_boundaries(self):
         self.assertEqual(self.damage(power=1300,attack=1000,defense=1),43426)
-        self.assertEqual(self.damage(power=1300,attack=1000,defense=1,typeless=True),1092002)
+        self.assertEqual(self.damage(power=1300,attack=1000,defense=1,typeless=True),43426)
+        # Phase2 also wraps after +2, before the optional typed STAB event.
+        args = dict(level=1,power=25,attack=1048575,defense=1,physical=False)
+        self.assertEqual(self.damage(**args),1)
+        self.assertEqual(self.damage(**args,typeless=True),1)
+        # Type effectiveness precedes a final identity event, not randomization.
+        self.assertEqual(self.damage(power=960,attack=1000,defense=1,
+            critical=True,effectiveness_num=4),159760)
 
     def test_resolved_item_stat_multipliers_and_low_physical_floor(self):
         self.assertEqual(self.damage(attack_num=3,attack_den=2),128)
@@ -136,9 +143,12 @@ class MechanicsTests(unittest.TestCase):
         defaults = dict(level=100,power=100,attack=200,defense=200,
             attack_stage=0,defense_stage=0,physical=True,critical=False,stab=False,typeless=False,
             burned=False,guts=False,attack_num=1,attack_den=1,defense_num=1,
-            defense_den=1,weather_num=1,weather_den=1,screen=False,
+            defense_den=1,weather_num=1,weather_den=1,phase1_num=1,phase1_den=1,screen=False,
             effectiveness_num=1,effectiveness_den=1,immune=False,roll=100)
-        changes = [{},dict(burned=True),dict(critical=True,attack_stage=-3,defense_stage=4),
+        changes = [{},dict(burned=True),dict(phase1_num=3,phase1_den=2),
+            dict(phase1_num=3,phase1_den=2,weather_num=3,weather_den=2,burned=True),
+            dict(power=40,attack=100,defense=1000,physical=False,screen=True,phase1_num=3,phase1_den=2),
+            dict(critical=True,attack_stage=-3,defense_stage=4),
             dict(stab=True,roll=85),dict(weather_num=3,weather_den=2,screen=True),
             dict(attack=337,defense=153,attack_stage=3,defense_stage=-2,
                  attack_num=3,attack_den=2,critical=True,stab=True,roll=91),
@@ -150,8 +160,11 @@ class MechanicsTests(unittest.TestCase):
             dict(physical=False,attack_stage=-2,defense_stage=3,roll=87),
             dict(power=60000,attack=2000,defense=1,stab=True,critical=True),
             dict(power=960,attack=1000,defense=1,critical=True,stab=False),
+            dict(power=960,attack=1000,defense=1,critical=True,effectiveness_num=4),
             dict(power=1300,attack=1000,defense=1),
-            dict(power=1300,attack=1000,defense=1,typeless=True)]
+            dict(power=1300,attack=1000,defense=1,typeless=True),
+            dict(level=1,power=25,attack=1048575,defense=1,physical=False),
+            dict(level=1,power=25,attack=1048575,defense=1,physical=False,typeless=True)]
         rows = [{**defaults,**c} for c in changes]
         helper = Path(__file__).with_name("gpu_damage_oracle.cjs")
         result = subprocess.run([NODE,str(helper),str(Path(SHOWDOWN).resolve())],
@@ -161,6 +174,10 @@ class MechanicsTests(unittest.TestCase):
         self.assertEqual(int(self.m.modify(2000000,3,2)),expected["large_modifier"])
         self.assertEqual(self.m.paralyzed_speed(self.np.array([101,103,1]),True).tolist(),
                          expected["paralysis_speed"])
+
+    def test_screen_and_flash_fire_chain_rounds_only_once(self):
+        self.assertEqual(self.damage(power=40,attack=100,defense=1000,physical=False,
+            screen=True,phase1_num=3,phase1_den=2),4)
 
 
 if __name__ == "__main__":

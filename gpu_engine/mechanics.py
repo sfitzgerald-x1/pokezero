@@ -38,7 +38,7 @@ def boosted_stat(stat, stage):
 def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=0,
                 physical=True, critical=False, stab=False, typeless=False, burned=False, guts=False,
                 attack_num=1, attack_den=1, defense_num=1, defense_den=1,
-                weather_num=1, weather_den=1, screen=False,
+                weather_num=1, weather_den=1, phase1_num=1, phase1_den=1, screen=False,
                 effectiveness_num=1, effectiveness_den=1, immune=False, roll=100):
     """Singles damage with resolved stat/weather/type modifiers and roll 85..100.
 
@@ -56,15 +56,25 @@ def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=
              * jnp.asarray(power, jnp.uint32) * atk.astype(jnp.uint32))
             // defe.astype(jnp.uint32) // 50).astype(jnp.int32)
     base = jnp.where(physical & burned & ~jnp.asarray(guts), modify(base, 1, 2), base)
-    base = jnp.where(screen & ~jnp.asarray(critical), modify(base, 1, 2), base)
-    base = jnp.where((jnp.asarray(weather_num) != 1) | (jnp.asarray(weather_den) != 1),
-                     modify(base, weather_num, weather_den), base)
+    # Screen and Flash Fire share ONE ModifyDamagePhase1 event. Compose the
+    # Q12 chain first; rounding each handler's damage separately is incorrect.
+    screen_active = screen & ~jnp.asarray(critical)
+    phase_factor = (jnp.asarray(phase1_num,jnp.uint32)*4096
+                    // jnp.asarray(phase1_den,jnp.uint32))
+    screen_factor = jnp.where(screen_active,jnp.uint32(2048),jnp.uint32(4096))
+    phase_factor = (screen_factor*phase_factor + jnp.uint32(2048)) >> 12
+    # runEvent applies its Q12 modifier even when the chain stays identity.
+    # That unsigned wrap is observable on deliberately large authored inputs.
+    base = modify(base,phase_factor,4096)
+    base = modify(base, weather_num, weather_den)
     base = jnp.where(physical, jnp.maximum(1, base), base) + 2
     base = jnp.where(critical, modify(base, 2), base)
+    base = modify(base)  # ModifyDamagePhase2 integer event, including identity
     # Typed moves run the Q12 STAB event even when its multiplier is identity.
     # Confusion/Struggle's ??? type skips that event altogether.
     base = jnp.where(typeless, base, modify(base, jnp.where(stab, 3, 1), jnp.where(stab, 2, 1)))
     base = base * effectiveness_num // effectiveness_den
+    base = modify(base)  # final ModifyDamage event before randomization
     damage = jnp.maximum(1, (base.astype(jnp.uint32)
                             * jnp.asarray(roll, jnp.uint32) // 100).astype(jnp.int32))
     return jnp.where(immune | (jnp.asarray(power) <= 0), 0, damage)

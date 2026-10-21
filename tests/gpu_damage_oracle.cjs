@@ -20,8 +20,17 @@ const result = rows.map(r => {
       if (name === 'WeatherModifyDamage' && (r.weather_num !== 1 || r.weather_den !== 1)) {
         return this.modify(value,r.weather_num,r.weather_den);
       }
-      if (name === 'ModifyDamagePhase1' && r.screen && !r.critical) return this.modify(value,1,2);
-      return value;
+      if (name === 'ModifyDamagePhase1') {
+        const chain = {trunc:Dex.trunc,event:{modifier:1},chainModify:Battle.prototype.chainModify};
+        if (r.screen && !r.critical) chain.chainModify(1,2);
+        if (r.phase1_num !== 1 || r.phase1_den !== 1) {
+          chain.chainModify(r.phase1_num,r.phase1_den);
+        }
+        return this.modify(value,chain.event.modifier);
+      }
+      // Battle.runEvent applies identity Q12 to nonnegative integer relay
+      // values too (Phase2, final ModifyDamage and unmodified weather).
+      return Number.isInteger(value) && value >= 0 ? this.modify(value,1) : value;
     },
   };
   const stat = (value,stage) => Pokemon.prototype.calculateStat.call(

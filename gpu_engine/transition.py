@@ -18,6 +18,7 @@ import numpy as np
 from . import mechanics as m
 from . import items as held
 from . import weather as climate
+from . import absorption as absorb
 from . import entry as arrival
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
@@ -37,6 +38,7 @@ class MoveTable(NamedTuple):
     items: held.ItemTable | None = None
     weather: climate.WeatherTable | None = None
     entry: arrival.EntryTable | None = None
+    absorption: absorb.AbsorptionTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -64,7 +66,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         jnp.asarray(np.where(chart == .5, 2, 1), jnp.int32),
         jnp.asarray(metadata["vocabulary"]["moves"].index("struggle"), jnp.int32),
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
-        arrival.from_metadata(metadata))
+        arrival.from_metadata(metadata),absorb.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -321,6 +323,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             effective_weather = climate.effective(table.weather,work.weather,active_abilities,active_hp)
             weather_num,weather_den = climate.damage_modifier(table.weather,effective_weather,typ)
             accuracy,always_hit = climate.thunder_accuracy(table.weather,effective_weather,move,accuracy,always_hit)
+        phase1_num,phase1_den = (1,1)
+        if table.absorption is not None:
+            phase1_num,phase1_den = absorb.damage_phase1(table.absorption,typ,_active(work.volatile,work,side))
         damage = m.gen3_damage(level=_active(work.level, work, side), power=table.power[move],
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
@@ -329,6 +334,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             physical=physical, critical=chance[:, 4] == 0,
             attack_num=attack_num,attack_den=attack_den,
             weather_num=weather_num,weather_den=weather_den,
+            phase1_num=phase1_num,phase1_den=phase1_den,
             stab=jnp.any(own_types == typ[:, None], axis=1) & (typ != 0),
             typeless=typ == 0,
             burned=_active(work.status, work, side) == m.BRN,
@@ -339,6 +345,19 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         if table.effects is not None:
             hit &= ~(protected[rows,foe] & table.effects.protectable[move])
             bypass_sub = table.effects.bypass_sub[move]
+        if table.absorption is not None:
+            # TryHit follows accuracy/Protect but precedes Substitute. Field
+            # weather and self effects do not run a Pokemon-targeted TryHit.
+            targets_mon = table.power[move] > 0
+            if table.effects is not None:
+                targets_mon |= table.effects.status[move] != m.NONE
+            absorbed = absorb.try_hit(table.absorption,_active(work.ability,work,foe),move,typ,
+                _active(work.status,work,foe),foe_types,_active(work.hp,work,foe),
+                _active(work.max_hp,work,foe),_active(work.substitute_hp,work,foe),
+                _active(work.volatile,work,foe),eligible=acts & hit & targets_mon)
+            work = work._replace(hp=_set_active(work.hp,work,foe,absorbed.hp),
+                volatile=_set_active(work.volatile,work,foe,absorbed.volatile))
+            hit &= ~absorbed.blocked
         hp = _active(work.hp, work, foe)
         sub_hp = _active(work.substitute_hp,work,foe)
         hits_sub = (sub_hp > 0) & ~bypass_sub
@@ -348,6 +367,15 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
             substitute_hp=_set_active(work.substitute_hp,work,foe,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
+        if table.absorption is not None:
+            # Gen 3 thaw is original-catalog Fire, not Hidden Power Fire or
+            # dynamically Fire Weather Ball; a Substitute hit does not thaw.
+            thawed = ((dealt > 0) & ~hits_sub & table.absorption.fire_thaws[move]
+                & (_active(work.status,work,foe) == m.FRZ))
+            work = work._replace(status=_set_active(work.status,work,foe,
+                jnp.where(thawed,m.NONE,_active(work.status,work,foe))),
+                status_counter=_set_active(work.status_counter,work,foe,
+                    jnp.where(thawed,0,_active(work.status_counter,work,foe))))
         # Gen 3 Struggle uses round(actual damage / 4), not max HP / 4.
         recoil = jnp.maximum(1, (dealt + 2) // 4)
         hp = _active(work.hp, work, side)
