@@ -30,8 +30,8 @@ function forcedFixture(hazard,suppression=false) {
     for(const p of [b.p1.pokemon[1],b.p2.pokemon[1]]) {p.types=['Normal'];p.maxhp=101;p.hp=101;}
     b.p1.pokemon[1].hp=1;
     if(suppression) b.p2.pokemon[1].hp=1;
-    b.p1.addSideCondition('spikes');
-    b.p2.addSideCondition('spikes');
+    b.p1.addSideCondition('spikes',b.p2.active[0]);
+    b.p2.addSideCondition('spikes',b.p1.active[0]);
   }
   b.p1.active[0].faint();b.p2.active[0].faint();b.faintMessages();
   b.checkFainted();b.midTurn=true;b.makeRequest('switch');

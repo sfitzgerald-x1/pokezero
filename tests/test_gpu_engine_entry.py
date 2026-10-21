@@ -197,6 +197,17 @@ class EntryTests(unittest.TestCase):
         r = self.play(s,[[4,4]])
         self.assertEqual(r.hp[0,:,1].tolist(),[0,1])
 
+    def test_fainted_outgoing_speed_does_not_keep_boost_status_or_ability_modifiers(self):
+        from gpu_engine import mechanics as m
+        s = self.live()._replace(weather=self.j.array([self.w.RAIN]))
+        s = s._replace(hp=s.hp.at[:,:,0].set(0).at[:,:,1].set(1),spikes=s.spikes.at[0].set(1),
+            ability=s.ability.at[0,0,0].set(8).at[0,0,1].set(8).at[0,1,1].set(10),
+            boosts=s.boosts.at[0,0,0,4].set(6),status=s.status.at[0,0,0].set(m.PAR),
+            stats=s.stats.at[0,0,0,5].set(120).at[0,1,0,5].set(200)
+                .at[0,0,1,5].set(100).at[0,1,1,5].set(150))
+        self.assertEqual(self.t._speeds(s,self.table).tolist(),[[120,200]])
+        self.assertEqual(self.play(s,[[4,4]]).hp[0,:,1].tolist(),[1,0])
+
     def test_last_mon_hazard_ko_ends_before_foe_residual(self):
         s = self.live()
         s = s._replace(hp=s.hp.at[0,0].set(0).at[0,0,1].set(1).at[0,1,0].set(50),
@@ -254,8 +265,10 @@ class EntryTests(unittest.TestCase):
 
     @unittest.skipUnless(NODE and SHOWDOWN,"requires pinned entry source")
     def test_pinned_authored_switch_and_handler_oracle(self):
-        actual = json.loads(subprocess.run([NODE,str(Path(__file__).with_name("gpu_entry_oracle.cjs")),SHOWDOWN],
-            text=True,capture_output=True,check=True).stdout)
+        oracle = subprocess.run([NODE,str(Path(__file__).with_name("gpu_entry_oracle.cjs")),SHOWDOWN],
+            text=True,capture_output=True)
+        self.assertEqual(oracle.returncode,0,oracle.stderr)
+        actual = json.loads(oracle.stdout)
         self.assertEqual(actual["double_switch_attack_stages"],[-1,0])
         self.assertEqual(actual["weather_start"],"sunnyday")
         self.assertEqual(actual["spikes_damage"],[12,16,25])

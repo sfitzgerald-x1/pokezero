@@ -118,7 +118,10 @@ def _speeds(state,table):
             weather = climate.effective(table.weather,weather,ability,state.hp[rows,sides,state.active])
         speed = arrival.speed_modifier(table.entry,ability,weather[:,None],speed)
     # Gen 3 paralysis is applied after the other Speed modifiers.
-    return m.paralyzed_speed(speed,status == m.PAR)
+    live_speed = m.paralyzed_speed(speed,status == m.PAR)
+    # faintMessages clears boosts; status/ability handlers no longer run for
+    # fainted holders. Their pending instaswitch still has an outgoing speed.
+    return jnp.where(state.hp[rows,sides,state.active] > 0,live_speed,stats[...,5])
 
 
 def initialize(state,table,*,eligible=True):
