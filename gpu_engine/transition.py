@@ -2,7 +2,7 @@
 
 All moves are still flagged placeholders: damaging moves use static type and
 power, and only the explicit major-status/self-effect subset is integrated.
-Items, abilities, weather, most volatiles and
+Most items, abilities, weather, most volatiles and
 special move rules are not integrated. Do not use this kernel for strength or
 the final throughput/go-no-go table. It supplies the turn/PRNG/array plumbing
 needed to integrate those mechanics, with placeholder use returned explicitly.
@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from . import mechanics as m
+from . import items as held
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -31,6 +32,7 @@ class MoveTable(NamedTuple):
     type_den: jax.Array
     struggle: jax.Array
     effects: MoveEffects | None = None
+    items: held.ItemTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -57,7 +59,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         jnp.asarray(np.where(chart == .5, 1, chart), jnp.int32),
         jnp.asarray(np.where(chart == .5, 2, 1), jnp.int32),
         jnp.asarray(metadata["vocabulary"]["moves"].index("struggle"), jnp.int32),
-        effects_from_metadata(metadata))
+        effects_from_metadata(metadata),held.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0) -> BattleState:
@@ -84,6 +86,18 @@ def _set_active(value, state, side, update):
     return value.at[rows, side, state.active[rows, side]].set(update)
 
 
+def _lum_update(state,table,eligible):
+    if table.items is None:
+        return state
+    for side in range(2):
+        result = held.consume_lum(table.items,_active(state.item,state,side),
+            _active(state.status,state,side),_active(state.status_counter,state,side),
+            _active(state.confusion_counter,state,side),_active(state.hp,state,side),eligible=eligible)
+        for name,value in zip(("item","status","status_counter","confusion_counter"),result):
+            state = state._replace(**{name:_set_active(getattr(state,name),state,side,value)})
+    return state
+
+
 class StepResult(NamedTuple):
     state: BattleState
     invalid_actions: jax.Array      # [B]; invalid live requests freeze that battle
@@ -98,7 +112,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     The ordinary turn integrates switches, priority/speed, status action gates,
     PP, confusion self-damage, Struggle recoil, static single-hit damage,
     major-status residuals and party exhaustion. Flinch uses volatile bit 0.
-    Switch events and all move effects remain placeholders, not fidelity claims.
+    Selected held items are integrated; broader switch/item/ability events remain
+    incomplete. Every executed move is still flagged a placeholder.
     """
     if actions.shape != state.active.shape or not jnp.issubdtype(actions.dtype, jnp.integer):
         raise ValueError("actions must be integer [B,2]")
@@ -112,8 +127,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     invalid = ~state.done & jnp.any(requested & (~valid | (actions < 0) | (actions > 8)), axis=1)
     live = ~state.done & ~invalid
     splits = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
-    draws = jax.vmap(lambda key: jax.random.randint(key, (2, 9), 0,
-        jnp.array([2, 100, 100, 100, 16, 16, 100, 4, 8], jnp.int32)))(splits[:, 1])
+    draws = jax.vmap(lambda key: jax.random.randint(key, (2, 10), 0,
+        jnp.array([2, 100, 100, 100, 16, 16, 100, 4, 8, 2], jnp.int32)))(splits[:, 1])
     work = state._replace(keys=splits[:, 0])
     switches = live[:, None] & requested & (actions >= 4)
     bench = bench_indices(state.active)
@@ -129,20 +144,24 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     counters = state.status_counter.at[rows[:, None], sides, state.active].set(
         jnp.where(switches & toxic, 0, old_counter))
     work = work._replace(boosts=boosts, status_counter=counters)
-    for name in ("volatile", "confusion_counter", "protect_counter", "substitute_hp"):
+    for name in ("volatile", "confusion_counter", "protect_counter", "substitute_hp", "choice_move"):
         value = getattr(work, name)
         old = value[rows[:, None], sides, state.active]
         work = work._replace(**{name: value.at[rows[:, None], sides, state.active].set(
             jnp.where(switches, 0, old))})
+    work = _lum_update(work,table,live)
     slot = jnp.clip(actions, 0, 3)
     pp = state.pp[rows[:, None], sides, state.active]
-    usable = (pp > 0) & ~state.disabled[rows[:, None], sides, state.active]
+    choice = state.choice_move[rows[:,None],sides,state.active]
+    move_ids = state.moves[rows[:,None],sides,state.active]
+    usable = ((pp > 0) & ~state.disabled[rows[:, None], sides, state.active]
+              & ((choice[...,None] == 0) | (move_ids == choice[...,None])))
     struggle = ~jnp.any(usable, axis=-1)
     moves = state.moves[rows[:, None], sides, state.active, slot]
     moves = jnp.where(struggle, table.struggle, moves)
     stats = state.stats[rows[:, None], sides, state.active]
     speed = m.boosted_stat(stats[..., 5], old_boosts[..., 4])
-    speed = m.paralyzed_speed(speed, state.status[rows[:, None], sides, state.active] == m.PAR)
+    speed = m.paralyzed_speed(speed, work.status[rows[:, None], sides, state.active] == m.PAR)
     priority = table.priority[moves]
     first = jnp.where(priority[:, 0] != priority[:, 1], priority[:, 1] > priority[:, 0],
         jnp.where(speed[:, 0] != speed[:, 1], speed[:, 1] > speed[:, 0], draws[:, 0, 0] == 1)).astype(jnp.int32)
@@ -171,10 +190,15 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 jnp.where(eligible, value, _active(current, work, side)))})
         own_stats = _active(work.stats, work, side)
         own_boosts = _active(work.boosts, work, side)
+        confusion_num,confusion_den = (1,1)
+        if table.items is not None:
+            confusion_num,confusion_den = held.attack_modifier(table.items,
+                _active(work.item,work,side),_active(work.species,work,side),jnp.ones_like(eligible))
         confusion_damage = m.gen3_damage(level=_active(work.level, work, side), power=40,
             attack=own_stats[:, 1], defense=own_stats[:, 2],
             attack_stage=own_boosts[:, 0], defense_stage=own_boosts[:, 1],
             typeless=True, burned=_active(work.status, work, side) == m.BRN,
+            attack_num=confusion_num,attack_den=confusion_den,
             roll=85 + chance[:, 5])
         hp = _active(work.hp, work, side)
         hp = jnp.where(eligible & before.confusion_self_hit, jnp.maximum(0, hp - confusion_damage), hp)
@@ -194,6 +218,10 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         attack_boosts = _active(work.boosts, work, side)
         defense_boosts = _active(work.boosts, work, foe)
         physical = table.physical[move]
+        attack_num,attack_den = (1,1)
+        if table.items is not None:
+            attack_num,attack_den = held.attack_modifier(table.items,
+                _active(work.item,work,side),_active(work.species,work,side),physical)
         is_struggle = move == table.struggle
         typ = jnp.where(is_struggle, 0, table.type[move])
         own_types = _active(work.types, work, side)
@@ -206,6 +234,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             attack_stage=jnp.where(physical, attack_boosts[:, 0], attack_boosts[:, 2]),
             defense_stage=jnp.where(physical, defense_boosts[:, 1], defense_boosts[:, 3]),
             physical=physical, critical=chance[:, 4] == 0,
+            attack_num=attack_num,attack_den=attack_den,
             stab=jnp.any(own_types == typ[:, None], axis=1) & (typ != 0),
             typeless=typ == 0,
             burned=_active(work.status, work, side) == m.BRN,
@@ -283,9 +312,29 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 status_counter=_set_active(work.status_counter,work,foe,
                     jnp.where(apply_status,jnp.where(status == m.SLP,2 + chance[:,7],0),
                               _active(work.status_counter,work,foe))))
+        if table.items is not None:
+            locked = _active(work.choice_move,work,side)
+            lock = (acts & ~is_struggle & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
+            work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,move,locked)))
+        work = _lum_update(work,table,live & ~replacement)
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
-    # Residual scheduling beyond major statuses is not yet implemented.
-    for side in range(2):
+    # Selected residuals use the pinned order/suborder, then current speed.
+    # Leftovers (10,4) precedes major statuses (10,6) for BOTH seats.
+    end_stats = work.stats[rows[:,None],sides,work.active]
+    end_boosts = work.boosts[rows[:,None],sides,work.active]
+    end_status = work.status[rows[:,None],sides,work.active]
+    end_speed = m.paralyzed_speed(m.boosted_stat(end_stats[...,5],end_boosts[...,4]),end_status == m.PAR)
+    residual_first = jnp.where(end_speed[:,0] != end_speed[:,1],end_speed[:,1] > end_speed[:,0],
+                              draws[:,0,9] == 1).astype(jnp.int32)
+    if table.items is not None:
+        for order in range(2):
+            side = jnp.where(order == 0,residual_first,1-residual_first)
+            eligible = live & ~replacement & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
+            hp = held.leftovers_heal(table.items,_active(work.item,work,side),_active(work.hp,work,side),
+                                     _active(work.max_hp,work,side),eligible=eligible)
+            work = work._replace(hp=_set_active(work.hp,work,side,hp))
+    for order in range(2):
+        side = jnp.where(order == 0,residual_first,1-residual_first)
         battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)
         residual = m.major_status_residual(_active(work.hp, work, side),
             _active(work.max_hp, work, side), _active(work.status, work, side),

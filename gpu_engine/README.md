@@ -17,7 +17,7 @@ State has six party members per side; all fields are JAX arrays with a leading
 batch dimension. Types, status, items, abilities and moves require the eventual
 team pool's vocabulary. Bench actions enumerate party order excluding the
 active slot. Move0 represents synthetic Struggle only when no move is usable.
-The initial mask handles PP, externally resolved disabled/trapped flags,
+The initial mask handles PP, Choice Band locking, externally resolved disabled/trapped flags,
 forced replacement and fainted slots; Taunt, Encore, recharge and other
 restrictions still require the transition and are not claimed as supported.
 For unilateral forced replacement, the initial transition suppresses the
@@ -105,8 +105,8 @@ The explicit status/self-effect subset now applies Toxic, poison, paralysis,
 burn and sleep moves; Rest; Recover-class floor-half healing; self boosts and
 Haze. It handles existing-status/type/Substitute refusal, Gen 3 Electric-type
 paralysis eligibility and Thunder Wave's Ground immunity, sleep counters and
-boost clamping. Items/abilities can still alter these events and are not yet
-integrated, so this is not a move-coverage qualification.
+boost clamping. Remaining items/abilities can still alter these events,
+so this is not a move-coverage qualification.
 
 Substitute now costs the floored quarter of max HP, absorbs single-hit damage
 without spill and preserves actual sub-damage for Struggle recoil. Protect and
@@ -117,7 +117,16 @@ ordinary turn. They fail as the last queued move. This remains a partial surface
 multi-hit, item/ability interactions, Baton Pass and the wider event system are
 not qualified by these authored component fixtures.
 
-This is an incomplete integration kernel. Items, abilities, weather, switch events,
+The held-item subset applies Choice Band, species-gated Thick Club and Gen 3
+Light Ball stat multipliers (Light Ball boosts only Pikachu's special attack).
+Choice Band locks an attempted move until switching; an exhausted locked move
+permits Struggle, not a different move. Lum Berry cures major status/confusion
+and is consumed, including newly applied status before the slower move. Selected
+residual events run in speed order: both Leftovers heals precede either major
+status event, and party exhaustion ends processing. Other items, item transfer
+or suppression, and ability interactions still require integration.
+
+This is an incomplete integration kernel. Remaining items, abilities, weather, switch events,
 the full residual scheduler and remaining special move effects are not
 integrated. Its arithmetic/turn fixtures and one-turn real
 team smoke do not qualify gameplay or supply the final throughput table. Pool

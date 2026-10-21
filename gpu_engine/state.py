@@ -25,6 +25,7 @@ class BattleState(NamedTuple):
     moves: jax.Array               # [B,2,6,4]
     pp: jax.Array                  # [B,2,6,4]
     disabled: jax.Array            # [B,2,6,4]
+    choice_move: jax.Array         # [B,2,6], locked move ID; zero means unlocked
     item: jax.Array                # [B,2,6]
     ability: jax.Array             # [B,2,6]
     boosts: jax.Array              # [B,2,6,7]: Atk,Def,SpA,SpD,Spe,Acc,Eva
@@ -61,6 +62,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         stats=jnp.zeros((b, 2, 6, 6), jnp.int32), hp=mon(), max_hp=mon(),
         status=mon(), status_counter=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
         pp=jnp.zeros((b, 2, 6, 4), jnp.int32), disabled=jnp.zeros((b, 2, 6, 4), jnp.bool_),
+        choice_move=mon(),
         item=mon(), ability=mon(), boosts=jnp.zeros((b, 2, 6, 7), jnp.int32),
         volatile=jnp.zeros((b, 2, 6), jnp.uint32), confusion_counter=mon(),
         protect_counter=mon(), substitute_hp=mon(), active=side(),
@@ -84,7 +86,9 @@ def legal_actions(state: BattleState) -> jax.Array:
     active_hp = jnp.take_along_axis(state.hp, state.active[..., None], axis=2)[..., 0]
     pp = jnp.take_along_axis(state.pp, state.active[..., None, None], axis=2)[..., 0, :]
     disabled = jnp.take_along_axis(state.disabled, state.active[..., None, None], axis=2)[..., 0, :]
-    moves = (pp > 0) & ~disabled
+    move_ids = jnp.take_along_axis(state.moves,state.active[...,None,None],axis=2)[...,0,:]
+    choice = jnp.take_along_axis(state.choice_move,state.active[...,None],axis=2)[...,0]
+    moves = (pp > 0) & ~disabled & ((choice[...,None] == 0) | (move_ids == choice[...,None]))
     moves = moves.at[..., 0].set(moves[..., 0] | ~jnp.any(moves, axis=-1))
     forced = state.forced_switch | (active_hp <= 0)
     moves &= ~forced[..., None]
