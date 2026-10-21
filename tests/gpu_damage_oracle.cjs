@@ -21,11 +21,12 @@ const result = rows.map(r => {
         return this.modify(value,r.weather_num,r.weather_den);
       }
       if (name === 'ModifyDamagePhase1') {
-        let changed = r.screen && !r.critical ? this.modify(value,1,2) : value;
+        const chain = {trunc:Dex.trunc,event:{modifier:1},chainModify:Battle.prototype.chainModify};
+        if (r.screen && !r.critical) chain.chainModify(1,2);
         if (r.phase1_num !== 1 || r.phase1_den !== 1) {
-          changed = this.modify(changed,r.phase1_num,r.phase1_den);
+          chain.chainModify(r.phase1_num,r.phase1_den);
         }
-        return changed;
+        return this.modify(value,chain.event.modifier);
       }
       return value;
     },

@@ -140,6 +140,7 @@ class MechanicsTests(unittest.TestCase):
             effectiveness_num=1,effectiveness_den=1,immune=False,roll=100)
         changes = [{},dict(burned=True),dict(phase1_num=3,phase1_den=2),
             dict(phase1_num=3,phase1_den=2,weather_num=3,weather_den=2,burned=True),
+            dict(power=40,attack=100,defense=1000,physical=False,screen=True,phase1_num=3,phase1_den=2),
             dict(critical=True,attack_stage=-3,defense_stage=4),
             dict(stab=True,roll=85),dict(weather_num=3,weather_den=2,screen=True),
             dict(attack=337,defense=153,attack_stage=3,defense_stage=-2,
@@ -163,6 +164,10 @@ class MechanicsTests(unittest.TestCase):
         self.assertEqual(int(self.m.modify(2000000,3,2)),expected["large_modifier"])
         self.assertEqual(self.m.paralyzed_speed(self.np.array([101,103,1]),True).tolist(),
                          expected["paralysis_speed"])
+
+    def test_screen_and_flash_fire_chain_rounds_only_once(self):
+        self.assertEqual(self.damage(power=40,attack=100,defense=1000,physical=False,
+            screen=True,phase1_num=3,phase1_den=2),4)
 
 
 if __name__ == "__main__":

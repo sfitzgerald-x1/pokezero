@@ -56,9 +56,15 @@ def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=
              * jnp.asarray(power, jnp.uint32) * atk.astype(jnp.uint32))
             // defe.astype(jnp.uint32) // 50).astype(jnp.int32)
     base = jnp.where(physical & burned & ~jnp.asarray(guts), modify(base, 1, 2), base)
-    base = jnp.where(screen & ~jnp.asarray(critical), modify(base, 1, 2), base)
-    base = jnp.where((jnp.asarray(phase1_num) != 1) | (jnp.asarray(phase1_den) != 1),
-                     modify(base, phase1_num, phase1_den), base)
+    # Screen and Flash Fire share ONE ModifyDamagePhase1 event. Compose the
+    # Q12 chain first; rounding each handler's damage separately is incorrect.
+    screen_active = screen & ~jnp.asarray(critical)
+    phase_factor = (jnp.asarray(phase1_num,jnp.uint32)*4096
+                    // jnp.asarray(phase1_den,jnp.uint32))
+    screen_factor = jnp.where(screen_active,jnp.uint32(2048),jnp.uint32(4096))
+    phase_factor = (screen_factor*phase_factor + jnp.uint32(2048)) >> 12
+    phase_active = screen_active | (jnp.asarray(phase1_num) != 1) | (jnp.asarray(phase1_den) != 1)
+    base = jnp.where(phase_active,modify(base,phase_factor,4096),base)
     base = jnp.where((jnp.asarray(weather_num) != 1) | (jnp.asarray(weather_den) != 1),
                      modify(base, weather_num, weather_den), base)
     base = jnp.where(physical, jnp.maximum(1, base), base) + 2
