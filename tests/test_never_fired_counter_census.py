@@ -220,7 +220,9 @@ _CORPUS_TREES = ("reports", "docs")
 # ledger is added under reports/docs; no historical JSON changed or was removed.
 # 415 -> 416: the only added reports/docs JSON is the freshly executed
 # 20261020_order_refusal_context mutation receipt. All historical artifacts remain.
-_EXPECTED_COUNTER_ARTIFACTS = 416
+# 416 -> 417: against base 7eb03d0f, only the completed ON4-versus-raw
+# secondary result JSON is added under reports/docs; no historical JSON changed.
+_EXPECTED_COUNTER_ARTIFACTS = 417
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

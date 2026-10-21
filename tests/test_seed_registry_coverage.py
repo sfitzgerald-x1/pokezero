@@ -116,6 +116,11 @@ GAMEPLAY_SELECTION_SHA256 = "fa76bc9966bba48f0dd474a2450b4c362e49ac1452db18c39b0
 GAMEPLAY_CONTROL = "docs/audit_artifacts/phase0_raw_sample_control_20261019.json"
 GAMEPLAY_CONTROL_SHA256 = "b3dabd51cd4b77d3f86a28f78f71eb9cbf0eed641c2b1a41ff470ab27cb881e8"
 
+# Independently reviewed full-game secondary, not a differential sweep. Keep
+# this exact path/byte binding narrow; copies and changed bytes are not exempt.
+GAMEPLAY_ON4_SECONDARY = "docs/audit_artifacts/phase0_on4_raw_secondary_20261020.json"
+GAMEPLAY_ON4_SECONDARY_SHA256 = "1575915721c6a4a3d5a1a86139a352d8847a9178ab7be808539397659b92af50"
+
 # The registered final-holdout block, and the 60 seeds of it that C141 did not reach.
 FINAL_HOLDOUT_REGISTERED = (19_200_000, 19_200_199)
 FINAL_HOLDOUT_UNSWEPT_HEAD = (19_200_000, 19_200_059)
@@ -344,6 +349,12 @@ def fidelity_intervals(root: Path = REPO) -> dict[str, list[tuple[int, int]]]:
             # This exact completed gameplay ledger cannot witness a fidelity
             # sweep. All unknown paths retain the shape-agnostic rule below.
             continue
+        if relative == GAMEPLAY_ON4_SECONDARY:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != GAMEPLAY_ON4_SECONDARY_SHA256:
+                raise AssertionError("registered gameplay secondary bytes changed; re-audit namespace and provenance")
+            # Exact reviewed head-to-head gameplay is not a differential sweep.
+            # No new path, schema, seed range or changed bytes inherit this rule.
+            continue
         reaching = sorted(
             {
                 (low, high)
@@ -432,6 +443,47 @@ class GameplayControlNamespaceTests(unittest.TestCase):
         self.assertIn("`3,829,143,000`–`3,829,143,031`", table)
         self.assertIn(GAMEPLAY_CONTROL, table)
         self.assertIn("completed descriptive gameplay; not a fidelity sweep", table)
+
+
+class GameplayOn4SecondaryNamespaceTests(unittest.TestCase):
+    def test_exact_reviewed_secondary_is_not_a_fidelity_sweep_witness(self) -> None:
+        data = (REPO / GAMEPLAY_ON4_SECONDARY).read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), GAMEPLAY_ON4_SECONDARY_SHA256)
+        document = json.loads(data)
+        self.assertEqual({span for span in _seed_intervals(document)
+                          if span[1] >= FIDELITY_SEED_FLOOR},
+                         {(seed, seed) for seed in range(3829141000, 3829141064)})
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / GAMEPLAY_ON4_SECONDARY
+            path.parent.mkdir(parents=True)
+            path.write_bytes(data)
+            self.assertEqual(fidelity_intervals(root), {})
+        self.assertEqual(len(REGISTERED_BANDS), 4)
+
+    def test_registered_secondary_drift_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / GAMEPLAY_ON4_SECONDARY
+            path.parent.mkdir(parents=True)
+            path.write_bytes((REPO / GAMEPLAY_ON4_SECONDARY).read_bytes() + b"\n")
+            with self.assertRaisesRegex(AssertionError, "secondary bytes changed"):
+                fidelity_intervals(root)
+
+    def test_secondary_copy_elsewhere_cannot_hide_seeds(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "docs/unregistered-secondary-copy.json"
+            path.parent.mkdir()
+            path.write_bytes((REPO / GAMEPLAY_ON4_SECONDARY).read_bytes())
+            self.assertEqual(len(unregistered(fidelity_intervals(root))), 64)
+
+    def test_ledger_records_secondary_not_a_new_fidelity_band(self) -> None:
+        table = registry_table()
+        self.assertIn("gameplay ON4 versus raw secondary", table)
+        self.assertIn("`3,829,141,000`–`3,829,141,063`", table)
+        self.assertIn(GAMEPLAY_ON4_SECONDARY, table)
+        self.assertIn("127 validated outcomes and one unknown cap", table)
 
 
 def unregistered(
