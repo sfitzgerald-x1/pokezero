@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Set up foul-play as an arms-length Gen 3 random-battle eval opponent.
 #
-# Builds an isolated venv with poke-engine compiled for gen3 and applies the local
+# Builds an isolated venv with the canonical patched gen3 poke-engine and applies the local
 # --no-security login patch. foul-play is GPL-3.0 and runs as a SEPARATE process; pokezero
 # (MIT) never imports it. Requires: rustup/cargo, uv. See third_party/README.md.
 set -euo pipefail
@@ -26,7 +26,10 @@ done
 echo "[3/3] build isolated venv + poke-engine (gen3) via uv"
 uv venv --python 3.12 "$FPVENV"
 uv pip install --python "$FPVENV/bin/python" requests==2.33.0 websockets==14.1 python-dateutil==2.8.0
-uv pip install --python "$FPVENV/bin/python" --no-cache poke-engine==0.0.47 \
-  --config-settings="build-args=--features poke-engine/gen3 --no-default-features"
+# Import success alone does not qualify this separate consumer: an unpatched
+# gen3 wheel can panic on the exhausted ordinary-sleep fixture. Reuse the same
+# pinned source and ordered patch manifest as the other engine builders.
+bash "$REPO/scripts/setup_poke_engine.sh" "$FPVENV/bin/python"
+"$FPVENV/bin/python" "$REPO/scripts/verify_foulplay_poke_engine.py" --iterations 128
 
-"$FPVENV/bin/python" -c "import poke_engine; print('foul-play gen3 eval ready ->', '$FPVENV')"
+echo "foul-play gen3 eval ready -> $FPVENV"
