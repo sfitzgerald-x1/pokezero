@@ -1,0 +1,65 @@
+name: GPU engine CPU component checks
+
+on:
+  pull_request:
+    paths:
+      - 'gpu_engine/**'
+      - 'tests/test_gpu_engine*.py'
+      - 'tests/gpu_*_oracle.cjs'
+      - '.github/workflows/gpu-engine-components.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpu-components-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-components:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      JAX_PLATFORMS: cpu
+      OMP_NUM_THREADS: '2'
+      OPENBLAS_NUM_THREADS: '2'
+      POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+      POKEZERO_GPU_TEAM_POOL: ${{ github.workspace }}/.ci/gpu-component-teams.npz
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22.22.2'
+      - uses: actions/checkout@v5
+        with:
+          repository: smogon/pokemon-showdown
+          ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
+          path: .ci/pokemon-showdown
+          persist-credentials: false
+      - name: Install CPU test environment and build pinned source oracle
+        run: |
+          python -m pip install 'jax==0.12.0' 'numpy==2.5.4'
+          npm ci --prefix "$POKEZERO_SHOWDOWN_ROOT"
+          npm run build --prefix "$POKEZERO_SHOWDOWN_ROOT"
+      - name: Prepare small fresh real-team test fixture
+        run: |
+          python -m gpu_engine.team_pool --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
+            --source-commit-label f76228a1354b5d0f307ca2d16101294ad3a2308b \
+            --teams 1024 --seed-start 650200000 --out "$POKEZERO_GPU_TEAM_POOL"
+      - name: Run all component tests without optional skips
+        run: |
+          set -o pipefail
+          python -c 'import jax; print("Component test devices:", jax.devices())'
+          python -m unittest discover -s tests -p 'test_gpu_engine*.py' -v 2>&1 \
+            | tee /tmp/gpu-components.log
+          if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then
+            echo '::error::component tests skipped required JAX, source oracle or real-team fixture'
+            exit 1
+          fi
+          # These are CPU correctness checks, not GPU timing, full-game fidelity,
+          # move-coverage qualification, strength evidence or a go/no-go result.
