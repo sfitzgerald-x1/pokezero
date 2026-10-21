@@ -1,6 +1,7 @@
 // Invoke actual pinned Gen 3 item/status handlers on authored inputs, not games.
 const path = require('node:path');
 const {Dex} = require(path.join(process.argv[2],'dist/sim/dex.js'));
+const {Battle} = require(path.join(process.argv[2],'dist/sim/battle.js'));
 const dex = Dex.mod('gen3');
 function factor(id,callback,species) {
   const fn = dex.items.get(id)[callback];
@@ -19,10 +20,19 @@ const pokemon = {status:'tox',volatiles:{confusion:{}},
 lum.onAfterSetStatus.call({},'tox',pokemon);
 const lockContext = {effectState:{}};
 dex.conditions.get('choicelock').onStart.call(lockContext,{lastMove:{id:'tackle'}});
+function residualOrder(speed0,speed1) {
+  const handlers = [{id:'heal0',order:10,subOrder:4,speed:speed0},
+    {id:'heal1',order:10,subOrder:4,speed:speed1},
+    {id:'status0',order:10,subOrder:6,speed:speed0},
+    {id:'status1',order:10,subOrder:6,speed:speed1}];
+  return handlers.sort(Battle.prototype.comparePriority).map(h=>h.id);
+}
 process.stdout.write(JSON.stringify({multipliers:{band:factor('choiceband','onModifyAtk','Ditto'),
   club_cubone:factor('thickclub','onModifyAtk','Cubone'),club_marowak:factor('thickclub','onModifyAtk','Marowak'),
   club_other:factor('thickclub','onModifyAtk','Ditto'),ball_pikachu_spa:factor('lightball','onModifySpA','Pikachu'),
   ball_other_spa:factor('lightball','onModifySpA','Ditto'),ball_atk_handler:!!dex.items.get('lightball').onModifyAtk},
   residual_order:{leftovers:[leftovers.onResidualOrder,leftovers.onResidualSubOrder],
     psn:[poison.onResidualOrder,poison.onResidualSubOrder]},leftovers_requested_heal:requested,
-  lum:{eaten,status:pokemon.status,confused:!!pokemon.volatiles.confusion},choice_lock:lockContext.effectState.move}));
+  lum:{eaten,status:pokemon.status,confused:!!pokemon.volatiles.confusion},choice_lock:lockContext.effectState.move,
+  unequal_speed_events:residualOrder(300,200),
+  equal_speed_event_kinds:residualOrder(200,200).map(id=>id.replace(/[01]/,''))}));

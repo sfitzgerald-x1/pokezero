@@ -318,28 +318,34 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,move,locked)))
         work = _lum_update(work,table,live & ~replacement)
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
-    # Selected residuals use the pinned order/suborder, then current speed.
-    # Leftovers (10,4) precedes major statuses (10,6) for BOTH seats.
+    # Both selected handlers have order10/priority0. The pinned comparator
+    # sorts SPEED before suborder: a faster status precedes a slower heal.
+    # At equal speed, both Leftovers(4) precede statuses(6), with independent
+    # per-suborder tie coins. Absent handlers are masked no-ops.
     end_stats = work.stats[rows[:,None],sides,work.active]
     end_boosts = work.boosts[rows[:,None],sides,work.active]
     end_status = work.status[rows[:,None],sides,work.active]
     end_speed = m.paralyzed_speed(m.boosted_stat(end_stats[...,5],end_boosts[...,4]),end_status == m.PAR)
-    residual_first = jnp.where(end_speed[:,0] != end_speed[:,1],end_speed[:,1] > end_speed[:,0],
-                              draws[:,0,9] == 1).astype(jnp.int32)
-    if table.items is not None:
-        for order in range(2):
-            side = jnp.where(order == 0,residual_first,1-residual_first)
-            eligible = live & ~replacement & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
-            hp = held.leftovers_heal(table.items,_active(work.item,work,side),_active(work.hp,work,side),
-                                     _active(work.max_hp,work,side),eligible=eligible)
-            work = work._replace(hp=_set_active(work.hp,work,side,hp))
-    for order in range(2):
-        side = jnp.where(order == 0,residual_first,1-residual_first)
+    event_sides = jnp.array([0,1,0,1])
+    event_suborder = jnp.array([4,4,6,6])
+    tie = jnp.concatenate((draws[:,0,9,None] ^ sides,draws[:,1,9,None] ^ sides),axis=1)
+    event_keys = -end_speed[:,event_sides]*32 + event_suborder[None,:]*2 + tie
+    event_order = jnp.argsort(event_keys,axis=1)
+    for order in range(4):
+        event = event_order[:,order]
+        side = event % 2
+        heal_event = event < 2
         battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)
-        residual = m.major_status_residual(_active(work.hp, work, side),
+        eligible = live & ~replacement & battle_continues
+        hp = _active(work.hp,work,side)
+        healed = hp
+        if table.items is not None:
+            healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
+                _active(work.max_hp,work,side),eligible=eligible & heal_event)
+        residual = m.major_status_residual(hp,
             _active(work.max_hp, work, side), _active(work.status, work, side),
-            _active(work.status_counter, work, side), active=live & ~replacement & battle_continues)
-        work = work._replace(hp=_set_active(work.hp, work, side, residual.hp),
+            _active(work.status_counter, work, side), active=eligible & ~heal_event)
+        work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
             status_counter=_set_active(work.status_counter, work, side, residual.counter))
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)

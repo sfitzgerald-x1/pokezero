@@ -122,8 +122,9 @@ Light Ball stat multipliers (Light Ball boosts only Pikachu's special attack).
 Choice Band locks an attempted move until switching; an exhausted locked move
 permits Struggle, not a different move. Lum Berry cures major status/confusion
 and is consumed, including newly applied status before the slower move. Selected
-residual events run in speed order: both Leftovers heals precede either major
-status event, and party exhaustion ends processing. Other items, item transfer
+residual events sort speed before suborder: on one mon (or equal speeds),
+Leftovers precedes status, but faster poison can end the game before slower
+Leftovers. Party exhaustion ends processing. Other items, item transfer
 or suppression, and ability interactions still require integration.
 
 This is an incomplete integration kernel. Remaining items, abilities, weather, switch events,

@@ -163,13 +163,20 @@ class ItemTests(unittest.TestCase):
             status=s.status.at[0,0,0].set(self.m.PSN))
         self.assertEqual(int(self.play(s).hp[0,0,0]),1)
 
-    def test_both_leftovers_events_precede_either_status_event(self):
+    def test_faster_poison_faint_ends_before_slower_leftovers(self):
         s = self.live()
         s = s._replace(hp=s.hp.at[:,:,1:].set(0).at[0,0,0].set(1).at[0,1,0].set(50),
             status=s.status.at[0,0,0].set(self.m.PSN),item=s.item.at[0,1,0].set(1))
         r = self.play(s)
-        self.assertEqual(r.hp[0,:,0].tolist(),[0,56])
+        self.assertEqual(r.hp[0,:,0].tolist(),[0,50])
         self.assertEqual(int(r.winner[0]),1)
+
+    def test_at_equal_speed_both_leftovers_precede_either_status(self):
+        s = self.live()
+        s = s._replace(hp=s.hp.at[:,:,1:].set(0).at[0,0,0].set(1).at[0,1,0].set(50),
+            status=s.status.at[0,0,0].set(self.m.PSN),item=s.item.at[0,1,0].set(1),
+            stats=s.stats.at[0,0,0,5].set(200))
+        self.assertEqual(self.play(s).hp[0,:,0].tolist(),[0,56])
 
     def test_residual_speed_order_decides_first_last_mon_faint(self):
         s = self.live()
@@ -210,6 +217,8 @@ class ItemTests(unittest.TestCase):
         self.assertEqual(rows["leftovers_requested_heal"],101/16)
         self.assertEqual(rows["lum"],{"eaten":1,"status":"","confused":False})
         self.assertEqual(rows["choice_lock"],"tackle")
+        self.assertEqual(rows["unequal_speed_events"],["heal0","status0","heal1","status1"])
+        self.assertEqual(rows["equal_speed_event_kinds"],["heal","heal","status","status"])
 
 
 if __name__ == "__main__":
