@@ -140,6 +140,13 @@ switching. Original-catalog damaging Fire moves thaw a struck frozen target;
 Hidden Power Fire and dynamically Fire Weather Ball do not. These are selected
 events, not general ability coverage.
 
+Speed Boost uses ordinary-turn age since entry: initial leads qualify on the
+first ordinary turn, ordinary switch-ins skip that turn's bonus, and forced
+replacement pseudo-turns do not age either side or run residuals. Selected
+residual handlers retain their snapshotted speed order after a boost; the
+ability does not re-sort already queued Leftovers or status events. This is
+authored component coverage, not a full-game fidelity result.
+
 Guts now composes with the selected item multipliers in one Attack event,
 including confusion self-damage. It overrides the physical burn penalty without
 curing burn or preventing residual damage. Gen 3 Thick Fat modifies Fire/Ice
