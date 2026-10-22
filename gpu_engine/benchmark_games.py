@@ -73,15 +73,19 @@ def _samples(call,*,warmup,repeats):
 def render_markdown(result):
     lines=['# Advancing GPU cost shape diagnostic','',
         f"Hardware: {result['device']}; JAX {result['jax']}; one GPU; FP32/HIGHEST.",'',
+        f"Protocol completed: {result['protocol_completed']}.",'',
         'Real champion, both seats, non-production placeholder observation and unqualified mechanics.',
         'Actual completed cohort games divided by advancing wall time; no refill. Unfinished games remain censored.',
         'Completed-game turn means exclude censored games and are not used to project a completion rate.',
         'Component latencies are separate fixed-root samples, not summands of the advancing mean.','',
-        '| Batch | Engine ms | Encode ms | Forward ms | Advancing request ms | Completed | Censored | Games/s | Completed mean turns |',
-        '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+        '| Batch | Status | Engine ms | Encode ms | Forward ms | Advancing request ms | Completed | Censored | Games/s | Completed mean turns |',
+        '| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
     for r in result['rows']:
         mean='—' if r['mean_completed_game_turns'] is None else f"{r['mean_completed_game_turns']:.2f}"
-        lines.append(f"| {r['batch']} | {r['engine']['mean_ms']:.3f} | {r['encode']['mean_ms']:.3f} | {r['forward']['mean_ms']:.3f} | {r['mean_end_to_end_request_ms']:.3f} | {r['completed_games']} | {r['censored_games']} | {r['games_per_second']:.3f} | {mean} |")
+        invalid=r['status']=='INVALID_ACTION_OR_NONFINITE'
+        rate='invalid' if invalid else f"{r['games_per_second']:.3f}"
+        latency='invalid' if invalid else f"{r['mean_end_to_end_request_ms']:.3f}"
+        lines.append(f"| {r['batch']} | {r['status']} | {r['engine']['mean_ms']:.3f} | {r['encode']['mean_ms']:.3f} | {r['forward']['mean_ms']:.3f} | {latency} | {r['completed_games']} | {r['censored_games']} | {rate} | {mean} |")
     lines.extend(['','Request caps, per-game final turns/completion masks, ordinary-turn/live-request rates and raw samples are in JSON.',
         'No production fidelity, strength or go/no-go conclusion follows. Device counters are after-only, not average utilization.'])
     return '\n'.join(lines)+'\n'
@@ -147,6 +151,10 @@ def measure(pool_path,weights_path,expected_pool_sha,*,batches=(256,1024,2048,81
         turns=np.asarray(state.turn)
         row.update(status=status,**cohort_summary(done,turns,seconds=elapsed,requests=requests,
             live_requests=live_requests,ordinary_turns=int(turns.sum())))
+        if status=='INVALID_ACTION_OR_NONFINITE':
+            for field in ('games_per_second','mean_end_to_end_request_ms',
+                    'live_game_requests_per_second','ordinary_game_turns_per_second'):
+                row[field]=None
         result['rows'].append(row)
         print(json.dumps({k:v for k,v in row.items() if k not in ('engine','encode','forward','final_turns','completed_mask')}),flush=True)
         if status=='INVALID_ACTION_OR_NONFINITE':break

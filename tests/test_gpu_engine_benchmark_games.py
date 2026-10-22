@@ -23,10 +23,16 @@ class AdvancingBenchmarkTests(unittest.TestCase):
     def test_render_retains_censoring_and_does_not_project_games_from_turns(self):
         from gpu_engine.benchmark_games import cohort_summary,render_markdown
         row=cohort_summary([False],[100],seconds=2,requests=100,live_requests=100,ordinary_turns=100)
-        row.update(batch=1,engine={'mean_ms':.1},encode={'mean_ms':.2},forward={'mean_ms':.3})
-        text=render_markdown({'device':'authored fixture','jax':'test','rows':[row]})
-        self.assertIn('| 1 | 0.100 | 0.200 | 0.300 | 20.000 | 0 | 1 | 0.000 | — |',text)
+        row.update(batch=1,status='REQUEST_CAP',engine={'mean_ms':.1},encode={'mean_ms':.2},forward={'mean_ms':.3})
+        result={'device':'authored fixture','jax':'test','protocol_completed':True,'rows':[row]}
+        text=render_markdown(result)
+        self.assertIn('| 1 | REQUEST_CAP | 0.100 | 0.200 | 0.300 | 20.000 | 0 | 1 | 0.000 | — |',text)
         self.assertIn('Unfinished games remain censored',text)
+        row.update(status='INVALID_ACTION_OR_NONFINITE',games_per_second=None,mean_end_to_end_request_ms=None)
+        result['protocol_completed']=False;text=render_markdown(result)
+        self.assertIn('Protocol completed: False',text)
+        self.assertIn('INVALID_ACTION_OR_NONFINITE',text)
+        self.assertIn('| invalid | 0 | 1 | invalid |',text)
 
     def test_masked_sampling_no_legal_and_stable_prefix(self):
         import jax
