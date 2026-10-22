@@ -180,8 +180,8 @@ drains into the current living occupant of the opposite singles slot, including
 at full HP; switching the seeded holder clears it. Wish belongs to the side
 slot, cannot refresh while pending, and expires using the recipient's max HP
 before weather. Forced-replacement pseudo-turns do not tick either effect.
-Seed damage and healing finish together before checking for a win. Baton Pass,
-Liquid Ooze and wider event interactions remain pending.
+Seed damage and healing finish together before checking for a win. Direct Baton
+passes the seed flag; Liquid Ooze and wider event interactions remain pending.
 
 Pursuit intercepts an ordinary opponent switch against the outgoing state at
 80 power with unconditional accuracy. In Gen 3 it is Special/Dark. A sleeping
@@ -190,8 +190,8 @@ bypasses BeforeMove paralysis, confusion, flinch and counter changes. It spends
 PP once, including the outgoing holder's Pressure, and retains capped Substitute
 damage and successful-use Choice lock. Even after a Pursuit KO, Gen 3 installs
 the already chosen replacement, with its hazards and entry ability. Forced
-replacement pseudo-turns are not intercepted. Baton Pass and broader contact/
-item callbacks remain pending; ordinary non-switch Pursuit uses the usual path.
+replacement pseudo-turns and direct Baton Pass are not intercepted. Broader
+contact/item callbacks remain pending; ordinary non-switch Pursuit uses the usual path.
 
 Action-phase Gen 3 KOs suspend the ordinary turn before residuals. A replacement
 request installs the next living member before Wish, weather and order10 effects;
@@ -200,7 +200,7 @@ block, turn count and active ages are not redrawn/ticked during recovery. A
 separate counted stream supplies replacement-entry tie coins. Once residuals
 finish, their own faint replacements are standalone pseudo-turns with no second
 residual. `turn` counts ordinary turns begun, including a suspended one. This is
-the KO-resumption foundation; Baton Pass still needs a queued-move continuation.
+the KO-resumption foundation used by direct Baton's queued-move continuation.
 
 Guts now composes with the selected item multipliers in one Attack event,
 including confusion self-damage. It overrides the physical burn penalty without
@@ -208,8 +208,8 @@ curing burn or preventing residual damage. Gen 3 Thick Fat modifies Fire/Ice
 base power, not Attack or final damage. Arena Trap, Magnet Pull and Shadow Tag
 restrict voluntary switches through the current request mask; forced switches
 remain legal. Bench/fainted trappers do not bind, and Gen 3 does not give Ghosts
-or other Shadow Tag holders their later-generation exemptions. Move traps and
-Baton Pass remain pending.
+or other Shadow Tag holders their later-generation exemptions. Direct Baton
+escapes these traps; move-based traps and their transfer links remain pending.
 
 Seismic Toss/Night Shade use level damage and Sonic Boom/Dragon Rage their fixed
 constants, retaining immunity, accuracy, Protect, Substitute and Endure while
