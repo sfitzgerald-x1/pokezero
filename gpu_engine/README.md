@@ -142,17 +142,11 @@ checks likewise supply no games-per-second result.
 
 ## Initial turn integration
 
-`champion.py` is an inference-only functional JAX port (no Flax dependency) of
-the champion's one-frame, norm-first TransformerEncoder: exact GELU, key padding,
-masked mean, action tokens13..21, policy/value/opponent heads, float32 eval mode.
-The category embedding has916 rows TOTAL, including the16 OOV buckets, not932.
-Export the unchanged trusted checkpoint once with optional Torch2.10 on CPU:
-`python -m gpu_engine.champion --checkpoint /path/model.pt --out /outside/git/weights.npz`.
-`PYTHONPATH=src python -m gpu_engine.check_champion_forward --checkpoint /path/model.pt
---archive /outside/git/weights.npz` checks the actual production Torch forward
-on authored inputs. Load NPZ with `champion.load`; forward and per-seat masked
-temperature1 sampling stay on device. No-legal rows return−1, never a valid action.
-This is a cost workload, not production observation semantics, training or strength.
+Synthesis/Moonlight/Morning Sun heal floor(max HP / 2) in clear weather,
+floor(2 × max HP / 3) in sun and floor(max HP / 4) in rain/sand/hail, minimum one.
+Living Air Lock/Cloud Nine suppress weather for healing; the move resolves before
+weather expiry/upkeep. Full-HP attempts still spend caller PP. This is selected
+component support, not qualified move/game coverage.
 
 `observation.encode(state, table)` builds the handoff's placeholder observation
 on device for both seats: float32 `[B,2,23,132]`, int32 `[B,2,23,41]`, token
@@ -327,6 +321,20 @@ JSON retains samples, source/pool bindings and memory in use; Markdown reports
 mean step latency. Encoder, forward, end-to-end, game length, game rate and
 utilization remain unmeasured/null. Existing outputs are never overwritten.
 These are incomplete-core timings, not the final table or a go/no-go result.
+
+## Champion forward cost
+
+`champion.py` is an inference-only functional JAX port (no Flax dependency) of
+the champion's one-frame, norm-first TransformerEncoder: exact GELU, key padding,
+masked mean, action tokens13..21, policy/value/opponent heads, float32 eval mode.
+The category embedding has916 rows TOTAL, including the16 OOV buckets, not932.
+Export the unchanged trusted checkpoint once with optional Torch2.10 on CPU:
+`python -m gpu_engine.champion --checkpoint /path/model.pt --out /outside/git/weights.npz`.
+`PYTHONPATH=src python -m gpu_engine.check_champion_forward --checkpoint /path/model.pt
+--archive /outside/git/weights.npz` checks the actual production Torch forward
+on authored inputs. Load NPZ with `champion.load`; forward and per-seat masked
+temperature1 sampling stay on device. No-legal rows return−1, never a valid action.
+This is a cost workload, not production observation semantics, training or strength.
 
 ## Measurement contract
 
