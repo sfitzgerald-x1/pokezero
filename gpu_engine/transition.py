@@ -34,7 +34,7 @@ from . import secondary as secondaries
 from . import sleep_talk as talking
 from . import self_destruct as exploding
 from . import encore as repeating
-from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
+from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, weather_healing
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions, usable_moves
 
 
@@ -554,6 +554,12 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 jnp.where(creates_sub,cost,sub_hp)))
             restored = jnp.minimum(max_hp,hp + max_hp // 2)
             hp = jnp.where(acts & effects.heal_half[move],restored,hp)
+            heal_weather=work.weather
+            if table.weather is not None:
+                heal_weather=climate.effective(table.weather,work.weather,
+                    work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
+            restored=jnp.minimum(max_hp,hp+weather_healing(max_hp,heal_weather))
+            hp=jnp.where(acts & effects.weather_heal[move] & (hp>0),restored,hp)
             rest = (acts & effects.rest[move] & (hp < max_hp)
                     & (_active(work.status,work,side) != m.SLP))
             hp = jnp.where(rest,max_hp,hp)
