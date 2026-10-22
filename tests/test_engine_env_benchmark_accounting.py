@@ -56,7 +56,7 @@ class BenchmarkAccountingTests(unittest.TestCase):
         self.assertEqual(arm.outcomes[0]['turns'],7)
 
     def test_report_zero_and_mixed_completion_metrics_are_not_invented(self):
-        args=SimpleNamespace(games=2,seed_start=17,format_id='fixture',policy_label='fake')
+        args=SimpleNamespace(games=2,seed_start=17,format_id='fixture',policy_label='random-legal fixture')
         incomplete=self.play(FakeEnv())
         complete=self.play(FakeEnv(finish=1));complete.game_seconds=[2.5]
         for other in (incomplete,complete):
