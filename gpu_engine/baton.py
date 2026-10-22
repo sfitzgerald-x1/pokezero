@@ -40,7 +40,7 @@ def copy_to_recipient(state, side, target, *, eligible):
         source = value[rows, side, old]
         if name == "volatile":
             source &= jnp.uint32(LEECH_SEED)
-        elif name in ("protect_counter", "choice_move", "last_move", "encore_move", "encore_counter", "charge_move", "charge_counter"):
+        elif name in ("protect_counter", "choice_move", "last_move", "encore_move", "encore_counter"):
             source = jnp.zeros_like(source)
         gate = eligible[:, None] if source.ndim == 2 else eligible
         value = value.at[rows, side, target].set(jnp.where(

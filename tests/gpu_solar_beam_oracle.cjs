@@ -1,6 +1,23 @@
 // Pinned Gen3 Solar Beam boundaries, not a seeded strength or parity panel.
 const path=require('node:path');
 const {Battle}=require(path.join(process.argv[2],'dist/sim/battle.js'));
+function copiedCharge() {
+  const b=new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
+  for(let side=0;side<2;side++)b.setPlayer(`p${side+1}`,{name:`seat${side}`,team:[
+    {species:'Mew',ability:'Run Away',moves:['solarbeam','splash']},
+    {species:'Ditto',ability:'Run Away',moves:['splash']}]});
+  const p=b.p1.active[0],q=b.p2.active[0],next=b.p1.pokemon[1];
+  // Authored primitive boundary, NOT proof of a naturally reachable sequence.
+  p.addVolatile('twoturnmove',q,b.dex.moves.get('solarbeam'));
+  p.volatiles.twoturnmove.duration=1;
+  next.copyVolatileFrom(p,'copyvolatile');
+  // Event handlers inspect only active holders; install this authored recipient.
+  p.isActive=false;next.isActive=true;next.position=0;b.p1.active[0]=next;
+  const locked=next.getLockedMove();
+  const result={charge:!!next.volatiles.solarbeam,duration:next.volatiles.twoturnmove?.duration,
+    locked,request:next.getMoves(locked).map(x=>x.id),known:next.moves,oldCharge:!!p.volatiles.solarbeam};
+  b.destroy();return result;
+}
 function sample(options={}) {
   const b=new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
   for(let side=0;side<2;side++)b.setPlayer(`p${side+1}`,{name:`seat${side}`,team:[
@@ -29,4 +46,4 @@ process.stdout.write(JSON.stringify({clear:sample(),sun:sample({weather:'sunnyda
   rain:sample({weather:'raindance'}),sand:sample({weather:'sandstorm'}),hail:sample({weather:'hail'}),
   cloud:sample({weather:'sunnyday',cloud:true}),expire:sample({weather:'sunnyday',expire:true}),
   sleep:sample({sleep:true}),paralysis:sample({paralysis:true}),onePP:sample({onePP:true}),
-  protect:sample({protect:true}),pressure:sample({pressure:true})}));
+  protect:sample({protect:true}),pressure:sample({pressure:true}),copied:copiedCharge()}));

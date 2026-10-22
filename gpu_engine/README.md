@@ -352,7 +352,8 @@ Solar Beam charges outside effective sun, hard-locking its release even at zero
 PP. The release has no second PP/Pressure cost; BeforeMove interruption cancels
 the charge. Effective rain/sand/hail halve its base power. Live weather suppression,
 move-time weather and ordinary-turn charge expiry are represented; forced and
-deferred replacement requests do not consume a charge turn. Other charging moves
+deferred replacement requests do not consume a charge turn. Baton copies a
+remaining charge, including to a recipient that does not know Solar Beam. Other charging moves
 remain placeholders. These component checks do not qualify complete-game coverage.
 
 ## Selected Encore integration

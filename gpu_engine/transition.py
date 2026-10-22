@@ -277,6 +277,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     slot = jnp.clip(move_actions, 0, 3)
     struggle = ~jnp.any(usable_moves(state), axis=-1)
     moves = state.moves[rows[:, None], sides, state.active, slot]
+    charge_moves=state.charge_move[rows[:,None],sides,state.active]
+    moves=jnp.where(charge_moves>0,charge_moves,moves)
     moves = jnp.where(struggle, table.struggle, moves)
     pursuit_used = jnp.zeros_like(switches)
     pursuit_faint = jnp.zeros_like(state.done)

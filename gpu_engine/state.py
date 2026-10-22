@@ -128,7 +128,10 @@ def usable_moves(state: BattleState) -> jax.Array:
     moves &= (duration[...,None]==0) | (move_ids==encore[...,None])
     charge=jnp.take_along_axis(state.charge_move,state.active[...,None],axis=2)[...,0]
     # A hard-locked release ignores PP/Disable/Choice/Encore request filtering.
-    moves=jnp.where(charge[...,None]>0,move_ids==charge[...,None],moves)
+    charge_slots=move_ids==charge[...,None]
+    # Baton can copy the charge even when its recipient does not know the move.
+    charge_slots=charge_slots.at[...,0].set(charge_slots[...,0]|~jnp.any(charge_slots,axis=-1))
+    moves=jnp.where(charge[...,None]>0,charge_slots,moves)
     return moves
 
 

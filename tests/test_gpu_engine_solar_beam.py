@@ -101,9 +101,16 @@ class SolarBeamTests(unittest.TestCase):
         held=self.c.residual(a,eligible=j.array([False]))
         self.assertEqual(int(held.charge_counter[0,0,0]),1)
         copied=baton.copy_to_recipient(a,j.array([0]),j.array([1]),eligible=j.array([True]))
-        self.assertEqual(int(copied.charge_move[0,0,1]),0)
+        self.assertEqual((int(copied.charge_move[0,0,1]),int(copied.charge_counter[0,0,1])),(1,1))
         departed=entry.depart(a,j.array([0]),None,eligible=j.array([True]))
         self.assertEqual((int(departed.charge_move[0,0,0]),int(departed.charge_counter[0,0,0])),(0,0))
+        recipient=entry.depart(copied,j.array([0]),None,eligible=j.array([True]))
+        recipient=recipient._replace(active=recipient.active.at[0,0].set(1))
+        self.assertEqual(self.t.action_mask(recipient,self.table)[0,0].tolist(),
+            [True,False,False,False,False,False,False,False,False])
+        b=self.play(recipient).state
+        self.assertLess(int(b.hp[0,1,0]),1000)
+        self.assertEqual((int(b.pp[0,0,1,0]),int(b.last_move[0,0,1]),int(b.charge_move[0,0,1])),(8,1,0))
 
     def test_native_damage_arithmetic_for_clear_and_halved_rain_power(self):
         j=self.j
@@ -142,3 +149,5 @@ class SolarBeamTests(unittest.TestCase):
             self.assertEqual(result[name]['second']['hp'],1000,name)
             self.assertFalse(result[name]['second']['charge'],name)
         self.assertEqual(result['pressure']['first']['pp'],14)
+        self.assertEqual(result['copied'],{'charge':True,'duration':1,'locked':'solarbeam',
+            'request':['solarbeam'],'known':['splash'],'oldCharge':False})
