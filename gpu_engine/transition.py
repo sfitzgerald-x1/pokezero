@@ -592,6 +592,10 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(volatile=_set_active(work.volatile,work,foe,seeded),
                 wish_counter=work.wish_counter.at[rows,side].set(jnp.where(
                     acts & table.sustain.wish[move] & (pending == 0),2,pending)))
+            # Gen3 clears even through an unbroken Substitute or zero actual
+            # Endure damage, but not on a miss, Protect or type immunity.
+            work=recovery.spin_cleanup(work,side,
+                eligible=acts & hit & ~immune & table.sustain.spin[move])
         if table.items is not None:
             locked = _active(work.choice_move,work,side)
             lock = (caller_acts & (caller_move!=table.struggle)

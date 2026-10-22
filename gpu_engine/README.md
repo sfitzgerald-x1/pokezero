@@ -142,6 +142,12 @@ checks likewise supply no games-per-second result.
 
 ## Initial turn integration
 
+Rapid Spin uses Gen 3 power 20 and clears represented Leech Seed/own Spikes
+after a successful nonimmune hit, including unbroken Substitute and Endure at
+one HP. Miss/Protect/Ghost leave them intact; Mean Look/ability/Ingrain traps
+remain, and there is no modern Speed boost. Partial-trap clocks/damage are not
+represented, so this does not qualify all of Rapid Spin or move/game coverage.
+
 Explosion/Selfdestruct apply Gen 3's floor-halved defense after stat modifiers.
 Damp on either living active holder vetoes the move after PP; otherwise the
 user self-KOs even on a miss, Protect, Ghost immunity or Substitute. Action-phase
