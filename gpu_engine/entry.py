@@ -60,7 +60,9 @@ def depart(state,side,table,*,eligible):
     state=state._replace(status=state.status.at[rows,side,active].set(
         jnp.where(eligible & cure,m.NONE,status)),
         status_counter=state.status_counter.at[rows,side,active].set(
-            jnp.where(eligible & (cure | (status==m.TOX)),0,counter)))
+            jnp.where(eligible & (cure | (status==m.TOX)),0,counter)),
+        sleep_skipped=state.sleep_skipped.at[rows,side,active].set(jnp.where(
+            eligible & (cure | (status!=m.SLP)),0,state.sleep_skipped[rows,side,active])))
     for name in ("boosts","volatile","confusion_counter","protect_counter","substitute_hp","choice_move"):
         value=getattr(state,name);old=value[rows,side,active]
         gate=eligible[:,None] if old.ndim==2 else eligible
@@ -92,6 +94,8 @@ def enter(state,side,table,*,eligible,hazards=True):
     next_hp = jnp.where(hit,jnp.maximum(0,hp-amount),hp)
     knocked_out = hit & (next_hp == 0)
     state = state._replace(hp=state.hp.at[rows,side,active].set(next_hp))
+    # Gen3 runs status SwitchIn even after a hazard KO, before faintMessages.
+    state=restore_sleep(state,side,eligible=eligible)
     starts = eligible & (next_hp > 0)
     requested = table.weather_ability[ability]
     change = (starts & (requested != weather.NONE)
@@ -105,3 +109,14 @@ def enter(state,side,table,*,eligible,hazards=True):
     old = state.boosts[rows,foe,foe_active,0]
     boosts = state.boosts.at[rows,foe,foe_active,0].set(jnp.where(drops,jnp.maximum(-6,old-1),old))
     return state._replace(boosts=boosts),knocked_out
+
+
+def restore_sleep(state,side,*,eligible):
+    """Gen3 status SwitchIn after hazards, before Ability Start."""
+    rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]
+    skipped=state.sleep_skipped[rows,side,active]
+    sleeping=state.status[rows,side,active]==m.SLP
+    counter=state.status_counter[rows,side,active]
+    return state._replace(status_counter=state.status_counter.at[rows,side,active].set(
+        jnp.where(eligible & sleeping,counter+skipped,counter)),
+        sleep_skipped=state.sleep_skipped.at[rows,side,active].set(jnp.where(eligible,0,skipped)))

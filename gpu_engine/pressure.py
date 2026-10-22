@@ -3,7 +3,8 @@
 The accepted offline pool predates target metadata. The pinned catalog's
 non-foe targets are retained here and checked against that source by the oracle;
 base power and status/damage category do not determine Pressure eligibility.
-Called moves, two-turn and redirected actions remain placeholder mechanics.
+Sleep Talk charges only its caller; other callers, two-turn and redirected
+actions remain placeholder mechanics.
 """
 from typing import NamedTuple
 

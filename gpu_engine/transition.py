@@ -31,6 +31,7 @@ from . import phazing as dragging
 from . import linked_traps as linking
 from . import critical as crits
 from . import secondary as secondaries
+from . import sleep_talk as talking
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -61,6 +62,7 @@ class MoveTable(NamedTuple):
     linked_traps: linking.TrapTable | None = None
     critical: crits.CriticalTable | None = None
     secondary: secondaries.SecondaryTable | None = None
+    sleep_talk: talking.SleepTalkTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -92,7 +94,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
-        secondaries.from_metadata(metadata))
+        secondaries.from_metadata(metadata),talking.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -135,6 +137,8 @@ def _lum_update(state,table,eligible):
             _active(state.confusion_counter,state,side),_active(state.hp,state,side),eligible=eligible)
         for name,value in zip(("item","status","status_counter","confusion_counter"),result):
             state = state._replace(**{name:_set_active(getattr(state,name),state,side,value)})
+        state=state._replace(sleep_skipped=_set_active(state.sleep_skipped,state,side,
+            jnp.where(result.status==m.SLP,_active(state.sleep_skipped,state,side),0)))
     return state
 
 
@@ -241,6 +245,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     secondary_draws=jax.vmap(lambda key:jax.random.randint(
         jax.random.fold_in(key,1618033),(2,),0,100))(splits[:,1])
     secondary_draws=jnp.where(resuming[:,None],state.secondary_draws,secondary_draws)
+    sleep_talk_draws=jax.vmap(lambda key:jax.random.randint(
+        jax.random.fold_in(key,1414213),(2,),0,60))(splits[:,1])
+    sleep_talk_draws=jnp.where(resuming[:,None],state.sleep_talk_draws,sleep_talk_draws)
     # Replacement requests do not consume another ordinary-turn chance block.
     # A separate counted fold-in distinguishes repeated hazard-KO entry ties.
     entry_ties = jax.vmap(lambda key,count:jax.random.randint(
@@ -306,6 +313,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         if table.entry is not None:
             work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
             switch_faint |= knocked_out
+        else:
+            work=arrival.restore_sleep(work,side,eligible=do_switch)
     if table.entry is not None:
         # Forced instaswitch actions(order3) install ALL entrants before any
         # runSwitch callback(order101). Ordinary switch actions(order103) do
@@ -344,14 +353,21 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         side = jnp.where(order == 0, first, 1 - first)
         foe = 1 - side
         move = moves[rows, side]
+        caller_move=move
         chance = draws[rows, side]
         move_context = ~replacement | (state.pending_residual & (saved_actor == side))
         eligible = (live & move_context & ~paused & ~moves_cancelled & ~switches[rows, side]
             & ~pursuit_used[rows,side] & ~displaced[rows,side] & (_active(work.hp, work, side) > 0))
+        sleep_usable=jnp.zeros_like(live);early_bird=jnp.zeros_like(live)
+        if table.sleep_talk is not None:
+            sleep_usable=table.sleep_talk.move[move]
+            early_bird=table.sleep_talk.early_bird[_active(work.ability,work,side)]
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
-            flinched=(_active(work.volatile, work, side) & FLINCH) != 0)
+            flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
+            sleep_usable=sleep_usable,early_bird=early_bird)
+        work=talking.before_move(work,side,before.status,eligible=eligible,sleep_usable=sleep_usable)
         for name, value in (("status", before.status), ("status_counter", before.counter),
                             ("confusion_counter", before.confusion_counter)):
             current = getattr(work, name)
@@ -393,6 +409,14 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         work = work._replace(pp=work.pp.at[rows, side, active, chosen_slot].set(
             jnp.where(acts & ~struggle[rows, side], jnp.maximum(0, old_pp - used_pp), old_pp)))
         placeholders += acts.astype(jnp.int32)
+        caller_acts=acts
+        if table.sleep_talk is not None:
+            called,usable=talking.choose(table.sleep_talk,_active(work.moves,work,side),
+                _active(work.pp,work,side),sleep_talk_draws[rows,side])
+            executes=(_active(work.status,work,side)==m.SLP) & usable
+            move=jnp.where(sleep_usable,called,move)
+            acts &= ~sleep_usable | executes
+            placeholders += (acts & sleep_usable).astype(jnp.int32)
         attack_stats = _active(work.stats, work, side)
         defense_stats = _active(work.stats, work, foe)
         attack_boosts = _active(work.boosts, work, side)
@@ -520,7 +544,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 status=_set_active(work.status,work,side,
                     jnp.where(rest,m.SLP,_active(work.status,work,side))),
                 status_counter=_set_active(work.status_counter,work,side,
-                    jnp.where(rest,3,_active(work.status_counter,work,side))))
+                    jnp.where(rest,3,_active(work.status_counter,work,side))),
+                sleep_skipped=_set_active(work.sleep_skipped,work,side,
+                    jnp.where(rest,0,_active(work.sleep_skipped,work,side))))
             boosts = _active(work.boosts,work,side)
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
@@ -542,7 +568,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 jnp.where(apply_status,status,_active(work.status,work,foe))),
                 status_counter=_set_active(work.status_counter,work,foe,
                     jnp.where(apply_status,jnp.where(status == m.SLP,2 + chance[:,7],0),
-                              _active(work.status_counter,work,foe))))
+                              _active(work.status_counter,work,foe))),
+                sleep_skipped=_set_active(work.sleep_skipped,work,foe,
+                    jnp.where(apply_status,0,_active(work.sleep_skipped,work,foe))))
         if table.sustain is not None:
             seeded = recovery.seed_target(table.sustain,move,_active(work.types,work,foe),
                 _active(work.hp,work,foe),_active(work.substitute_hp,work,foe),
@@ -553,8 +581,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                     acts & table.sustain.wish[move] & (pending == 0),2,pending)))
         if table.items is not None:
             locked = _active(work.choice_move,work,side)
-            lock = (acts & ~is_struggle & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
-            work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,move,locked)))
+            lock = (caller_acts & (caller_move!=table.struggle)
+                & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
+            work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,caller_move,locked)))
         if table.linked_traps is not None:
             work=linking.apply(work,side,move,table.linked_traps,eligible=acts & hit)
         if table.secondary is not None:
@@ -689,6 +718,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         residual_draws=jnp.where(defer_residual[:,None,None],draws,jnp.zeros_like(draws)),
         phazing_draws=jnp.where(defer_residual[:,None],phazing_draws,0),
         secondary_draws=jnp.where(defer_residual[:,None],secondary_draws,0),
+        sleep_talk_draws=jnp.where(defer_residual[:,None],sleep_talk_draws,0),
         replacement_count=jnp.where(defer_residual,
             jnp.where(resuming,state.replacement_count+1,0),0),
         forced_switch=((jnp.take_along_axis(work.hp, work.active[..., None], axis=2)[..., 0] <= 0)
