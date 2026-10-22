@@ -142,6 +142,11 @@ checks likewise supply no games-per-second result.
 
 ## Initial turn integration
 
+Heal Bell cures living own-party major status and sleep bookkeeping, leaving
+confusion/other volatiles and the opposing party unchanged. Gen 3 Soundproof
+blocks each holder's cure, including the user; fainted party members are not
+cured. This is selected component support, not qualified move/game coverage.
+
 Explosion/Selfdestruct apply Gen 3's floor-halved defense after stat modifiers.
 Damp on either living active holder vetoes the move after PP; otherwise the
 user self-KOs even on a miss, Protect, Ghost immunity or Substitute. Action-phase

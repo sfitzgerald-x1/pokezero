@@ -27,6 +27,8 @@ class MoveEffects(NamedTuple):
     endure: jax.Array
     protectable: jax.Array         # actual pinned move flags, not category inference
     bypass_sub: jax.Array
+    heal_bell: jax.Array
+    soundproof: jax.Array
 
 
 def from_metadata(metadata):
@@ -64,7 +66,26 @@ def from_metadata(metadata):
         flags({"recover","softboiled","milkdrink","slackoff"}),flags({"rest"}),
         flags({"haze"}),flags({"thunderwave"}),jnp.asarray(immunity),
         jnp.asarray(types.index("ground"),jnp.int32),flags({"substitute"}),
-        flags({"protect","detect"}),flags({"endure"}),move_flag("protect"),move_flag("bypasssub"))
+        flags({"protect","detect"}),flags({"endure"}),move_flag("protect"),move_flag("bypasssub"),
+        flags({"healbell"}),jnp.asarray([name=="soundproof" for name in
+            metadata["vocabulary"].get("abilities",["_none"])]))
+
+
+def cure_team(state,side,table,*,eligible):
+    """Gen3 Heal Bell cures living own-party status except each Soundproof holder.
+
+    The user is not exempt from Soundproof in this generation. Confusion and
+    other volatiles are not major status and are deliberately preserved.
+    """
+    rows=jnp.arange(state.hp.shape[0])
+    status=state.status[rows,side]
+    cured=(jnp.asarray(eligible)[:,None] & (state.hp[rows,side]>0) & (status!=m.NONE)
+        & ~table.soundproof[state.ability[rows,side]])
+    updates={}
+    for name in ("status","status_counter","sleep_skipped"):
+        value=getattr(state,name)
+        updates[name]=value.at[rows,side].set(jnp.where(cured,0,value[rows,side]))
+    return state._replace(**updates)
 
 
 def stall_success(counter, roll):
