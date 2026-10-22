@@ -16,13 +16,29 @@ class SustainTable(NamedTuple):
     seed: jax.Array
     wish: jax.Array
     grass_type: jax.Array
+    spin: jax.Array
 
 
 def from_metadata(metadata):
     vocab = metadata["vocabulary"]
     return SustainTable(jnp.asarray([name == "leechseed" for name in vocab["moves"]]),
         jnp.asarray([name == "wish" for name in vocab["moves"]]),
-        jnp.asarray(vocab["types"].index("grass")))
+        jnp.asarray(vocab["types"].index("grass")),
+        jnp.asarray([name=="rapidspin" for name in vocab["moves"]]))
+
+
+def spin_cleanup(state,side,*,eligible):
+    """Clear represented seed/Spikes, never Mean Look/ability/Ingrain traps.
+
+    Partial-trap damage/clocks are not represented by this spike yet. Do not
+    erase anonymous external or linked trapping flags to pretend they are Bind.
+    """
+    rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]
+    applies=jnp.asarray(eligible) & (state.hp[rows,side,active]>0)
+    old=state.volatile[rows,side,active]
+    return state._replace(volatile=state.volatile.at[rows,side,active].set(
+        jnp.where(applies,old & ~jnp.uint32(LEECH_SEED),old)),
+        spikes=state.spikes.at[rows,side].set(jnp.where(applies,0,state.spikes[rows,side])))
 
 
 def seed_target(table,move,types,hp,sub_hp,volatile,*,eligible):
