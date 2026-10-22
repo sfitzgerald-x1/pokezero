@@ -14,6 +14,31 @@ from pokezero.showdown import _legal_action_mask
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def native_case(row):
+    """Authored native flag fixture, not a full source-state parity claim."""
+    sides = (ROOT / "rust/pokezero-search/src/test_fixtures/minimal.state").read_text().strip().split("/")
+    types = {"Pikachu": ("ELECTRIC", "TYPELESS"), "Charizard": ("FIRE", "FLYING"),
+             "Gengar": ("GHOST", "POISON"), "Metagross": ("STEEL", "PSYCHIC"),
+             "Dugtrio": ("GROUND", "TYPELESS"), "Magneton": ("ELECTRIC", "STEEL"),
+             "Snorlax": ("NORMAL", "TYPELESS")}
+    own_index = 0 if row["slot"] == "p1" else 1
+    for index in (0, 1):
+        party = sides[index].split("=")
+        species, ability = ((row["own"], row["ownAbility"]) if index == own_index
+                            else (row["foe"], row["ability"]))
+        fields = party[0].split(",")
+        fields[0] = species.upper()
+        fields[2:4] = types[species]
+        fields[8] = fields[9] = "".join(c for c in ability.upper() if c.isalnum())
+        fields[22:26] = ["TACKLE;false;56", "NONE;true;0", "NONE;true;0", "NONE;true;0"]
+        party[0] = ",".join(fields)
+        fields[0] = "SNORLAX"; fields[2:4] = types["Snorlax"]
+        fields[8] = fields[9] = "IMMUNITY"
+        party[1] = ",".join(fields)
+        sides[index] = "=".join(party)
+    return "/".join(sides)
+
+
 def case():
     request = {"side": {"id": "p1", "pokemon": [
         {"ident": "p1: Pikachu", "active": True, "condition": "100/100"},
@@ -33,6 +58,44 @@ def case():
 
 
 class PrivateRequestObserverTest(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("POKEZERO_SHOWDOWN_ROOT"), "requires pinned Showdown and rebuilt native observer")
+    def test_native_projection_matches_source_flags_and_zero_switch_law(self):
+        import pokezero_search
+        from pokezero.policy_opponent_view import build_policy_opponent_view_from_native_bundle
+        from test_policy_opponent_request import arguments
+        rows = json.loads(subprocess.run([os.environ.get("POKEZERO_NODE_BINARY", "node"),
+            str(ROOT / "tests/policy_request_observer_oracle.cjs"), os.environ["POKEZERO_SHOWDOWN_ROOT"]],
+            capture_output=True, text=True, check=True, timeout=30).stdout)["rows"]
+        for row in rows:
+            lines = public_policy_lines(row["lines"], hp_visibility={"p1": "exact", "p2": "exact"})
+            state = native_case(row)
+            for root in (True, False):
+                with self.subTest(foe=row["foe"], ability=row["ability"], own=row["own"], seat=row["slot"], root=root):
+                    kwargs = dict(root=root, public_lines=lines, format_id="gen3randombattle", request_observer=True)
+                    supplied = json.loads(pokezero_search.sampled_policy_request(state, row["slot"],
+                        [row["own"], "Snorlax"], [row["own"], "Snorlax"], {"tackle": 56}, **kwargs))
+                    actual = row["request"]["active"][0]
+                    self.assertEqual(supplied["request"]["active"][0].get("maybeTrapped", False), actual.get("maybeTrapped", False))
+                    self.assertEqual(supplied["request"]["active"][0].get("trapped", False), actual.get("trapped", False))
+                    self.assertEqual(_legal_action_mask(supplied["request"]), _legal_action_mask(row["request"]))
+                    view = build_policy_opponent_view_from_native_bundle(native_request_bundle=supplied, **arguments(lines, row["slot"]))
+                    if actual.get("maybeTrapped"):
+                        self.assertIsNotNone(view.action_contract)
+                        self.assertEqual(view.action_contract.gather([1., 0., 0., 0., 0., 0., 0., 0., 0.]),
+                                         tuple(1. if i == 0 else 0. for i in supplied["native_action_indices"]))
+                        self.assertEqual(supplied["request_observer"]["public_binding"], public_binding(lines))
+                        self.assertEqual(supplied["request_observer"]["request_sha256"], request_digest(supplied["request"]))
+                    else:
+                        self.assertNotIn("request_observer", supplied)
+                    # Unobserved opposing item/stats/move details cannot alter
+                    # the own request or the narrow server-private receipt.
+                    hidden = state.split("/"); index = 1 if row["slot"] == "p1" else 0
+                    fields = hidden[index].split(","); fields[10] = "LEFTOVERS"; fields[13] = "222"
+                    fields[22] = "THUNDERBOLT;false;24"; hidden[index] = ",".join(fields)
+                    changed = json.loads(pokezero_search.sampled_policy_request("/".join(hidden), row["slot"],
+                        [row["own"], "Snorlax"], [row["own"], "Snorlax"], {"tackle": 56}, **kwargs))
+                    self.assertEqual(supplied, changed)
+
     def test_certified_view_keeps_canonical_observation_and_conserves_full_row(self):
         from types import SimpleNamespace
         from unittest.mock import patch
