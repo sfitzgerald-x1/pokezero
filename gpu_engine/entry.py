@@ -2,8 +2,8 @@
 
 The inherited Gen 4 runSwitch applies hazards before Ability Start. Ordinary
 switches and their runSwitch callbacks resolve one at a time, not together.
-Pursuit is dispatched by transition before entry. Baton Pass, phazing and most
-ability interactions remain pending.
+Pursuit is dispatched by transition before entry. Direct Baton and phazing
+reuse these selected entry/departure events; broader ability events are pending.
 """
 from typing import NamedTuple
 
@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 
 from . import weather
+from . import mechanics as m
 
 
 class EntryTable(NamedTuple):
@@ -42,6 +43,29 @@ def speed_modifier(table,ability,effective_weather,speed):
     doubled = ((table.swift_swim[ability] & (effective_weather == weather.RAIN))
         | (table.chlorophyll[ability] & (effective_weather == weather.SUN)))
     return speed * jnp.where(doubled,2,1)
+
+
+def depart(state,side,table,*,eligible):
+    """Selected outgoing cleanup shared by voluntary, Baton and drag switches.
+
+    Baton copies its supported fields before calling this. This does not run
+    BeforeSwitchOut/Pursuit, which does not apply to a drag or direct Baton.
+    """
+    rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]
+    hp=state.hp[rows,side,active];status=state.status[rows,side,active]
+    cure=hp<=0
+    if table is not None:
+        cure |= table.natural_cure[state.ability[rows,side,active]]
+    counter=state.status_counter[rows,side,active]
+    state=state._replace(status=state.status.at[rows,side,active].set(
+        jnp.where(eligible & cure,m.NONE,status)),
+        status_counter=state.status_counter.at[rows,side,active].set(
+            jnp.where(eligible & (cure | (status==m.TOX)),0,counter)))
+    for name in ("boosts","volatile","confusion_counter","protect_counter","substitute_hp","choice_move"):
+        value=getattr(state,name);old=value[rows,side,active]
+        gate=eligible[:,None] if old.ndim==2 else eligible
+        state=state._replace(**{name:value.at[rows,side,active].set(jnp.where(gate,0,old))})
+    return state
 
 
 def enter(state,side,table,*,eligible,hazards=True):

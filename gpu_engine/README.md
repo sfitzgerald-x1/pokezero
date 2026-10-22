@@ -47,6 +47,21 @@ Entry hazards still hit through Substitute: an entry KO cancels the saved move,
 then the existing replacement chain finishes before residuals. All moves remain
 placeholders until the wider effects and coverage checks qualify them.
 
+Direct Roar/Whirlwind select a living bench uniformly, cancel the displaced
+actor's queued action and run entry before residuals. Protect and accuracy still
+apply; Substitute does not block them. Suction Cups blocks both, Soundproof
+blocks Roar only, and a represented Ingrain root blocks dragging/voluntary
+switching (the Ingrain move itself remains a placeholder). Natural Cure and
+outgoing volatile cleanup share the ordinary switch path. Hazard KO suspends
+the original turn until a healthy replacement; incoming Lum/weather/Intimidate
+resolve at entry. Broader reflection, move traps and event effects remain pending.
+
+Bench choice extends the fixed ordinary chance block with one uniform [0,60)
+roll per seat from a dedicated fold-in. Since every possible living bench count
+1..5 divides 60, rank selection is unbiased. The existing twelve chance columns
+are unchanged, and the extra rolls are saved across a Baton pause rather than
+redrawn from a later key. This is sampled chance, not engine/Showdown RNG parity.
+
 ## Run the first device check
 
 From the checkout root, in a fresh Python 3.12 environment on a supported NVIDIA GPU:
