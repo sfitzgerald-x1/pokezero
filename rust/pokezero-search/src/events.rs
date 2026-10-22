@@ -57,7 +57,7 @@
 //!   attribution-unsafe rather than assigned to an invented action window.
 //!
 //! Lines the fold provably ignores (fold.rs `process_line`) are deliberately
-//! NOT rendered: `|-singleturn|`, `|-curestatus|`, `|-ability|`,
+//! NOT rendered: `|-singleturn|`, `|-curestatus|`, `|-ability|` (except switch-in Trace→Shadow Tag),
 //! `|-enditem|`, `|-mustrecharge|`, `|-start|` (except absorb signatures),
 //! `|-anim|`, `|debug|`. Omissions are part of the documented contract.
 //!
@@ -1437,6 +1437,33 @@ fn render_switch_phase(
                     boost.amount,
                     None,
                 ));
+            }
+            Instruction::ChangeAbility(change) if switched && change.side_ref == side => {
+                // The own-policy request also consumes public ability knowledge,
+                // even though the value fold ignores -ability. Gen3 Trace's
+                // setAbility emits this reveal without activating the copied
+                // ability. Do not turn pre-switch resets or Transform into a
+                // reveal, or infer a trap merely from sampled opposing truth.
+                let traced = match side {
+                    SideReference::SideOne => &sim.state.side_one,
+                    SideReference::SideTwo => &sim.state.side_two,
+                }.get_active_immutable().ability == Abilities::TRACE;
+                sim.apply(ins);
+                let foe = other_side(side);
+                let (own, opposing) = match side {
+                    SideReference::SideOne => (&sim.state.side_one, &sim.state.side_two),
+                    SideReference::SideTwo => (&sim.state.side_two, &sim.state.side_one),
+                };
+                if traced && own.get_active_immutable().ability == Abilities::SHADOWTAG
+                    && opposing.get_active_immutable().ability == Abilities::SHADOWTAG
+                    && own.get_active_immutable().hp > 0 && opposing.get_active_immutable().hp > 0
+                {
+                    let ident = ctx.active_ident(sim.state, side);
+                    let source = ctx.active_ident(sim.state, foe);
+                    out.lines.push(format!(
+                        "|-ability|{ident}|Shadow Tag|Trace|[from] ability: Trace|[of] {source}"
+                    ));
+                }
             }
             // Pre-switch bookkeeping (volatile clears, boost resets, toxic
             // reset, PARTIALLYTRAPPED release, ability change...): no lines.
@@ -9310,6 +9337,46 @@ mod tests {
         );
         sim.finish();
         assert_eq!(state.serialize(), serialized);
+    }
+
+    #[test]
+    fn trace_shadow_tag_reveal_requires_a_live_instruction_local_entry() {
+        use poke_engine::instruction::ChangeAbilityInstruction;
+        // Deliberately malformed deltas are negative renderer guard probes,
+        // not claims that the engine or normal teams generate these cases.
+        for (before, foe_ability, own_hp, foe_hp, switch_first, reveal) in [
+            (Abilities::TRACE, Abilities::SHADOWTAG, 100, 100, true, true),
+            (Abilities::LEVITATE, Abilities::SHADOWTAG, 100, 100, true, false),
+            (Abilities::TRACE, Abilities::LEVITATE, 100, 100, true, false),
+            (Abilities::TRACE, Abilities::SHADOWTAG, 0, 100, true, false),
+            (Abilities::TRACE, Abilities::SHADOWTAG, 100, 0, true, false),
+            (Abilities::TRACE, Abilities::SHADOWTAG, 100, 100, false, false),
+        ] {
+            let mut state = parse_state(MINIMAL.trim()).unwrap();
+            state.side_one.pokemon[PokemonIndex::P1] = state.side_one.pokemon[PokemonIndex::P0].clone();
+            for index in [PokemonIndex::P0, PokemonIndex::P1] {
+                state.side_one.pokemon[index].ability = before;
+                state.side_one.pokemon[index].hp = own_hp;
+            }
+            state.side_two.pokemon[PokemonIndex::P0].ability = foe_ability;
+            state.side_two.pokemon[PokemonIndex::P0].hp = foe_hp;
+            let snapshot = state.serialize();
+            let mut context = ctx();
+            context.species[0].push("Gardevoir".into());
+            let switch = Instruction::Switch(SwitchInstruction { side_ref: SideReference::SideOne,
+                previous_index: PokemonIndex::P0, next_index: PokemonIndex::P1 });
+            let change = Instruction::ChangeAbility(ChangeAbilityInstruction {
+                side_ref: SideReference::SideOne,
+                ability_change: Abilities::SHADOWTAG as i16 - before as i16,
+            });
+            let segment = if switch_first { vec![switch, change] } else { vec![change, switch] };
+            let mut out = RenderedEvents::default();
+            let mut sim = Sim::new(&mut state, [false, false]);
+            render_switch_phase(&mut sim, SideReference::SideOne, &segment, &context, &mut out);
+            assert_eq!(out.lines.iter().any(|s| s.starts_with("|-ability|")), reveal);
+            sim.finish();
+            assert_eq!(state.serialize(), snapshot, "projection must remain reversible");
+        }
     }
 
     /// ONE SIDE's emission order, pinned against the REAL engine.
