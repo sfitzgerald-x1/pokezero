@@ -13,6 +13,8 @@ import jax.numpy as jnp
 FLINCH = 1  # volatile bit 0; cleared at the end of each ordinary turn
 LEECH_SEED = 4  # volatile bit 2; opposite singles slot receives the drain
 ROOTED = 8  # represented Ingrain condition; the move itself remains pending
+FOCUS_PUNCH = 16  # original queued move prepared before the ordinary turn
+FOCUS_LOST = 32   # direct damaging hit landed since that preparation
 
 
 class BattleState(NamedTuple):
