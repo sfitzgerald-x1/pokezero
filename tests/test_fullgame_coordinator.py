@@ -338,6 +338,19 @@ class CoordinatorTests(unittest.TestCase):
             self.assertEqual(result, dict(exit_code=1))
             self.assertEqual(coordinator.read(Path(directory) / "coordinator-exit.json")["exit_code"], 1)
 
+    def test_snapshot_exports_per_seat_progress_without_renewing_or_scoring(self):
+        with tempfile.TemporaryDirectory() as directory:
+            _entry, _review, doc = self.agent_fixture(directory)
+            output = Path(doc["run_directory"])
+            output.mkdir()
+            progress = dict(name="candidate-p1", observed_games=2, last_completion_unix=123)
+            panel.write(output / "candidate-p1-progress.json", progress)
+            before = (output / "candidate-p1-progress.json").read_bytes()
+            result = coordinator.snapshot(doc, Path(directory), {})
+            self.assertEqual(result["documents"]["candidate-p1-progress.json"], progress)
+            self.assertEqual(result["counts"], {})
+            self.assertEqual((output / "candidate-p1-progress.json").read_bytes(), before)
+
     def test_snapshot_exports_new_prefix_and_refuses_shrink(self):
         with tempfile.TemporaryDirectory() as directory:
             _entry, _review, doc = self.agent_fixture(directory)
