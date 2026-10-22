@@ -1,4 +1,4 @@
-"""Gen 3 weather-move subset; entry abilities and Solar Beam charge pending.
+"""Gen 3 weather-move subset; Solar Beam charge is integrated separately.
 
 IDs come from the pool, not hard-coded vocabulary positions. Weather expiry
 precedes its order-8 upkeep callback, which precedes order-10 held/status events.

@@ -37,6 +37,8 @@ class BattleState(NamedTuple):
     last_move: jax.Array           # [B,2,6], last PP-spending normal caller
     encore_move: jax.Array         # [B,2,6], noCopy forced caller; zero inactive
     encore_counter: jax.Array      # [B,2,6], remaining residual ticks
+    charge_move: jax.Array         # [B,2,6], selected Solar Beam hard lock
+    charge_counter: jax.Array      # [B,2,6], includes charging turn's residual
     item: jax.Array                # [B,2,6]
     ability: jax.Array             # [B,2,6]
     boosts: jax.Array              # [B,2,6,7]: Atk,Def,SpA,SpD,Spe,Acc,Eva
@@ -89,7 +91,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         stats=jnp.zeros((b, 2, 6, 6), jnp.int32), hp=mon(), max_hp=mon(),
         status=mon(), status_counter=mon(), sleep_skipped=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
         pp=jnp.zeros((b, 2, 6, 4), jnp.int32), disabled=jnp.zeros((b, 2, 6, 4), jnp.bool_),
-        choice_move=mon(),last_move=mon(),encore_move=mon(),encore_counter=mon(),
+        choice_move=mon(),last_move=mon(),encore_move=mon(),encore_counter=mon(),charge_move=mon(),charge_counter=mon(),
         item=mon(), ability=mon(), boosts=jnp.zeros((b, 2, 6, 7), jnp.int32),
         volatile=jnp.zeros((b, 2, 6), jnp.uint32), confusion_counter=mon(),
         protect_counter=mon(), substitute_hp=mon(), active=side(),
@@ -126,6 +128,12 @@ def usable_moves(state: BattleState) -> jax.Array:
     encore=jnp.take_along_axis(state.encore_move,state.active[...,None],axis=2)[...,0]
     duration=jnp.take_along_axis(state.encore_counter,state.active[...,None],axis=2)[...,0]
     moves &= (duration[...,None]==0) | (move_ids==encore[...,None])
+    charge=jnp.take_along_axis(state.charge_move,state.active[...,None],axis=2)[...,0]
+    # A hard-locked release ignores PP/Disable/Choice/Encore request filtering.
+    charge_slots=move_ids==charge[...,None]
+    # Baton can copy the charge even when its recipient does not know the move.
+    charge_slots=charge_slots.at[...,0].set(charge_slots[...,0]|~jnp.any(charge_slots,axis=-1))
+    moves=jnp.where(charge[...,None]>0,charge_slots,moves)
     return moves
 
 
@@ -142,6 +150,7 @@ def legal_actions(state: BattleState) -> jax.Array:
     source=jnp.take_along_axis(state.trap_source,state.active[...,None],axis=2)[...,0]
     linked=(source>=0) & (source==state.active[:,::-1]) & (active_hp[:,::-1]>0)
     # Gen 3 has no later-generation Ghost exemption for these move traps.
-    switches = (bench_hp > 0) & (~(state.trapped | rooted | linked) | forced)[..., None]
+    charge=jnp.take_along_axis(state.charge_move,state.active[...,None],axis=2)[...,0]>0
+    switches = (bench_hp > 0) & (~(state.trapped | rooted | linked | charge) | forced)[..., None]
     mask = jnp.concatenate((moves, switches), axis=-1)
     return mask & ~state.done[:, None, None]
