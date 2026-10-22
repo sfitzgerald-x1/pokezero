@@ -381,6 +381,13 @@ strength measurement or a go/no-go. After-only counters are not mean utilization
 
 ## Selected Encore integration
 
+Focus Punch prepares its original queued move before switches and Encore's
+override. A direct non-status hit breaks focus even when Endure prevents HP
+loss; a Substitute, miss, Protect or immunity does not. Gen3 failure is after
+caller PP/last-move recording and still Choice-locks. Preparation blocks added
+flinch, survives an interrupted Baton request and expires with the turn; it is
+not Baton-copyable. These components do not qualify full move/game coverage.
+
 Gen 3 Encore chooses 3..6 turns, adds a tick when the target has no queued move,
 and ticks at speed-ordered residual order10/suborder14. It forces the last
 PP-spending normal caller, retaining original queued priority and charging the

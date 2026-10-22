@@ -34,8 +34,9 @@ from . import secondary as secondaries
 from . import sleep_talk as talking
 from . import self_destruct as exploding
 from . import encore as repeating
+from . import focus_punch as focusing
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team, weather_healing
-from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions, usable_moves
+from .state import FLINCH, FOCUS_PUNCH, FOCUS_LOST, BattleState, bench_indices, empty_state, legal_actions, usable_moves
 
 
 class MoveTable(NamedTuple):
@@ -67,6 +68,7 @@ class MoveTable(NamedTuple):
     sleep_talk: talking.SleepTalkTable | None = None
     self_destruct: exploding.SelfDestructTable | None = None
     encore: repeating.EncoreTable | None = None
+    focus_punch: focusing.FocusTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -99,7 +101,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
         secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata),
-        repeating.from_metadata(metadata))
+        repeating.from_metadata(metadata),focusing.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -276,6 +278,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     struggle = ~jnp.any(usable_moves(state), axis=-1)
     moves = state.moves[rows[:, None], sides, state.active, slot]
     moves = jnp.where(struggle, table.struggle, moves)
+    if table.focus_punch is not None:
+        work=focusing.prepare(work,moves,table.focus_punch,ordinary=live & ~replacement,
+            move_requests=(actions<4) & ~struggle)
     pursuit_used = jnp.zeros_like(switches)
     pursuit_faint = jnp.zeros_like(state.done)
     if table.pursuit is not None:
@@ -424,6 +429,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             acts &= ~sleep_usable | executes
             placeholders += (acts & sleep_usable).astype(jnp.int32)
         explodes=jnp.zeros_like(acts)
+        if table.focus_punch is not None:
+            acts &= ~focusing.failed(work,side,move,table.focus_punch)
         if table.self_destruct is not None:
             blocked=exploding.blocked(table.self_destruct,move,
                 work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
@@ -521,6 +528,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
             substitute_hp=_set_active(work.substitute_hp,work,foe,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
+        if table.focus_punch is not None:
+            work=focusing.hit(work,side,move,table.focus_punch,eligible=acts & hit & ~immune & ~hits_sub)
         # Gen 3 floors recoil from actual damage, including capped sub damage.
         recoil=jnp.where(is_struggle & (dealt>0),jnp.maximum(1,dealt//4),0)
         if table.damage_moves is not None:
@@ -741,6 +750,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         if table.encore is not None:
             work=repeating.residual(work,side,eligible=eligible & (event>=8))
     work=linking.prune(work)
+    work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,
+        work.volatile & jnp.uint32(~(FOCUS_PUNCH|FOCUS_LOST)&0xffffffff)))
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0)
         for name in ("last_move","encore_move","encore_counter")})
     alive = jnp.any(work.hp > 0, axis=2)
@@ -764,6 +775,6 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         baton_pass=work.baton_pass & ~done[:,None])
     ordinary = turn_context & ~defer_residual
     work = work._replace(volatile=jnp.where(ordinary[:, None, None],
-        work.volatile & jnp.uint32(~FLINCH & 0xffffffff), work.volatile))
+        work.volatile & jnp.uint32(~(FLINCH|FOCUS_PUNCH|FOCUS_LOST) & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     return StepResult(work, invalid, placeholders)

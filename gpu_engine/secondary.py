@@ -11,7 +11,7 @@ import numpy as np
 
 from . import mechanics as m
 from .effects import from_metadata as effects_from_metadata
-from .state import FLINCH
+from .state import FLINCH,FOCUS_PUNCH
 from .weather import SUN
 
 
@@ -84,7 +84,8 @@ def apply(state, side, move, roll, table, *, eligible, effective_weather=0):
     boosts = get(state.boosts)
     drops = proc & table.spd_drop[move] & ~table.clear_body[ability]
     boosts = boosts.at[:, 3].set(jnp.where(drops, jnp.maximum(-6, boosts[:, 3] - 1), boosts[:, 3]))
-    flinch = proc & table.flinch[move] & ~table.inner_focus[ability]
+    flinch = (proc & table.flinch[move] & ~table.inner_focus[ability]
+        & ((get(state.volatile) & FOCUS_PUNCH)==0))
     return state._replace(
         status=state.status.at[rows, foe, target].set(jnp.where(changes, status, get(state.status))),
         status_counter=state.status_counter.at[rows, foe, target].set(
