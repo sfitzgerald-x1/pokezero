@@ -154,6 +154,12 @@ private state is visible and raw engine IDs are not champion vocabulary rows.
 It is only an encode/forward cost-shape workload, never strength/training input.
 No RNG or battle state is changed; no game-rate or encoder-parity claim follows.
 
+Explosion/Selfdestruct apply Gen 3's floor-halved defense after stat modifiers.
+Damp on either living active holder vetoes the move after PP; otherwise the
+user self-KOs even on a miss, Protect, Ghost immunity or Substitute. Action-phase
+replacement/residual ordering and Gen 3 last-party ties follow the existing
+turn scheduler. These component checks do not qualify full move/game coverage.
+
 Sleep Talk uses its own priority, PP and Choice lock, then calls one eligible
 own move without another BeforeMove or PP/Pressure charge. Catalog charge and
 nosleeptalk flags exclude slots; selecting a zero-PP slot fails without rerolling.

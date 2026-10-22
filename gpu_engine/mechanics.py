@@ -38,6 +38,7 @@ def boosted_stat(stat, stage):
 def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=0,
                 physical=True, critical=False, stab=False, typeless=False, burned=False, guts=False,
                 attack_num=1, attack_den=1, defense_num=1, defense_den=1,
+                halve_defense=False,
                 weather_num=1, weather_den=1, phase1_num=1, phase1_den=1, screen=False,
                 effectiveness_num=1, effectiveness_den=1, immune=False, roll=100):
     """Singles damage with resolved stat/weather/type modifiers and roll 85..100.
@@ -52,6 +53,9 @@ def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=
     def_stage = jnp.where(critical & (jnp.asarray(defense_stage) > 0), 0, defense_stage)
     atk = modify(boosted_stat(attack, atk_stage), attack_num, attack_den)
     defe = jnp.maximum(1, modify(boosted_stat(defense, def_stage), defense_num, defense_den))
+    # Explosion/Selfdestruct floor AFTER defensive stat events, not Q12-round
+    # a half modifier or double base power (the odd-defense boundary differs).
+    defe = jnp.where(jnp.asarray(halve_defense),jnp.maximum(1,defe//2),defe)
     base = (((jnp.asarray(level, jnp.uint32) * 2 // 5 + 2)
              * jnp.asarray(power, jnp.uint32) * atk.astype(jnp.uint32))
             // defe.astype(jnp.uint32) // 50).astype(jnp.int32)
@@ -114,7 +118,7 @@ def before_move(status, counter, confusion_counter=0, *, thaw_roll=99,
     Sleep starts at 2..5 (Rest: 3) and decrements before testing whether it ends.
     Confusion similarly starts at 2..5. A defrost move may pass freeze without
     curing it here: the move's later ModifyMove event performs that cure.
-    Sleep Talk's switch-out skipped-time bookkeeping belongs to the future step.
+    The transition owns Sleep Talk's skipped-time and switch-in bookkeeping.
     Confusion self-damage (40 BP physical, typeless) is returned as an event flag.
     """
     status, counter = jnp.asarray(status), jnp.asarray(counter)
