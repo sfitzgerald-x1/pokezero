@@ -365,6 +365,17 @@ one HP. Miss/Protect/Ghost leave them intact; Mean Look/ability/Ingrain traps
 remain, and there is no modern Speed boost. Partial-trap clocks/damage are not
 represented, so this does not qualify all of Rapid Spin or move/game coverage.
 
+## Joint action expansion cost shape
+
+`python -m gpu_engine.benchmark_expansion --team-pool POOL --expected-pool-sha
+POOL_SHA --out RESULT.json` writes JSON/Markdown for 256, 1024 and 4096 parents.
+Each device call replicates each parent into 81 lexicographic action pairs,
+including invalid requests, which freeze and are counted separately from valid
+child transitions. Siblings retain the same parent chance key (common random
+numbers). Timings include parent replication and complete output synchronization;
+five warmups and 100 fixed-root samples exclude setup/compile. This measures a
+search-shaped engine workload, not an actual search or qualified gameplay.
+
 ## Advancing cost shape diagnostic
 
 After the separate champion-forward dependency is available, run
