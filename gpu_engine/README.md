@@ -148,6 +148,16 @@ user self-KOs even on a miss, Protect, Ghost immunity or Substitute. Action-phas
 replacement/residual ordering and Gen 3 last-party ties follow the existing
 turn scheduler. These component checks do not qualify full move/game coverage.
 
+Sleep Talk uses its own priority, PP and Choice lock, then calls one eligible
+own move without another BeforeMove or PP/Pressure charge. Catalog charge and
+nosleeptalk flags exclude slots; selecting a zero-PP slot fails without rerolling.
+Called Protect, Pursuit, phazing and Baton reuse the original queue semantics.
+Gen3 sleep decrements, Early Bird, consecutive Sleep Talk skipped turns and
+switch-in restoration are represented, including restoration after a hazard KO.
+Natural Cure, waking and Lum clear that bookkeeping; it does not pass via Baton.
+The dedicated [0,60) selection roll persists through pauses. Other move callers,
+Snore's move effects and general called-move qualification remain pending.
+
 Selected target secondaries cover Rock Slide flinch; Ice Beam/Punch freeze;
 Thunderbolt/Thunder/Punch and Body Slam paralysis; Sludge Bomb poison; selected
 Fire burns; and Gen 3 Crunch/Shadow Ball/Psychic Special Defense drops. Shield
