@@ -3,6 +3,9 @@
 Repeated one-step requests do not advance or complete games. Missing encoder,
 policy, end-to-end, game-length and game-rate fields stay null. This diagnostic
 cannot evaluate the handoff's go/no-go thresholds or qualify move coverage.
+
+The --report-* mode consolidates already measured, source-versioned receipts
+into the handoff tables without acquiring a GPU or running another experiment.
 """
 from __future__ import annotations
 
@@ -128,7 +131,11 @@ def measure(pool_path, *, batches=(256,1024,2048,8192), repeats=100, warmup=5):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--team-pool",required=True,type=Path)
+    source=parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--team-pool",type=Path)
+    source.add_argument("--report-games",type=Path)
+    for name in ('refill','expansion','cpu','fidelity','ledger'):
+        parser.add_argument('--report-'+name,type=Path)
     parser.add_argument("--out-prefix",required=True,type=Path)
     parser.add_argument("--batches",nargs="+",type=int,default=[256,1024,2048,8192])
     parser.add_argument("--repeats",type=int,default=100)
@@ -137,9 +144,18 @@ def main():
     paths = [Path(str(args.out_prefix)+suffix) for suffix in (".json",".md")]
     if any(path.exists() for path in paths):
         raise FileExistsError("refusing to overwrite an existing benchmark result")
-    result = measure(args.team_pool,batches=tuple(args.batches),repeats=args.repeats,warmup=args.warmup)
+    renderer=render_markdown
+    if args.report_games:
+        from .report import assemble,render_markdown as renderer
+        receipts={name:getattr(args,'report_'+name) for name in ('games','refill','expansion','cpu','fidelity','ledger')}
+        if any(path is None for path in receipts.values()):parser.error('all six --report-* receipts are required')
+        result=assemble(receipts)
+    else:
+        if any(getattr(args,'report_'+name) for name in ('refill','expansion','cpu','fidelity','ledger')):
+            parser.error('--report-* receipts require --report-games')
+        result = measure(args.team_pool,batches=tuple(args.batches),repeats=args.repeats,warmup=args.warmup)
     paths[0].parent.mkdir(parents=True,exist_ok=True)
-    for path,content in zip(paths,(json.dumps(result,indent=2,allow_nan=False)+"\n",render_markdown(result))):
+    for path,content in zip(paths,(json.dumps(result,indent=2,allow_nan=False)+"\n",renderer(result))):
         with path.open("x") as output:
             output.write(content)
     print(json.dumps(dict(status=result["status"],json=str(paths[0]),markdown=str(paths[1]))))
