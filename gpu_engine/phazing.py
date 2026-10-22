@@ -55,4 +55,6 @@ def drag(state,side,move,roll,table,entry_table,*,eligible):
     knocked_out=jnp.zeros_like(changed)
     if entry_table is not None:
         state,knocked_out=entry.enter(state,side,entry_table,eligible=changed)
+    else:
+        state=entry.restore_sleep(state,side,eligible=changed)
     return state,changed,knocked_out

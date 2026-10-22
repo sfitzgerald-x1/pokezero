@@ -27,6 +27,7 @@ class BattleState(NamedTuple):
     max_hp: jax.Array              # [B,2,6]
     status: jax.Array              # [B,2,6]
     status_counter: jax.Array      # [B,2,6]
+    sleep_skipped: jax.Array       # [B,2,6], Gen3 Sleep Talk turns restored on entry
     moves: jax.Array               # [B,2,6,4]
     pp: jax.Array                  # [B,2,6,4]
     disabled: jax.Array            # [B,2,6,4]
@@ -52,6 +53,7 @@ class BattleState(NamedTuple):
     residual_draws: jax.Array      # [B,2,12], original ordinary-turn chance block
     phazing_draws: jax.Array       # [B,2], fixed uniform [0,60) bench-choice rolls
     secondary_draws: jax.Array     # [B,2], fixed uniform [0,100) target-secondary rolls
+    sleep_talk_draws: jax.Array    # [B,2], fixed uniform [0,60) called-slot rolls
     replacement_count: jax.Array   # [B], tie stream within a suspended turn
     spikes: jax.Array              # [B,2]
     wish_counter: jax.Array        # [B,2], slot condition; persists across switches
@@ -80,7 +82,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         hidden_power_power=jnp.full((b,2,6),70,jnp.int32),
         happiness=jnp.full((b,2,6),255,jnp.int32), types=jnp.zeros((b, 2, 6, 2), jnp.int32),
         stats=jnp.zeros((b, 2, 6, 6), jnp.int32), hp=mon(), max_hp=mon(),
-        status=mon(), status_counter=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
+        status=mon(), status_counter=mon(), sleep_skipped=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
         pp=jnp.zeros((b, 2, 6, 4), jnp.int32), disabled=jnp.zeros((b, 2, 6, 4), jnp.bool_),
         choice_move=mon(),
         item=mon(), ability=mon(), boosts=jnp.zeros((b, 2, 6, 7), jnp.int32),
@@ -94,7 +96,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         queued_actions=side(),queued_stall=side(),
         pending_residual=jnp.zeros((b,),jnp.bool_),
         residual_draws=jnp.zeros((b,2,12),jnp.int32),replacement_count=battle(),
-        phazing_draws=side(), secondary_draws=side(),
+        phazing_draws=side(), secondary_draws=side(), sleep_talk_draws=side(),
         spikes=side(), wish_counter=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32))
 
