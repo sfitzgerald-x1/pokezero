@@ -65,7 +65,14 @@ def depart(state,side,table,*,eligible):
         value=getattr(state,name);old=value[rows,side,active]
         gate=eligible[:,None] if old.ndim==2 else eligible
         state=state._replace(**{name:value.at[rows,side,active].set(jnp.where(gate,0,old))})
-    return state
+    # Remove both ends of linked move traps. A direct Baton remaps/copies its
+    # links to the recipient BEFORE departure, so those transferred links stay.
+    own=state.trap_source[rows,side,active]
+    state=state._replace(trap_source=state.trap_source.at[rows,side,active].set(
+        jnp.where(eligible,-1,own)))
+    foe=1-side;linked=state.trap_source[rows,foe]
+    return state._replace(trap_source=state.trap_source.at[rows,foe].set(
+        jnp.where(eligible[:,None] & (linked==active[:,None]),-1,linked)))
 
 
 def enter(state,side,table,*,eligible,hazards=True):
