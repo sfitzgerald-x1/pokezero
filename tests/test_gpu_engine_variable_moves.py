@@ -98,7 +98,7 @@ class VariableMoveTests(unittest.TestCase):
 
     def test_pool_keeps_existing_derived_fields_and_default_happiness(self):
         import numpy as np
-        pool={name:np.asarray(getattr(self.live(),name)[0]) for name in
+        pool={name:np.array(getattr(self.live(),name)[0],copy=True) for name in
             ("species","level","types","stats","moves","pp","item","ability","hidden_power_type","hidden_power_power")}
         pool["hidden_power_type"][:]=10;pool["hidden_power_power"][:]=33
         s=self.tr.state_from_pool(pool,np.array([[0,1]]))
