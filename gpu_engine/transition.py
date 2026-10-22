@@ -30,6 +30,7 @@ from . import baton as passing
 from . import phazing as dragging
 from . import linked_traps as linking
 from . import critical as crits
+from . import secondary as secondaries
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -59,6 +60,7 @@ class MoveTable(NamedTuple):
     phazing: dragging.PhazingTable | None = None
     linked_traps: linking.TrapTable | None = None
     critical: crits.CriticalTable | None = None
+    secondary: secondaries.SecondaryTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -89,7 +91,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
         pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
-        dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata))
+        dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
+        secondaries.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -235,6 +238,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     phazing_draws=jax.vmap(lambda key:jax.random.randint(
         jax.random.fold_in(key,271828),(2,),0,60))(splits[:,1])
     phazing_draws=jnp.where(resuming[:,None],state.phazing_draws,phazing_draws)
+    secondary_draws=jax.vmap(lambda key:jax.random.randint(
+        jax.random.fold_in(key,1618033),(2,),0,100))(splits[:,1])
+    secondary_draws=jnp.where(resuming[:,None],state.secondary_draws,secondary_draws)
     # Replacement requests do not consume another ordinary-turn chance block.
     # A separate counted fold-in distinguishes repeated hazard-KO entry ties.
     entry_ties = jax.vmap(lambda key,count:jax.random.randint(
@@ -474,15 +480,6 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
             substitute_hp=_set_active(work.substitute_hp,work,foe,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
-        if table.absorption is not None:
-            # Gen 3 thaw is original-catalog Fire, not Hidden Power Fire or
-            # dynamically Fire Weather Ball; a Substitute hit does not thaw.
-            thawed = ((dealt > 0) & ~hits_sub & table.absorption.fire_thaws[move]
-                & (_active(work.status,work,foe) == m.FRZ))
-            work = work._replace(status=_set_active(work.status,work,foe,
-                jnp.where(thawed,m.NONE,_active(work.status,work,foe))),
-                status_counter=_set_active(work.status_counter,work,foe,
-                    jnp.where(thawed,0,_active(work.status_counter,work,foe))))
         # Gen 3 floors recoil from actual damage, including capped sub damage.
         recoil=jnp.where(is_struggle & (dealt>0),jnp.maximum(1,dealt//4),0)
         if table.damage_moves is not None:
@@ -534,6 +531,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             status = effects.status[move]
             target_types = _active(work.types,work,foe)
             immune = jnp.any(effects.status_immunity[status[:,None],target_types],axis=1)
+            if table.secondary is not None:
+                immune |= ~secondaries.status_allowed(table.secondary,status,target_types,
+                    _active(work.ability,work,foe))
             immune |= effects.thunderwave[move] & jnp.any(target_types == effects.ground_type,axis=1)
             apply_status = (acts & hit & (status != m.NONE) & ~immune
                 & (_active(work.hp,work,foe) > 0) & (_active(work.status,work,foe) == m.NONE)
@@ -557,6 +557,23 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,move,locked)))
         if table.linked_traps is not None:
             work=linking.apply(work,side,move,table.linked_traps,eligible=acts & hit)
+        if table.secondary is not None:
+            effective_weather=work.weather
+            if table.weather is not None:
+                effective_weather=climate.effective(table.weather,work.weather,
+                    work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
+            work=secondaries.apply(work,side,move,secondary_draws[rows,side],table.secondary,
+                eligible=acts & hit & (dealt>0) & ~hits_sub,effective_weather=effective_weather)
+        if table.absorption is not None:
+            # Gen 3 onDamagingHit follows secondaries: a frozen target cannot
+            # receive this Fire hit's burn, then thaws. Original-catalog Fire
+            # only (not Hidden Power Fire); Substitute damage does not thaw.
+            thawed = ((dealt > 0) & ~hits_sub & table.absorption.fire_thaws[move]
+                & (_active(work.status,work,foe) == m.FRZ))
+            work = work._replace(status=_set_active(work.status,work,foe,
+                jnp.where(thawed,m.NONE,_active(work.status,work,foe))),
+                status_counter=_set_active(work.status_counter,work,foe,
+                    jnp.where(thawed,0,_active(work.status_counter,work,foe))))
         work = _lum_update(work,table,live & move_context)
         if table.weather is not None:
             weather,counter = climate.set_move(work.weather,work.weather_counter,
@@ -671,6 +688,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         queued_stall=jnp.where((defer_residual & (queued_actor >= 0))[:,None],saved_stall,0),
         residual_draws=jnp.where(defer_residual[:,None,None],draws,jnp.zeros_like(draws)),
         phazing_draws=jnp.where(defer_residual[:,None],phazing_draws,0),
+        secondary_draws=jnp.where(defer_residual[:,None],secondary_draws,0),
         replacement_count=jnp.where(defer_residual,
             jnp.where(resuming,state.replacement_count+1,0),0),
         forced_switch=((jnp.take_along_axis(work.hp, work.active[..., None], axis=2)[..., 0] <= 0)

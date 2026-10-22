@@ -142,6 +142,16 @@ checks likewise supply no games-per-second result.
 
 ## Initial turn integration
 
+Selected target secondaries cover Rock Slide flinch; Ice Beam/Punch freeze;
+Thunderbolt/Thunder/Punch and Body Slam paralysis; Sludge Bomb poison; selected
+Fire burns; and Gen 3 Crunch/Shadow Ball/Psychic Special Defense drops. Shield
+Dust, Serene Grace, Inner Focus, Clear Body/White Smoke and selected status
+immunities are resolved, including sun's freeze immunity and weather suppression.
+Breaking a Substitute still blocks its hit's secondary, and Lum resolves before
+the next action. One dedicated fixed secondary roll per seat is saved through
+Baton pauses; the original twelve chance columns are unchanged. Other target,
+self, multi-effect and contact-ability secondaries remain placeholders.
+
 `transition.py` initializes real teams from the pool and connects fixed-shape
 action ordering, switches, PP, status action gates, static single-hit damage,
 major-status residuals, forced-replacement pseudo-turns and party exhaustion.
