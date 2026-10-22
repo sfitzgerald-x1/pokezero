@@ -579,12 +579,12 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                     jnp.where((acts & effects.haze[move])[:,None],0,old)))
             status = effects.status[move]
             target_types = _active(work.types,work,foe)
-            immune = jnp.any(effects.status_immunity[status[:,None],target_types],axis=1)
+            status_immune = jnp.any(effects.status_immunity[status[:,None],target_types],axis=1)
             if table.secondary is not None:
-                immune |= ~secondaries.status_allowed(table.secondary,status,target_types,
+                status_immune |= ~secondaries.status_allowed(table.secondary,status,target_types,
                     _active(work.ability,work,foe))
-            immune |= effects.thunderwave[move] & jnp.any(target_types == effects.ground_type,axis=1)
-            apply_status = (acts & hit & (status != m.NONE) & ~immune
+            status_immune |= effects.thunderwave[move] & jnp.any(target_types == effects.ground_type,axis=1)
+            apply_status = (acts & hit & (status != m.NONE) & ~status_immune
                 & (_active(work.hp,work,foe) > 0) & (_active(work.status,work,foe) == m.NONE)
                 & ((_active(work.substitute_hp,work,foe) == 0) | effects.bypass_sub[move]))
             work = work._replace(status=_set_active(work.status,work,foe,
@@ -602,6 +602,10 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(volatile=_set_active(work.volatile,work,foe,seeded),
                 wish_counter=work.wish_counter.at[rows,side].set(jnp.where(
                     acts & table.sustain.wish[move] & (pending == 0),2,pending)))
+            # Gen3 clears even through an unbroken Substitute or zero actual
+            # Endure damage, but not on a miss, Protect or type immunity.
+            work=recovery.spin_cleanup(work,side,
+                eligible=acts & hit & ~immune & table.sustain.spin[move])
         if table.items is not None:
             locked = _active(work.choice_move,work,side)
             lock = (caller_acts & (caller_move!=table.struggle)
