@@ -13,6 +13,16 @@ turn integration. No complete transition, encoder, policy forward, fidelity resu
 or games-per-second benchmark is implemented yet. Empty states
 are storage fixtures and are terminal by default; they are not benchmark games.
 
+Selected variable moves resolve before stat/type-dependent modifiers: Hidden
+Power uses the Pokemon's accepted-pool type/power (not the metadata alias), and
+Return/Frustration use happiness. The pinned generator emits team objects without
+happiness, so Showdown defaults to 255: Return 102, Frustration 1. This is not
+the text-team import path which may set Frustration happiness to zero. All Hidden
+Power aliases are excluded from original-Fire thaw; resolved Fire still triggers
+non-frozen Flash Fire. This repairs the accepted alias metadata's thaw edge
+without changing the accepted pool or historical measurements. Wider variable
+moves, Transform and complete gameplay qualification remain pending.
+
 State has six party members per side; all fields are JAX arrays with a leading
 batch dimension. Types, status, items, abilities and moves require the eventual
 team pool's vocabulary. Bench actions enumerate party order excluding the
