@@ -287,7 +287,53 @@ pub(crate) fn observe(
 }
 
 impl MaybeTrap {
-    pub(crate) fn receipt(
+    /// Exactly the frozen policy's moves, or the complete protocol surface.
+    /// A native subset, a new move or only some live switches remains refused.
+    pub(crate) fn certify(&self, own: &Side, request: &Value, native: &[usize]) -> PyResult<Value> {
+        let moves = request
+            .pointer("/active/0/moves")
+            .and_then(Value::as_array)
+            .ok_or_else(|| refusal("missing observer moves"))?;
+        let policy: Vec<_> = moves
+            .iter()
+            .enumerate()
+            .filter(|(_, mv)| mv["disabled"] == false)
+            .map(|(index, _)| index)
+            .collect();
+        if moves.is_empty() || moves.len() > 4 || policy.is_empty() {
+            return Err(refusal("invalid observer moves"));
+        }
+        let rows = request
+            .pointer("/side/pokemon")
+            .and_then(Value::as_array)
+            .ok_or_else(|| refusal("missing observer party"))?;
+        let mut protocol = policy.clone();
+        for (index, mon) in rows.iter().enumerate().skip(1) {
+            if mon["condition"]
+                .as_str()
+                .unwrap_or("")
+                .split('/')
+                .next()
+                .and_then(|hp| hp.parse::<u32>().ok())
+                .is_some_and(|hp| hp > 0)
+            {
+                protocol.push(4 + index - 1);
+            }
+        }
+        if protocol.len() == policy.len() {
+            return Err(refusal("observer requires a living bench"));
+        }
+        let mut sorted = native.to_vec();
+        sorted.sort_unstable();
+        if sorted != policy && sorted != protocol {
+            return Err(refusal(
+                "unexplained native/protocol/policy action difference",
+            ));
+        }
+        self.receipt(own, request, &protocol, &policy)
+    }
+
+    fn receipt(
         &self,
         own: &Side,
         request: &Value,
