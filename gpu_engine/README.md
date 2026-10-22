@@ -450,3 +450,33 @@ This is the declared singles measurement subset, not every ability, clause or
 volatile cross-product. Implementation assessment is not qualified gameplay;
 game-qualified coverage remains unset pending the separate divergence check.
 The accepted pool and its historical implementation flags are never rewritten.
+
+## Fixed first-divergence diagnostic
+
+`python -m gpu_engine.fidelity --team-pool POOL --expected-pool-sha POOL_SHA
+--showdown-root PINNED_SHOWDOWN --node PINNED_NODE --out TRACE.json` binds clean
+source and reconstructs all stored fields plus original packed sets for exactly
+200 unfiltered pairs, game IDs 50200..50399. The earlier 50000..50199 panel is
+retained unchanged after its authored faint-marker adapter correction; the
+corrected panel is disjoint, not a replay or a pooled inference.
+The stock local bridge is imported
+through a diagnostic-only launcher; no simulator state is repaired or materialized.
+Both engines receive the complete reference-legal action law, normalized to
+original party and canonical move identities, only after independent requested
+seat and full legal-set agreement. Known semantic raw chance roles are shared;
+unknown/repeated native roles stop that original trajectory as unresolved.
+Initialization randomness is audited separately: gender is inert only without
+Attract/Cute Charm, and the unconditional Quick Claw roll only without a holder.
+Other initial randomness remains unresolved, not a pass.
+HP/faint agreement is independent of major status: Showdown's `fnt` marker is
+not compared to a living major-status code. Historical traces are never repaired
+or resumed after an adapter correction.
+
+Each trajectory ends at its first mismatch, unresolved role, matched terminal,
+completed twentieth ordinary turn or 200-request cap. Terminal/winner agreement
+is required; unfinished forced/Baton/residual work cannot pass the turn cap.
+Every original pair remains in the fixed denominator. Infrastructure errors
+abort the panel without replacement. Exclusive JSONL records the entry before
+play and each result immediately; exit zero means 200 classified trajectories,
+not 200 completed games or a fidelity pass. Mechanic classification is a separate
+read-only analysis; the runner never awards a go decision.
