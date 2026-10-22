@@ -33,6 +33,11 @@ class AdvancingBenchmarkTests(unittest.TestCase):
         self.assertIn('Protocol completed: False',text)
         self.assertIn('INVALID_ACTION_OR_NONFINITE',text)
         self.assertIn('| invalid | 0 | 1 | invalid |',text)
+        row.update(cohort_summary([True],[100],seconds=2,requests=100,live_requests=100,ordinary_turns=100),
+            status='COMPLETE_COHORT')
+        result['protocol_completed']=True;text=render_markdown(result)
+        self.assertIn('| 1 | COMPLETE_COHORT |',text)
+        self.assertIn('| 1 | 0 | 0.500 | 100.00 |',text)
 
     def test_masked_sampling_no_legal_and_stable_prefix(self):
         import jax
