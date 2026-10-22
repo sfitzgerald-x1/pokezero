@@ -142,11 +142,17 @@ checks likewise supply no games-per-second result.
 
 ## Initial turn integration
 
-Rapid Spin uses Gen 3 power 20 and clears represented Leech Seed/own Spikes
-after a successful nonimmune hit, including unbroken Substitute and Endure at
-one HP. Miss/Protect/Ghost leave them intact; Mean Look/ability/Ingrain traps
-remain, and there is no modern Speed boost. Partial-trap clocks/damage are not
-represented, so this does not qualify all of Rapid Spin or move/game coverage.
+`observation.encode(state, table)` builds the handoff's placeholder observation
+on device for both seats: float32 `[B,2,23,132]`, int32 `[B,2,23,41]`, token
+types/attention masks and the table-backed legal-action mask. Sections are one
+field, six own mons, six opposing mons, nine actions and one tendency token;
+token type IDs are 0/1/2/3/5. Representative columns contain HP fractions, level,
+stats, boosts, PP, statuses, species/move/item/ability IDs, weather and legal flags.
+Unfilled columns remain zero. Switch actions use the current ordered bench.
+This is NOT the production v4 column/category mapping or belief encoder: opposing
+private state is visible and raw engine IDs are not champion vocabulary rows.
+It is only an encode/forward cost-shape workload, never strength/training input.
+No RNG or battle state is changed; no game-rate or encoder-parity claim follows.
 
 Explosion/Selfdestruct apply Gen 3's floor-halved defense after stat modifiers.
 Damp on either living active holder vetoes the move after PP; otherwise the
@@ -157,6 +163,8 @@ turn scheduler. These component checks do not qualify full move/game coverage.
 Sleep Talk uses its own priority, PP and Choice lock, then calls one eligible
 own move without another BeforeMove or PP/Pressure charge. Catalog charge and
 nosleeptalk flags exclude slots; selecting a zero-PP slot fails without rerolling.
+An existing Encore or Choice lock rejects the called dispatch after caller PP;
+the first Choice Band use can still call before installing that lock.
 Called Protect, Pursuit, phazing and Baton reuse the original queue semantics.
 Gen3 sleep decrements, Early Bird, consecutive Sleep Talk skipped turns and
 switch-in restoration are represented, including restoration after a hazard KO.
@@ -323,3 +331,24 @@ mechanics by turn 20. 30–100 games/second means reconsider; below 30 or no bat
 scaling means no-go. These thresholds are not yet measured. Missing components
 must remain missing in reports, not receive projected or placeholder timings.
 No training, policy-quality or full-fidelity claim follows from this spike.
+
+## Selected Rapid Spin integration
+
+Rapid Spin uses Gen 3 power 20 and clears represented Leech Seed/own Spikes
+after a successful nonimmune hit, including unbroken Substitute and Endure at
+one HP. Miss/Protect/Ghost leave them intact; Mean Look/ability/Ingrain traps
+remain, and there is no modern Speed boost. Partial-trap clocks/damage are not
+represented, so this does not qualify all of Rapid Spin or move/game coverage.
+
+## Selected Encore integration
+
+Gen 3 Encore chooses 3..6 turns, adds a tick when the target has no queued move,
+and ticks at speed-ordered residual order10/suborder14. It forces the last
+PP-spending normal caller, retaining original queued priority and charging the
+forced move's slot. Sleep Talk records its caller; Pursuit interception records
+Pursuit. Protect blocks Encore, Substitute/Ghost do not; missing/excluded/zero-PP
+last moves fail and an active Encore does not refresh. PP exhaustion ends it at
+residual; ordinary switching, Baton noCopy and faint cleanup clear its fields.
+The existing [0,4) duration column and unused residual tie column preserve the
+original fixed chance block; primary sleep and Encore cannot share a dispatch.
+Other move locks and full move/game qualification remain outside this component.
