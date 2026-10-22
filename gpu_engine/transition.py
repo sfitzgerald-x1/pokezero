@@ -32,6 +32,7 @@ from . import linked_traps as linking
 from . import critical as crits
 from . import secondary as secondaries
 from . import sleep_talk as talking
+from . import self_destruct as exploding
 from . import encore as repeating
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions, usable_moves
@@ -64,6 +65,7 @@ class MoveTable(NamedTuple):
     critical: crits.CriticalTable | None = None
     secondary: secondaries.SecondaryTable | None = None
     sleep_talk: talking.SleepTalkTable | None = None
+    self_destruct: exploding.SelfDestructTable | None = None
     encore: repeating.EncoreTable | None = None
 
 
@@ -96,7 +98,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
-        secondaries.from_metadata(metadata),talking.from_metadata(metadata),repeating.from_metadata(metadata))
+        secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata),
+        repeating.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -420,6 +423,12 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             move=jnp.where(sleep_usable,called,move)
             acts &= ~sleep_usable | executes
             placeholders += (acts & sleep_usable).astype(jnp.int32)
+        explodes=jnp.zeros_like(acts)
+        if table.self_destruct is not None:
+            blocked=exploding.blocked(table.self_destruct,move,
+                work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
+            acts &= ~blocked
+            explodes=acts & table.self_destruct.move[move]
         attack_stats = _active(work.stats, work, side)
         defense_stats = _active(work.stats, work, foe)
         attack_boosts = _active(work.boosts, work, side)
@@ -467,7 +476,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
             attack_stage=jnp.where(physical, attack_boosts[:, 0], attack_boosts[:, 2]),
             defense_stage=jnp.where(physical, defense_boosts[:, 1], defense_boosts[:, 3]),
-            physical=physical, critical=critical,
+            physical=physical, critical=critical,halve_defense=explodes & physical,
             attack_num=attack_num,attack_den=attack_den,
             weather_num=weather_num,weather_den=weather_den,
             phase1_num=phase1_num,phase1_den=phase1_den,
@@ -481,6 +490,11 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 damage,immune=immune)
         hit = m.accuracy_hit(accuracy, attack_boosts[:, 5], defense_boosts[:, 6],
                              chance[:, 6], always_hit=always_hit)
+        # TryMove (including Damp) succeeds before self-KO, which occurs even
+        # if the subsequent target hit misses, is protected, immune or a sub.
+        # Damage inputs were resolved while the user's ability was still active.
+        work=work._replace(hp=_set_active(work.hp,work,side,
+            jnp.where(explodes,0,_active(work.hp,work,side))))
         bypass_sub = jnp.zeros_like(acts)
         if table.effects is not None:
             hit &= ~(protected[rows,foe] & table.effects.protectable[move])

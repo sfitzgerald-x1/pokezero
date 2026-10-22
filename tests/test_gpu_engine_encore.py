@@ -159,12 +159,21 @@ class EncoreTests(unittest.TestCase):
         a=self.play(low,self.j.array([[0,0]])).state
         self.assertEqual((int(a.last_move[0,1,0]),int(a.encore_counter[0,1,0])),(0,0))
 
-    def test_pursuit_intercept_records_last_and_ko_pause_retains_clock(self):
+    def test_pursuit_ko_installs_chosen_switch_and_ticks_encore(self):
         s=self.live();s=s._replace(moves=s.moves.at[0,0,0,0].set(10),
             encore_move=s.encore_move.at[0,0,0].set(10),encore_counter=s.encore_counter.at[0,0,0].set(3),
             hp=s.hp.at[0,1,0].set(1))
         a=self.play(s,self.j.array([[0,4]])).state
         self.assertEqual(int(a.last_move[0,0,0]),10)
+        self.assertEqual(int(a.active[0,1]),1)
+        self.assertFalse(bool(a.pending_residual[0]));self.assertEqual(int(a.encore_counter[0,0,0]),2)
+
+    def test_ordinary_ko_pause_retains_clock_until_replacement(self):
+        s=self.live();s=s._replace(moves=s.moves.at[0,0,0,0].set(2),
+            encore_move=s.encore_move.at[0,0,0].set(2),encore_counter=s.encore_counter.at[0,0,0].set(3),
+            hp=s.hp.at[0,1,0].set(1))
+        a=self.play(s,self.j.array([[0,1]])).state
+        self.assertEqual(int(a.last_move[0,0,0]),2)
         self.assertTrue(bool(a.pending_residual[0]));self.assertEqual(int(a.encore_counter[0,0,0]),3)
         b=self.play(a,self.j.array([[0,4]])).state
         self.assertEqual(int(b.encore_counter[0,0,0]),2)

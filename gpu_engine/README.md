@@ -142,9 +142,17 @@ checks likewise supply no games-per-second result.
 
 ## Initial turn integration
 
+Explosion/Selfdestruct apply Gen 3's floor-halved defense after stat modifiers.
+Damp on either living active holder vetoes the move after PP; otherwise the
+user self-KOs even on a miss, Protect, Ghost immunity or Substitute. Action-phase
+replacement/residual ordering and Gen 3 last-party ties follow the existing
+turn scheduler. These component checks do not qualify full move/game coverage.
+
 Sleep Talk uses its own priority, PP and Choice lock, then calls one eligible
 own move without another BeforeMove or PP/Pressure charge. Catalog charge and
 nosleeptalk flags exclude slots; selecting a zero-PP slot fails without rerolling.
+An existing Encore or Choice lock rejects the called dispatch after caller PP;
+the first Choice Band use can still call before installing that lock.
 Called Protect, Pursuit, phazing and Baton reuse the original queue semantics.
 Gen3 sleep decrements, Early Bird, consecutive Sleep Talk skipped turns and
 switch-in restoration are represented, including restoration after a hazard KO.
