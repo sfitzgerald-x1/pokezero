@@ -114,6 +114,8 @@ pub(crate) struct PolicyOpponentBridge {
     callback: Py<PyAny>,
     opponent_side_one: bool,
     root_order: Vec<String>,
+    root_public_lines: Vec<String>,
+    format_id: Option<String>,
     max_pp: HashMap<String, i64>,
     base_pp: HashMap<String, i64>,
     root_own_side: Side,
@@ -136,6 +138,8 @@ impl PolicyOpponentBridge {
         base_pp: HashMap<String, i64>,
         root_own_side: Side,
         display_ctx: EventContext,
+        root_public_lines: Vec<String>,
+        format_id: Option<String>,
     ) -> Self {
         let root_order = root_order
             .iter()
@@ -150,6 +154,8 @@ impl PolicyOpponentBridge {
             callback,
             opponent_side_one,
             root_order,
+            root_public_lines,
+            format_id,
             max_pp,
             base_pp,
             root_own_side,
@@ -286,7 +292,10 @@ impl PolicyOpponentBridge {
             } else {
                 state.side_one.force_switch
             };
-            let bundle = crate::policy_request::sampled_side_request_with_pp(
+            // Complete PUBLIC root history plus this invocation's immutable
+            // branch suffix. No opposing sampled Side/ability enters proof.
+            let public_history: Vec<_> = self.root_public_lines.iter().chain(lines.iter()).cloned().collect();
+            let bundle = crate::policy_request::sampled_side_request_with_public_history(
                 &own,
                 slot,
                 species,
@@ -296,6 +305,8 @@ impl PolicyOpponentBridge {
                 parent.is_none(),
                 opponent_replacing,
                 Some(&self.base_pp),
+                &public_history,
+                self.format_id.as_deref(),
             )
             .map_err(|error| {
                 Python::attach(|py| {

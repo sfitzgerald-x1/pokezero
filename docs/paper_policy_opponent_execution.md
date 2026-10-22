@@ -713,3 +713,30 @@ measurement boundary, not correctness coverage or playing strength. The
 original category coverage and later conditional paper-reproduction stages
 remain unqualified; the plan's permitted unresolved stop does not turn them
 into achieved scientific results.
+
+### Public Shadow Tag knowledge (October 22, 2026)
+
+Own-policy request construction can now use the complete filtered public root
+history plus the current branch suffix, recomputed on every invocation. Under
+the registered normal-ability Gen3 randombattle contract, a living public
+Wobbuffet/Wynaut entry establishes Shadow Tag; an explicit public ability reveal
+can establish it for its named holder. This is not sampled opposing-ability
+truth. Custom formats, missing battle-start/format provenance, identity changes,
+ability-changing events and ambiguous life/entry information cannot inherit a
+certificate. Root `force_trapped` remains root-only, and exact native/private
+legal-surface equality is still required. Opt-out callers remain unchanged.
+
+The source oracle uses real normal-ability teams in both seats. Parser and
+constructor fixtures separately cover invalidation and sibling isolation. A
+model-enabled regression passes the new history argument through the real
+NativeLeafModel/bridge in both seats, checks a trapped root request without
+switches, and requires absent evidence to refuse before callback. That authored
+root-only test uses uniform callback weights, not champion own-head inference
+or reached-child evidence; exact-head model CI must execute it before merge.
+
+This repairs only public-proven trapping. Arena Trap/Magnet Pull's genuinely
+hidden `maybeTrapped` and unavailable-switch/private-request/rechoice protocol
+remain unresolved. No guard relaxation, policy-mass dropping, historical-cause
+claim, historical roster recovery or new strength panel follows from this
+source repair. The original zero-completed attempt remains a failure with its
+precise originating state unknown.

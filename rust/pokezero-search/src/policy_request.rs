@@ -115,6 +115,15 @@ pub(crate) fn sampled_side_request_with_pp(
     opponent_replacing: bool,
     base_pp: Option<&HashMap<String, i64>>,
 ) -> PyResult<Value> {
+    sampled_side_request_with_public_history(side,slot,species,order,options,max_pp,
+        root,opponent_replacing,base_pp,&[],None)
+}
+
+pub(crate) fn sampled_side_request_with_public_history(
+    side: &Side, slot: &str, species: &[String], order: &[String], options: &[MoveChoice],
+    max_pp: &HashMap<String,i64>, root: bool, opponent_replacing: bool,
+    base_pp: Option<&HashMap<String,i64>>, public_lines: &[String], format_id: Option<&str>,
+) -> PyResult<Value> {
     if slot != "p1" && slot != "p2" {
         return Err(refusal("unknown seat"));
     }
@@ -332,7 +341,8 @@ pub(crate) fn sampled_side_request_with_pp(
     } else {
         // Only known own volatiles contribute. Never ask Side::trapped with
         // the real opposing Pokemon (that would reveal hidden trap abilities).
-        let trapped = recharging
+        let public_trapped = crate::public_trap::known_shadow_tag(public_lines,slot,&ordered[0],format_id);
+        let trapped = public_trapped || recharging
             || side.active_is_charging_move().is_some()
             || (root && side.force_trapped)
             || side.trapped(&Pokemon::default());
@@ -433,7 +443,7 @@ pub(crate) fn sampled_side_request_with_pp(
 /// Diagnostic bridge. Production uses the same Side-only constructor in the
 /// reached-node provider; full state/other-side context never enters Python.
 #[pyfunction]
-#[pyo3(signature = (state_str, slot, species, request_order, max_pp, root = true, base_pp = None))]
+#[pyo3(signature = (state_str, slot, species, request_order, max_pp, root = true, base_pp = None, public_lines = None, format_id = None))]
 pub fn sampled_policy_request(
     state_str: &str,
     slot: &str,
@@ -442,6 +452,8 @@ pub fn sampled_policy_request(
     max_pp: HashMap<String, i64>,
     root: bool,
     base_pp: Option<HashMap<String, i64>>,
+    public_lines: Option<Vec<String>>,
+    format_id: Option<&str>,
 ) -> PyResult<String> {
     let state = crate::parse_state(state_str)?;
     let (one, two) = if root {
@@ -454,7 +466,7 @@ pub fn sampled_policy_request(
         "p2" => (&state.side_two, two, state.side_one.force_switch),
         _ => return Err(refusal("unknown seat")),
     };
-    sampled_side_request_with_pp(
+    sampled_side_request_with_public_history(
         side,
         slot,
         &species,
@@ -464,6 +476,8 @@ pub fn sampled_policy_request(
         root,
         opponent_replacing,
         base_pp.as_ref(),
+        &public_lines.unwrap_or_default(),
+        format_id,
     )
     .map(|v| v.to_string())
 }
@@ -595,6 +609,36 @@ mod tests {
                 .to_string()
                 .contains("legal surfaces differ"))
         });
+    }
+
+    #[test]
+    fn public_shadow_tag_history_certifies_only_the_matching_live_request() {
+        Python::initialize();
+        for slot in ["p1", "p2"] {
+            for root in [true, false] {
+                let mut state = fixture();
+                state.side_two.get_active().id = FromStr::from_str("WOBBUFFET").unwrap();
+                state.side_two.get_active().ability = Abilities::SHADOWTAG;
+                if slot == "p2" { std::mem::swap(&mut state.side_one,&mut state.side_two); }
+                let other = if slot == "p1" { "p2" } else { "p1" };
+                let history = vec!["|gametype|singles".into(),"|gen|3".into(),"|tier|[Gen 3] Random Battle".into(),"|start".into(),
+                    format!("|switch|{slot}a: Charmander|Charmander, L100|100/100"),
+                    format!("|switch|{other}a: Wobbuffet|Wobbuffet, L80|100/100"),"|turn|1".into()];
+                let (one,two) = if root { state.root_get_all_options() } else { state.get_all_options() };
+                let (side,options) = if slot == "p1" { (&state.side_one,one) } else { (&state.side_two,two) };
+                let run = |lines: &[String],format| sampled_side_request_with_public_history(
+                    side,slot,&names(),&names(),&options,&pp(),root,false,None,lines,format);
+                assert!(run(&[],Some("gen3randombattle")).is_err());
+                assert!(run(&history,Some("gen3customgame")).is_err());
+                let accepted = run(&history,Some("gen3randombattle")).unwrap();
+                assert_eq!(accepted["native_action_indices"],json!([0]));
+                assert_eq!(accepted["request"]["active"][0]["trapped"],true);
+                let mut changed=history.clone();
+                changed.push(format!("|move|{slot}a: Charmander|Skill Swap|{other}a: Wobbuffet"));
+                assert!(run(&changed,Some("gen3randombattle")).is_err());
+                assert!(run(&history,Some("gen3randombattle")).is_ok()); // sibling isolation
+            }
+        }
     }
 
     #[test]

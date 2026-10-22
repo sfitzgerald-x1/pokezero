@@ -127,14 +127,14 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`e682ba4aa0f771ec…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`6ba6d3b0692a8c5f…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
-the fingerprint's inputs — the 76 gen3 patches, `poke-engine-gen3-patches.txt`,
-`poke-engine-base-source.json`, the 12 crate sources, and the `Cargo.toml` / `Cargo.lock` /
+the fingerprint's inputs — the 79 gen3 patches, `poke-engine-gen3-patches.txt`,
+`poke-engine-base-source.json`, the 16 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
@@ -341,6 +341,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1503 refused-position adapter repairs | `policy_request.rs` certifies committed-action WAIT during replacement instead of resampling; two phase regression tests. `policy_bridge.rs` retains private-safe refusal witnesses. Original study receipts remain unchanged | `369883e836b7fdfc…` |
 | #1506 Transform callback repair | `policy_bridge.rs` separates original and copied PP banks and preserves public Transform provenance; `policy_request.rs` retains original party identity and Gen 3 copied-slot PP Ups. `encoder.rs` and `model.rs` supply registered base PP. Historical study receipts and the fingerprint gate's OPEN status remain unchanged | `7249f80b10c42ddf…` |
 | #1531 synthetic Struggle | The added engine patch and manifest entry plus Struggle handling in `events.rs`, `leaf.rs`, `tree.rs`, `model.rs` and `policy_request.rs` move the source fingerprint. This identifies the new build inputs, not a qualification of them; historical sweeps and the fingerprint gate's OPEN status remain unchanged | `b1f8b7ee64a5ebc1…` |
+| Public Shadow Tag request knowledge | New `public_trap.rs` and `lib.rs`/`policy_request.rs`/`policy_bridge.rs`/`model.rs` plumbing bind per-invocation public evidence without relaxing native/private equality. Current source derivation only; historical sweeps and OPEN qualification remain unchanged | `6ba6d3b0692a8c5f…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -964,9 +965,9 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.hashed_crate_sources` | 15 |
-| `t1.hashed_input_files` | 100 |
-| `t1.head_fingerprint` | b1f8b7ee64a5ebc1 |
+| `t1.hashed_crate_sources` | 16 |
+| `t1.hashed_input_files` | 101 |
+| `t1.head_fingerprint` | 6ba6d3b0692a8c5f |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

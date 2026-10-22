@@ -2368,6 +2368,7 @@ impl NativeLeafModel {
         policy_opponent_seed = None,
         policy_opponent_request_order = None,
         record_joint_actions = false,
+        policy_opponent_public_lines = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -2402,6 +2403,7 @@ impl NativeLeafModel {
         policy_opponent_seed: Option<u64>,
         policy_opponent_request_order: Option<Vec<String>>,
         record_joint_actions: bool,
+        policy_opponent_public_lines: Option<Vec<String>>,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -2422,6 +2424,9 @@ impl NativeLeafModel {
             ));
         }
         let policy_enabled = policy_opponent_callback.is_some();
+        if !policy_enabled && policy_opponent_public_lines.is_some() {
+            return Err(PyValueError::new_err("public opponent history requires own-policy opt-in"));
+        }
         if policy_enabled != policy_opponent_seed.is_some() || policy_enabled != policy_opponent_request_order.is_some() {
             return Err(PyValueError::new_err("policy opponent requires callback, independent seed and complete sampled request order together"));
         }
@@ -2507,6 +2512,9 @@ impl NativeLeafModel {
                 leaf_ctx.tables.registered_move_base_pp(),
                 if leaf_ctx.self_is_side_one() { root_state.side_two.clone() } else { root_state.side_one.clone() },
                 policy_display_ctx,
+                policy_opponent_public_lines.unwrap_or_default(),
+                serde_json::from_str::<serde_json::Value>(root_inputs_json).ok()
+                    .and_then(|v| v.get("format_id").and_then(|s| s.as_str()).map(String::from)),
             ))
         } else { None };
         py.detach(move || {

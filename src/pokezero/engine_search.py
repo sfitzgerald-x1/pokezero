@@ -6266,6 +6266,7 @@ class EngineMctsPolicy:
         if not self._config.policy_opponent:
             return {}
         from .policy_opponent import make_policy_opponent_callback
+        from .policy_opponent_view import public_policy_lines
 
         result, model = self._policy_opponent_result, self._policy_opponent_model
         if result is None or model is None:
@@ -6304,7 +6305,9 @@ class EngineMctsPolicy:
         )
         return {"policy_opponent_callback": callback,
                 "policy_opponent_seed": policy_seed,
-                "policy_opponent_request_order": list(order)}
+                "policy_opponent_request_order": list(order),
+                "policy_opponent_public_lines": list(public_policy_lines(
+                    replay.public_lines, hp_visibility=replay.hp_visibility))}
 
     def _search_model(
         self,
