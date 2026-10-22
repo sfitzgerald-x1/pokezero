@@ -466,6 +466,10 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         if table.items is not None:
             attack_num,attack_den = held.attack_modifier(table.items,
                 _active(work.item,work,side),_active(work.species,work,side),physical)
+        defense_num,defense_den = (1,1)
+        if table.items is not None:
+            defense_num,defense_den = held.defense_modifier(table.items,
+                _active(work.item,work,foe),_active(work.species,work,foe),physical)
         if table.combat is not None:
             attack_num,attack_den = traits.attack_modifier(table.combat,_active(work.ability,work,side),
                 _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den)
@@ -501,6 +505,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             defense_stage=jnp.where(physical, defense_boosts[:, 1], defense_boosts[:, 3]),
             physical=physical, critical=critical,halve_defense=explodes & physical,
             attack_num=attack_num,attack_den=attack_den,
+            defense_num=defense_num,defense_den=defense_den,
             weather_num=weather_num,weather_den=weather_den,
             phase1_num=phase1_num,phase1_den=phase1_den,
             stab=jnp.any(own_types == typ[:, None], axis=1) & (typ != 0),

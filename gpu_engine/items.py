@@ -18,6 +18,8 @@ class ItemTable(NamedTuple):
     light_ball: jax.Array
     club_species: jax.Array
     ball_species: jax.Array
+    soul_dew: jax.Array
+    dew_species: jax.Array
 
 
 def from_metadata(metadata):
@@ -25,7 +27,8 @@ def from_metadata(metadata):
     flag = lambda key,names: jnp.asarray([name in names for name in vocab[key]])
     return ItemTable(flag("items",{"leftovers"}),flag("items",{"lumberry"}),
         flag("items",{"choiceband"}),flag("items",{"thickclub"}),flag("items",{"lightball"}),
-        flag("species",{"cubone","marowak"}),flag("species",{"pikachu"}))
+        flag("species",{"cubone","marowak"}),flag("species",{"pikachu"}),
+        flag("items",{"souldew"}),flag("species",{"latias","latios"}))
 
 
 def attack_modifier(table,item,species,physical):
@@ -33,7 +36,14 @@ def attack_modifier(table,item,species,physical):
     band = physical & table.choice_band[item]
     doubled = ((physical & table.thick_club[item] & table.club_species[species])
         | (~physical & table.light_ball[item] & table.ball_species[species]))
-    return jnp.where(band,3,jnp.where(doubled,2,1)),jnp.where(band,2,1)
+    dew = ~physical & table.soul_dew[item] & table.dew_species[species]
+    return jnp.where(band | dew,3,jnp.where(doubled,2,1)),jnp.where(band | dew,2,1)
+
+
+def defense_modifier(table,item,species,physical):
+    """Gen3 Soul Dew modifies SpD, not physical Defense or final damage."""
+    dew = ~jnp.asarray(physical,jnp.bool_) & table.soul_dew[item] & table.dew_species[species]
+    return jnp.where(dew,3,1),jnp.where(dew,2,1)
 
 
 class LumResult(NamedTuple):

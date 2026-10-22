@@ -451,6 +451,16 @@ volatile cross-product. Implementation assessment is not qualified gameplay;
 game-qualified coverage remains unset pending the separate divergence check.
 The accepted pool and its historical implementation flags are never rewritten.
 
+## Selected stat-event corrections
+
+Soul Dew chains 1.5 into SpA and SpD for original Latias/Latios, after critical
+stage cancellation and before damage arithmetic. Both chains apply to special
+Pursuit interception on the outgoing target. Huge Power/Pure Power double
+physical Atk, including confusion and its item chain; they do not bypass burn
+or modify special damage. Physical confusion defense does not use Soul Dew.
+These authored native-event fixtures do not qualify games. Transform/base-species
+replacement, item transfer/suppression and other abilities remain outside scope.
+
 ## Fixed first-divergence diagnostic
 
 `python -m gpu_engine.fidelity --team-pool POOL --expected-pool-sha POOL_SHA
