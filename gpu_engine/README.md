@@ -490,3 +490,25 @@ abort the panel without replacement. Exclusive JSONL records the entry before
 play and each result immediately; exit zero means 200 classified trajectories,
 not 200 completed games or a fidelity pass. Mechanic classification is a separate
 read-only analysis; the runner never awards a go decision.
+
+## Canonical historical report (no measurement)
+
+`python -m gpu_engine.benchmark --report-games ADVANCING.json
+--report-refill REFILL.json --report-expansion EXPANSION.json --report-cpu CPU.json
+--report-fidelity FIDELITY.json --report-ledger LEDGER.json --out-prefix REPORT`
+writes exclusive `REPORT.json` and `REPORT.md` tables from six existing receipts.
+This reporting mode never calls a device or replays a game. It binds exact input
+bytes and keeps source versions/workloads separate. Advancing component times
+are fixed-root samples, not additive to advancing elapsed time or transferable
+to a different refill source. Live requests, ordinary turns and nominal batch
+slot capacity are distinct; games/s uses actual completions and wall time.
+Unknown fidelity cases and censored games are never dropped to qualify a gate.
+After-only GPU counters do not become average utilization/per-batch memory;
+missing values remain unavailable. The historical CPU receipt has no embedded
+source commit, so the report does not invent one from a filename.
+
+The report recommends no production advancement: selected-effect source shares
+are not qualified gameplay or proof of >=85% correct effects. It does not claim
+the preset <30 games/s failure or <10% covered-divergence success. A negative or
+unqualified spike readout does not authorize a full Gen3/production rewrite.
+The existing `--team-pool` mode remains the explicitly partial core diagnostic.
