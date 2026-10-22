@@ -142,6 +142,12 @@ checks likewise supply no games-per-second result.
 
 ## Initial turn integration
 
+Explosion/Selfdestruct apply Gen 3's floor-halved defense after stat modifiers.
+Damp on either living active holder vetoes the move after PP; otherwise the
+user self-KOs even on a miss, Protect, Ghost immunity or Substitute. Action-phase
+replacement/residual ordering and Gen 3 last-party ties follow the existing
+turn scheduler. These component checks do not qualify full move/game coverage.
+
 Selected target secondaries cover Rock Slide flinch; Ice Beam/Punch freeze;
 Thunderbolt/Thunder/Punch and Body Slam paralysis; Sludge Bomb poison; selected
 Fire burns; and Gen 3 Crunch/Shadow Ball/Psychic Special Defense drops. Shield
