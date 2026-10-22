@@ -2,7 +2,8 @@
 
 The inherited Gen 4 runSwitch applies hazards before Ability Start. Ordinary
 switches and their runSwitch callbacks resolve one at a time, not together.
-Pursuit, Baton Pass, phazing and most ability interactions remain pending.
+Pursuit is dispatched by transition before entry. Baton Pass, phazing and most
+ability interactions remain pending.
 """
 from typing import NamedTuple
 

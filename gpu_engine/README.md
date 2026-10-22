@@ -172,6 +172,16 @@ before weather. Forced-replacement pseudo-turns do not tick either effect.
 Seed damage and healing finish together before checking for a win. Baton Pass,
 Liquid Ooze and wider event interactions remain pending.
 
+Pursuit intercepts an ordinary opponent switch against the outgoing state at
+80 power with unconditional accuracy. In Gen 3 it is Special/Dark. A sleeping
+or frozen actor at beforeTurn registration does not intercept; an interception
+bypasses BeforeMove paralysis, confusion, flinch and counter changes. It spends
+PP once, including the outgoing holder's Pressure, and retains capped Substitute
+damage and successful-use Choice lock. Even after a Pursuit KO, Gen 3 installs
+the already chosen replacement, with its hazards and entry ability. Forced
+replacement pseudo-turns are not intercepted. Baton Pass and broader contact/
+item callbacks remain pending; ordinary non-switch Pursuit uses the usual path.
+
 Guts now composes with the selected item multipliers in one Attack event,
 including confusion self-damage. It overrides the physical burn penalty without
 curing burn or preventing residual damage. Gen 3 Thick Fat modifies Fire/Ice
