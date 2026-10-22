@@ -95,7 +95,11 @@ class CriticalTests(unittest.TestCase):
             str(Path(SHOWDOWN).resolve())],capture_output=True,text=True)
         self.assertEqual(p.returncode,0,p.stderr)
         result=json.loads(p.stdout)
-        self.assertEqual(result["ratios"],[2]*10)
+        self.assertEqual(result["high_ids"],sorted(self.c.HIGH_CRIT))
+        self.assertEqual(result["ratios"],[2]*12)
+        catalog=self.c.from_metadata({"vocabulary":{"moves":["_none"]+result["high_ids"]+["tackle"],
+            "abilities":["_none"]}})
+        self.assertEqual(catalog.high.tolist(),[False]+[True]*12+[False])
         for name,den,crit in (("ordinary",16,True),("high",8,True),("battle",8,False),("shell",16,False)):
             self.assertEqual(result[name]["draws"],[[1,den]])
             self.assertEqual(result[name]["crit"],crit)

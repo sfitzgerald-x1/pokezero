@@ -11,7 +11,8 @@ import jax.numpy as jnp
 
 
 HIGH_CRIT = frozenset({"aeroblast", "aircutter", "blazekick", "crabhammer",
-    "crosschop", "karatechop", "leafblade", "poisontail", "razorleaf", "slash"})
+    "crosschop", "karatechop", "leafblade", "poisontail", "razorleaf", "razorwind",
+    "skyattack", "slash"})
 
 
 class CriticalTable(NamedTuple):
