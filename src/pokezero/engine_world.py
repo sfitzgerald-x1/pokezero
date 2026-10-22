@@ -1186,11 +1186,12 @@ def _build_side_spec(
     approximate_partial_trap_turns: bool = False,
     approximate_hidden_duration_volatiles: bool = False,
     force_switch: bool = False,
-    # WORLD-level, unlike `force_switch`, which is per-side (`is_self_slot and
-    # self_force_switch`). The deferred residual block runs on the replacement ply
+    # WORLD-level, unlike `force_switch`, which starts from the acting request
+    # and also marks any publicly fainted active below. Deferred residual runs
+    # on the replacement ply
     # for BOTH sides, so a volatile whose clock that block advances is ambiguous on
     # either seat -- the opponent's Taunt is the measured case, and the opponent's
-    # own `force_switch` is always False.
+    # own `force_switch` remains False when its active is still alive.
     world_owes_replacement: bool = False,
     wish_set_turn: int | None = None,
     encored_move: str | None = None,
@@ -1279,6 +1280,18 @@ def _build_side_spec(
         )
     if active_index is None:
         raise EngineWorldUnsupported("payload_malformed", f"side {slot!r} has no active row")
+
+    # Replacement is a WORLD phase, not only the acting seat's private request.
+    # Showdown Battle.checkFainted marks every fainted active's switchFlag and
+    # getRequests('switch') offers both seats replacements after a double faint.
+    # gen3 get_all_options checks explicit force_switch BEFORE its HP-derived
+    # double-faint branch. Leaving the other fainted seat's flag false therefore
+    # serializes that real simultaneous boundary into switch/WAIT, contradicting
+    # its own request and preventing own-policy search. Only use public HP at an
+    # already-established replacement boundary; never infer a living foe's
+    # hidden pivot/commitment or change the ordinary move-request phase.
+    if world_owes_replacement and party[active_index].hp <= 0:
+        force_switch = True
 
     volatiles = [normalize_id(str(v)) for v in side_payload.get("volatiles") or ()]
     if side_payload.get("meanlookTrap") is True and "trapped" not in volatiles:
