@@ -6,7 +6,9 @@ training, value calibration, strength, or completed-game throughput.
 """
 from dataclasses import asdict,dataclass
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
 from typing import NamedTuple
 
@@ -62,23 +64,37 @@ def validate_weights(params,c):
             raise ValueError(f'invalid float32 tensor {name}: {a.shape}/{a.dtype}, expected {shape}')
 
 
+def snapshot(path):
+    """Bind deserialization and digest to the same immutable byte snapshot."""
+    with Path(path).open('rb') as stream:
+        before=os.fstat(stream.fileno());blob=stream.read();after=os.fstat(stream.fileno())
+    identity=lambda x:(x.st_dev,x.st_ino,x.st_size,x.st_mtime_ns)
+    if identity(before)!=identity(after) or len(blob)!=after.st_size:
+        raise RuntimeError('checkpoint changed while reading')
+    return blob,hashlib.sha256(blob).hexdigest()
+
+
+def config_from_checkpoint(cfg):
+    if (cfg['window_size']!=1 or cfg.get('temporal_aggregator','mean')!='mean'
+            or cfg.get('value_head_hidden_layers',0) not in (0,None)
+            or cfg.get('value_activation','linear') not in ('linear','tanh')):
+        raise ValueError('only one-frame mean pooling and linear/tanh single-layer value heads supported')
+    return Config(numeric=cfg['numeric_feature_count'],categorical=cfg['categorical_feature_count'],
+        tokens=cfg['token_count'],vocabulary=cfg['categorical_vocab_size'],token_types=cfg['token_type_vocab_size'],
+        width=cfg['embedding_dim'],layers=cfg['transformer_layers'],heads=cfg['attention_heads'],
+        feedforward=cfg['feedforward_dim'],tanh_value=cfg.get('value_activation','linear')=='tanh')
+
+
 def export(checkpoint,out):
     """CPU-only, safe Torch loader; exclusive NPZ output outside version control."""
     import torch
-    payload=torch.load(checkpoint,map_location='cpu',weights_only=True)
-    cfg=payload['model_config']
-    if (cfg['window_size']!=1 or cfg.get('temporal_aggregator','mean')!='mean'
-            or cfg.get('value_head_hidden_layers',0) not in (0,None)
-            or cfg.get('value_activation','tanh') not in ('linear','tanh')):
-        raise ValueError('only one-frame mean pooling and linear/tanh single-layer value heads supported')
-    c=Config(numeric=cfg['numeric_feature_count'],categorical=cfg['categorical_feature_count'],
-        tokens=cfg['token_count'],vocabulary=cfg['categorical_vocab_size'],token_types=cfg['token_type_vocab_size'],
-        width=cfg['embedding_dim'],layers=cfg['transformer_layers'],heads=cfg['attention_heads'],
-        feedforward=cfg['feedforward_dim'],tanh_value=cfg.get('value_activation','tanh')=='tanh')
+    blob,digest=snapshot(checkpoint)
+    payload=torch.load(io.BytesIO(blob),map_location='cpu',weights_only=True)
+    c=config_from_checkpoint(payload['model_config'])
     params={k:v.detach().cpu().numpy() for k,v in payload['state_dict'].items()}
     validate_weights(params,c)
     meta={'schema':'pokezero.gpu_champion_forward.v1','config':asdict(c),
-        'checkpoint_sha256':hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest(),
+        'checkpoint_sha256':digest,
         'parameter_count':sum(a.size for a in params.values())}
     encoded=np.frombuffer(json.dumps(meta,sort_keys=True).encode(),np.uint8)
     with Path(out).open('xb') as stream:np.savez_compressed(stream,metadata_json=encoded,**params)
@@ -86,12 +102,14 @@ def export(checkpoint,out):
 
 
 def load(path):
-    with np.load(path,allow_pickle=False) as data:
+    blob,digest=snapshot(path)
+    with np.load(io.BytesIO(blob),allow_pickle=False) as data:
         meta=json.loads(data['metadata_json'].tobytes())
         if meta['schema']!='pokezero.gpu_champion_forward.v1':raise ValueError('unsupported weight archive')
         c=Config(**meta['config']);params={k:data[k] for k in data.files if k!='metadata_json'}
     validate_weights(params,c)
     if meta['parameter_count']!=sum(a.size for a in params.values()):raise ValueError('parameter count mismatch')
+    meta['weights_archive_sha256']=digest
     return {k:j.asarray(v) for k,v in params.items()},c,meta
 
 

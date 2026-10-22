@@ -4,6 +4,7 @@ This is numerical forward validation on authored inputs, not encoder parity,
 strength or a game-rate measurement. No checkpoint or model is changed.
 """
 import argparse
+import io
 import json
 import numpy as np
 import torch
@@ -14,14 +15,13 @@ from . import champion
 def check(checkpoint,archive):
     from pokezero.neural_policy import EntityTokenTransformerPolicy,TransformerPolicyConfig
     torch.set_num_threads(2)
-    payload=torch.load(checkpoint,map_location='cpu',weights_only=True)
+    blob,digest=champion.snapshot(checkpoint)
+    payload=torch.load(io.BytesIO(blob),map_location='cpu',weights_only=True)
     config=TransformerPolicyConfig.from_dict(payload['model_config'])
     reference=EntityTokenTransformerPolicy(config).eval()
     reference.load_state_dict(payload['state_dict'],strict=True)
     params,c,meta=champion.load(archive)
-    import hashlib
-    from pathlib import Path
-    if hashlib.sha256(Path(checkpoint).read_bytes()).hexdigest()!=meta['checkpoint_sha256']:
+    if digest!=meta['checkpoint_sha256']:
         raise ValueError('archive/checkpoint binding mismatch')
     rows=[]
     for seed in (701,702):

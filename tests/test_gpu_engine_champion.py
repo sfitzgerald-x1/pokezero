@@ -1,5 +1,7 @@
 """Authored forward shape/masking checks, not actual-champion or game parity."""
 import importlib.util
+from pathlib import Path
+import tempfile
 import unittest
 
 
@@ -60,3 +62,23 @@ class ChampionTests(unittest.TestCase):
         self.assertEqual(actions.tolist(),[[3,7],[-1,-1]])
         again=self.jax.jit(self.m.sample)(out,legal,keys)
         self.assertTrue(bool(j.array_equal(actions,again)))
+
+    def test_missing_activation_is_production_legacy_linear_and_unsupported_rejected(self):
+        cfg=dict(window_size=1,numeric_feature_count=4,categorical_feature_count=3,token_count=23,
+            categorical_vocab_size=12,token_type_vocab_size=6,embedding_dim=8,transformer_layers=1,
+            attention_heads=2,feedforward_dim=16)
+        self.assertFalse(self.m.config_from_checkpoint(cfg).tanh_value)
+        self.assertTrue(self.m.config_from_checkpoint(dict(cfg,value_activation='tanh')).tanh_value)
+        for values in ({'window_size':2},{'temporal_aggregator':'gru'},{'value_activation':'sigmoid'},
+                {'value_head_hidden_layers':2}):
+            with self.assertRaises(ValueError):self.m.config_from_checkpoint(dict(cfg,**values))
+
+    def test_snapshot_digest_stays_bound_after_pathname_replacement(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'checkpoint';path.write_bytes(b'original checkpoint bytes')
+            blob,digest=self.m.snapshot(path)
+            path.write_bytes(b'replacement bytes')
+            self.assertEqual(blob,b'original checkpoint bytes')
+            self.assertEqual(digest,hashlib.sha256(blob).hexdigest())
+            self.assertNotEqual(digest,self.m.snapshot(path)[1])
