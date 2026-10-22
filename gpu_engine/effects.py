@@ -11,6 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from . import mechanics as m
+from . import weather as climate
 
 
 class MoveEffects(NamedTuple):
@@ -29,6 +30,7 @@ class MoveEffects(NamedTuple):
     bypass_sub: jax.Array
     heal_bell: jax.Array
     soundproof: jax.Array
+    weather_heal: jax.Array       # [M], Gen 3 Synthesis/Moonlight/Morning Sun
 
 
 def from_metadata(metadata):
@@ -68,7 +70,8 @@ def from_metadata(metadata):
         jnp.asarray(types.index("ground"),jnp.int32),flags({"substitute"}),
         flags({"protect","detect"}),flags({"endure"}),move_flag("protect"),move_flag("bypasssub"),
         flags({"healbell"}),jnp.asarray([name=="soundproof" for name in
-            metadata["vocabulary"].get("abilities",["_none"])]))
+            metadata["vocabulary"].get("abilities",["_none"])]),
+        flags({"synthesis","moonlight","morningsun"}))
 
 
 def cure_team(state,side,table,*,eligible):
@@ -86,6 +89,12 @@ def cure_team(state,side,table,*,eligible):
         value=getattr(state,name)
         updates[name]=value.at[rows,side].set(jnp.where(cured,0,value[rows,side]))
     return state._replace(**updates)
+def weather_healing(max_hp, weather):
+    """Pinned Gen 3 fractional healing, truncated once (not modern 0.667)."""
+    amount = jnp.where(weather == climate.SUN,max_hp * 2 // 3,
+        jnp.where((weather == climate.RAIN) | (weather == climate.SAND)
+            | (weather == climate.HAIL),max_hp // 4,max_hp // 2))
+    return jnp.maximum(1,amount)
 
 
 def stall_success(counter, roll):

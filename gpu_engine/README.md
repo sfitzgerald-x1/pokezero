@@ -147,6 +147,12 @@ checks likewise supply no games-per-second result.
 
 ## Initial turn integration
 
+Synthesis/Moonlight/Morning Sun heal floor(max HP / 2) in clear weather,
+floor(2 × max HP / 3) in sun and floor(max HP / 4) in rain/sand/hail, minimum one.
+Living Air Lock/Cloud Nine suppress weather for healing; the move resolves before
+weather expiry/upkeep. Full-HP attempts still spend caller PP. This is selected
+component support, not qualified move/game coverage.
+
 `observation.encode(state, table)` builds the handoff's placeholder observation
 on device for both seats: float32 `[B,2,23,132]`, int32 `[B,2,23,41]`, token
 types/attention masks and the table-backed legal-action mask. Sections are one
@@ -336,6 +342,14 @@ mechanics by turn 20. 30–100 games/second means reconsider; below 30 or no bat
 scaling means no-go. These thresholds are not yet measured. Missing components
 must remain missing in reports, not receive projected or placeholder timings.
 No training, policy-quality or full-fidelity claim follows from this spike.
+
+## Selected Rapid Spin integration
+
+Rapid Spin uses Gen 3 power 20 and clears represented Leech Seed/own Spikes
+after a successful nonimmune hit, including unbroken Substitute and Endure at
+one HP. Miss/Protect/Ghost leave them intact; Mean Look/ability/Ingrain traps
+remain, and there is no modern Speed boost. Partial-trap clocks/damage are not
+represented, so this does not qualify all of Rapid Spin or move/game coverage.
 
 ## Selected Encore integration
 
