@@ -1142,7 +1142,11 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         use_opponent_priors,
         fpu_reduction,
     };
-    let mut tree = Tree::from_root(&state)?;
+    let mut tree = if policy_opponent.is_some() {
+        Tree::from_root_with_policy_wait(&state, !leaf_ctx.self_is_side_one())?
+    } else {
+        Tree::from_root(&state)?
+    };
     if record_joint_actions {
         tree.joint_action_visits = Some(Default::default());
     }

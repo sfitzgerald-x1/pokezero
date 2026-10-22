@@ -187,6 +187,70 @@ class NativeCanonicalOwnPolicyTest(NativePolicyOpponentSearchTest):
     observation_schema_version = "pokezero.observation.v4"
     transition_token_budget = 0
 
+    def test_model_root_wait_keeps_pending_or_consumed_action_without_own_head_rechoice(self):
+        import subprocess
+        from unittest.mock import patch
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
+        from pokezero.neural_policy import (category_vocab_from_model_config,
+            feature_masks_from_model_config, observation_spec_from_model_config)
+        from pokezero.policy_opponent import make_policy_opponent_callback
+        from pokezero.policy_opponent_view import build_policy_opponent_view_from_native_bundle, public_policy_lines
+        from pokezero.transitions_fold import FoldState
+        from test_policy_opponent_pending_commitment import pending_state
+        from test_showdown import FakeSetSource
+        root = Path(__file__).resolve().parents[1]
+        rows = json.loads(subprocess.run([os.environ.get('POKEZERO_NODE_BINARY', 'node'),
+            str(root / 'tests/policy_opponent_pending_commitment_oracle.cjs'), str(DEFAULT_SHOWDOWN_ROOT)],
+            capture_output=True, text=True, check=True, timeout=30).stdout)['rows']
+        dex = load_showdown_dex_cached(DEFAULT_SHOWDOWN_ROOT)
+        source = getattr(self, 'champion_source', None) or FakeSetSource()
+        result = getattr(self, 'champion_result', None) or SimpleNamespace(model_config=self.config, belief_set_source_hash=None)
+        vocab = category_vocab_from_model_config(self.config, DEFAULT_SHOWDOWN_ROOT)
+        maximum = {name: info.max_pp for name, info in dex.moves.items()}
+        for row in rows:
+            if row['scenario'] == 'confusion':
+                continue  # public consumption classification has its own living oracle control
+            actor, subject = row['waitingSeat'], row['passingSeat']
+            with self.subTest(opponent=actor, pending=row['fastPass']):
+                lines = public_policy_lines(row['before']['public_lines'], hp_visibility={'p1':'exact', 'p2':'exact'})
+                state = pending_state(actor, committed=row['fastPass'])
+                ctx = {actor:['Charmander', 'Ditto'], subject:['Mew', 'Ditto'], 'turn':1}
+                bundle = json.loads(pokezero_search.sampled_policy_request(state, subject,
+                    ctx[subject], ctx[subject], maximum, public_lines=list(lines), format_id='gen3randombattle'))
+                view = build_policy_opponent_view_from_native_bundle(native_request_bundle=bundle,
+                    public_lines=lines, hp_visibility={'p1':'exact', 'p2':'exact'}, opponent_slot=subject,
+                    battle_id='authored-pending-commitment', battle_seed=701, format_id='gen3randombattle',
+                    set_source=source, spec=observation_spec_from_model_config(self.config),
+                    feature_masks=feature_masks_from_model_config(self.config))
+                fold, _ = FoldState.initial(perspective_slot=subject).advance(lines)
+                position = {'state_str':state, 'ctx':json.dumps(ctx), 'actives':(0,0),
+                    'self_side':'side_one' if subject == 'p1' else 'side_two',
+                    'row_inputs':json.dumps(view.row_inputs(dex=dex)), 'fold_state':fold.to_payload()}
+                callback = make_policy_opponent_callback(public_lines=lines,
+                    hp_visibility={'p1':'exact', 'p2':'exact'}, opponent_slot=actor,
+                    battle_id='authored-pending-commitment', battle_seed=701, format_id='gen3randombattle',
+                    set_source=source, model=self.python_model, result=result,
+                    category_vocab=vocab, dex=dex, device='cpu')
+                seen = []
+                def checked(raw):
+                    payload = json.loads(raw)
+                    request = payload['native_request_bundle']
+                    self.assertTrue(request['request']['wait'])
+                    self.assertEqual(request['native_action_indices'], [None])
+                    seen.append(payload)
+                    return callback(raw)
+                with patch.object(self.python_model, 'forward', wraps=self.python_model.forward) as own_forward:
+                    report = self.run_search(checked, position=position, max_depth=1,
+                        policy_opponent_public_lines=list(lines))
+                own_forward.assert_not_called()
+                self.assertEqual(report['iterations'], 64)
+                self.assertEqual(report['policy_opponent_evals'], 0)
+                self.assertTrue(seen)
+                opponent_stats = report['side_one' if actor == 'p1' else 'side_two']
+                self.assertEqual(len(opponent_stats), 1)
+                self.assertEqual(opponent_stats[0]['move'], 'ember' if row['fastPass'] else 'No Move')
+
     def test_server_private_maybe_trap_reaches_real_model_and_canonical_own_head(self):
         """Both seats and hidden trap/free worlds; authored, not strength data."""
         import subprocess

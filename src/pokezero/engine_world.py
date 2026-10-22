@@ -442,23 +442,30 @@ def battle_spec_from_payload(
     self_force_switch = request_kind == "force-switch"
     pending_baton_pass = tuple(str(s) for s in payload.get("pendingBatonPassSides") or ())
     self_baton_passing = False
+    opponent_action_pending = False
     if pending_baton_pass:
-        # Supported shape: OUR Baton Pass is pending and we are choosing the
-        # recipient (boosts/whitelisted volatiles pass; the engine restricts
-        # us to switch choices). The opponent's committed-but-hidden action
-        # is sampled per world into switch_out_move_second_saved_move, but
-        # review probes show the gen3 engine build does NOT resolve it after
-        # the switch (root values are invariant to the sample) — the
-        # recipient enters without eating the committed move, a fail-soft
-        # optimistic under-model. The field is populated for forward
-        # compatibility; treat the commitment as UNMODELED today. Any other
-        # pending shape stays fail-closed.
+        # Our recipient request is public. Whether the foe still owes its
+        # already-selected action is ALSO public chronology, not a speed or
+        # private-queue inference. A slow pass must not manufacture a second
+        # foe action. Authored transition checks cover a saved move resuming
+        # after a fast pass and no repeat after a slow pass; this does not
+        # establish all Baton Pass mechanics or repair historical outcomes.
         if set(pending_baton_pass) != {self_player} or not self_force_switch:
             raise EngineWorldUnsupported(
                 "pending_baton_pass",
                 f"unsupported pending Baton Pass shape: {pending_baton_pass!r} (kind {request_kind!r})",
             )
         self_baton_passing = True
+        commitment = payload.get("pendingBatonPassOpponentAction")
+        opponent = "p2" if self_player == "p1" else "p1"
+        if (not isinstance(commitment, Mapping)
+                or commitment.get("passer") != self_player
+                or commitment.get("opponent") != opponent
+                or type(commitment.get("turn")) is not int
+                or commitment.get("turn") != payload.get("turn")
+                or commitment.get("state") not in ("PENDING", "ALREADY_CONSUMED")):
+            raise EngineWorldUnsupported("pending_baton_pass", "unresolved public action chronology")
+        opponent_action_pending = commitment["state"] == "PENDING"
     request_state = payload.get("selfActiveRequestState")
     if isinstance(request_state, Mapping):
         raised = sorted(flag for flag, value in request_state.items() if value)
@@ -535,7 +542,7 @@ def battle_spec_from_payload(
             force_switch=is_self_slot and self_force_switch,
             world_owes_replacement=self_force_switch,
             baton_passing=is_self_slot and self_baton_passing,
-            opponent_committed_pending=(not is_self_slot) and self_baton_passing,
+            opponent_committed_pending=(not is_self_slot) and opponent_action_pending,
             wish_set_turn=_wish_set_turn(payload, slot),
             encored_move=(encored_moves or {}).get(slot),
             removed_item_species=frozenset(
@@ -1065,6 +1072,58 @@ def _apply_forecast_types(sides: Mapping[str, SideSpec], *, weather: str) -> dic
     return result
 
 
+def pending_baton_opponent_action(public_lines: Sequence[str], *, turn: int, passer: str) -> dict[str, Any]:
+    """Classify one interrupted turn using PUBLIC actor chronology only.
+
+    Missing/truncated/called-action ambiguity refuses upstream. A confusion
+    activation is an actual BeforeMove attempt even when self-hit emits no
+    move/cant. Entry effects, drag and Focus Punch preparation are not choices.
+    """
+    foe = "p2" if passer == "p1" else "p1"
+    proof = {"turn": turn, "passer": passer, "opponent": foe, "state": "AMBIGUOUS"}
+    if passer not in _PLAYER_SLOTS or type(turn) is not int:
+        return proof
+    rows = [line.split("|") for line in public_lines]
+    turns = [(i, row) for i, row in enumerate(rows) if len(row) > 2 and row[1] == "turn"]
+    if not turns or turns[-1][1][2] != str(turn):
+        return proof
+    if sum(row[2] == str(turn) for _, row in turns) != 1:
+        return proof
+    window = rows[turns[-1][0] + 1:]
+    if any(len(row) > 1 and row[1] == "upkeep" for row in window):
+        return proof
+    markers = [i for i, row in enumerate(window) if len(row) > 3
+        and row[1] == "move" and row[2].startswith(f"{passer}a: ")
+        and normalize_id(row[3]) == "batonpass"]
+    if len(markers) != 1:
+        return proof
+    marker = markers[0]
+    if any(field.startswith("[from]") for field in window[marker][4:]):
+        return proof
+    consumed = False
+    for i, row in enumerate(window):
+        if len(row) < 3 or not row[2].startswith(f"{foe}a: "):
+            continue
+        event = row[1]
+        if event in {"drag", "replace"}:
+            # A passive active-identity change does not prove a voluntary
+            # action, and may cancel the old active's queued move.
+            return proof
+        if event in {"move", "cant", "switch", "faint"}:
+            if i > marker or (event == "move" and any(field.startswith("[from]") for field in row[4:])):
+                return proof
+            consumed = True
+        elif event == "-activate":
+            # Confusion activation is only emitted in the real BeforeMove
+            # handler. Unlike a passive ability, it proves an action attempt.
+            if len(row) > 3 and normalize_id(row[3]) == "confusion" and i < marker:
+                consumed = True
+            else:
+                return proof
+    proof["state"] = "ALREADY_CONSUMED" if consumed else "PENDING"
+    return proof
+
+
 def world_battle_spec(
     state: Any,
     override: BattleStartOverride,
@@ -1087,14 +1146,19 @@ def world_battle_spec(
     """Construct the engine world for a live public branch point.
 
     ``state`` is a ``PublicBattleMaterializationState``; the public overlay is
-    computed by the same payload helper the Node direct path uses. Deferred
-    opponent actions are deliberately not forwarded: boundaries that need them
-    fail closed (``boundary_not_move_request`` / ``pending_baton_pass``).
+    computed by the same payload helper the Node direct path uses. The bridge's
+    opponent actions are deliberately not forwarded. At our
+    pending Baton Pass request, public chronology determines whether the foe
+    still owes its hidden committed action; only that case samples one world
+    commitment. Ambiguous histories and other deferred shapes fail closed.
     """
 
     from .local_showdown import _public_materialization_payload
 
     payload = _public_materialization_payload(state)
+    if payload.get("pendingBatonPassSides"):
+        payload["pendingBatonPassOpponentAction"] = pending_baton_opponent_action(
+            state.replay.public_lines, turn=payload["turn"], passer=state.player_id)
     return battle_spec_from_payload(
         payload,
         override,
