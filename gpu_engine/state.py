@@ -32,6 +32,9 @@ class BattleState(NamedTuple):
     pp: jax.Array                  # [B,2,6,4]
     disabled: jax.Array            # [B,2,6,4]
     choice_move: jax.Array         # [B,2,6], locked move ID; zero means unlocked
+    last_move: jax.Array           # [B,2,6], last PP-spending normal caller
+    encore_move: jax.Array         # [B,2,6], noCopy forced caller; zero inactive
+    encore_counter: jax.Array      # [B,2,6], remaining residual ticks
     item: jax.Array                # [B,2,6]
     ability: jax.Array             # [B,2,6]
     boosts: jax.Array              # [B,2,6,7]: Atk,Def,SpA,SpD,Spe,Acc,Eva
@@ -84,7 +87,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         stats=jnp.zeros((b, 2, 6, 6), jnp.int32), hp=mon(), max_hp=mon(),
         status=mon(), status_counter=mon(), sleep_skipped=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
         pp=jnp.zeros((b, 2, 6, 4), jnp.int32), disabled=jnp.zeros((b, 2, 6, 4), jnp.bool_),
-        choice_move=mon(),
+        choice_move=mon(),last_move=mon(),encore_move=mon(),encore_counter=mon(),
         item=mon(), ability=mon(), boosts=jnp.zeros((b, 2, 6, 7), jnp.int32),
         volatile=jnp.zeros((b, 2, 6), jnp.uint32), confusion_counter=mon(),
         protect_counter=mon(), substitute_hp=mon(), active=side(),
@@ -119,6 +122,9 @@ def legal_actions(state: BattleState) -> jax.Array:
     move_ids = jnp.take_along_axis(state.moves,state.active[...,None,None],axis=2)[...,0,:]
     choice = jnp.take_along_axis(state.choice_move,state.active[...,None],axis=2)[...,0]
     moves = (pp > 0) & ~disabled & ((choice[...,None] == 0) | (move_ids == choice[...,None]))
+    encore=jnp.take_along_axis(state.encore_move,state.active[...,None],axis=2)[...,0]
+    duration=jnp.take_along_axis(state.encore_counter,state.active[...,None],axis=2)[...,0]
+    moves &= (duration[...,None]==0) | (move_ids==encore[...,None])
     moves = moves.at[..., 0].set(moves[..., 0] | ~jnp.any(moves, axis=-1))
     forced = state.forced_switch | (active_hp <= 0)
     moves &= ~forced[..., None]

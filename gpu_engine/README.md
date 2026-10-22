@@ -311,3 +311,16 @@ mechanics by turn 20. 30–100 games/second means reconsider; below 30 or no bat
 scaling means no-go. These thresholds are not yet measured. Missing components
 must remain missing in reports, not receive projected or placeholder timings.
 No training, policy-quality or full-fidelity claim follows from this spike.
+
+## Selected Encore integration
+
+Gen 3 Encore chooses 3..6 turns, adds a tick when the target has no queued move,
+and ticks at speed-ordered residual order10/suborder14. It forces the last
+PP-spending normal caller, retaining original queued priority and charging the
+forced move's slot. Sleep Talk records its caller; Pursuit interception records
+Pursuit. Protect blocks Encore, Substitute/Ghost do not; missing/excluded/zero-PP
+last moves fail and an active Encore does not refresh. PP exhaustion ends it at
+residual; ordinary switching, Baton noCopy and faint cleanup clear its fields.
+The existing [0,4) duration column and unused residual tie column preserve the
+original fixed chance block; primary sleep and Encore cannot share a dispatch.
+Other move locks and full move/game qualification remain outside this component.
