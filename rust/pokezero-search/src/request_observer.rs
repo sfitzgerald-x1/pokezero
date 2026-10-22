@@ -17,6 +17,9 @@ pub(crate) struct MaybeTrap {
     // an observer certificate. Every invocation rechecks the complete history.
     slot: String,
     binding: Value,
+    own_state: String,
+    own_id: String,
+    own_ability: String,
 }
 
 fn refusal(message: &str) -> PyErr {
@@ -84,6 +87,19 @@ pub(crate) fn observe(
 ) -> PyResult<Option<MaybeTrap>> {
     let current = own.get_active_immutable();
     let holder = foe.get_active_immutable();
+    let active_index = own
+        .active_index
+        .serialize()
+        .parse::<usize>()
+        .expect("native active index");
+    if !own
+        .pokemon
+        .into_iter()
+        .enumerate()
+        .any(|(index, mon)| index != active_index && mon.hp > 0)
+    {
+        return Ok(None); // getMoveRequestData: no canSwitchIn, no maybeTrapped
+    }
     if own.force_switch
         || own.baton_passing
         || foe.force_switch
@@ -108,8 +124,14 @@ pub(crate) fn observe(
     if !(arena_species || magnet_species || actual_trap) {
         return Ok(None);
     }
-    // A missing context is NOT permission to synthesize the private bit. The
-    // legacy Side-only path remains strict and will diagnose native mismatch.
+    let maybe = (arena_species && current.is_grounded())
+        || (holder.ability == Abilities::ARENATRAP && current.is_grounded())
+        || (holder.ability == Abilities::MAGNETPULL && current.has_type(&PokemonType::STEEL));
+    if !maybe {
+        return Ok(None);
+    } // no observation extension; do not poison ordinary choices
+      // A missing context is NOT permission to synthesize the private bit. The
+      // legacy Side-only path remains strict and will diagnose native mismatch.
     if format.is_none() && lines.is_empty() {
         return Ok(None);
     }
@@ -129,6 +151,7 @@ pub(crate) fn observe(
     let mut active = [String::new(), String::new()];
     let mut species = [String::new(), String::new()];
     let mut alive = [false; 2];
+    let mut tainted = [false; 2];
     let (mut gen3, mut singles, mut tier, mut started) = (false, false, false, false);
     let mut turn = 0u32;
     for line in lines {
@@ -174,6 +197,7 @@ pub(crate) fn observe(
             "switch" | "drag" => {
                 let seat = seat.ok_or_else(|| refusal("unknown active entry"))?;
                 active[seat] = field(2).into();
+                tainted[seat] = false;
                 species[seat] = id(field(3).split(',').next().unwrap_or(""));
                 alive[seat] = field(4)
                     .split('/')
@@ -181,8 +205,25 @@ pub(crate) fn observe(
                     .and_then(|s| s.parse::<u32>().ok())
                     .is_some_and(|hp| hp > 0);
             }
-            "replace" | "detailschange" | "-formechange" | "-transform" | "-ability"
-            | "-endability" => return Err(refusal("unsupported public identity/ability context")),
+            "replace" | "detailschange" | "-formechange" | "-transform" | "-endability" => {
+                tainted[seat.ok_or_else(|| refusal("unknown identity/ability owner"))?] = true;
+            }
+            "-ability" => {
+                let seat = seat.ok_or_else(|| refusal("unknown ability owner"))?;
+                if active[seat] != field(2) {
+                    return Err(refusal("stale ability owner"));
+                }
+                let expected = if seat == own_seat {
+                    current.ability
+                } else {
+                    holder.ability
+                };
+                // Ordinary current ability reveals are not changes. Past entry
+                // changes cannot contaminate a later switch-in or a sibling.
+                if id(field(3)) != id(&format!("{expected:?}")) || line.contains("[from]") {
+                    tainted[seat] = true;
+                }
+            }
             "move"
                 if matches!(
                     id(field(3)).as_str(),
@@ -194,17 +235,21 @@ pub(crate) fn observe(
                         | "camouflage"
                 ) =>
             {
-                return Err(refusal("unsupported ability/type-changing history"))
+                if id(field(3)) == "skillswap" {
+                    tainted = [true; 2];
+                } else {
+                    tainted[seat.ok_or_else(|| refusal("unknown ability/type actor"))?] = true;
+                }
             }
             "-start" if matches!(id(field(3)).as_str(), "typechange" | "typeadd") => {
-                return Err(refusal("unsupported changed type"))
+                tainted[seat.ok_or_else(|| refusal("unknown type owner"))?] = true;
             }
             "-activate"
                 if line.contains("ability:")
                     || line.contains("Skill Swap")
                     || line.contains("Role Play") =>
             {
-                return Err(refusal("ambiguous ability-changing history"))
+                tainted = [true; 2];
             }
             "faint" | "-damage" | "-sethp" => {
                 let seat = seat.ok_or_else(|| refusal("unknown HP owner"))?;
@@ -228,31 +273,42 @@ pub(crate) fn observe(
         || species[1 - own_seat] != foe_id
         || current.hp <= 0
         || holder.hp <= 0
+        || tainted.iter().any(|b| *b)
     {
         return Err(refusal("public/node active identity or life mismatch"));
-    }
-    let maybe = (arena_species && current.is_grounded())
-        || (magnet_species
-            && holder.ability == Abilities::MAGNETPULL
-            && current.has_type(&PokemonType::STEEL));
-    if !maybe {
-        return Ok(None);
     }
     Ok(Some(MaybeTrap {
         slot: slot.into(),
         binding: public_binding(lines),
+        own_state: own.serialize(),
+        own_id: id(&format!("{:?}", current.id)),
+        own_ability: id(&format!("{:?}", current.ability)),
     }))
 }
 
 impl MaybeTrap {
     pub(crate) fn receipt(
         &self,
+        own: &Side,
         request: &Value,
         protocol: &[usize],
         policy: &[usize],
     ) -> PyResult<Value> {
         if request.pointer("/side/id").and_then(Value::as_str) != Some(self.slot.as_str()) {
             return Err(refusal("own request seat mismatch"));
+        }
+        let row = request
+            .pointer("/side/pokemon/0")
+            .ok_or_else(|| refusal("missing observed own active"))?;
+        let own_ident = row["ident"].as_str().unwrap_or("");
+        if own.serialize() != self.own_state
+            || own_ident.split_once(": ").map(|(_, name)| id(name)) != Some(self.own_id.clone())
+            || id(row["ability"].as_str().unwrap_or("")) != self.own_ability
+            || row["active"] != true
+            || request.pointer("/active/0/maybeTrapped") != Some(&json!(true))
+            || request.pointer("/active/0/trapped") == Some(&json!(true))
+        {
+            return Err(refusal("observed own state/request eligibility changed"));
         }
         Ok(
             json!({"schema": "pokezero.gen3-maybe-trap-request.v1", "seat": self.slot,
@@ -267,6 +323,21 @@ impl MaybeTrap {
 mod tests {
     use super::*;
     use std::str::FromStr;
+    #[test]
+    fn canonical_utf8_domain_digests_match_python_including_unicode_and_escaping() {
+        let lines = ["|player|p1|Pokémon 🐉".into(), "|turn|1".into()];
+        assert_eq!(
+            public_binding(&lines)["sha256"],
+            "3b8104753c70846260997045cb96e19e82504644078bef1348726b733278b78f"
+        );
+        assert_eq!(
+            digest(
+                &json!({"z":[true,0,"Pokémon 🐉"],"a":{"β":"\n"}}),
+                b"pokezero.gen3-maybe-trap-own-request.v1"
+            ),
+            "a5ced8b361a933cac9d207d20c8f566c64e93939b833656bc0d1077d98293ab4"
+        );
+    }
     fn fixture(
         foe: &str,
         ability: Abilities,
@@ -280,6 +351,8 @@ mod tests {
         mon.id = FromStr::from_str(own).unwrap();
         mon.types = (kind, PokemonType::TYPELESS);
         mon.ability = own_ability;
+        state.side_one.pokemon.pkmn[1] = state.side_one.get_active_immutable().clone();
+        state.side_one.pokemon.pkmn[1].id = FromStr::from_str("SNORLAX").unwrap();
         let mon = state.side_two.get_active();
         mon.id = FromStr::from_str(foe).unwrap();
         mon.ability = ability;
@@ -369,7 +442,9 @@ mod tests {
             if let Some(seen) = seen {
                 let receipt = seen
                     .receipt(
-                        &json!({"side":{"id":"p1"},"name":"Pokémon 🐉"}),
+                        &state.side_one,
+                        &json!({"side":{"id":"p1", "pokemon":[{"ident": format!("p1: {own}"), "ability":format!("{own_ability:?}").to_lowercase(), "active":true}]},
+                            "active":[{"maybeTrapped":true}], "name":"Pokémon 🐉"}),
                         &[0, 4],
                         &[0],
                     )
@@ -391,7 +466,7 @@ mod tests {
         );
         for extra in [
             "|move|p1a: PIKACHU|Skill Swap|p2a: DUGTRIO",
-            "|-ability|p2a: DUGTRIO|Arena Trap",
+            "|-ability|p2a: DUGTRIO|Sand Veil",
             "|turn|3",
             "|-start|p1a: PIKACHU|typechange|Flying",
             "|faint|p2a: DUGTRIO",
@@ -446,5 +521,96 @@ mod tests {
         )
         .unwrap()
         .is_none());
+    }
+    #[test]
+    fn proof_binds_own_eligibility_and_current_entry_but_never_emits_a_no_bench_flag() {
+        let (mut state, lines) = fixture(
+            "DUGTRIO",
+            Abilities::ARENATRAP,
+            "PIKACHU",
+            PokemonType::ELECTRIC,
+            Abilities::STATIC,
+        );
+        let proof = observe(
+            &state.side_one,
+            &state.side_two,
+            "p1",
+            &lines,
+            Some("gen3randombattle"),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        let request = json!({"side":{"id":"p1","pokemon":[{"ident":"p1: PIKACHU","active":true,"ability":"static"}]},"active":[{"maybeTrapped":true}]});
+        assert!(proof
+            .receipt(&state.side_one, &request, &[0, 4], &[0])
+            .is_ok());
+        let mut wrong = request.clone();
+        wrong["side"]["pokemon"][0]["ident"] = json!("p1: GENGAR");
+        assert!(proof
+            .receipt(&state.side_one, &wrong, &[0, 4], &[0])
+            .is_err());
+        wrong = request.clone();
+        wrong["side"]["pokemon"][0]["ability"] = json!("levitate");
+        assert!(proof
+            .receipt(&state.side_one, &wrong, &[0, 4], &[0])
+            .is_err());
+        state.side_one.get_active().ability = Abilities::LEVITATE;
+        assert!(proof
+            .receipt(&state.side_one, &request, &[0, 4], &[0])
+            .is_err());
+        state.side_one.get_active().ability = Abilities::STATIC;
+        let mut later = lines.clone();
+        later.push("|-ability|p2a: DUGTRIO|Arena Trap".into());
+        assert!(observe(
+            &state.side_one,
+            &state.side_two,
+            "p1",
+            &later,
+            Some("gen3randombattle"),
+            true
+        )
+        .unwrap()
+        .is_some());
+        later.push("|move|p2a: DUGTRIO|Role Play|p1a: PIKACHU".into());
+        assert!(observe(
+            &state.side_one,
+            &state.side_two,
+            "p1",
+            &later,
+            Some("gen3randombattle"),
+            true
+        )
+        .is_err());
+        later.push("|switch|p2a: DUGTRIO|DUGTRIO, L100|100/100".into());
+        assert!(observe(
+            &state.side_one,
+            &state.side_two,
+            "p1",
+            &later,
+            Some("gen3randombattle"),
+            true
+        )
+        .unwrap()
+        .is_some());
+        for (foe, ability, kind) in [
+            ("DUGTRIO", Abilities::ARENATRAP, PokemonType::ELECTRIC),
+            ("DUGTRIO", Abilities::SANDVEIL, PokemonType::ELECTRIC),
+            ("MAGNETON", Abilities::MAGNETPULL, PokemonType::STEEL),
+            ("MAGNETON", Abilities::STURDY, PokemonType::STEEL),
+        ] {
+            let (mut empty, lines) = fixture(foe, ability, "PIKACHU", kind, Abilities::STATIC);
+            empty.side_one.pokemon.pkmn[1].hp = 0;
+            assert!(observe(
+                &empty.side_one,
+                &empty.side_two,
+                "p1",
+                &lines,
+                Some("gen3randombattle"),
+                true
+            )
+            .unwrap()
+            .is_none());
+        }
     }
 }
