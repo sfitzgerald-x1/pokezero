@@ -63,7 +63,8 @@ def depart(state,side,table,*,eligible):
             jnp.where(eligible & (cure | (status==m.TOX)),0,counter)),
         sleep_skipped=state.sleep_skipped.at[rows,side,active].set(jnp.where(
             eligible & (cure | (status!=m.SLP)),0,state.sleep_skipped[rows,side,active])))
-    for name in ("boosts","volatile","confusion_counter","protect_counter","substitute_hp","choice_move"):
+    for name in ("boosts","volatile","confusion_counter","protect_counter","substitute_hp","choice_move",
+                 "last_move","encore_move","encore_counter"):
         value=getattr(state,name);old=value[rows,side,active]
         gate=eligible[:,None] if old.ndim==2 else eligible
         state=state._replace(**{name:value.at[rows,side,active].set(jnp.where(gate,0,old))})
