@@ -228,7 +228,10 @@ _CORPUS_TREES = ("reports", "docs")
 # receipt is added under reports/docs; no historical JSON changed or was removed.
 # 419 -> 420: against main 60611a85, the sole JSON addition is the fresh
 # public-trap mutation battery. No historical JSON is edited or removed.
-_EXPECTED_COUNTER_ARTIFACTS = 420
+# 420 -> 421: against 53166f3a, the sole reports/docs JSON addition is
+# rollout_leaf_witness_mutation_battery_20261022_phase_progress.json.
+# No historical JSON is edited or removed.
+_EXPECTED_COUNTER_ARTIFACTS = 421
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
