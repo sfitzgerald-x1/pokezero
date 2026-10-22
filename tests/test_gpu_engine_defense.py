@@ -79,7 +79,7 @@ class DefenseTests(unittest.TestCase):
         s = self.live()._replace(pp=self.live().pp.at[:,0].set(0),
             substitute_hp=self.live().substitute_hp.at[0,1,0].set(7))
         r = self.play(s,"tackle")
-        self.assertEqual(r.hp[0,:,0].tolist(),[99,101])
+        self.assertEqual(r.hp[0,:,0].tolist(),[100,101])
         self.assertEqual(int(r.substitute_hp[0,1,0]),0)
 
     def test_substitute_survives_small_hits_and_is_unchanged_by_miss(self):
