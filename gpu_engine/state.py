@@ -51,6 +51,7 @@ class BattleState(NamedTuple):
     pending_residual: jax.Array    # [B], suspended action turn waits for entry
     residual_draws: jax.Array      # [B,2,12], original ordinary-turn chance block
     phazing_draws: jax.Array       # [B,2], fixed uniform [0,60) bench-choice rolls
+    secondary_draws: jax.Array     # [B,2], fixed uniform [0,100) target-secondary rolls
     replacement_count: jax.Array   # [B], tie stream within a suspended turn
     spikes: jax.Array              # [B,2]
     wish_counter: jax.Array        # [B,2], slot condition; persists across switches
@@ -93,7 +94,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         queued_actions=side(),queued_stall=side(),
         pending_residual=jnp.zeros((b,),jnp.bool_),
         residual_draws=jnp.zeros((b,2,12),jnp.int32),replacement_count=battle(),
-        phazing_draws=side(),
+        phazing_draws=side(), secondary_draws=side(),
         spikes=side(), wish_counter=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32))
 
