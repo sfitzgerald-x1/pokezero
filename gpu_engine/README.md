@@ -375,6 +375,20 @@ deferred replacement requests do not consume a charge turn. Baton copies a
 remaining charge, including to a recipient that does not know Solar Beam. Other charging moves
 remain placeholders. These component checks do not qualify complete-game coverage.
 
+## Advancing cost shape diagnostic
+
+After the separate champion-forward dependency is available, run
+`python -m gpu_engine.benchmark_games --team-pool POOL --weights WEIGHTS
+--expected-pool-sha POOL_SHA --out RESULT.json`. This writes exclusive JSON and
+Markdown outputs for batches 256, 1024, 2048 and 8192. Each finite cohort uses
+distinct prefix team pairs, five warmups and 100 component samples, followed by
+at most 1000 advancing requests with temperature-one masked champion actions.
+No game is refilled or redrawn. Actual completions divided by elapsed wall time
+give games/second; capped games remain censored. Ordinary game turns and live
+requests are separate counters because forced/Baton requests are not turns.
+This is an unqualified mechanics/placeholder-observation diagnostic, not a
+strength measurement or a go/no-go. After-only counters are not mean utilization.
+
 ## Selected Encore integration
 
 Gen 3 Encore chooses 3..6 turns, adds a tick when the target has no queued move,
