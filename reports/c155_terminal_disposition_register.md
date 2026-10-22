@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`6ba6d3b0692a8c5f…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`d32cc4649b006400…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -341,7 +341,9 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1503 refused-position adapter repairs | `policy_request.rs` certifies committed-action WAIT during replacement instead of resampling; two phase regression tests. `policy_bridge.rs` retains private-safe refusal witnesses. Original study receipts remain unchanged | `369883e836b7fdfc…` |
 | #1506 Transform callback repair | `policy_bridge.rs` separates original and copied PP banks and preserves public Transform provenance; `policy_request.rs` retains original party identity and Gen 3 copied-slot PP Ups. `encoder.rs` and `model.rs` supply registered base PP. Historical study receipts and the fingerprint gate's OPEN status remain unchanged | `7249f80b10c42ddf…` |
 | #1531 synthetic Struggle | The added engine patch and manifest entry plus Struggle handling in `events.rs`, `leaf.rs`, `tree.rs`, `model.rs` and `policy_request.rs` move the source fingerprint. This identifies the new build inputs, not a qualification of them; historical sweeps and the fingerprint gate's OPEN status remain unchanged | `b1f8b7ee64a5ebc1…` |
-| Public Shadow Tag request knowledge | New `public_trap.rs` and `lib.rs`/`policy_request.rs`/`policy_bridge.rs`/`model.rs` plumbing bind per-invocation public evidence without relaxing native/private equality. Current source derivation only; historical sweeps and OPEN qualification remain unchanged | `6ba6d3b0692a8c5f…` |
+| #1618 authored trapping-boundary diagnosis | Test-only `policy_request.rs` constructor matrix and clarified fixture name change hashed source bytes, not runtime behavior. Re-derived on the main merge tree; historical sweeps and OPEN qualification stay unchanged | `36442fa084c73a3b…` |
+| #1619 public Shadow Tag request knowledge, original branch | New `public_trap.rs` and `lib.rs`/`policy_request.rs`/`policy_bridge.rs`/`model.rs` plumbing bind per-invocation public evidence without relaxing native/private equality. Current source derivation only; historical sweeps and OPEN qualification remain unchanged | `6ba6d3b0692a8c5f…` |
+| #1619 integration with #1618 | Ordinary main merge preserves both independently reviewed constructor tests. Runtime is unchanged from the public-knowledge branch; hashed test bytes differ. Historical measurements and OPEN qualification remain unchanged | `d32cc4649b006400…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -943,7 +945,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 419 |
+| `base.expected_counter_artifacts` | 420 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 79 |
 | `base.section3_rows` | 82 |
@@ -967,7 +969,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 16 |
 | `t1.hashed_input_files` | 101 |
-| `t1.head_fingerprint` | 6ba6d3b0692a8c5f |
+| `t1.head_fingerprint` | d32cc4649b006400 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

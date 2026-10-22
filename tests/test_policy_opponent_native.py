@@ -92,7 +92,9 @@ class NativePolicyOpponentSearchTest(_EncodedSearchFixture, unittest.TestCase):
                          lambda raw: [0.0] * len(json.loads(raw)["native_request_bundle"]["native_action_indices"])):
             with self.subTest(callback=callback), self.assertRaises(ValueError):
                 self.run_search(callback)
-        # Hidden trapping can collapse the native legal surface to one move.
+        # Native-only trapping can collapse the legal surface to one move.
+        # No public trap certificate is supplied by this authored mutation;
+        # this is not a claim that real Gen3 Showdown hides Shadow Tag.
         # It must still refuse at the side-only constructor, not bypass the
         # provider just because there is only one native arm.
         trapped = dict(self.position)
