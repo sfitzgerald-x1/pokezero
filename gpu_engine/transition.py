@@ -22,6 +22,7 @@ from . import absorption as absorb
 from . import entry as arrival
 from . import combat as traits
 from . import pressure as pp_cost
+from . import sustain as recovery
 from . import damage_moves as special_hits
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
@@ -44,6 +45,7 @@ class MoveTable(NamedTuple):
     absorption: absorb.AbsorptionTable | None = None
     combat: traits.CombatTable | None = None
     pressure: pp_cost.PressureTable | None = None
+    sustain: recovery.SustainTable | None = None
     damage_moves: special_hits.DamageMoveTable | None = None
 
 
@@ -73,7 +75,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         jnp.asarray(metadata["vocabulary"]["moves"].index("struggle"), jnp.int32),
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
         arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
-        pp_cost.from_metadata(metadata),special_hits.from_metadata(metadata))
+        pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -486,6 +488,14 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 status_counter=_set_active(work.status_counter,work,foe,
                     jnp.where(apply_status,jnp.where(status == m.SLP,2 + chance[:,7],0),
                               _active(work.status_counter,work,foe))))
+        if table.sustain is not None:
+            seeded = recovery.seed_target(table.sustain,move,_active(work.types,work,foe),
+                _active(work.hp,work,foe),_active(work.substitute_hp,work,foe),
+                _active(work.volatile,work,foe),eligible=acts & hit)
+            pending = work.wish_counter[rows,side]
+            work = work._replace(volatile=_set_active(work.volatile,work,foe,seeded),
+                wish_counter=work.wish_counter.at[rows,side].set(jnp.where(
+                    acts & table.sustain.wish[move] & (pending == 0),2,pending)))
         if table.items is not None:
             locked = _active(work.choice_move,work,side)
             lock = (acts & ~is_struggle & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
@@ -500,8 +510,15 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(spikes=work.spikes.at[rows,foe].set(jnp.where(
                 acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
-    # Residual handler speeds are snapshotted before weather expiry/upkeep.
+    # Snapshot before Wish(order7), weather(order8), and order10 handlers.
     end_speed = _speeds(work,table)
+    if table.sustain is not None:
+        ordinary = live & ~replacement & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
+        for side in range(2):
+            wish = recovery.wish_residual(_active(work.hp,work,side),_active(work.max_hp,work,side),
+                work.wish_counter[:,side],eligible=ordinary)
+            work = work._replace(hp=_set_active(work.hp,work,side,wish.hp),
+                wish_counter=work.wish_counter.at[:,side].set(wish.counter))
     if table.weather is not None:
         ordinary = live & ~replacement & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         weather,counter = climate.residual_clock(work.weather,work.weather_counter,eligible=ordinary)
@@ -517,20 +534,21 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 _active(work.max_hp,work,side),eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,hp))
     # Selected order10/priority0 handlers snapshot SPEED before suborder.
-    # Equal-speed Speed Boost(3), Leftovers(4), status(6) use independent ties.
+    # Equal-speed Speed Boost(3), Leftovers(4), seed(5), status(6) use independent ties.
     # Ability boosts do not re-sort the already queued residual handlers.
-    event_sides = jnp.array([0,1,0,1,0,1])
-    event_suborder = jnp.array([3,3,4,4,6,6])
+    event_sides = jnp.array([0,1,0,1,0,1,0,1])
+    event_suborder = jnp.array([3,3,4,4,5,5,6,6])
     tie = jnp.concatenate((draws[:,1,0,None] ^ sides,
-        draws[:,0,9,None] ^ sides,draws[:,1,9,None] ^ sides),axis=1)
+        draws[:,0,9,None] ^ sides,draws[:,0,10,None] ^ sides,draws[:,1,9,None] ^ sides),axis=1)
     event_keys = -end_speed[:,event_sides]*32 + event_suborder[None,:]*2 + tie
     event_order = jnp.argsort(event_keys,axis=1)
-    for order in range(6):
+    for order in range(8):
         event = event_order[:,order]
         side = event % 2
         ability_event = event < 2
         heal_event = (event >= 2) & (event < 4)
-        status_event = event >= 4
+        seed_event = (event >= 4) & (event < 6)
+        status_event = event >= 6
         battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)
         eligible = live & ~replacement & battle_continues
         hp = _active(work.hp,work,side)
@@ -550,6 +568,13 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             _active(work.status_counter, work, side), active=eligible & status_event)
         work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
             status_counter=_set_active(work.status_counter, work, side, residual.counter))
+        if table.sustain is not None:
+            foe = 1-side
+            drained = recovery.leech(_active(work.hp,work,side),_active(work.max_hp,work,side),
+                _active(work.volatile,work,side),_active(work.hp,work,foe),_active(work.max_hp,work,foe),
+                eligible=eligible & seed_event)
+            work = work._replace(hp=_set_active(work.hp,work,side,drained.hp))
+            work = work._replace(hp=_set_active(work.hp,work,foe,drained.recipient_hp))
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))
