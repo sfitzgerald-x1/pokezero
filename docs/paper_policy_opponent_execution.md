@@ -17,6 +17,33 @@ or invalid actions. The readout's repair addendum preserves the original study
 and explains Baton Pass commitment handling, sampled-own-party switch identity,
 and verified public faint-before-action replay. Default search remains unchanged.
 
+## October 22 authored trapping-boundary diagnosis
+
+This is engineering evidence, not another strength panel or a reconstruction of
+the closed October 21 zero-completed attempt. Its generic legal-surface refusal
+does not establish the exact historical mechanic or node.
+
+Pinned Gen3 Showdown fixtures in both seats expose **Shadow Tag** immediately
+as `trapped: true`. **Arena Trap** and **Magnet Pull** instead expose
+`maybeTrapped`; an unavailable switch updates the private request to
+`trapped: true` without advancing the turn or spending move PP. Treating every
+ability-trap discrepancy as hidden information is therefore incorrect.
+
+The authored native constructor matrix accepts ordinary and own-known trapped
+states in both seats and root/child constructor phases. A native-only trap with
+no supplied public/private certificate still refuses. Its real native error
+survives bounded Python note projection and traceback rendering; the standalone constructor does
+not supply a traversal depth, and no depth is invented. These checks do not
+qualify full model traversal, opponent-policy strength or a repaired run.
+
+The current root-only `force_trapped` latch is deliberately not inherited by
+children. A faithful extension needs provenance-valid request knowledge at each
+reached node, including the no-turn unavailable-choice/rechoice update where
+applicable. Reading a hidden ability into the policy mask, intersecting masks,
+dropping switch probability or resampling until native-legal would change the
+opponent policy, not repair the request contract. Keep the refusal until that
+protocol has a reviewed disposition; logging alone does not justify relaunch.
+
 ## Implemented native foundation
 
 `policy_opponent.rs` samples a fixed full legal distribution independently of

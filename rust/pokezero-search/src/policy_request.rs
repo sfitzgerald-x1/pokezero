@@ -582,19 +582,73 @@ mod tests {
     }
 
     #[test]
-    fn hidden_trapping_ability_cannot_be_encoded_as_private_knowledge() {
+    fn unrepresented_trapping_ability_cannot_be_encoded_as_private_knowledge() {
         pyo3::Python::initialize();
         let mut state = fixture();
         assert!(bundle(&state, &names()).is_ok());
         state.side_two.get_active().ability = Abilities::SHADOWTAG;
         let error = bundle(&state, &names())
-            .expect_err("native trap masking must refuse rather than disclose truth");
+            .expect_err("native trap masking needs an own/public trap certificate");
         pyo3::Python::attach(|py| {
             assert!(error
                 .value(py)
                 .to_string()
                 .contains("legal surfaces differ"))
         });
+    }
+
+    #[test]
+    fn authored_trap_boundary_matrix_distinguishes_own_known_and_unrepresented_traps() {
+        // This diagnoses the constructor contract, NOT a saved historical
+        // decision. A native-only Shadow Tag below has NO public trap witness
+        // supplied to this Side-only constructor; it is not a claim that real
+        // Gen3 Showdown hides Shadow Tag (it exposes trapped:true).
+        pyo3::Python::initialize();
+        for slot in ["p1", "p2"] {
+            for root in [true, false] {
+                for case in ["ordinary", "own_trapped_volatile", "native_only_trap", "root_latch"] {
+                    let mut state = fixture();
+                    match case {
+                        "own_trapped_volatile" => {
+                            state.side_one.volatile_statuses.insert(PokemonVolatileStatus::TRAPPED);
+                        }
+                        "native_only_trap" => {
+                            state.side_two.get_active().ability = Abilities::SHADOWTAG;
+                        }
+                        "root_latch" => state.side_one.force_trapped = true,
+                        _ => {}
+                    }
+                    if slot == "p2" {
+                        std::mem::swap(&mut state.side_one, &mut state.side_two);
+                    }
+                    let (one, two) = if root { state.root_get_all_options() } else { state.get_all_options() };
+                    let (side, options) = if slot == "p1" { (&state.side_one, one) } else { (&state.side_two, two) };
+                    let result = sampled_side_request(side, slot, &names(), &names(), &options, &pp(), root);
+                    if case == "native_only_trap" {
+                        let error = result.expect_err("no public trap certificate was provided");
+                        Python::attach(|py| {
+                            let raw: String = error.value(py).getattr("policy_opponent_diagnostic").unwrap().extract().unwrap();
+                            let diagnostic: Value = serde_json::from_str(&raw).unwrap();
+                            assert_eq!(diagnostic["native_action_indices"], json!([0]));
+                            assert_eq!(diagnostic["private_action_indices"], json!([0, 4, 5]));
+                            assert_eq!(diagnostic["seat"], slot);
+                            assert_eq!(diagnostic["root"], root);
+                            assert_eq!(diagnostic["force_switch"], false);
+                            assert_eq!(diagnostic["waiting"], false);
+                            assert_eq!(diagnostic["recharging"], false);
+                            eprintln!("AUTHORED_TRAP_BOUNDARY case={case} seat={slot} root={root} native=[0] private=[0,4,5] outcome=REFUSED");
+                        });
+                    } else {
+                        let request = result.unwrap();
+                        let trapped = case == "own_trapped_volatile" || (case == "root_latch" && root);
+                        let expected = if trapped { json!([0]) } else { json!([0, 4, 5]) };
+                        assert_eq!(request["native_action_indices"], expected);
+                        assert_eq!(request["request"]["active"][0]["trapped"], trapped);
+                        eprintln!("AUTHORED_TRAP_BOUNDARY case={case} seat={slot} root={root} indices={expected} outcome=ACCEPTED");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
