@@ -15,6 +15,7 @@ import re
 from typing import Any, Mapping, Sequence
 
 from .actions import ACTION_COUNT
+from .policy_action_contract import PolicyActionContract
 from .belief import PokemonSetSource, PublicBattleBeliefEngine
 from .dex import ShowdownDex
 from .local_showdown import PublicBattleMaterializationState, _public_materialization_payload
@@ -125,6 +126,9 @@ class PolicyOpponentView:
     feature_masks: ObservationFeatureMasks
     battle_seed: int
     native_action_indices: tuple[int | None, ...] | None = None
+    # Validation-only: never enters row_inputs(), observation metadata, or the
+    # checkpoint. It certifies protocol/policy/native surfaces separately.
+    action_contract: PolicyActionContract | None = None
 
     def row_inputs(self, *, dex: ShowdownDex) -> dict[str, Any]:
         metadata = _observation_metadata(self.state, dex=dex, schema_version=self.spec.schema_version)
@@ -272,9 +276,9 @@ def build_policy_opponent_view_from_native_bundle(
     full engine state. Native callers supply only the sampled acting side's
     request bundle and a public transcript.
     """
-    if not isinstance(native_request_bundle, Mapping) or set(native_request_bundle) != {
-        "request", "self_move_states", "native_action_indices",
-    }:
+    required = {"request", "self_move_states", "native_action_indices"}
+    if (not isinstance(native_request_bundle, Mapping)
+        or set(native_request_bundle) not in (required, required | {"request_observer"})):
         raise PolicyOpponentViewError("incomplete native private-request bundle")
     if not isinstance(native_request_bundle["self_move_states"], Mapping):
         raise PolicyOpponentViewError("native private-request bundle lacks complete own PP")
@@ -293,9 +297,21 @@ def build_policy_opponent_view_from_native_bundle(
         **view_arguments,
     )
     legal = {index for index, enabled in enumerate(view.state.legal_action_mask) if enabled}
-    if legal != set(mapped):
+    contract = None
+    if "request_observer" in native_request_bundle:
+        try:
+            contract = PolicyActionContract.certify(
+                request=view.materialization.self_request,
+                receipt=native_request_bundle["request_observer"],
+                native_indices=indices, canonical_mask=view.state.legal_action_mask,
+                public_lines=view.public_lines, slot=view.state.player_id,
+                format_id=view.materialization.observation_format_id,
+            )
+        except (TypeError, ValueError) as error:
+            raise PolicyOpponentViewError(str(error)) from error
+    elif legal != set(mapped):
         raise PolicyOpponentViewError("native and canonical private-request legal surfaces differ")
-    return replace(view, native_action_indices=indices)
+    return replace(view, native_action_indices=indices, action_contract=contract)
 
 
 def advance_policy_opponent_view(

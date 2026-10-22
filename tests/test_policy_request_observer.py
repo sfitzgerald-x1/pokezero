@@ -33,6 +33,52 @@ def case():
 
 
 class PrivateRequestObserverTest(unittest.TestCase):
+    def test_certified_view_keeps_canonical_observation_and_conserves_full_row(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from pokezero.policy_opponent import policy_opponent_distribution
+        from pokezero.policy_opponent_view import build_policy_opponent_view_from_native_bundle, PolicyOpponentViewError
+        from test_policy_opponent import config
+        from test_policy_opponent_request import arguments, bundle
+        from test_policy_opponent_view import VOCAB
+        from test_engine_world import _dex
+
+        native = bundle()
+        request = native["request"]
+        request["active"][0]["trapped"] = False
+        request["active"][0]["maybeTrapped"] = True
+        args = arguments()
+        lines = public_policy_lines(args["public_lines"], hp_visibility=args["hp_visibility"])
+        native["request_observer"] = {"schema": SCHEMA, "format_id": args["format_id"],
+            "seat": args["opponent_slot"], "public_binding": public_binding(lines),
+            "request_sha256": request_digest(request), "protocol_action_indices": [0, 1, 4],
+            "policy_action_indices": [0, 1]}
+        cfg = config()
+        for indices in ([0, 1, 4], [1, 0]):
+            native["native_action_indices"] = indices
+            view = build_policy_opponent_view_from_native_bundle(native_request_bundle=native, **args)
+            observation = view.observation(category_vocab=VOCAB, dex=_dex())
+            self.assertEqual(tuple(i for i, yes in enumerate(observation.legal_action_mask) if yes), (0, 1))
+            for payload in (view.row_inputs(dex=_dex()), observation.metadata):
+                self.assertNotIn("request_observer", json.dumps(payload))
+                self.assertNotIn("protocol_action_indices", json.dumps(payload))
+            with patch("pokezero.neural_policy.evaluate_transformer_action_priors",
+                       return_value=(.25, .75, 0., 0., 0., 0., 0., 0., 0.)):
+                actual = policy_opponent_distribution(view, native_action_indices=indices,
+                    model=SimpleNamespace(config=cfg), result=SimpleNamespace(model_config=cfg),
+                    category_vocab=VOCAB, dex=_dex())
+            self.assertEqual(actual, tuple(.25 if i == 0 else .75 if i == 1 else 0. for i in indices))
+            with patch("pokezero.neural_policy.evaluate_transformer_action_priors",
+                       return_value=(.25, .65, 0., 0., .1, 0., 0., 0., 0.)):
+                with self.assertRaises(PolicyOpponentViewError):
+                    policy_opponent_distribution(view, native_action_indices=indices,
+                        model=SimpleNamespace(config=cfg), result=SimpleNamespace(model_config=cfg),
+                        category_vocab=VOCAB, dex=_dex())
+            if 4 in indices:
+                with self.assertRaises(PolicyOpponentViewError):
+                    build_policy_opponent_view_from_native_bundle(
+                        native_request_bundle={k: v for k, v in native.items() if k != "request_observer"}, **args)
+
     def test_exact_native_surfaces_and_zero_mass_conservation(self):
         for native in ([0, 1], [5, 1, 4, 0]):
             contract = PolicyActionContract.certify(**case(), native_indices=native)

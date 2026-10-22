@@ -22,6 +22,7 @@ pub mod model;
 pub(crate) mod priors;
 pub(crate) mod policy_opponent;
 pub(crate) mod policy_request;
+pub(crate) mod request_observer;
 #[cfg(feature = "model")]
 pub(crate) mod policy_bridge;
 pub mod rollout;
