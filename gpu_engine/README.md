@@ -118,6 +118,11 @@ from coverage counts. Cosmetic forms such as Unown-G retain distinct species IDs
 
 ## Damage and status core components
 
+Heal Bell cures living own-party major status and sleep bookkeeping, leaving
+confusion/other volatiles and the opposing party unchanged. Gen 3 Soundproof
+blocks each holder's cure, including the user; fainted party members are not
+cured. This is selected component support, not qualified move/game coverage.
+
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
 ordinary damage and pre-switch Pursuit, using the actual outgoing holder.
@@ -321,6 +326,20 @@ JSON retains samples, source/pool bindings and memory in use; Markdown reports
 mean step latency. Encoder, forward, end-to-end, game length, game rate and
 utilization remain unmeasured/null. Existing outputs are never overwritten.
 These are incomplete-core timings, not the final table or a go/no-go result.
+
+## Champion forward cost
+
+`champion.py` is an inference-only functional JAX port (no Flax dependency) of
+the champion's one-frame, norm-first TransformerEncoder: exact GELU, key padding,
+masked mean, action tokens13..21, policy/value/opponent heads, float32 eval mode.
+The category embedding has916 rows TOTAL, including the16 OOV buckets, not932.
+Export the unchanged trusted checkpoint once with optional Torch2.10 on CPU:
+`python -m gpu_engine.champion --checkpoint /path/model.pt --out /outside/git/weights.npz`.
+`PYTHONPATH=src python -m gpu_engine.check_champion_forward --checkpoint /path/model.pt
+--archive /outside/git/weights.npz` checks the actual production Torch forward
+on authored inputs. Load NPZ with `champion.load`; forward and per-seat masked
+temperature1 sampling stay on device. No-legal rows return−1, never a valid action.
+This is a cost workload, not production observation semantics, training or strength.
 
 ## Measurement contract
 
