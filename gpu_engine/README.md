@@ -182,6 +182,15 @@ the already chosen replacement, with its hazards and entry ability. Forced
 replacement pseudo-turns are not intercepted. Baton Pass and broader contact/
 item callbacks remain pending; ordinary non-switch Pursuit uses the usual path.
 
+Action-phase Gen 3 KOs suspend the ordinary turn before residuals. A replacement
+request installs the next living member before Wish, weather and order10 effects;
+another hazard KO requires another replacement first. The saved ordinary chance
+block, turn count and active ages are not redrawn/ticked during recovery. A
+separate counted stream supplies replacement-entry tie coins. Once residuals
+finish, their own faint replacements are standalone pseudo-turns with no second
+residual. `turn` counts ordinary turns begun, including a suspended one. This is
+the KO-resumption foundation; Baton Pass still needs a queued-move continuation.
+
 Guts now composes with the selected item multipliers in one Attack event,
 including confusion self-damage. It overrides the physical burn penalty without
 curing burn or preventing residual damage. Gen 3 Thick Fat modifies Fire/Ice

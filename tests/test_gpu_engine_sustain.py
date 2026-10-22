@@ -126,14 +126,14 @@ class SustainTests(unittest.TestCase):
         r=self.play(s,[[4,0]]).state
         self.assertEqual((int(r.hp[0,0,1]),int(r.wish_counter[0,0])),(60,0))
 
-    def test_dead_active_wish_expires_before_replacement_without_resurrection(self):
+    def test_move_ko_defers_wish_until_replacement_recipient_is_installed(self):
         s=self.live()._replace(wish_counter=self.j.array([[1,0]]))
         s=s._replace(hp=s.hp.at[0,0,0].set(1),moves=s.moves.at[0,1,0,0].set(7),
             stats=s.stats.at[0,1,0,5].set(300))
         r=self.play(s).state
-        self.assertEqual((int(r.hp[0,0,0]),int(r.wish_counter[0,0])),(0,0))
+        self.assertEqual((int(r.hp[0,0,0]),int(r.wish_counter[0,0]),bool(r.pending_residual[0])),(0,1,True))
         replaced=self.play(r,[[4,0]]).state
-        self.assertEqual((int(replaced.hp[0,0,1]),int(replaced.wish_counter[0,0])),(80,0))
+        self.assertEqual((int(replaced.hp[0,0,1]),int(replaced.wish_counter[0,0])),(101,0))
 
     def test_wish_precedes_potentially_lethal_weather_chip(self):
         s=self.live()._replace(wish_counter=self.j.array([[1,0]]),weather=self.j.array([self.w.SAND]))
