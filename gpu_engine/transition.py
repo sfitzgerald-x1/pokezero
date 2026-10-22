@@ -24,6 +24,7 @@ from . import combat as traits
 from . import pressure as pp_cost
 from . import sustain as recovery
 from . import damage_moves as special_hits
+from . import variable_moves as variable
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -47,6 +48,7 @@ class MoveTable(NamedTuple):
     pressure: pp_cost.PressureTable | None = None
     sustain: recovery.SustainTable | None = None
     damage_moves: special_hits.DamageMoveTable | None = None
+    variable_moves: variable.VariableMoveTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -75,7 +77,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         jnp.asarray(metadata["vocabulary"]["moves"].index("struggle"), jnp.int32),
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
         arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
-        pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata))
+        pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
+        variable.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -87,7 +90,12 @@ def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
         raise ValueError("team_indices must be in-range integers shaped [B,2]")
     state = empty_state(len(indices), seed=seed)
     values = {name: jnp.asarray(pool[name][indices], jnp.int32)
-              for name in ("species", "level", "types", "stats", "moves", "pp", "item", "ability")}
+              for name in ("species", "level", "types", "stats", "moves", "pp", "item", "ability",
+                           "hidden_power_type", "hidden_power_power")}
+    # The pinned random-team generator returns team objects without happiness;
+    # Pokemon's constructor defaults these to 255 (not Frustration text-import 0).
+    if "happiness" in pool:
+        values["happiness"] = jnp.asarray(pool["happiness"][indices], jnp.int32)
     hp = values["stats"][..., 0]
     state = state._replace(**values, hp=hp, max_hp=hp, done=jnp.zeros_like(state.done),
         entry_pending=jnp.ones_like(state.entry_pending))
@@ -344,6 +352,11 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         attack_boosts = _active(work.boosts, work, side)
         defense_boosts = _active(work.boosts, work, foe)
         physical = table.physical[move]
+        power,typ = table.power[move],table.type[move]
+        if table.variable_moves is not None:
+            power,typ,physical = variable.resolve(table.variable_moves,move,power,typ,physical,
+                _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
+                _active(work.happiness,work,side))
         attack_num,attack_den = (1,1)
         if table.items is not None:
             attack_num,attack_den = held.attack_modifier(table.items,
@@ -352,7 +365,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             attack_num,attack_den = traits.attack_modifier(table.combat,_active(work.ability,work,side),
                 _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den)
         is_struggle = move == table.struggle
-        typ = jnp.where(is_struggle, 0, table.type[move])
+        typ = jnp.where(is_struggle, 0, typ)
         own_types = _active(work.types, work, side)
         foe_types = _active(work.types, work, foe)
         num = table.type_num[typ, foe_types[:, 0]] * table.type_num[typ, foe_types[:, 1]]
@@ -371,7 +384,6 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         phase1_num,phase1_den = (1,1)
         if table.absorption is not None:
             phase1_num,phase1_den = absorb.damage_phase1(table.absorption,typ,_active(work.volatile,work,side))
-        power = table.power[move]
         if table.combat is not None:
             power = traits.base_power(table.combat,_active(work.ability,work,foe),typ,power)
         damage = m.gen3_damage(level=_active(work.level, work, side), power=power,
@@ -400,7 +412,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         if table.absorption is not None:
             # TryHit follows accuracy/Protect but precedes Substitute. Field
             # weather and self effects do not run a Pokemon-targeted TryHit.
-            targets_mon = table.power[move] > 0
+            targets_mon = power > 0
             if table.effects is not None:
                 targets_mon |= table.effects.status[move] != m.NONE
             absorbed = absorb.try_hit(table.absorption,_active(work.ability,work,foe),move,typ,

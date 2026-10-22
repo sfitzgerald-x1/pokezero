@@ -34,7 +34,8 @@ def from_metadata(metadata):
     # Gen 3 thaw uses the move's original catalog type, not its dynamic type:
     # Hidden Power Fire and Fire Weather Ball do NOT thaw the target.
     fire_thaws = jnp.asarray([bool(row and row["source_type"] == "Fire"
-        and row["category"] != "Status") for row in rows])
+        and row["category"] != "Status" and not name.startswith("hiddenpower"))
+        for name,row in zip(vocab["moves"],rows)])
     return AbsorptionTable(flag("abilities","waterabsorb"),flag("abilities","voltabsorb"),
         flag("abilities","flashfire"),jnp.asarray(vocab["types"].index("water")),
         jnp.asarray(vocab["types"].index("electric")),jnp.asarray(vocab["types"].index("fire")),

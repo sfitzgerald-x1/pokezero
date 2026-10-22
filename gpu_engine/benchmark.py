@@ -51,7 +51,8 @@ def load_bound_pool(pool_path):
     # ctime is deliberately excluded: unlinking a stable open inode changes it.
     with np.load(io.BytesIO(payload),allow_pickle=False) as archive:
         metadata = json.loads(archive["metadata_utf8"].tobytes())
-        fields = ("species","level","types","stats","moves","pp","item","ability")
+        fields = ("species","level","types","stats","moves","pp","item","ability",
+                  "hidden_power_type","hidden_power_power")
         pool = {name:archive[name] for name in fields}
     return pool, metadata, hashlib.sha256(payload).hexdigest()
 

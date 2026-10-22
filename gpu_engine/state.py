@@ -17,6 +17,9 @@ LEECH_SEED = 4  # volatile bit 2; opposite singles slot receives the drain
 class BattleState(NamedTuple):
     species: jax.Array             # [B,2,6]
     level: jax.Array               # [B,2,6]
+    hidden_power_type: jax.Array   # [B,2,6], Pokemon's derived type, not alias
+    hidden_power_power: jax.Array  # [B,2,6], derived from accepted pool IVs
+    happiness: jax.Array           # [B,2,6], Showdown team-object default 255
     types: jax.Array               # [B,2,6,2]; type IDs require the pool vocabulary
     stats: jax.Array               # [B,2,6,6]: HP,Atk,Def,SpA,SpD,Spe
     hp: jax.Array                  # [B,2,6]
@@ -62,7 +65,9 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
     keys = jax.vmap(jax.random.fold_in, in_axes=(None, 0))(
         jax.random.PRNGKey(seed), jnp.arange(b, dtype=jnp.uint32))
     return BattleState(
-        species=mon(), level=mon(), types=jnp.zeros((b, 2, 6, 2), jnp.int32),
+        species=mon(), level=mon(), hidden_power_type=mon(),
+        hidden_power_power=jnp.full((b,2,6),70,jnp.int32),
+        happiness=jnp.full((b,2,6),255,jnp.int32), types=jnp.zeros((b, 2, 6, 2), jnp.int32),
         stats=jnp.zeros((b, 2, 6, 6), jnp.int32), hp=mon(), max_hp=mon(),
         status=mon(), status_counter=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
         pp=jnp.zeros((b, 2, 6, 4), jnp.int32), disabled=jnp.zeros((b, 2, 6, 4), jnp.bool_),

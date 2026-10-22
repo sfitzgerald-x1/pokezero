@@ -26,7 +26,7 @@ class AbsorptionTests(unittest.TestCase):
         self.meta = {"vocabulary":{"moves":self.moves,"abilities":self.abilities,"types":self.types},
             "moves":[None]+[{"source_type":typ,"category":cat} for typ,cat in
                 [("Water","Special"),("Electric","Special"),("Electric","Status"),
-                 ("Fire","Special"),("Fire","Status"),("Normal","Special"),("Water","Status"),
+                 ("Fire","Special"),("Fire","Status"),("Fire","Special"),("Water","Status"),
                  ("Normal","Status"),("???","Physical"),("Normal","Status")]]}
         self.table = a.from_metadata(self.meta)
 

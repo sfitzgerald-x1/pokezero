@@ -48,7 +48,8 @@ class BenchmarkTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/"pool.npz"
             replacement = Path(directory)/"replacement.npz"
-            fields = ("species","level","types","stats","moves","pp","item","ability")
+            fields = ("species","level","types","stats","moves","pp","item","ability",
+                      "hidden_power_type","hidden_power_power")
             for destination,value in ((path,1),(replacement,2)):
                 np.savez(destination,**{name:np.array([value]) for name in fields},
                     metadata_utf8=np.frombuffer(json.dumps({"test":value}).encode(),dtype=np.uint8))
