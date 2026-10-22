@@ -68,7 +68,11 @@ def policy_opponent_distribution(
     observation = view.observation(category_vocab=category_vocab, dex=dex)
     observation.validate(view.spec)
     legal = {index for index, enabled in enumerate(observation.legal_action_mask) if enabled}
-    if (set() if waiting else set(indices)) != legal:
+    if view.action_contract is not None:
+        if (indices != view.action_contract.native
+            or legal != set(view.action_contract.policy)):
+            raise PolicyOpponentViewError("observer/canonical action contract changed")
+    elif (set() if waiting else set(indices)) != legal:
         raise PolicyOpponentViewError("native and sampled-request legal surfaces differ")
     if len(indices) == 1:
         return (1.0,)
@@ -84,6 +88,11 @@ def policy_opponent_distribution(
         raise PolicyOpponentViewError("invalid own-policy probability row")
     if any(probabilities[index] != 0 for index in range(ACTION_COUNT) if index not in legal):
         raise PolicyOpponentViewError("own-policy row contains illegal action mass")
+    if view.action_contract is not None:
+        try:
+            return view.action_contract.gather(probabilities)
+        except ValueError as error:
+            raise PolicyOpponentViewError(str(error)) from error
     weights = tuple(probabilities[index] for index in indices)
     total = math.fsum(weights)
     if not math.isfinite(total) or total <= 0:

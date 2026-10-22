@@ -1020,10 +1020,11 @@ jobs:
             tests.test_policy_opponent_refusal_note \
             tests.test_policy_opponent_public_trap \
             tests.test_policy_opponent_trap_boundary \
+            tests.test_policy_request_observer \
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
             tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 94 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 100 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"

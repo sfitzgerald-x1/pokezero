@@ -767,3 +767,36 @@ remain unresolved. No guard relaxation, policy-mass dropping, historical-cause
 claim, historical roster recovery or new strength panel follows from this
 source repair. The original zero-completed attempt remains a failure with its
 precise originating state unknown.
+
+### Server-private maybe-trap request contract (October 22, 2026)
+
+This is an explicit observer-contract extension beyond the Side-only/public
+proof above. The server-private Rust observer may inspect sampled ability
+internally to reproduce **only** the request bit that pinned Showdown supplies.
+No opposing ability label, team, moves, item or stats is exported to the policy.
+In normal Gen3 random battles, grounded actors facing Dugtrio receive
+`maybeTrapped` in both Arena Trap and Sand Veil worlds. Gen3 Magnet Pull uses an
+actual `AnyMaybeTrapPokemon` handler, not the speculative `FoeMaybeTrapPokemon`
+handler: Steel actors facing Magneton receive the bit in Magnet Pull worlds,
+not Sturdy worlds. Flying/Levitate and non-Steel exclusions stay unchanged.
+
+The frozen canonical checkpoint masks switches on `maybeTrapped`, although the
+protocol still offers them. The typed contract separately checks protocol
+offers R, canonical policy support P, and native arms N. N must equal **exactly
+P or R**, with identical move slots and all-or-none live bench slots. Native
+extra switches retain exactly zero weight; the entire original policy row's
+mass is preserved. No positive mass is dropped or conditioned, and no epsilon,
+resampling or new rechoice policy is introduced. Both Rust and Python retain
+their ordinary exact-equality guards outside this certified case.
+
+Proofs bind the exact public history, current active entry and observed own
+state/request. Unicode-safe domain-separated digests are integrity bindings,
+not authentication or evidence of semantic truth. Relevant ability/type or
+Transform uncertainty fails closed for the current entry; a later switch
+clears that entry's taint. Hard locks, root-only confirmed trap latches,
+forced/WAIT and no-living-bench boundaries retain their established paths.
+Unsupported changed trapping abilities/formats remain refused. This does not
+qualify generic Gen3 fidelity, recover the original lost failure state, or
+authorize replay/continuation of any stopped scientific roster. New strength
+work still requires exact-head model and real champion verification plus a
+fresh reviewed entry; these authored tests are engineering evidence only.
