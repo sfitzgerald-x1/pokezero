@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`a5dc3e80dbbfa632…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`4784193cf4ebea81…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -345,6 +345,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1619 public Shadow Tag request knowledge, original branch | New `public_trap.rs` and `lib.rs`/`policy_request.rs`/`policy_bridge.rs`/`model.rs` plumbing bind per-invocation public evidence without relaxing native/private equality. Current source derivation only; historical sweeps and OPEN qualification remain unchanged | `6ba6d3b0692a8c5f…` |
 | #1619 integration with #1618 | Ordinary main merge preserves both independently reviewed constructor tests. Runtime is unchanged from the public-knowledge branch; hashed test bytes differ. Historical measurements and OPEN qualification remain unchanged | `d32cc4649b006400…` |
 | Server-private maybe-trap request observer | New typed `request_observer.rs`, SHA-256 dependency, request/bridge plumbing and tests separate protocol offers, frozen policy support and native arms. Only the legitimate request bit crosses the observer boundary; no extra opposing private facts or positive policy mass are discarded. Historical receipts and OPEN qualification remain unchanged | `a5dc3e80dbbfa632…` |
+| #1622 post-switch Trace public reveal | `events.rs` renders an instruction-local Trace-to-Shadow-Tag reveal after a normal/replacement switch, with both current participants alive and the copied ability matching the current foe. Strict request equality remains unchanged; phazing is outside this repair. Both native consumers were rebuilt in an isolated runtime. Authored fixtures establish the omission, not the stopped game's historical cause or strength. Historical receipts and OPEN qualification remain unchanged | `4784193cf4ebea81…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
