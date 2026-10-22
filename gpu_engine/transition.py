@@ -414,7 +414,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         if table.sleep_talk is not None:
             called,usable=talking.choose(table.sleep_talk,_active(work.moves,work,side),
                 _active(work.pp,work,side),sleep_talk_draws[rows,side])
-            executes=(_active(work.status,work,side)==m.SLP) & usable
+            executes=((_active(work.status,work,side)==m.SLP) & usable
+                & (_active(work.encore_counter,work,side)==0)
+                & (_active(work.choice_move,work,side)==0))
             move=jnp.where(sleep_usable,called,move)
             acts &= ~sleep_usable | executes
             placeholders += (acts & sleep_usable).astype(jnp.int32)

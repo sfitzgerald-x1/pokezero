@@ -16,14 +16,15 @@ class EncoreTests(unittest.TestCase):
     def setUp(self):
         import jax
         import jax.numpy as j
-        from gpu_engine import baton,effects,encore,mechanics,pressure,pursuit,sleep_talk,transition
+        from gpu_engine import baton,effects,encore,items,mechanics,pressure,pursuit,sleep_talk,transition
         from gpu_engine.state import empty_state
         self.jax,self.j,self.m,self.enc,self.tr,self.empty=jax,j,mechanics,encore,transition,empty_state
         self.names=["_none","encore","tackle","splash","protect","struggle","sleeptalk",
             "solarbeam","focuspunch","batonpass","pursuit"]
         types=["_none","normal","fighting","flying","poison","ground","rock","bug","ghost",
             "steel","fire","water","grass","electric","psychic","ice","dragon","dark"]
-        meta={"vocabulary":{"moves":self.names,"types":types,"abilities":["_none","pressure"]},
+        meta={"vocabulary":{"moves":self.names,"types":types,"abilities":["_none","pressure"],
+            "items":["_none","choiceband"],"species":["_none"]},
             "moves":[None]+[{"flags":{"protect":1,"bypasssub":name=="encore",
                 "failencore":name in {"encore","struggle"},"charge":name=="solarbeam",
                 "nosleeptalk":name in {"sleeptalk","focuspunch"}}} for name in self.names[1:]]}
@@ -32,7 +33,7 @@ class EncoreTests(unittest.TestCase):
             j.ones(n,j.int32).at[10].set(17),j.ones(n,bool).at[10].set(False),j.full(n,100),
             j.ones(n,bool),j.zeros(n,j.int32).at[4].set(3),j.ones((18,18),j.int32),
             j.ones((18,18),j.int32),j.array(5),effects=effects.from_metadata(meta),
-            pressure=pressure.from_metadata(meta),pursuit=pursuit.from_metadata(meta),
+            items=items.from_metadata(meta),pressure=pressure.from_metadata(meta),pursuit=pursuit.from_metadata(meta),
             baton=baton.from_metadata(meta),sleep_talk=sleep_talk.from_metadata(meta),encore=self.profile)
 
     def live(self,batch=1,*,slow=False):
@@ -128,6 +129,17 @@ class EncoreTests(unittest.TestCase):
         a=self.play(s).state
         self.assertEqual((int(a.encore_move[0,1,0]),int(a.last_move[0,1,0])),(6,6))
         self.assertEqual(a.pp[0,1,0].tolist(),[10,10,10,9])
+        self.assertEqual(a.hp[0,:,0].tolist(),[10000,10000])
+
+    def test_first_choice_sleep_talk_calls_but_locked_second_use_does_not(self):
+        s=self.live();s=s._replace(moves=s.moves.at[0,0,0].set(self.j.array([6,2,7,8])),
+            item=s.item.at[0,0,0].set(1),status=s.status.at[0,0,0].set(self.m.SLP),
+            status_counter=s.status_counter.at[0,0,0].set(5))
+        a=self.play(s).state
+        self.assertLess(int(a.hp[0,1,0]),10000);self.assertEqual(int(a.choice_move[0,0,0]),6)
+        b=self.play(a).state
+        self.assertEqual(int(b.hp[0,1,0]),int(a.hp[0,1,0]))
+        self.assertEqual(b.pp[0,0,0].tolist(),[8,10,10,10])
 
     def test_before_move_failure_preserves_last_and_does_not_spend_pp(self):
         s=self.live();s=s._replace(status=s.status.at[0,0,0].set(self.m.SLP),
@@ -184,7 +196,12 @@ class EncoreTests(unittest.TestCase):
         self.assertEqual(cases["repeat"]["after"]["duration"],1)
         self.assertEqual((cases["switch"]["after"]["duration"],cases["switch"]["after"]["last"]),(0,""))
         self.assertEqual(cases["asleep"]["initial"]["last"],"sleeptalk")
+        self.assertFalse(cases["asleep"]["called"]);self.assertEqual(cases["asleep"]["hpLoss"],0)
         self.assertEqual(cases["forced_protect"]["initial"]["move"],"protect")
+        self.assertEqual(cases["fallback"]["initial"]["last"],"struggle")
+        self.assertEqual(cases["fallback"]["initial"]["pp"],[0,64,16,16])
+        self.assertEqual(cases["fallback"]["initial"]["duration"],0)
+        self.assertEqual(cases["choice"],dict(firstHit=True,secondHit=False,pp=14,lock="sleeptalk"))
 
 
 if __name__=="__main__":unittest.main()
