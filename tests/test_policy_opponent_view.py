@@ -272,5 +272,139 @@ class PolicyOpponentViewTest(unittest.TestCase):
                     feature_masks=ObservationFeatureMasks(transition_token_budget=0))
 
 
+class ReplaySummaryReuseTest(unittest.TestCase):
+    @staticmethod
+    def source():
+        from pokezero.randbat import (Gen3RandbatSource, Gen3RandbatVariant,
+            Gen3RandbatSpeciesUniverse, RandbatSourceMetadata)
+        universes = {}
+        for species, moves, ability in (("Snorlax", ("bodyslam", "shadowball"), "Immunity"),
+                ("Starmie", ("surf",), "Natural Cure"),
+                ("Swampert", ("surf", "earthquake"), "Torrent")):
+            variant = Gen3RandbatVariant(species, "fixture", species, "fixture", 80,
+                moves, ability, "Leftovers")
+            universes[species.casefold()] = Gen3RandbatSpeciesUniverse(species, 80, (variant,))
+        return Gen3RandbatSource(RandbatSourceMetadata("gen3randombattle", 3,
+            None, None, None, "fixture"), universes)
+
+    @staticmethod
+    def query(**overrides):
+        arguments = dict(format_id="gen3randombattle", species="Snorlax",
+            revealed_moves=(), revealed_ability=None, revealed_item=None,
+            ruled_out_abilities=(), ruled_out_items=())
+        arguments.update(overrides)
+        return arguments
+
+    def test_repeated_queries_are_reused_with_exact_keys_and_none(self):
+        from unittest.mock import patch
+        from pokezero.policy_opponent_view import _ReplaySummarySource
+        source = self.source()
+        cached = _ReplaySummarySource(source)
+        changes = ({}, {"format_id": None}, {"format_id": ""}, {"species": "missing"},
+            {"species": "snorlax"}, {"revealed_moves": ("bodyslam", "shadowball")},
+            {"revealed_moves": ("shadowball", "bodyslam")}, {"revealed_ability": "Immunity"},
+            {"revealed_ability": ""}, {"revealed_item": "Leftovers"}, {"revealed_item": ""},
+            {"ruled_out_abilities": ("Immunity",)}, {"ruled_out_items": ("Leftovers",)})
+        with patch.object(type(source), "summarize", wraps=source.summarize) as summarize:
+            for change in changes:
+                query = self.query(**change)
+                expected = source.summarize(**query)
+                before = summarize.call_count
+                self.assertEqual(cached.summarize(**query), expected)
+                self.assertEqual(cached.summarize(**query), expected)
+                self.assertEqual(summarize.call_count, before + 1)
+        self.assertEqual(len(cached.cache), len(changes))
+
+    def test_cache_values_and_all_returned_nested_data_are_isolated(self):
+        from pokezero.policy_opponent_view import _ReplaySummarySource
+        source = self.source()
+        cached = _ReplaySummarySource(source)
+        first = cached.summarize(**self.query())
+        expected = source.summarize(**self.query())
+        first.candidate_variants[0]["moves"].append("secret")
+        first.source_metadata["source_hash"] = "changed"
+        second = cached.summarize(**self.query())
+        self.assertEqual(second, expected)
+        second.candidate_variants[0]["moves"].clear()
+        second.source_metadata.clear()
+        self.assertEqual(cached.summarize(**self.query()), expected)
+        self.assertEqual(_ReplaySummarySource(source).summarize(**self.query()), expected)
+
+    def test_exceptions_are_not_cached_and_non_tuple_queries_keep_source_behavior(self):
+        from unittest.mock import patch
+        from pokezero.policy_opponent_view import _ReplaySummarySource
+        source = self.source()
+        cached = _ReplaySummarySource(source)
+        with patch.object(type(source), "summarize", side_effect=TypeError("original failure")) as call:
+            for _ in range(2):
+                with self.assertRaisesRegex(TypeError, "original failure"):
+                    cached.summarize(**self.query())
+            self.assertEqual(call.call_count, 2)
+        self.assertEqual(cached.cache, {})
+        query = self.query(revealed_moves=["bodyslam"])
+        with patch.object(type(source), "summarize", wraps=source.summarize) as call:
+            self.assertEqual(cached.summarize(**query), source.summarize(**query))
+            self.assertEqual(cached.summarize(**query), source.summarize(**query))
+            self.assertEqual(call.call_count, 4)
+        self.assertEqual(cached.cache, {})
+
+    def test_full_views_equal_canonical_replay_with_item_narrowing_and_off_script_reveals(self):
+        from unittest.mock import patch
+        from pokezero.belief import PublicBattleBeliefEngine
+        source = self.source()
+        canonical = PublicBattleBeliefEngine.from_events
+        vocab = build_category_vocabulary((*VOCAB.tokens, "belief:possible_ability:torrent",
+            "belief:possible_move:earthquake", "belief:possible_move:surf",
+            "belief:possible_move:thunderbolt", "move:thunderbolt"))
+        histories = (LINES, (*LINES, "|-item|p1a: Swampert|Leftovers"),
+            (*LINES, "|move|p1a: Swampert|Thunderbolt|p2a: Snorlax",
+             "|-damage|p2a: Snorlax|90/100", "|upkeep", "|turn|2"))
+        for lines in histories:
+            for narrow in (False, True):
+                with self.subTest(lines=lines, item_narrowing=narrow):
+                    masks = ObservationFeatureMasks(transition_token_budget=0,
+                        item_belief_narrowing=narrow)
+                    cached = view(lines, set_source=source, feature_masks=masks)
+                    with patch("pokezero.policy_opponent_view._rebuild_policy_belief", side_effect=canonical):
+                        baseline = view(lines, set_source=source, feature_masks=masks)
+                    self.assertEqual(cached.row_inputs(dex=_dex()), baseline.row_inputs(dex=_dex()))
+                    self.assertEqual(tensor_fields(cached.observation(category_vocab=vocab, dex=_dex())),
+                        tensor_fields(baseline.observation(category_vocab=vocab, dex=_dex())))
+                    self.assertIs(cached.materialization.belief_engine.set_source, source)
+
+    def test_replays_do_not_share_queries_and_custom_sources_or_subclasses_are_not_cached(self):
+        from unittest.mock import patch
+        from pokezero.policy_opponent_view import _ReplaySummarySource
+        source = self.source()
+        with patch.object(type(source), "summarize", wraps=source.summarize) as call:
+            view(set_source=source)
+            first = call.call_count
+            view(set_source=source)
+            self.assertEqual(call.call_count, 2 * first)
+        subclass = type("SourceSubclass", (type(source),), {})
+        child = subclass(source.metadata, source.universes)
+        for other in (FakeSetSource(), child):
+            with patch("pokezero.policy_opponent_view._ReplaySummarySource", wraps=_ReplaySummarySource) as wrapper:
+                result = view(set_source=other)
+                wrapper.assert_not_called()
+                self.assertIs(result.materialization.belief_engine.set_source, other)
+
+    def test_original_source_is_restored_even_when_ingestion_raises(self):
+        from unittest.mock import patch
+        from pokezero.belief import PublicBattleBeliefEngine
+        from pokezero.policy_opponent_view import _rebuild_policy_belief, _ReplaySummarySource
+        source = self.source()
+        observed = []
+        def fail(engine, event):
+            observed.append(engine)
+            self.assertIsInstance(engine.set_source, _ReplaySummarySource)
+            raise ValueError("authored ingestion failure")
+        with patch.object(PublicBattleBeliefEngine, "ingest_event", fail):
+            with self.assertRaisesRegex(ValueError, "authored ingestion failure"):
+                _rebuild_policy_belief([object()], format_id="gen3randombattle",
+                    set_source=source, item_belief_narrowing=False)
+        self.assertIs(observed[0].set_source, source)
+
+
 if __name__ == "__main__":
     unittest.main()
