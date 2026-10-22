@@ -192,6 +192,48 @@ pub(crate) fn root_visit_lock(
 }
 
 impl Tree {
+    /// Only the own-policy model core uses this entry. A waiting opponent's
+    /// action was committed before our Baton Pass request; root slow-uturn
+    /// exploration must not turn that saved action into a fresh policy choice.
+    /// Keep the real native Move/Struggle (not its policy-side null mapping),
+    /// and never mutate the State or the ordinary incumbent root constructor.
+    pub(crate) fn from_root_with_policy_wait(state: &State, opponent_side_one: bool) -> PyResult<Self> {
+        let mut tree = Self::from_root(state)?;
+        let (own, other) = if opponent_side_one {
+            (&state.side_one, &state.side_two)
+        } else {
+            (&state.side_two, &state.side_one)
+        };
+        if other.force_switch && !own.force_switch && !own.baton_passing
+            && own.get_active_immutable().hp > 0
+        {
+            let (one, two) = state.get_all_options();
+            let options = if opponent_side_one { one } else { two };
+            use poke_engine::choices::Choices;
+            use poke_engine::engine::state::PokemonVolatileStatus;
+            let matches_saved = options.len() == 1 && match options[0] {
+                MoveChoice::Move(index) => own.switch_out_move_second_saved_move != Choices::NONE
+                    && own.get_active_immutable().moves[&index].id == own.switch_out_move_second_saved_move,
+                MoveChoice::Struggle => own.switch_out_move_second_saved_move == Choices::STRUGGLE,
+                MoveChoice::None => own.switch_out_move_second_saved_move == Choices::NONE
+                    || own.volatile_statuses.contains(&PokemonVolatileStatus::MUSTRECHARGE),
+                MoveChoice::Switch(_) => false,
+            };
+            if !matches_saved {
+                return Err(PyValueError::new_err("policy opponent: ambiguous committed wait options"));
+            }
+            let root = &mut tree.decisions[0];
+            if opponent_side_one {
+                root.s1_stats = make_stats(own, &options);
+                root.s1_options = options;
+            } else {
+                root.s2_stats = make_stats(own, &options);
+                root.s2_options = options;
+            }
+        }
+        Ok(tree)
+    }
+
     /// Root decision node from the ROOT option surface (`root_get_all_options`
     /// — force-trapped / slow-uturn aware, matching the one-ply core).
     pub(crate) fn from_root(state: &State) -> PyResult<Self> {
@@ -1369,6 +1411,110 @@ mod model_abort_seam_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_policy_wait_preserves_commitment_and_ordinary_roots_in_both_seats() {
+        use poke_engine::choices::Choices;
+        use poke_engine::state::PokemonMoveIndex;
+        for opponent_side_one in [true, false] {
+            for committed in [true, false] {
+                let mut state = parse_state(include_str!("test_fixtures/minimal.state").trim()).unwrap();
+                let (waiting, passing) = if opponent_side_one {
+                    (&mut state.side_one, &mut state.side_two)
+                } else {
+                    (&mut state.side_two, &mut state.side_one)
+                };
+                passing.pokemon.pkmn[1] = passing.get_active_immutable().clone();
+                passing.force_switch = true;
+                passing.baton_passing = true;
+                waiting.slow_uturn_move = committed;
+                waiting.switch_out_move_second_saved_move = if committed {
+                    waiting.get_active_immutable().moves.m0.id
+                } else { Choices::NONE };
+                let before = state.serialize();
+                let ordinary = Tree::from_root(&state).unwrap();
+                let policy = Tree::from_root_with_policy_wait(&state, opponent_side_one).unwrap();
+                let (original_options, options, passer_original, passer_options) = if opponent_side_one {
+                    (&ordinary.decisions[0].s1_options, &policy.decisions[0].s1_options,
+                     &ordinary.decisions[0].s2_options, &policy.decisions[0].s2_options)
+                } else {
+                    (&ordinary.decisions[0].s2_options, &policy.decisions[0].s2_options,
+                     &ordinary.decisions[0].s1_options, &policy.decisions[0].s1_options)
+                };
+                assert_eq!(options, &vec![if committed { MoveChoice::Move(PokemonMoveIndex::M0) } else { MoveChoice::None }]);
+                if committed { assert!(original_options.len() > 1); }
+                assert_eq!(passer_original, passer_options);
+                assert_eq!(before, state.serialize());
+                assert_eq!(Tree::from_root(&state).unwrap().decisions[0].s1_options,
+                           ordinary.decisions[0].s1_options);
+                // Both replacing seats remain simultaneous switch choices.
+                if opponent_side_one { state.side_one.force_switch = true; }
+                else { state.side_two.force_switch = true; }
+                let ordinary = Tree::from_root(&state).unwrap();
+                let policy = Tree::from_root_with_policy_wait(&state, opponent_side_one).unwrap();
+                assert_eq!(ordinary.decisions[0].s1_options, policy.decisions[0].s1_options);
+                assert_eq!(ordinary.decisions[0].s2_options, policy.decisions[0].s2_options);
+            }
+        }
+    }
+
+    #[test]
+    fn own_policy_wait_refuses_unresolvable_saved_move_without_changing_state() {
+        use poke_engine::choices::Choices;
+        pyo3::Python::initialize();
+        for opponent_side_one in [true, false] {
+            let mut state = parse_state(include_str!("test_fixtures/minimal.state").trim()).unwrap();
+            let (waiting, passing) = if opponent_side_one {
+                (&mut state.side_one, &mut state.side_two)
+            } else { (&mut state.side_two, &mut state.side_one) };
+            passing.pokemon.pkmn[1] = passing.get_active_immutable().clone();
+            passing.force_switch = true;
+            passing.baton_passing = true;
+            waiting.slow_uturn_move = true;
+            waiting.switch_out_move_second_saved_move = Choices::FIREBLAST;
+            let before = state.serialize();
+            assert!(Tree::from_root_with_policy_wait(&state, opponent_side_one).is_err());
+            assert_eq!(before, state.serialize());
+            // Legacy root behavior remains available only to the legacy path.
+            assert!(Tree::from_root(&state).is_ok());
+        }
+    }
+
+    #[test]
+    fn own_policy_wait_struggle_recharge_and_ordinary_controls() {
+        use poke_engine::choices::Choices;
+        use poke_engine::engine::state::PokemonVolatileStatus;
+        for opponent_side_one in [true, false] {
+            let initial = parse_state(include_str!("test_fixtures/minimal.state").trim()).unwrap();
+            let ordinary = Tree::from_root(&initial).unwrap();
+            let policy = Tree::from_root_with_policy_wait(&initial, opponent_side_one).unwrap();
+            assert_eq!(ordinary.decisions[0].s1_options, policy.decisions[0].s1_options);
+            assert_eq!(ordinary.decisions[0].s2_options, policy.decisions[0].s2_options);
+            for recharge in [true, false] {
+                let mut state = initial.clone();
+                let (waiting, passing) = if opponent_side_one {
+                    (&mut state.side_one, &mut state.side_two)
+                } else { (&mut state.side_two, &mut state.side_one) };
+                passing.pokemon.pkmn[1] = passing.get_active_immutable().clone();
+                passing.force_switch = true;
+                waiting.slow_uturn_move = true;
+                if recharge {
+                    waiting.volatile_statuses.insert(PokemonVolatileStatus::MUSTRECHARGE);
+                    waiting.switch_out_move_second_saved_move = waiting.get_active_immutable().moves.m0.id;
+                } else {
+                    waiting.get_active().moves.m0.pp = 0;
+                    waiting.get_active().moves.m1.pp = 0;
+                    waiting.switch_out_move_second_saved_move = Choices::STRUGGLE;
+                }
+                let before = state.serialize();
+                let tree = Tree::from_root_with_policy_wait(&state, opponent_side_one).unwrap();
+                let options = if opponent_side_one { &tree.decisions[0].s1_options }
+                    else { &tree.decisions[0].s2_options };
+                assert_eq!(options, &vec![if recharge { MoveChoice::None } else { MoveChoice::Struggle }]);
+                assert_eq!(before, state.serialize());
+            }
+        }
+    }
 
     // -----------------------------------------------------------------
     // Model-prior APPLY: seat routing, arity refusal, and the guarantee

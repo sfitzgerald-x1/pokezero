@@ -1020,16 +1020,18 @@ jobs:
             tests.test_policy_opponent_refusal_note \
             tests.test_policy_opponent_public_trap \
             tests.test_policy_opponent_trace_projection \
+            tests.test_policy_opponent_pending_commitment \
             tests.test_policy_opponent_trap_boundary \
             tests.test_policy_request_observer \
             tests.test_engine_world.BattleSpecConstructionTests.test_double_faint_replacement_marks_both_sides_in_either_seat \
             tests.test_engine_world.BattleSpecConstructionTests.test_double_faint_materialization_reaches_native_switch_request_not_wait \
             tests.test_engine_world.BattleSpecConstructionTests.test_replacement_phase_does_not_promote_a_living_opponent \
             tests.test_engine_world.BattleSpecConstructionTests.test_replacement_flags_match_pinned_showdown_faint_path \
+            tests.test_engine_world.BatonPassBoundaryTests \
             tests.test_policy_opponent_native.NativePolicyOpponentSearchTest \
             tests.test_policy_opponent_native.NativeCanonicalOwnPolicyTest -v 2>&1 \
             | tee /tmp/policy-opponent.log
-          grep -qE 'Ran 105 tests' /tmp/policy-opponent.log
+          grep -qE 'Ran 117 tests' /tmp/policy-opponent.log
           grep -qE '^OK$' /tmp/policy-opponent.log
           if grep -qE '^OK \(.*skipped=' /tmp/policy-opponent.log; then
             echo "::error::the own-policy opponent contracts must not skip"

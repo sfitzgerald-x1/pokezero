@@ -1715,6 +1715,8 @@ class BatonPassBoundaryTests(unittest.TestCase):
 
     def _bp_payload(self):
         payload = _payload(self.dex, selfRequestKind="force-switch", pendingBatonPassSides=["p1"])
+        payload["pendingBatonPassOpponentAction"] = {
+            "turn": 7, "passer": "p1", "opponent": "p2", "state": "PENDING"}
         starmie_max = _maxhp(_STARMIE, self.dex)
         # Passer (Swampert) is leaving; Starmie is the live bench recipient.
         payload["sides"]["p1"]["pokemon"][1]["condition"] = f"{starmie_max}/{starmie_max}"
@@ -1722,8 +1724,8 @@ class BatonPassBoundaryTests(unittest.TestCase):
         return payload
 
     def test_self_pending_baton_pass_constructs_and_populates_saved_move_field(self) -> None:
-        # NOTE: the gen3 engine does not resolve the saved move after the pass
-        # (probe-confirmed); this pins field population + determinism only.
+        # Field population/determinism only; the separate authored native and
+        # Showdown continuation checks exercise execution and one PP charge.
         import random as _random
 
         world = battle_spec_from_payload(
