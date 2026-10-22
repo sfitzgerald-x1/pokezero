@@ -100,6 +100,8 @@ def write_initialized_checkpoint(path: Path, reference: Path | None) -> None:
 class ArmResult:
     label: str
     games: int = 0
+    attempted_games: int = 0
+    incomplete_games: int = 0
     decisions: int = 0
     plies: int = 0
     turns: int = 0
@@ -111,6 +113,8 @@ class ArmResult:
     teams: float = 0.0
     extra: dict[str, float] = field(default_factory=dict)
     game_seconds: list[float] = field(default_factory=list)
+    attempt_seconds: list[float] = field(default_factory=list)
+    outcomes: list[dict] = field(default_factory=list)
 
     @property
     def games_per_second(self) -> float:
@@ -173,7 +177,7 @@ def _play(env, policies, seed, format_id, max_rounds, arm: ArmResult) -> None:
     `step` for BOTH arms keeps the totals symmetric; the engine arm's internal
     counters supply the finer split.
     """
-    rngs = {player: random.Random(f"{seed}:{player}".__hash__() & 0xFFFFFFFF) for player in ("p1", "p2")}
+    rngs = {player: random.Random(f"{seed}:{player}") for player in ("p1", "p2")}
 
     started = time.perf_counter()
     env.reset(seed=seed, format_id=format_id)
@@ -198,7 +202,13 @@ def _play(env, policies, seed, format_id, max_rounds, arm: ArmResult) -> None:
 
     terminal = env.terminal()
     arm.turns += int(terminal.turn_count) if terminal is not None else 0
-    arm.games += 1
+    arm.attempted_games += 1
+    arm.games += int(terminal is not None)
+    arm.incomplete_games += int(terminal is None)
+    arm.outcomes.append(dict(seed=seed,completed=terminal is not None,decision_rounds=rounds,
+        turns=int(terminal.turn_count) if terminal is not None else None,
+        stop_reason='TERMINAL' if terminal is not None else
+            'DECISION_ROUND_CAP' if rounds>=max_rounds else 'NO_REQUESTED_PLAYERS'))
 
 
 def _random_legal_policy():
@@ -254,8 +264,11 @@ def run_engine_arm(args, policy_factory, masks, observation_spec) -> ArmResult:
         wall_started = time.perf_counter()
         for index in range(args.games):
             game_started = time.perf_counter()
+            before = arm.games
             _play(env, policies, args.seed_start + index, args.format_id, args.max_decision_rounds, arm)
-            arm.game_seconds.append(time.perf_counter() - game_started)
+            elapsed = time.perf_counter() - game_started
+            arm.attempt_seconds.append(elapsed)
+            if arm.games>before:arm.game_seconds.append(elapsed)
         arm.wall = time.perf_counter() - wall_started
     finally:
         env.close()
@@ -304,8 +317,11 @@ def run_showdown_arm(args, policy_factory, masks, observation_spec) -> ArmResult
         wall_started = time.perf_counter()
         for index in range(args.games):
             game_started = time.perf_counter()
+            before = arm.games
             _play(env, policies, args.seed_start + index, args.format_id, args.max_decision_rounds, arm)
-            arm.game_seconds.append(time.perf_counter() - game_started)
+            elapsed = time.perf_counter() - game_started
+            arm.attempt_seconds.append(elapsed)
+            if arm.games>before:arm.game_seconds.append(elapsed)
         arm.wall = time.perf_counter() - wall_started
     finally:
         env.close()
@@ -341,11 +357,14 @@ def report(engine: ArmResult, showdown: ArmResult, args) -> None:
 
     print(f"\n{'':34s} {'engine':>14s} {'showdown':>14s} {'speedup':>10s}")
     print("-" * 78)
+    print(f"{'attempted / completed / incomplete':34s} {engine.attempted_games}/{engine.games}/{engine.incomplete_games} "
+          f"{showdown.attempted_games}/{showdown.games}/{showdown.incomplete_games}")
+    print('Games/sec counts actual terminal completions over all attempt wall time; unfinished attempts are retained.')
     print(f"{'games / sec':34s} {engine.games_per_second:14.3f} {showdown.games_per_second:14.3f} "
           f"{ratio(showdown.games_per_second, engine.games_per_second):>10s}")
     print(f"{'decisions / sec':34s} {engine.decisions_per_second:14.1f} {showdown.decisions_per_second:14.1f} "
           f"{ratio(showdown.decisions_per_second, engine.decisions_per_second):>10s}")
-    print(f"{'sec / game (mean)':34s} {engine.wall / max(engine.games,1):14.4f} "
+    print(f"{'wall sec / completion':34s} {engine.wall / max(engine.games,1):14.4f} "
           f"{showdown.wall / max(showdown.games,1):14.4f} "
           f"{ratio(engine.wall / max(engine.games,1), showdown.wall / max(showdown.games,1)):>10s}")
     median_e = statistics.median(engine.game_seconds) if engine.game_seconds else 0.0
@@ -354,8 +373,8 @@ def report(engine: ArmResult, showdown: ArmResult, args) -> None:
     print(f"{'env sec / game (policy excluded)':34s} {engine.env_seconds / max(engine.games,1):14.4f} "
           f"{showdown.env_seconds / max(showdown.games,1):14.4f} "
           f"{ratio(engine.env_seconds / max(engine.games,1), showdown.env_seconds / max(showdown.games,1)):>10s}")
-    print(f"{'decisions / game':34s} {engine.decisions / max(engine.games,1):14.1f} "
-          f"{showdown.decisions / max(showdown.games,1):14.1f}")
+    print(f"{'decisions / attempt':34s} {engine.decisions / max(engine.attempted_games,1):14.1f} "
+          f"{showdown.decisions / max(showdown.attempted_games,1):14.1f}")
     print(f"{'turns / game':34s} {engine.turns / max(engine.games,1):14.1f} "
           f"{showdown.turns / max(showdown.games,1):14.1f}")
 
@@ -392,6 +411,9 @@ def report(engine: ArmResult, showdown: ArmResult, args) -> None:
         print(f"  {'unattributed':44s} {arm.other:8.3f}s  {arm.other / arm.wall * 100:5.1f}%  "
               f"{arm.per_decision_us(arm.other):8.1f} us")
 
+    if engine.incomplete_games or showdown.incomplete_games:
+        print('\nNo 16k-game projection: at least one arm has incomplete attempts.')
+        return
     engine_16k = 16000 / engine.games_per_second if engine.games_per_second else float("inf")
     showdown_16k = 16000 / showdown.games_per_second if showdown.games_per_second else float("inf")
     print(f"\nEXTRAPOLATION — 16k-game k=0 smoke, single worker, this machine")
@@ -421,6 +443,8 @@ def main() -> int:
                         help="Architecture source for --init-checkpoint.")
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args()
+    if args.games<1 or args.max_decision_rounds<1:parser.error('positive games and round cap required')
+    if args.json_out is not None and args.json_out.exists():parser.error('refusing to overwrite an existing result')
 
     if args.init_checkpoint is not None:
         write_initialized_checkpoint(args.init_checkpoint, args.init_reference)
@@ -478,6 +502,11 @@ def main() -> int:
         payload = {
             arm.label: {
                 "games": arm.games,
+                "attempted_games": arm.attempted_games,
+                "incomplete_games": arm.incomplete_games,
+                "outcomes": arm.outcomes,
+                "completed_game_seconds": arm.game_seconds,
+                "attempt_seconds": arm.attempt_seconds,
                 "decisions": arm.decisions,
                 "plies": arm.plies,
                 "wall_s": arm.wall,
@@ -498,8 +527,10 @@ def main() -> int:
             "format_id": args.format_id,
             "policy": args.policy_label,
             "transition_token_budget": 0,
+            "max_decision_rounds": args.max_decision_rounds,
+            "policy_rng": 'random.Random version2 string seed per seed/player, independent of PYTHONHASHSEED',
         }
-        args.json_out.write_text(json.dumps(payload, indent=2, sort_keys=True))
+        with args.json_out.open('x') as output:output.write(json.dumps(payload, indent=2, sort_keys=True))
         print(f"\nwrote {args.json_out}")
     return 0
 
