@@ -187,6 +187,58 @@ class NativeCanonicalOwnPolicyTest(NativePolicyOpponentSearchTest):
     observation_schema_version = "pokezero.observation.v4"
     transition_token_budget = 0
 
+    def test_public_shadow_tag_prefix_reaches_real_model_bridge(self):
+        """Authored public reveal through NativeLeafModel, not a strength test.
+
+        Keep fixture identities/encoder bindings intact. The subject's active
+        is assigned Shadow Tag and an explicit public ability reveal; no
+        default-ability inference or private sampled ability is the proof.
+        """
+        for side, original in self.perspective_positions.items():
+            with self.subTest(subject_side=side):
+                position = dict(original)
+                ctx = json.loads(position["ctx"])
+                subject_index = 0 if side == "side_one" else 1
+                subject = "p1" if subject_index == 0 else "p2"
+                state_sides = position["state_str"].split("/")
+                party = state_sides[subject_index].split("=")
+                active = position["actives"][subject_index]
+                fields = party[active].split(",")
+                fields[8] = fields[9] = "SHADOWTAG"
+                party[active] = ",".join(fields)
+                state_sides[subject_index] = "=".join(party)
+                position["state_str"] = "/".join(state_sides)
+                inputs = json.loads(position["row_inputs"])
+                self.assertEqual(inputs["format_id"], "gen3randombattle")
+                prefix = ["|gametype|singles", "|gen|3",
+                          "|tier|[Gen 3] Random Battle", "|start"]
+                for index, slot in enumerate(("p1", "p2")):
+                    species = ctx[slot][position["actives"][index]]
+                    prefix.append(f"|switch|{slot}a: {species}|{species}, L80|100/100")
+                holder = ctx[subject][active]
+                prefix += ["|turn|1", f"|-ability|{subject}a: {holder}|Shadow Tag"]
+                seen = []
+
+                def provide(raw):
+                    payload = json.loads(raw)
+                    seen.append(payload)
+                    bundle = payload["native_request_bundle"]
+                    self.assertTrue(bundle["request"]["active"][0]["trapped"])
+                    self.assertTrue(bundle["native_action_indices"])
+                    self.assertTrue(all(index < 4 for index in bundle["native_action_indices"]))
+                    return [1.0] * len(bundle["native_action_indices"])
+
+                report = self.run_search(provide, position=position, max_depth=1,
+                                         policy_opponent_public_lines=prefix)
+                self.assertEqual(report["iterations"], 64)
+                self.assertGreater(len(seen), 0)
+                self.assertTrue(all(payload["public_branch_lines"] == [] for payload in seen))
+                seen.clear()
+                with self.assertRaisesRegex(ValueError, "native and private-knowledge legal surfaces differ"):
+                    self.run_search(provide, position=position, max_depth=1,
+                                    policy_opponent_public_lines=[])
+                self.assertEqual(seen, [], "missing public proof must refuse before policy inference")
+
     def test_full_policy_dispatches_canonical_own_head_in_both_seats(self):
         from types import SimpleNamespace
         from unittest.mock import patch
