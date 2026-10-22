@@ -194,10 +194,11 @@ def action_mask(state,table):
 
 
 def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult:
-    """Static-shape two-action turn, with forced replacement as a pseudo-turn.
+    """Static-shape request: ordinary turn, pending residual, or replacement.
 
-    Actions must be integer [B,2]. Chance consumes the same fixed block per live
-    battle, independent of branches. Dead/invalid battles remain byte-identical.
+    Actions must be integer [B,2]. Ordinary requests draw a fixed chance block;
+    suspended-turn replacements retain it until residuals finish. Standalone
+    replacements do not tick an ordinary turn. Dead/invalid states stay identical.
     The ordinary turn integrates switches, priority/speed, status action gates,
     PP, confusion self-damage, Struggle recoil, static single-hit damage,
     major-status residuals and party exhaustion. Flinch uses volatile bit 0.
@@ -215,13 +216,21 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     valid = jnp.take_along_axis(action_mask(state,table), jnp.clip(actions, 0, 8)[..., None], axis=2)[..., 0]
     invalid = ~state.done & jnp.any(requested & (~valid | (actions < 0) | (actions > 8)), axis=1)
     live = ~state.done & ~invalid
+    resuming = live & state.pending_residual
     splits = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
     draws = jax.vmap(lambda key: jax.random.randint(key, (2, 12), 0,
         jnp.array([2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2], jnp.int32)))(splits[:, 1])
+    draws = jnp.where(resuming[:,None,None],state.residual_draws,draws)
+    # Replacement requests do not consume another ordinary-turn chance block.
+    # A separate counted fold-in distinguishes repeated hazard-KO entry ties.
+    entry_ties = jax.vmap(lambda key,count:jax.random.randint(
+        jax.random.fold_in(key,jnp.uint32(982451653)+count.astype(jnp.uint32)),(2,),0,2))(
+            state.keys,state.replacement_count)
     # nextTurn increments activeTurns before an ordinary request. switchIn
     # later resets an entrant to zero, excluding its entry turn's Speed Boost.
     age = state.active_turns + ((live & ~replacement)[:,None] & (active_hp > 0)).astype(jnp.int32)
-    work = initialize(state,table,eligible=live)._replace(keys=splits[:, 0],active_turns=age)
+    work = initialize(state,table,eligible=live)._replace(
+        keys=jnp.where(resuming[:,None],state.keys,splits[:,0]),active_turns=age)
     work = _lum_update(work,table,live)
     # All action speeds are frozen before ordinary switches. In Gen 3 a
     # switch-in weather change does not reorder the remaining move queue.
@@ -249,7 +258,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             pursuit_faint |= fainted
     bench = bench_indices(state.active)
     target = jnp.take_along_axis(bench, jnp.clip(actions - 4, 0, 4)[..., None], axis=2)[..., 0]
-    switch_first = jnp.where(speed[:,0] != speed[:,1],speed[:,1] > speed[:,0],draws[:,0,11] == 1).astype(jnp.int32)
+    switch_coin = jnp.where(resuming,entry_ties[:,0],draws[:,0,11])
+    switch_first = jnp.where(speed[:,0] != speed[:,1],speed[:,1] > speed[:,0],switch_coin == 1).astype(jnp.int32)
     switch_faint = jnp.zeros_like(state.done)
     installed = jnp.zeros_like(switches)
     callback_speed = jnp.zeros_like(speed)
@@ -289,7 +299,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         # not: their callbacks were resolved immediately above. Forced callback
         # order uses each incoming speed frozen at its own insertion.
         first_entry = jnp.where(callback_speed[:,0] != callback_speed[:,1],
-            callback_speed[:,1] > callback_speed[:,0],draws[:,1,10] == 1).astype(jnp.int32)
+            callback_speed[:,1] > callback_speed[:,0],
+            jnp.where(resuming,entry_ties[:,1],draws[:,1,10]) == 1).astype(jnp.int32)
         for order in range(2):
             side = jnp.where(order == 0,first_entry,1-first_entry)
             continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
@@ -538,17 +549,26 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(spikes=work.spikes.at[rows,foe].set(jnp.where(
                 acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
+    # Gen 3 action-phase faints request replacement BEFORE the residual action.
+    # All queued moves are already cancelled after a KO. Retain only that
+    # pending residual action until both slots are alive, including hazard-KO
+    # recovery chains. Post-residual replacement requests stay separate.
+    turn_context = live & (~replacement | state.pending_residual)
+    parties_alive = jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
+    active_alive = jnp.all(work.hp[rows[:,None],sides,work.active]>0,axis=1)
+    defer_residual = turn_context & parties_alive & ~active_alive
+    residual_ready = turn_context & parties_alive & active_alive
     # Snapshot before Wish(order7), weather(order8), and order10 handlers.
     end_speed = _speeds(work,table)
     if table.sustain is not None:
-        ordinary = live & ~replacement & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
+        ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         for side in range(2):
             wish = recovery.wish_residual(_active(work.hp,work,side),_active(work.max_hp,work,side),
                 work.wish_counter[:,side],eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,wish.hp),
                 wish_counter=work.wish_counter.at[:,side].set(wish.counter))
     if table.weather is not None:
-        ordinary = live & ~replacement & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
+        ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         weather,counter = climate.residual_clock(work.weather,work.weather_counter,eligible=ordinary)
         work = work._replace(weather=weather,weather_counter=counter)
         active_abilities = work.ability[rows[:,None],sides,work.active]
@@ -578,7 +598,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         seed_event = (event >= 4) & (event < 6)
         status_event = event >= 6
         battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)
-        eligible = live & ~replacement & battle_continues
+        eligible = residual_ready & battle_continues
         hp = _active(work.hp,work,side)
         if table.entry is not None:
             boosts = _active(work.boosts,work,side)
@@ -608,8 +628,12 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))
     work = work._replace(done=done, winner=jnp.where(done, winner, -1),
         turn=state.turn + (live & ~replacement).astype(jnp.int32),
+        pending_residual=defer_residual,
+        residual_draws=jnp.where(defer_residual[:,None,None],draws,jnp.zeros_like(draws)),
+        replacement_count=jnp.where(defer_residual,
+            jnp.where(resuming,state.replacement_count+1,0),0),
         forced_switch=(jnp.take_along_axis(work.hp, work.active[..., None], axis=2)[..., 0] <= 0) & alive)
-    ordinary = live & ~replacement
+    ordinary = turn_context & ~defer_residual
     work = work._replace(volatile=jnp.where(ordinary[:, None, None],
         work.volatile & jnp.uint32(~FLINCH & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
