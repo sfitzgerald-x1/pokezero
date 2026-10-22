@@ -109,6 +109,19 @@ class EncoreTests(unittest.TestCase):
         self.assertEqual(int(a.pp[0,1,0,2]),9)
         self.assertEqual(int(a.protect_counter[0,1,0]),0) # Already last queued action.
 
+    def test_step_dispatches_struggle_when_encore_slot_is_unusable(self):
+        s=self.live();s=s._replace(encore_move=s.encore_move.at[0,1,0].set(2),
+            encore_counter=s.encore_counter.at[0,1,0].set(2))
+        variants=(s._replace(pp=s.pp.at[0,1,0,0].set(0)),
+            s._replace(disabled=s.disabled.at[0,1,0,0].set(True)),
+            s._replace(choice_move=s.choice_move.at[0,1,0].set(3)))
+        for state in variants:
+            a=self.play(state,self.j.array([[1,0]])).state
+            self.assertEqual(int(a.last_move[0,1,0]),5)
+            self.assertEqual(a.pp[0,1,0].tolist(),state.pp[0,1,0].tolist())
+            self.assertLess(int(a.hp[0,0,0]),10000)
+            self.assertLess(int(a.hp[0,1,0]),10000)
+
     def test_sleep_talk_records_and_forces_caller_not_called_move(self):
         s=self.live();s=s._replace(last_move=s.last_move.at[0,1,0].set(6),
             status=s.status.at[0,1,0].set(self.m.SLP),status_counter=s.status_counter.at[0,1,0].set(5))

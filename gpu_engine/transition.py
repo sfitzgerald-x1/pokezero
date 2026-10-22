@@ -34,7 +34,7 @@ from . import secondary as secondaries
 from . import sleep_talk as talking
 from . import encore as repeating
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
-from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
+from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions, usable_moves
 
 
 class MoveTable(NamedTuple):
@@ -270,12 +270,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     saved_actor = jnp.where(live & state.pending_residual,state.queued_actor,-1)
     move_actions = jnp.where((saved_actor[:,None] == sides),state.queued_actions,actions)
     slot = jnp.clip(move_actions, 0, 3)
-    pp = state.pp[rows[:, None], sides, state.active]
-    choice = state.choice_move[rows[:,None],sides,state.active]
-    move_ids = state.moves[rows[:,None],sides,state.active]
-    usable = ((pp > 0) & ~state.disabled[rows[:, None], sides, state.active]
-              & ((choice[...,None] == 0) | (move_ids == choice[...,None])))
-    struggle = ~jnp.any(usable, axis=-1)
+    struggle = ~jnp.any(usable_moves(state), axis=-1)
     moves = state.moves[rows[:, None], sides, state.active, slot]
     moves = jnp.where(struggle, table.struggle, moves)
     pursuit_used = jnp.zeros_like(switches)

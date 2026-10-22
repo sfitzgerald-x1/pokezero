@@ -110,13 +110,12 @@ def bench_indices(active: jax.Array) -> jax.Array:
     return slots + (slots >= active[..., None])
 
 
-def legal_actions(state: BattleState) -> jax.Array:
-    """PP/disabled/resolved-trap/faint mask; other move restrictions are pending.
+def usable_moves(state: BattleState) -> jax.Array:
+    """Canonical PP/disabled/Choice/Encore mask BEFORE synthetic Struggle.
 
-    If no move is usable, move-slot0 means synthetic Struggle. A transition must
-    distinguish that case from selecting the ordinary move in slot0.
+    Both request construction and actual dispatch must use this exact surface.
+    Forced replacement and living-actor gates belong to their callers.
     """
-    active_hp = jnp.take_along_axis(state.hp, state.active[..., None], axis=2)[..., 0]
     pp = jnp.take_along_axis(state.pp, state.active[..., None, None], axis=2)[..., 0, :]
     disabled = jnp.take_along_axis(state.disabled, state.active[..., None, None], axis=2)[..., 0, :]
     move_ids = jnp.take_along_axis(state.moves,state.active[...,None,None],axis=2)[...,0,:]
@@ -125,6 +124,13 @@ def legal_actions(state: BattleState) -> jax.Array:
     encore=jnp.take_along_axis(state.encore_move,state.active[...,None],axis=2)[...,0]
     duration=jnp.take_along_axis(state.encore_counter,state.active[...,None],axis=2)[...,0]
     moves &= (duration[...,None]==0) | (move_ids==encore[...,None])
+    return moves
+
+
+def legal_actions(state: BattleState) -> jax.Array:
+    """Canonical move constraints plus Struggle, switches, traps and faint gates."""
+    active_hp = jnp.take_along_axis(state.hp, state.active[..., None], axis=2)[..., 0]
+    moves=usable_moves(state)
     moves = moves.at[..., 0].set(moves[..., 0] | ~jnp.any(moves, axis=-1))
     forced = state.forced_switch | (active_hp <= 0)
     moves &= ~forced[..., None]
