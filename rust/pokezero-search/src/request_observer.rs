@@ -144,17 +144,12 @@ pub(crate) fn observe(
     if format != Some("gen3randombattle") || !matches!(slot, "p1" | "p2") {
         return Err(refusal("requires normal Gen3 singles provenance"));
     }
-    if (arena_species && !matches!(holder.ability, Abilities::ARENATRAP | Abilities::SANDVEIL))
-        || (magnet_species && !matches!(holder.ability, Abilities::MAGNETPULL | Abilities::STURDY))
-        || (!arena_species && !magnet_species)
-    {
-        return Err(refusal("unsupported changed trapping ability"));
-    }
     let own_seat = usize::from(slot == "p2");
     let mut active = [String::new(), String::new()];
     let mut species = [String::new(), String::new()];
     let mut alive = [false; 2];
     let mut tainted = [false; 2];
+    let mut traced_trap = [false; 2];
     let (mut gen3, mut singles, mut tier, mut started) = (false, false, false, false);
     let mut turn = 0u32;
     for line in lines {
@@ -201,6 +196,7 @@ pub(crate) fn observe(
                 let seat = seat.ok_or_else(|| refusal("unknown active entry"))?;
                 active[seat] = field(2).into();
                 tainted[seat] = false;
+                traced_trap[seat] = false;
                 species[seat] = id(field(3).split(',').next().unwrap_or(""));
                 alive[seat] = field(4)
                     .split('/')
@@ -216,14 +212,28 @@ pub(crate) fn observe(
                 if active[seat] != field(2) {
                     return Err(refusal("stale ability owner"));
                 }
-                let expected = if seat == own_seat {
-                    current.ability
-                } else {
-                    holder.ability
-                };
+                let mon = if seat == own_seat { current } else { holder };
+                let expected = mon.ability;
+                // Pinned Gen3 Trace copies once on entry and publicly names
+                // both participants. Permit only the two trapping abilities
+                // whose server-private maybeTrapped semantics we implement.
+                // A later switch clears this proof; no reveal clears taint.
+                let trace = !traced_trap[seat]
+                    && mon.base_ability == Abilities::TRACE
+                    && matches!(species[seat].as_str(), "gardevoir" | "porygon2")
+                    && matches!(expected, Abilities::ARENATRAP | Abilities::MAGNETPULL)
+                    && id(field(3)) == id(&format!("{expected:?}"))
+                    && f.len() == 7
+                    && field(4) == "Trace"
+                    && field(5) == "[from] ability: Trace"
+                    && field(6) == format!("[of] {}", active[1 - seat])
+                    && !active[1 - seat].is_empty()
+                    && alive.iter().all(|b| *b);
                 // Ordinary current ability reveals are not changes. Past entry
                 // changes cannot contaminate a later switch-in or a sibling.
-                if id(field(3)) != id(&format!("{expected:?}")) || line.contains("[from]") {
+                if trace {
+                    traced_trap[seat] = true;
+                } else if id(field(3)) != id(&format!("{expected:?}")) || line.contains("[from]") {
                     tainted[seat] = true;
                 }
             }
@@ -268,6 +278,12 @@ pub(crate) fn observe(
             }
             _ => {}
         }
+    }
+    let native_holder = (arena_species
+        && matches!(holder.ability, Abilities::ARENATRAP | Abilities::SANDVEIL))
+        || (magnet_species && matches!(holder.ability, Abilities::MAGNETPULL | Abilities::STURDY));
+    if !native_holder && !traced_trap[1 - own_seat] {
+        return Err(refusal("unsupported changed trapping ability"));
     }
     if !started
         || turn == 0
@@ -584,6 +600,112 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn public_trace_proof_is_entry_bound_not_sampled_ability_truth() {
+        for tracer in ["GARDEVOIR", "PORYGON2"] {
+            for (source, ability, kind, name) in [
+                (
+                    "DUGTRIO",
+                    Abilities::ARENATRAP,
+                    PokemonType::GROUND,
+                    "Arena Trap",
+                ),
+                (
+                    "MAGNETON",
+                    Abilities::MAGNETPULL,
+                    PokemonType::STEEL,
+                    "Magnet Pull",
+                ),
+            ] {
+                let (mut state, mut lines) = fixture(tracer, ability, source, kind, ability);
+                state.side_one.get_active().base_ability = ability;
+                state.side_two.get_active().base_ability = Abilities::TRACE;
+                let reveal = format!(
+                    "|-ability|p2a: {tracer}|{name}|Trace|[from] ability: Trace|[of] p1a: {source}"
+                );
+                lines.insert(lines.len() - 1, reveal.clone());
+                let check = |state: &poke_engine::state::State, lines: &[String]| {
+                    observe(
+                        &state.side_one,
+                        &state.side_two,
+                        "p1",
+                        lines,
+                        Some("gen3randombattle"),
+                        false,
+                    )
+                };
+                assert!(check(&state, &lines).unwrap().is_some());
+                let omitted: Vec<_> = lines
+                    .iter()
+                    .filter(|line| **line != reveal)
+                    .cloned()
+                    .collect();
+                assert!(check(&state, &omitted).is_err());
+                for bad in [
+                    reveal.replace("[of] p1a:", "[of] p2a:"),
+                    reveal.replace("|Trace|[from]", "|Other|[from]"),
+                    reveal.replace("[from] ability: Trace", "[from] move: Role Play"),
+                    reveal.replace(name, "Levitate"),
+                    format!("{reveal}|unexpected"),
+                ] {
+                    let altered: Vec<_> = lines
+                        .iter()
+                        .map(|line| {
+                            if *line == reveal {
+                                bad.clone()
+                            } else {
+                                line.clone()
+                            }
+                        })
+                        .collect();
+                    assert!(check(&state, &altered).is_err(), "{bad}");
+                }
+                let mut wrong_base = state.clone();
+                wrong_base.side_two.get_active().base_ability = ability;
+                assert!(check(&wrong_base, &lines).is_err());
+                let mut duplicate = lines.clone();
+                duplicate.insert(duplicate.len() - 1, reveal.clone());
+                assert!(check(&state, &duplicate).is_err());
+                let mut tainted = lines.clone();
+                tainted.insert(
+                    tainted.len() - 2,
+                    format!("|move|p1a: {source}|Skill Swap|p2a: {tracer}"),
+                );
+                assert!(check(&state, &tainted).is_err());
+                let mut reentry = lines.clone();
+                reentry.push(format!("|switch|p2a: {tracer}|{tracer}, L100|100/100"));
+                assert!(check(&state, &reentry).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn own_public_trace_does_not_poison_native_holder_observation() {
+        let (mut state, mut lines) = fixture(
+            "DUGTRIO",
+            Abilities::ARENATRAP,
+            "GARDEVOIR",
+            PokemonType::PSYCHIC,
+            Abilities::ARENATRAP,
+        );
+        state.side_one.get_active().base_ability = Abilities::TRACE;
+        lines.insert(
+            lines.len() - 1,
+            "|-ability|p1a: GARDEVOIR|Arena Trap|Trace|[from] ability: Trace|[of] p2a: DUGTRIO"
+                .into(),
+        );
+        assert!(observe(
+            &state.side_one,
+            &state.side_two,
+            "p1",
+            &lines,
+            Some("gen3randombattle"),
+            false
+        )
+        .unwrap()
+        .is_some());
+    }
+
     #[test]
     fn unsupported_public_context_fails_closed_and_root_latch_does_not_survive_as_a_child_fact() {
         let (mut state, lines) = fixture(

@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`0e95d740bf324bd5…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`42ffa04f69a64d7d…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -347,6 +347,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Server-private maybe-trap request observer | New typed `request_observer.rs`, SHA-256 dependency, request/bridge plumbing and tests separate protocol offers, frozen policy support and native arms. Only the legitimate request bit crosses the observer boundary; no extra opposing private facts or positive policy mass are discarded. Historical receipts and OPEN qualification remain unchanged | `a5dc3e80dbbfa632…` |
 | #1622 post-switch Trace public reveal | `events.rs` renders an instruction-local Trace-to-Shadow-Tag reveal after a normal/replacement switch, with both current participants alive and the copied ability matching the current foe. Strict request equality remains unchanged; phazing is outside this repair. Both native consumers were rebuilt in an isolated runtime. Authored fixtures establish the omission, not the stopped game's historical cause or strength. Historical receipts and OPEN qualification remain unchanged | `4784193cf4ebea81…` |
 | Own-policy pending-action root | `model.rs` opts into a mode-specific `tree.rs` root that retains the exact saved Move/Struggle or genuine wait instead of re-expanding a committed opponent choice. Invalid commitments refuse, State bytes and ordinary root behavior remain unchanged, and authored both-seat controls pin the distinction. Historical sweeps and OPEN qualification remain unchanged | `0e95d740bf324bd5…` |
+| Public Trace maybe-trap observation | `request_observer.rs` accepts only an exact current-entry Trace reveal for Gardevoir/Porygon2 copying Arena Trap or Magnet Pull; missing, stale, conflicting and otherwise unsupported changes still refuse. `events.rs` emits those reveals from the actual switch-local ability transition. The rebuilt search extension passes authored source/request and child-branch controls; engine patches, historical receipts and OPEN qualification are unchanged. This is not a new frozen two-consumer sweep or a historical-cause claim | `42ffa04f69a64d7d…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -972,7 +973,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 17 |
 | `t1.hashed_input_files` | 102 |
-| `t1.head_fingerprint` | 0e95d740bf324bd5 |
+| `t1.head_fingerprint` | 42ffa04f69a64d7d |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -990,12 +991,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6586 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6594 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6658 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6666 |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |
