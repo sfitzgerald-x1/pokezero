@@ -201,13 +201,14 @@ def _play(env, policies, seed, format_id, max_rounds, arm: ArmResult) -> None:
         observations = dict(result.observations)
 
     terminal = env.terminal()
-    arm.turns += int(terminal.turn_count) if terminal is not None else 0
+    completed=terminal is not None and not terminal.capped
+    arm.turns += int(terminal.turn_count) if completed else 0
     arm.attempted_games += 1
-    arm.games += int(terminal is not None)
-    arm.incomplete_games += int(terminal is None)
-    arm.outcomes.append(dict(seed=seed,completed=terminal is not None,decision_rounds=rounds,
+    arm.games += int(completed)
+    arm.incomplete_games += int(not completed)
+    arm.outcomes.append(dict(seed=seed,completed=completed,decision_rounds=rounds,
         turns=int(terminal.turn_count) if terminal is not None else None,
-        stop_reason='TERMINAL' if terminal is not None else
+        stop_reason='TERMINAL' if completed else 'ENVIRONMENT_CAP' if terminal is not None else
             'DECISION_ROUND_CAP' if rounds>=max_rounds else 'NO_REQUESTED_PLAYERS'))
 
 
@@ -342,7 +343,11 @@ def run_showdown_arm(args, policy_factory, masks, observation_spec) -> ArmResult
 
 def report(engine: ArmResult, showdown: ArmResult, args) -> None:
     def ratio(a: float, b: float) -> str:
-        return f"{b / a:.2f}x" if a > 0 else "n/a"
+        return f"{b / a:.2f}x" if a is not None and b is not None and a > 0 else "n/a"
+
+    def completion_row(label,e,s):
+        number=lambda value:f'{value:14.4f}' if value is not None else f'{"n/a":>14s}'
+        print(f'{label:34s} {number(e)} {number(s)} {ratio(e,s):>10s}')
 
     print("\n" + "=" * 78)
     print("ENGINE-AS-ENVIRONMENT MICRO-BENCHMARK")
@@ -364,19 +369,17 @@ def report(engine: ArmResult, showdown: ArmResult, args) -> None:
           f"{ratio(showdown.games_per_second, engine.games_per_second):>10s}")
     print(f"{'decisions / sec':34s} {engine.decisions_per_second:14.1f} {showdown.decisions_per_second:14.1f} "
           f"{ratio(showdown.decisions_per_second, engine.decisions_per_second):>10s}")
-    print(f"{'wall sec / completion':34s} {engine.wall / max(engine.games,1):14.4f} "
-          f"{showdown.wall / max(showdown.games,1):14.4f} "
-          f"{ratio(engine.wall / max(engine.games,1), showdown.wall / max(showdown.games,1)):>10s}")
-    median_e = statistics.median(engine.game_seconds) if engine.game_seconds else 0.0
-    median_s = statistics.median(showdown.game_seconds) if showdown.game_seconds else 0.0
-    print(f"{'sec / game (median)':34s} {median_e:14.4f} {median_s:14.4f} {ratio(median_e, median_s):>10s}")
-    print(f"{'env sec / game (policy excluded)':34s} {engine.env_seconds / max(engine.games,1):14.4f} "
-          f"{showdown.env_seconds / max(showdown.games,1):14.4f} "
-          f"{ratio(engine.env_seconds / max(engine.games,1), showdown.env_seconds / max(showdown.games,1)):>10s}")
+    completion_row('all-attempt wall sec / completion',engine.wall/engine.games if engine.games else None,
+        showdown.wall/showdown.games if showdown.games else None)
+    median_e = statistics.median(engine.game_seconds) if engine.game_seconds else None
+    median_s = statistics.median(showdown.game_seconds) if showdown.game_seconds else None
+    completion_row('completed game sec (median)',median_e,median_s)
+    completion_row('all-attempt env sec / completion',engine.env_seconds/engine.games if engine.games else None,
+        showdown.env_seconds/showdown.games if showdown.games else None)
     print(f"{'decisions / attempt':34s} {engine.decisions / max(engine.attempted_games,1):14.1f} "
           f"{showdown.decisions / max(showdown.attempted_games,1):14.1f}")
-    print(f"{'turns / game':34s} {engine.turns / max(engine.games,1):14.1f} "
-          f"{showdown.turns / max(showdown.games,1):14.1f}")
+    completion_row('completed mean turns',engine.turns/engine.games if engine.games else None,
+        showdown.turns/showdown.games if showdown.games else None)
 
     print(f"\nPER-DECISION LATENCY (microseconds)")
     print(f"{'':34s} {'engine':>14s} {'showdown':>14s} {'speedup':>10s}")
