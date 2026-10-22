@@ -1,0 +1,116 @@
+"""Bounded request-observer checks, not playing-strength measurements."""
+from copy import deepcopy
+import json
+import os
+from pathlib import Path
+import subprocess
+import unittest
+
+from pokezero.policy_action_contract import PolicyActionContract, SCHEMA, public_binding, request_digest
+from pokezero.policy_opponent_view import public_policy_lines
+from pokezero.showdown import _legal_action_mask
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def case():
+    request = {"side": {"id": "p1", "pokemon": [
+        {"ident": "p1: Pikachu", "active": True, "condition": "100/100"},
+        {"ident": "p1: Snorlax", "active": False, "condition": "100/100"},
+        {"ident": "p1: Charizard", "active": False, "condition": "100/100"}]},
+        "active": [{"moves": [{"id": "tackle", "disabled": False},
+                               {"id": "growl", "disabled": False}], "maybeTrapped": True}]}
+    lines = ["|gametype|singles", "|gen|3", "|tier|[Gen 3] Random Battle", "|start",
+             "|switch|p1a: Pikachu|Pikachu, L80|100/100",
+             "|switch|p2a: Dugtrio|Dugtrio, L80|100/100", "|turn|1"]
+    receipt = {"schema": SCHEMA, "format_id": "gen3randombattle", "seat": "p1",
+               "public_binding": public_binding(lines), "request_sha256": request_digest(request),
+               "policy_action_indices": [0, 1],
+               "protocol_action_indices": [0, 1, 4, 5]}
+    return dict(request=request, receipt=receipt, public_lines=lines, slot="p1",
+                format_id="gen3randombattle", canonical_mask=_legal_action_mask(request))
+
+
+class PrivateRequestObserverTest(unittest.TestCase):
+    def test_exact_native_surfaces_and_zero_mass_conservation(self):
+        for native in ([0, 1], [5, 1, 4, 0]):
+            contract = PolicyActionContract.certify(**case(), native_indices=native)
+            row = [.25, .75, 0, 0, 0, 0, 0, 0, 0]
+            self.assertEqual(contract.gather(row), tuple(row[index] for index in native))
+            for bad in ([.25, .65, 0, 0, .1, 0, 0, 0, 0], [float("nan")] * 9, [0] * 9):
+                with self.assertRaises(ValueError):
+                    contract.gather(bad)
+        for native in ([0], [0, 1, 4], [0, 1, 2], [0, 1, 4, 5, 6], [0, 1, 1], [False, 1]):
+            with self.assertRaises(ValueError):
+                PolicyActionContract.certify(**case(), native_indices=native)
+
+    def test_every_observer_exception_is_bound_and_unsupported_choices_refuse(self):
+        mutations = (
+            lambda c: c.update(format_id="gen3customgame"),
+            lambda c: c.update(slot="p2"),
+            lambda c: c["public_lines"].append("|turn|2"),
+            lambda c: c["public_lines"].append("|switch|p2a: Dugtrio|Dugtrio, L80|100/100"),
+            lambda c: c["request"].update(forceSwitch=[True]),
+            lambda c: c["request"].update(wait=True),
+            lambda c: c["request"]["active"][0].update(trapped=True),
+            lambda c: c["request"]["active"][0].pop("maybeTrapped"),
+            lambda c: c["request"]["active"][0].update(maybeLocked=True),
+            lambda c: c["request"]["side"]["pokemon"][1].update(condition="0 fnt"),
+            lambda c: c["request"]["side"]["pokemon"][1].update(active=True),
+            lambda c: c["request"]["side"]["pokemon"][0].update(ident="p1: Raichu"),
+            lambda c: c["receipt"].update(policy_action_indices=[0]),
+            lambda c: c["receipt"].update(extra_private_truth="forbidden"),
+            lambda c: c.update(canonical_mask=(True, True, False, False, True, True, False, False, False)),
+        )
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                data = case(); mutate(data)
+                with self.assertRaises(ValueError):
+                    PolicyActionContract.certify(**data, native_indices=[0, 1])
+
+        stale = case()
+        stale["public_lines"].append("|-ability|p2a: Dugtrio|Arena Trap")
+        stale["receipt"]["public_binding"] = public_binding(stale["public_lines"])
+        stale["public_lines"][-1] = "|-ability|p2a: Dugtrio|Sand Veil"
+        with self.assertRaisesRegex(ValueError, "public-entry binding"):
+            PolicyActionContract.certify(**stale, native_indices=[0, 1])
+
+    @unittest.skipUnless(os.environ.get("POKEZERO_SHOWDOWN_ROOT"), "requires pinned Showdown")
+    def test_actual_source_projection_and_canonical_masks_in_both_seats(self):
+        output = subprocess.run([os.environ.get("POKEZERO_NODE_BINARY", "node"),
+            str(ROOT / "tests/policy_request_observer_oracle.cjs"), os.environ["POKEZERO_SHOWDOWN_ROOT"]],
+            capture_output=True, text=True, check=True, timeout=30)
+        result = json.loads(output.stdout)
+        self.assertFalse(result["scientific_measurement"])
+        self.assertEqual(len(result["rows"]), 20)
+        paired = {}
+        for row in result["rows"]:
+            with self.subTest(foe=row["foe"], ability=row["ability"], own=row["own"], seat=row["slot"]):
+                request = row["request"]
+                mask = _legal_action_mask(request)
+                maybe = request["active"][0].get("maybeTrapped", False)
+                expected = ((row["foe"] == "Dugtrio" and row["own"] == "Pikachu")
+                    or (row["ability"] == "Magnet Pull" and row["own"] == "Metagross"))
+                self.assertEqual(maybe, expected)
+                self.assertEqual([index for index, on in enumerate(mask) if on], [0] if maybe else [0, 4])
+                lines = public_policy_lines(row["lines"], hp_visibility={"p1": "exact", "p2": "exact"})
+                key = row["foe"], row["own"], row["slot"]
+                if key in paired:
+                    self.assertEqual(lines, paired[key], "alternate hidden ability changed public prefix")
+                else:
+                    paired[key] = lines
+                if maybe:
+                    receipt = {"schema": SCHEMA, "format_id": "gen3randombattle", "seat": row["slot"],
+                        "public_binding": public_binding(lines), "request_sha256": request_digest(request),
+                        "policy_action_indices": [0],
+                        "protocol_action_indices": [0, 4]}
+                    native = [0] if row["actual_trapped"] else [0, 4]
+                    contract = PolicyActionContract.certify(request=request, receipt=receipt,
+                        native_indices=native, canonical_mask=mask, public_lines=lines,
+                        slot=row["slot"], format_id="gen3randombattle")
+                    self.assertEqual(contract.gather([1., 0, 0, 0, 0, 0, 0, 0, 0]), tuple(1. if i == 0 else 0. for i in native))
+
+
+if __name__ == "__main__":
+    unittest.main()
