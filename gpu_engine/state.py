@@ -42,7 +42,11 @@ class BattleState(NamedTuple):
     active_turns: jax.Array        # [B,2], ordinary turns begun since last entry
     trapped: jax.Array             # [B,2], resolved trap state, not ability logic
     forced_switch: jax.Array       # [B,2]
-    pending_residual: jax.Array    # [B], action-phase KO waits for replacement
+    baton_pass: jax.Array          # [B,2], living direct-Baton switch cause
+    queued_actor: jax.Array        # [B], saved opposing action; -1 means none
+    queued_actions: jax.Array      # [B,2], original ordinary move-slot requests
+    queued_stall: jax.Array        # [B,2], old counters for the saved action
+    pending_residual: jax.Array    # [B], suspended action turn waits for entry
     residual_draws: jax.Array      # [B,2,12], original ordinary-turn chance block
     replacement_count: jax.Array   # [B], tie stream within a suspended turn
     spikes: jax.Array              # [B,2]
@@ -81,6 +85,8 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         entry_pending=jnp.zeros((b,2),jnp.bool_),
         active_turns=side(),
         trapped=jnp.zeros((b, 2), jnp.bool_), forced_switch=jnp.zeros((b, 2), jnp.bool_),
+        baton_pass=jnp.zeros((b,2),jnp.bool_),queued_actor=jnp.full((b,),-1,jnp.int32),
+        queued_actions=side(),queued_stall=side(),
         pending_residual=jnp.zeros((b,),jnp.bool_),
         residual_draws=jnp.zeros((b,2,12),jnp.int32),replacement_count=battle(),
         spikes=side(), wish_counter=side(),weather=battle(), weather_counter=battle(), turn=battle(),

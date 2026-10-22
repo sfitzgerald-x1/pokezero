@@ -26,6 +26,7 @@ from . import sustain as recovery
 from . import damage_moves as special_hits
 from . import variable_moves as variable
 from . import pursuit as intercepts
+from . import baton as passing
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -51,6 +52,7 @@ class MoveTable(NamedTuple):
     damage_moves: special_hits.DamageMoveTable | None = None
     variable_moves: variable.VariableMoveTable | None = None
     pursuit: intercepts.PursuitTable | None = None
+    baton: passing.BatonTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -80,7 +82,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
         arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
         pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
-        variable.from_metadata(metadata),intercepts.from_metadata(metadata))
+        variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -236,7 +238,11 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     # switch-in weather change does not reorder the remaining move queue.
     speed = _speeds(work,table)
     switches = live[:, None] & requested & (actions >= 4)
-    slot = jnp.clip(actions, 0, 3)
+    # An interrupted direct Baton resumes the already chosen foe slot, never
+    # the ignored action supplied alongside the forced replacement request.
+    saved_actor = jnp.where(live & state.pending_residual,state.queued_actor,-1)
+    move_actions = jnp.where((saved_actor[:,None] == sides),state.queued_actions,actions)
+    slot = jnp.clip(move_actions, 0, 3)
     pp = state.pp[rows[:, None], sides, state.active]
     choice = state.choice_move[rows[:,None],sides,state.active]
     move_ids = state.moves[rows[:,None],sides,state.active]
@@ -279,12 +285,15 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         counter = work.status_counter[rows,side,old_active]
         work = work._replace(status_counter=work.status_counter.at[rows,side,old_active].set(
             jnp.where(do_switch & (cure | (old_status == m.TOX)),0,counter)))
+        work = passing.copy_to_recipient(work,side,target[rows,side],
+            eligible=do_switch & work.baton_pass[rows,side])
         for name in ("boosts","volatile","confusion_counter","protect_counter","substitute_hp","choice_move"):
             value = getattr(work,name)
             old = value[rows,side,old_active]
             gate = do_switch[:,None] if old.ndim == 2 else do_switch
             work = work._replace(**{name:value.at[rows,side,old_active].set(jnp.where(gate,0,old))})
         work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
+            baton_pass=work.baton_pass.at[rows,side].set(work.baton_pass[rows,side] & ~do_switch),
             forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])),
             active_turns=work.active_turns.at[rows,side].set(jnp.where(do_switch,0,work.active_turns[rows,side])))
         # insertChoice snapshots each incoming callback's Speed now; a later
@@ -320,6 +329,10 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     enduring = jnp.zeros_like(protected)
     # Stall lasts through the next ordinary turn unless refreshed by success.
     old_stall = work.protect_counter
+    saved_stall = jnp.where(state.pending_residual[:,None],state.queued_stall,
+        old_stall[rows[:,None],sides,work.active])
+    queued_actor = jnp.full_like(state.queued_actor,-1)
+    paused = jnp.zeros_like(live)
     work = work._replace(protect_counter=jnp.where(
         (live & ~replacement)[:,None,None],0,work.protect_counter))
     for order in range(2):
@@ -327,7 +340,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         foe = 1 - side
         move = moves[rows, side]
         chance = draws[rows, side]
-        eligible = (live & ~replacement & ~moves_cancelled & ~switches[rows, side]
+        move_context = ~replacement | (state.pending_residual & (saved_actor == side))
+        eligible = (live & move_context & ~paused & ~moves_cancelled & ~switches[rows, side]
             & ~pursuit_used[rows,side] & (_active(work.hp, work, side) > 0))
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
@@ -480,8 +494,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             # when the foe switched before move execution). A failed use or a
             # non-stalling turn lets the previous stall counter expire.
             stall = (acts & (effects.protect[move] | effects.endure[move])
-                & (order == 0) & ~switches[rows,foe])
-            count = _active(old_stall,work,side)
+                & (order == 0) & ~state.pending_residual & ~switches[rows,foe])
+            count = jnp.where(state.pending_residual,saved_stall[rows,side],_active(old_stall,work,side))
             stall &= stall_success(count,chance[:,8])
             protected = protected.at[rows,side].set(stall & effects.protect[move])
             enduring = enduring.at[rows,side].set(stall & effects.endure[move])
@@ -539,7 +553,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             locked = _active(work.choice_move,work,side)
             lock = (acts & ~is_struggle & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
             work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,move,locked)))
-        work = _lum_update(work,table,live & ~replacement)
+        work = _lum_update(work,table,live & move_context)
         if table.weather is not None:
             weather,counter = climate.set_move(work.weather,work.weather_counter,
                 table.weather.move_weather[move],eligible=acts)
@@ -549,15 +563,26 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(spikes=work.spikes.at[rows,foe].set(jnp.where(
                 acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
+        if table.baton is not None:
+            bench_alive = jnp.any(
+                (work.hp[rows,side] > 0) & (jnp.arange(6)[None,:] != work.active[rows,side,None]),axis=1)
+            passed = acts & table.baton.move[move] & (hp > 0) & bench_alive
+            work = work._replace(baton_pass=work.baton_pass.at[rows,side].set(
+                work.baton_pass[rows,side] | passed))
+            # Only a first ordinary action can leave an opposing action queued.
+            # A resumed Baton is already the final original action.
+            save_foe = passed & (order == 0) & ~state.pending_residual & ~switches[rows,foe]
+            queued_actor = jnp.where(save_foe,foe,queued_actor)
+            paused |= passed
     # Gen 3 action-phase faints request replacement BEFORE the residual action.
-    # All queued moves are already cancelled after a KO. Retain only that
-    # pending residual action until both slots are alive, including hazard-KO
-    # recovery chains. Post-residual replacement requests stay separate.
+    # A KO cancels queued moves; direct Baton retains at most one selected foe
+    # move. Both pause residuals, including hazard-KO recovery chains.
+    # Post-residual replacement requests stay separate.
     turn_context = live & (~replacement | state.pending_residual)
     parties_alive = jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
     active_alive = jnp.all(work.hp[rows[:,None],sides,work.active]>0,axis=1)
-    defer_residual = turn_context & parties_alive & ~active_alive
-    residual_ready = turn_context & parties_alive & active_alive
+    defer_residual = turn_context & parties_alive & (~active_alive | paused)
+    residual_ready = turn_context & parties_alive & active_alive & ~paused
     # Snapshot before Wish(order7), weather(order8), and order10 handlers.
     end_speed = _speeds(work,table)
     if table.sustain is not None:
@@ -629,10 +654,16 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     work = work._replace(done=done, winner=jnp.where(done, winner, -1),
         turn=state.turn + (live & ~replacement).astype(jnp.int32),
         pending_residual=defer_residual,
+        queued_actor=jnp.where(defer_residual,queued_actor,-1),
+        queued_actions=jnp.where((defer_residual & (queued_actor >= 0))[:,None],
+            jnp.where(resuming[:,None],state.queued_actions,actions),0),
+        queued_stall=jnp.where((defer_residual & (queued_actor >= 0))[:,None],saved_stall,0),
         residual_draws=jnp.where(defer_residual[:,None,None],draws,jnp.zeros_like(draws)),
         replacement_count=jnp.where(defer_residual,
             jnp.where(resuming,state.replacement_count+1,0),0),
-        forced_switch=(jnp.take_along_axis(work.hp, work.active[..., None], axis=2)[..., 0] <= 0) & alive)
+        forced_switch=((jnp.take_along_axis(work.hp, work.active[..., None], axis=2)[..., 0] <= 0)
+            | work.baton_pass) & alive,
+        baton_pass=work.baton_pass & ~done[:,None])
     ordinary = turn_context & ~defer_residual
     work = work._replace(volatile=jnp.where(ordinary[:, None, None],
         work.volatile & jnp.uint32(~FLINCH & 0xffffffff), work.volatile))
