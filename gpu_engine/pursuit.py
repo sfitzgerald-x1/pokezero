@@ -11,6 +11,7 @@ import jax.numpy as jnp
 from . import items as held
 from . import mechanics as m
 from . import pressure as pp_cost
+from . import critical as crits
 
 
 class PursuitTable(NamedTuple):
@@ -45,9 +46,12 @@ def intercept(state, side, slot, move, chance, table, *, eligible):
     if table.items is not None:
         attack_num,attack_den = held.attack_modifier(table.items,get(state.item,side,own),
             get(state.species,side,own),False)
+    critical=chance[:,4]==0
+    if table.critical is not None:
+        critical=crits.is_critical(table.critical,move,get(state.ability,foe,target),chance[:,4])
     damage = m.gen3_damage(level=get(state.level,side,own),power=80,
         attack=attack[:,3],defense=defense[:,4],attack_stage=attack_boosts[:,2],
-        defense_stage=defense_boosts[:,3],physical=False,critical=chance[:,4]==0,
+        defense_stage=defense_boosts[:,3],physical=False,critical=critical,
         attack_num=attack_num,attack_den=attack_den,
         stab=jnp.any(own_types==typ[:,None],axis=1),effectiveness_num=num,
         effectiveness_den=den,immune=num==0,roll=85+chance[:,5])
