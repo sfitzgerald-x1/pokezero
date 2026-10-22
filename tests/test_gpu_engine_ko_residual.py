@@ -118,6 +118,9 @@ class KOResidualTests(unittest.TestCase):
         self.assertEqual(data["hazards"],dict(before={**before,"weatherDuration":4},middle={**before,"weatherDuration":4},
             after={**after,"weatherDuration":3},recipient=350))
         self.assertEqual(data["recipient"],dict(before=dict(request="switch",wish=1,oldHP=0),after=dict(hp=1000,wish=False)))
+        self.assertEqual(data["suppressor"],dict(
+            before=dict(request="switch",hp=1000,wish=0,weatherDuration=4,turn=1),
+            after=dict(request="move",hp=938,wish=0,weatherDuration=3,turn=2)))
 
 
 if __name__=="__main__":unittest.main()

@@ -31,4 +31,11 @@ function recipientWish(){
  b.makeChoices(undefined,'switch 2');const after={hp:b.p2.active[0].hp,wish:!!b.p2.slotConditions[0].wish};
  b.destroy();return{before,after};
 }
-process.stdout.write(JSON.stringify({source:sourceWish(),hazards:sourceWish(true),recipient:recipientWish()}));
+function suppressorKO(){
+ const b=create(),p=b.p1.active[0],q=b.p2.active[0];p.hp=1000;
+ q.setAbility('airlock');b.field.setWeather('sandstorm',p,b.dex.moves.get('sandstorm'));
+ b.field.weatherState.duration=4;b.makeChoices('move 1','move 1');
+ const before=snapshot(b);b.makeChoices(undefined,'switch 2');const after=snapshot(b);
+ b.destroy();return{before,after};
+}
+process.stdout.write(JSON.stringify({source:sourceWish(),hazards:sourceWish(true),recipient:recipientWish(),suppressor:suppressorKO()}));

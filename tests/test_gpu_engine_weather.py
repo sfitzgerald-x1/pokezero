@@ -111,6 +111,11 @@ class WeatherTests(unittest.TestCase):
         s = self.live()._replace(weather=self.j.array([3]))
         s = s._replace(ability=s.ability.at[0,1,0].set(1),hp=s.hp.at[0,1,0].set(1))
         r = self.play(s,"surf")
+        # Action-phase KO suspends the turn before weather; replacing the
+        # suppressor then restores sand for this same turn's residual.
+        self.assertEqual(int(r.hp[0,0,0]),101)
+        self.assertTrue(bool(r.pending_residual[0]))
+        r = self.t.step(r,self.j.array([[0,4]]),self.table).state
         self.assertEqual(int(r.hp[0,0,0]),95)
         s = self.live()._replace(weather=self.j.array([3]))
         s = s._replace(ability=s.ability.at[0,1,1].set(1))
