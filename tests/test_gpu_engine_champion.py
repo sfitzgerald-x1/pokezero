@@ -82,3 +82,12 @@ class ChampionTests(unittest.TestCase):
             self.assertEqual(blob,b'original checkpoint bytes')
             self.assertEqual(digest,hashlib.sha256(blob).hexdigest())
             self.assertNotEqual(digest,self.m.snapshot(path)[1])
+
+    def test_forward_root_selection_requires_explicit_repeated_fixture(self):
+        from gpu_engine.benchmark_forward import root_indices
+        with self.assertRaises(ValueError):root_indices(1024,1024)
+        with self.assertRaises(ValueError):root_indices(100001,200000)
+        pairs=root_indices(1024,1024,fixture=True)
+        self.assertEqual(len(self.np.unique(pairs,axis=0)),512)
+        pairs=root_indices(8192,200000)
+        self.assertEqual(len(self.np.unique(pairs,axis=0)),8192)
