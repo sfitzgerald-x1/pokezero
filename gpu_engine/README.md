@@ -142,6 +142,18 @@ checks likewise supply no games-per-second result.
 
 ## Initial turn integration
 
+`observation.encode(state, table)` builds the handoff's placeholder observation
+on device for both seats: float32 `[B,2,23,132]`, int32 `[B,2,23,41]`, token
+types/attention masks and the table-backed legal-action mask. Sections are one
+field, six own mons, six opposing mons, nine actions and one tendency token;
+token type IDs are 0/1/2/3/5. Representative columns contain HP fractions, level,
+stats, boosts, PP, statuses, species/move/item/ability IDs, weather and legal flags.
+Unfilled columns remain zero. Switch actions use the current ordered bench.
+This is NOT the production v4 column/category mapping or belief encoder: opposing
+private state is visible and raw engine IDs are not champion vocabulary rows.
+It is only an encode/forward cost-shape workload, never strength/training input.
+No RNG or battle state is changed; no game-rate or encoder-parity claim follows.
+
 Explosion/Selfdestruct apply Gen 3's floor-halved defense after stat modifiers.
 Damp on either living active holder vetoes the move after PP; otherwise the
 user self-KOs even on a miss, Protect, Ghost immunity or Substitute. Action-phase
