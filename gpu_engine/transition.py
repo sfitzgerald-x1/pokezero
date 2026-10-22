@@ -28,6 +28,7 @@ from . import variable_moves as variable
 from . import pursuit as intercepts
 from . import baton as passing
 from . import phazing as dragging
+from . import linked_traps as linking
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -55,6 +56,7 @@ class MoveTable(NamedTuple):
     pursuit: intercepts.PursuitTable | None = None
     baton: passing.BatonTable | None = None
     phazing: dragging.PhazingTable | None = None
+    linked_traps: linking.TrapTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -85,7 +87,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
         pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
-        dragging.from_metadata(metadata))
+        dragging.from_metadata(metadata),linking.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -548,6 +550,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             locked = _active(work.choice_move,work,side)
             lock = (acts & ~is_struggle & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
             work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,move,locked)))
+        if table.linked_traps is not None:
+            work=linking.apply(work,side,move,table.linked_traps,eligible=acts & hit)
         work = _lum_update(work,table,live & move_context)
         if table.weather is not None:
             weather,counter = climate.set_move(work.weather,work.weather_counter,
@@ -649,6 +653,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 eligible=eligible & seed_event)
             work = work._replace(hp=_set_active(work.hp,work,side,drained.hp))
             work = work._replace(hp=_set_active(work.hp,work,foe,drained.recipient_hp))
+    work=linking.prune(work)
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))

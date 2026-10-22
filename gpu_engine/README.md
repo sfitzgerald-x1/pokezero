@@ -27,7 +27,7 @@ State has six party members per side; all fields are JAX arrays with a leading
 batch dimension. Types, status, items, abilities and moves require the eventual
 team pool's vocabulary. Bench actions enumerate party order excluding the
 active slot. Move0 represents synthetic Struggle only when no move is usable.
-The structural mask handles PP, Choice Band locking, externally resolved disabled/trapped flags,
+The structural mask handles PP, Choice Band locking, linked move traps, externally resolved disabled/trapped flags,
 forced replacement and fainted slots. Table-backed callers must use
 `transition.action_mask(state, table)`, which additionally resolves current active
 ability traps and is also used by the step validator and benchmark sampler.
@@ -40,8 +40,8 @@ Direct Baton Pass now suspends the original turn for a living forced switch,
 then resumes the already selected opposing move with its original chance block.
 It does not solicit a second action, re-sort two moves, or trigger Pursuit's
 voluntary-switch interception. Two queued Baton actions suspend separately.
-Supported transfer is seven boosts, Substitute HP, confusion counter and the
-singles Leech Seed flag; recipient HP/status/item/ability remain its own, and
+Supported transfer is seven boosts, Substitute HP, confusion counter, the
+singles Leech Seed flag and direct move-trap links; recipient HP/status/item/ability remain its own, and
 Flash Fire/Choice lock do not pass. This is not general volatile-copy support.
 Entry hazards still hit through Substitute: an entry KO cancels the saved move,
 then the existing replacement chain finishes before residuals. All moves remain
@@ -54,7 +54,15 @@ blocks Roar only, and a represented Ingrain root blocks dragging/voluntary
 switching (the Ingrain move itself remains a placeholder). Natural Cure and
 outgoing volatile cleanup share the ordinary switch path. Hazard KO suspends
 the original turn until a healthy replacement; incoming Lum/weather/Intimidate
-resolve at entry. Broader reflection, move traps and event effects remain pending.
+resolve at entry. Broader reflection, partial traps and event effects remain pending.
+
+Mean Look, Spider Web and Block now record the opposing owner's stable party
+index rather than setting an anonymous trapped flag. Protect/Substitute block
+them; Gen 3 Ghosts are not exempt. Baton transfers either linked end, including
+mutual traps; an ordinary switch, drag or faint severs the links. Re-entering
+with the same former owner cannot reactivate a stale trap. Ability traps remain
+separate and are recomputed from current active abilities. Partial-damage traps
+such as Wrap/Bind and broader volatile interactions remain placeholders.
 
 Bench choice extends the fixed ordinary chance block with one uniform [0,60)
 roll per seat from a dedicated fold-in. Since every possible living bench count
@@ -224,7 +232,7 @@ base power, not Attack or final damage. Arena Trap, Magnet Pull and Shadow Tag
 restrict voluntary switches through the current request mask; forced switches
 remain legal. Bench/fainted trappers do not bind, and Gen 3 does not give Ghosts
 or other Shadow Tag holders their later-generation exemptions. Direct Baton
-escapes these traps; move-based traps and their transfer links remain pending.
+escapes these ability traps; its direct move-trap links transfer as described above.
 
 Seismic Toss/Night Shade use level damage and Sonic Boom/Dragon Rage their fixed
 constants, retaining immunity, accuracy, Protect, Substitute and Endure while

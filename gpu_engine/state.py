@@ -42,6 +42,7 @@ class BattleState(NamedTuple):
     entry_pending: jax.Array       # [B,2], initial Ability Start not yet resolved
     active_turns: jax.Array        # [B,2], ordinary turns begun since last entry
     trapped: jax.Array             # [B,2], resolved trap state, not ability logic
+    trap_source: jax.Array         # [B,2,6], opposing party index; -1 unlinked
     forced_switch: jax.Array       # [B,2]
     baton_pass: jax.Array          # [B,2], living direct-Baton switch cause
     queued_actor: jax.Array        # [B], saved opposing action; -1 means none
@@ -87,6 +88,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         entry_pending=jnp.zeros((b,2),jnp.bool_),
         active_turns=side(),
         trapped=jnp.zeros((b, 2), jnp.bool_), forced_switch=jnp.zeros((b, 2), jnp.bool_),
+        trap_source=jnp.full((b,2,6),-1,jnp.int32),
         baton_pass=jnp.zeros((b,2),jnp.bool_),queued_actor=jnp.full((b,),-1,jnp.int32),
         queued_actions=side(),queued_stall=side(),
         pending_residual=jnp.zeros((b,),jnp.bool_),
@@ -120,6 +122,9 @@ def legal_actions(state: BattleState) -> jax.Array:
     bench_hp = jnp.take_along_axis(state.hp, bench_indices(state.active), axis=2)
     active_volatile=jnp.take_along_axis(state.volatile,state.active[...,None],axis=2)[...,0]
     rooted=(active_volatile & jnp.uint32(ROOTED))!=0
-    switches = (bench_hp > 0) & (~(state.trapped | rooted) | forced)[..., None]
+    source=jnp.take_along_axis(state.trap_source,state.active[...,None],axis=2)[...,0]
+    linked=(source>=0) & (source==state.active[:,::-1]) & (active_hp[:,::-1]>0)
+    # Gen 3 has no later-generation Ghost exemption for these move traps.
+    switches = (bench_hp > 0) & (~(state.trapped | rooted | linked) | forced)[..., None]
     mask = jnp.concatenate((moves, switches), axis=-1)
     return mask & ~state.done[:, None, None]
