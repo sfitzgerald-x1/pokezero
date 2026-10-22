@@ -118,6 +118,11 @@ from coverage counts. Cosmetic forms such as Unown-G retain distinct species IDs
 
 ## Damage and status core components
 
+Heal Bell cures living own-party major status and sleep bookkeeping, leaving
+confusion/other volatiles and the opposing party unchanged. Gen 3 Soundproof
+blocks each holder's cure, including the user; fainted party members are not
+cured. This is selected component support, not qualified move/game coverage.
+
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
 ordinary damage and pre-switch Pursuit, using the actual outgoing holder.
