@@ -1,7 +1,9 @@
 //! Correctness-first synchronous own-policy provider for native model search.
 //! The Python callback receives only a sampled OWN request plus PUBLIC branch
-//! events. Neither a complete engine State nor the other seat's private facts
-//! cross the boundary. Subject leaf/value/PUCT evaluation remains in model.rs.
+//! events. Neither a complete engine State nor extra opposing private facts
+//! cross the boundary. The server-private observer exports only the legitimate
+//! request bit, not the sampled ability that caused it. Subject leaf/value/PUCT
+//! evaluation remains in model.rs.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -293,9 +295,13 @@ impl PolicyOpponentBridge {
                 state.side_one.force_switch
             };
             // Complete PUBLIC root history plus this invocation's immutable
-            // branch suffix. No opposing sampled Side/ability enters proof.
+            // branch suffix. Only the separate server-private observer may
+            // inspect sampled ability; no extra truth enters policy payloads.
             let public_history: Vec<_> = self.root_public_lines.iter().chain(lines.iter()).cloned().collect();
-            let bundle = crate::policy_request::sampled_side_request_with_public_history(
+            let foe = if self.opponent_side_one { &state.side_two } else { &state.side_one };
+            let observation = crate::request_observer::observe(
+                &own,foe,slot,&public_history,self.format_id.as_deref(),parent.is_none())?;
+            let bundle = crate::policy_request::sampled_side_request_with_observation(
                 &own,
                 slot,
                 species,
@@ -307,6 +313,7 @@ impl PolicyOpponentBridge {
                 Some(&self.base_pp),
                 &public_history,
                 self.format_id.as_deref(),
+                observation.as_ref(),
             )
             .map_err(|error| {
                 Python::attach(|py| {
@@ -328,6 +335,11 @@ impl PolicyOpponentBridge {
                 });
                 error
             })?;
+            let zero_switch_positions: Vec<_> = if bundle.get("request_observer").is_some() {
+                bundle["native_action_indices"].as_array().expect("certified native map").iter()
+                    .enumerate().filter(|(_, index)| index.as_u64().is_some_and(|n| n >= 4))
+                    .map(|(position, _)| position).collect()
+            } else { Vec::new() };
             let payload = json!({"native_request_bundle": bundle, "public_branch_lines": lines,
                 "opponent_slot": slot})
             .to_string();
@@ -339,6 +351,9 @@ impl PolicyOpponentBridge {
             }
             let weights: Vec<f32> =
                 Python::attach(|py| self.callback.call1(py, (payload,))?.extract(py))?;
+            if zero_switch_positions.iter().any(|position| weights.get(*position).is_some_and(|w| *w != 0.0)) {
+                return Err(PyValueError::new_err("policy opponent: observer callback assigned nonzero switch mass"));
+            }
             ActionDistribution::new(&weights, options.len())
         })();
         self.policy_nanos

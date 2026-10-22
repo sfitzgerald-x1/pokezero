@@ -187,6 +187,80 @@ class NativeCanonicalOwnPolicyTest(NativePolicyOpponentSearchTest):
     observation_schema_version = "pokezero.observation.v4"
     transition_token_budget = 0
 
+    def test_server_private_maybe_trap_reaches_real_model_and_canonical_own_head(self):
+        """Both seats and hidden trap/free worlds; authored, not strength data."""
+        import subprocess
+        from pokezero.dex import load_showdown_dex_cached
+        from pokezero.local_showdown import DEFAULT_SHOWDOWN_ROOT
+        from pokezero.neural_policy import (category_vocab_from_model_config,
+            feature_masks_from_model_config, observation_spec_from_model_config)
+        from pokezero.policy_opponent import make_policy_opponent_callback
+        from pokezero.policy_opponent_view import build_policy_opponent_view_from_native_bundle, public_policy_lines
+        from pokezero.transitions_fold import FoldState
+        from test_policy_request_observer import native_case
+        from test_showdown import FakeSetSource
+        root = Path(__file__).resolve().parents[1]
+        rows = json.loads(subprocess.run([os.environ.get("POKEZERO_NODE_BINARY", "node"),
+            str(root / "tests/policy_request_observer_oracle.cjs"), str(DEFAULT_SHOWDOWN_ROOT)],
+            capture_output=True, text=True, check=True, timeout=30).stdout)["rows"]
+        dex = load_showdown_dex_cached(DEFAULT_SHOWDOWN_ROOT)
+        source = getattr(self, "champion_source", None) or FakeSetSource()
+        vocab = category_vocab_from_model_config(self.config, DEFAULT_SHOWDOWN_ROOT)
+        result = getattr(self, "champion_result", None) or SimpleNamespace(model_config=self.config, belief_set_source_hash=None)
+        for row in rows:
+            if row["own"] not in {"Pikachu", "Metagross"} or (row["foe"] == "Magneton" and row["own"] != "Metagross"):
+                continue
+            with self.subTest(foe=row["foe"], ability=row["ability"], own=row["own"], slot=row["slot"]):
+                actor = row["slot"]; subject = "p2" if actor == "p1" else "p1"
+                lines = public_policy_lines(row["lines"], hp_visibility={"p1":"exact", "p2":"exact"})
+                state = native_case(row)
+                # Two own moves force real own-head inference even in native
+                # trapped worlds; do not prove this only through singleton bypass.
+                state_sides = state.split("/")
+                for index in (0,1):
+                    fields = state_sides[index].split(","); fields[23] = "GROWL;false;64"
+                    state_sides[index] = ",".join(fields)
+                state = "/".join(state_sides)
+                bundle = json.loads(pokezero_search.sampled_policy_request(state, subject,
+                    [row["foe"], "Snorlax"], [row["foe"], "Snorlax"], {"tackle":56,"growl":64},
+                    public_lines=lines, format_id="gen3randombattle", request_observer=True))
+                view = build_policy_opponent_view_from_native_bundle(native_request_bundle=bundle,
+                    public_lines=lines, hp_visibility={"p1":"percentage","p2":"percentage"}, opponent_slot=subject,
+                    battle_id="authored-private-trap", battle_seed=701, format_id="gen3randombattle",
+                    set_source=source, spec=observation_spec_from_model_config(self.config),
+                    feature_masks=feature_masks_from_model_config(self.config))
+                ctx = {actor:[row["own"], "Snorlax"],subject:[row["foe"], "Snorlax"], "turn":1}
+                fold, _ = FoldState.initial(perspective_slot=subject).advance(lines)
+                position = {"state_str":state, "ctx":json.dumps(ctx), "self_side":"side_one" if subject == "p1" else "side_two",
+                    "actives":(0,0), "row_inputs":json.dumps(view.row_inputs(dex=dex)), "fold_state":fold.to_payload()}
+                provide = make_policy_opponent_callback(public_lines=lines,
+                    hp_visibility={"p1":"percentage","p2":"percentage"}, opponent_slot=actor,
+                    battle_id="authored-private-trap", battle_seed=701, format_id="gen3randombattle",
+                    set_source=source, model=self.python_model, result=result, category_vocab=vocab, dex=dex, device="cpu")
+                seen = []
+                def checked(raw):
+                    payload = json.loads(raw); weights = provide(raw)
+                    native = payload["native_request_bundle"]
+                    if "request_observer" in native:
+                        self.assertTrue(native["request"]["active"][0]["maybeTrapped"])
+                        self.assertTrue(all(w == 0. for i,w in zip(native["native_action_indices"],weights) if i >= 4))
+                    self.assertAlmostEqual(sum(weights),1.,places=6)
+                    seen.append(payload)
+                    return weights
+                report = self.run_search(checked,position=position,max_depth=2,policy_opponent_public_lines=list(lines))
+                self.assertEqual(report["iterations"],64)
+                self.assertGreater(report["policy_opponent_evals"],1)
+                self.assertTrue(seen)
+                self.assertTrue(any(p["public_branch_lines"] for p in seen), "no reached-child provider invocation")
+                expected = row["request"]["active"][0].get("maybeTrapped",False)
+                self.assertEqual("request_observer" in seen[0]["native_request_bundle"],expected)
+                if expected and not row["actual_trapped"]:
+                    # The native engine may execute switches in a free world,
+                    # but this checkpoint gives them zero probability.
+                    with self.assertRaisesRegex(ValueError,"nonzero switch mass"):
+                        self.run_search(lambda raw:[1.] * len(json.loads(raw)["native_request_bundle"]["native_action_indices"]),
+                            position=position,max_depth=1,policy_opponent_public_lines=list(lines))
+
     def test_public_shadow_tag_prefix_reaches_real_model_bridge(self):
         """Authored public reveal through NativeLeafModel, not a strength test.
 

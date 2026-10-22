@@ -124,6 +124,12 @@ pub(crate) fn observe(
     if !(arena_species || magnet_species || actual_trap) {
         return Ok(None);
     }
+    // Transform makes Showdown's knownType false. Its speculative trapping
+    // predicates may then differ even for native Flying/non-Steel types, so
+    // reject this unsupported context BEFORE deciding that no flag is needed.
+    if current.pre_transform.is_some() || holder.pre_transform.is_some() {
+        return Err(refusal("unsupported transformed trapping context"));
+    }
     let maybe = (arena_species && current.is_grounded())
         || (holder.ability == Abilities::ARENATRAP && current.is_grounded())
         || (holder.ability == Abilities::MAGNETPULL && current.has_type(&PokemonType::STEEL));
@@ -143,9 +149,6 @@ pub(crate) fn observe(
         || (!arena_species && !magnet_species)
     {
         return Err(refusal("unsupported changed trapping ability"));
-    }
-    if current.pre_transform.is_some() || holder.pre_transform.is_some() {
-        return Err(refusal("unsupported transformed trapping context"));
     }
     let own_seat = usize::from(slot == "p2");
     let mut active = [String::new(), String::new()];
@@ -368,7 +371,87 @@ impl MaybeTrap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use poke_engine::engine::state::MoveChoice;
+    use poke_engine::state::{PokemonIndex, PreTransform};
     use std::str::FromStr;
+    #[test]
+    fn unsupported_transformed_unknown_types_refuse_before_the_free_native_type_path() {
+        for (foe, ability, own, kind) in [
+            (
+                "MAGNETON",
+                Abilities::MAGNETPULL,
+                "PIKACHU",
+                PokemonType::ELECTRIC,
+            ),
+            (
+                "DUGTRIO",
+                Abilities::SANDVEIL,
+                "CHARIZARD",
+                PokemonType::FLYING,
+            ),
+        ] {
+            let (mut state, lines) = fixture(foe, ability, own, kind, Abilities::STATIC);
+            let snapshot = PreTransform::capture(state.side_one.get_active_immutable());
+            state.side_one.get_active().pre_transform = Some(Box::new(snapshot));
+            assert!(observe(
+                &state.side_one,
+                &state.side_two,
+                "p1",
+                &lines,
+                Some("gen3randombattle"),
+                true
+            )
+            .is_err());
+        }
+    }
+    #[test]
+    fn real_constructor_accepts_exact_policy_or_protocol_never_partial_native_sets() {
+        let (mut state, lines) = fixture(
+            "DUGTRIO",
+            Abilities::ARENATRAP,
+            "PIKACHU",
+            PokemonType::ELECTRIC,
+            Abilities::STATIC,
+        );
+        state.side_one.pokemon.pkmn[2] = state.side_one.get_active_immutable().clone();
+        state.side_one.pokemon.pkmn[2].id = FromStr::from_str("SQUIRTLE").unwrap();
+        let proof = observe(
+            &state.side_one,
+            &state.side_two,
+            "p1",
+            &lines,
+            Some("gen3randombattle"),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+        let names = ["Pikachu", "Snorlax", "Squirtle"].map(String::from);
+        let pp = [("ember".into(), 40), ("tackle".into(), 56)].into();
+        let policy = state.root_get_all_options().0;
+        let build = |options: &[MoveChoice]| {
+            crate::policy_request::sampled_side_request_with_observation(
+                &state.side_one,
+                "p1",
+                &names,
+                &names,
+                options,
+                &pp,
+                true,
+                false,
+                None,
+                &lines,
+                Some("gen3randombattle"),
+                Some(&proof),
+            )
+        };
+        assert!(build(&policy).is_ok());
+        let mut partial = policy.clone();
+        partial.push(MoveChoice::Switch(PokemonIndex::P1));
+        assert!(build(&partial).is_err());
+        partial.push(MoveChoice::Switch(PokemonIndex::P2));
+        assert!(build(&partial).is_ok());
+        assert!(build(&policy[..1]).is_err());
+    }
     #[test]
     fn canonical_utf8_domain_digests_match_python_including_unicode_and_escaping() {
         let lines = ["|player|p1|Pokémon 🐉".into(), "|turn|1".into()];

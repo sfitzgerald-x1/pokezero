@@ -1,7 +1,8 @@
 //! A sampled seat's PRIVATE request. The core accepts only that seat's Side;
 //! it cannot inspect the other seat's unrevealed ability, item, moves or stats.
-//! Native legal options are checked against this own-information surface, not
-//! used to disclose hidden trapping abilities through the policy's legal mask.
+//! A separate server-private observer may supply a typed, state-bound proof of
+//! stock Showdown's maybeTrapped bit. Protocol offers, frozen policy support and
+//! native options then have an explicit exact contract, never a mask intersection.
 
 use std::collections::{HashMap, HashSet};
 
@@ -123,6 +124,16 @@ pub(crate) fn sampled_side_request_with_public_history(
     side: &Side, slot: &str, species: &[String], order: &[String], options: &[MoveChoice],
     max_pp: &HashMap<String,i64>, root: bool, opponent_replacing: bool,
     base_pp: Option<&HashMap<String,i64>>, public_lines: &[String], format_id: Option<&str>,
+) -> PyResult<Value> {
+    sampled_side_request_with_observation(side,slot,species,order,options,max_pp,root,
+        opponent_replacing,base_pp,public_lines,format_id,None)
+}
+
+pub(crate) fn sampled_side_request_with_observation(
+    side: &Side, slot: &str, species: &[String], order: &[String], options: &[MoveChoice],
+    max_pp: &HashMap<String,i64>, root: bool, opponent_replacing: bool,
+    base_pp: Option<&HashMap<String,i64>>, public_lines: &[String], format_id: Option<&str>,
+    observation: Option<&crate::request_observer::MaybeTrap>,
 ) -> PyResult<Value> {
     if slot != "p1" && slot != "p2" {
         return Err(refusal("unknown seat"));
@@ -352,6 +363,9 @@ pub(crate) fn sampled_side_request_with_public_history(
             active_moves = vec![json!({"id": "struggle", "move": "Struggle", "target": "randomNormal", "disabled": false})];
         }
         request["active"] = json!([{"moves": active_moves, "trapped": trapped}]);
+        if observation.is_some() && !trapped {
+            request["active"][0]["maybeTrapped"] = json!(true);
+        }
     }
     let mut map = Vec::with_capacity(options.len());
     let mut native_legal = HashSet::new();
@@ -412,7 +426,14 @@ pub(crate) fn sampled_side_request_with_public_history(
             }
         }
     }
-    if native_legal != private_legal {
+    // The observer is a typed, source-certified exception, not a general
+    // intersection of mismatching masks. Protocol still offers switches;
+    // canonical policy suppresses them, with exactly zero mass conserved.
+    let observer_receipt = if request.pointer("/active/0/maybeTrapped") == Some(&json!(true)) {
+        let labels: Vec<_> = map.iter().flatten().copied().collect();
+        Some(observation.expect("flag requires typed observer").certify(side,&request,&labels)?)
+    } else { None };
+    if native_legal != private_legal && observer_receipt.is_none() {
         // A refusal is not a policy input. Retain the two already-derived
         // action surfaces for diagnosis without sending opposing hidden state
         // to the provider or silently changing either legal mask.
@@ -437,13 +458,15 @@ pub(crate) fn sampled_side_request_with_public_history(
         })?;
         return Err(error);
     }
-    Ok(json!({"request": request, "self_move_states": move_states, "native_action_indices": map}))
+    let mut bundle = json!({"request": request, "self_move_states": move_states, "native_action_indices": map});
+    if let Some(receipt) = observer_receipt { bundle["request_observer"] = receipt; }
+    Ok(bundle)
 }
 
 /// Diagnostic bridge. Production uses the same Side-only constructor in the
 /// reached-node provider; full state/other-side context never enters Python.
 #[pyfunction]
-#[pyo3(signature = (state_str, slot, species, request_order, max_pp, root = true, base_pp = None, public_lines = None, format_id = None))]
+#[pyo3(signature = (state_str, slot, species, request_order, max_pp, root = true, base_pp = None, public_lines = None, format_id = None, request_observer = false))]
 pub fn sampled_policy_request(
     state_str: &str,
     slot: &str,
@@ -454,6 +477,7 @@ pub fn sampled_policy_request(
     base_pp: Option<HashMap<String, i64>>,
     public_lines: Option<Vec<String>>,
     format_id: Option<&str>,
+    request_observer: bool,
 ) -> PyResult<String> {
     let state = crate::parse_state(state_str)?;
     let (one, two) = if root {
@@ -466,7 +490,12 @@ pub fn sampled_policy_request(
         "p2" => (&state.side_two, two, state.side_one.force_switch),
         _ => return Err(refusal("unknown seat")),
     };
-    sampled_side_request_with_public_history(
+    let lines = public_lines.unwrap_or_default();
+    let observation = if request_observer {
+        let foe = if slot == "p1" { &state.side_two } else { &state.side_one };
+        crate::request_observer::observe(side,foe,slot,&lines,format_id,root)?
+    } else { None };
+    sampled_side_request_with_observation(
         side,
         slot,
         &species,
@@ -476,8 +505,9 @@ pub fn sampled_policy_request(
         root,
         opponent_replacing,
         base_pp.as_ref(),
-        &public_lines.unwrap_or_default(),
+        &lines,
         format_id,
+        observation.as_ref(),
     )
     .map(|v| v.to_string())
 }

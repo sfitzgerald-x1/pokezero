@@ -270,11 +270,13 @@ def _sampled_move_states(
 def build_policy_opponent_view_from_native_bundle(
     *, native_request_bundle: Mapping[str, Any], **view_arguments: Any,
 ) -> PolicyOpponentView:
-    """Certify the native side-only request, full PP and exact action surface.
+    """Certify the native own request, full PP and exact action contract.
 
     This is the production integration boundary, not a constructor accepting a
     full engine state. Native callers supply only the sampled acting side's
-    request bundle and a public transcript.
+    request bundle and a public transcript. The optional server-private receipt
+    distinguishes offered moves/switches from frozen zero-switch policy support;
+    it never enters the checkpoint observation.
     """
     required = {"request", "self_move_states", "native_action_indices"}
     if (not isinstance(native_request_bundle, Mapping)
