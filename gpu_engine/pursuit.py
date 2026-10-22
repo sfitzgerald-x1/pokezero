@@ -67,6 +67,8 @@ def intercept(state, side, slot, move, chance, table, *, eligible):
         cost = pp_cost.cost(table.pressure,move,own_types,get(state.ability,foe,target),hp)
     pp = state.pp[rows,side,own,slot]
     state = state._replace(pp=state.pp.at[rows,side,own,slot].set(jnp.where(used,jnp.maximum(0,pp-cost),pp)))
+    last=state.last_move[rows,side,own]
+    state=state._replace(last_move=state.last_move.at[rows,side,own].set(jnp.where(used,move,last)))
     # The inherited interception handler locks only after successful useMove.
     # Keep this explicit even though Dark has no type immunity in Gen 3.
     successful = used & (dealt>0)
