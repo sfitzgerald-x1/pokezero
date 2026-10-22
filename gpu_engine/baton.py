@@ -35,12 +35,12 @@ def copy_to_recipient(state, side, target, *, eligible):
     state=state._replace(trap_source=state.trap_source.at[rows,foe].set(
         jnp.where(eligible[:,None] & (links==old[:,None]),target[:,None],links)))
     for name in ("boosts", "substitute_hp", "confusion_counter", "volatile",
-                 "protect_counter", "choice_move", "last_move", "encore_move", "encore_counter"):
+                 "protect_counter", "choice_move", "last_move", "encore_move", "encore_counter", "charge_move", "charge_counter"):
         value = getattr(state, name)
         source = value[rows, side, old]
         if name == "volatile":
             source &= jnp.uint32(LEECH_SEED)
-        elif name in ("protect_counter", "choice_move", "last_move", "encore_move", "encore_counter"):
+        elif name in ("protect_counter", "choice_move", "last_move", "encore_move", "encore_counter", "charge_move", "charge_counter"):
             source = jnp.zeros_like(source)
         gate = eligible[:, None] if source.ndim == 2 else eligible
         value = value.at[rows, side, target].set(jnp.where(

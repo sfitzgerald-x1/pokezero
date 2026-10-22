@@ -346,6 +346,15 @@ one HP. Miss/Protect/Ghost leave them intact; Mean Look/ability/Ingrain traps
 remain, and there is no modern Speed boost. Partial-trap clocks/damage are not
 represented, so this does not qualify all of Rapid Spin or move/game coverage.
 
+## Selected Solar Beam integration
+
+Solar Beam charges outside effective sun, hard-locking its release even at zero
+PP. The release has no second PP/Pressure cost; BeforeMove interruption cancels
+the charge. Effective rain/sand/hail halve its base power. Live weather suppression,
+move-time weather and ordinary-turn charge expiry are represented; forced and
+deferred replacement requests do not consume a charge turn. Other charging moves
+remain placeholders. These component checks do not qualify complete-game coverage.
+
 ## Selected Encore integration
 
 Gen 3 Encore chooses 3..6 turns, adds a tick when the target has no queued move,

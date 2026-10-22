@@ -34,6 +34,7 @@ from . import secondary as secondaries
 from . import sleep_talk as talking
 from . import self_destruct as exploding
 from . import encore as repeating
+from . import solar_beam as charging
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, weather_healing
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions, usable_moves
 
@@ -67,6 +68,7 @@ class MoveTable(NamedTuple):
     sleep_talk: talking.SleepTalkTable | None = None
     self_destruct: exploding.SelfDestructTable | None = None
     encore: repeating.EncoreTable | None = None
+    solar_beam: charging.SolarTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -99,7 +101,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
         secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata),
-        repeating.from_metadata(metadata))
+        repeating.from_metadata(metadata),charging.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -356,6 +358,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         chosen_slot=slot[rows,side]
         move,chosen_slot=repeating.override(work,side,move,chosen_slot,struggle=struggle[rows,side])
         caller_move=move
+        charge_locked=_active(work.charge_move,work,side)>0
         chance = draws[rows, side]
         move_context = ~replacement | (state.pending_residual & (saved_actor == side))
         eligible = (live & move_context & ~paused & ~moves_cancelled & ~switches[rows, side]
@@ -400,16 +403,18 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         # Gen 3 singles cancels all queued actions after any faint, not only
         # the fainted mon's move. A confusion self-KO therefore skips the foe.
         moves_cancelled |= eligible & (hp == 0)
+        if table.solar_beam is not None:
+            work=charging.clear(work,side,eligible=eligible & ~before.can_act)
         acts = eligible & before.can_act & ~moves_cancelled
         active = work.active[rows, side]
         old_pp = work.pp[rows, side, active, chosen_slot]
-        acts &= struggle[rows,side] | (old_pp>0)
+        acts &= charge_locked | struggle[rows,side] | (old_pp>0)
         used_pp = 1
         if table.pressure is not None:
             used_pp = pp_cost.cost(table.pressure,move,_active(work.types,work,side),
                 _active(work.ability,work,foe),_active(work.hp,work,foe))
         work = work._replace(pp=work.pp.at[rows, side, active, chosen_slot].set(
-            jnp.where(acts & ~struggle[rows, side], jnp.maximum(0, old_pp - used_pp), old_pp)))
+            jnp.where(acts & ~charge_locked & ~struggle[rows, side], jnp.maximum(0, old_pp - used_pp), old_pp)))
         work=work._replace(last_move=_set_active(work.last_move,work,side,
             jnp.where(acts,caller_move,_active(work.last_move,work,side))))
         placeholders += acts.astype(jnp.int32)
@@ -424,6 +429,13 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             acts &= ~sleep_usable | executes
             placeholders += (acts & sleep_usable).astype(jnp.int32)
         explodes=jnp.zeros_like(acts)
+        effective_weather=work.weather
+        if table.weather is not None:
+            effective_weather=climate.effective(table.weather,work.weather,
+                work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
+        if table.solar_beam is not None:
+            work,starts=charging.try_move(work,side,move,table.solar_beam,effective_weather,eligible=acts)
+            acts &= ~starts
         if table.self_destruct is not None:
             blocked=exploding.blocked(table.self_destruct,move,
                 work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
@@ -435,6 +447,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         defense_boosts = _active(work.boosts, work, foe)
         physical = table.physical[move]
         power,typ = table.power[move],table.type[move]
+        if table.solar_beam is not None:
+            power=charging.base_power(table.solar_beam,move,power,effective_weather)
         if table.variable_moves is not None:
             power,typ,physical = variable.resolve(table.variable_moves,move,power,typ,physical,
                 _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
@@ -741,7 +755,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work=repeating.residual(work,side,eligible=eligible & (event>=8))
     work=linking.prune(work)
     work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0)
-        for name in ("last_move","encore_move","encore_counter")})
+        for name in ("last_move","encore_move","encore_counter","charge_move","charge_counter")})
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))
@@ -762,6 +776,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             | work.baton_pass) & alive,
         baton_pass=work.baton_pass & ~done[:,None])
     ordinary = turn_context & ~defer_residual
+    if table.solar_beam is not None:
+        work=charging.residual(work,eligible=ordinary)
     work = work._replace(volatile=jnp.where(ordinary[:, None, None],
         work.volatile & jnp.uint32(~FLINCH & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
