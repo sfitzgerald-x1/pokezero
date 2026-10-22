@@ -6,6 +6,7 @@ import contextlib
 import io
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 path=Path(__file__).resolve().parents[1]/'scripts/engine_env_benchmark.py'
 spec=importlib.util.spec_from_file_location('engine_env_benchmark_accounting',path)
@@ -74,3 +75,10 @@ class BenchmarkAccountingTests(unittest.TestCase):
         import random
         a=random.Random('17:p1');b=random.Random('17:p1')
         self.assertEqual([a.random() for _ in range(4)],[b.random() for _ in range(4)])
+
+    def test_random_legal_report_needs_no_torch(self):
+        arm=self.play(FakeEnv())
+        args=SimpleNamespace(games=1,seed_start=17,format_id='fixture',policy_label='random-legal (no model forward)')
+        output=io.StringIO()
+        with patch.dict(sys.modules,{'torch':None}),contextlib.redirect_stdout(output):benchmark.report(arm,arm,args)
+        self.assertIn('no neural policy or Torch forward',output.getvalue())

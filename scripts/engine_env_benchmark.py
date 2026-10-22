@@ -357,8 +357,11 @@ def report(engine: ArmResult, showdown: ArmResult, args) -> None:
     print(f"format               {args.format_id}")
     print(f"policy               {args.policy_label}")
     print(f"transition budget    k=0 (Markov-only)")
-    import torch  # noqa: PLC0415
-    print(f"threads              1 worker; torch intra-op threads={torch.get_num_threads()}")
+    if args.policy_label.startswith('random-legal'):
+        print('threads              1 worker; no neural policy or Torch forward')
+    else:
+        import torch  # noqa: PLC0415
+        print(f"threads              1 worker; torch intra-op threads={torch.get_num_threads()}")
 
     print(f"\n{'':34s} {'engine':>14s} {'showdown':>14s} {'speedup':>10s}")
     print("-" * 78)
