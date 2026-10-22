@@ -118,6 +118,11 @@ from coverage counts. Cosmetic forms such as Unown-G retain distinct species IDs
 
 ## Damage and status core components
 
+Heal Bell cures living own-party major status and sleep bookkeeping, leaving
+confusion/other volatiles and the opposing party unchanged. Gen 3 Soundproof
+blocks each holder's cure, including the user; fainted party members are not
+cured. This is selected component support, not qualified move/game coverage.
+
 The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
 high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
 ordinary damage and pre-switch Pursuit, using the actual outgoing holder.
@@ -370,6 +375,20 @@ child transitions. Siblings retain the same parent chance key (common random
 numbers). Timings include parent replication and complete output synchronization;
 five warmups and 100 fixed-root samples exclude setup/compile. This measures a
 search-shaped engine workload, not an actual search or qualified gameplay.
+
+## Advancing cost shape diagnostic
+
+After the separate champion-forward dependency is available, run
+`python -m gpu_engine.benchmark_games --team-pool POOL --weights WEIGHTS
+--expected-pool-sha POOL_SHA --out RESULT.json`. This writes exclusive JSON and
+Markdown outputs for batches 256, 1024, 2048 and 8192. Each finite cohort uses
+distinct prefix team pairs, five warmups and 100 component samples, followed by
+at most 1000 advancing requests with temperature-one masked champion actions.
+No game is refilled or redrawn. Actual completions divided by elapsed wall time
+give games/second; capped games remain censored. Ordinary game turns and live
+requests are separate counters because forced/Baton requests are not turns.
+This is an unqualified mechanics/placeholder-observation diagnostic, not a
+strength measurement or a go/no-go. After-only counters are not mean utilization.
 
 ## Selected Encore integration
 

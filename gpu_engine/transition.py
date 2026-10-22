@@ -34,7 +34,7 @@ from . import secondary as secondaries
 from . import sleep_talk as talking
 from . import self_destruct as exploding
 from . import encore as repeating
-from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, weather_healing
+from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team, weather_healing
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions, usable_moves
 
 
@@ -573,6 +573,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             boosts = _active(work.boosts,work,side)
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
+            work=cure_team(work,side,effects,eligible=acts & effects.heal_bell[move])
             for target_side in range(2):
                 old = _active(work.boosts,work,target_side)
                 work = work._replace(boosts=_set_active(work.boosts,work,target_side,
