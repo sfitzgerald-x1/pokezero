@@ -379,6 +379,23 @@ requests are separate counters because forced/Baton requests are not turns.
 This is an unqualified mechanics/placeholder-observation diagnostic, not a
 strength measurement or a go/no-go. After-only counters are not mean utilization.
 
+## Warm start refill cost shape diagnostic
+
+`python -m gpu_engine.benchmark_refill --team-pool POOL --weights WEIGHTS
+--expected-pool-sha POOL_SHA --out RESULT.json` measures actual completed games
+over a 60-second window following 30 seconds of advancing warmup, at each of
+256, 1024, 2048 and 8192 slots. Refill/reset, sampling, all three champion heads
+for both seats, transition, synchronization and host accounting are timed.
+Each replacement receives the next unused pair from a fixed 100000-game roster;
+there is no wrap or redraw. Each batch restarts the same ordered prefix, so
+these are not independent cohorts. A 2000-request cap censors a game rather
+than counting it completed; in-flight games at the window end remain separate.
+Warmup in-flight state and per-game RNG counters persist into the timed window.
+Pool exhaustion or invalid/nonfinite requests stop the protocol. The JSON keeps
+retired IDs and final active IDs for exactly-once accounting. Thirty seconds of
+warmup does not prove stationarity; this is unqualified mechanics with the
+non-production placeholder observation, not production self-play or a go/no-go.
+
 ## Selected Encore integration
 
 Gen 3 Encore chooses 3..6 turns, adds a tick when the target has no queued move,
