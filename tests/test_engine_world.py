@@ -531,6 +531,91 @@ class BattleSpecConstructionTests(unittest.TestCase):
         self.assertEqual(world.spec.side_one.pokemon[0].hp, 0)
         self.assertNotIn("substitute", world.spec.side_one.volatile_statuses)
 
+    def _double_faint_replacement(self, self_slot):
+        payload = (_payload(self.dex) if self_slot == "p1"
+                   else _payload_seated_at_p2(self.dex))
+        payload["selfRequestKind"] = "force-switch"
+        for side in payload["sides"].values():
+            side["pokemon"][0]["condition"] = "0 fnt"
+            if len(side["pokemon"]) == 1:
+                side["pokemon"].append({"species": "Starmie", "condition": "100/100"})
+            else:
+                hp = _maxhp(_STARMIE, self.dex)
+                side["pokemon"][1]["condition"] = f"{hp}/{hp}"
+            side["substituteHealthState"] = "absent"
+            side["substituteDepletion"] = None
+        return battle_spec_from_payload(payload, _override(), dex=self.dex)
+
+    def test_double_faint_replacement_marks_both_sides_in_either_seat(self) -> None:
+        for slot in ("p1", "p2"):
+            with self.subTest(self_slot=slot):
+                world = self._double_faint_replacement(slot)
+                self.assertTrue(world.spec.side_one.force_switch)
+                self.assertTrue(world.spec.side_two.force_switch)
+                self.assertEqual(world.spec.side_one.pokemon[0].hp, 0)
+                self.assertEqual(world.spec.side_two.pokemon[0].hp, 0)
+
+    def test_double_faint_materialization_reaches_native_switch_request_not_wait(self) -> None:
+        import json
+        try:
+            import pokezero_search
+        except ImportError:
+            self.skipTest("requires the native private-request constructor")
+        from pokezero.poke_engine_adapter import build_poke_engine_state
+        from pokezero.showdown import _legal_action_mask
+
+        maximum = {name: move.max_pp for name, move in self.dex.moves.items()}
+        for self_slot in ("p1", "p2"):
+            world = self._double_faint_replacement(self_slot)
+            state = build_poke_engine_state(world.spec).to_string()
+            for slot in ("p1", "p2"):
+                names = list(world.party_species[slot])
+                for root in (True, False):
+                    with self.subTest(self_slot=self_slot, slot=slot, root=root):
+                        bundle = json.loads(pokezero_search.sampled_policy_request(
+                            state, slot, names, names, maximum, root=root))
+                        self.assertEqual(bundle["request"]["forceSwitch"], [True])
+                        self.assertNotIn("wait", bundle["request"])
+                        self.assertEqual(bundle["native_action_indices"], [4])
+                        self.assertEqual([i for i, on in enumerate(
+                            _legal_action_mask(bundle["request"])) if on], [4])
+
+    def test_replacement_phase_does_not_promote_a_living_opponent(self) -> None:
+        for slot in ("p1", "p2"):
+            with self.subTest(self_slot=slot):
+                payload = (_payload(self.dex) if slot == "p1"
+                           else _payload_seated_at_p2(self.dex))
+                payload["selfRequestKind"] = "force-switch"
+                payload["sides"][slot]["pokemon"][0]["condition"] = "0 fnt"
+                payload["sides"][slot]["substituteHealthState"] = "absent"
+                payload["sides"][slot]["substituteDepletion"] = None
+                world = battle_spec_from_payload(payload, _override(), dex=self.dex)
+                own, foe = ((world.spec.side_one, world.spec.side_two) if slot == "p1"
+                            else (world.spec.side_two, world.spec.side_one))
+                self.assertTrue(own.force_switch)
+                self.assertFalse(foe.force_switch)
+
+    def test_replacement_flags_match_pinned_showdown_faint_path(self) -> None:
+        import json
+        from pathlib import Path
+        import subprocess
+        root = showdown_root()
+        if not (root / "dist/sim/battle.js").is_file():
+            self.skipTest("requires compiled pinned Showdown")
+        document = json.loads(subprocess.run([
+            os.environ.get("POKEZERO_NODE_BINARY", "node"),
+            str(Path(__file__).with_name("double_replacement_oracle.cjs")), str(root),
+        ], capture_output=True, text=True, check=True, timeout=30).stdout)
+        self.assertFalse(document["scientific_measurement"])
+        self.assertEqual(len(document["rows"]), 3)
+        for row in document["rows"]:
+            for slot in ("p1", "p2"):
+                self.assertEqual(row["requests"][slot], slot in row["fainted"])
+        for slot in ("p1", "p2"):
+            world = self._double_faint_replacement(slot)
+            self.assertTrue(world.spec.side_one.force_switch)
+            self.assertTrue(world.spec.side_two.force_switch)
+
     def test_unown_letter_formes_collapse_to_base_species(self) -> None:
         unown_dex = _dex()
         unown_dex.species["unown"] = SpeciesInfo(
