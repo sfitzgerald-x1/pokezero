@@ -562,6 +562,31 @@ class ParallelSeatTests(unittest.TestCase):
             self.assertEqual(terminal["status"], "SUPERVISOR_FAILURE")
             self.assertEqual([s["exit_code"] for s in terminal["shards"]], [0, -15])
 
+    def test_final_verification_cannot_let_a_zero_exit_panel_cross_its_cap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output, _doc = self.fixture(directory)
+            now = [0]
+            checks = [0]
+
+            def verify(_entry):
+                checks[0] += 1
+                if checks[0] == 6:  # Initial, two prelaunch, two child, final.
+                    now[0] = 1000
+
+            workers = [Mock(pid=123001), Mock(pid=123002)]
+            for worker in workers:
+                worker.poll.return_value = 0
+            with patch.object(panel.sys, "platform", "linux"), patch.object(panel, "verify", side_effect=verify), \
+                    patch.object(panel.time, "time", side_effect=lambda: now[0]), \
+                    patch.object(panel, "observed_count", return_value=128), \
+                    patch.object(panel, "stop_owned", return_value=(0, True)), \
+                    patch.object(panel, "print", create=True), \
+                    patch.object(panel.subprocess, "Popen", side_effect=workers):
+                self.assertEqual(panel.run(entry, review, deadline_unix=1000), 1)
+            terminal = json.loads((output / "terminal.json").read_text())
+            self.assertEqual(terminal["status"], "CALENDAR_CAP")
+            self.assertEqual([s["exit_code"] for s in terminal["shards"]], [0, 0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -312,6 +312,9 @@ def run_parallel_seats(entry, entry_path, entry_hash, output, env, terminal):
         verify(entry)
         if digest(entry_path) != entry_hash:
             raise ValueError("registration changed during collection")
+        if terminal["status"] == "COLLECTION_ATTEMPT_COMPLETE":
+            # The final input verification can itself cross the absolute cap.
+            terminal["status"] = guard() or "COLLECTION_ATTEMPT_COMPLETE"
 
 
 def run(entry_path, review_path, *, deadline_unix=None):
