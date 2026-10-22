@@ -155,7 +155,7 @@ class TransitionTests(unittest.TestCase):
         r = self.t.step(s,self.jnp.zeros((64,2),self.jnp.int32),table)
         damage = 100 - r.state.hp[:,1,0]
         self.assertTrue(bool(self.jnp.all((damage >= 37) & (damage <= 88))))
-        self.assertTrue(bool(self.jnp.all(r.state.hp[:,0,0] == 100 - self.jnp.maximum(1,(damage+2)//4))))
+        self.assertTrue(bool(self.jnp.all(r.state.hp[:,0,0] == 100 - self.jnp.maximum(1,damage//4))))
         self.assertTrue(bool(self.jnp.all(r.state.pp[:,0,0,0] == 0)))
         s = s._replace(hp=s.hp.at[:,1,0].set(2))
         r = self.t.step(s,self.jnp.zeros((64,2),self.jnp.int32),table)

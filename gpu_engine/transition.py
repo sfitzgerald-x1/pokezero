@@ -23,6 +23,7 @@ from . import entry as arrival
 from . import combat as traits
 from . import pressure as pp_cost
 from . import sustain as recovery
+from . import damage_moves as special_hits
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -45,6 +46,7 @@ class MoveTable(NamedTuple):
     combat: traits.CombatTable | None = None
     pressure: pp_cost.PressureTable | None = None
     sustain: recovery.SustainTable | None = None
+    damage_moves: special_hits.DamageMoveTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -73,7 +75,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         jnp.asarray(metadata["vocabulary"]["moves"].index("struggle"), jnp.int32),
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
         arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
-        pp_cost.from_metadata(metadata),recovery.from_metadata(metadata))
+        pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -386,6 +388,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             burned=_active(work.status, work, side) == m.BRN,
             guts=guts,
             effectiveness_num=num, effectiveness_den=den, immune=immune, roll=85 + chance[:, 5])
+        if table.damage_moves is not None:
+            damage=special_hits.resolve_fixed(table.damage_moves,move,_active(work.level,work,side),
+                damage,immune=immune)
         hit = m.accuracy_hit(accuracy, attack_boosts[:, 5], defense_boosts[:, 6],
                              chance[:, 6], always_hit=always_hit)
         bypass_sub = jnp.zeros_like(acts)
@@ -423,10 +428,12 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 jnp.where(thawed,m.NONE,_active(work.status,work,foe))),
                 status_counter=_set_active(work.status_counter,work,foe,
                     jnp.where(thawed,0,_active(work.status_counter,work,foe))))
-        # Gen 3 Struggle uses round(actual damage / 4), not max HP / 4.
-        recoil = jnp.maximum(1, (dealt + 2) // 4)
+        # Gen 3 floors recoil from actual damage, including capped sub damage.
+        recoil=jnp.where(is_struggle & (dealt>0),jnp.maximum(1,dealt//4),0)
+        if table.damage_moves is not None:
+            recoil=special_hits.recoil_damage(table.damage_moves,move,_active(work.ability,work,side),dealt)
         hp = _active(work.hp, work, side)
-        hp = jnp.where(is_struggle & (dealt > 0), jnp.maximum(0, hp - recoil), hp)
+        hp = jnp.maximum(0,hp-recoil)
         work = work._replace(hp=_set_active(work.hp, work, side, hp))
         if table.effects is not None:
             effects = table.effects

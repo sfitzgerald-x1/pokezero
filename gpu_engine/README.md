@@ -100,7 +100,7 @@ terminal battles remain unchanged. Every executed move remains conservatively
 counted as a placeholder while required mechanics are incomplete.
 
 Confusion now deals typeless, noncritical self-damage before PP use; Struggle is
-typeless and recoils for the rounded quarter of actual damage dealt, not max HP.
+typeless and recoils for the floored quarter of actual damage dealt, not max HP.
 Any faint cancels the remaining ordinary action, as in Gen 3 singles. Flinch is
 volatile bit 0, blocks before confusion and clears after an ordinary turn.
 
@@ -170,6 +170,13 @@ restrict voluntary switches through the current request mask; forced switches
 remain legal. Bench/fainted trappers do not bind, and Gen 3 does not give Ghosts
 or other Shadow Tag holders their later-generation exemptions. Move traps and
 Baton Pass remain pending.
+
+Seismic Toss/Night Shade use level damage and Sonic Boom/Dragon Rage their fixed
+constants, retaining immunity, accuracy, Protect, Substitute and Endure while
+bypassing ordinary damage modifiers. Selected recoil moves use floored actual
+damage (including capped Substitute damage), not later-generation rounding.
+Rock Head prevents their recoil except Struggle. Nondivisible source fixtures
+correct the earlier rounded-Struggle implementation and regression expectations.
 
 This is an incomplete integration kernel. Remaining items, ability interactions, switch events,
 the full residual scheduler and remaining special move effects are not
