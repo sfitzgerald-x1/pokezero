@@ -48,12 +48,13 @@ class RapidSpinTests(unittest.TestCase):
 
     def test_miss_protect_and_ghost_do_not_clear(self):
         j=self.j;s=self.live()
-        for a,table in ((s._replace(moves=s.moves.at[0,1,0,0].set(3)),self.table),
-                (s._replace(types=s.types.at[0,1,0,0].set(8)),self.table),
-                (s,self.table._replace(accuracy=self.table.accuracy.at[1].set(0),
+        for label,a,table in (("protect",s._replace(moves=s.moves.at[0,1,0,0].set(3)),self.table),
+                ("ghost",s._replace(types=s.types.at[0,1,0,0].set(8)),self.table),
+                ("miss",s,self.table._replace(accuracy=self.table.accuracy.at[1].set(0),
                     always_hit=self.table.always_hit.at[1].set(False)))):
-            r=self.t.step(a,j.zeros((1,2),j.int32),table).state
-            self.assertEqual((int(r.volatile[0,0,0])&self.seed,int(r.spikes[0,0])),(self.seed,2))
+            with self.subTest(label=label):
+                r=self.t.step(a,j.zeros((1,2),j.int32),table).state
+                self.assertEqual((int(r.volatile[0,0,0])&self.seed,int(r.spikes[0,0])),(self.seed,2))
 
     def test_unbroken_and_broken_substitute_clear_without_spill(self):
         for capacity in (19,1):
