@@ -16,7 +16,7 @@ class SelfDestructTests(unittest.TestCase):
     def setUp(self):
         import jax
         import jax.numpy as j
-        from gpu_engine import critical,effects,mechanics,pressure,self_destruct,sleep_talk,transition
+        from gpu_engine import critical,effects,items,mechanics,pressure,self_destruct,sleep_talk,transition
         from gpu_engine.state import empty_state
         self.jax,self.j,self.m,self.sd,self.tr,self.empty=jax,j,mechanics,self_destruct,transition,empty_state
         self.names=["_none","explosion","selfdestruct","splash","protect","endure","tackle",
@@ -24,14 +24,16 @@ class SelfDestructTests(unittest.TestCase):
         types=["_none","normal","fighting","flying","poison","ground","rock","bug","ghost",
             "steel","fire","water","grass","electric","psychic","ice","dragon","dark"]
         meta={"vocabulary":{"moves":self.names,"types":types,
-            "abilities":["_none","damp","battlearmor","pressure"]},
+            "abilities":["_none","damp","battlearmor","pressure"],
+            "species":["_none"],"items":["_none","choiceband"]},
             "moves":[None]+[{"flags":{"protect":1}} for _ in self.names[1:]]}
         self.profile=self_destruct.from_metadata(meta)
         num=j.ones((18,18),j.int32).at[1,8].set(0)
         self.table=transition.MoveTable(j.array([0,250,200,0,0,0,35,50,0,0]),
             j.array([0,1,1,1,1,1,1,0,1,1]),j.ones(10,bool),j.full(10,100),
             j.ones(10,bool),j.array([0,0,0,0,3,3,0,0,0,0]),num,j.ones_like(num),j.array(7),
-            effects=effects.from_metadata(meta),critical=critical.from_metadata(meta),pressure=pressure.from_metadata(meta),
+            effects=effects.from_metadata(meta),items=items.from_metadata(meta),
+            critical=critical.from_metadata(meta),pressure=pressure.from_metadata(meta),
             sleep_talk=sleep_talk.from_metadata(meta),self_destruct=self.profile)
 
     def live(self,batch=1):
@@ -115,6 +117,14 @@ class SelfDestructTests(unittest.TestCase):
             self.assertEqual(r.hp[0,:,0].tolist(),[1000,1000])
             self.assertEqual(r.pp[0,:,0,0].tolist(),[10,9])
 
+    def test_damp_refusal_still_choice_locks_the_original_caller(self):
+        for move in (1,2):
+            s=self.live();s=s._replace(ability=s.ability.at[0,1,0].set(1),
+                moves=s.moves.at[0,0,0,0].set(move),item=s.item.at[0,0,0].set(1))
+            r=self.play(s).state
+            self.assertEqual(int(r.choice_move[0,0,0]),move)
+            self.assertEqual(r.hp[0,:,0].tolist(),[1000,1000])
+
     def test_endure_and_last_party_termination_keep_gen3_tie(self):
         j=self.j;s=self.live();s=s._replace(hp=s.hp.at[0,1,0].set(1),
             moves=s.moves.at[0,1,0,0].set(5))
@@ -182,6 +192,7 @@ class SelfDestructTests(unittest.TestCase):
             self.assertEqual(cases[name]["hp"],[0,578])
             self.assertEqual((cases[name]["pp"][0],cases[name]["calledPP"]),(15,8))
         self.assertEqual(cases["talk_damp"]["hp"],[1000,1000])
+        self.assertEqual(cases["damp_choice"]["lock"],"explosion")
 
 
 if __name__=="__main__":unittest.main()

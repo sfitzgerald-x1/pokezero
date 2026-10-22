@@ -5,7 +5,7 @@ function sample(options={}) {
   const name=options.move||'explosion';
   const b=new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
   for(let side=0;side<2;side++) b.setPlayer(`p${side+1}`,{name:`seat${side}`,team:[
-    {species:'Mew',ability:(side?options.foeAbility:options.ability)||'Run Away',
+    {species:'Mew',ability:(side?options.foeAbility:options.ability)||'Run Away',item:side?'':(options.item||''),
       moves:side?[options.foeMove||'splash']:(options.talk?['sleeptalk',name,'solarbeam','focuspunch']:[name]),level:100},
     ...(options.last?[]:[{species:'Ditto',moves:['splash'],ability:'Run Away'}]),
   ]});
@@ -22,7 +22,7 @@ function sample(options={}) {
   b.makeChoices('move 1','move 1');
   const result={hp:[p.hp,q.hp],pp:[p.moveSlots[0].pp,q.moveSlots[0].pp],
     sub:q.volatiles.substitute?.hp||0,ended:b.ended,winner:b.winner||'',
-    request:b.requestState,calledPP:p.moveSlots[1]?.pp};
+    request:b.requestState,calledPP:p.moveSlots[1]?.pp,lock:p.volatiles.choicelock?.move||''};
   b.destroy();return result;
 }
 const cases={normal:sample(),selfdestruct:sample({move:'selfdestruct'}),
@@ -32,7 +32,8 @@ const cases={normal:sample(),selfdestruct:sample({move:'selfdestruct'}),
   endure:sample({foeMove:'endure',targetHP:1}),sub:sample({sub:true}),
   foe_attack:sample({foeMove:'tackle'}),pressure:sample({foeAbility:'Pressure'}),
   talk:sample({talk:true}),talk_pressure:sample({talk:true,foeAbility:'Pressure'}),
-  talk_damp:sample({talk:true,foeAbility:'Damp'})};
+  talk_damp:sample({talk:true,foeAbility:'Damp'}),
+  damp_choice:sample({foeAbility:'Damp',item:'Choice Band'})};
 function damageGrid() {
   const b=new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
   for(let side=0;side<2;side++)b.setPlayer(`p${side+1}`,{name:`seat${side}`,team:[

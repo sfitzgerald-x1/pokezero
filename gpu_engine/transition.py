@@ -395,6 +395,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         work = work._replace(pp=work.pp.at[rows, side, active, chosen_slot].set(
             jnp.where(acts & ~struggle[rows, side], jnp.maximum(0, old_pp - used_pp), old_pp)))
         placeholders += acts.astype(jnp.int32)
+        caller_acts=acts
         explodes=jnp.zeros_like(acts)
         if table.self_destruct is not None:
             blocked=exploding.blocked(table.self_destruct,move,
@@ -566,7 +567,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                     acts & table.sustain.wish[move] & (pending == 0),2,pending)))
         if table.items is not None:
             locked = _active(work.choice_move,work,side)
-            lock = (acts & ~is_struggle & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
+            lock = (caller_acts & ~is_struggle & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
             work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,move,locked)))
         if table.linked_traps is not None:
             work=linking.apply(work,side,move,table.linked_traps,eligible=acts & hit)
