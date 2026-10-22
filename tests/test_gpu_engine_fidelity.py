@@ -15,6 +15,22 @@ SHOWDOWN=os.environ.get('POKEZERO_SHOWDOWN_ROOT')
 
 @unittest.skipUnless(importlib.util.find_spec('jax'),'requires isolated spike JAX')
 class TraceTests(unittest.TestCase):
+    def test_faint_marker_is_not_a_major_status_but_hp_disagreement_remains(self):
+        from unittest.mock import patch
+        import jax.numpy as j
+        from gpu_engine.fidelity import compare
+        from gpu_engine.state import empty_state
+        s=empty_state(1)._replace(hp=j.full((1,2,6),100).at[0,0,0].set(0),
+            status=j.zeros((1,2,6),j.int32).at[0,0,0].set(2))
+        parties=[[dict(hp=100,status='',fainted=False) for _ in range(6)] for _ in range(2)]
+        parties[0][0]=dict(hp=0,status='fnt',fainted=True)
+        with patch('gpu_engine.fidelity.native_view',return_value=({},parties,[0,0])):
+            self.assertEqual(compare(s,None,None,None),[])
+            parties[0][0]=dict(hp=1,status='',fainted=False)
+            diff=compare(s,None,None,None)
+            self.assertTrue(any(x['field']=='0:0:hp' for x in diff))
+            self.assertTrue(any(x['field']=='0:0:fainted' for x in diff))
+
     def test_final_row_harness_failure_cannot_exit_zero(self):
         from gpu_engine.fidelity import protocol_completed
         rows=[dict(status='STATE_MISMATCH') for _ in range(200)]

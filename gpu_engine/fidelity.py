@@ -28,11 +28,14 @@ from pokezero.observation import ObservationFeatureMasks
 from pokezero.showdown import showdown_choice_for_action
 
 STATUS=['','par','brn','psn','tox','slp','frz']
+# The first 50000..50199 panel is immutable historical evidence. Following
+# its authored adapter correction, use one disjoint fixed panel, not a replay.
+FIRST_GAME=50200
 canonical=lambda name:'hiddenpower' if name.startswith('hiddenpower') else name
 toid=lambda name:''.join(x for x in name.lower() if x.isalnum())
 
 
-def reconstruct(pool,metadata,showdown,node,*,first_game=50000,games=200):
+def reconstruct(pool,metadata,showdown,node,*,first_game=FIRST_GAME,games=200):
     """Verify all stored fields against the original generator before play."""
     start=2*first_game;count=2*games
     if games!=200 or start<0 or start+count>len(pool['seeds']):raise ValueError('fixed 200-pair roster required')
@@ -96,7 +99,12 @@ def compare(state,snapshot,original,vocab,*,initial=False):
         for slot,mon in enumerate(parties[side]):
             prefix=f'{side}:{slot}:'
             check(prefix+'hp',mon['hp'],int(state.hp[0,side,slot]))
-            check(prefix+'status',mon['status'],STATUS[int(state.status[0,side,slot])])
+            # Showdown serializes a KO as status="fnt"; the tensor keeps
+            # major status separate from HP/faint. Compare major status only
+            # while either representation is alive, retaining independent KO
+            # checks. This never resumes a previously stopped trajectory.
+            if mon['hp']>0 or int(state.hp[0,side,slot])>0:
+                check(prefix+'status',mon['status'],STATUS[int(state.status[0,side,slot])])
             check(prefix+'fainted',bool(mon['fainted']),int(state.hp[0,side,slot])<=0)
             if initial:
                 check(prefix+'max_hp',mon['maxhp'],int(state.max_hp[0,side,slot]))
@@ -199,8 +207,8 @@ def run(pool_path,expected_sha,showdown,node,out):
     hashes=lambda:{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths if p.is_file()}
     before=hashes();packed,roster=reconstruct(pool,metadata,showdown,node)
     table=transition.tables_from_metadata(metadata);reference_actions.table=table
-    base=transition.state_from_pool(pool,np.arange(100000,100400).reshape(200,2),seed=719)
-    base=base._replace(keys=jax.vmap(lambda n:jax.random.fold_in(jax.random.PRNGKey(719),n))(j.arange(50000,50200)))
+    base=transition.state_from_pool(pool,np.arange(2*FIRST_GAME,2*(FIRST_GAME+200)).reshape(200,2),seed=719)
+    base=base._replace(keys=jax.vmap(lambda n:jax.random.fold_in(jax.random.PRNGKey(719),n))(j.arange(FIRST_GAME,FIRST_GAME+200)))
     base=jax.block_until_ready(transition.initialize(base,table));advance=jax.jit(lambda s,a:transition.step(s,a,table))
     header=dict(schema='pokezero.gpu_fidelity_trace.v1',source_commit=source,source_sha256=before,pool_sha256=pool_sha,
         roster=roster,format='gen3customgame; no Sleep/Freeze Clause',ordinary_turn_cap=20,request_cap=200,
@@ -212,7 +220,7 @@ def run(pool_path,expected_sha,showdown,node,out):
     with journal.open('x') as stream:
         stream.write(json.dumps(dict(kind='ENTRY',**header))+'\n');stream.flush()
         for offset in range(200):
-            game=50000+offset;state=jax.tree.map(lambda x:x[offset:offset+1],base)
+            game=FIRST_GAME+offset;state=jax.tree.map(lambda x:x[offset:offset+1],base)
             original=[[metadata['vocabulary']['species'][int(x)] for x in state.species[0,s]] for s in range(2)]
             row=dict(game_id=game,team_ids=[2*game,2*game+1],steps=[],status='REQUEST_CAP',first_divergence=None)
             rng=random.Random(f'gpu-fidelity-actions-v1:{game}')
@@ -245,6 +253,7 @@ def run(pool_path,expected_sha,showdown,node,out):
                             native,actions,diff,maps=reference_actions(env,state,snapshot,original,metadata['vocabulary'],rng)
                             if diff:row.update(status='LEGAL_ACTION_MISMATCH',first_divergence=diff);break
                             if not native:row['status']='NO_REFERENCE_REQUEST';break
+                            row.pop('post_boundary',None);row.pop('native_log_tail',None)
                             row['pre_boundary']=boundary_projection(state,snapshot,original,metadata['vocabulary'])
                             tape=chance_tape(state,game,index);control.write_text(json.dumps(tape))
                             step=dict(index=index,showdown_actions=native,gpu_actions=actions.tolist(),identity_maps=maps,chance=tape)
