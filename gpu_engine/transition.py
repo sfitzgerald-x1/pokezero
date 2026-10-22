@@ -33,8 +33,9 @@ from . import critical as crits
 from . import secondary as secondaries
 from . import sleep_talk as talking
 from . import self_destruct as exploding
+from . import encore as repeating
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success, cure_team
-from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
+from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions, usable_moves
 
 
 class MoveTable(NamedTuple):
@@ -65,6 +66,7 @@ class MoveTable(NamedTuple):
     secondary: secondaries.SecondaryTable | None = None
     sleep_talk: talking.SleepTalkTable | None = None
     self_destruct: exploding.SelfDestructTable | None = None
+    encore: repeating.EncoreTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -96,7 +98,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
         dragging.from_metadata(metadata),linking.from_metadata(metadata),crits.from_metadata(metadata),
-        secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata))
+        secondaries.from_metadata(metadata),talking.from_metadata(metadata),exploding.from_metadata(metadata),
+        repeating.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -270,12 +273,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     saved_actor = jnp.where(live & state.pending_residual,state.queued_actor,-1)
     move_actions = jnp.where((saved_actor[:,None] == sides),state.queued_actions,actions)
     slot = jnp.clip(move_actions, 0, 3)
-    pp = state.pp[rows[:, None], sides, state.active]
-    choice = state.choice_move[rows[:,None],sides,state.active]
-    move_ids = state.moves[rows[:,None],sides,state.active]
-    usable = ((pp > 0) & ~state.disabled[rows[:, None], sides, state.active]
-              & ((choice[...,None] == 0) | (move_ids == choice[...,None])))
-    struggle = ~jnp.any(usable, axis=-1)
+    struggle = ~jnp.any(usable_moves(state), axis=-1)
     moves = state.moves[rows[:, None], sides, state.active, slot]
     moves = jnp.where(struggle, table.struggle, moves)
     pursuit_used = jnp.zeros_like(switches)
@@ -355,6 +353,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         side = jnp.where(order == 0, first, 1 - first)
         foe = 1 - side
         move = moves[rows, side]
+        chosen_slot=slot[rows,side]
+        move,chosen_slot=repeating.override(work,side,move,chosen_slot,struggle=struggle[rows,side])
         caller_move=move
         chance = draws[rows, side]
         move_context = ~replacement | (state.pending_residual & (saved_actor == side))
@@ -401,21 +401,25 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         # the fainted mon's move. A confusion self-KO therefore skips the foe.
         moves_cancelled |= eligible & (hp == 0)
         acts = eligible & before.can_act & ~moves_cancelled
-        chosen_slot = slot[rows, side]
         active = work.active[rows, side]
         old_pp = work.pp[rows, side, active, chosen_slot]
+        acts &= struggle[rows,side] | (old_pp>0)
         used_pp = 1
         if table.pressure is not None:
             used_pp = pp_cost.cost(table.pressure,move,_active(work.types,work,side),
                 _active(work.ability,work,foe),_active(work.hp,work,foe))
         work = work._replace(pp=work.pp.at[rows, side, active, chosen_slot].set(
             jnp.where(acts & ~struggle[rows, side], jnp.maximum(0, old_pp - used_pp), old_pp)))
+        work=work._replace(last_move=_set_active(work.last_move,work,side,
+            jnp.where(acts,caller_move,_active(work.last_move,work,side))))
         placeholders += acts.astype(jnp.int32)
         caller_acts=acts
         if table.sleep_talk is not None:
             called,usable=talking.choose(table.sleep_talk,_active(work.moves,work,side),
                 _active(work.pp,work,side),sleep_talk_draws[rows,side])
-            executes=(_active(work.status,work,side)==m.SLP) & usable
+            executes=((_active(work.status,work,side)==m.SLP) & usable
+                & (_active(work.encore_counter,work,side)==0)
+                & (_active(work.choice_move,work,side)==0))
             move=jnp.where(sleep_usable,called,move)
             acts &= ~sleep_usable | executes
             placeholders += (acts & sleep_usable).astype(jnp.int32)
@@ -600,6 +604,11 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,caller_move,locked)))
         if table.linked_traps is not None:
             work=linking.apply(work,side,move,table.linked_traps,eligible=acts & hit)
+        if table.encore is not None:
+            # Duration uses the existing uniform [0,4) status-duration column:
+            # a dispatched Encore cannot also inflict a primary sleep status.
+            queued=(order==0) & ~state.pending_residual & ~switches[rows,foe] & ~displaced[rows,foe]
+            work=repeating.apply(work,foe,move,chance[:,7],table.encore,eligible=acts & hit,queued=queued)
         if table.secondary is not None:
             effective_weather=work.weather
             if table.weather is not None:
@@ -679,19 +688,20 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     # Selected order10/priority0 handlers snapshot SPEED before suborder.
     # Equal-speed Speed Boost(3), Leftovers(4), seed(5), status(6) use independent ties.
     # Ability boosts do not re-sort the already queued residual handlers.
-    event_sides = jnp.array([0,1,0,1,0,1,0,1])
-    event_suborder = jnp.array([3,3,4,4,5,5,6,6])
+    event_sides = jnp.array([0,1,0,1,0,1,0,1,0,1])
+    event_suborder = jnp.array([3,3,4,4,5,5,6,6,14,14])
     tie = jnp.concatenate((draws[:,1,0,None] ^ sides,
-        draws[:,0,9,None] ^ sides,draws[:,0,10,None] ^ sides,draws[:,1,9,None] ^ sides),axis=1)
+        draws[:,0,9,None] ^ sides,draws[:,0,10,None] ^ sides,draws[:,1,9,None] ^ sides,
+        draws[:,1,11,None] ^ sides),axis=1)
     event_keys = -end_speed[:,event_sides]*32 + event_suborder[None,:]*2 + tie
     event_order = jnp.argsort(event_keys,axis=1)
-    for order in range(8):
+    for order in range(10):
         event = event_order[:,order]
         side = event % 2
         ability_event = event < 2
         heal_event = (event >= 2) & (event < 4)
         seed_event = (event >= 4) & (event < 6)
-        status_event = event >= 6
+        status_event = (event >= 6) & (event < 8)
         battle_continues = jnp.all(jnp.any(work.hp > 0, axis=2), axis=1)
         eligible = residual_ready & battle_continues
         hp = _active(work.hp,work,side)
@@ -718,7 +728,11 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 eligible=eligible & seed_event)
             work = work._replace(hp=_set_active(work.hp,work,side,drained.hp))
             work = work._replace(hp=_set_active(work.hp,work,foe,drained.recipient_hp))
+        if table.encore is not None:
+            work=repeating.residual(work,side,eligible=eligible & (event>=8))
     work=linking.prune(work)
+    work=work._replace(**{name:jnp.where(work.hp>0,getattr(work,name),0)
+        for name in ("last_move","encore_move","encore_counter")})
     alive = jnp.any(work.hp > 0, axis=2)
     done = ~jnp.all(alive, axis=1)
     winner = jnp.where(alive[:, 0], 0, jnp.where(alive[:, 1], 1, 2))
