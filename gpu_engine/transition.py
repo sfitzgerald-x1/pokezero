@@ -25,6 +25,7 @@ from . import pressure as pp_cost
 from . import sustain as recovery
 from . import damage_moves as special_hits
 from . import variable_moves as variable
+from . import pursuit as intercepts
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -49,6 +50,7 @@ class MoveTable(NamedTuple):
     sustain: recovery.SustainTable | None = None
     damage_moves: special_hits.DamageMoveTable | None = None
     variable_moves: variable.VariableMoveTable | None = None
+    pursuit: intercepts.PursuitTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -78,7 +80,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
         arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
         pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
-        variable.from_metadata(metadata))
+        variable.from_metadata(metadata),intercepts.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -225,6 +227,26 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     # switch-in weather change does not reorder the remaining move queue.
     speed = _speeds(work,table)
     switches = live[:, None] & requested & (actions >= 4)
+    slot = jnp.clip(actions, 0, 3)
+    pp = state.pp[rows[:, None], sides, state.active]
+    choice = state.choice_move[rows[:,None],sides,state.active]
+    move_ids = state.moves[rows[:,None],sides,state.active]
+    usable = ((pp > 0) & ~state.disabled[rows[:, None], sides, state.active]
+              & ((choice[...,None] == 0) | (move_ids == choice[...,None])))
+    struggle = ~jnp.any(usable, axis=-1)
+    moves = state.moves[rows[:, None], sides, state.active, slot]
+    moves = jnp.where(struggle, table.struggle, moves)
+    pursuit_used = jnp.zeros_like(switches)
+    pursuit_faint = jnp.zeros_like(state.done)
+    if table.pursuit is not None:
+        for side in range(2):
+            initial_status = _active(state.status,state,side)
+            eligible = (live & ~replacement & (actions[:,side]<4) & switches[:,1-side]
+                & ~struggle[:,side] & (initial_status!=m.SLP) & (initial_status!=m.FRZ))
+            work,used,fainted = intercepts.intercept(work,side,slot[:,side],moves[:,side],
+                draws[:,side],table,eligible=eligible)
+            pursuit_used = pursuit_used.at[:,side].set(used)
+            pursuit_faint |= fainted
     bench = bench_indices(state.active)
     target = jnp.take_along_axis(bench, jnp.clip(actions - 4, 0, 4)[..., None], axis=2)[..., 0]
     switch_first = jnp.where(speed[:,0] != speed[:,1],speed[:,1] > speed[:,0],draws[:,0,11] == 1).astype(jnp.int32)
@@ -276,20 +298,13 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             # A hazard KO cancels subsequent queued runSwitch callbacks too.
             switch_faint |= knocked_out
     work = _lum_update(work,table,live)
-    slot = jnp.clip(actions, 0, 3)
-    pp = state.pp[rows[:, None], sides, state.active]
-    choice = state.choice_move[rows[:,None],sides,state.active]
-    move_ids = state.moves[rows[:,None],sides,state.active]
-    usable = ((pp > 0) & ~state.disabled[rows[:, None], sides, state.active]
-              & ((choice[...,None] == 0) | (move_ids == choice[...,None])))
-    struggle = ~jnp.any(usable, axis=-1)
-    moves = state.moves[rows[:, None], sides, state.active, slot]
-    moves = jnp.where(struggle, table.struggle, moves)
     priority = table.priority[moves]
     first = jnp.where(priority[:, 0] != priority[:, 1], priority[:, 1] > priority[:, 0],
         jnp.where(speed[:, 0] != speed[:, 1], speed[:, 1] > speed[:, 0], draws[:, 0, 0] == 1)).astype(jnp.int32)
-    placeholders = jnp.zeros_like(state.turn)
-    moves_cancelled = switch_faint
+    placeholders = jnp.sum(pursuit_used,axis=1,dtype=jnp.int32)
+    # A Pursuit KO still installs the chosen switch in Gen 3. It cancels moves,
+    # not that requeued switch; separate it from ordinary hazard cancellation.
+    moves_cancelled = switch_faint | pursuit_faint
     protected = jnp.zeros_like(state.active,dtype=jnp.bool_)
     enduring = jnp.zeros_like(protected)
     # Stall lasts through the next ordinary turn unless refreshed by success.
@@ -301,7 +316,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         foe = 1 - side
         move = moves[rows, side]
         chance = draws[rows, side]
-        eligible = live & ~replacement & ~moves_cancelled & ~switches[rows, side] & (_active(work.hp, work, side) > 0)
+        eligible = (live & ~replacement & ~moves_cancelled & ~switches[rows, side]
+            & ~pursuit_used[rows,side] & (_active(work.hp, work, side) > 0))
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
