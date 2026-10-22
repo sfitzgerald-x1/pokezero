@@ -1,5 +1,6 @@
 """Authored supervisor fixtures. No scientific game, model or search execution."""
 import importlib.util
+from contextlib import ExitStack
 import json
 import os
 from pathlib import Path
@@ -346,6 +347,220 @@ class PanelTests(unittest.TestCase):
             self.assertEqual(doc["status"], "PROCESS_FAILURE")
             self.assertEqual(doc["shards"][0]["exit_code"], 1)
             self.assertTrue(doc["shards"][0]["cleanup_ok"])
+
+
+class ParallelSeatTests(unittest.TestCase):
+    def fixture(self, directory):
+        entry, review, output = PanelTests().fixture_entry(directory)
+        doc = json.loads(entry.read_text())
+        doc.update(shard_execution="parallel_seats_fixed_work", comparison_kind="raw_head_to_head",
+                   common_arguments=["--policy-mode", "engine-mcts", "--opponent-policy-mode", "raw",
+                                     "--device", "cpu", "--no-search-fallback", "--engine-worlds", "4",
+                                     "--engine-sims", "256", "--engine-depth", "6", "--engine-batch", "16",
+                                     "--engine-model-world-workers", "1"],
+                   shards=[dict(name="candidate-" + seat, seat=seat, arguments=[])
+                           for seat in ("p1", "p2")])
+        self.save(entry, review, doc)
+        return entry, review, output, doc
+
+    def save(self, entry, review, doc):
+        panel.write(entry, doc)
+        panel.write(review, dict(status="CLEAR", entry_sha256=panel.digest(entry)))
+
+    def execute(self, entry, review, *, counts=None, workers=None, stop=None, verify=None,
+                before_sleep=None, deadline=None):
+        workers = workers or [Mock(pid=123001), Mock(pid=123002)]
+        for worker in workers:
+            if not isinstance(worker, Exception):
+                worker.poll.return_value = 0
+        clock = [0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+            if before_sleep:
+                before_sleep(clock[0], workers)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(panel, "print", create=True))
+            stack.enter_context(patch.object(panel.sys, "platform", "linux"))
+            stack.enter_context(patch.object(panel, "verify", side_effect=verify))
+            stack.enter_context(patch.object(panel.time, "time", side_effect=lambda: clock[0]))
+            stack.enter_context(patch.object(panel.time, "sleep", side_effect=sleep))
+            spawn = stack.enter_context(patch.object(panel.subprocess, "Popen", side_effect=workers))
+            drain = stack.enter_context(patch.object(panel, "stop_owned", side_effect=stop,
+                                                     return_value=(0, True)))
+            stack.enter_context(patch.object(panel, "observed_count", side_effect=counts,
+                                             return_value=128))
+            result = panel.run(entry, review, deadline_unix=deadline)
+        return result, spawn, drain
+
+    def test_both_launch_before_poll_with_one_deadline_and_no_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output, _doc = self.fixture(directory)
+            first, second = Mock(pid=123001), Mock(pid=123002)
+
+            def first_poll():
+                self.assertTrue((output / "candidate-p2-launch.json").exists())
+                return 0
+
+            first.poll.side_effect = first_poll
+            result, spawn, drain = self.execute(entry, review, workers=[first, second], deadline=1000)
+            self.assertEqual(result, 0)
+            self.assertEqual(spawn.call_count, 2)
+            self.assertEqual(drain.call_count, 2)
+            terminal = json.loads((output / "terminal.json").read_text())
+            self.assertEqual(terminal["status"], "COLLECTION_ATTEMPT_COMPLETE")
+            self.assertEqual(terminal["scientific_qualification"], "UNREVIEWED")
+            self.assertEqual(terminal["shard_execution"], "parallel_seats_fixed_work")
+            for seat in ("p1", "p2"):
+                launch = json.loads((output / f"candidate-{seat}-launch.json").read_text())
+                receipt = json.loads((output / f"candidate-{seat}-terminal.json").read_text())
+                self.assertEqual(launch["deadline_unix"], 1000)
+                self.assertEqual(receipt["exit_code"], 0)
+                self.assertTrue(receipt["cleanup_ok"])
+                self.assertEqual(receipt["observed_games"], 128)
+            with patch.object(panel, "verify"), patch.object(panel.subprocess, "Popen") as retry:
+                with self.assertRaises(FileExistsError):
+                    panel.run(entry, review)
+            retry.assert_not_called()
+
+    def test_timed_dynamic_abbreviated_or_per_seat_overrides_cannot_opt_in(self):
+        for arguments in (["--engine-early-stop"], ["--engine-early-st"],
+                          ["--root-time-budget-ms", "1000"], ["--engine-depth-min", "2"],
+                          ["--policy-mode", "trajectory-reference"], ["--device", "cuda"],
+                          ["--engine-sims", "0"], ["--eng", "2"]):
+            with self.subTest(arguments=arguments), tempfile.TemporaryDirectory() as directory:
+                entry, review, output, doc = self.fixture(directory)
+                doc["common_arguments"].extend(arguments)
+                self.save(entry, review, doc)
+                with patch.object(panel, "verify"), patch.object(panel.subprocess, "Popen") as spawn:
+                    with self.assertRaises(ValueError):
+                        panel.run(entry, review)
+                spawn.assert_not_called()
+                self.assertFalse(output.exists())
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, _output, doc = self.fixture(directory)
+            doc["shards"][1]["arguments"] = ["--engine-early-stop"]
+            with self.assertRaisesRegex(ValueError, "own phase receipt"):
+                panel.validate_execution(doc)
+            doc["shards"][1]["arguments"] = ["--phase-progress-out",
+                                                   str(Path(doc["run_directory"]) / "candidate-p2-phase.json")]
+            self.assertEqual(panel.validate_execution(doc), "parallel_seats_fixed_work")
+
+    def test_parallel_contract_does_not_expand_to_other_rosters_or_coordination(self):
+        for field, value in (("shard_execution", "parallel"), ("comparison_kind", "foulplay"),
+                             ("coordination", {}), ("shards", [])):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                entry, review, output, doc = self.fixture(directory)
+                doc[field] = value
+                self.save(entry, review, doc)
+                with patch.object(panel.subprocess, "Popen") as spawn:
+                    with self.assertRaises(ValueError):
+                        panel.run(entry, review)
+                spawn.assert_not_called()
+                self.assertFalse(output.exists())
+
+    def test_either_nonzero_stops_peer_and_preserves_both_actual_exits(self):
+        for failing_seat in (0, 1):
+            with self.subTest(failing_seat=failing_seat), tempfile.TemporaryDirectory() as directory:
+                entry, review, output, _doc = self.fixture(directory)
+                workers = [Mock(pid=123001), Mock(pid=123002)]
+                for i, worker in enumerate(workers):
+                    worker.poll.side_effect = lambda i=i: 1 if i == failing_seat else None
+                result, spawn, drain = self.execute(
+                    entry, review, workers=workers, stop=[(1, True), (-15, True)])
+                self.assertEqual(result, 1)
+                self.assertEqual(spawn.call_count, 2)
+                self.assertEqual([call.args[0] for call in drain.call_args_list],
+                                 [workers[failing_seat], workers[1 - failing_seat]])
+                terminal = json.loads((output / "terminal.json").read_text())
+                self.assertEqual(terminal["status"], "PROCESS_FAILURE")
+                self.assertEqual([s["exit_code"] for s in terminal["shards"]], [1, -15])
+
+    def test_second_launch_failure_drains_first_and_records_actual_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output, _doc = self.fixture(directory)
+            with self.assertRaisesRegex(OSError, "fixture launch failed"):
+                self.execute(entry, review, workers=[Mock(pid=123001), OSError("fixture launch failed")],
+                             counts=lambda *_: 0, stop=[(-15, True)])
+            terminal = json.loads((output / "terminal.json").read_text())
+            self.assertEqual(terminal["status"], "SUPERVISOR_FAILURE")
+            self.assertEqual(terminal["shards"][0]["exit_code"], -15)
+            self.assertFalse((output / "candidate-p2-launch.json").exists())
+
+    def test_malformed_prefix_cannot_prevent_peer_drain_or_erase_actual_exit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output, _doc = self.fixture(directory)
+
+            def count(path, *_):
+                if path.name == "candidate-p1.json":
+                    raise ValueError("fixture malformed prefix")
+                return 0
+
+            with self.assertRaisesRegex(RuntimeError, "cleanup/receipt failure"):
+                self.execute(entry, review, counts=count, stop=[(-15, True), (-15, True)])
+            terminal = json.loads((output / "terminal.json").read_text())
+            self.assertEqual(len(terminal["shards"]), 2)
+            self.assertEqual([s["exit_code"] for s in terminal["shards"]], [-15, -15])
+            self.assertEqual(terminal["drain_errors"][0]["name"], "candidate-p1")
+            self.assertIn("prefix_error", terminal["shards"][0])
+
+    def test_one_seat_progress_cannot_renew_other_seats_watchdog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output, doc = self.fixture(directory)
+            doc["no_completion_seconds"] = 10
+            self.save(entry, review, doc)
+            workers = [Mock(pid=123001), Mock(pid=123002)]
+            for worker in workers:
+                worker.poll.side_effect = lambda: None
+            seen = [0]
+
+            def count(path, *_):
+                if path.name == "candidate-p1.json":
+                    seen[0] += 1
+                    return seen[0]
+                return 0
+
+            result, _spawn, drain = self.execute(entry, review, workers=workers, counts=count,
+                                               stop=[(-15, True), (-15, True)])
+            self.assertEqual(result, 1)
+            self.assertEqual(drain.call_count, 2)
+            terminal = json.loads((output / "terminal.json").read_text())
+            self.assertEqual(terminal["status"], "NO_COMPLETION_TIMEOUT")
+            self.assertEqual(terminal["stopping_shard"], "candidate-p2")
+            self.assertTrue((output / "candidate-p1-progress.json").exists())
+            self.assertFalse((output / "candidate-p2-progress.json").exists())
+
+    def test_calendar_cap_drains_both_even_with_advancing_prefixes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output, _doc = self.fixture(directory)
+            workers = [Mock(pid=123001), Mock(pid=123002)]
+            for worker in workers:
+                worker.poll.side_effect = lambda: None
+            result, _spawn, drain = self.execute(entry, review, workers=workers, deadline=5,
+                                               stop=[(-15, True), (-15, True)])
+            self.assertEqual(result, 1)
+            self.assertEqual(drain.call_count, 2)
+            self.assertEqual(json.loads((output / "terminal.json").read_text())["status"], "CALENDAR_CAP")
+
+    def test_zero_exit_incomplete_prefix_drains_peer_without_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output, _doc = self.fixture(directory)
+            with self.assertRaisesRegex(ValueError, "without the planned completed prefix"):
+                self.execute(entry, review, counts=lambda *_: 2, stop=[(0, True), (-15, True)])
+            terminal = json.loads((output / "terminal.json").read_text())
+            self.assertEqual(terminal["status"], "SUPERVISOR_FAILURE")
+            self.assertEqual([s["exit_code"] for s in terminal["shards"]], [0, -15])
+
+    def test_post_exit_provenance_failure_still_drains_peer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry, review, output, _doc = self.fixture(directory)
+            with self.assertRaisesRegex(ValueError, "fixture input drift"):
+                self.execute(entry, review, verify=[None, None, None, ValueError("fixture input drift"), None],
+                             stop=[(0, True), (-15, True)])
+            terminal = json.loads((output / "terminal.json").read_text())
+            self.assertEqual(terminal["status"], "SUPERVISOR_FAILURE")
+            self.assertEqual([s["exit_code"] for s in terminal["shards"]], [0, -15])
 
 
 if __name__ == "__main__":

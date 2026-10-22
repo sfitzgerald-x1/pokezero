@@ -117,7 +117,7 @@ def snapshot(entry, parent, cursors):
         name = shard["name"]
         if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
             raise ValueError("unsafe shard name")
-        for suffix in ("-launch.json", "-terminal.json"):
+        for suffix in ("-launch.json", "-progress.json", "-terminal.json"):
             path = output / (name + suffix)
             if path.exists():
                 documents[path.name] = read(path)
