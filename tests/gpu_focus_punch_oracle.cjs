@@ -32,4 +32,4 @@ process.stdout.write(JSON.stringify({normal:sample(),hit:sample({foe:'tackle'}),
   status:sample({foe:'toxic'}),protect:sample({foe:'protect'}),ghost:sample({ghost:true}),
   sleep:sample({sleep:true}),hit_band:sample({foe:'tackle',band:true}),switch:sample({switch:true}),
   flinch:sample({foe:'fakeout'}),encore:sample({foe:'encore'}),
-  zero_damage:sample({foe:'tackle',endure:true})}));
+  zero_damage:sample({foe:'tackle',endure:true}),fixed_damage:sample({foe:'seismictoss'})}));

@@ -16,25 +16,25 @@ class FocusPunchTests(unittest.TestCase):
     def setUp(self):
         import jax
         import jax.numpy as j
-        from gpu_engine import baton,effects,encore,focus_punch,items,mechanics,pressure,secondary,transition
+        from gpu_engine import baton,damage_moves,effects,encore,focus_punch,items,mechanics,pressure,secondary,transition
         from gpu_engine.state import empty_state,FOCUS_PUNCH,FOCUS_LOST,FLINCH
         self.jax,self.j,self.f,self.t,self.m,self.empty=jax,j,focus_punch,transition,mechanics,empty_state
         self.charge,self.lost,self.flinch=FOCUS_PUNCH,FOCUS_LOST,FLINCH
-        self.names=['_none','focuspunch','tackle','splash','protect','endure','struggle','encore','batonpass','rockslide','toxic']
+        self.names=['_none','focuspunch','tackle','splash','protect','endure','struggle','encore','batonpass','rockslide','toxic','seismictoss']
         types=['_none','normal','fighting','flying','poison','ground','rock','bug','ghost',
             'steel','fire','water','grass','electric','psychic','ice','dragon','dark']
         meta={'vocabulary':{'moves':self.names,'types':types,'abilities':['_none','pressure'],
             'items':['_none','choiceband'],'species':['_none']},
-            'moves':[None]+[{'category':'Physical' if name in {'focuspunch','tackle','struggle','rockslide'} else 'Status',
+            'moves':[None]+[{'category':'Physical' if name in {'focuspunch','tackle','struggle','rockslide','seismictoss'} else 'Status',
                 'flags':{'protect':name in {'focuspunch','tackle','rockslide','encore','toxic'},
                     'bypasssub':name=='encore','failencore':name in {'encore','struggle'}}} for name in self.names[1:]]}
         n=len(self.names);num=j.ones((18,18),j.int32).at[1,8].set(0).at[2,8].set(0)
-        self.table=transition.MoveTable(j.array([0,150,35,0,0,0,50,0,0,75,0]),
-            j.array([0,2,1,1,1,1,0,1,1,6,4]),j.ones(n,bool),j.full(n,100),j.ones(n,bool),
-            j.array([0,-3,0,0,3,3,0,0,0,0,0]),num,j.ones((18,18),j.int32),j.array(6),
+        self.table=transition.MoveTable(j.array([0,150,35,0,0,0,50,0,0,75,0,0]),
+            j.array([0,2,1,1,1,1,0,1,1,6,4,2]),j.ones(n,bool),j.full(n,100),j.ones(n,bool),
+            j.array([0,-3,0,0,3,3,0,0,0,0,0,0]),num,j.ones((18,18),j.int32),j.array(6),
             effects=effects.from_metadata(meta),items=items.from_metadata(meta),pressure=pressure.from_metadata(meta),
             baton=baton.from_metadata(meta),encore=encore.from_metadata(meta),secondary=secondary.from_metadata(meta),
-            focus_punch=focus_punch.from_metadata(meta))
+            focus_punch=focus_punch.from_metadata(meta),damage_moves=damage_moves.from_metadata(meta))
 
     def live(self,batch=1,foe=3):
         j=self.j;s=self.empty(batch,seed=223)
@@ -65,6 +65,10 @@ class FocusPunchTests(unittest.TestCase):
             a=self.play(s).state
             self.assertEqual(int(a.hp[0,0,0]),1000);self.assertLess(int(a.hp[0,1,0]),1000)
             self.assertLess(int(a.substitute_hp[0,0,0]),hp)
+
+    def test_fixed_level_damage_breaks_despite_zero_catalog_power(self):
+        a=self.play(self.live(foe=11)).state
+        self.assertEqual((int(a.hp[0,0,0]),int(a.hp[0,1,0]),int(a.pp[0,0,0,0])),(900,1000,7))
 
     def test_miss_immunity_and_status_do_not_break_focus(self):
         s=self.live(foe=2)
@@ -122,7 +126,7 @@ class FocusPunchTests(unittest.TestCase):
     @unittest.skipUnless(NODE and SHOWDOWN,'requires pinned Showdown')
     def test_pinned_gen3_hit_sub_pp_and_encore(self):
         cases=json.loads(subprocess.check_output([NODE,str(Path(__file__).with_name('gpu_focus_punch_oracle.cjs')),SHOWDOWN],text=True))
-        for name in ('hit','hit_band','flinch','zero_damage'):
+        for name in ('hit','hit_band','flinch','zero_damage','fixed_damage'):
             self.assertTrue(cases[name]['failed'],name);self.assertEqual(cases[name]['pp'],31,name)
         for name in ('normal','miss','immune','sub','broken_sub','status'):
             self.assertFalse(cases[name]['failed'],name);self.assertLess(cases[name]['hp'][1],1000,name)
