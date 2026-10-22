@@ -5,10 +5,14 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT=Path(__file__).resolve().parents[1]
+# Native bridge fixtures import the src-layout API before fidelity itself.
+# Do not depend on a caller's PYTHONPATH or another test's import side effect.
+sys.path.insert(0,str(ROOT/'src'))
 NODE=os.environ.get('NODE') or shutil.which('node')
 SHOWDOWN=os.environ.get('POKEZERO_SHOWDOWN_ROOT')
 
