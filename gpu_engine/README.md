@@ -36,6 +36,17 @@ restrictions still require the transition and are not claimed as supported.
 For unilateral forced replacement, the initial transition suppresses the
 other seat's action. The mask alone is not a complete request-phase protocol.
 
+Direct Baton Pass now suspends the original turn for a living forced switch,
+then resumes the already selected opposing move with its original chance block.
+It does not solicit a second action, re-sort two moves, or trigger Pursuit's
+voluntary-switch interception. Two queued Baton actions suspend separately.
+Supported transfer is seven boosts, Substitute HP, confusion counter and the
+singles Leech Seed flag; recipient HP/status/item/ability remain its own, and
+Flash Fire/Choice lock do not pass. This is not general volatile-copy support.
+Entry hazards still hit through Substitute: an entry KO cancels the saved move,
+then the existing replacement chain finishes before residuals. All moves remain
+placeholders until the wider effects and coverage checks qualify them.
+
 ## Run the first device check
 
 From the checkout root, in a fresh Python 3.12 environment on a supported NVIDIA GPU:
@@ -127,7 +138,7 @@ Detect block moves according to the pinned catalog's protect flag; Endure limits
 direct move damage to leave one HP, not residuals or recoil. Their shared Gen 3
 stall chance halves to a minimum of one eighth and expires after an unrefreshed
 ordinary turn. They fail as the last queued move. This remains a partial surface:
-multi-hit, item/ability interactions, Baton Pass and the wider event system are
+multi-hit, broader item/ability interactions and the wider event system are
 not qualified by these authored component fixtures.
 
 The held-item subset applies Choice Band, species-gated Thick Club and Gen 3

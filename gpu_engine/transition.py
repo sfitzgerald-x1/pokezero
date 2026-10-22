@@ -564,7 +564,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
                 acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
         if table.baton is not None:
-            bench_alive = jnp.any(work.hp[rows,side] > 0,axis=1) & jnp.any(
+            bench_alive = jnp.any(
                 (work.hp[rows,side] > 0) & (jnp.arange(6)[None,:] != work.active[rows,side,None]),axis=1)
             passed = acts & table.baton.move[move] & (hp > 0) & bench_alive
             work = work._replace(baton_pass=work.baton_pass.at[rows,side].set(
@@ -575,9 +575,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             queued_actor = jnp.where(save_foe,foe,queued_actor)
             paused |= passed
     # Gen 3 action-phase faints request replacement BEFORE the residual action.
-    # All queued moves are already cancelled after a KO. Retain only that
-    # pending residual action until both slots are alive, including hazard-KO
-    # recovery chains. Post-residual replacement requests stay separate.
+    # A KO cancels queued moves; direct Baton retains at most one selected foe
+    # move. Both pause residuals, including hazard-KO recovery chains.
+    # Post-residual replacement requests stay separate.
     turn_context = live & (~replacement | state.pending_residual)
     parties_alive = jnp.all(jnp.any(work.hp>0,axis=2),axis=1)
     active_alive = jnp.all(work.hp[rows[:,None],sides,work.active]>0,axis=1)
