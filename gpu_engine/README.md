@@ -110,6 +110,12 @@ from coverage counts. Cosmetic forms such as Unown-G retain distinct species IDs
 
 ## Damage and status core components
 
+The existing fixed critical roll now resolves ordinary 1/16 and catalog +1
+high-crit 1/8 chances. Battle Armor and Shell Armor veto critical hits in both
+ordinary damage and pre-switch Pursuit, using the actual outgoing holder.
+Focus Energy, critical-boosting items and additional critical stages are outside
+this subset; the accepted pool and PRNG columns are unchanged.
+
 `mechanics.py` supplies batched Gen 3 damage arithmetic, separate accuracy/evasion
 stages, paralysis speed, before-move status transitions and major-status residuals.
 It preserves the pinned Showdown Q12 unsigned truncation and rounding, damage

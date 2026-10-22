@@ -28,6 +28,7 @@ from . import variable_moves as variable
 from . import pursuit as intercepts
 from . import baton as passing
 from . import phazing as dragging
+from . import critical as crits
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -55,6 +56,7 @@ class MoveTable(NamedTuple):
     pursuit: intercepts.PursuitTable | None = None
     baton: passing.BatonTable | None = None
     phazing: dragging.PhazingTable | None = None
+    critical: crits.CriticalTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -85,7 +87,7 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
         pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
         variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
-        dragging.from_metadata(metadata))
+        dragging.from_metadata(metadata),crits.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -422,12 +424,15 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             phase1_num,phase1_den = absorb.damage_phase1(table.absorption,typ,_active(work.volatile,work,side))
         if table.combat is not None:
             power = traits.base_power(table.combat,_active(work.ability,work,foe),typ,power)
+        critical = chance[:,4] == 0
+        if table.critical is not None:
+            critical = crits.is_critical(table.critical,move,_active(work.ability,work,foe),chance[:,4])
         damage = m.gen3_damage(level=_active(work.level, work, side), power=power,
             attack=jnp.where(physical, attack_stats[:, 1], attack_stats[:, 3]),
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
             attack_stage=jnp.where(physical, attack_boosts[:, 0], attack_boosts[:, 2]),
             defense_stage=jnp.where(physical, defense_boosts[:, 1], defense_boosts[:, 3]),
-            physical=physical, critical=chance[:, 4] == 0,
+            physical=physical, critical=critical,
             attack_num=attack_num,attack_den=attack_den,
             weather_num=weather_num,weather_den=weather_den,
             phase1_num=phase1_num,phase1_den=phase1_den,
