@@ -123,7 +123,7 @@ class TransitionTests(unittest.TestCase):
         self.assertTrue(bool(self.jnp.all(r.state.confusion_counter[:,0,0] == 1)))
         self.assertTrue(bool(self.jnp.all(r.state.hp[:,1,0] == 100)))
 
-    def test_confusion_self_ko_cancels_foe_action_but_not_eligible_residuals(self):
+    def test_confusion_self_ko_defers_residuals_until_replacement(self):
         s = self.live(64)
         s = s._replace(hp=s.hp.at[:,0,0].set(1),
             confusion_counter=s.confusion_counter.at[:,0,0].set(2),
@@ -132,8 +132,13 @@ class TransitionTests(unittest.TestCase):
         ko = r.state.hp[:,0,0] == 0
         self.assertTrue(bool(self.jnp.any(ko)))
         self.assertTrue(bool(self.jnp.all(~ko | (r.state.pp[:,1,0,0] == 10))))
-        self.assertTrue(bool(self.jnp.all(r.state.hp[:,1,0] == 88)))
+        self.assertTrue(bool(self.jnp.all(r.state.hp[:,1,0] == self.jnp.where(ko,100,88))))
+        self.assertTrue(bool(self.jnp.all(r.state.pending_residual == ko)))
         self.assertFalse(bool(self.jnp.any(r.state.done)))
+        waiting = self.jax.tree.map(lambda x:x[ko],r.state)
+        resumed = self.t.step(waiting,self.jnp.tile(self.jnp.array([[4,0]]),(int(self.jnp.sum(ko)),1)),self.table).state
+        self.assertTrue(bool(self.jnp.all(resumed.hp[:,1,0] == 88)))
+        self.assertTrue(bool(self.jnp.all(resumed.pp[:,1,0,0] == 10)))
 
     def test_confusion_last_mon_ko_ends_before_foe_move_and_residual(self):
         s = self.live(64)
