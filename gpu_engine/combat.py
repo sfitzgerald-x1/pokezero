@@ -22,6 +22,7 @@ class CombatTable(NamedTuple):
     steel_type: jax.Array
     fire_type: jax.Array
     ice_type: jax.Array
+    doubled_attack: jax.Array
 
 
 def from_metadata(metadata):
@@ -29,7 +30,8 @@ def from_metadata(metadata):
     flag = lambda name:jnp.asarray([value == name for value in vocab["abilities"]])
     typ = lambda name:jnp.asarray(vocab["types"].index(name))
     return CombatTable(flag("guts"),flag("thickfat"),flag("arenatrap"),flag("magnetpull"),
-        flag("shadowtag"),flag("levitate"),typ("flying"),typ("steel"),typ("fire"),typ("ice"))
+        flag("shadowtag"),flag("levitate"),typ("flying"),typ("steel"),typ("fire"),typ("ice"),
+        jnp.asarray([name in {"hugepower","purepower"} for name in vocab["abilities"]]))
 
 
 def attack_modifier(table,ability,status,physical,*,item_num=1,item_den=1):
@@ -39,7 +41,8 @@ The selected multipliers are exact Q12 fractions (1, 1.5, 2). Their rational
 product is the same chain as the pinned event; damage applies it once to Atk.
 """
     activated = table.guts[ability] & (status != m.NONE) & jnp.asarray(physical)
-    return item_num*jnp.where(activated,3,1),item_den*jnp.where(activated,2,1)
+    doubled = table.doubled_attack[ability] & jnp.asarray(physical)
+    return item_num*jnp.where(activated,3,jnp.where(doubled,2,1)),item_den*jnp.where(activated,2,1)
 
 
 def base_power(table,ability,move_type,power):
