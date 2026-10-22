@@ -39,6 +39,7 @@ from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION, protocol_signatu
 from .dex import ShowdownDex, load_showdown_dex_cached
 from .env import PlayerId, TerminalState
 from .fallback_replay import RefusalRecord, attach_refusal_recorder
+from .fullgame_phase_progress import FullgamePhaseProgress
 from .local_showdown import (
     BRIDGE_PATH,
     LocalShowdownConfig,
@@ -5826,6 +5827,7 @@ async def run_controlled_foulplay_benchmark(
     *,
     progress_callback: ControlledFoulPlayProgressCallback | None = None,
     trajectory_callback: ControlledFoulPlayTrajectoryCallback | None = None,
+    phase_progress: FullgamePhaseProgress | None = None,
     live_continuation_oracle_successor_capture_callback: Callable[[Mapping[str, Any]], None]
     | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
@@ -5856,6 +5858,7 @@ async def run_controlled_foulplay_benchmark(
             checkpoint_sha256=None,
             progress_callback=progress_callback,
             trajectory_callback=trajectory_callback,
+            phase_progress=phase_progress,
         )
 
     checkpoint = config.checkpoint
@@ -5992,6 +5995,7 @@ async def run_controlled_foulplay_benchmark(
             trajectory_callback=trajectory_callback,
             live_continuation_probe=live_continuation_probe,
             live_continuation_oracle_controller=live_continuation_oracle_controller,
+            phase_progress=phase_progress,
         )
         if config.policy_mode == "trajectory-reference":
             reference_result = benchmark_result
@@ -6032,6 +6036,7 @@ async def _run_controlled_foulplay_games(
     opponent_policy: Policy | None = None,
     live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
     live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
+    phase_progress: FullgamePhaseProgress | None = None,
 ) -> ControlledFoulPlayBenchmarkResult:
     """Run a preconstructed legal policy through the shared FoulPlay bridge.
 
@@ -6116,6 +6121,7 @@ async def _run_controlled_foulplay_games(
                         opponent_policy=opponent_policy,
                         live_continuation_probe=live_continuation_probe,
                         live_continuation_oracle_controller=live_continuation_oracle_controller,
+                        phase_progress=phase_progress,
                     )
                 )
             finally:
@@ -7372,8 +7378,11 @@ async def _run_single_game(
     opponent_policy: Policy | None = None,
     live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
     live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
+    phase_progress: FullgamePhaseProgress | None = None,
 ) -> ControlledFoulPlayGameResult:
     battle_id = f"{DEFAULT_BATTLE_ID_PREFIX}-{seed}"
+    if phase_progress is not None:
+        phase_progress.emit("game", "started", seed=seed, seat=config.pokezero_player)
     state = _ControlledBattleState(
         battle_id=battle_id,
         seed=seed,
@@ -7412,7 +7421,11 @@ async def _run_single_game(
     terminal: TerminalState | None = None
 
     while terminal is None:
+        if phase_progress is not None:
+            phase_progress.emit("bridge_wait", "started", seed=seed, decision_round=decision_round)
         event = await bridge.next_event()
+        if phase_progress is not None:
+            phase_progress.emit("bridge_wait", "returned", seed=seed, decision_round=decision_round)
         if event.get("battleId") != battle_id:
             continue
         event_type = event.get("type")
@@ -7429,6 +7442,8 @@ async def _run_single_game(
             if decision_round >= config.max_decision_rounds:
                 terminal = TerminalState(winner=None, turn_count=config.max_decision_rounds, capped=True)
                 break
+            if phase_progress is not None:
+                phase_progress.emit("decision", "started", seed=seed, decision_round=decision_round)
             terminal = await _handle_decision_boundary(
                 config=config,
                 bridge=bridge,
@@ -7446,7 +7461,10 @@ async def _run_single_game(
                 opponent_policy=opponent_policy,
                 live_continuation_probe=live_continuation_probe,
                 live_continuation_oracle_controller=live_continuation_oracle_controller,
+                phase_progress=phase_progress,
             )
+            if phase_progress is not None:
+                phase_progress.emit("decision", "returned", seed=seed, decision_round=decision_round)
             decision_round += 1
             continue
         if event_type == "terminal":
@@ -7719,6 +7737,9 @@ async def _run_single_game(
                 "request_history": [[seat, line] for seat, line in state.request_history],
             }
         trajectory_callback(state.trajectory)
+    if phase_progress is not None:
+        phase_progress.emit("game", "returned", seed=seed, seat=config.pokezero_player,
+                            decision_round=decision_round)
     return ControlledFoulPlayGameResult(
         battle_id=battle_id,
         seed=seed,
@@ -8186,10 +8207,14 @@ async def _select_live_foulplay_decision(
     decision_round: int,
     foulplay_process: asyncio.subprocess.Process | None,
     foulplay_logs: _ProcessLogBuffer,
+    phase_progress: FullgamePhaseProgress | None = None,
 ) -> tuple[str, PolicyDecision]:
     """Wait for, decode, and record the live FoulPlay action without submitting it."""
 
     think_clock = _FoulPlayThinkClock()
+    if phase_progress is not None:
+        phase_progress.emit("foulplay_choice", "started", seed=state.seed,
+                            seat=config.foulplay_player, decision_round=decision_round)
     choice = await _wait_for_foulplay_choice_or_exit(
         server=server,
         battle_id=state.battle_id,
@@ -8197,6 +8222,9 @@ async def _select_live_foulplay_decision(
         logs=foulplay_logs,
         clock=think_clock,
     )
+    if phase_progress is not None:
+        phase_progress.emit("foulplay_choice", "returned", seed=state.seed,
+                            seat=config.foulplay_player, decision_round=decision_round)
     foulplay_action = action_index_from_choice_string(player_state, choice)
     if foulplay_action is None:
         raise RuntimeError(f"unable to decode foul-play choice {choice!r}.")
@@ -8257,6 +8285,7 @@ async def _handle_decision_boundary(
     opponent_policy: Policy | None = None,
     live_continuation_probe: _LiveFoulPlayContinuationProbe | None = None,
     live_continuation_oracle_controller: _LiveFoulPlayContinuationOracleController | None = None,
+    phase_progress: FullgamePhaseProgress | None = None,
 ) -> TerminalState | None:
     assert state.trajectory is not None
     pokezero_player = config.pokezero_player
@@ -8322,6 +8351,7 @@ async def _handle_decision_boundary(
             decision_round=decision_round,
             foulplay_process=foulplay_process,
             foulplay_logs=foulplay_logs,
+            phase_progress=phase_progress,
         )
         if probe_this_boundary:
             assert live_continuation_probe is not None
@@ -8364,6 +8394,9 @@ async def _handle_decision_boundary(
             )
         # Match the local benchmark boundary: policy selection begins after the
         # observation/context are ready and ends at the returned decision.
+        if phase_progress is not None:
+            phase_progress.emit("candidate_policy", "started", seed=state.seed,
+                                seat=pokezero_player, decision_round=decision_round)
         pokezero_choice_wall_start = time.perf_counter()
         policy_decision = await asyncio.to_thread(
             _select_policy_decision,
@@ -8426,6 +8459,9 @@ async def _handle_decision_boundary(
                     },
                 )
         policy_elapsed_seconds = time.perf_counter() - pokezero_choice_wall_start
+        if phase_progress is not None:
+            phase_progress.emit("candidate_policy", "returned", seed=state.seed,
+                                seat=pokezero_player, decision_round=decision_round)
         choices[pokezero_player] = showdown_choice_for_action(
             player_states[pokezero_player],
             policy_decision.action_index,
@@ -8464,6 +8500,9 @@ async def _handle_decision_boundary(
             decision_round=decision_round,
             belief_set_source=belief_set_source,
         )
+        if phase_progress is not None:
+            phase_progress.emit("opponent_policy", "started", seed=state.seed,
+                                seat=foulplay_player, decision_round=decision_round)
         opponent_wall_start = time.perf_counter()
         opponent_decision = await asyncio.to_thread(
             _select_policy_decision,
@@ -8473,6 +8512,9 @@ async def _handle_decision_boundary(
             seed=state.seed,
         )
         opponent_elapsed_seconds = time.perf_counter() - opponent_wall_start
+        if phase_progress is not None:
+            phase_progress.emit("opponent_policy", "returned", seed=state.seed,
+                                seat=foulplay_player, decision_round=decision_round)
         choices[foulplay_player] = showdown_choice_for_action(
             player_states[foulplay_player], opponent_decision.action_index,
         )
@@ -8494,6 +8536,7 @@ async def _handle_decision_boundary(
             decision_round=decision_round,
             foulplay_process=foulplay_process,
             foulplay_logs=foulplay_logs,
+            phase_progress=phase_progress,
         )
         choices[foulplay_player] = choice
         decisions[foulplay_player] = foulplay_decision
@@ -8535,7 +8578,11 @@ async def _handle_decision_boundary(
         elif opponent_policy is not None:
             state.opponent_decisions.append(decision)
 
+    if phase_progress is not None:
+        phase_progress.emit("submission", "started", seed=state.seed, decision_round=decision_round)
     await bridge.send({"type": "choices", "battleId": state.battle_id, "choices": choices})
+    if phase_progress is not None:
+        phase_progress.emit("submission", "returned", seed=state.seed, decision_round=decision_round)
     if pokezero_context is not None and pokezero_context.player_id in choices:
         state.pokezero_submitted_choice_players.append(pokezero_context.player_id)
     return None
@@ -9726,12 +9773,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--summary-out", type=Path, default=None, help="Optional JSON result path.")
+    parser.add_argument("--phase-progress-out", type=Path, default=None,
+                        help="Opt-in atomic public phase snapshot at a NEW path. No actions or "
+                             "private state; not a result or watchdog reset. Adds disk I/O.")
     parser.add_argument("--json", action="store_true", help="Print JSON result.")
     return parser
 
 
 def build_comparison_arg_parser() -> argparse.ArgumentParser:
     parser = build_arg_parser()
+    # One snapshot belongs to one invocation, not several independently retried arms.
+    _remove_optional_argument(parser, "--phase-progress-out")
     _remove_optional_argument(parser, "--policy-mode")
     for option in ("--reference-seconds", "--reference-workers", "--reference-alpha",
                    "--reference-beta", "--reference-max-transitions",
@@ -9946,6 +9998,11 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     if args.showdown_root is None:
         parser.error("--showdown-root is required, or set POKEZERO_SHOWDOWN_ROOT.")
     config = _config_from_args(args)
+    if (args.phase_progress_out is not None and args.summary_out is not None
+            and args.phase_progress_out.resolve() == args.summary_out.resolve()):
+        parser.error("--phase-progress-out must differ from --summary-out")
+    phase_progress = (FullgamePhaseProgress(args.phase_progress_out)
+                      if args.phase_progress_out is not None else None)
 
     def write_progress(result: ControlledFoulPlayBenchmarkResult) -> None:
         if args.summary_out is not None:
@@ -9954,7 +10011,10 @@ async def async_main(argv: Sequence[str] | None = None) -> int:
     result = await run_controlled_foulplay_benchmark(
         config,
         progress_callback=write_progress if args.summary_out is not None else None,
+        phase_progress=phase_progress,
     )
+    if phase_progress is not None:
+        phase_progress.emit("run", "returned")
     payload = result.to_dict()
     if args.summary_out is not None:
         _write_json(args.summary_out, payload)

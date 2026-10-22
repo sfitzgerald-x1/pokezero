@@ -16,6 +16,9 @@ on:
       - tests/test_fullgame_strength.py
       - scripts/run_fullgame_panel.py
       - tests/test_fullgame_panel.py
+      - src/pokezero/foulplay_bridge.py
+      - src/pokezero/fullgame_phase_progress.py
+      - tests/test_fullgame_phase_progress.py
       - scripts/coordinate_fullgame_panels.py
       - tests/test_fullgame_coordinator.py
       - scripts/install_phase0_reference_bundle.py
@@ -39,6 +42,9 @@ on:
       - tests/test_fullgame_strength.py
       - scripts/run_fullgame_panel.py
       - tests/test_fullgame_panel.py
+      - src/pokezero/foulplay_bridge.py
+      - src/pokezero/fullgame_phase_progress.py
+      - tests/test_fullgame_phase_progress.py
       - scripts/coordinate_fullgame_panels.py
       - tests/test_fullgame_coordinator.py
       - scripts/install_phase0_reference_bundle.py
@@ -63,4 +69,4 @@ jobs:
       - name: Run standalone contracts
         env:
           PYTHONPATH: src:tests
-        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity test_search_over_raw_margin test_search_over_raw_budget16384 test_fullgame_strength test_fullgame_panel test_fullgame_coordinator test_reference_bundle_install -v
+        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity test_search_over_raw_margin test_search_over_raw_budget16384 test_fullgame_strength test_fullgame_panel test_fullgame_phase_progress test_fullgame_coordinator test_reference_bundle_install -v
