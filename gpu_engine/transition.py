@@ -27,6 +27,7 @@ from . import damage_moves as special_hits
 from . import variable_moves as variable
 from . import pursuit as intercepts
 from . import baton as passing
+from . import phazing as dragging
 from .effects import MoveEffects, from_metadata as effects_from_metadata, stall_success
 from .state import FLINCH, BattleState, bench_indices, empty_state, legal_actions
 
@@ -53,6 +54,7 @@ class MoveTable(NamedTuple):
     variable_moves: variable.VariableMoveTable | None = None
     pursuit: intercepts.PursuitTable | None = None
     baton: passing.BatonTable | None = None
+    phazing: dragging.PhazingTable | None = None
 
 
 def tables_from_metadata(metadata: dict) -> MoveTable:
@@ -82,7 +84,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         effects_from_metadata(metadata),held.from_metadata(metadata),climate.from_metadata(metadata),
         arrival.from_metadata(metadata),absorb.from_metadata(metadata),traits.from_metadata(metadata),
         pp_cost.from_metadata(metadata),recovery.from_metadata(metadata),special_hits.from_metadata(metadata),
-        variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata))
+        variable.from_metadata(metadata),intercepts.from_metadata(metadata),passing.from_metadata(metadata),
+        dragging.from_metadata(metadata))
 
 
 def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
@@ -223,6 +226,11 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     draws = jax.vmap(lambda key: jax.random.randint(key, (2, 12), 0,
         jnp.array([2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2], jnp.int32)))(splits[:, 1])
     draws = jnp.where(resuming[:,None,None],state.residual_draws,draws)
+    # Extend the ordinary chance block without changing its existing twelve
+    # columns. One fixed roll per seat gives unbiased 1..5-bench selection.
+    phazing_draws=jax.vmap(lambda key:jax.random.randint(
+        jax.random.fold_in(key,271828),(2,),0,60))(splits[:,1])
+    phazing_draws=jnp.where(resuming[:,None],state.phazing_draws,phazing_draws)
     # Replacement requests do not consume another ordinary-turn chance block.
     # A separate counted fold-in distinguishes repeated hazard-KO entry ties.
     entry_ties = jax.vmap(lambda key,count:jax.random.randint(
@@ -275,23 +283,9 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         do_switch = switches[rows,side] & continues & (~switch_faint | replacement)
         installed = installed.at[rows,side].set(do_switch)
-        old_hp = work.hp[rows,side,old_active]
-        old_status = work.status[rows,side,old_active]
-        cure = old_hp <= 0
-        if table.entry is not None:
-            cure |= table.entry.natural_cure[work.ability[rows,side,old_active]]
-        work = work._replace(status=work.status.at[rows,side,old_active].set(
-            jnp.where(do_switch & cure,m.NONE,old_status)))
-        counter = work.status_counter[rows,side,old_active]
-        work = work._replace(status_counter=work.status_counter.at[rows,side,old_active].set(
-            jnp.where(do_switch & (cure | (old_status == m.TOX)),0,counter)))
         work = passing.copy_to_recipient(work,side,target[rows,side],
             eligible=do_switch & work.baton_pass[rows,side])
-        for name in ("boosts","volatile","confusion_counter","protect_counter","substitute_hp","choice_move"):
-            value = getattr(work,name)
-            old = value[rows,side,old_active]
-            gate = do_switch[:,None] if old.ndim == 2 else do_switch
-            work = work._replace(**{name:value.at[rows,side,old_active].set(jnp.where(gate,0,old))})
+        work=arrival.depart(work,side,table.entry,eligible=do_switch)
         work = work._replace(active=work.active.at[rows,side].set(jnp.where(do_switch,target[rows,side],old_active)),
             baton_pass=work.baton_pass.at[rows,side].set(work.baton_pass[rows,side] & ~do_switch),
             forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])),
@@ -333,6 +327,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         old_stall[rows[:,None],sides,work.active])
     queued_actor = jnp.full_like(state.queued_actor,-1)
     paused = jnp.zeros_like(live)
+    displaced=jnp.zeros_like(state.active,dtype=jnp.bool_)
     work = work._replace(protect_counter=jnp.where(
         (live & ~replacement)[:,None,None],0,work.protect_counter))
     for order in range(2):
@@ -342,7 +337,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
         chance = draws[rows, side]
         move_context = ~replacement | (state.pending_residual & (saved_actor == side))
         eligible = (live & move_context & ~paused & ~moves_cancelled & ~switches[rows, side]
-            & ~pursuit_used[rows,side] & (_active(work.hp, work, side) > 0))
+            & ~pursuit_used[rows,side] & ~displaced[rows,side] & (_active(work.hp, work, side) > 0))
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
@@ -563,6 +558,12 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             work = work._replace(spikes=work.spikes.at[rows,foe].set(jnp.where(
                 acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
+        if table.phazing is not None:
+            work,changed,hazard_ko=dragging.drag(work,foe,move,phazing_draws[rows,side],
+                table.phazing,table.entry,eligible=acts & hit & (hp>0))
+            displaced=displaced.at[rows,foe].set(displaced[rows,foe] | changed)
+            moves_cancelled |= hazard_ko
+            work=_lum_update(work,table,changed)
         if table.baton is not None:
             bench_alive = jnp.any(
                 (work.hp[rows,side] > 0) & (jnp.arange(6)[None,:] != work.active[rows,side,None]),axis=1)
@@ -659,6 +660,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
             jnp.where(resuming[:,None],state.queued_actions,actions),0),
         queued_stall=jnp.where((defer_residual & (queued_actor >= 0))[:,None],saved_stall,0),
         residual_draws=jnp.where(defer_residual[:,None,None],draws,jnp.zeros_like(draws)),
+        phazing_draws=jnp.where(defer_residual[:,None],phazing_draws,0),
         replacement_count=jnp.where(defer_residual,
             jnp.where(resuming,state.replacement_count+1,0),0),
         forced_switch=((jnp.take_along_axis(work.hp, work.active[..., None], axis=2)[..., 0] <= 0)

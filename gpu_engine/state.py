@@ -12,6 +12,7 @@ import jax.numpy as jnp
 
 FLINCH = 1  # volatile bit 0; cleared at the end of each ordinary turn
 LEECH_SEED = 4  # volatile bit 2; opposite singles slot receives the drain
+ROOTED = 8  # represented Ingrain condition; the move itself remains pending
 
 
 class BattleState(NamedTuple):
@@ -48,6 +49,7 @@ class BattleState(NamedTuple):
     queued_stall: jax.Array        # [B,2], old counters for the saved action
     pending_residual: jax.Array    # [B], suspended action turn waits for entry
     residual_draws: jax.Array      # [B,2,12], original ordinary-turn chance block
+    phazing_draws: jax.Array       # [B,2], fixed uniform [0,60) bench-choice rolls
     replacement_count: jax.Array   # [B], tie stream within a suspended turn
     spikes: jax.Array              # [B,2]
     wish_counter: jax.Array        # [B,2], slot condition; persists across switches
@@ -89,6 +91,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         queued_actions=side(),queued_stall=side(),
         pending_residual=jnp.zeros((b,),jnp.bool_),
         residual_draws=jnp.zeros((b,2,12),jnp.int32),replacement_count=battle(),
+        phazing_draws=side(),
         spikes=side(), wish_counter=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32))
 
@@ -115,6 +118,8 @@ def legal_actions(state: BattleState) -> jax.Array:
     forced = state.forced_switch | (active_hp <= 0)
     moves &= ~forced[..., None]
     bench_hp = jnp.take_along_axis(state.hp, bench_indices(state.active), axis=2)
-    switches = (bench_hp > 0) & (~state.trapped | forced)[..., None]
+    active_volatile=jnp.take_along_axis(state.volatile,state.active[...,None],axis=2)[...,0]
+    rooted=(active_volatile & jnp.uint32(ROOTED))!=0
+    switches = (bench_hp > 0) & (~(state.trapped | rooted) | forced)[..., None]
     mask = jnp.concatenate((moves, switches), axis=-1)
     return mask & ~state.done[:, None, None]
