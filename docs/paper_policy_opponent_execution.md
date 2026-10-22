@@ -795,7 +795,14 @@ not authentication or evidence of semantic truth. Relevant ability/type or
 Transform uncertainty fails closed for the current entry; a later switch
 clears that entry's taint. Hard locks, root-only confirmed trap latches,
 forced/WAIT and no-living-bench boundaries retain their established paths.
-Unsupported changed trapping abilities/formats remain refused. This does not
+An exact current-entry Gen3 Trace reveal now supports Gardevoir/Porygon2 copying
+Arena Trap or Magnet Pull. The observer requires native base Trace, matching
+copied ability, exact active source/target identities and both alive at the
+reveal; it resets the proof on entry and never clears prior taint. The native
+switch renderer emits the corresponding instruction-local reveal. Omitted,
+conflicting or stale reveals and other changed abilities/formats still refuse.
+The authored `--traced` request and `--maybe-trap` replacement oracles exercise
+this boundary, not any stopped game's lost sampled state. This does not
 qualify generic Gen3 fidelity, recover the original lost failure state, or
 authorize replay/continuation of any stopped scientific roster. New strength
 work still requires exact-head model and real champion verification plus a

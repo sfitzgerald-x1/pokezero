@@ -1454,14 +1454,22 @@ fn render_switch_phase(
                     SideReference::SideOne => (&sim.state.side_one, &sim.state.side_two),
                     SideReference::SideTwo => (&sim.state.side_two, &sim.state.side_one),
                 };
-                if traced && own.get_active_immutable().ability == Abilities::SHADOWTAG
-                    && opposing.get_active_immutable().ability == Abilities::SHADOWTAG
+                let copied = own.get_active_immutable().ability;
+                let label = match copied {
+                    Abilities::SHADOWTAG => Some("Shadow Tag"),
+                    Abilities::ARENATRAP => Some("Arena Trap"),
+                    Abilities::MAGNETPULL => Some("Magnet Pull"),
+                    _ => None,
+                };
+                if traced && label.is_some()
+                    && opposing.get_active_immutable().ability == copied
                     && own.get_active_immutable().hp > 0 && opposing.get_active_immutable().hp > 0
                 {
                     let ident = ctx.active_ident(sim.state, side);
                     let source = ctx.active_ident(sim.state, foe);
                     out.lines.push(format!(
-                        "|-ability|{ident}|Shadow Tag|Trace|[from] ability: Trace|[of] {source}"
+                        "|-ability|{ident}|{}|Trace|[from] ability: Trace|[of] {source}",
+                        label.expect("supported traced trapping ability")
                     ));
                 }
             }

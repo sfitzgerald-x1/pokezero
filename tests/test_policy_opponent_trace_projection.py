@@ -16,12 +16,13 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def native_replacement(seat):
-    def mon(name, ability, moves, hp=100):
-        return PokemonSpec(id=name, level=100, types=('psychic',), hp=hp, maxhp=100,
+def native_replacement(seat, holder_species='wobbuffet', holder_ability='shadowtag',
+                       holder_moves=('safeguard', 'counter'), holder_types=('psychic',)):
+    def mon(name, ability, moves, hp=100, types=('psychic',)):
+        return PokemonSpec(id=name, level=100, types=types, hp=hp, maxhp=100,
             attack=100, defense=100, special_attack=100, special_defense=100, speed=100,
             ability=ability, moves=tuple(MoveSpec(id=m, pp=10) for m in moves))
-    holder = SideSpec(pokemon=(mon('wobbuffet', 'shadowtag', ('safeguard', 'counter')),
+    holder = SideSpec(pokemon=(mon(holder_species, holder_ability, holder_moves, types=holder_types),
                               mon('blissey', 'naturalcure', ('softboiled',))))
     tracer = SideSpec(pokemon=(mon('snorlax', 'immunity', ('rest',), hp=0),
                               mon('gardevoir', 'trace', ('psychic', 'calmmind')),
@@ -34,6 +35,46 @@ def native_replacement(seat):
 @unittest.skipUnless(pokezero_search is not None and os.environ.get('POKEZERO_SHOWDOWN_ROOT'),
                      'requires native branch renderer and pinned Showdown source')
 class TraceProjectionTests(unittest.TestCase):
+    def test_replacement_trace_maybe_trap_reveal_and_child_observer_match_source(self):
+        from pokezero.showdown import _legal_action_mask
+        result = json.loads(subprocess.run([os.environ.get('POKEZERO_NODE_BINARY', 'node'),
+            str(ROOT / 'tests/policy_opponent_trace_oracle.cjs'),
+            os.environ['POKEZERO_SHOWDOWN_ROOT'], '--maybe-trap'],
+            capture_output=True, text=True, check=True, timeout=30).stdout)
+        self.assertFalse(result['scientific_measurement'])
+        self.assertFalse(result['historical_cause_established'])
+        self.assertEqual(len(result['rows']), 4)
+        for row in result['rows']:
+            with self.subTest(seat=row['seat'], ability=row['holderAbility']):
+                seat = row['seat']; other = 'p2' if seat == 'p1' else 'p1'
+                expected = (f'|-ability|{other}a: Gardevoir|{row["holderAbility"]}|Trace|'
+                            f'[from] ability: Trace|[of] {seat}a: {row["holderSpecies"]}')
+                self.assertTrue(row['request']['maybeTrapped'])
+                self.assertIn(expected, row['after'])
+                names = {seat: [row['holderSpecies'], 'Blissey'],
+                         other: ['Snorlax', 'Gardevoir', 'Blissey']}
+                state = native_replacement(seat, row['holderSpecies'].lower(),
+                    row['holderAbility'].lower().replace(' ', ''), ('tackle',),
+                    ('ground',) if row['holderSpecies'] == 'Dugtrio' else ('electric', 'steel'))
+                moves = ('none', 'gardevoir') if seat == 'p1' else ('gardevoir', 'none')
+                branches = json.loads(pokezero_search.branch_events(state, *moves,
+                    json.dumps({**names, 'turn': 1}), True, True))['branches']
+                self.assertEqual(len(branches), 1)
+                branch = branches[0]
+                self.assertFalse(branch['attribution_unsafe'])
+                self.assertIn(expected, branch['events'])
+                before = list(public_policy_lines(row['before'], hp_visibility={'p1': 'exact', 'p2': 'exact'}))
+                def request(events):
+                    return json.loads(pokezero_search.sampled_policy_request(branch['post_state'], seat,
+                        names[seat], names[seat], {'tackle': 56, 'softboiled': 16}, root=False,
+                        public_lines=before + events, format_id='gen3randombattle', request_observer=True))
+                supplied = request(branch['events'])
+                self.assertTrue(supplied['request']['active'][0]['maybeTrapped'])
+                source = {'side': supplied['request']['side'], 'active': [row['request']]}
+                self.assertEqual(_legal_action_mask(supplied['request']), _legal_action_mask(source))
+                with self.assertRaisesRegex(ValueError, 'changed trapping ability'):
+                    request([line for line in branch['events'] if line != expected])
+
     def test_replacement_trace_public_reveal_reaches_child_request_in_both_seats(self):
         result = json.loads(subprocess.run([os.environ.get('POKEZERO_NODE_BINARY', 'node'),
             str(ROOT / 'tests/policy_opponent_trace_oracle.cjs'), os.environ['POKEZERO_SHOWDOWN_ROOT']],

@@ -20,6 +20,7 @@ def native_case(row):
     types = {"Pikachu": ("ELECTRIC", "TYPELESS"), "Charizard": ("FIRE", "FLYING"),
              "Gengar": ("GHOST", "POISON"), "Metagross": ("STEEL", "PSYCHIC"),
              "Dugtrio": ("GROUND", "TYPELESS"), "Magneton": ("ELECTRIC", "STEEL"),
+             "Gardevoir": ("PSYCHIC", "TYPELESS"), "Porygon2": ("NORMAL", "TYPELESS"),
              "Snorlax": ("NORMAL", "TYPELESS")}
     own_index = 0 if row["slot"] == "p1" else 1
     for index in (0, 1):
@@ -30,6 +31,8 @@ def native_case(row):
         fields[0] = species.upper()
         fields[2:4] = types[species]
         fields[8] = fields[9] = "".join(c for c in ability.upper() if c.isalnum())
+        if index != own_index:
+            fields[9] = "".join(c for c in row.get("baseAbility", ability).upper() if c.isalnum())
         fields[22:26] = ["TACKLE;false;56", "NONE;true;0", "NONE;true;0", "NONE;true;0"]
         party[0] = ",".join(fields)
         fields[0] = "SNORLAX"; fields[2:4] = types["Snorlax"]
@@ -58,6 +61,35 @@ def case():
 
 
 class PrivateRequestObserverTest(unittest.TestCase):
+    @unittest.skipUnless(os.environ.get("POKEZERO_SHOWDOWN_ROOT"), "requires pinned Showdown and rebuilt native observer")
+    def test_public_trace_trapping_abilities_match_source_and_missing_reveals_refuse(self):
+        import pokezero_search
+        rows = json.loads(subprocess.run([os.environ.get("POKEZERO_NODE_BINARY", "node"),
+            str(ROOT / "tests/policy_request_observer_oracle.cjs"),
+            os.environ["POKEZERO_SHOWDOWN_ROOT"], "--traced"],
+            capture_output=True, text=True, check=True, timeout=30).stdout)["rows"]
+        self.assertEqual(len(rows), 8)
+        for row in rows:
+            lines = list(public_policy_lines(row["lines"], hp_visibility={"p1": "exact", "p2": "exact"}))
+            other = "p2" if row["slot"] == "p1" else "p1"
+            reveal = (f'|-ability|{other}a: {row["foe"]}|{row["ability"]}|Trace|'
+                      f'[from] ability: Trace|[of] {row["slot"]}a: {row["own"]}')
+            self.assertIn(reveal, lines)
+            self.assertTrue(row["request"]["active"][0]["maybeTrapped"])
+            state = native_case(row)
+            for root in (True, False):
+                with self.subTest(tracer=row["foe"], ability=row["ability"], seat=row["slot"], root=root):
+                    supplied = json.loads(pokezero_search.sampled_policy_request(state, row["slot"],
+                        [row["own"], "Snorlax"], [row["own"], "Snorlax"], {"tackle": 56},
+                        root=root, public_lines=lines, format_id="gen3randombattle", request_observer=True))
+                    self.assertEqual(_legal_action_mask(supplied["request"]), _legal_action_mask(row["request"]))
+                    self.assertEqual(supplied["request_observer"]["public_binding"], public_binding(lines))
+                    omitted = [line for line in lines if line != reveal]
+                    with self.assertRaisesRegex(ValueError, "changed trapping ability"):
+                        pokezero_search.sampled_policy_request(state, row["slot"],
+                            [row["own"], "Snorlax"], [row["own"], "Snorlax"], {"tackle": 56},
+                            root=root, public_lines=omitted, format_id="gen3randombattle", request_observer=True)
+
     @unittest.skipUnless(os.environ.get("POKEZERO_SHOWDOWN_ROOT"), "requires pinned Showdown and rebuilt native observer")
     def test_native_projection_matches_source_flags_and_zero_switch_law(self):
         import pokezero_search
