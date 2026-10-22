@@ -426,3 +426,17 @@ residual; ordinary switching, Baton noCopy and faint cleanup clear its fields.
 The existing [0,4) duration column and unused residual tie column preserve the
 original fixed chance block; primary sleep and Encore cannot share a dispatch.
 Other move locks and full move/game qualification remain outside this component.
+
+## Selected effect ledger
+
+`python -m gpu_engine.coverage --team-pool POOL --expected-pool-sha POOL_SHA
+--out LEDGER.json` reconciles frequencies against every nonempty tensor move
+slot and reports source-assessed selected effects, partial effects and
+placeholders. Rows name runtime dispatch, authored check references and missing
+intrinsic effects. Brick Break's screen removal, Rapid Spin's partial-trap
+cleanup and Sing's Soundproof admission remain partial, with no whole-move
+credit. Hidden Power aliases contribute their actual counts once each.
+This is the declared singles measurement subset, not every ability, clause or
+volatile cross-product. Implementation assessment is not qualified gameplay;
+game-qualified coverage remains unset pending the separate divergence check.
+The accepted pool and its historical implementation flags are never rewritten.
