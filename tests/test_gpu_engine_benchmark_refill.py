@@ -1,10 +1,55 @@
 """Authored refill accounting fixtures, not scientific measurements."""
 import importlib.util
+import contextlib
+from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 
 @unittest.skipUnless(importlib.util.find_spec('jax'),'requires isolated spike JAX')
 class RefillTests(unittest.TestCase):
+    def test_measurement_only_sampling_and_failed_cleanup_stops_later_batches(self):
+        import numpy as np
+        from gpu_engine import benchmark_refill as b
+        device=mock.Mock(device_kind='authored GPU')
+        head=mock.Mock();head.devices.return_value={device}
+        def advance(state,ids,counts,cursor,initial):
+            cursor=int(cursor)
+            values=(state,ids,counts,np.array(cursor+1),np.array([cursor-1]),np.array([True]),np.array([False]))
+            return values,np.array([1]),np.array(False),(head,)
+        # Fake dependency outputs and clock, not a GPU execution or performance sample.
+        for stopped in (True,False):
+            with self.subTest(stopped=stopped), contextlib.ExitStack() as stack:
+                patch=lambda target,**kw:stack.enter_context(mock.patch.object(*target,**kw))
+                patch((b,'sole_gpu'),return_value=device)
+                patch((b,'load_bound_pool'),return_value=({'species':range(200000)},{},'pool'))
+                identity=patch((b,'cuda_device_uuid'),return_value='bound-uuid')
+                patch((b.champion,'load'),return_value=({},None,{}))
+                patch((b.transition,'tables_from_metadata'),return_value=None)
+                patch((b.transition,'state_from_pool'),return_value={'x':np.arange(2)})
+                patch((b.jax,'default_device'),side_effect=lambda _:contextlib.nullcontext())
+                patch((b.jax,'device_put'),side_effect=lambda x,_:x)
+                patch((b.jax,'block_until_ready'),side_effect=lambda x:x)
+                patch((b,'driver'),return_value=advance)
+                patch((b.subprocess,'check_output'),side_effect=lambda args,**kw:'source' if 'rev-parse' in args else '')
+                # warm start/check/end, measured pre-start/check/end, repeated per batch
+                clock=[0,0,2,2.1,2.2,3,5,5.1, 6,6,8,8.1,8.2,9,11,11.1]
+                patch((b.time,'perf_counter'),side_effect=clock)
+                sampler=patch((b,'DeviceWindow'))
+                sampler.return_value.start.side_effect=[3,9]
+                sampler.return_value.finish.return_value={'worker_stopped':stopped,'status':'SAMPLED' if stopped else 'PARTIAL'}
+                patch((b,'print'),create=True)
+                result=b.measure('pool','weights','pool',batches=(1,1),warm_seconds=1,measure_seconds=1,device_telemetry=True)
+                self.assertEqual(identity.call_count,1)
+                self.assertEqual(sampler.call_count,2 if stopped else 1)
+                self.assertNotIn('device_telemetry',result['rows'][0]['warmup'])
+                self.assertIn('device_telemetry',result['rows'][0]['measured'])
+                self.assertEqual(result['protocol_completed'],stopped)
+                if not stopped:
+                    self.assertEqual(len(result['rows']),1)
+                    self.assertEqual(result['rows'][0]['status'],'TELEMETRY_CLEANUP_FAILED')
+                    self.assertIsNone(result['rows'][0]['games_per_second'])
+
     def test_complete_precedes_cap_and_entire_state_resets_once(self):
         import jax
         import jax.numpy as j

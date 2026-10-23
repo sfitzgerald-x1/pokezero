@@ -417,6 +417,21 @@ retired IDs and final active IDs for exactly-once accounting. Thirty seconds of
 warmup does not prove stationarity; this is unqualified mechanics with the
 non-production placeholder observation, not production self-play or a go/no-go.
 
+Add `--device-telemetry` for one-second polling during each measured refill
+window. The CUDA driver must expose exactly one GPU, matching JAX's sole CUDA
+ordinal; its UUID, not a presumed physical index, binds every device query.
+Identity failure stops before measurement. Every query has a 0.5-second timeout;
+query failures, monotonic start/end times, sampling gaps and boundary-straddling
+samples are retained. Only successful queries wholly within the measured window
+contribute to the mean of reported utilization samples and maximum sampled
+device-used memory (MiB). These are not continuous utilization means, exact peaks
+or live JAX-array memory. Device counters include other users unless separate
+allocation evidence establishes exclusivity; no benchmark-only attribution is
+inferred. Polling overhead is included in wall time; bounded shutdown/join is
+outside it. Warmup, workload, roster, caps and timing protocol are unchanged.
+New hardware/source results stay separate from historical receipts. The option
+does not qualify mechanics, fidelity, strength or production deployment.
+
 ## Selected Encore integration
 
 Focus Punch prepares its original queued move before switches and Encore's
