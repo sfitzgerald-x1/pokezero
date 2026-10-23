@@ -9,6 +9,7 @@ reveals-only belief approximation.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, replace
 import json
 import re
@@ -17,6 +18,7 @@ from typing import Any, Mapping, Sequence
 from .actions import ACTION_COUNT
 from .policy_action_contract import PolicyActionContract
 from .belief import PokemonSetSource, PublicBattleBeliefEngine
+from .randbat import Gen3RandbatSource
 from .dex import ShowdownDex
 from .local_showdown import PublicBattleMaterializationState, _public_materialization_payload
 from .observation import (
@@ -32,6 +34,60 @@ from .showdown import (
 
 class PolicyOpponentViewError(ValueError):
     """An observation cannot be certified; never replace it with uniform play."""
+
+
+class _ReplaySummarySource:
+    """Reuse pure source queries during ONE replay, never between policy calls.
+
+    The registered Gen3 source must remain unchanged during the replay. Its
+    summaries contain mutable nested mappings, so neither the first recipient
+    nor a cache hit receives the cache's own value.
+    """
+
+    def __init__(self, source: Gen3RandbatSource):
+        self.source = source
+        self.cache: dict[tuple[Any, ...], Any] = {}
+
+    def summarize(self, *, format_id, species, revealed_moves,
+                  revealed_ability=None, revealed_item=None,
+                  ruled_out_abilities=(), ruled_out_items=()):
+        arguments = dict(format_id=format_id, species=species,
+            revealed_moves=revealed_moves, revealed_ability=revealed_ability,
+            revealed_item=revealed_item, ruled_out_abilities=ruled_out_abilities,
+            ruled_out_items=ruled_out_items)
+        key = tuple(arguments.values())
+        try:
+            hash(key)
+        except TypeError:
+            # Preserve the source's behavior for non-tuple callers, rather
+            # than coercing a query or changing its exception/fallback path.
+            return self.source.summarize(**arguments)
+        if key in self.cache:
+            return deepcopy(self.cache[key])
+        summary = self.source.summarize(**arguments)
+        self.cache[key] = deepcopy(summary)
+        return summary
+
+
+def _rebuild_policy_belief(events, *, format_id, set_source, item_belief_narrowing):
+    if type(set_source) is not Gen3RandbatSource:
+        # Arbitrary sources may be stateful, including subclasses. Their
+        # canonical call sequence and TypeError compatibility remain intact.
+        return PublicBattleBeliefEngine.from_events(events, format_id=format_id,
+            set_source=set_source, item_belief_narrowing=item_belief_narrowing)
+    belief = PublicBattleBeliefEngine(format_id=format_id, set_source=set_source,
+        item_belief_narrowing=item_belief_narrowing)
+    belief.set_source = _ReplaySummarySource(set_source)
+    try:
+        # Same constructor/ingestion sequence as canonical from_events. Only
+        # repeated pure source queries are reused; every event still runs.
+        for event in events:
+            belief.ingest_event(event)
+    finally:
+        # Restore the exact registered binding, including on an ingestion
+        # error, before normalization, cloning or materialization can use it.
+        belief.set_source = set_source
+    return belief
 
 
 _HP_EVENTS = {"switch", "drag", "replace", "-damage", "-heal", "-sethp"}
@@ -205,7 +261,7 @@ def build_policy_opponent_view(
     )
     if replay.winner is not None or any(line.split("|")[1] == "tie" for line in clean_lines if "|" in line):
         raise PolicyOpponentViewError("public policy cannot infer at a terminal root")
-    belief = PublicBattleBeliefEngine.from_events(
+    belief = _rebuild_policy_belief(
         replay.public_events, format_id=format_id, set_source=set_source,
         item_belief_narrowing=feature_masks.item_belief_narrowing,
     )
