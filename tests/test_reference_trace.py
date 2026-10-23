@@ -108,7 +108,7 @@ class PublicTraceProofTests(unittest.TestCase):
         suffix = ("|-activate|p1a: Porygon2|Skill Swap|||[of] p2a: Lapras",)
         with self.assertRaises(ReferenceRefusal):
             qualify(suffix)
-        suffix = ("|switch|p1a: Skarmory|Skarmory|100/100",
+        suffix = (COPY, "|switch|p1a: Skarmory|Skarmory|100/100",
                   "|-ability|p1a: Skarmory|Water Absorb|Keen Eye|[from] move: Role Play|[of] p2a: Lapras")
         with self.assertRaisesRegex(ReferenceRefusal, "not represented"):
             qualify(suffix)
