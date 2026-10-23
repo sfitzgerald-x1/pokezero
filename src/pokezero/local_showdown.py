@@ -772,11 +772,17 @@ class LocalShowdownEnv:
         deferred_opponent_actions: Mapping[PlayerId, int] | None = None,
         deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
         reference_rest_sleep: bool = False,
+        reference_joint_sleep: list[dict[str, Any]] | None = None,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
         if not isinstance(reference_rest_sleep, bool):
             raise LocalShowdownError("Reference Rest opt-in must be boolean.")
+        if reference_joint_sleep is not None:
+            if (reference_rest_sleep or type(reference_joint_sleep) is not list
+                    or state.observation_format_id not in {"gen3randombattle", "gen3customgame"}):
+                raise LocalShowdownError("Reference joint sleep requires exclusive Gen 3 assignments.")
+            _validate_reference_rest_names(state)
         if reference_rest_sleep and state.observation_format_id not in {"gen3randombattle", "gen3customgame"}:
             raise LocalShowdownError("Reference Rest requires the Gen 3 public ledger.")
         if reference_rest_sleep and state.observation_format_id == "gen3customgame":
@@ -793,6 +799,7 @@ class LocalShowdownEnv:
                 "type": "materialize",
                 "battleId": self._battle_token,
                 "referenceRestSleep": reference_rest_sleep,
+                "referenceJointSleep": reference_joint_sleep,
                 "publicState": _public_materialization_payload(
                     state,
                     deferred_opponent_actions=deferred_opponent_actions,

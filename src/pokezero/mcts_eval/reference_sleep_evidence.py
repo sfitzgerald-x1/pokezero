@@ -24,7 +24,7 @@ from .reference_sleep import (
     SleepAttempt, SleepCureChance, SleepEvent, SleepHypothesis, SleepPosterior,
     SleepReentry, condition_sleep,
 )
-from .reference_sleep_history import PublicSleepLedger, _key
+from .reference_sleep_history import PublicSleepEpisode, PublicSleepLedger, _key
 
 
 # Canonical Gen 3 ability ids (Dex ability numbers 1..76). Do not classify an
@@ -71,6 +71,7 @@ class QualifiedSleepEvidence:
     reason: str
     posterior: SleepPosterior | None = None
     witnesses: tuple[SleepEvidenceWitness, ...] = ()
+    current_traits: tuple[tuple[str, SleepTraits], ...] = ()
 
     @property
     def evidence_probability(self) -> Fraction | None:
@@ -97,6 +98,18 @@ def qualify_sleep_episode(
     Compatibility here concerns the supported sleep evidence, not complete
     team legality or all other mechanics. It does not choose a sampling law.
     """
+    if type(episode_index) is not int:
+        return QualifiedSleepEvidence("unresolved", "invalid-episode-or-boundary")
+    return _qualify(ledger, opening_traits, episode_index=episode_index,
+                    at_action_boundary=at_action_boundary)
+
+
+def qualify_sleep_traits(ledger: PublicSleepLedger, opening_traits: Mapping[str, SleepTraits]):
+    """Supported deterministic full-history trait constraints, NO episode weight."""
+    return _qualify(ledger, opening_traits, episode_index=None, at_action_boundary=True)
+
+
+def _qualify(ledger, opening_traits, *, episode_index, at_action_boundary):
     witnesses: list[SleepEvidenceWitness] = []
     events: list[SleepEvent] = []
 
@@ -107,13 +120,16 @@ def qualify_sleep_episode(
         witnesses.append(SleepEvidenceWitness(line, kind))
 
     try:
-        if (type(ledger) is not PublicSleepLedger or type(episode_index) is not int
-                or not 0 <= episode_index < len(ledger.episodes)
+        if (type(ledger) is not PublicSleepLedger
+                or (episode_index is not None and (type(episode_index) is not int
+                    or not 0 <= episode_index < len(ledger.episodes)))
                 or at_action_boundary is not True or not isinstance(opening_traits, Mapping)):
             halt("unresolved", "invalid-episode-or-boundary")
-        episode = ledger.episodes[episode_index]
+        episode = (PublicSleepEpisode("", "", "induced", len(ledger.public_lines) + 1, (), True)
+                   if episode_index is None else ledger.episodes[episode_index])
         selected = {event.line: event for event in episode.events}
-        last = episode.events[-1].line if episode.closed else len(ledger.public_lines)
+        last = (-1 if episode_index is None else
+                episode.events[-1].line if episode.closed else len(ledger.public_lines))
         original = {}
         for key, trait in opening_traits.items():
             if (type(key) is not str or not re.fullmatch(r"p[12]:[a-z0-9]+", key)
@@ -129,7 +145,7 @@ def qualify_sleep_episode(
         copied_since_turn: set[str] = set()
         pending_cure: tuple[Fraction, str, int] | None = None
         first_residual = True
-        yawn_onset = (episode.onset_line > 0 and
+        yawn_onset = (episode_index is not None and episode.onset_line > 0 and
             ledger.public_lines[episode.onset_line - 1].split("|")[1:4] ==
             ["-end", ledger.public_lines[episode.onset_line].split("|")[2], "move: Yawn"])
         trick_expected: dict[str, tuple[str, str]] = {}
@@ -164,6 +180,16 @@ def qualify_sleep_episode(
             command = fields[1]
             event = selected.get(number)
             inside = episode.onset_line <= number <= last
+            # Announced causes are deterministic trait constraints even when
+            # the episode is closed and its stochastic likelihood is omitted.
+            if command in {"-activate", "-curestatus"} and len(fields) >= 4:
+                announced = ([fields[3]] if command == "-activate" else fields[4:])
+                for tag in announced:
+                    cause = tag.removeprefix("[from] ")
+                    if cause in {"ability: Shed Skin", "ability: Natural Cure",
+                                 "ability: Insomnia", "ability: Vital Spirit"}:
+                        if traits(_key(fields[2])).ability != _id(cause.partition(":")[2]):
+                            halt("incompatible", "announced-cure-ability-contradiction")
             if command == "turn":
                 copied_since_turn.clear()
             if ((command == "-start" and len(fields) >= 4 and fields[3] == "move: Yawn")
@@ -336,12 +362,17 @@ def qualify_sleep_episode(
             chance(len(ledger.public_lines), pending_cure[0], True, pending_cure[1])
         if not episode.closed and active.get(episode.key[:2]) == episode.key:
             update_survival(len(ledger.public_lines))
+        if episode_index is None:
+            return QualifiedSleepEvidence("compatible", "qualified-public-traits",
+                                          SleepPosterior((), Fraction(1)), tuple(witnesses),
+                                          tuple(sorted(current.items())))
         try:
             posterior = condition_sleep((SleepHypothesis("supplied-team", Fraction(1), tuple(events)),),
                                         kind=episode.kind)
         except ReferenceRefusal:
             halt("incompatible", "no-compatible-sleep-state")
-        return QualifiedSleepEvidence("compatible", "qualified-supplied-hypothesis", posterior, tuple(witnesses))
+        return QualifiedSleepEvidence("compatible", "qualified-supplied-hypothesis", posterior,
+                                      tuple(witnesses), tuple(sorted(current.items())))
     except (_EvidenceStop, ReferenceRefusal, IndexError) as error:
         status = error.status if isinstance(error, _EvidenceStop) else "unresolved"
         reason = error.reason if isinstance(error, _EvidenceStop) else "unresolved-public-identity"

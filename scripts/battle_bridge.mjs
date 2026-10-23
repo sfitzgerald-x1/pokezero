@@ -7,6 +7,7 @@ import process from "node:process";
 import readline from "node:readline";
 import {fileURLToPath, pathToFileURL} from "node:url";
 import {referenceRestState, bindReferenceRestSources} from "./battle_bridge_reference_rest.mjs";
+import {restoreReferenceSleep} from "./battle_bridge_reference_sleep.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -534,7 +535,11 @@ function materializeBattle(command) {
   // This template belongs to the already belief-sampled search world. We construct a new
   // public branch-point payload from it, then let Showdown deserialize that payload directly.
   const snapshot = State.serializeBattle(battle.battleStream.battle);
-  applyPublicState(snapshot, publicState, command.referenceRestSleep === true);
+  const jointSleep = command.referenceJointSleep ?? null;
+  if (jointSleep !== null && command.referenceRestSleep === true) {
+    throw new Error("Reference sleep modes are mutually exclusive.");
+  }
+  applyPublicState(snapshot, publicState, command.referenceRestSleep === true, jointSleep);
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
@@ -1054,7 +1059,7 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
   };
 }
 
-function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
+function applyPublicState(snapshot, publicState, referenceRestSleep = false, jointSleep = null) {
   if (!Number.isInteger(publicState.turn) || publicState.turn < 1) {
     throw new Error("Materialize requires a positive integer turn.");
   }
@@ -1175,6 +1180,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
         row.species,
         publicSide.toxicStage,
         referenceRestSleep ? row : null,
+        jointSleep !== null,
       );
       serializedSide.pokemon[index].boosts = row.active
         ? normalizedBoosts(publicSide.boosts)
@@ -1242,6 +1248,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false) {
     serializedSide.totalFainted = serializedSide.pokemon.length - serializedSide.pokemonLeft;
     delete serializedSide.activeRequest;
   }
+  if (jointSleep !== null) restoreReferenceSleep(snapshot, jointSleep);
 }
 
 function restoreDeferredOpponentActions(simulatorBattle, publicState) {
@@ -1679,14 +1686,15 @@ function applyPublicVolatiles(
   }
 }
 
-function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, referenceRow = null) {
+function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, referenceRow = null,
+                               conditionedSleep = false) {
   if (typeof condition !== "string" || !condition.trim()) {
     throw new Error(`Materialize is missing a condition for ${sideId} ${species}.`);
   }
   const parts = condition.trim().split(/\s+/);
   const fainted = parts.includes("fnt") || parts[0] === "0";
   const status = parts.find(part => ["brn", "frz", "par", "psn", "tox", "slp"].includes(part)) || "";
-  if (parts.includes("slp") && referenceRow === null) {
+  if (parts.includes("slp") && referenceRow === null && !conditionedSleep) {
     throw new Error("Materialize does not yet support sleep counters.");
   }
   let hp = 0;
@@ -1707,7 +1715,9 @@ function applyPokemonCondition(pokemon, condition, sideId, species, toxicStage, 
   pokemon.fainted = fainted;
   pokemon.status = status;
   pokemon.statusState = {id: status, effectOrder: 0};
-  if (status === "slp") pokemon.statusState = referenceRestState(referenceRow, pokemon.ability);
+  if (status === "slp" && !conditionedSleep) {
+    pokemon.statusState = referenceRestState(referenceRow, pokemon.ability);
+  }
   if (status === "tox") {
     if (!Number.isInteger(toxicStage) || toxicStage < 0 || toxicStage > 15) {
       throw new Error(`Materialize requires a valid toxic stage for ${sideId} ${species}.`);

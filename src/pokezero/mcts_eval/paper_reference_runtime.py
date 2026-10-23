@@ -43,6 +43,7 @@ class ShowdownWorkerFactory:
     # Explicit bounded completion adaptation; defaults preserve strict forcing.
     allow_earlier_compatible_template: bool = False
     node_binary: str = "node"
+    joint_sleep_proposal_cap: int | None = None
 
     def __call__(self, index):
         return _ShowdownRuntime(self, index)
@@ -80,6 +81,7 @@ class _ShowdownRuntime:
         self.env = LocalShowdownEnv(config)
         self.source = source
         self.allow_earlier_compatible_template = binding.allow_earlier_compatible_template
+        self.joint_sleep_proposal_cap = binding.joint_sleep_proposal_cap
         try:
             # Warm bridge startup belongs to the separately measured pool startup.
             # This synthetic startup battle contributes NO trajectory/statistics.
@@ -105,7 +107,8 @@ class _ShowdownRuntime:
         root = decision_state(observation, player=state.player_id)
         factory = PublicRootWorldFactory(env=self.env, state=state, observation=observation,
             evaluator=self.evaluator, set_source=self.source,
-            allow_earlier_compatible_template=self.allow_earlier_compatible_template)
+            allow_earlier_compatible_template=self.allow_earlier_compatible_template,
+            joint_sleep_proposal_cap=self.joint_sleep_proposal_cap)
         receipt_index, forward_index = 0, self.evaluator.forwards
 
         def evidence():
@@ -120,7 +123,8 @@ class _ShowdownRuntime:
                 raise ReferenceRefusal("worker root evaluation identity changed")
             return self.evaluator(observation)[1]
 
-        return PreparedDecision(root, evaluate_root, factory, evidence)
+        return PreparedDecision(root, evaluate_root, factory, evidence,
+            bind_sampling_deadline=(None if self.joint_sleep_proposal_cap is None else factory.bind_deadline))
 
     def close(self):
         self.env.close()

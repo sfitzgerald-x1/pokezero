@@ -26,6 +26,7 @@ class ReferencePolicyConfig:
     beta: float = 1.
     max_transitions: int = 256
     allow_earlier_compatible_template: bool = False
+    joint_sleep_proposal_cap: int | None = None
 
     def __post_init__(self) -> None:
         ReferenceConfig(self.alpha, self.beta, self.max_transitions)
@@ -36,6 +37,9 @@ class ReferencePolicyConfig:
             raise ReferenceRefusal("reference workers must be an integer in [1, 20]")
         if type(self.allow_earlier_compatible_template) is not bool:
             raise ReferenceRefusal("reference compatible-template adaptation must be explicit bool")
+        if self.joint_sleep_proposal_cap is not None and (type(self.joint_sleep_proposal_cap) is not int
+                or not 1 <= self.joint_sleep_proposal_cap <= 32):
+            raise ReferenceRefusal("reference joint sleep proposal cap must be an integer in [1, 32]")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -43,6 +47,9 @@ class ReferencePolicyConfig:
             "alpha": self.alpha, "beta": self.beta,
             "max_transitions": self.max_transitions, "batch_size": 10,
             "allow_earlier_compatible_template": self.allow_earlier_compatible_template,
+            "joint_sleep_proposal_cap": self.joint_sleep_proposal_cap,
+            "joint_sleep_target": (None if self.joint_sleep_proposal_cap is None else
+                "Q_H_times_open_episode_evidence;closed_trait_constraints_only;envelope=1"),
             "device": "cpu", "leaf": "unchanged_one_snapshot_model",
             "selector": "cumulative_root_visit_max", "raw_fallback": False,
             "atomic_work_instrumented": False, "scientifically_qualified": False,

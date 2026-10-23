@@ -42,6 +42,8 @@ class PreparedDecision:
     evidence: Callable[[], Any] = lambda: None
     # Prospective worker-local commit observation; absent on historical runtimes.
     atomic_work: Any | None = None
+    # Opt-in sampler gets the SAME absolute deadline as trajectory search.
+    bind_sampling_deadline: Callable[[float | None], None] | None = None
 
 
 class WorkerRuntime(Protocol):
@@ -219,12 +221,15 @@ def _worker(connection, index, runtime_factory, config):
             preparation_seconds = time.perf_counter() - prepared_at
             if not isinstance(prepared, PreparedDecision) or prepared.root != root:
                 raise ReferenceRefusal("worker prepared a different public/actor-known root")
+            if prepared.bind_sampling_deadline is not None:
+                prepared.bind_sampling_deadline(deadline)
             while True:
                 phase = "trajectory_batch"
                 batch = search.search_batch(root, battle_id=battle_id,
                     evaluate_root=prepared.evaluate_root, sample_world=prepared.sample_world,
                     seed=seed, trajectories=limit, deadline_at=deadline,
-                    atomic_work=prepared.atomic_work)
+                    atomic_work=prepared.atomic_work,
+                    allow_sampling_deadline=prepared.bind_sampling_deadline is not None)
                 sequence += 1
                 update = search.export_statistics(worker_id=str(index), sequence=sequence)
                 phase = "statistics_exchange"

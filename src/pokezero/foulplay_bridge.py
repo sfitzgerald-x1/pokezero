@@ -767,6 +767,7 @@ class ControlledFoulPlayConfig:
     reference_beta: float | None = None
     reference_max_transitions: int | None = None
     reference_allow_earlier_compatible_template: bool | None = None
+    reference_joint_sleep_proposal_cap: int | None = None
     # HEAD-TO-HEAD. "foul-play" keeps the existing opponent; anything else puts a SECOND
     # pokezero policy in the opponent seat, built from the SAME checkpoint under that mode.
     # Same checkpoint on purpose: the question is what the search buys over the model it
@@ -993,7 +994,8 @@ class ControlledFoulPlayConfig:
             raise ValueError("unknown policy_mode; expected raw, root-puct, engine-mcts, or trajectory-reference")
         reference_fields = (
             "reference_seconds", "reference_workers", "reference_alpha", "reference_beta",
-            "reference_max_transitions", "reference_allow_earlier_compatible_template")
+            "reference_max_transitions", "reference_allow_earlier_compatible_template",
+            "reference_joint_sleep_proposal_cap")
         if self.policy_mode == "trajectory-reference":
             _reference_policy_config(self)
             if (self.device not in (None, "cpu") or self.temperature != 1.
@@ -6877,6 +6879,7 @@ def _opponent_seat_config(config: ControlledFoulPlayConfig) -> ControlledFoulPla
         "reference_beta": None,
         "reference_max_transitions": None,
         "reference_allow_earlier_compatible_template": None,
+        "reference_joint_sleep_proposal_cap": None,
     }
     # Per-seat axes. Applied BEFORE the engine-only clearing below so that an axis
     # override on a non-engine opponent is still inert rather than silently retained.
@@ -6905,6 +6908,7 @@ def _reference_policy_config(config: ControlledFoulPlayConfig):
         allow_earlier_compatible_template=(False
             if config.reference_allow_earlier_compatible_template is None
             else config.reference_allow_earlier_compatible_template),
+        joint_sleep_proposal_cap=config.reference_joint_sleep_proposal_cap,
     )
 
 
@@ -6961,7 +6965,8 @@ def _build_policy(
                 str(config.showdown_root), source.metadata.source_hash,
                 allow_earlier_compatible_template=(
                     _reference_policy_config(config).allow_earlier_compatible_template),
-                node_binary=config.node_binary),
+                node_binary=config.node_binary,
+                joint_sleep_proposal_cap=_reference_policy_config(config).joint_sleep_proposal_cap),
             policy_id=policy_id)
 
     if config.policy_mode == "engine-mcts":
@@ -9379,6 +9384,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Reference trajectory safety limit (default 256).")
     parser.add_argument("--reference-allow-earlier-compatible-template", action="store_true", default=None,
         help="Explicit reference completion adaptation; strict forcing is the default.")
+    parser.add_argument("--reference-joint-sleep-proposal-cap", type=int, default=None,
+        help="Opt-in joint team/open-sleep conditioning; fixed full-team proposal cap 1..32.")
     parser.add_argument("--opponent-engine-depth", type=int, default=None,
         help="Engine depth for the OPPONENT seat. Defaults to --engine-depth. Set it to "
              "compare two budgets head-to-head, e.g. --engine-depth 3 --engine-sims 2048 "
@@ -9787,7 +9794,7 @@ def build_comparison_arg_parser() -> argparse.ArgumentParser:
     _remove_optional_argument(parser, "--policy-mode")
     for option in ("--reference-seconds", "--reference-workers", "--reference-alpha",
                    "--reference-beta", "--reference-max-transitions",
-                   "--reference-allow-earlier-compatible-template"):
+                   "--reference-allow-earlier-compatible-template", "--reference-joint-sleep-proposal-cap"):
         _remove_optional_argument(parser, option)
     # The comparison driver runs BOTH arms against foul-play by construction, so a
     # head-to-head opponent is meaningless here -- and accepting the flag while ignoring
@@ -9875,6 +9882,7 @@ def _config_from_args(
         reference_beta=getattr(args, "reference_beta", None),
         reference_max_transitions=getattr(args, "reference_max_transitions", None),
         reference_allow_earlier_compatible_template=getattr(args, "reference_allow_earlier_compatible_template", None),
+        reference_joint_sleep_proposal_cap=getattr(args, "reference_joint_sleep_proposal_cap", None),
         # getattr with a default: the comparison driver strips --policy-mode from its
         # parser (_remove_optional_argument) and other entry points build Namespaces that
         # never saw this flag. A bare args.opponent_policy_mode would AttributeError on

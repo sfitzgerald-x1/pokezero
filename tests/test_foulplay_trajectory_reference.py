@@ -183,6 +183,10 @@ class TrajectoryReferenceBridgeTests(unittest.TestCase):
         self.assertEqual(opponent.policy_mode, "raw")
         self.assertIsNone(opponent.reference_seconds)
         self.assertIsNone(opponent.reference_workers)
+        self.assertIsNone(recipe["joint_sleep_proposal_cap"])
+        adapted = replace(cfg, reference_joint_sleep_proposal_cap=32)
+        self.assertEqual(bridge._reference_policy_config(adapted).to_dict()["joint_sleep_proposal_cap"], 32)
+        self.assertIsNone(bridge._opponent_seat_config(adapted).reference_joint_sleep_proposal_cap)
         self.assertNotIn("--reference-seconds", bridge.build_comparison_arg_parser().format_help())
         self.assertEqual(parser.parse_args(["--checkpoint", "c"]).policy_mode, "root-puct")
 
@@ -196,6 +200,8 @@ class TrajectoryReferenceBridgeTests(unittest.TestCase):
             {"allow_search_fallback": True}, {"format_id": "gen4randombattle"},
             {"opponent_policy_mode": "root-puct"},
             {"reference_allow_earlier_compatible_template": 1},
+            {"reference_joint_sleep_proposal_cap": True}, {"reference_joint_sleep_proposal_cap": 0},
+            {"reference_joint_sleep_proposal_cap": 33},
             {"policy_mode": "raw", "opponent_policy_mode": "foul-play"},
         ):
             with self.subTest(values=values), self.assertRaises((ValueError, ReferenceRefusal)):

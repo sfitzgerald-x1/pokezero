@@ -68,6 +68,17 @@ class PublicRootFactoryTests(unittest.TestCase):
         finally:
             world.close()
 
+    def test_opted_in_joint_sampler_preserves_exact_opening_root(self):
+        factory = self.factory(joint_sleep_proposal_cap=32, allow_earlier_compatible_template=True)
+        world = factory(random.Random(3))
+        try:
+            self.assertEqual(world.frame().subject, factory.root)
+            self.assertEqual(factory.receipts[0]["joint_sleep_assignments"], [])
+            self.assertEqual(len(factory.receipts[0]["joint_sleep_proposals"]), 1)
+            self.assertEqual(factory.receipts[0]["joint_sleep_proposals"][0]["likelihood"], [1, 1])
+        finally:
+            world.close()
+
     def test_private_replay_requests_source_drift_and_missing_actor_opening_refuse(self):
         with self.assertRaisesRegex(ReferenceRefusal, "strip replay"):
             self.factory(state=replace(self.public, replay=replace(self.public.replay, requests={"p2": {}})))
