@@ -9,7 +9,7 @@ import unittest
 from _showdown_root import requires_showdown, showdown_root
 from pokezero.mcts_eval.paper_reference import ReferenceRefusal
 from pokezero.mcts_eval.reference_sleep import (
-    SleepAttempt, SleepCure, SleepHypothesis, SleepReentry, condition_sleep,
+    SleepAttempt, SleepCure, SleepCureChance, SleepHypothesis, SleepReentry, condition_sleep,
 )
 
 
@@ -61,6 +61,30 @@ for (const ability of ['Pressure','Early Bird']) for (const initial of [2,3,4,5]
  }
 }
 process.stdout.write(JSON.stringify(results));
+'''
+
+
+PASSIVE_ORACLE_PROGRAM = r'''
+const {Battle} = require(process.argv[1] + '/dist/sim');
+const battle = new Battle({formatid:'gen3randombattle',seed:[1,2,3,4],strictChoices:true});
+battle.setPlayer('p1',{team:[{species:'Arbok',ability:'Shed Skin',moves:['Splash']}]});
+battle.setPlayer('p2',{team:[{species:'Breloom',ability:'Effect Spore',moves:['Splash']}]});
+const pokemon=battle.p1.active[0], ability=battle.dex.abilities.get('shedskin');
+const calls=[]; let cures=0;
+// Authored boundary enumeration, NOT 100 sampled games or a statistical test.
+// The real inherited callback supplies its probability; each possible draw is
+// exposed once. This does not prove a public transcript's phase eligibility.
+for (let roll=0; roll<100; roll++) {
+ pokemon.clearStatus();
+ pokemon.setStatus('slp',battle.p2.active[0],battle.dex.moves.get('spore'));
+ battle.randomChance=(numerator,denominator)=>{
+  calls.push([numerator,denominator]); return roll<numerator;
+ };
+ battle.singleEvent('Residual',ability,pokemon.abilityState,pokemon);
+ if (pokemon.status==='') cures++;
+}
+process.stdout.write(JSON.stringify({order:ability.onResidualOrder,cures,survived:100-cures,calls}));
+battle.destroy();
 '''
 
 
@@ -132,6 +156,75 @@ class ReferenceSleepContractTests(unittest.TestCase):
             (SleepAttempt(False, False, True), SleepAttempt(True, False, True))),), kind="induced")
         self.assertEqual([r.initial_time for r in result.outcomes], [4, 5])
 
+    def test_passive_cure_absence_reweights_joint_trait_mass_exactly(self):
+        ordinary = (SleepAttempt(False, False, True),) * 2
+        bird = (SleepAttempt(True, False, True),) * 2
+        shed = tuple(event for attempt in ordinary for event in
+                     (attempt, SleepCureChance(Fraction(33, 100), True)))
+        posterior = condition_sleep((SleepHypothesis("ordinary", Fraction(1, 3), ordinary),
+            SleepHypothesis("bird", Fraction(1, 3), bird),
+            SleepHypothesis("shed", Fraction(1, 3), shed)), kind="induced")
+        likelihoods = dict(ordinary=Fraction(3, 4), bird=Fraction(1, 4),
+                           shed=Fraction(3, 4) * Fraction(67, 100) ** 2)
+        weights = Counter()
+        for row in posterior.outcomes:
+            weights[row.hypothesis] += row.probability
+        total = sum(likelihoods.values())
+        self.assertEqual(weights, {key: value / total for key, value in likelihoods.items()})
+        self.assertEqual(posterior.evidence_probability, total / 3)
+
+    def test_passive_cure_presence_clears_timer_and_refund_without_a_tick(self):
+        history = (SleepAttempt(False, True, True), SleepCureChance(Fraction(33, 100), False))
+        posterior = condition_sleep((SleepHypothesis("shed", Fraction(1), history),), kind="induced")
+        self.assertEqual(posterior.evidence_probability, Fraction(33, 100))
+        self.assertEqual([row.initial_time for row in posterior.outcomes], [2, 3, 4, 5])
+        self.assertTrue(all((row.time, row.skipped_time) == (0, 0) for row in posterior.outcomes))
+        with self.assertRaises(ReferenceRefusal):
+            condition_sleep((SleepHypothesis("shed", Fraction(1), history + (SleepCure(),)),), kind="induced")
+
+    def test_deterministic_cure_checks_filter_incompatible_traits(self):
+        for probability, survived in ((Fraction(1), True), (Fraction(0), False)):
+            with self.subTest(probability=probability), self.assertRaises(ReferenceRefusal):
+                condition_sleep((SleepHypothesis("impossible", Fraction(1),
+                    (SleepCureChance(probability, survived),)),), kind="induced")
+        for probability, survived in ((Fraction(0), True), (Fraction(1), False)):
+            posterior = condition_sleep((SleepHypothesis("resolved", Fraction(1),
+                (SleepCureChance(probability, survived),)),), kind="rest")
+            self.assertEqual(posterior.evidence_probability, 1)
+            self.assertEqual(posterior.outcomes[0].asleep, survived)
+
+    def test_passive_checks_preserve_refunds_and_allow_explicit_trait_changes(self):
+        history = (SleepCureChance(Fraction(33, 100), True), SleepAttempt(True, True, True),
+                   SleepReentry(), SleepCureChance(Fraction(0), True),
+                   SleepAttempt(False, False, True))
+        posterior = condition_sleep((SleepHypothesis("timeline", Fraction(1), history),), kind="induced")
+        self.assertEqual(posterior.evidence_probability, Fraction(3, 4) * Fraction(67, 100))
+        self.assertEqual([(row.initial_time, row.time, row.skipped_time)
+                          for row in posterior.outcomes], [(3, 1, 0), (4, 2, 0), (5, 3, 0)])
+
+    def test_unknown_or_out_of_range_passive_probabilities_refuse(self):
+        for probability in (None, .33, True, 0, Fraction(-1, 100), Fraction(101, 100)):
+            with self.subTest(probability=probability), self.assertRaises(ReferenceRefusal):
+                SleepCureChance(probability, True)
+        for survived in (None, 0, "unknown"):
+            with self.subTest(survived=survived), self.assertRaises(ReferenceRefusal):
+                SleepCureChance(Fraction(33, 100), survived)
+
+    @requires_showdown("requires pinned Gen 3 callback for authored probability boundaries")
+    def test_gen3_shed_skin_callback_probability_and_phase_order(self):
+        result = subprocess.run(["node", "-e", PASSIVE_ORACLE_PROGRAM, str(showdown_root())],
+                                check=True, capture_output=True, text=True, timeout=30)
+        self.check_passive_oracle(json.loads(result.stdout))
+
+    def check_passive_oracle(self, row):
+        self.assertEqual(row["order"], 10)
+        self.assertEqual((row["cures"], row["survived"]), (33, 67))
+        self.assertEqual(row["calls"], [[33, 100]] * 100)
+        for survived, count in ((True, row["survived"]), (False, row["cures"])):
+            posterior = condition_sleep((SleepHypothesis("eligible", Fraction(1),
+                (SleepCureChance(Fraction(33, 100), survived),)),), kind="induced")
+            self.assertEqual(posterior.evidence_probability, Fraction(count, 100))
+
     def test_impossible_unresolved_and_malformed_histories_refuse(self):
         with self.assertRaises(ReferenceRefusal):
             condition_sleep((SleepHypothesis("known", Fraction(1),
@@ -164,6 +257,17 @@ class ReferenceSleepContractTests(unittest.TestCase):
         first, second = random.Random(17), random.Random(17)
         self.assertEqual([posterior.draw(first) for _ in range(20)],
                          [posterior.draw(second) for _ in range(20)])
+        passive = condition_sleep((SleepHypothesis("ordinary", Fraction(1, 2), ()),
+            SleepHypothesis("shed", Fraction(1, 2),
+                (SleepCureChance(Fraction(33, 100), True),))), kind="induced")
+        observed = Counter()
+        for bin_number in range(668):
+            rng = IntegerProbe(bin_number)
+            row = passive.draw(rng)
+            observed[row.hypothesis, row.initial_time] += 1
+            self.assertEqual(rng.maximum, 668)
+        self.assertEqual(observed, {(label, initial): count
+            for label, count in (("ordinary", 100), ("shed", 67)) for initial in range(2, 6)})
 
 
 if __name__ == "__main__":
