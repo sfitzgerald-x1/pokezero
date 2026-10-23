@@ -1,4 +1,25 @@
-"""Closed diagnostic schema for bridge source positions, never error content."""
+"""Closed bridge diagnostics: source positions and declared public-effect labels."""
+
+# Public parser vocabulary plus its separately encoded recharge flag. Never
+# copy arbitrary simulator messages, IDs, names or an unrecognized input token.
+PUBLIC_VOLATILE_REASON_TOKENS = frozenset({
+    "confusion", "leechseed", "substitute", "taunt", "encore", "disable", "torment", "attract",
+    "nightmare", "curse", "ingrain", "foresight", "lockon", "mindreader", "destinybond", "grudge",
+    "focusenergy", "charge", "yawn", "stockpile", "bide", "uproar", "imprison", "magiccoat",
+    "snatch", "mudsport", "watersport", "defensecurl", "minimize", "rage", "partiallytrapped",
+    "perishsong", "perish0", "perish1", "perish2", "perish3", "flashfire", "solarbeam",
+    "mustrecharge", "unrecognized",
+})
+
+
+def safe_bridge_error_reason(value):
+    """Accept only the one authored reason and a closed public-effect token."""
+    if (type(value) is not dict or set(value) != {"code", "volatile"}
+            or type(value["code"]) is not str or value["code"] != "UNSUPPORTED_PUBLIC_VOLATILE"
+            or type(value["volatile"]) is not str
+            or value["volatile"] not in PUBLIC_VOLATILE_REASON_TOKENS):
+        return None
+    return dict(value)
 
 BRIDGE_SOURCE_FILES = frozenset({
     "scripts/battle_bridge.mjs",
