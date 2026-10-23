@@ -25,7 +25,7 @@ import time
 import traceback
 from typing import Any, Callable, Protocol
 
-from ..bridge_error_sites import safe_bridge_error_origin, safe_bridge_error_sites
+from ..bridge_error_sites import safe_bridge_error_origin, safe_bridge_error_reason, safe_bridge_error_sites
 from .paper_reference import (
     BatchResult, DecisionState, Evaluation, ReferenceConfig, ReferenceRefusal,
     SearchResult, TrajectorySearch, World,
@@ -112,6 +112,12 @@ def _exception_code_sites(error):
             origin = None
         if origin is not None:
             entry["bridge_origin"] = origin
+        try:
+            reason = safe_bridge_error_reason(getattr(error, "bridge_error_reason", None))
+        except Exception:
+            reason = None
+        if reason is not None:
+            entry["bridge_reason"] = reason
         chain.append(entry)
         error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
     return chain
@@ -134,7 +140,7 @@ def sanitized_worker_failures(errors):
         safe = []
         for entry in sites:
             if (not isinstance(entry, dict) or not {"category", "frames"} <= set(entry)
-                    or not set(entry) <= {"category", "frames", "bridge_frames", "bridge_origin"}
+                    or not set(entry) <= {"category", "frames", "bridge_frames", "bridge_origin", "bridge_reason"}
                     or entry["category"] not in tuple(_ERROR_CATEGORIES)
                     or not isinstance(entry["frames"], list) or len(entry["frames"]) > 8):
                 break
@@ -154,6 +160,11 @@ def sanitized_worker_failures(errors):
                 if origin is None:
                     break
                 projected["bridge_origin"] = origin
+            if "bridge_reason" in entry:
+                reason = safe_bridge_error_reason(entry["bridge_reason"])
+                if reason is None:
+                    break
+                projected["bridge_reason"] = reason
             safe.append(projected)
         else:
             result.append({"worker": message[1], "decision_id": message[2], "phase": message[3],

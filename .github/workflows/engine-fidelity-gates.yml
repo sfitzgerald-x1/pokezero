@@ -1084,7 +1084,7 @@ jobs:
             tests.test_bridge_error_sites \
             tests.test_mcts_eval_timing_corpus -v 2>&1 \
             | tee /tmp/paper-reference.log
-          grep -qE 'Ran 204 tests' /tmp/paper-reference.log
+          grep -qE 'Ran 208 tests' /tmp/paper-reference.log
           grep -qE '^OK$' /tmp/paper-reference.log
           if grep -qE '^OK \(.*skipped=' /tmp/paper-reference.log; then
             echo "::error::the paper trajectory reference contracts must not skip"

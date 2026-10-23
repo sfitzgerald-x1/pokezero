@@ -107,6 +107,29 @@ function bridgeErrorCodeSites(error, sourceUrl, simulatorUrl) {
   return sites;
 }
 
+// Same closed vocabulary as the public parser; unknown input maps to a fixed
+// bucket, never a free-form error message or sampled/private battle state.
+const PUBLIC_VOLATILE_REASON_TOKENS = new Set([
+  "confusion", "leechseed", "substitute", "taunt", "encore", "disable", "torment", "attract",
+  "nightmare", "curse", "ingrain", "foresight", "lockon", "mindreader", "destinybond", "grudge",
+  "focusenergy", "charge", "yawn", "stockpile", "bide", "uproar", "imprison", "magiccoat",
+  "snatch", "mudsport", "watersport", "defensecurl", "minimize", "rage", "partiallytrapped",
+  "perishsong", "perish0", "perish1", "perish2", "perish3", "flashfire", "solarbeam",
+  "mustrecharge", "unrecognized",
+]);
+
+function bridgeErrorReason(error) {
+  try {
+    const value = error instanceof Error ? error.bridgeReason : null;
+    if (!value || Object.keys(value).sort().join(",") !== "code,volatile" ||
+        value.code !== "UNSUPPORTED_PUBLIC_VOLATILE" ||
+        !PUBLIC_VOLATILE_REASON_TOKENS.has(value.volatile)) return undefined;
+    return {code: value.code, volatile: value.volatile};
+  } catch {
+    return undefined; // Diagnostics never replace the original failure.
+  }
+}
+
 function battleIdOf(command) {
   return command.battleId == null ? DEFAULT_BATTLE_ID : String(command.battleId);
 }
@@ -144,7 +167,8 @@ function listenToStream(battle, name, stream) {
       emit({ type: "stream_end", battleId: battle.battleId, stream: name });
     } catch (error) {
       emit({ type: "error", battleId: battle.battleId, stream: name, message: error.message,
-        errorOrigin: "stream", codeSites: bridgeErrorCodeSites(error, import.meta.url, showdownSourceUrl) });
+        errorOrigin: "stream", codeSites: bridgeErrorCodeSites(error, import.meta.url, showdownSourceUrl),
+        errorReason: bridgeErrorReason(error) });
     }
   })();
 }
@@ -1643,7 +1667,10 @@ function applyPublicVolatiles(
       continue;
     }
     if (!STATIC_PUBLIC_VOLATILES.has(volatile)) {
-      throw new Error(`Materialize does not yet support volatile effect ${rawVolatile}.`);
+      const error = new Error(`Materialize does not yet support volatile effect ${rawVolatile}.`);
+      error.bridgeReason = {code: "UNSUPPORTED_PUBLIC_VOLATILE",
+        volatile: PUBLIC_VOLATILE_REASON_TOKENS.has(volatile) ? volatile : "unrecognized"};
+      throw error;
     }
     if (seen.has(volatile)) {
       throw new Error(`Materialize received duplicate volatile effect ${rawVolatile}.`);
@@ -1950,7 +1977,8 @@ rl.on("line", line => {
       await handleCommand(JSON.parse(line));
     } catch (error) {
       emit({ type: "error", message: error.message,
-        errorOrigin: "command", codeSites: bridgeErrorCodeSites(error, import.meta.url, showdownSourceUrl) });
+        errorOrigin: "command", codeSites: bridgeErrorCodeSites(error, import.meta.url, showdownSourceUrl),
+        errorReason: bridgeErrorReason(error) });
     }
   })();
 });
