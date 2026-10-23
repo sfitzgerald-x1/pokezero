@@ -61,6 +61,29 @@ function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
+function bridgeErrorCodeSites(error, sourceUrl) {
+  // Only numeric locations from our own source. Never export stack text,
+  // messages, function names, simulator paths or values embedded in an error.
+  if (!(error instanceof Error) || typeof error.stack !== "string") return [];
+  const header = `${error.name}: ${error.message}\n`;
+  if (!error.stack.startsWith(header)) return [];
+  const sites = [];
+  // Strip the entire message, including embedded newlines/forged frame text.
+  for (const line of error.stack.slice(header.length).split("\n").slice(0, 64)) {
+    const suffix = line.trim().replace(/\)$/, "");
+    const marker = `${sourceUrl}:`;
+    const start = suffix.lastIndexOf(marker);
+    if (start < 0 || (start > 0 && ![" ", "("].includes(suffix[start - 1]))) continue;
+    const match = /^(\d+):(\d+)$/.exec(suffix.slice(start + marker.length));
+    if (!match) continue;
+    const [lineNumber, column] = match.slice(1).map(Number);
+    if (![lineNumber, column].every(value => Number.isSafeInteger(value) && value > 0 && value <= 10000000)) continue;
+    sites.push({file: "scripts/battle_bridge.mjs", line: lineNumber, column});
+    if (sites.length === 8) break;
+  }
+  return sites;
+}
+
 function battleIdOf(command) {
   return command.battleId == null ? DEFAULT_BATTLE_ID : String(command.battleId);
 }
@@ -97,7 +120,8 @@ function listenToStream(battle, name, stream) {
       }
       emit({ type: "stream_end", battleId: battle.battleId, stream: name });
     } catch (error) {
-      emit({ type: "error", battleId: battle.battleId, stream: name, message: error.message });
+      emit({ type: "error", battleId: battle.battleId, stream: name, message: error.message,
+        codeSites: bridgeErrorCodeSites(error, import.meta.url) });
     }
   })();
 }
@@ -1893,7 +1917,8 @@ rl.on("line", line => {
     try {
       await handleCommand(JSON.parse(line));
     } catch (error) {
-      emit({ type: "error", message: error.message });
+      emit({ type: "error", message: error.message,
+        codeSites: bridgeErrorCodeSites(error, import.meta.url) });
     }
   })();
 });
