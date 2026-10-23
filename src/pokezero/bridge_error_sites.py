@@ -1,5 +1,23 @@
 """Closed diagnostic schema for bridge source positions, never error content."""
 
+BRIDGE_SOURCE_FILES = frozenset({
+    "scripts/battle_bridge.mjs",
+    *("showdown/dist/" + name for name in (
+        "sim/battle.js", "sim/battle-actions.js", "sim/battle-queue.js",
+        "sim/battle-stream.js", "sim/field.js", "sim/pokemon.js", "sim/side.js",
+        "sim/state.js", "sim/prng.js", "sim/dex.js", "sim/dex-conditions.js",
+        "sim/dex-moves.js", "lib/streams.js", "data/moves.js", "data/abilities.js",
+        "data/conditions.js", "data/items.js", "data/mods/gen3/moves.js",
+        "data/mods/gen3/abilities.js", "data/mods/gen3/conditions.js",
+        "data/mods/gen3/items.js", "data/mods/gen3/scripts.js",
+    )),
+})
+
+
+def safe_bridge_error_origin(value):
+    """The emitting catch boundary, not an inferred operation or error cause."""
+    return value if type(value) is str and value in {"command", "stream"} else None
+
 
 def safe_bridge_error_sites(value):
     """Reject malformed metadata wholesale, copying only allowlisted locations."""
@@ -8,7 +26,7 @@ def safe_bridge_error_sites(value):
     result = []
     for row in value:
         if (type(row) is not dict or set(row) != {"file", "line", "column"}
-                or type(row["file"]) is not str or row["file"] != "scripts/battle_bridge.mjs"
+                or type(row["file"]) is not str or row["file"] not in BRIDGE_SOURCE_FILES
                 or any(type(row[key]) is not int or not 0 < row[key] <= 10**7
                        for key in ("line", "column"))):
             return []

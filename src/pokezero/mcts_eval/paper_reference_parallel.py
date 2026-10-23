@@ -25,7 +25,7 @@ import time
 import traceback
 from typing import Any, Callable, Protocol
 
-from ..bridge_error_sites import safe_bridge_error_sites
+from ..bridge_error_sites import safe_bridge_error_origin, safe_bridge_error_sites
 from .paper_reference import (
     BatchResult, DecisionState, Evaluation, ReferenceConfig, ReferenceRefusal,
     SearchResult, TrajectorySearch, World,
@@ -104,6 +104,12 @@ def _exception_code_sites(error):
             bridge = []  # Diagnostics must not replace the original refusal.
         if bridge:
             entry["bridge_frames"] = bridge
+        try:
+            origin = safe_bridge_error_origin(getattr(error, "bridge_error_origin", None))
+        except Exception:
+            origin = None
+        if origin is not None:
+            entry["bridge_origin"] = origin
         chain.append(entry)
         error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
     return chain
@@ -125,8 +131,8 @@ def sanitized_worker_failures(errors):
             continue
         safe = []
         for entry in sites:
-            if (not isinstance(entry, dict) or set(entry) not in (
-                    {"category", "frames"}, {"category", "frames", "bridge_frames"})
+            if (not isinstance(entry, dict) or not {"category", "frames"} <= set(entry)
+                    or not set(entry) <= {"category", "frames", "bridge_frames", "bridge_origin"}
                     or entry["category"] not in tuple(_ERROR_CATEGORIES)
                     or not isinstance(entry["frames"], list) or len(entry["frames"]) > 8):
                 break
@@ -141,6 +147,11 @@ def sanitized_worker_failures(errors):
                 if not bridge:
                     break
                 projected["bridge_frames"] = bridge
+            if "bridge_origin" in entry:
+                origin = safe_bridge_error_origin(entry["bridge_origin"])
+                if origin is None:
+                    break
+                projected["bridge_origin"] = origin
             safe.append(projected)
         else:
             result.append({"worker": message[1], "decision_id": message[2], "phase": message[3],

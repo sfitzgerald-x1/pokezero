@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import process from "node:process";
 import readline from "node:readline";
+import {fileURLToPath, pathToFileURL} from "node:url";
 import {referenceRestState, bindReferenceRestSources} from "./battle_bridge_reference_rest.mjs";
 import {
   invalidatedBoundaryState,
@@ -36,6 +37,7 @@ let BattleStream;
 let getPlayerStreams;
 let State;
 let Teams;
+const showdownSourceUrl = pathToFileURL(path.resolve(showdownRoot) + path.sep).href;
 try {
   ({ BattleStream, getPlayerStreams, Teams } = require(path.join(showdownRoot, "dist", "sim", "index.js")));
   ({ State } = require(path.join(showdownRoot, "dist", "sim", "state.js")));
@@ -61,24 +63,44 @@ function emit(payload) {
   process.stdout.write(`${JSON.stringify(payload)}\n`);
 }
 
-function bridgeErrorCodeSites(error, sourceUrl) {
-  // Only numeric locations from our own source. Never export stack text,
-  // messages, function names, simulator paths or values embedded in an error.
+function bridgeErrorCodeSites(error, sourceUrl, simulatorUrl) {
+  // Fixed source labels and numeric positions only, never stack text, messages,
+  // function names or installation paths. Do not infer an absent throw site.
   if (!(error instanceof Error) || typeof error.stack !== "string") return [];
   const header = `${error.name}: ${error.message}\n`;
   if (!error.stack.startsWith(header)) return [];
+  const sources = new Map([[sourceUrl, "scripts/battle_bridge.mjs"]]);
+  if (simulatorUrl) {
+    for (const relative of [
+      "sim/battle.js", "sim/battle-actions.js", "sim/battle-queue.js",
+      "sim/battle-stream.js", "sim/field.js", "sim/pokemon.js", "sim/side.js",
+      "sim/state.js", "sim/prng.js", "sim/dex.js", "sim/dex-conditions.js",
+      "sim/dex-moves.js", "lib/streams.js", "data/moves.js", "data/abilities.js",
+      "data/conditions.js", "data/items.js", "data/mods/gen3/moves.js",
+      "data/mods/gen3/abilities.js", "data/mods/gen3/conditions.js",
+      "data/mods/gen3/items.js", "data/mods/gen3/scripts.js",
+    ]) {
+      const url = new URL(`dist/${relative}`, simulatorUrl);
+      const label = `showdown/dist/${relative}`;
+      sources.set(url.href, label);
+      sources.set(fileURLToPath(url), label);
+    }
+  }
   const sites = [];
   // Strip the entire message, including embedded newlines/forged frame text.
   for (const line of error.stack.slice(header.length).split("\n").slice(0, 64)) {
     const suffix = line.trim().replace(/\)$/, "");
-    const marker = `${sourceUrl}:`;
-    const start = suffix.lastIndexOf(marker);
-    if (start < 0 || (start > 0 && ![" ", "("].includes(suffix[start - 1]))) continue;
-    const match = /^(\d+):(\d+)$/.exec(suffix.slice(start + marker.length));
-    if (!match) continue;
-    const [lineNumber, column] = match.slice(1).map(Number);
-    if (![lineNumber, column].every(value => Number.isSafeInteger(value) && value > 0 && value <= 10000000)) continue;
-    sites.push({file: "scripts/battle_bridge.mjs", line: lineNumber, column});
+    for (const [source, label] of sources) {
+      const marker = `${source}:`;
+      const start = suffix.lastIndexOf(marker);
+      if (start < 0 || (start > 0 && ![" ", "("].includes(suffix[start - 1]))) continue;
+      const match = /^(\d+):(\d+)$/.exec(suffix.slice(start + marker.length));
+      if (!match) continue;
+      const [lineNumber, column] = match.slice(1).map(Number);
+      if (![lineNumber, column].every(value => Number.isSafeInteger(value) && value > 0 && value <= 10000000)) continue;
+      sites.push({file: label, line: lineNumber, column});
+      break;
+    }
     if (sites.length === 8) break;
   }
   return sites;
@@ -121,7 +143,7 @@ function listenToStream(battle, name, stream) {
       emit({ type: "stream_end", battleId: battle.battleId, stream: name });
     } catch (error) {
       emit({ type: "error", battleId: battle.battleId, stream: name, message: error.message,
-        codeSites: bridgeErrorCodeSites(error, import.meta.url) });
+        errorOrigin: "stream", codeSites: bridgeErrorCodeSites(error, import.meta.url, showdownSourceUrl) });
     }
   })();
 }
@@ -1918,7 +1940,7 @@ rl.on("line", line => {
       await handleCommand(JSON.parse(line));
     } catch (error) {
       emit({ type: "error", message: error.message,
-        codeSites: bridgeErrorCodeSites(error, import.meta.url) });
+        errorOrigin: "command", codeSites: bridgeErrorCodeSites(error, import.meta.url, showdownSourceUrl) });
     }
   })();
 });
