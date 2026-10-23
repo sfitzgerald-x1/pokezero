@@ -412,12 +412,12 @@ class TrajectorySearch:
                      sample_world: Callable[[random.Random], World], seed: int,
                      trajectories: int, deadline_at: float | None = None,
                      clock: Callable[[], float] = time.perf_counter,
-                     atomic_work=None) -> BatchResult:
+                     atomic_work=None, allow_sampling_deadline: bool = False) -> BatchResult:
         """At most one exchange batch, using the coordinator's absolute clock."""
         result = self._run_batch(root, battle_id=battle_id, evaluate_root=evaluate_root,
             sample_world=sample_world, seed=seed, trajectories=trajectories,
             deadline_seconds=None, deadline_at=deadline_at, clock=clock,
-            require_complete=False, atomic_work=atomic_work)
+            require_complete=False, atomic_work=atomic_work, allow_sampling_deadline=allow_sampling_deadline)
         assert isinstance(result, BatchResult)
         return result
 
@@ -426,7 +426,8 @@ class TrajectorySearch:
                    sample_world: Callable[[random.Random], World], seed: int,
                    trajectories: int, deadline_seconds: float | None,
                    deadline_at: float | None, clock: Callable[[], float],
-                   require_complete: bool, atomic_work=None) -> BatchResult | SearchResult:
+                   require_complete: bool, atomic_work=None,
+                   allow_sampling_deadline: bool = False) -> BatchResult | SearchResult:
         started = clock()  # Includes root inference, determinization, simulator and cleanup.
         if (battle_id != self._battle_id or not self._usable
                 or type(seed) is not int or not 0 <= seed < 2**64
@@ -470,11 +471,12 @@ class TrajectorySearch:
                 try:
                     world = sample_world(_rng(seed, ordinal, "hidden"))
                 except SamplingDeadlineExceeded:
-                    if atomic_work is None:
+                    if atomic_work is None and not allow_sampling_deadline:
                         raise  # Preserve the historical non-instrumented path.
                     if not expired():
                         raise ReferenceRefusal("sampler reported deadline expiry before the search deadline")
-                    atomic_work.cancel(self, 0, sampled=False)
+                    if atomic_work is not None:
+                        atomic_work.cancel(self, 0, sampled=False)
                     break
                 if atomic_work is None:
                     draws += 1

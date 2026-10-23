@@ -13,11 +13,14 @@ from __future__ import annotations
 from dataclasses import asdict
 import random
 import re
+import time
 from typing import Any
 
-from .paper_reference import ReferenceRefusal
+from .paper_reference import ReferenceRefusal, SamplingDeadlineExceeded
 from .paper_reference_sampling import KnownSetTraits, PaperHiddenTeamSampler
 from .paper_reference_showdown import ChampionEvaluator, ShowdownTrajectoryWorld, decision_state
+from .reference_sleep_history import public_sleep_history
+from .reference_sleep_joint import joint_sleep_proposal, opening_sleep_traits
 from ..determinization import _self_team_from_metadata_result, player_belief_view_from_payload
 from ..env import BattleStartOverride
 from ..local_showdown import LocalShowdownEnv, PublicBattleMaterializationState
@@ -58,7 +61,15 @@ def _maximum_hp(condition: str | None) -> int | None:
 class PublicRootWorldFactory:
     def __init__(self, *, env: LocalShowdownEnv, state: PublicBattleMaterializationState,
                  observation: Any, evaluator: ChampionEvaluator, set_source: Gen3RandbatSource,
-                 allow_earlier_compatible_template: bool = False) -> None:
+                 allow_earlier_compatible_template: bool = False,
+                 joint_sleep_proposal_cap: int | None = None) -> None:
+        if joint_sleep_proposal_cap is not None and (type(joint_sleep_proposal_cap) is not int
+                or not 1 <= joint_sleep_proposal_cap <= 32):
+            raise ReferenceRefusal("joint sleep cap must be an explicit integer in 1..32")
+        self.joint_sleep_proposal_cap = joint_sleep_proposal_cap
+        self.deadline_at = None
+        self.sleep_ledger = (None if joint_sleep_proposal_cap is None else
+            public_sleep_history(tuple(state.replay.public_lines), at_action_boundary=True))
         if state.replay.requests:
             raise ReferenceRefusal("public root must strip replay request payloads")
         if state.deferred_opponent_action_player is not None:
@@ -116,6 +127,13 @@ class PublicRootWorldFactory:
         self.active = False
         self.receipts: list[dict[str, Any]] = []
 
+    def bind_deadline(self, deadline_at):
+        self.deadline_at = deadline_at
+
+    def _check_deadline(self):
+        if self.deadline_at is not None and time.perf_counter() >= self.deadline_at:
+            raise SamplingDeadlineExceeded("joint team/sleep sampling reached the decision deadline")
+
     def __call__(self, hidden_rng: random.Random) -> ShowdownTrajectoryWorld:
         if self.active:
             raise ReferenceRefusal("warm reference world is still owned by another trajectory")
@@ -123,7 +141,32 @@ class PublicRootWorldFactory:
         evidence: dict[str, Any] = {"ordinal": len(self.receipts), "status": "STARTED"}
         self.receipts.append(evidence)
         try:
-            draw = self.sampler.draw(self.known, hidden_rng)
+            assignments = None
+            if self.joint_sleep_proposal_cap is None:
+                draw = self.sampler.draw(self.known, hidden_rng)
+            else:
+                evidence["joint_sleep_proposals"] = []
+                evidence["joint_sleep_proposal_cap"] = self.joint_sleep_proposal_cap
+                evidence["joint_sleep_envelope"] = [1, 1]
+                opponent = "p2" if self.state.player_id == "p1" else "p1"
+                for attempt in range(self.joint_sleep_proposal_cap):
+                    self._check_deadline()
+                    proposal = {"ordinal": attempt, "status": "STARTED"}
+                    evidence["joint_sleep_proposals"].append(proposal)
+                    draw = self.sampler.draw(self.known, hidden_rng, check_deadline=self._check_deadline)
+                    proposal.update(packed_team_sha256=draw.packed_team_sha256,
+                        known_draws=[asdict(row) for row in draw.known],
+                        unknown_party_seeds=list(draw.unknown_party_seeds))
+                    traits = opening_sleep_traits({self.state.player_id: self.own_team, opponent: draw.team})
+                    assignments, qualified = joint_sleep_proposal(self.sleep_ledger, traits, hidden_rng,
+                        check_deadline=self._check_deadline)
+                    proposal.update(qualified, status="ACCEPTED" if assignments is not None else "REJECTED")
+                    if assignments is not None:
+                        break
+                else:
+                    raise ReferenceRefusal("joint team/sleep proposal cap exhausted")
+                evidence["joint_sleep_assignments"] = assignments
+                self._check_deadline()
             evidence.update(packed_team_sha256=draw.packed_team_sha256,
                 known_draws=[asdict(row) for row in draw.known], forced_sets=draw.forced_sets,
                 unknown_party_seeds=list(draw.unknown_party_seeds))
@@ -132,13 +175,23 @@ class PublicRootWorldFactory:
                 opponent: pack_team(draw.team)}, observation_format_id="gen3randombattle")
             seed = hidden_rng.getrandbits(32)
             evidence["materialization_seed"] = seed
-            self.env.materialize_public_world(state=self.state, start_override=override, seed=seed,
-                reference_rest_sleep=True)
+            if self.joint_sleep_proposal_cap is None:
+                self.env.materialize_public_world(state=self.state, start_override=override, seed=seed,
+                    reference_rest_sleep=True)
+            else:
+                self._check_deadline()
+                self.env.materialize_public_world(state=self.state, start_override=override, seed=seed,
+                    reference_joint_sleep=assignments)
+                self._check_deadline()
             if decision_state(self.env.observe(self.state.player_id), player=self.state.player_id) != self.root:
                 raise ReferenceRefusal("fresh sampled world does not preserve exact player-known root")
             evidence["status"] = "ROOT_VALIDATED"
             return ShowdownTrajectoryWorld(self.env, subject=self.state.player_id, evaluator=self.evaluator,
                 release=lambda: self._release(evidence))
+        except SamplingDeadlineExceeded:
+            self.active = False
+            evidence.update(status="DEADLINE", released=True)
+            raise
         except Exception as exc:
             self.active = False
             evidence.update(status="REFUSED", error=f"{type(exc).__name__}: {exc}")

@@ -1,5 +1,5 @@
 // Source/target binding ONLY, after all party reordering and timer restoration.
-// Not wired into the bridge until the caller qualifies the sleep assignments.
+// The opt-in joint sampler supplies qualified assignments; legacy paths do not.
 // The caller must derive origins from public chronology, not private simulator
 // state. This module does not infer provenance, timers, abilities or a sampler.
 
@@ -15,6 +15,34 @@ function referenceIdentity(value) {
 
 function speciesId(value) {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+export function restoreReferenceSleep(snapshot, assignments) {
+  if (!Array.isArray(assignments)) throw new Error("Reference joint sleep needs an assignment roster.");
+  // Validate in a cheap shadow (only parties/status objects copied), so a bad
+  // late source/timer never partially changes the supplied snapshot.
+  const shadow = {...snapshot, sides: snapshot.sides.map(side => ({...side,
+    pokemon: side.pokemon.map(pokemon => ({...pokemon, statusState: {...pokemon.statusState}}))}))};
+  const origins = [];
+  for (const row of assignments) {
+    if (!row || Object.keys(row).sort().join(",") !== "kind,skippedTime,sleeper,source,time" ||
+        !Number.isSafeInteger(row.time) || !Number.isSafeInteger(row.skippedTime)) {
+      throw new Error("Reference joint sleep requires explicit integer timer assignments.");
+    }
+    referenceIdentity(row.sleeper);
+    const side = shadow.sides.find(side => side.id === row.sleeper.side);
+    const matches = side?.pokemon.filter(p => speciesId(p.set.species) === speciesId(row.sleeper.species)) ?? [];
+    if (matches.length !== 1) throw new Error("Reference joint sleep cannot resolve its sleeper.");
+    matches[0].statusState = {id: "slp", effectOrder: 0, time: row.time, skippedTime: row.skippedTime,
+      ...(row.kind === "rest" ? {startTime: 3} : {})};
+    origins.push({kind: row.kind, sleeper: row.sleeper, source: row.source});
+  }
+  bindReferenceSleepSources(shadow, origins);
+  for (const [s, side] of shadow.sides.entries()) {
+    for (const [p, pokemon] of side.pokemon.entries()) {
+      if (pokemon.status === "slp") snapshot.sides[s].pokemon[p].statusState = pokemon.statusState;
+    }
+  }
 }
 
 export function bindReferenceSleepSources(snapshot, assignments) {

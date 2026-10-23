@@ -226,7 +226,7 @@ class PaperHiddenTeamSampler:
         # that rule unless the caller explicitly registers the bounded variant.
         self.allow_earlier_compatible_template = allow_earlier_compatible_template
 
-    def draw(self, known: tuple[KnownSetTraits, ...], rng: random.Random) -> HiddenTeamDraw:
+    def draw(self, known: tuple[KnownSetTraits, ...], rng: random.Random, *, check_deadline=None) -> HiddenTeamDraw:
         if (not isinstance(known, tuple) or len(known) > 6
                 or any(not isinstance(mon, KnownSetTraits) for mon in known)):
             raise ReferenceRefusal("reference requires at most six explicit public species traits")
@@ -234,16 +234,19 @@ class PaperHiddenTeamSampler:
         if len(seen) != len(known):
             raise ReferenceRefusal("public known species violate the random-battle species clause")
         team: list[FixturePokemon] = []
+        check = check_deadline if check_deadline is not None else lambda: None
         receipts = []
         for traits in known:
             seeds = []
             candidates = []
             genders_assigned = []
             for _ in range(10):
+                check()
                 assigned_gender = False
                 seed = rng.getrandbits(32)
                 seeds.append(seed)
                 candidate = _fixture(self.generator.generate_reference_set(seed=seed, species=traits.species))
+                check()
                 if canonical_gen3_randbat_species_id(candidate.species) != canonical_gen3_randbat_species_id(traits.species):
                     raise ReferenceRefusal("known-species server draw changed species")
                 if traits.gender is not None and not candidate.gender:
@@ -289,11 +292,13 @@ class PaperHiddenTeamSampler:
                 selected_attempt, tuple(projection_evidence)))
         party_seeds = []
         while len(team) < 6:
+            check()
             if len(party_seeds) >= 10:
                 raise ReferenceRefusal("unknown-species fresh-party rejection safety cap exceeded")
             seed = rng.getrandbits(32)
             party_seeds.append(seed)
             rows = self.generator.generate_scenario_team(seed=seed)
+            check()
             if len(rows) != 6:
                 raise ReferenceRefusal("unknown-species generator returned a partial party")
             for row in rows:
