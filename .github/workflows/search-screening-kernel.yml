@@ -23,6 +23,8 @@ on:
       - tests/test_fullgame_coordinator.py
       - scripts/install_phase0_reference_bundle.py
       - tests/test_reference_bundle_install.py
+      - scripts/reference_materialization_coverage.py
+      - tests/test_reference_materialization_coverage.py
       - pyproject.toml
       - .github/workflows/search-screening-kernel.yml
   push:
@@ -49,6 +51,8 @@ on:
       - tests/test_fullgame_coordinator.py
       - scripts/install_phase0_reference_bundle.py
       - tests/test_reference_bundle_install.py
+      - scripts/reference_materialization_coverage.py
+      - tests/test_reference_materialization_coverage.py
       - pyproject.toml
       - .github/workflows/search-screening-kernel.yml
 permissions:
@@ -69,4 +73,4 @@ jobs:
       - name: Run standalone contracts
         env:
           PYTHONPATH: src:tests
-        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity test_search_over_raw_margin test_search_over_raw_budget16384 test_fullgame_strength test_fullgame_panel test_fullgame_phase_progress test_fullgame_coordinator test_reference_bundle_install -v
+        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity test_search_over_raw_margin test_search_over_raw_budget16384 test_fullgame_strength test_fullgame_panel test_fullgame_phase_progress test_fullgame_coordinator test_reference_bundle_install test_reference_materialization_coverage -v
