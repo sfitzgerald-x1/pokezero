@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
 
 from .belief import PublicBattleBeliefEngine, RevealedPokemonBelief
-from .bridge_error_sites import safe_bridge_error_sites
+from .bridge_error_sites import safe_bridge_error_origin, safe_bridge_error_sites
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .dex import load_showdown_dex_cached, normalize_id
 from .tier2 import canonical_move_id
@@ -95,9 +95,10 @@ _DEFAULT_PLAYER_NAMES: Mapping[PlayerId, str] = {"p1": "PokeZero p1", "p2": "Pok
 class LocalShowdownError(RuntimeError):
     """Raised when the local BattleStream bridge or simulator rejects a step."""
 
-    def __init__(self, *args, bridge_code_sites=None):
+    def __init__(self, *args, bridge_code_sites=None, bridge_error_origin=None):
         super().__init__(*args)
         self.bridge_code_sites = safe_bridge_error_sites(bridge_code_sites)
+        self.bridge_error_origin = safe_bridge_error_origin(bridge_error_origin)
 
 
 def env_config_from_checkpoint_provenance(
@@ -1646,7 +1647,8 @@ class LocalShowdownEnv:
                 continue
             if event.get("type") == "error":
                 raise LocalShowdownError(str(event.get("message") or "Bridge error."),
-                                         bridge_code_sites=event.get("codeSites"))
+                                         bridge_code_sites=event.get("codeSites"),
+                                         bridge_error_origin=event.get("errorOrigin"))
             battle_id = event.get("battleId")
             if battle_id is not None and self._battle_token is not None and battle_id != self._battle_token:
                 continue
@@ -1664,7 +1666,8 @@ class LocalShowdownEnv:
             return False
         if event_type == "error":
             raise LocalShowdownError(str(event.get("message") or "Bridge error."),
-                                     bridge_code_sites=event.get("codeSites"))
+                                     bridge_code_sites=event.get("codeSites"),
+                                     bridge_error_origin=event.get("errorOrigin"))
         if event_type == "ready":
             return True
         if event_type == "terminal":
