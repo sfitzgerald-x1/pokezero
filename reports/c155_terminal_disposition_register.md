@@ -794,6 +794,13 @@ members and the integrated branch gives 422. The sole addition is the freshly ex
 `rollout_leaf_witness_mutation_battery_20261023_regret_selection.json`; no member was removed
 and no historical JSON was edited. Appendix A carries that independently re-derived corpus count.
 
+For #1637, the same selector against main `cc55dc6f` gives 422 members and the
+integrated branch gives 423. The sole added member is the freshly executed
+`rollout_leaf_witness_mutation_battery_20261023_joint_sleep.json`; no member was
+removed and prior mutation receipts remain unchanged. Separate C153/C154 changes
+correct ten historical source citation anchors to their current line numbers;
+they do not change historical outcomes or assertions. Appendix A carries 423.
+
 ⚠ **The second coupling has a failure mode local runs cannot show, and it has already fired.**
 Where CI gates on the merge rather than the branch — as this repo does — **local green and CI green
 are different measurements**, and a step added to `main` after the branch was cut appears only in
@@ -956,7 +963,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 422 |
+| `base.expected_counter_artifacts` | 423 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 79 |
 | `base.section3_rows` | 82 |
