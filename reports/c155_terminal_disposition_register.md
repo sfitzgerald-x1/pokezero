@@ -789,6 +789,11 @@ properties of the **whole** workflow, so a PR that adds any unittest step to it 
 until the two numbers are re-derived. Both are deliberate and they are the whole point: the document
 that goes stale is the one nothing forces an author through.
 
+For #1635, re-running the tracked-JSON selector against main `a310e5ed` gives 421
+members and the integrated branch gives 422. The sole addition is the freshly executed
+`rollout_leaf_witness_mutation_battery_20261023_regret_selection.json`; no member was removed
+and no historical JSON was edited. Appendix A carries that independently re-derived corpus count.
+
 ⚠ **The second coupling has a failure mode local runs cannot show, and it has already fired.**
 Where CI gates on the merge rather than the branch — as this repo does — **local green and CI green
 are different measurements**, and a step added to `main` after the branch was cut appears only in
@@ -951,7 +956,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 421 |
+| `base.expected_counter_artifacts` | 422 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 79 |
 | `base.section3_rows` | 82 |
