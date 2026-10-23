@@ -25,6 +25,7 @@ import time
 import traceback
 from typing import Any, Callable, Protocol
 
+from ..bridge_error_sites import safe_bridge_error_sites
 from .paper_reference import (
     BatchResult, DecisionState, Evaluation, ReferenceConfig, ReferenceRefusal,
     SearchResult, TrajectorySearch, World,
@@ -96,7 +97,14 @@ def _exception_code_sites(error):
             if relative is not None and _code_file(relative) is not None:
                 frames.append({"file": relative, "line": trace.tb_lineno})
             trace = trace.tb_next
-        chain.append({"category": category, "frames": frames[-8:]})
+        entry = {"category": category, "frames": frames[-8:]}
+        try:
+            bridge = safe_bridge_error_sites(getattr(error, "bridge_code_sites", None))
+        except Exception:
+            bridge = []  # Diagnostics must not replace the original refusal.
+        if bridge:
+            entry["bridge_frames"] = bridge
+        chain.append(entry)
         error = error.__cause__ or (None if error.__suppress_context__ else error.__context__)
     return chain
 
@@ -117,7 +125,8 @@ def sanitized_worker_failures(errors):
             continue
         safe = []
         for entry in sites:
-            if (not isinstance(entry, dict) or set(entry) != {"category", "frames"}
+            if (not isinstance(entry, dict) or set(entry) not in (
+                    {"category", "frames"}, {"category", "frames", "bridge_frames"})
                     or entry["category"] not in tuple(_ERROR_CATEGORIES)
                     or not isinstance(entry["frames"], list) or len(entry["frames"]) > 8):
                 break
@@ -126,7 +135,13 @@ def sanitized_worker_failures(errors):
                    or _code_file(row["file"]) is None or type(row["line"]) is not int
                    or not 0 < row["line"] <= 10**7 for row in frames):
                 break
-            safe.append({"category": entry["category"], "frames": [dict(row) for row in frames]})
+            projected = {"category": entry["category"], "frames": [dict(row) for row in frames]}
+            if "bridge_frames" in entry:
+                bridge = safe_bridge_error_sites(entry["bridge_frames"])
+                if not bridge:
+                    break
+                projected["bridge_frames"] = bridge
+            safe.append(projected)
         else:
             result.append({"worker": message[1], "decision_id": message[2], "phase": message[3],
                            "error_code_sites": safe})

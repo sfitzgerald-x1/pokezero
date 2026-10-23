@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from .category_vocab import CategoryVocabulary
 
 from .belief import PublicBattleBeliefEngine, RevealedPokemonBelief
+from .bridge_error_sites import safe_bridge_error_sites
 from .actions import ACTION_COUNT, MOVE_ACTION_COUNT
 from .dex import load_showdown_dex_cached, normalize_id
 from .tier2 import canonical_move_id
@@ -93,6 +94,10 @@ _DEFAULT_PLAYER_NAMES: Mapping[PlayerId, str] = {"p1": "PokeZero p1", "p2": "Pok
 
 class LocalShowdownError(RuntimeError):
     """Raised when the local BattleStream bridge or simulator rejects a step."""
+
+    def __init__(self, *args, bridge_code_sites=None):
+        super().__init__(*args)
+        self.bridge_code_sites = safe_bridge_error_sites(bridge_code_sites)
 
 
 def env_config_from_checkpoint_provenance(
@@ -1640,7 +1645,8 @@ class LocalShowdownEnv:
             if event is None:
                 continue
             if event.get("type") == "error":
-                raise LocalShowdownError(str(event.get("message") or "Bridge error."))
+                raise LocalShowdownError(str(event.get("message") or "Bridge error."),
+                                         bridge_code_sites=event.get("codeSites"))
             battle_id = event.get("battleId")
             if battle_id is not None and self._battle_token is not None and battle_id != self._battle_token:
                 continue
@@ -1657,7 +1663,8 @@ class LocalShowdownEnv:
         if battle_id is not None and self._battle_token is not None and battle_id != self._battle_token:
             return False
         if event_type == "error":
-            raise LocalShowdownError(str(event.get("message") or "Bridge error."))
+            raise LocalShowdownError(str(event.get("message") or "Bridge error."),
+                                     bridge_code_sites=event.get("codeSites"))
         if event_type == "ready":
             return True
         if event_type == "terminal":

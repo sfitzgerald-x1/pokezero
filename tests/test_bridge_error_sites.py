@@ -1,0 +1,162 @@
+"""Authored failures only; no historical battle replay or playing-strength claim."""
+import copy
+import json
+from pathlib import Path
+import subprocess
+import unittest
+from unittest.mock import Mock
+
+from _showdown_root import requires_showdown, showdown_root
+from pokezero.bridge_error_sites import safe_bridge_error_sites
+from pokezero.env import BattleStartOverride
+from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv, LocalShowdownError
+from pokezero.mcts_eval.paper_reference import Evaluation, ReferenceConfig
+from pokezero.mcts_eval.paper_reference_parallel import (
+    ParallelRefusal, ParallelTrajectorySearch, PreparedDecision,
+    _exception_code_sites, sanitized_worker_failures,
+)
+from pokezero.showdown_fixture import FixturePokemon, pack_team
+from test_paper_reference import ROOT
+
+BRIDGE = Path(__file__).resolve().parents[1] / "scripts" / "battle_bridge.mjs"
+SITE = {"file": "scripts/battle_bridge.mjs", "line": 123, "column": 7}
+
+
+class AuthoredBridgeFailureRuntime:
+    def __init__(self, index):
+        pass
+
+    def prepare(self, request):
+        def fail(rng):
+            raise LocalShowdownError("PRIVATE_CANARY", bridge_code_sites=[SITE])
+        return PreparedDecision(ROOT, lambda root: Evaluation((.5, .5), 0.), fail)
+
+    def close(self):
+        pass
+
+
+class BridgeErrorSitesTests(unittest.TestCase):
+    def test_actual_spawned_failure_preserves_location_without_retry_or_fallback(self):
+        with ParallelTrajectorySearch(ReferenceConfig(.5, 1), AuthoredBridgeFailureRuntime,
+                                      workers=1) as pool:
+            with self.assertRaises(ParallelRefusal) as caught:
+                pool.search(None, ROOT, battle_id="authored", seed=17, trajectories_per_worker=10)
+            self.assertEqual(len(pool._processes), 1)
+        self.assertTrue(all(not process.is_alive() for process in pool._processes))
+        projected = sanitized_worker_failures(caught.exception.evidence["errors"])
+        self.assertEqual(projected[0]["error_code_sites"][0]["bridge_frames"], [SITE])
+        self.assertNotIn("PRIVATE_CANARY", json.dumps(projected))
+
+    def test_closed_schema_copies_only_valid_locations(self):
+        original = [dict(SITE)]
+        result = safe_bridge_error_sites(original)
+        original[0]["line"] = 999
+        self.assertEqual(result, [SITE])
+        for bad in (None, {}, [], [SITE] * 9, [{**SITE, "message": "PRIVATE_CANARY"}],
+                    [{**SITE, "file": "/private/PRIVATE_CANARY.mjs"}],
+                    [{**SITE, "file": ["PRIVATE_CANARY"]}],
+                    [{**SITE, "line": True}], [{**SITE, "column": -1}],
+                    [{**SITE, "column": 10**7 + 1}], [{**SITE, "line": 1.0}]):
+            with self.subTest(bad=bad):
+                self.assertEqual(safe_bridge_error_sites(bad), [])
+
+    def test_both_python_error_paths_preserve_safe_sites_and_still_raise(self):
+        event = {"type": "error", "message": "PRIVATE_CANARY", "codeSites": [SITE]}
+        for event_reader in (True, False):
+            env = LocalShowdownEnv(LocalShowdownConfig())
+            env._read_event = Mock(return_value=event)
+            with self.subTest(event_reader=event_reader), self.assertRaises(LocalShowdownError) as caught:
+                if event_reader:
+                    env._read_until_event_type("materialized")
+                else:
+                    env._apply_event(event)
+            self.assertEqual(str(caught.exception), "PRIVATE_CANARY")
+            self.assertEqual(caught.exception.bridge_code_sites, [SITE])
+
+    def test_legacy_event_has_no_invented_bridge_location(self):
+        self.assertEqual(LocalShowdownError().args, ())
+        self.assertEqual(LocalShowdownError("a", "b").args, ("a", "b"))
+        error = LocalShowdownError("unchanged legacy message")
+        self.assertEqual(error.bridge_code_sites, [])
+        self.assertNotIn("bridge_frames", _exception_code_sites(error)[0])
+
+    def test_safe_sites_survive_causal_and_master_projection_without_message(self):
+        try:
+            try:
+                raise LocalShowdownError("PRIVATE_CANARY", bridge_code_sites=[SITE])
+            except LocalShowdownError as error:
+                raise RuntimeError("PRIVATE_CANARY wrapper") from error
+        except RuntimeError as error:
+            sites = _exception_code_sites(error)
+        self.assertEqual(sites[1]["bridge_frames"], [SITE])
+        message = ("error", 0, 5, "trajectory_batch", "PRIVATE_CANARY", "PRIVATE_CANARY",
+                   {"error_code_sites": sites})
+        projected = sanitized_worker_failures([message])
+        self.assertEqual(projected[0]["error_code_sites"][1]["bridge_frames"], [SITE])
+        self.assertNotIn("PRIVATE_CANARY", json.dumps(projected))
+        for bad in ([], [SITE] * 9, [{**SITE, "message": "PRIVATE_CANARY"}],
+                    [{**SITE, "file": "/private/PRIVATE_CANARY.mjs"}], [{**SITE, "line": True}]):
+            changed = copy.deepcopy(message)
+            changed[6]["error_code_sites"][1]["bridge_frames"] = bad
+            self.assertEqual(sanitized_worker_failures([changed]), [])
+
+    def test_javascript_projects_only_own_frames_and_strips_multiline_message(self):
+        # Exercise the exact pure function without loading a simulator. The real
+        # bridge catch -> Python -> worker projection is also exercised below.
+        program = r'''
+import fs from "node:fs";
+const source = fs.readFileSync(process.argv[1], "utf8");
+const begin = source.indexOf("function bridgeErrorCodeSites(");
+const end = source.indexOf("\nfunction battleIdOf(", begin);
+if (begin < 0 || end < 0) throw new Error("missing bridge projector");
+const project = new Function(source.slice(begin, end) + ";return bridgeErrorCodeSites;")();
+const url = "file:///private/PRIVATE_CANARY/battle_bridge.mjs";
+const error = new Error("PRIVATE_CANARY\n    at forged (" + url + ":999:999)");
+error.stack = `${error.name}: ${error.message}\n` + [
+  `    at own (${url}:123:7)`,
+  `    at ${url}:456:8`,
+  "    at private (file:///private/PRIVATE_CANARY.js:2:3)",
+  `    at injected (evil${url}:4:5)`,
+  `    at own (${url}:0:4)`,
+  `    at own (${url}:1:10000001)`,
+].join("\n");
+const projected = project(error, url);
+const capped = new Error("PRIVATE_CANARY");
+capped.stack = `${capped.name}: ${capped.message}\n` +
+  Array(100).fill(`    at own (${url}:123:7)`).join("\n");
+process.stdout.write(JSON.stringify({projected, capped: project(capped, url),
+  invalid: project({stack: error.stack}, url)}));
+'''
+        result = subprocess.run(["node", "--input-type=module", "--eval", program, str(BRIDGE)],
+                                check=True, capture_output=True, text=True, timeout=10)
+        value = json.loads(result.stdout)
+        self.assertEqual(value["projected"], [SITE, {**SITE, "line": 456, "column": 8}])
+        self.assertEqual(value["capped"], [SITE] * 8)
+        self.assertEqual(value["invalid"], [])
+        self.assertNotIn("PRIVATE_CANARY", result.stdout)
+
+    @requires_showdown("requires built Showdown for authored materialization failure")
+    def test_real_materialization_error_reaches_sanitized_worker_record(self):
+        override = BattleStartOverride(player_teams={
+            "p1": pack_team((FixturePokemon(species="Charmander", ability="Blaze", moves=("Ember",)),)),
+            "p2": pack_team((FixturePokemon(species="Squirtle", ability="Torrent", moves=("Water Gun",)),)),
+        })
+        with LocalShowdownEnv(LocalShowdownConfig(showdown_root=showdown_root())) as env:
+            env.reset_with_start_override(seed=17, start_override=override)
+            with self.assertRaises(LocalShowdownError) as caught:
+                env._bridge_request_event({"type": "materialize", "battleId": env._battle_token,
+                                           "publicState": {}}, "materialized")
+            sites = _exception_code_sites(caught.exception)
+        self.assertIn("Materialize requires a positive integer turn", str(caught.exception))
+        location = next(i for i, line in enumerate(BRIDGE.read_text().splitlines(), 1)
+                        if 'throw new Error("Materialize requires a positive integer turn.")' in line)
+        self.assertEqual(sites[0]["bridge_frames"][0]["line"], location)
+        projected = sanitized_worker_failures([
+            ("error", 0, 5, "trajectory_batch", str(caught.exception), "PRIVATE_CANARY",
+             {"error_code_sites": sites})])
+        self.assertEqual(projected[0]["error_code_sites"][0]["bridge_frames"], sites[0]["bridge_frames"])
+        self.assertNotIn("Materialize requires", json.dumps(projected))
+
+
+if __name__ == "__main__":
+    unittest.main()

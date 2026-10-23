@@ -103,6 +103,7 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/audit_provenance.py",
         "src/pokezero/belief.py",
         "src/pokezero/bootstrap.py",
+        "src/pokezero/bridge_error_sites.py",
         "src/pokezero/category_vocab.py",
         "src/pokezero/collection.py",
         "src/pokezero/dataset.py",
