@@ -930,6 +930,10 @@ class EngineMctsConfig:
     # flag-off must be the search every recorded result was produced under, and
     # that equivalence is asserted bit-for-bit, not argued.
     fpu_reduction: float | None = None
+    # Phase 1 instantaneous positive-advantage sampling, not cumulative regret
+    # matching. PUCT remains the exact legacy default. Only encoded model
+    # adversarial search supports the opt-in; independent chance RNG unchanged.
+    selection: str = "puct"
     # Per-decision override telemetry: does search play something other than the
     # raw policy head's argmax? Pure measurement -- it asks the crate for the
     # per-arm `prior` column and reads it; nothing on the search's path changes,
@@ -1033,6 +1037,14 @@ class EngineMctsConfig:
     fold_cross_check: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.selection) is not str or self.selection not in ("puct", "regret"):
+            raise ValueError("selection must be 'puct' or 'regret'.")
+        if self.selection == "regret" and (
+                self.leaf_eval != "model" or self.policy_opponent
+                or self.fpu_reduction is not None or self.rollout_leaf_eval
+                or self.rollout_leaf_shadow or not math.isfinite(self.c_puct)
+                or self.c_puct < 0):
+            raise ValueError("regret selection requires adversarial model search, no FPU/rollout seam, and finite nonnegative c_puct.")
         if type(self.policy_opponent) is not bool:
             raise ValueError("policy_opponent must be a boolean.")
         if type(self.record_joint_actions) is not bool or (self.record_joint_actions and (
@@ -2863,6 +2875,23 @@ def native_search_args(
     if time_budget_ms is not None:
         search_args.append(int(time_budget_ms))
     return search_args
+
+
+def native_selection_kwargs(config: EngineMctsConfig) -> dict[str, str]:
+    """Omit the new keyword entirely on the legacy/stale-wheel path."""
+    mode = getattr(config, "selection", "puct")
+    if mode not in ("puct", "regret"):
+        raise ValueError("selection must be 'puct' or 'regret'.")
+    return {"selection": "regret"} if mode == "regret" else {}
+
+
+def validate_native_selection(config: EngineMctsConfig, report: Mapping[str, Any]) -> None:
+    if config.selection == "puct":
+        return
+    draws, iterations = report.get("selection_draws"), report.get("iterations")
+    if (report.get("selection") != "regret" or type(draws) is not int
+            or type(iterations) is not int or iterations < 0 or draws < 2 * iterations):
+        raise EngineSearchWitnessError("native regret selection witness missing or invalid")
 
 
 MODEL_ROLLOUT_SHADOW_MODE = "model_value_shadow_rollout"
@@ -6534,6 +6563,7 @@ class EngineMctsPolicy:
                         time_budget_ms=time_budget_ms,
                     )
                     policy_kwargs = self._policy_opponent_native_kwargs(context, record)
+                    policy_kwargs.update(native_selection_kwargs(config))
                     if config.record_joint_actions:
                         policy_kwargs["record_joint_actions"] = True
                     native_invocation_started = time_budget_ms is not None
@@ -6577,6 +6607,7 @@ class EngineMctsPolicy:
                     # rejects the whole decision.  The dispatch mode may change
                     # throughput, never that failure boundary.
                     report = payload
+                validate_native_selection(config, report)
                 if config.record_joint_actions:
                     joint = validate_native_joint_action_witness(report)
                     joint_action_invocations.append({
@@ -6838,12 +6869,12 @@ class EngineMctsPolicy:
                 # ... and everything ELSE the world observed before it aborted, which
                 # this seam used to discard wholesale.
                 self._absorb_aborted_lossy_subcases(error)
-                if config.policy_opponent or config.record_joint_actions:
+                if config.policy_opponent or config.record_joint_actions or config.selection == "regret":
                     finalize_time_budget()
                     if config.policy_opponent:
                         _note_policy_opponent_refusal(error)
                     raise EngineSearchWitnessError(
-                        f"{'policy opponent' if config.policy_opponent else 'joint-action measurement'} world refused (chance seed={record['seed']}): {reason}"
+                        f"{'policy opponent' if config.policy_opponent else 'regret selection' if config.selection == 'regret' else 'joint-action measurement'} world refused (chance seed={record['seed']}): {reason}"
                     ) from error
                 return None
             # Invocation-level counters reflect actual compute. A stopped
@@ -7416,6 +7447,7 @@ class EngineMctsPolicy:
                         completed=True,
                         payload=json.loads(handle.search_batched_multi_encoded(
                             *search_args, **self._policy_opponent_native_kwargs(context, _record),
+                            **native_selection_kwargs(config),
                             **({"record_joint_actions": True} if config.record_joint_actions else {}))),
                         native_invocation_started=True,
                     )
@@ -7462,6 +7494,7 @@ class EngineMctsPolicy:
                             time_budget_ms=time_budget_ms,
                         )
                         policy_kwargs = self._policy_opponent_native_kwargs(context, record)
+                        policy_kwargs.update(native_selection_kwargs(config))
                         if config.record_joint_actions:
                             policy_kwargs["record_joint_actions"] = True
                     except Exception as error:
@@ -7853,6 +7886,7 @@ class EngineMctsPolicy:
         metadata = {
             "engine_mcts": {
                 "leaf_eval": "model",
+                **({"selection": "regret"} if config.selection == "regret" else {}),
                 **({"joint_actions": {
                     "scope": "per_native_invocation_without_belief_reweighting",
                     "native_invocations": joint_action_invocations,
@@ -8996,6 +9030,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="max decision plies (model mode)")
     parser.add_argument("--no-model-priors", action="store_true",
                         help="model mode with uniform priors (A/B kill switch)")
+    parser.add_argument("--selection", choices=("puct", "regret"), default="puct",
+                        help="model search selector; regret is an unmeasured opt-in")
     parser.add_argument("--early-stop", action="store_true",
                         help="model mode: stop only when remaining sims cannot change the action")
     parser.add_argument("--early-stop-min-sims", type=int, default=64,
@@ -9033,6 +9069,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         search_batch=args.batch,
         search_depth=args.depth,
         model_priors=not args.no_model_priors,
+        selection=args.selection,
         early_stop=args.early_stop,
         early_stop_min_sims=args.early_stop_min_sims,
         fold_cross_check=args.fold_cross_check,
@@ -9143,6 +9180,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "model_priors": config.model_priors,
             "use_opponent_priors": config.use_opponent_priors,
             "fpu_reduction": config.fpu_reduction,
+            **({"selection": "regret"} if config.selection == "regret" else {}),
             "early_stop": config.early_stop,
             "early_stop_min_sims": config.early_stop_min_sims,
         },
