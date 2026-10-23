@@ -8,6 +8,7 @@ import readline from "node:readline";
 import {fileURLToPath, pathToFileURL} from "node:url";
 import {referenceRestState, bindReferenceRestSources} from "./battle_bridge_reference_rest.mjs";
 import {restoreReferenceSleep} from "./battle_bridge_reference_sleep.mjs";
+import {restoreReferenceTrace} from "./battle_bridge_reference_trace.mjs";
 import {
   invalidatedBoundaryState,
   snapshotBoundaryRequests,
@@ -563,7 +564,9 @@ function materializeBattle(command) {
   if (jointSleep !== null && command.referenceRestSleep === true) {
     throw new Error("Reference sleep modes are mutually exclusive.");
   }
-  applyPublicState(snapshot, publicState, command.referenceRestSleep === true, jointSleep);
+  const trace = command.referenceTrace ?? null;
+  if (trace !== null && jointSleep === null) throw new Error("Reference Trace requires joint sleep.");
+  applyPublicState(snapshot, publicState, command.referenceRestSleep === true, jointSleep, trace);
   const send = battle.battleStream.battle.send;
   battle.battleStream.battle = State.deserializeBattle(snapshot);
   battle.battleStream.battle.restart(send);
@@ -1083,7 +1086,7 @@ function scenarioStateSummary(simulatorBattle, requestedState) {
   };
 }
 
-function applyPublicState(snapshot, publicState, referenceRestSleep = false, jointSleep = null) {
+function applyPublicState(snapshot, publicState, referenceRestSleep = false, jointSleep = null, trace = null) {
   if (!Number.isInteger(publicState.turn) || publicState.turn < 1) {
     throw new Error("Materialize requires a positive integer turn.");
   }
@@ -1273,6 +1276,7 @@ function applyPublicState(snapshot, publicState, referenceRestSleep = false, joi
     delete serializedSide.activeRequest;
   }
   if (jointSleep !== null) restoreReferenceSleep(snapshot, jointSleep);
+  if (trace !== null) restoreReferenceTrace(snapshot, trace);
 }
 
 function restoreDeferredOpponentActions(simulatorBattle, publicState) {
