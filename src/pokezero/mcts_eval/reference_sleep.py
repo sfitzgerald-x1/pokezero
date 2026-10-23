@@ -14,6 +14,13 @@ likelihood. The joint normalization below includes that likelihood. Unknown
 ability-history or attempt classification must be resolved or refused by the
 caller, never coerced to ordinary/non-Early-Bird evidence.
 
+Passive cure opportunities also contribute likelihood, including a cure that
+did NOT occur. The caller must resolve their probability, eligibility and
+chronological position from the trait timeline and simulator rules. A public
+upkeep marker alone does not establish an opportunity: for example Gen 3
+Shed Skin runs before Yawn, and a benched sleeper is not checked. This module
+does not choose which episodes to include in a scientific sampling target.
+
 This module does not extract protocol evidence, select a hidden-team proposal
 law, restore a simulator, or bind Sleep Clause sources. Those integration
 requirements remain outstanding. In particular, current sampled-team draws
@@ -51,7 +58,27 @@ class SleepCure:
     """An explicit cure, distinct from a natural wake opportunity."""
 
 
-SleepEvent = SleepAttempt | SleepReentry | SleepCure
+@dataclass(frozen=True)
+class SleepCureChance:
+    """One independently resolved passive opportunity and its observation.
+
+    Probability is conditional on the explicitly supplied hypothesis and
+    preceding history, NOT an ability prior or a frequency among templates.
+    Use 0/1 for resolved deterministic checks. Unknown eligibility must refuse
+    in the caller, never become a zero-probability check. An observed cure is
+    represented by this event alone, not followed by another SleepCure.
+    """
+    cure_probability: Fraction
+    stayed_asleep: bool
+
+    def __post_init__(self):
+        if (type(self.cure_probability) is not Fraction
+                or not 0 <= self.cure_probability <= 1
+                or type(self.stayed_asleep) is not bool):
+            raise ReferenceRefusal("passive sleep cure needs an exact resolved probability and observation")
+
+
+SleepEvent = SleepAttempt | SleepReentry | SleepCure | SleepCureChance
 
 
 @dataclass(frozen=True)
@@ -64,7 +91,7 @@ class SleepHypothesis:
         if (type(self.label) is not str or not self.label
                 or type(self.prior_mass) is not Fraction or self.prior_mass <= 0
                 or type(self.events) is not tuple
-                or any(type(event) not in (SleepAttempt, SleepReentry, SleepCure)
+                or any(type(event) not in (SleepAttempt, SleepReentry, SleepCure, SleepCureChance)
                        for event in self.events)):
             raise ReferenceRefusal("sleep hypothesis needs explicit prior and complete typed history")
 
@@ -100,8 +127,9 @@ class SleepPosterior:
         raise AssertionError("normalized sleep distribution has no selected outcome")
 
 
-def _advance(initial: int, events: tuple[SleepEvent, ...]) -> tuple[int, int] | None:
+def _advance(initial: int, events: tuple[SleepEvent, ...]) -> tuple[int, int, Fraction] | None:
     time, skipped = initial, 0
+    likelihood = Fraction(1)
     for event in events:
         if time == 0:
             raise ReferenceRefusal("sleep episode continues after an observed wake or cure")
@@ -110,6 +138,13 @@ def _advance(initial: int, events: tuple[SleepEvent, ...]) -> tuple[int, int] | 
             skipped = 0
         elif type(event) is SleepCure:
             time, skipped = 0, 0
+        elif type(event) is SleepCureChance:
+            likelihood *= (1 - event.cure_probability if event.stayed_asleep
+                           else event.cure_probability)
+            if not likelihood:
+                return None
+            if not event.stayed_asleep:
+                time, skipped = 0, 0
         else:
             time -= 2 if event.early_bird else 1
             if event.stayed_asleep != (time > 0):
@@ -118,7 +153,7 @@ def _advance(initial: int, events: tuple[SleepEvent, ...]) -> tuple[int, int] | 
                 time, skipped = 0, 0
             else:
                 skipped = skipped + 1 if event.sleep_usable else 0
-    return time, skipped
+    return time, skipped, likelihood
 
 
 def condition_sleep(hypotheses: tuple[SleepHypothesis, ...], *, kind: str) -> SleepPosterior:
@@ -140,7 +175,9 @@ def condition_sleep(hypotheses: tuple[SleepHypothesis, ...], *, kind: str) -> Sl
         for initial in initial_times:
             state = _advance(initial, row.events)
             if state is not None:
-                accepted.append((row.label, initial, *state, row.prior_mass / len(initial_times)))
+                time, skipped, likelihood = state
+                accepted.append((row.label, initial, time, skipped,
+                                 row.prior_mass * likelihood / len(initial_times)))
     mass = sum((row[-1] for row in accepted), Fraction())
     if not mass:
         raise ReferenceRefusal("public sleep history has no compatible latent state")
