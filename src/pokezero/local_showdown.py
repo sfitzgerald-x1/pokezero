@@ -774,11 +774,14 @@ class LocalShowdownEnv:
         deferred_opponent_action_priors: Mapping[PlayerId, Sequence[float]] | None = None,
         reference_rest_sleep: bool = False,
         reference_joint_sleep: list[dict[str, Any]] | None = None,
+        reference_trace: list[dict[str, Any]] | None = None,
     ) -> None:
         """Construct a belief-sampled branch point without replaying prior choices."""
 
         if not isinstance(reference_rest_sleep, bool):
             raise LocalShowdownError("Reference Rest opt-in must be boolean.")
+        if reference_trace is not None and (type(reference_trace) is not list or reference_joint_sleep is None):
+            raise LocalShowdownError("Reference Trace requires the opt-in joint sampler certificate.")
         if reference_joint_sleep is not None:
             if (reference_rest_sleep or type(reference_joint_sleep) is not list
                     or state.observation_format_id not in {"gen3randombattle", "gen3customgame"}):
@@ -801,6 +804,7 @@ class LocalShowdownEnv:
                 "battleId": self._battle_token,
                 "referenceRestSleep": reference_rest_sleep,
                 "referenceJointSleep": reference_joint_sleep,
+                "referenceTrace": reference_trace,
                 "publicState": _public_materialization_payload(
                     state,
                     deferred_opponent_actions=deferred_opponent_actions,

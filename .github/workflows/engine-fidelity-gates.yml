@@ -125,6 +125,7 @@ jobs:
             tests/test_bridge_error_sites.py
             scripts/battle_bridge_boundary_requests.mjs
             scripts/battle_bridge_reference_sleep.mjs
+            scripts/battle_bridge_reference_trace.mjs
             scripts/hc_depth_grid.py
             scripts/mcts_acceptance_h2h.py
             scripts/price_uniform_rollout_leaves.py
@@ -135,6 +136,7 @@ jobs:
             tests/test_policy_opponent*.py
             tests/test_paper_reference*.py
             tests/test_reference_sleep*.py
+            tests/test_reference_trace.py
             tests/test_mcts_eval_timing_corpus.py
             tests/test_engine_fidelity_counts.py
             tests/conftest.py
@@ -1079,12 +1081,12 @@ jobs:
             tests.test_paper_reference_sampler tests.test_paper_reference_rest \
             tests.test_reference_sleep tests.test_reference_sleep_history \
             tests.test_reference_sleep_binding tests.test_reference_sleep_evidence \
-            tests.test_reference_sleep_joint \
+            tests.test_reference_sleep_joint tests.test_reference_trace \
             tests.test_paper_reference_showdown tests.test_battle_bridge_boundary_requests \
             tests.test_bridge_error_sites \
             tests.test_mcts_eval_timing_corpus -v 2>&1 \
             | tee /tmp/paper-reference.log
-          grep -qE 'Ran 208 tests' /tmp/paper-reference.log
+          grep -qE 'Ran 224 tests' /tmp/paper-reference.log
           grep -qE '^OK$' /tmp/paper-reference.log
           if grep -qE '^OK \(.*skipped=' /tmp/paper-reference.log; then
             echo "::error::the paper trajectory reference contracts must not skip"

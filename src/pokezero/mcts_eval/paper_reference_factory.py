@@ -159,7 +159,7 @@ class PublicRootWorldFactory:
                         unknown_party_seeds=list(draw.unknown_party_seeds))
                     traits = opening_sleep_traits({self.state.player_id: self.own_team, opponent: draw.team})
                     assignments, qualified = joint_sleep_proposal(self.sleep_ledger, traits, hidden_rng,
-                        check_deadline=self._check_deadline)
+                        check_deadline=self._check_deadline, restore_public_trace=True)
                     proposal.update(qualified, status="ACCEPTED" if assignments is not None else "REJECTED")
                     if assignments is not None:
                         break
@@ -181,7 +181,7 @@ class PublicRootWorldFactory:
             else:
                 self._check_deadline()
                 self.env.materialize_public_world(state=self.state, start_override=override, seed=seed,
-                    reference_joint_sleep=assignments)
+                    reference_joint_sleep=assignments, reference_trace=qualified["trace_assignments"])
                 self._check_deadline()
             if decision_state(self.env.observe(self.state.player_id), player=self.state.player_id) != self.root:
                 raise ReferenceRefusal("fresh sampled world does not preserve exact player-known root")

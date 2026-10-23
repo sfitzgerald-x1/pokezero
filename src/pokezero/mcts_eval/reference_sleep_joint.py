@@ -16,6 +16,7 @@ from typing import Callable, Mapping
 from .paper_reference import ReferenceRefusal
 from .reference_sleep_evidence import SleepTraits, qualify_sleep_episode, qualify_sleep_traits
 from .reference_sleep_history import PublicSleepLedger
+from .reference_trace import trace_restoration_assignments
 
 
 def opening_sleep_traits(parties) -> dict[str, SleepTraits]:
@@ -32,7 +33,8 @@ def opening_sleep_traits(parties) -> dict[str, SleepTraits]:
 
 
 def joint_sleep_proposal(ledger: PublicSleepLedger, traits: Mapping[str, SleepTraits],
-                         rng: random.Random, *, check_deadline: Callable[[], None]):
+                         rng: random.Random, *, check_deadline: Callable[[], None],
+                         restore_public_trace: bool = False):
     """Return assignments or rejection, with exact likelihood accounting.
 
     Accepting with product evidence probability BEFORE drawing conditional
@@ -47,14 +49,17 @@ def joint_sleep_proposal(ledger: PublicSleepLedger, traits: Mapping[str, SleepTr
         raise ReferenceRefusal("joint sleep trait history unresolved: " + compatibility.reason)
     if compatibility.status == "incompatible":
         return None, dict(evidence=[], likelihood=[0, 1], accepted=False, reason=compatibility.reason)
-    # The direct Showdown materializer retains original abilities. Unlike the
-    # native engine path it does NOT consume the replay's revealedAbility row.
-    # Refuse unresolved runtime representation, never silently restore an
-    # original ability after the qualifier reasoned with a copied one.
-    for key, current in compatibility.current_traits:
-        original = re.sub(r"[^a-z0-9]", "", traits[key].ability.lower())
-        if current.ability != original:
-            raise ReferenceRefusal("joint sleep current ability is not represented by the materializer")
+    # Generic revealedAbility rows are not restoration certificates. The
+    # explicit joint path can restore the bounded public Trace subset; every
+    # other unrepresented current/original mismatch still refuses.
+    trace_assignments = None
+    if restore_public_trace:
+        trace_assignments = trace_restoration_assignments(ledger, traits, compatibility)
+    else:
+        for key, current in compatibility.current_traits:
+            original = re.sub(r"[^a-z0-9]", "", traits[key].ability.lower())
+            if current.ability != original:
+                raise ReferenceRefusal("joint sleep current ability is not represented by the materializer")
     for index, episode in enumerate(ledger.episodes):
         if episode.closed:
             continue
@@ -72,6 +77,8 @@ def joint_sleep_proposal(ledger: PublicSleepLedger, traits: Mapping[str, SleepTr
             qualified.append((episode, row.posterior))
     check_deadline()
     receipt = dict(evidence=evidence, likelihood=[likelihood.numerator, likelihood.denominator])
+    if trace_assignments is not None:
+        receipt["trace_assignments"] = trace_assignments
     # Integer rejection is exact, including tiny passive-survival likelihoods.
     if rng.randrange(likelihood.denominator) >= likelihood.numerator:
         return None, dict(receipt, accepted=False)
