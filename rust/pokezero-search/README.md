@@ -27,6 +27,28 @@ Three things are proven here, and only these three:
 Search *quality* is explicitly not a goal: `puct_search` is one ply deep with
 uniform priors. Do not read strength into its outputs.
 
+### Opt-in model multi-ply selector
+
+`EngineMctsConfig(selection="regret", leaf_eval="model", ...)` or the
+engine-search CLI's `--selection regret` enables instantaneous positive-advantage
+sampling in the encoded model search. `selection="puct"` is the unchanged
+default; older entry points do not support the new mode. Native callers use the
+appended `selection` keyword on `search_batched_multi_encoded`.
+
+Each seat samples weights `max(Q(a)-V,0) + c_puct*P(a)/sqrt(max(N,1))`.
+Unvisited values are 0.5; V uses that seat's visit-weighted statistics, including
+its virtual losses. Zero total weight falls back to the original prior, then
+uniform if the prior is zero. Original priors are never rewritten. A separately
+seeded selection RNG leaves the chance RNG independent; the final root
+visit-max recommendation and belief aggregation are unchanged.
+
+This is the proposed instantaneous selector, **not cumulative regret matching**
+or an equilibrium-convergence guarantee. Own-policy opponent sampling, FPU and
+rollout-leaf seams cannot be combined with it. Opt-in reports carry `selection`
+and `selection_draws`; default reports gain no fields. These contracts establish
+implementation behavior, not strength, reliability or deployability. No
+full-game campaign is enabled by adding the option.
+
 ## Building
 
 The engine source is vendored, never committed (`third_party/poke-engine-src/`

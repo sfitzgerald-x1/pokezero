@@ -1130,6 +1130,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
     policy_opponent: Option<(&crate::policy_bridge::PolicyOpponentBridge, u64)>,
     record_joint_actions: bool,
+    regret_selection: bool,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
@@ -1147,6 +1148,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     } else {
         Tree::from_root(&state)?
     };
+    if regret_selection {
+        tree.selector = Some(crate::selection::PositiveAdvantageSampler::new(seed));
+    }
     if record_joint_actions {
         tree.joint_action_visits = Some(Default::default());
     }
@@ -1920,6 +1924,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         Some(witness) => format!("{extra},\"joint_action_witness\":{witness}"),
         None => extra,
     };
+    let extra = if let Some(selector) = &outcome.tree.selector {
+        format!("{extra},\"selection\":\"regret\",\"selection_draws\":{}", selector.draws)
+    } else { extra };
     // Deadline fields are appended only for the opt-in path: a historical
     // fixed-work report remains byte-for-byte on its old schema. An overrun is
     // not hidden -- it is the cost of finishing the final complete batch rather
@@ -2373,6 +2380,7 @@ impl NativeLeafModel {
         policy_opponent_request_order = None,
         record_joint_actions = false,
         policy_opponent_public_lines = None,
+        selection = "puct",
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -2408,6 +2416,7 @@ impl NativeLeafModel {
         policy_opponent_request_order: Option<Vec<String>>,
         record_joint_actions: bool,
         policy_opponent_public_lines: Option<Vec<String>>,
+        selection: &str,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -2428,6 +2437,15 @@ impl NativeLeafModel {
             ));
         }
         let policy_enabled = policy_opponent_callback.is_some();
+        let regret_selection = match selection {
+            "puct" => false,
+            "regret" => true,
+            _ => return Err(PyValueError::new_err("selection must be 'puct' or 'regret'")),
+        };
+        if regret_selection && (policy_enabled || fpu_reduction.is_some() || rollout_leaf_mode.is_some()
+                || !c_puct.is_finite() || c_puct < 0.0) {
+            return Err(PyValueError::new_err("regret selection requires adversarial model search, no FPU/rollout seam, and finite nonnegative c_puct"));
+        }
         if !policy_enabled && policy_opponent_public_lines.is_some() {
             return Err(PyValueError::new_err("public opponent history requires own-policy opt-in"));
         }
@@ -2585,6 +2603,7 @@ impl NativeLeafModel {
                     lossy_subcases,
                     policy_bridge.as_ref().map(|bridge| (bridge, policy_opponent_seed.expect("validated policy seed"))),
                     record_joint_actions,
+                    regret_selection,
                 )
             })
         })

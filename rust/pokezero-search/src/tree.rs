@@ -151,6 +151,8 @@ fn debug_assert_probability_conservation(branches: &[ChanceBranch]) {
 pub(crate) struct Tree {
     pub decisions: Vec<DecisionNode>,
     pub chances: Vec<ChanceNode>,
+    /// Only opt-in encoded model search initializes this independent stream.
+    pub selector: Option<crate::selection::PositiveAdvantageSampler>,
     /// Measurement-only completed backups, never collection reservations.
     /// Absent unless explicitly requested by a native measurement caller.
     pub joint_action_visits: Option<std::collections::BTreeMap<(usize, usize, usize), u64>>,
@@ -255,6 +257,7 @@ impl Tree {
         Ok(Tree {
             decisions: vec![root],
             chances: Vec::new(),
+            selector: None,
             joint_action_visits: None,
         })
     }
@@ -690,6 +693,9 @@ fn traverse_inner<F: FnMut(&State, &BranchSeam) -> LeafPrice>(
                         return Err(error);
                     }
                 }
+            } else if let Some(selector) = tree.selector.as_mut() {
+                (selector.select(&node.s1_stats, cfg.c_puct, true),
+                 selector.select(&node.s2_stats, cfg.c_puct, false))
             } else {
                 let i = select(
                     &node.s1_stats,
@@ -1413,6 +1419,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn regret_traversals_restore_state_and_finalize_all_virtual_losses() {
+        let mut state = parse_state(include_str!("test_fixtures/minimal.state").trim()).unwrap();
+        let before = state.serialize();
+        let mut tree = Tree::from_root(&state).unwrap();
+        tree.selector = Some(crate::selection::PositiveAdvantageSampler::new(19));
+        let cfg = MultiPlyConfig { max_depth: 3, c_puct: 1.4, deep_ko_split: true,
+            use_opponent_priors: false, fpu_reduction: None };
+        let mut counters = SearchCounters::default();
+        let mut chance = StdRng::seed_from_u64(21);
+        for _ in 0..96 {
+            let t = traverse(&mut tree, &mut state, &mut chance, &cfg, &mut counters,
+                &mut |leaf, _| LeafPrice::Ready(HpFractionEval.eval(leaf)));
+            assert_eq!(state.serialize(), before);
+            finalize(&mut tree, &t, &[]);
+        }
+        assert_eq!(tree.decisions[0].visits, 96);
+        assert!(tree.selector.as_ref().unwrap().draws > 192);
+        for node in &tree.decisions {
+            for stats in [&node.s1_stats, &node.s2_stats] {
+                assert_eq!(stats.iter().map(|s| s.visits).sum::<u32>(), node.visits);
+            }
+            let one: f32 = node.s1_stats.iter().map(|s| s.total_value).sum();
+            let two: f32 = node.s2_stats.iter().map(|s| s.total_value).sum();
+            assert!((one - two).abs() < 1e-4);
+        }
+    }
+
+    #[test]
     fn own_policy_wait_preserves_commitment_and_ordinary_roots_in_both_seats() {
         use poke_engine::choices::Choices;
         use poke_engine::state::PokemonMoveIndex;
@@ -1970,6 +2004,7 @@ mod tests {
     #[test]
     fn both_seats_priors_land_on_their_own_stats_at_child_creation() {
         let mut tree = Tree {
+            selector: None,
             joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
@@ -1990,6 +2025,7 @@ mod tests {
     #[test]
     fn stored_side_flags_route_the_apply_when_the_searching_seat_is_side_two() {
         let mut tree = Tree {
+            selector: None,
             joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
@@ -2009,6 +2045,7 @@ mod tests {
     #[test]
     fn an_opponent_only_branch_leaves_the_acting_seat_uniform() {
         let mut tree = Tree {
+            selector: None,
             joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
@@ -2023,6 +2060,7 @@ mod tests {
     #[test]
     fn a_branch_with_no_stored_priors_leaves_the_child_uniform() {
         let mut tree = Tree {
+            selector: None,
             joint_action_visits: None,
             decisions: vec![prior_node(&[0.5, 0.5], &[0.5, 0.5])],
             chances: vec![ChanceNode {
@@ -2813,6 +2851,7 @@ mod tests {
                 })
                 .collect();
             let mut tree = Tree {
+                selector: None,
                 joint_action_visits: None,
                 decisions: vec![root],
                 chances: vec![ChanceNode { branches }],

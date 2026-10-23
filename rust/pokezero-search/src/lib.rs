@@ -27,6 +27,7 @@ pub(crate) mod public_trap;
 #[cfg(feature = "model")]
 pub(crate) mod policy_bridge;
 pub mod rollout;
+pub(crate) mod selection;
 pub mod tree;
 
 use std::hint::black_box;

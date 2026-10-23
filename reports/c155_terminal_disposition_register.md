@@ -127,14 +127,14 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`42ffa04f69a64d7d…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`4415c16215e271e0…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
 the fingerprint's inputs — the 79 gen3 patches, `poke-engine-gen3-patches.txt`,
-`poke-engine-base-source.json`, the 17 crate sources, and the `Cargo.toml` / `Cargo.lock` /
+`poke-engine-base-source.json`, the 18 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
@@ -348,6 +348,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1622 post-switch Trace public reveal | `events.rs` renders an instruction-local Trace-to-Shadow-Tag reveal after a normal/replacement switch, with both current participants alive and the copied ability matching the current foe. Strict request equality remains unchanged; phazing is outside this repair. Both native consumers were rebuilt in an isolated runtime. Authored fixtures establish the omission, not the stopped game's historical cause or strength. Historical receipts and OPEN qualification remain unchanged | `4784193cf4ebea81…` |
 | Own-policy pending-action root | `model.rs` opts into a mode-specific `tree.rs` root that retains the exact saved Move/Struggle or genuine wait instead of re-expanding a committed opponent choice. Invalid commitments refuse, State bytes and ordinary root behavior remain unchanged, and authored both-seat controls pin the distinction. Historical sweeps and OPEN qualification remain unchanged | `0e95d740bf324bd5…` |
 | Public Trace maybe-trap observation | `request_observer.rs` accepts only an exact current-entry Trace reveal for Gardevoir/Porygon2 copying Arena Trap or Magnet Pull; missing, stale, conflicting and otherwise unsupported changes still refuse. `events.rs` emits those reveals from the actual switch-local ability transition. The rebuilt search extension passes authored source/request and child-branch controls; engine patches, historical receipts and OPEN qualification are unchanged. This is not a new frozen two-consumer sweep or a historical-cause claim | `42ffa04f69a64d7d…` |
+| #1635 default-off positive-advantage selection | New `selection.rs` and `lib.rs`/`tree.rs`/`model.rs` plumbing plus constructor tests in `priors.rs` change the hashed crate source inventory from 17 to 18 and total input inventory from 102 to 103. PUCT remains the default; no historical sweep, freeze declaration or OPEN qualification changes | `4415c16215e271e0…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -788,6 +789,11 @@ properties of the **whole** workflow, so a PR that adds any unittest step to it 
 until the two numbers are re-derived. Both are deliberate and they are the whole point: the document
 that goes stale is the one nothing forces an author through.
 
+For #1635, re-running the tracked-JSON selector against main `a310e5ed` gives 421
+members and the integrated branch gives 422. The sole addition is the freshly executed
+`rollout_leaf_witness_mutation_battery_20261023_regret_selection.json`; no member was removed
+and no historical JSON was edited. Appendix A carries that independently re-derived corpus count.
+
 ⚠ **The second coupling has a failure mode local runs cannot show, and it has already fired.**
 Where CI gates on the merge rather than the branch — as this repo does — **local green and CI green
 are different measurements**, and a step added to `main` after the branch was cut appears only in
@@ -798,15 +804,16 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure: there are **47 executable** invocation sites at this
-head; the scan resolves **47** of them and leaves **none** unresolved. No invocation-carrying
+rather than inherited from #1205's figure: there are **48 executable** invocation sites at this
+head; the scan resolves **48** of them and leaves **none** unresolved. No invocation-carrying
 comment remains. The own-policy integration, inherited-selector parser, and frozen-root roster
 gates are included, as is the 109-test paper trajectory reference step added by #1504; the counts
 were re-derived from executable workflow bodies. The guarded 13-test synthetic Struggle
 adapter step, both three-test fresh native and model-wheel Struggle steps, and the 13-test
 root-prior normalization and model live-path work-separation fixture step are included. The
 eight-test initial-team capture observer, nine-test selected-field comparison and twelve-test
-initial-team source integration steps are included.
+initial-team source integration steps are included. The seven-test opt-in regret-selection
+step added by #1635 is included; these counts are re-derived on the merged main-based tree.
 
 (Was 36/1/35. #1384 added the guarded opponent request-order source pins. Re-derived from the
 merged workflow and scanner rather than incremented.)
@@ -949,7 +956,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 421 |
+| `base.expected_counter_artifacts` | 422 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 79 |
 | `base.section3_rows` | 82 |
@@ -971,9 +978,9 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.hashed_crate_sources` | 17 |
-| `t1.hashed_input_files` | 102 |
-| `t1.head_fingerprint` | 42ffa04f69a64d7d |
+| `t1.hashed_crate_sources` | 18 |
+| `t1.hashed_input_files` | 103 |
+| `t1.head_fingerprint` | 4415c16215e271e0 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

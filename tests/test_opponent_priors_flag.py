@@ -385,6 +385,12 @@ class NativeCallContractTest(unittest.TestCase):
                 "rollout_threads",
                 "rollout_branch_on_damage",
                 "time_budget_ms",
+                "policy_opponent_callback",
+                "policy_opponent_seed",
+                "policy_opponent_request_order",
+                "record_joint_actions",
+                "policy_opponent_public_lines",
+                "selection",
             ],
         )
 
