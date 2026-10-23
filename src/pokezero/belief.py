@@ -1947,6 +1947,12 @@ class PublicBattleBeliefEngine:
             # Record the proc for the Early Bird Rest-wake guard (Fix C), before
             # the already-confirmed early return below so it fires on every proc.
             self._shed_skin_activated_this_turn.add(belief.key)
+        if belief.key in self._running_ability:
+            # A proc of an already-known borrowed ability (Trace/Transform)
+            # confirms CURRENT mechanics, not the generator's original set.
+            # Keep the running ability and proc bookkeeping above, but never
+            # poison variant matching or flag a false original-set conflict.
+            return
         if _normalize_identifier(belief.revealed_ability or "") == _normalize_identifier(ability_name):
             return
         if belief.revealed_ability:

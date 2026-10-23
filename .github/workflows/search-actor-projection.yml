@@ -4,6 +4,7 @@ on:
     paths:
       - src/pokezero/mcts_eval/search_over_raw_actor_projection.py
       - tests/test_search_over_raw_actor_projection.py
+      - tests/test_belief_running_ability_effects.py
       - .github/workflows/search-actor-projection.yml
       - src/pokezero/local_showdown.py
       - src/pokezero/showdown.py
@@ -21,6 +22,7 @@ on:
     paths:
       - src/pokezero/mcts_eval/search_over_raw_actor_projection.py
       - tests/test_search_over_raw_actor_projection.py
+      - tests/test_belief_running_ability_effects.py
       - .github/workflows/search-actor-projection.yml
       - src/pokezero/local_showdown.py
       - src/pokezero/showdown.py
@@ -67,4 +69,4 @@ jobs:
         env:
           POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
           PYTHONPATH: src:tests
-        run: python -B -S -m unittest test_search_over_raw_actor_projection -v
+        run: python -B -S -m unittest test_search_over_raw_actor_projection test_belief_running_ability_effects -v
