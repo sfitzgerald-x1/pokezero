@@ -17,6 +17,7 @@ import numpy as np
 from . import champion, observation, transition
 from .benchmark import load_bound_pool, sole_gpu
 from .benchmark_games import sample_actions
+from .device_telemetry import DeviceWindow, cuda_device_uuid
 
 
 def policy_keys(ids, requests):
@@ -75,11 +76,12 @@ def summarize(retired, completed, capped, *, seconds, requests, assigned, batch,
 
 
 def measure(pool_path,weights_path,expected_pool_sha,*,batches=(256,1024,2048,8192),
-            warm_seconds=30,measure_seconds=60,max_requests=2000):
+            warm_seconds=30,measure_seconds=60,max_requests=2000,device_telemetry=False):
     if not batches or any(type(b)is not int or b<1 for b in batches):raise ValueError('positive batches required')
     if warm_seconds<=0 or measure_seconds<=0 or type(max_requests)is not int or max_requests<1:
         raise ValueError('positive windows and integer per-game request cap required')
     device=sole_gpu();pool,metadata,pool_sha=load_bound_pool(pool_path)
+    device_uuid=cuda_device_uuid(device) if device_telemetry else None
     games=100000
     if pool_sha!=expected_pool_sha or len(pool['species'])<2*games or max(batches)>games:
         raise ValueError('bound >=200000-team pool and batches <=100000 required')
@@ -100,6 +102,7 @@ def measure(pool_path,weights_path,expected_pool_sha,*,batches=(256,1024,2048,81
         package_sha256=package,device=device.device_kind,jax=jax.__version__,weights=weightmeta,
         team_pool_sha256=pool_sha,pool_games=games,warm_seconds=warm_seconds,measure_seconds=measure_seconds,
         max_requests_per_game=max_requests,rows=[],
+        device_telemetry_enabled=device_telemetry,device_uuid=device_uuid,
         scope='Unqualified mechanics, omniscient non-production placeholder observation, unchanged champion both seats/all3 heads; not strength, production self-play, fidelity or go/no-go.',
         roster='Fixed ordered pairs(2r,2r+1), no wrap/redraw. Same prefixes reused across batches, not independent cohorts.',
         timing='Synchronized host wall time includes refill, gather/reset, forward, sampling, transition and host accounting. Initial states/setup/compile excluded. Warmup advances; measured window starts from its in-flight state. Capped games retained separately, never completions.')
@@ -112,23 +115,30 @@ def measure(pool_path,weights_path,expected_pool_sha,*,batches=(256,1024,2048,81
         all_retired=[];all_completed=0;all_capped=0;all_turns=0;status='WINDOW_COMPLETE'
         for phase,duration in (('warmup',warm_seconds),('measured',measure_seconds)):
             retired=[];completed=0;capped=0;turns=0;requests=0
+            sampler=DeviceWindow(device_uuid) if device_telemetry and phase=='measured' else None
             start=time.perf_counter()
-            while time.perf_counter()-start<duration:
-                values,ended_turns,invalid,heads=jax.block_until_ready(advance(state,ids,counts,cursor,initial))
-                requests+=1
-                if bool(np.asarray(invalid)):status='INVALID_ACTION_OR_NONFINITE';break
-                state,ids,counts,cursor,ended,done,cap=values
-                # These transfers/checks are inside the measured clock.
-                ended=np.asarray(ended);done=np.asarray(done);cap=np.asarray(cap)
-                retired.extend(ended[ended>=0].tolist());completed+=int(done.sum());capped+=int(cap.sum())
-                turns+=int(np.asarray(ended_turns).sum())
-                if int(np.asarray(cursor))>=games:status='POOL_EXHAUSTED';break
-            elapsed=time.perf_counter()-start
+            try:
+                if sampler:start=sampler.start()
+                while time.perf_counter()-start<duration:
+                    values,ended_turns,invalid,heads=jax.block_until_ready(advance(state,ids,counts,cursor,initial))
+                    requests+=1
+                    if bool(np.asarray(invalid)):status='INVALID_ACTION_OR_NONFINITE';break
+                    state,ids,counts,cursor,ended,done,cap=values
+                    # These transfers/checks are inside the measured clock.
+                    ended=np.asarray(ended);done=np.asarray(done);cap=np.asarray(cap)
+                    retired.extend(ended[ended>=0].tolist());completed+=int(done.sum());capped+=int(cap.sum())
+                    turns+=int(np.asarray(ended_turns).sum())
+                    if int(np.asarray(cursor))>=games:status='POOL_EXHAUSTED';break
+            finally:
+                end=time.perf_counter();elapsed=end-start
+                counters=sampler.finish(end) if sampler else None
+            if counters and not counters['worker_stopped']:status='TELEMETRY_CLEANUP_FAILED'
             all_retired.extend(retired);all_completed+=completed;all_capped+=capped;all_turns+=turns
             if len(set(all_retired))!=len(all_retired):raise RuntimeError('duplicate retired game ID')
             record=dict(phase=phase,completed_games=completed,capped_games=capped,retired_ids=retired,
                 elapsed_seconds=elapsed,lockstep_requests=requests,completed_turns=turns,
                 cursor=int(np.asarray(cursor)))
+            if sampler:record['device_telemetry']=counters
             if phase=='warmup':warm=record
             else:measured=record
             print(json.dumps({k:v for k,v in record.items() if k!='retired_ids'}|dict(batch=batch,status=status)),flush=True)
@@ -146,8 +156,9 @@ def measure(pool_path,weights_path,expected_pool_sha,*,batches=(256,1024,2048,81
     result['protocol_completed']=len(result['rows'])==len(batches) and all(r['status']=='WINDOW_COMPLETE' for r in result['rows'])
     if git('rev-parse','HEAD')!=source or git('status','--porcelain','--','gpu_engine') or hashes()!=package:
         raise RuntimeError('bound GPU source changed')
-    try:result['device_counters_after']=subprocess.check_output(['nvidia-smi','--query-gpu=utilization.gpu,memory.used,memory.total','--format=csv,noheader'],text=True).strip()
-    except (OSError,subprocess.CalledProcessError):result['device_counters_after']=None
+    if not device_telemetry:
+        try:result['device_counters_after']=subprocess.check_output(['nvidia-smi','--query-gpu=utilization.gpu,memory.used,memory.total','--format=csv,noheader'],text=True,timeout=2).strip()
+        except (OSError,subprocess.SubprocessError):result['device_counters_after']=None
     return result
 
 
@@ -158,9 +169,10 @@ if __name__=='__main__':
     p.add_argument('--batches',type=int,nargs='+',default=[256,1024,2048,8192])
     p.add_argument('--warm-seconds',type=float,default=30);p.add_argument('--measure-seconds',type=float,default=60)
     p.add_argument('--max-requests',type=int,default=2000)
+    p.add_argument('--device-telemetry',action='store_true',help='Bounded UUID-bound sampling during each measured window; overhead included')
     a=p.parse_args();out=Path(a.out)
     if out.exists():raise FileExistsError('exclusive output required')
     result=measure(a.team_pool,a.weights,a.expected_pool_sha,batches=tuple(a.batches),
-        warm_seconds=a.warm_seconds,measure_seconds=a.measure_seconds,max_requests=a.max_requests)
+        warm_seconds=a.warm_seconds,measure_seconds=a.measure_seconds,max_requests=a.max_requests,device_telemetry=a.device_telemetry)
     with out.open('x') as stream:json.dump(result,stream,sort_keys=True,indent=2,allow_nan=False);stream.write('\n')
     raise SystemExit(0 if result['protocol_completed'] else 1)
