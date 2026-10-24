@@ -1029,6 +1029,14 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # October 23 GPU fidelity anchor checks for an explicit fresh-process
         # opt-in before importing native; it never enables the flag itself.
         "gpu_engine/oracle_anchor.py",
+        # October 23 Priority 2 explicitly authorizes a bounded exact-search
+        # engineering pilot. Its owner opts in only for a fresh child process;
+        # the backend checks that precondition and the focused test pins it.
+        # None writes the flag at import, changes the legacy default, or adds
+        # a production/gameplay caller. Runtime import probes still cover them.
+        "scripts/bench_shallow_exact_native.py",
+        "src/pokezero/shallow_exact_native.py",
+        "tests/test_shallow_exact_native.py",
         # Forces the flag OFF so the standing mass gate always measures the
         # collapsed cascade, whatever the ambient environment says.
         "tests/test_branch_mass_reconstruction.py",
