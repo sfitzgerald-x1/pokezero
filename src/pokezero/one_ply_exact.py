@@ -118,6 +118,24 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
                   max_joint_actions: int = 10_000, max_seconds: float = 60.0,
                   solver_tolerance: float = 1e-8,
                   cross_cell_batches: bool = False) -> OnePlyResult:
+    """Historical common-matrix game; root identities must match on both sides."""
+    actions, matrices, work, deadline = _exact_world_matrices(
+        worlds, backend, batch_size=batch_size, max_leaves=max_leaves,
+        max_chance_branches=max_chance_branches, max_joint_actions=max_joint_actions,
+        max_seconds=max_seconds, cross_cell_batches=cross_cell_batches)
+    row_actions, column_actions = actions[0]
+    matrix = tuple(tuple(math.fsum(m[i][j]/len(worlds) for m in matrices)
+                         for j in range(len(column_actions)))
+                   for i in range(len(row_actions)))
+    equilibrium = solve_matrix_game_lp(matrix, tolerance=solver_tolerance, deadline=deadline)
+    return OnePlyResult(row_actions, column_actions, matrix, equilibrium, len(worlds), **work)
+
+
+def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
+                          batch_size: int, max_leaves: int,
+                          max_chance_branches: int, max_joint_actions: int,
+                          max_seconds: float, cross_cell_batches: bool,
+                          acting_side: int | None = None):
     """Complete one-turn expectations; no successor actions are requested.
 
     Positive native probability mass must sum to 1 within 1e-6. The complete
@@ -128,7 +146,8 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
     ``cross_cell_batches`` is explicit opt-in: retain world/cell/branch targets
     while filling batches across cells, without changing a single expectation.
     """
-    if (type(cross_cell_batches) is not bool or not worlds or any(type(v) is not int or v <= 0 for v in
+    if ((acting_side is not None and (type(acting_side) is not int or acting_side not in (0, 1)))
+            or type(cross_cell_batches) is not bool or not worlds or any(type(v) is not int or v <= 0 for v in
             (batch_size, max_leaves, max_chance_branches, max_joint_actions))
             or not math.isfinite(max_seconds) or max_seconds <= 0):
         raise ExactSearchRefused("nonempty worlds and positive work limits required")
@@ -160,12 +179,20 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
         if len(pair) != 2 or any(not s or len(set(s)) != len(s) for s in pair):
             raise ExactSearchRefused("unique nonempty root action identities required")
         actions.append(pair)
-    if any(a != actions[0] for a in actions):
-        raise ExactSearchRefused("root action identities differ across worlds")
-    row_actions, column_actions = actions[0]
-    if len(worlds)*len(row_actions)*len(column_actions) > max_joint_actions:
+    if acting_side is None:
+        if any(a != actions[0] for a in actions):
+            raise ExactSearchRefused("root action identities differ across worlds")
+    else:
+        own_actions = actions[0][acting_side]
+        if any(set(a[acting_side]) != set(own_actions) for a in actions):
+            raise ExactSearchRefused("acting-player action identities differ across worlds")
+        # Semantic identity, not native list position, owns our common mix.
+        actions = [tuple(own_actions if s == acting_side else a[s] for s in (0, 1))
+                   for a in actions]
+    joint_actions = sum(len(a[0])*len(a[1]) for a in actions)
+    if joint_actions > max_joint_actions:
         raise ExactSearchRefused("joint-action cap; no partial decision")
-    contributions = [[[] for _ in column_actions] for _ in row_actions]
+    contributions = []
     leaves = branches_count = batches = 0
     mass_error = 0.0
     pending, targets = [], []
@@ -190,7 +217,9 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
         pending.clear()
         targets.clear()
 
-    for world in worlds:
+    for world, (row_actions, column_actions) in zip(worlds, actions):
+        cells = [[[] for _ in column_actions] for _ in row_actions]
+        contributions.append(cells)
         for i, row in enumerate(row_actions):
             for j, col in enumerate(column_actions):
                 check()
@@ -227,15 +256,15 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
                             flush()
                 if not cross_cell_batches:
                     flush()
-                contributions[i][j].append(terms)
+                cells[i][j] = terms
     flush()
-    matrix = tuple(tuple(math.fsum(math.fsum(terms)/len(worlds) for terms in cell)
-                         for cell in row) for row in contributions)
+    matrices = tuple(tuple(tuple(math.fsum(terms) for terms in row) for row in cells)
+                     for cells in contributions)
     check()
-    equilibrium = solve_matrix_game_lp(matrix, tolerance=solver_tolerance, deadline=deadline)
-    return OnePlyResult(row_actions, column_actions, matrix, equilibrium, len(worlds),
-                        len(worlds)*len(row_actions)*len(column_actions),
-                        branches_count, leaves, batches, mass_error)
+    work = dict(joint_actions=joint_actions, chance_branches=branches_count,
+                leaf_evaluations=leaves, evaluation_batches=batches,
+                max_chance_mass_error=mass_error)
+    return tuple(actions), matrices, work, deadline
 
 
 def sample_equilibrium(result: OnePlyResult, *, game_seed: int, turn: int,
