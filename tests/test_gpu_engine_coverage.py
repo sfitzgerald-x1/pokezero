@@ -58,3 +58,9 @@ class CoverageTests(unittest.TestCase):
             self.assertEqual(result['rows'][0]['status'],'SELECTED_EFFECT_IMPLEMENTED')
             self.assertIsNone(result['game_qualified_move_share'])
             self.assertIn('not full-game qualification',result['rows'][0]['evidence'])
+
+    def test_belly_drum_registration_does_not_award_fidelity_credit(self):
+        result=ledger(dict(move_slots=1,move_frequency=[{'id':'bellydrum','count':1}]),
+                      root=Path(__file__).resolve().parents[1])
+        self.assertEqual(result['rows'][0]['status'],'SELECTED_EFFECT_IMPLEMENTED')
+        self.assertIsNone(result['game_qualified_move_share'])

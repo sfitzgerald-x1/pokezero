@@ -13,7 +13,7 @@ from test_gpu_engine_future_state import action_fixture, FAKE
 def fixture():
     data, meta = action_fixture()
     extra = ["struggle", "icebeam", "thunderbolt", "thunder", "doubleteam", "haze",
-             "raindance", "sunnyday", "sleeptalk", "encore", "roar", "protect", "spore", "leechseed", "painsplit", "tailglow"]
+             "raindance", "sunnyday", "sleeptalk", "encore", "roar", "protect", "spore", "leechseed", "painsplit", "tailglow", "bellydrum"]
     meta["vocabulary"]["moves"] += extra
     return data, meta
 
@@ -88,6 +88,15 @@ class ChanceConsumerTests(unittest.TestCase):
         self.assertEqual(len(self.cells(plan, "draws.1.1")), 2)
         self.assertEqual(len(self.cells(plan, "draws.0.2")), 2)
         self.assertEqual(len(self.cells(plan, "draws.0.1")), 1)
+
+    def test_belly_drum_hp_and_attack_change_add_no_random_coordinate(self):
+        data,meta=fixture();self.choose(data,meta,0,'bellydrum')
+        for hp,atk in ((300,0),(150,-6),(151,6)):
+            data['hp'][0][0]=hp;data['boosts'][0][0][0]=atk
+            plan=self.plan(data,meta,actions=(0,1),cap=2)
+            self.assertIsInstance(plan,c.ConsumerPlan,plan)
+            self.assertEqual(plan.cardinality,2)
+            self.assertEqual(sum(case.mass for case in plan.bounded_cases()),1)
 
     def test_haze_boosts_and_weather_refine_the_same_accuracy_coordinate(self):
         data, meta = fixture()

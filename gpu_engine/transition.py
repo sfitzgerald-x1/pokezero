@@ -664,6 +664,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             work=work._replace(hp=_set_active(work.hp,work,side,hp))
             work=work._replace(hp=_set_active(work.hp,work,foe,target_hp))
             boosts = _active(work.boosts,work,side)
+            # Gen3 Belly Drum reads live HP after earlier moves, fails at
+            # half HP or +6 Attack, and pays a floored direct HP cost. The
+            # +12 boost reaches +6 even from -6; other stages are untouched.
+            drum=(acts & effects.belly_drum[move] & (max_hp>1)
+                & (hp*2>max_hp) & (boosts[:,0]<6))
+            hp=hp-jnp.where(drum,max_hp//2,0)
+            boosts=boosts.at[:,0].set(jnp.where(drum,6,boosts[:,0]))
+            work=work._replace(hp=_set_active(work.hp,work,side,hp))
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
             work=cure_team(work,side,effects,eligible=acts & effects.heal_bell[move])
