@@ -1026,9 +1026,10 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # Explains why it does NOT set the flag at import, and exposes
         # --enumerate-rolls for a one-off comparison run.
         "scripts/engine_transition_differential.py",
-        # October 23 GPU fidelity anchor checks for an explicit fresh-process
-        # opt-in before importing native; it never enables the flag itself.
+        # Caller-enabled, fresh-process finite-law GPU fidelity diagnostics;
+        # neither module assigns the process-wide native enumeration flag.
         "gpu_engine/oracle_anchor.py",
+        "gpu_engine/truant_counterexample.py",
         # October 23 Priority 2 explicitly authorizes a bounded exact-search
         # engineering pilot. Its owner opts in only for a fresh child process;
         # the backend checks that precondition and the focused test pins it.
