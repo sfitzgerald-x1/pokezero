@@ -13,7 +13,7 @@ from test_gpu_engine_future_state import action_fixture, FAKE
 def fixture():
     data, meta = action_fixture()
     extra = ["struggle", "icebeam", "thunderbolt", "thunder", "doubleteam", "haze",
-             "raindance", "sunnyday", "sleeptalk", "encore", "roar", "protect", "spore", "leechseed", "painsplit"]
+             "raindance", "sunnyday", "sleeptalk", "encore", "roar", "protect", "spore", "leechseed", "painsplit", "tailglow"]
     meta["vocabulary"]["moves"] += extra
     return data, meta
 
@@ -25,7 +25,7 @@ def table(meta):
         accuracy=field({"thunder": 70}, 100), always_hit=field({"splash": True, "haze": True, "doubleteam": True}, False),
         priority=field({"protect": 3, "roar": -6}), struggle=names.index("struggle"),
         effects=dict(status=field({"spore": 5}),
-            self_boosts=field({"doubleteam": [0, 0, 0, 0, 0, 0, 1]}, [0]*7),
+            self_boosts=field({"doubleteam": [0, 0, 0, 0, 0, 0, 1], "tailglow": [0,0,2,0,0,0,0]}, [0]*7),
             haze=field({"haze": True}, False), protect=field({"protect": True}, False), endure=field({}),
         ), secondary=dict(chance=field({"icebeam": 10, "thunderbolt": 10, "thunder": 30}),
             status=field({"icebeam": 6, "thunderbolt": 1, "thunder": 1})),
@@ -69,6 +69,15 @@ class ChanceConsumerTests(unittest.TestCase):
             plan=self.plan(data,meta,actions=(0,1),cap=2)  # foe's existing unique Splash slot
             self.assertIsInstance(plan,c.ConsumerPlan,plan)
             self.assertEqual(plan.cardinality,2)  # conservative binary action-order coin
+            self.assertEqual(sum(case.mass for case in plan.bounded_cases()),1)
+
+    def test_tail_glow_changes_no_accuracy_or_random_coordinate(self):
+        data,meta=fixture();self.choose(data,meta,0,'tailglow')
+        for stage in (-6,0,5,6):
+            data['boosts'][0][0][2]=stage
+            plan=self.plan(data,meta,actions=(0,1),cap=2)
+            self.assertIsInstance(plan,c.ConsumerPlan,plan)
+            self.assertEqual(plan.cardinality,2)
             self.assertEqual(sum(case.mass for case in plan.bounded_cases()),1)
 
     def test_earlier_freeze_and_paralysis_activate_later_status_gates(self):
