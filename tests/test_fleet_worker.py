@@ -2942,6 +2942,134 @@ class FanInTests(FanInFixture):
         self.assertIn("games=1", content)
 
 
+class FanInPrunedPublicationReadTests(FanInFixture):
+    """Prune real accepted versions between root-stat and record-parent-open."""
+
+    def test_lookup_reselects_after_initial_or_final_publication_read_is_pruned(self) -> None:
+        from unittest.mock import patch
+
+        for read_number in (1, 2, 3):
+            with self.subTest(publication_read=read_number):
+                first = self._fanin_task(f"read{read_number}-s0.env", 1, 0, 1, 100)
+                second = self._fanin_task(f"read{read_number}-s1.env", 1, 1, 1, 101)
+                base = f"shard-wread{read_number}"
+                old = self._write_version(f"{base}-v1", [first])
+                original = fleet_worker._open_fanin_authoritative_directory
+                reads = 0
+                raced = False
+
+                def prune(path: Path, label: str):
+                    nonlocal reads, raced
+                    if path == old and label == "shard publication provenance directory":
+                        reads += 1
+                        if reads == read_number and not raced:
+                            raced = True
+                            self._write_version(f"{base}-v2", [first, second])
+                            fleet_worker._remove_stale_fanin_version(old)
+                    return original(path, label)
+
+                with patch.object(fleet_worker, "_open_fanin_authoritative_directory", new=prune):
+                    evidence = fleet_worker._find_committed_fanin_task_evidence(self.cache_dir, first)
+                self.assertTrue(raced)
+                self.assertIsNotNone(evidence)
+                self.assertEqual(evidence[0], first)
+                self.assertEqual(evidence[1].path.name, f"{base}-v2")
+                self.assertEqual(evidence[1].tasks, (first, second))
+
+    def test_final_verification_classifies_each_pruned_record_read_as_transient(self) -> None:
+        from unittest.mock import patch
+
+        for index, (label, read_number) in enumerate((
+            ("shard task manifest", 1), ("shard task manifest", 2),
+            ("shard publication provenance", 1),
+        )):
+            with self.subTest(record=label, read=read_number):
+                first = self._fanin_task(f"verify{index}-s0.env", 1, 0, 1, 100)
+                second = self._fanin_task(f"verify{index}-s1.env", 1, 1, 1, 101)
+                base = f"shard-wverify{index}"
+                old = self._write_version(f"{base}-v1", [first])
+                selected = next(item for item in fleet_worker._select_accepted_fanin_shards(self.cache_dir)
+                                if item.path == old)
+                original = fleet_worker._open_fanin_authoritative_directory
+                reads = 0
+                raced = False
+
+                def prune(path: Path, observed_label: str):
+                    nonlocal reads, raced
+                    if path == old and observed_label == f"{label} directory":
+                        reads += 1
+                        if reads == read_number and not raced:
+                            raced = True
+                            self._write_version(f"{base}-v2", [first, second])
+                            fleet_worker._remove_stale_fanin_version(old)
+                    return original(path, observed_label)
+
+                with patch.object(fleet_worker, "_open_fanin_authoritative_directory", new=prune):
+                    with self.assertRaises(fleet_worker._SelectedFanInVersionVanishedError):
+                        fleet_worker._verify_selected_fanin_shard(selected)
+                self.assertTrue(raced)
+
+    def test_pending_scan_preserves_unaccepted_task_when_another_version_is_pruned(self) -> None:
+        from unittest.mock import patch
+
+        first = self._fanin_task("old-s0.env", 1, 0, 1, 100)
+        second = self._fanin_task("old-s1.env", 1, 1, 1, 101)
+        old = self._write_version("shard-wother-v1", [first])
+        candidate = self._fanin_task("pending-s0.env", 1, 2, 1, 102)
+        route = self._route_witness(candidate)
+        guard = fleet_worker._fanin_task_fence_path(self.cache_dir, candidate.task_id)
+        guard.mkdir()
+        fleet_worker._write_fanin_fence(guard, candidate, "pending.fixture", "fixture-token")
+        original = fleet_worker._read_fanin_file_with_parent_snapshot
+        raced = False
+
+        def prune(path: Path, label: str, **kwargs):
+            nonlocal raced
+            if path.parent == old and label == "shard publication provenance" and not raced:
+                raced = True
+                self._write_version("shard-wother-v2", [first, second])
+                fleet_worker._remove_stale_fanin_version(old)
+            return original(path, label, **kwargs)
+
+        with patch.object(fleet_worker, "_read_fanin_file_with_parent_snapshot", new=prune):
+            with self.assertRaises(fleet_worker._FanInTransientError):
+                fleet_worker._recover_pending_fanin_publication(self.cache_dir, candidate, route)
+        self.assertTrue(raced)
+        self.assertIsNone(fleet_worker._read_current_fanin_fence(guard).acceptance)
+        self.assertFalse((self.queue / "done" / candidate.task_id).exists())
+        self.assertIsNone(fleet_worker._recover_pending_fanin_publication(self.cache_dir, candidate, route))
+
+    def test_missing_child_in_surviving_shard_remains_terminal(self) -> None:
+        for index, filename in enumerate((fleet_worker.FANIN_MANIFEST_NAME,
+                                         fleet_worker.FANIN_PUBLICATION_NAME)):
+            with self.subTest(child=filename):
+                task = self._fanin_task(f"missing{index}.env", 1, 0, 1, 100)
+                target = self._write_version(f"shard-wmissing{index}-v1", [task])
+                selected = next(item for item in fleet_worker._select_accepted_fanin_shards(self.cache_dir)
+                                if item.path == target)
+                (target / filename).unlink()
+                with self.assertRaises(fleet_worker.FanInInventoryValidationError):
+                    fleet_worker._verify_selected_fanin_shard(selected)
+                self.assertTrue(target.is_dir())
+                # Restore this fixture for the next independent negative case.
+                target.rename(self.root / f"retained-missing{index}")
+
+    def test_missing_cache_root_is_not_selected_version_pruning(self) -> None:
+        from unittest.mock import patch
+
+        task = self._fanin_task("cache-root.env", 1, 0, 1, 100)
+        target = self._write_version("shard-wroot-v1", [task])
+        original = fleet_worker._read_fanin_file_with_parent_snapshot
+
+        def remove_cache(path: Path, label: str, **kwargs):
+            self.cache_dir.rename(self.root / "retained-cache")
+            return original(path, label, **kwargs)
+
+        with patch.object(fleet_worker, "_read_fanin_file_with_parent_snapshot", new=remove_cache):
+            with self.assertRaises(FileNotFoundError):
+                fleet_worker._read_fanin_publication_snapshot(target)
+
+
 class CliWiringTests(unittest.TestCase):
     def test_subcommand_dispatches_with_static_remainder(self) -> None:
         import tempfile
