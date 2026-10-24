@@ -94,6 +94,9 @@ forward. It does not replace the encoder, change batch composition or qualify
 speed or gameplay. `drain_leaf_encode_subphases()` exposes the existing
 process-global row-input/products/row-write timers and resets them; use it only
 in an isolated diagnostic worker, not alongside a search timing receipt.
+Per-model `drain_transport_timings()` similarly resets packed-decode and native
+flat tensor/forward call counts and seconds. Old automatic PyO3 list extraction
+precedes the Rust method and is not included in those native measurements.
 
 The Cargo `path` dependency points at the sdist's workspace root, which *is*
 the engine crate (`src/gen3/` lives there; the `poke-engine-py` member is

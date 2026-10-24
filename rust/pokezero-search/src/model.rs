@@ -29,6 +29,7 @@
 //! batched search consumes model VALUES and keeps uniform priors.
 
 use std::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -2009,6 +2010,10 @@ type EvalObsFlatResult = (Vec<f32>, Vec<f32>, Vec<f32>, usize);
 #[pyclass]
 pub struct NativeLeafModel {
     evaluator: TorchScriptLeafEval,
+    packed_decode_calls: AtomicU64,
+    packed_decode_nanos: AtomicU64,
+    flat_forward_calls: AtomicU64,
+    flat_forward_nanos: AtomicU64,
 }
 
 #[pymethods]
@@ -2043,12 +2048,28 @@ impl NativeLeafModel {
         };
         Ok(Self {
             evaluator: TorchScriptLeafEval::load(model_path, parse_device(device)?, spec)?,
+            packed_decode_calls: AtomicU64::new(0),
+            packed_decode_nanos: AtomicU64::new(0),
+            flat_forward_calls: AtomicU64::new(0),
+            flat_forward_nanos: AtomicU64::new(0),
         })
     }
 
     #[getter]
     fn device(&self) -> String {
         format!("{:?}", self.evaluator.device)
+    }
+
+    /// Isolated-worker diagnostics only: (packed decode calls/seconds,
+    /// native flat tensor+forward calls/seconds), resetting these counters.
+    /// Automatic PyO3 list extraction occurs BEFORE eval_obs_flat enters Rust
+    /// and is deliberately not mislabeled as measured native decode time.
+    /// These counters do not participate in inference or search control flow.
+    fn drain_transport_timings(&self) -> (u64, f64, u64, f64) {
+        (self.packed_decode_calls.swap(0, Ordering::Relaxed),
+         self.packed_decode_nanos.swap(0, Ordering::Relaxed) as f64 / 1e9,
+         self.flat_forward_calls.swap(0, Ordering::Relaxed),
+         self.flat_forward_nanos.swap(0, Ordering::Relaxed) as f64 / 1e9)
     }
 
     /// Debug/parity entrypoint: evaluate `batch` pre-encoded observations
@@ -2079,7 +2100,8 @@ impl NativeLeafModel {
         if batch == 0 {
             return Err(PyValueError::new_err("batch must be > 0"));
         }
-        py.detach(|| {
+        let started = Instant::now();
+        let result = py.detach(|| {
             let spec = self.evaluator.spec();
             let obs = ObsBatch::from_flat(
                 &spec,
@@ -2110,7 +2132,10 @@ impl NativeLeafModel {
                 output.priors,
                 output.action_count,
             ))
-        })
+        });
+        self.flat_forward_calls.fetch_add(1, Ordering::Relaxed);
+        self.flat_forward_nanos.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        result
     }
 
     /// Additive canonical-byte transport for the SAME five effective tensors
@@ -2151,8 +2176,11 @@ impl NativeLeafModel {
         };
         let (c, n, t, a, h) = (categorical_ids.as_bytes(), numeric_features.as_bytes(),
             token_type_ids.as_bytes(), attention_mask.as_bytes(), history_mask.as_bytes());
-        let decoded = py.detach(|| crate::packed_obs::decode(shape, byte_order, c, n, t, a, h))
-            .map_err(PyValueError::new_err)?;
+        let started = Instant::now();
+        let decoded = py.detach(|| crate::packed_obs::decode(shape, byte_order, c, n, t, a, h));
+        self.packed_decode_calls.fetch_add(1, Ordering::Relaxed);
+        self.packed_decode_nanos.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let decoded = decoded.map_err(PyValueError::new_err)?;
         let legal = legal_mask.map(|mask| {
             if mask.as_bytes().iter().any(|&value| value > 1) {
                 return Err(PyValueError::new_err("packed legal mask requires boolean bytes 0 or 1"));

@@ -180,6 +180,20 @@ class CrateTorchScriptParityTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.native.eval_obs_packed(1, *packed, byte_order="little", legal_mask=b"\x02" * 9)
 
+    def test_transport_counters_are_observational_and_drain_per_model(self) -> None:
+        inputs = _flatten_inputs(self.export.make_random_inputs(self.config, 1, seed=813))
+        packed = [b"".join(struct.pack(code, value) for value in column)
+                  for code, column in zip(("<i", "<d", "<h", "<?", "<?"), inputs)]
+        self.native.drain_transport_timings()
+        old = self.native.eval_obs_flat(1, *inputs)
+        new = self.native.eval_obs_packed(1, *packed, byte_order="little")
+        self.assertEqual(old, new)
+        decode_calls, decode_s, forward_calls, forward_s = self.native.drain_transport_timings()
+        self.assertEqual((decode_calls, forward_calls), (1, 2))
+        self.assertGreaterEqual(decode_s, 0)
+        self.assertGreaterEqual(forward_s, 0)
+        self.assertEqual(self.native.drain_transport_timings(), (0, 0, 0, 0))
+
     def test_legal_mask_priors_match_masked_softmax(self) -> None:
         batch = 4
         inputs = self.export.make_random_inputs(self.config, batch, seed=404)
