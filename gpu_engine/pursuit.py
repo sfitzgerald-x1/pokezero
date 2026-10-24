@@ -12,6 +12,7 @@ from . import items as held
 from . import mechanics as m
 from . import pressure as pp_cost
 from . import critical as crits
+from . import secondary as secondaries
 
 
 class PursuitTable(NamedTuple):
@@ -22,13 +23,13 @@ def from_metadata(metadata):
     return PursuitTable(jnp.asarray([name == "pursuit" for name in metadata["vocabulary"]["moves"]]))
 
 
-def intercept(state, side, slot, move, chance, table, *, eligible):
+def intercept(state, side, slot, move, chance, table, *, eligible, contact_roll):
     """Hit the outgoing target before switch clearing/entry, consuming one move.
 
     Caller snapshots beforeTurn registration (sleep/freeze/Truant exclude it), excludes
     forced replacements and retains the chosen switch after KO in Gen 3.
     Interception bypasses paralysis/confusion/flinch and their counters. Wider
-    contact/item events outside the spike subset remain placeholders.
+    contact/item events beyond selected Static remain placeholders.
     """
     rows = jnp.arange(state.hp.shape[0])
     foe = 1-side
@@ -67,6 +68,9 @@ def intercept(state, side, slot, move, chance, table, *, eligible):
     after_hp = hp-jnp.where(sub>0,0,dealt)
     state = state._replace(hp=state.hp.at[rows,foe,target].set(after_hp),
         substitute_hp=state.substitute_hp.at[rows,foe,target].set(sub-jnp.where(sub>0,dealt,0)))
+    if table.secondary is not None:
+        state = secondaries.apply_contact(state,side,move,contact_roll,table.secondary,
+            eligible=used & (dealt>0) & (sub==0))
     cost = 1
     if table.pressure is not None:
         cost = pp_cost.cost(table.pressure,move,own_types,get(state.ability,foe,target),hp)

@@ -1,4 +1,4 @@
-"""Selected Gen 3 target secondaries, not general move-effect coverage.
+"""Selected Gen 3 target secondaries and Static, not full event coverage.
 
 The caller supplies one fixed [0,100) roll and excludes Substitute damage even
 when that hit broke the substitute. No chance is drawn conditionally here.
@@ -45,6 +45,8 @@ class SecondaryTable(NamedTuple):
     inner_focus: jax.Array
     ability_immunity: jax.Array   # [A,7], selected status-admission abilities
     type_immunity: jax.Array
+    contact: jax.Array           # [M], pinned catalog flag, not damage category
+    static: jax.Array            # [A], Gen3 one-third contact paralysis
 
 
 def from_metadata(metadata):
@@ -56,11 +58,44 @@ def from_metadata(metadata):
         "waterveil": (m.BRN,), "immunity": (m.PSN, m.TOX)}
     for index, name in enumerate(vocab["abilities"]):
         for status in blocked.get(name, ()): immunity[index, status] = True
+    move_rows = metadata.get('moves')
+    if move_rows is not None and len(move_rows) != len(vocab['moves']):
+        raise ValueError('move metadata/vocabulary mismatch')
+    contact = [bool(row and row.get('flags', {}).get('contact')) for row in move_rows] \
+        if move_rows is not None else [False]*len(vocab['moves'])
     return SecondaryTable(jnp.asarray([row[0] for row in rows], jnp.int32),
         jnp.asarray([row[1] for row in rows], jnp.int32),
         jnp.asarray([row[2] for row in rows]), jnp.asarray([row[3] for row in rows]),
         flags({"serenegrace"}), flags({"shielddust"}), flags({"clearbody", "whitesmoke"}),
-        flags({"innerfocus"}), jnp.asarray(immunity), effects_from_metadata(metadata).status_immunity)
+        flags({"innerfocus"}), jnp.asarray(immunity), effects_from_metadata(metadata).status_immunity,
+        jnp.asarray(contact), flags({'static'}))
+
+
+def apply_contact(state, side, move, roll, table, *, eligible):
+    """Static's Gen3 onDamagingHit, after damage/secondaries, before Lum.
+
+    The existing uniform [0,60) auxiliary draw gives exactly 20/60 = 1/3.
+    It is shared with phazing only across mutually exclusive dispatched moves:
+    the pinned Gen3 Roar/Whirlwind have no contact flag. A source plan rejects
+    a table claiming both consumers for one move. Saved phazing draws already
+    survive interrupted turns. No percentile approximation or extra key draw.
+
+    Caller excludes original Substitute damage (even if it broke), misses,
+    immunity, Protect and zero damage. A KO of the Static holder still triggers;
+    a fainted attacking source cannot receive status. Shield Dust and Serene
+    Grace do not affect this ability event; Limber and existing status do.
+    """
+    rows = jnp.arange(state.hp.shape[0]); foe = 1-side
+    own, target = state.active[rows, side], state.active[rows, foe]
+    ability = state.ability[rows, side, own]
+    proc = (jnp.asarray(eligible) & table.contact[move]
+        & table.static[state.ability[rows, foe, target]] & (jnp.asarray(roll) < 20)
+        & (state.hp[rows, side, own] > 0) & (state.status[rows, side, own] == m.NONE)
+        & ~table.ability_immunity[ability, m.PAR])
+    return state._replace(
+        status=state.status.at[rows, side, own].set(jnp.where(proc, m.PAR, state.status[rows, side, own])),
+        status_counter=state.status_counter.at[rows, side, own].set(
+            jnp.where(proc, 0, state.status_counter[rows, side, own])))
 
 
 def status_allowed(table, status, types, ability, *, effective_weather=0):

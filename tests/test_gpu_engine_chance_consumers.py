@@ -28,7 +28,8 @@ def table(meta):
             self_boosts=field({"doubleteam": [0, 0, 0, 0, 0, 0, 1], "tailglow": [0,0,2,0,0,0,0]}, [0]*7),
             haze=field({"haze": True}, False), protect=field({"protect": True}, False), endure=field({}),
         ), secondary=dict(chance=field({"icebeam": 10, "thunderbolt": 10, "thunder": 30}),
-            status=field({"icebeam": 6, "thunderbolt": 1, "thunder": 1})),
+            status=field({"icebeam": 6, "thunderbolt": 1, "thunder": 1}),
+            contact=field({}, False), static=[False]*len(meta['vocabulary']['abilities'])),
         weather=dict(move_weather=field({"raindance": 1, "sunnyday": 2}), thunder=field({"thunder": True}, False)),
         sleep_talk=dict(move=field({"sleeptalk": True}, False),
             callable=[name not in {"_none", "sleeptalk", "struggle"} for name in names]),
@@ -42,12 +43,13 @@ def table(meta):
 
 
 class ChanceConsumerTests(unittest.TestCase):
-    def plan(self, data=None, meta=None, actions=(0, 0), *, cap=100_000_000):
+    def plan(self, data=None, meta=None, actions=(0, 0), *, cap=100_000_000, kernel_table=None):
         if data is None:
             data, meta = fixture()
         construct = partial(mapping.native_input_from_jax, module=FAKE)
         with patch.object(c.mapping, "native_input_from_jax", side_effect=construct):
-            return c.plan_for_state(data, None, actions, table(meta), meta, cap=cap)
+            return c.plan_for_state(data, None, actions,
+                table(meta) if kernel_table is None else kernel_table, meta, cap=cap)
 
     def choose(self, data, meta, side, name, slot=0):
         data["moves"][side][0][slot] = meta["vocabulary"]["moves"].index(name)
@@ -154,6 +156,40 @@ class ChanceConsumerTests(unittest.TestCase):
         plan = self.plan(data, meta)
         cells = self.cells(plan, "secondary.0")
         self.assertEqual([cell.mass for cell in cells], [Fraction(1, 10), Fraction(1, 10), Fraction(4, 5)])
+
+    def test_static_has_exact_thirds_on_one_existing_auxiliary_axis(self):
+        data, meta = fixture(); meta['vocabulary']['abilities'].append('static')
+        data['ability'][1][0] = 2
+        t = table(meta); t['secondary']['static'][2] = True
+        t['secondary']['contact'][meta['vocabulary']['moves'].index('tackle')] = True
+        plan = self.plan(data, meta, actions=(0, 1), kernel_table=t)
+        self.assertIsInstance(plan, c.ConsumerPlan, plan)
+        self.assertEqual([x.mass for x in self.cells(plan, 'phazing.0')], [Fraction(1,3), Fraction(2,3)])
+        self.assertEqual(len(self.cells(plan, 'phazing.1')), 1)
+        self.assertEqual(len(self.cells(plan, 'draws.0.2')), 2)
+        data['ability'][1][0] = 0
+        plan = self.plan(data, meta, actions=(0, 1), kernel_table=t)
+        self.assertEqual(len(self.cells(plan, 'phazing.0')), 1)
+        data['ability'][1][1] = 2
+        plan = self.plan(data, meta, actions=(0, 4), kernel_table=t)
+        self.assertEqual(len(self.cells(plan, 'phazing.0')), 2)
+
+    def test_caller_union_refines_shared_phazing_static_axis_without_multiplying_it(self):
+        data, meta = fixture(); meta['vocabulary']['abilities'].append('static')
+        data['ability'][1][0] = 2
+        self.choose(data, meta, 0, 'sleeptalk')
+        self.choose(data, meta, 0, 'tackle', 1)
+        self.choose(data, meta, 0, 'roar', 2)
+        t = table(meta); t['secondary']['static'][2] = True
+        t['secondary']['contact'][meta['vocabulary']['moves'].index('tackle')] = True
+        plan = self.plan(data, meta, actions=(0, 1), kernel_table=t)
+        self.assertIsInstance(plan, c.ConsumerPlan, plan)
+        self.assertEqual(len(self.cells(plan, 'phazing.0')), 60)
+        self.assertEqual(sum(x.mass for x in self.cells(plan, 'phazing.0')), 1)
+        t['secondary']['contact'][meta['vocabulary']['moves'].index('roar')] = True
+        out = self.plan(data, meta, actions=(0, 1), kernel_table=t)
+        self.assertIsInstance(out, mapping.Refused)
+        self.assertEqual(out.gaps[0].code, 'CONTACT_PHAZING_OVERLAP')
 
     def test_stall_only_uses_admitted_denominators_and_one_shared_axis(self):
         data, meta = fixture()

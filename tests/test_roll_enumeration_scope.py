@@ -1045,6 +1045,12 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         "scripts/bench_shallow_exact_native.py",
         "src/pokezero/shallow_exact_native.py",
         "tests/test_shallow_exact_native.py",
+        # October 24's one-ply revision keeps the same explicit fresh-child
+        # opt-in and behavioral probe. The new owner-routing test inspects
+        # that child environment; neither file enables enumeration on import
+        # or changes the ordinary production search default.
+        "scripts/bench_one_ply_exact_native.py",
+        "tests/test_one_ply_native_runner.py",
         # Forces the flag OFF so the standing mass gate always measures the
         # collapsed cascade, whatever the ambient environment says.
         "tests/test_branch_mass_reconstruction.py",

@@ -50,7 +50,8 @@ class PursuitTests(unittest.TestCase):
             boosts=s.boosts.at[:,0,0,2].set(j.array([0,0,0,-2,-2,2])).at[:,1,0,3].set(2),
             hp=s.hp.at[:,1,0].set(10000),max_hp=s.max_hp.at[:,1,0].set(10000))
         chance=j.zeros((6,12),j.int32).at[:,4].set(j.array([1,1,1,1,0,0])).at[:,5].set(15)
-        r,used,fainted=self.p.intercept(s,0,j.zeros(6,j.int32),j.ones(6,j.int32),chance,self.table,eligible=True)
+        r,used,fainted=self.p.intercept(s,0,j.zeros(6,j.int32),j.ones(6,j.int32),chance,self.table,
+            eligible=True,contact_roll=j.zeros(6,j.int32))
         self.assertEqual((10000-r.hp[:,1,0]).tolist(),[128,128,252,66,504,1002])
         self.assertTrue(bool(j.all(used)));self.assertFalse(bool(j.any(fainted)))
 
