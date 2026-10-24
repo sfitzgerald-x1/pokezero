@@ -142,6 +142,7 @@ def worker(args):
             worlds, backend, batch_size=args.batch_size, max_leaves=args.max_leaves,
             max_joint_actions=args.max_joint_actions, max_chance_branches=args.max_branches,
             max_seconds=args.soft_seconds,
+            streaming=getattr(args, "streaming", False),
         )
         report = {"complete_decision": True, "result": asdict(result)}
         code = 0
@@ -166,6 +167,8 @@ def main():
         parser.add_argument("--" + name, required=True)
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--streaming", action="store_true",
+                        help="complete exact child matrices with bounded pending leaf batches")
     parser.add_argument("--memoize-leaves", action="store_true",
                         help="reuse only complete identical model-bound encoded rows within this decision")
     parser.add_argument("--max-leaves", type=int, default=8192)

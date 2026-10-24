@@ -131,6 +131,7 @@ class DepthTwoResult:
     evaluation_batches: int
     max_interior_solver_gap: float
     conservative_tree_gap: float
+    peak_pending_leaf_positions: int
 
 
 @dataclass
@@ -149,6 +150,7 @@ def exact_depth_two(
     max_leaves: int = 1_000_000, max_joint_actions: int = 1_000_000,
     max_chance_branches: int = 1_000_000, max_seconds: float = 60.0,
     solver_tolerance: float = 0.001, solver_max_iterations: int = 16384,
+    streaming: bool = False,
 ) -> DepthTwoResult:
     """Uniform-world expectation, two joint-action plies, equilibrium at each.
 
@@ -167,8 +169,20 @@ def exact_depth_two(
     subprocess hard deadline and bound allocations inside its outcome producer.
     ``conservative_tree_gap`` adds twice the largest interior gap to the root
     gap; the root gap alone certifies only the numerically backed-up matrix.
+
+    Opt-in streaming finishes one complete interior matrix before retaining
+    its numeric value at the root. It retains one root chance fan, one leaf
+    chance fan and at most ``batch_size`` pending model positions, not all
+    depth-two positions. A backend's optional per-decision encoded-row cache
+    has separate memory cost; it is neither evicted nor approximated here.
+    Streaming may perform forwards before a later work refusal. Such a refusal
+    still returns no decision/action; no partial payoff or fallback is valid.
+    Forward batch boundaries and float summation implementation differ (the
+    materialized path uses builtin sum, which may compensate on the runtime).
+    Numerical parity must check interior/root payoffs as well as model values
+    under a declared tolerance; contribution order is not a bitwise guarantee.
     """
-    if (not worlds or any(type(value) is not int or value <= 0
+    if (type(streaming) is not bool or not worlds or any(type(value) is not int or value <= 0
                           for value in (batch_size, max_leaves, max_joint_actions, max_chance_branches))
             or not math.isfinite(max_seconds) or max_seconds <= 0):
         raise ExactSearchRefused("nonempty worlds and positive integer work limits required")
@@ -209,6 +223,122 @@ def exact_depth_two(
             raise ExactSearchRefused("value outside finite side-one [-1, 1] scale")
         return value
 
+    def checked_outcomes(state: Any, row_action: Hashable, col_action: Hashable):
+        if counts["pairs"] >= max_joint_actions:
+            raise ExactSearchRefused("joint-action cap reached; no partial decision is valid")
+        counts["pairs"] += 1
+        check_deadline()
+        branches = []
+        for branch in backend.outcomes(state, row_action, col_action):
+            check_deadline()
+            if counts["branches"] >= max_chance_branches:
+                raise ExactSearchRefused("chance-branch materialization cap reached; no partial decision is valid")
+            counts["branches"] += 1
+            branches.append(branch)
+        check_deadline()
+        mass = sum(float(branch.probability) for branch in branches)
+        if (not branches or not math.isfinite(mass) or abs(mass - 1.0) > 1e-6
+                or any(not math.isfinite(branch.probability) or branch.probability <= 0 for branch in branches)):
+            raise ExactSearchRefused("chance distribution must retain positive unit mass")
+        return [(branch.probability / mass, branch.state) for branch in branches]
+
+    def streamed_result():
+        leaf_count = batches = peak_pending = 0
+        interior_gap = 0.0
+
+        def child_value(state):
+            nonlocal leaf_count, batches, peak_pending, interior_gap
+            check_deadline()
+            terminal = backend.terminal_value(state)
+            check_deadline()
+            if terminal is not None:
+                return checked_value(terminal)
+            child_actions = checked_actions(state, root=False)
+            counts["nodes"] += 1
+            matrix = [[0.0 for _ in child_actions[1]] for _ in child_actions[0]]
+            chunks = [[[] for _ in child_actions[1]] for _ in child_actions[0]]
+            pending, targets = [], []
+
+            def drain_ready():
+                # Preserve chance contribution order when terminal values
+                # precede a delayed model output. += need not match builtin
+                # sum's compensated arithmetic bitwise. No states are stored.
+                for i, row in enumerate(chunks):
+                    for j, chunk in enumerate(row):
+                        if chunk and all(value is not None for value in chunk):
+                            for value in chunk:
+                                matrix[i][j] += value
+                            chunk.clear()
+
+            def flush():
+                nonlocal batches
+                if pending:
+                    check_deadline()
+                    evaluated = list(backend.evaluate_leaves(pending))
+                    check_deadline()
+                    if len(evaluated) != len(pending):
+                        raise ExactSearchRefused("leaf evaluator changed batch cardinality")
+                    evaluated = [checked_value(value) for value in evaluated]
+                    for (chunk, index, probability), value in zip(targets, evaluated):
+                        chunk[index] = probability * value
+                    batches += 1
+                    pending.clear()
+                    targets.clear()
+                drain_ready()
+
+            for i, row_action in enumerate(child_actions[0]):
+                for j, col_action in enumerate(child_actions[1]):
+                    chunk = chunks[i][j]
+                    for probability, leaf in checked_outcomes(state, row_action, col_action):
+                        check_deadline()
+                        terminal = backend.terminal_value(leaf)
+                        check_deadline()
+                        if terminal is not None:
+                            chunk.append(probability * checked_value(terminal))
+                        else:
+                            if leaf_count >= max_leaves:
+                                raise ExactSearchRefused("leaf cap reached; no partial decision is valid")
+                            leaf_count += 1
+                            targets.append((chunk, len(chunk), probability))
+                            chunk.append(None)
+                            pending.append(leaf)
+                            peak_pending = max(peak_pending, len(pending))
+                            if len(pending) == batch_size:
+                                flush()
+                    drain_ready()
+            flush()
+            if any(chunk for row in chunks for chunk in row):
+                raise ExactSearchRefused("streamed matrix retained unresolved leaf contributions")
+            solution = solve_matrix_game(matrix, tolerance=solver_tolerance,
+                                         max_iterations=solver_max_iterations, deadline=deadline)
+            interior_gap = max(interior_gap, solution.gap)
+            return solution.value
+
+        matrices = []
+        for state, world_actions in zip(worlds, root_actions):
+            counts["nodes"] += 1
+            matrix = []
+            for row_action in world_actions[0]:
+                row = []
+                for col_action in world_actions[1]:
+                    # Validate the complete positive unit-mass root fan
+                    # before any child matrix can contribute a payoff.
+                    row.append(sum(probability * child_value(child)
+                                   for probability, child in checked_outcomes(state, row_action, col_action)))
+                matrix.append(row)
+            matrices.append(matrix)
+        root_matrix = tuple(tuple(sum(matrix[i][j] for matrix in matrices) / len(matrices)
+                                  for j in range(len(actions[1]))) for i in range(len(actions[0])))
+        equilibrium = solve_matrix_game(root_matrix, tolerance=solver_tolerance,
+                                        max_iterations=solver_max_iterations, deadline=deadline)
+        check_deadline()
+        return DepthTwoResult(actions[0], actions[1], root_matrix, equilibrium, len(worlds),
+                              counts["nodes"], counts["pairs"], counts["branches"], leaf_count, batches,
+                              interior_gap, equilibrium.gap + 2 * interior_gap, peak_pending)
+
+    if streaming:
+        return streamed_result()
+
     def expand(state: Any, depth: int, *, root: bool = False, prepared_actions=None) -> Any:
         check_deadline()
         terminal = backend.terminal_value(state)
@@ -226,26 +356,8 @@ def exact_depth_two(
         for row_action in actions[0]:
             row = []
             for col_action in actions[1]:
-                if counts["pairs"] >= max_joint_actions:
-                    raise ExactSearchRefused("joint-action cap reached; no partial decision is valid")
-                counts["pairs"] += 1
-                check_deadline()
-                branches = []
-                for branch in backend.outcomes(state, row_action, col_action):
-                    check_deadline()
-                    if counts["branches"] >= max_chance_branches:
-                        raise ExactSearchRefused("chance-branch materialization cap reached; no partial decision is valid")
-                    counts["branches"] += 1
-                    branches.append(branch)
-                check_deadline()
-                mass = sum(float(branch.probability) for branch in branches)
-                if (not branches or not math.isfinite(mass) or abs(mass - 1.0) > 1e-6
-                        or any(not math.isfinite(branch.probability) or branch.probability <= 0
-                               for branch in branches)):
-                    raise ExactSearchRefused("chance distribution must retain positive unit mass")
-                # Only roundoff-level normalization; no outcome is discarded.
-                row.append([(branch.probability / mass, expand(branch.state, depth - 1))
-                            for branch in branches])
+                row.append([(probability, expand(child, depth - 1))
+                            for probability, child in checked_outcomes(state, row_action, col_action)])
             cells.append(row)
         return _MatrixNode(actions, cells)
 
@@ -288,4 +400,4 @@ def exact_depth_two(
     check_deadline()
     return DepthTwoResult(actions[0], actions[1], root_matrix, equilibrium, len(roots),
                           counts["nodes"], counts["pairs"], counts["branches"],
-                          len(leaves), batches, interior_gap, equilibrium.gap + 2 * interior_gap)
+                          len(leaves), batches, interior_gap, equilibrium.gap + 2 * interior_gap, len(leaves))
