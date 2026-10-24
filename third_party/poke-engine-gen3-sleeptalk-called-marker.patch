@@ -1,0 +1,80 @@
+--- a/src/instruction.rs
++++ b/src/instruction.rs
+@@ -138,6 +138,9 @@
+     /// "from N to N", an unfilled placeholder. The measured claim is the branch
+     /// count; no campaign-scale fallback rate is asserted here, before or after.)
+     MoveImmobilized(MoveImmobilizedInstruction),
++    /// Public call identity, retained through branch equality/deduplication.
++    /// Applying or reversing this provenance marker has no state effect.
++    SleepTalkCalled(SleepTalkCalledInstruction),
+ }
+ 
+ /// Which move-time immobilizer aborted an action. See `Instruction::MoveImmobilized`.
+@@ -362,6 +365,9 @@
+             }
+             Instruction::MoveImmobilized(m) => {
+                 write!(f, "MoveImmobilized {:?}: {:?}", m.side_ref, m.reason)
++            }
++            Instruction::SleepTalkCalled(m) => {
++                write!(f, "SleepTalkCalled {:?}: {:?}", m.side_ref, m.move_id)
+             }
+             Instruction::SetLastUsedMove(s) => {
+                 write!(
+@@ -694,6 +700,12 @@
+ }
+ 
+ #[derive(Debug, PartialEq, Clone)]
++pub struct SleepTalkCalledInstruction {
++    pub side_ref: SideReference,
++    pub move_id: Choices,
++}
++
++#[derive(Debug, PartialEq, Clone)]
+ pub struct ChangeType {
+     pub side_ref: SideReference,
+     pub new_types: (PokemonType, PokemonType),
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -2166,6 +2166,7 @@
+             // this match has no catch-all -- which is the property that makes the
+             // compiler, not a reviewer, responsible for every future variant.
+             Instruction::MoveImmobilized(_) => {}
++            Instruction::SleepTalkCalled(_) => {}
+         }
+     }
+ 
+@@ -2404,6 +2405,7 @@
+             // the inverse of a no-op. Present so `reverse_one_instruction` stays
+             // total over the enum; see the apply arm.
+             Instruction::MoveImmobilized(_) => {}
++            Instruction::SleepTalkCalled(_) => {}
+         }
+     }
+ }
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -23,7 +23,7 @@
+ };
+ use crate::instruction::{DecrementPPInstruction, SetLastUsedMoveInstruction};
+ // pokezero gen3 fidelity fix (Attract immobilization attribution).
+-use crate::instruction::{ImmobilizeReason, MoveImmobilizedInstruction};
++use crate::instruction::{ImmobilizeReason, MoveImmobilizedInstruction, SleepTalkCalledInstruction};
+ 
+ use super::damage_calc::calculate_futuresight_damage;
+ use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
+@@ -3772,6 +3772,15 @@
+             new_choice.first_move = choice.first_move;
+             let mut sleep_talk_instructions = incoming_instructions.clone();
+             sleep_talk_instructions.update_percentage(1.0 / num_choices);
++            // Equal state deltas need not have equal PUBLIC histories: e.g.
++            // Earthquake into Flying and Rest while asleep both do nothing.
++            // Emit before recursion/dedup, even when the called move fails.
++            sleep_talk_instructions.instruction_list.push(
++                Instruction::SleepTalkCalled(SleepTalkCalledInstruction {
++                    side_ref: attacking_side,
++                    move_id: new_choice.move_id,
++                }),
++            );
+             generate_instructions_from_move(
+                 state,
+                 &mut new_choice,
