@@ -122,6 +122,13 @@ def measure(pool_path,expected_pool_sha):
         interpretation='An authored mechanic counterexample/control only; not fresh source roots, a causal explanation of species scores, a structural impossibility proof, pool-frequency correct-effect coverage, strength or production qualification.')
 
 
+def emit_summary(result, *, stream=None):
+    """Render saved authored results without passing print options to JSON."""
+    payload=dict(cases=len(result['cases']),elapsed_seconds=result['elapsed_seconds'],
+        tv_by_case=[[turn['total_variation_half_l1'] for turn in case['turns']] for case in result['cases']])
+    print(json.dumps(payload),file=stream,flush=True)
+
+
 if __name__=='__main__':
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--team-pool',required=True);p.add_argument('--expected-pool-sha',required=True);p.add_argument('--out',type=Path,required=True)
@@ -129,4 +136,4 @@ if __name__=='__main__':
     if a.out.exists():raise FileExistsError('exclusive new measurement output required')
     result=measure(a.team_pool,a.expected_pool_sha)
     with a.out.open('x') as stream:json.dump(result,stream,sort_keys=True,indent=2,allow_nan=False);stream.write('\n')
-    print(json.dumps(dict(cases=len(result['cases']),elapsed_seconds=result['elapsed_seconds'],tv_by_case=[[t['total_variation_half_l1'] for t in c['turns']] for c in result['cases']]),flush=True))
+    emit_summary(result)
