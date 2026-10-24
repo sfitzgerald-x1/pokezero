@@ -1,0 +1,153 @@
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -30,2 +30,5 @@
+ [features]
++# Full successor-state PP accounting for explicitly built Gen3 oracles only.
++# Existing search builds retain their historical high-PP abstraction.
++oracle-full-pp = []
+ remove_low_chance_instructions = []
+diff --git a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2729,6 +2729,7 @@ fn generate_instructions_from_existing_status_conditions(
+     attacker_choice: &Choice,
+     incoming_instructions: &mut StateInstructions,
+     final_instructions: &mut Vec<StateInstructions>,
++    wake_continuations: &mut Vec<StateInstructions>,
+ ) {
+     let (attacking_side, _defending_side) = state.get_both_sides(attacking_side_ref);
+     let current_active_index = attacking_side.active_index;
+@@ -2915,7 +2916,15 @@ fn generate_instructions_from_existing_status_conditions(
+                         }
+                         do_nothing_instructions.update_percentage(do_nothing_percentage);
+                         incoming_instructions.update_percentage(1.0 - do_nothing_percentage);
+-                        final_instructions.push(do_nothing_instructions);
++                        if cfg!(feature = "oracle-full-pp")
++                            && attacker_choice.move_id == Choices::SLEEPTALK
++                        {
++                            // Waking Sleep Talk still reaches the lower-priority
++                            // gates and pays caller PP before failing awake.
++                            wake_continuations.push(do_nothing_instructions);
++                        } else {
++                            final_instructions.push(do_nothing_instructions);
++                        }
+                     }
+                 }
+                 // Early Bird decrements Rest's counter twice. At 1 or 2 it
+@@ -3591,10 +3591,13 @@ pub fn generate_instructions_from_move(
+             .volatile_statuses.contains(&PokemonVolatileStatus::TRUANT);
+     if truant_loaf {
+         if !choice.sleep_talk_move {
++            let mut loaf_wakes = Vec::new();
+             generate_instructions_from_existing_status_conditions(
+                 state, &attacking_side, &choice, &mut incoming_instructions,
+-                &mut final_instructions,
++                &mut final_instructions, &mut loaf_wakes,
+             );
++            // Truant stops every awake prefix before lower gates/PP too.
++            final_instructions.extend(loaf_wakes);
+         }
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         if incoming_instructions.percentage > 0.0 {
+@@ -3622,6 +3631,7 @@ pub fn generate_instructions_from_move(
+         return;
+     }
+ 
++    let mut wake_continuations = Vec::new();
+     if !choice.sleep_talk_move {
+         generate_instructions_from_existing_status_conditions(
+             state,
+@@ -3629,9 +3639,50 @@ pub fn generate_instructions_from_move(
+             &choice,
+             &mut incoming_instructions,
+             &mut final_instructions,
++            &mut wake_continuations,
+         );
+     }
+ 
++    if !wake_continuations.is_empty() {
++        // These prefixes left the sleep handler before confusion/Attract. Do
++        // not repeat action-reset or before_move effects, and do not charge PP
++        // until those remaining gates have accepted the waking action.
++        state.reverse_instructions(&incoming_instructions.instruction_list);
++        for mut wake in wake_continuations {
++            state.apply_instructions(&wake.instruction_list);
++            let mut nested_wakes = Vec::new();
++            generate_instructions_from_existing_status_conditions(
++                state, &attacking_side, choice, &mut wake,
++                &mut final_instructions, &mut nested_wakes,
++            );
++            assert!(nested_wakes.is_empty(), "an awake continuation cannot wake again");
++            let mut waking_choice = choice.clone();
++            generate_instructions_after_status(
++                state, &mut waking_choice, defender_choice, attacking_side,
++                wake, &mut final_instructions, branch_on_damage,
++                blocked_by_protect, locked_continuation,
++            );
++        }
++        state.apply_instructions(&incoming_instructions.instruction_list);
++    }
++    generate_instructions_after_status(
++        state, choice, defender_choice, attacking_side, incoming_instructions,
++        final_instructions, branch_on_damage, blocked_by_protect, locked_continuation,
++    );
++}
++
++fn generate_instructions_after_status(
++    state: &mut State,
++    choice: &mut Choice,
++    defender_choice: &Choice,
++    attacking_side: SideReference,
++    mut incoming_instructions: StateInstructions,
++    mut final_instructions: &mut Vec<StateInstructions>,
++    branch_on_damage: bool,
++    blocked_by_protect: bool,
++    locked_continuation: bool,
++) {
++
+     // pokezero gen3 fidelity fix: self-destruct faints the user HERE, not in
+     // `choice_before_move`. Showdown reaches it in `useMoveInner`
+     // (sim/battle-actions.ts:501, `gen !== 4`), and `runMove` only calls `useMove`
+@@ -3679,6 +3679,20 @@
+         .get_active_immutable()
+         .status;
+     if choice.move_id == Choices::SLEEPTALK && attacker_status == PokemonStatus::SLEEP {
++        if cfg!(feature = "oracle-full-pp") && !choice.sleep_talk_move {
++            // Sleep Talk reaches this early return before ordinary PP charging.
++            // Charge only its caller slot; recursive useMove does not pay PP.
++            let attacker = state.get_side(&attacking_side).get_active();
++            let amount = attacker.moves[&choice.move_index].pp.clamp(0, 1);
++            incoming_instructions.instruction_list.push(Instruction::DecrementPP(
++                DecrementPPInstruction {
++                    side_ref: attacking_side,
++                    move_index: choice.move_index,
++                    amount,
++                },
++            ));
++            attacker.moves[&choice.move_index].pp -= amount;
++        }
+         // pokezero gen3 fidelity fix (last_used_move): Sleep Talk is
+         // `sleepUsable`, so gen3's `slp.onBeforeMove` returns undefined for it
+         // (data/mods/gen3/conditions.ts) and the move reaches `moveUsed` —
+@@ -3804,5 +3818,7 @@
+         // since that is when it starts to matter
+         let (attacker_side, defender_side) = state.get_both_sides(&attacking_side);
+         let active = attacker_side.get_active();
+-        if active.moves[&choice.move_index].pp < 10 {
++        // The full-state oracle must retain high PP as future state too.
++        // Compile-time opt-in leaves the sampled/legacy default unchanged.
++        if cfg!(feature = "oracle-full-pp") || active.moves[&choice.move_index].pp < 10 {
+             let pp_decrement_amount = if choice.target == MoveTarget::Opponent
+@@ -3812,6 +3828,11 @@
+             } else {
+                 1
+             };
++            let pp_decrement_amount = if cfg!(feature = "oracle-full-pp") {
++                pp_decrement_amount.min(active.moves[&choice.move_index].pp.max(0))
++            } else {
++                pp_decrement_amount
++            };
+             incoming_instructions
+                 .instruction_list
+                 .push(Instruction::DecrementPP(DecrementPPInstruction {

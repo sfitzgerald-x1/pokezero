@@ -32,7 +32,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # unchanged and remains a drift control. The full target-tree digest below also
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "7edb99db76333f13a15d0af3f5ae79d70d953d51576f0b81a7616b3afce95502",
+    "src/gen3/generate_instructions.rs": "675193e0ed8b24063af71eec66fdb76adfabe96234ea485b2a574e8dd4894aa7",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
     "src/gen3/abilities.rs": "b7a0e5f24f12e5a03353bb578dca1abeaa2a962c83705f3bed161836919fa66e",
     "src/gen3/choice_effects.rs": "a29d431464619c45d603d835ca6663bd7d2f573112c255d5cb9353862f62b161",
@@ -114,7 +114,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-24:]],
+                [entry.name for entry in applied[-25:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -150,6 +150,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-synthetic-struggle.patch",
                     "poke-engine-gen3-oracle-move-data.patch",
                     "poke-engine-gen3-truant-residual-clock.patch",
+                    "poke-engine-gen3-oracle-full-pp.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
@@ -228,6 +229,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertEqual(
                 targets,
                 [
+                    "Cargo.toml",
                     "poke-engine-py/python/poke_engine/poke_engine.pyi",
                     "poke-engine-py/src/lib.rs",
                     "python/poke_engine/__init__.py",

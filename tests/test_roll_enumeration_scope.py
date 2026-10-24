@@ -1029,6 +1029,9 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # October 23 GPU fidelity anchor checks for an explicit fresh-process
         # opt-in before importing native; it never enables the flag itself.
         "gpu_engine/oracle_anchor.py",
+        # Build-profile documentation distinguishes the explicit per-process
+        # damage-law opt-in from compile-time PP accounting; no executable caller.
+        "docs/gen3_oracle_full_pp.md",
         # October 23 Priority 2 explicitly authorizes a bounded exact-search
         # engineering pilot. Its owner opts in only for a fresh child process;
         # the backend checks that precondition and the focused test pins it.

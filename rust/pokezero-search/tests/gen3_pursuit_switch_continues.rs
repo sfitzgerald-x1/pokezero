@@ -104,13 +104,17 @@ fn switch_into(move_id: Choices, outgoing_hp: i16) -> Vec<String> {
 /// and the hunter's Leftovers must still tick after it.
 #[test]
 fn a_pursuit_ko_does_not_cancel_the_switch_it_interrupted() {
+    let mut expected = vec![
+        "Damage SideOne: 1".to_string(),
+        "Switch SideOne: P0 -> P1".to_string(),
+        "Heal SideTwo: 18".to_string(),
+    ];
+    if cfg!(feature = "oracle-full-pp") {
+        expected.insert(0, "DecrementPP SideTwo: M0 1".to_string());
+    }
     assert_eq!(
         switch_into(Choices::PURSUIT, 1),
-        vec![
-            "Damage SideOne: 1".to_string(),
-            "Switch SideOne: P0 -> P1".to_string(),
-            "Heal SideTwo: 18".to_string(),
-        ],
+        expected,
         "gen 2-4 continues a switch whose Pursuit target fainted \
          (sim/battle.ts:2790-2794). Cancelling it yields \
          [Damage SideOne: 1, ToggleSideOneForceSwitch]: the switch suppressed, the \
@@ -123,13 +127,17 @@ fn a_pursuit_ko_does_not_cancel_the_switch_it_interrupted() {
 /// meaningful — the ONLY difference between the two is the faint.
 #[test]
 fn a_pursuit_that_does_not_ko_also_switches() {
+    let mut expected = vec![
+        "Damage SideOne: 63".to_string(),
+        "Switch SideOne: P0 -> P1".to_string(),
+        "Heal SideTwo: 18".to_string(),
+    ];
+    if cfg!(feature = "oracle-full-pp") {
+        expected.insert(0, "DecrementPP SideTwo: M0 1".to_string());
+    }
     assert_eq!(
         switch_into(Choices::PURSUIT, 300),
-        vec![
-            "Damage SideOne: 63".to_string(),
-            "Switch SideOne: P0 -> P1".to_string(),
-            "Heal SideTwo: 18".to_string(),
-        ],
+        expected,
         "a survived Pursuit must never suppress the switch"
     );
 }

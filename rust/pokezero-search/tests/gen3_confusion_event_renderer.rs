@@ -10,7 +10,7 @@ use poke_engine::engine::abilities::Abilities;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
 use poke_engine::engine::items::Items;
 use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus};
-use poke_engine::instruction::{ImmobilizeReason, Instruction, StateInstructions};
+use poke_engine::instruction::{DecrementPPInstruction, ImmobilizeReason, Instruction, StateInstructions};
 use poke_engine::state::{
     PokemonIndex, PokemonMoveIndex, PokemonStatus, PokemonType, SideReference, State,
 };
@@ -946,15 +946,24 @@ fn the_engine_marks_which_immobilizer_aborted_the_attract_branch() {
     let branches = generate(&mut state);
     let marked = attract_marked_branches(&branches, SideReference::SideTwo);
     assert_eq!(marked.len(), 1, "{branches:?}");
-    assert_eq!(
-        marked[0].instruction_list,
-        vec![Instruction::MoveImmobilized(
+    // The earlier, non-attracted Splash pays PP in the explicit oracle profile.
+    // The blocked side still pays none, and every instruction remains pinned.
+    let mut expected = Vec::new();
+    if cfg!(feature = "oracle-full-pp") {
+        expected.push(Instruction::DecrementPP(DecrementPPInstruction {
+            side_ref: SideReference::SideOne, move_index: PokemonMoveIndex::M0, amount: 1,
+        }));
+    }
+    expected.push(Instruction::MoveImmobilized(
             poke_engine::instruction::MoveImmobilizedInstruction {
                 side_ref: SideReference::SideTwo,
                 reason: ImmobilizeReason::Attract,
             }
-        )],
-        "an immobilized action's whole delta is the marker -- no PP, no last-move, no \
+        ));
+    assert_eq!(
+        marked[0].instruction_list,
+        expected,
+        "an immobilized action adds only its marker -- no own PP, no last-move, no \
          damage: {marked:?}"
     );
     assert!(
@@ -982,11 +991,11 @@ fn the_engine_marks_which_immobilizer_aborted_the_attract_branch() {
         let move_phase = through_the_attract_marker(branch, SideReference::SideTwo);
         assert_eq!(
             move_phase.len(),
-            2,
+            2 + usize::from(cfg!(feature = "oracle-full-pp")),
             "only the confusion counter may precede the marker: {branch:?}"
         );
         assert!(
-            matches!(&move_phase[0], Instruction::ChangeVolatileStatusDuration(change)
+            matches!(&move_phase[usize::from(cfg!(feature = "oracle-full-pp"))], Instruction::ChangeVolatileStatusDuration(change)
                 if change.volatile_status == PokemonVolatileStatus::CONFUSION
                     && change.amount == 1),
             "{branch:?}"
@@ -1520,9 +1529,17 @@ fn the_markers_de_collapse_what_combine_duplicate_instructions_had_merged() {
         branches[0].percentage
     }
     fn empty(branches: &[StateInstructions]) -> Vec<&StateInstructions> {
+        // Full PP adds the two attempted callers' ordinary deductions to an
+        // otherwise empty miss. Pin those exact deltas, not arbitrary PP edits.
+        let expected: Vec<_> = if cfg!(feature = "oracle-full-pp") {
+            [SideReference::SideOne, SideReference::SideTwo].into_iter().map(|side_ref|
+                Instruction::DecrementPP(DecrementPPInstruction {
+                    side_ref, move_index: PokemonMoveIndex::M0, amount: 1,
+                })).collect()
+        } else { Vec::new() };
         branches
             .iter()
-            .filter(|branch| branch.instruction_list.is_empty())
+            .filter(|branch| branch.instruction_list == expected)
             .collect()
     }
     fn mass(branches: &[StateInstructions]) -> f32 {
