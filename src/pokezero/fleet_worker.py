@@ -1544,11 +1544,31 @@ def _read_fanin_acceptance(path: Path) -> _FanInAcceptance | None:
     return _fanin_acceptance_from_payload(payload)
 
 
+def _read_fanin_shard_file_with_parent_snapshot(
+    path: Path,
+    label: str,
+    *,
+    expected_parent: tuple[int, int] | None = None,
+) -> tuple[bytes | None, os.stat_result | None, tuple[int, int]]:
+    """Keep legitimate shard pruning inside the selected-version retry boundary."""
+    try:
+        return _read_fanin_file_with_parent_snapshot(
+            path, label, expected_parent=expected_parent,
+        )
+    except FileNotFoundError:
+        # A missing cache root is not evidence of ordinary version pruning.
+        _fanin_authoritative_directory_stat(path.parent.parent, "fan-in cache root")
+        # Only a disappeared shard becomes the typed transient. A surviving
+        # shard with a missing child still raises its original integrity error.
+        _fanin_real_directory_stat(path.parent)
+        raise
+
+
 def _read_fanin_publication_snapshot(
     path: Path,
 ) -> tuple[_FanInAcceptance | None, tuple[int, int, int, int, int, int] | None]:
     root = _fanin_real_directory_stat(path)
-    contents, observed, _parent = _read_fanin_file_with_parent_snapshot(
+    contents, observed, _parent = _read_fanin_shard_file_with_parent_snapshot(
         path / FANIN_PUBLICATION_NAME, "shard publication provenance",
     )
     _verify_fanin_root_unchanged(path, root)
@@ -2753,7 +2773,7 @@ def _verify_selected_fanin_shard(selected: _SelectedFanInShard) -> None:
             f"selected fan-in shard root identity changed after selection: {selected.path}"
         )
     try:
-        _contents, manifest = _read_fanin_authoritative_file_snapshot(
+        _contents, manifest, _parent = _read_fanin_shard_file_with_parent_snapshot(
             selected.path / FANIN_MANIFEST_NAME, "shard task manifest",
         )
     except FileNotFoundError as exc:
@@ -2765,7 +2785,7 @@ def _verify_selected_fanin_shard(selected: _SelectedFanInShard) -> None:
             f"selected fan-in shard manifest identity changed after selection: {selected.path}"
         )
     _verify_fanin_root_unchanged(selected.path, root)
-    _contents, final_manifest = _read_fanin_authoritative_file_snapshot(
+    _contents, final_manifest, _parent = _read_fanin_shard_file_with_parent_snapshot(
         selected.path / FANIN_MANIFEST_NAME, "shard task manifest",
     )
     if final_manifest is None or _fanin_stat_snapshot(final_manifest) != selected.manifest_snapshot:
@@ -2773,7 +2793,7 @@ def _verify_selected_fanin_shard(selected: _SelectedFanInShard) -> None:
             f"selected fan-in shard manifest identity changed after selection: {selected.path}"
         )
     _verify_fanin_root_unchanged(selected.path, root)
-    _contents, publication, publication_parent = _read_fanin_file_with_parent_snapshot(
+    _contents, publication, publication_parent = _read_fanin_shard_file_with_parent_snapshot(
         selected.path / FANIN_PUBLICATION_NAME, "shard publication provenance",
         expected_parent=_fanin_directory_identity(root),
     )
@@ -2941,7 +2961,7 @@ def _fanin_candidate_acceptance_evidence(
     _validate_fanin_target_acceptance(path, tasks, final)
     for acceptance in acceptances:
         _verify_fanin_fence_generation_identity(acceptance)
-    _contents, final_publication, publication_parent = _read_fanin_file_with_parent_snapshot(
+    _contents, final_publication, publication_parent = _read_fanin_shard_file_with_parent_snapshot(
         path / FANIN_PUBLICATION_NAME, "shard publication provenance",
         expected_parent=shard_root_identity,
     )
@@ -4168,7 +4188,15 @@ def _recover_pending_fanin_publication(
     for target in Path(cache_dir).glob("shard-w*-v*"):
         _verify_fanin_route_resolution(route, candidate)
         _verify_fanin_directory_identity(cache_dir, cache_root_identity, "fan-in cache root")
-        publication, publication_snapshot = _read_fanin_publication_snapshot(target)
+        try:
+            publication, publication_snapshot = _read_fanin_publication_snapshot(target)
+        except _SelectedFanInVersionVanishedError as exc:
+            # The glob is only a snapshot. Another producer may have accepted
+            # its successor and pruned this version before its parent opens.
+            # Preserve this claim and recycle; never acknowledge stale proof.
+            raise _FanInTransientError(
+                f"fan-in version pruned during pending-publication lookup: {target}"
+            ) from exc
         if publication is None and publication_snapshot is None:
             continue
         if publication is None or publication_snapshot is None:
