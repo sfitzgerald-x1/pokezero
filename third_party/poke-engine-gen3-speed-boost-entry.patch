@@ -1,0 +1,18 @@
+--- a/src/gen3/abilities.rs
++++ b/src/gen3/abilities.rs
+@@ -367,7 +367,14 @@
+         Abilities::SPEEDBOOST => {
+-            if attacking_side.speed_boost < 6 {
++            // Gen3 skips the entry turn, not the first ordinary action turn.
++            // The current transition's switch instructions retain that fact.
++            let entered_this_turn = instructions.instruction_list.iter().any(|instruction| {
++                matches!(instruction, Instruction::Switch(change)
++                    if change.side_ref == *side_ref
++                        && change.next_index == attacking_side.active_index)
++            });
++            if attacking_side.speed_boost < 6 && !entered_this_turn {
+                 let ins = Instruction::Boost(BoostInstruction {
+                     side_ref: side_ref.clone(),
+                     stat: PokemonBoostableStat::Speed,
+                     amount: 1,
+                 });
