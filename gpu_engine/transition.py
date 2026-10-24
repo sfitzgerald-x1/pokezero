@@ -672,6 +672,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             boosts=boosts.at[:,0].set(jnp.where(drum,6,boosts[:,0]))
             work=work._replace(hp=_set_active(work.hp,work,side,hp))
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
+            # These damaging moves lower their own SpA on a successful hit,
+            # including Substitute/KO, but not miss, Protect, immunity or
+            # absorption. Unlike target secondaries this is not Shield Dust
+            # or Clear Body gated. White Herb handling remains a separate gap.
+            drop = acts & hit & ~immune & effects.hit_spa_drop[move]
+            boosts = boosts.at[:,2].set(jnp.where(drop,jnp.maximum(-6,boosts[:,2]-2),boosts[:,2]))
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
             work=cure_team(work,side,effects,eligible=acts & effects.heal_bell[move])
             for target_side in range(2):

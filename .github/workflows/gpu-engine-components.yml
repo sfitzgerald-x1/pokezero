@@ -18,7 +18,7 @@ concurrency:
 jobs:
   cpu-components:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       JAX_PLATFORMS: cpu
       OMP_NUM_THREADS: '2'

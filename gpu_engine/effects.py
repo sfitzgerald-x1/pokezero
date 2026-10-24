@@ -33,6 +33,7 @@ class MoveEffects(NamedTuple):
     weather_heal: jax.Array       # [M], Gen 3 Synthesis/Moonlight/Morning Sun
     pain_split: jax.Array         # [M], live HP average assigned through own caps
     belly_drum: jax.Array         # [M], direct half-max HP cost and Attack +12
+    hit_spa_drop: jax.Array       # [M], Overheat/Psycho Boost self drop on successful hit
 
 
 def from_metadata(metadata):
@@ -75,7 +76,8 @@ def from_metadata(metadata):
         flags({"protect","detect"}),flags({"endure"}),move_flag("protect"),move_flag("bypasssub"),
         flags({"healbell"}),jnp.asarray([name=="soundproof" for name in
             metadata["vocabulary"].get("abilities",["_none"])]),
-        flags({"synthesis","moonlight","morningsun"}),flags({"painsplit"}),flags({"bellydrum"}))
+        flags({"synthesis","moonlight","morningsun"}),flags({"painsplit"}),flags({"bellydrum"}),
+        flags({"overheat","psychoboost"}))
 
 
 def cure_team(state,side,table,*,eligible):
