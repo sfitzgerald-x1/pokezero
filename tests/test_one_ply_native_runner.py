@@ -16,6 +16,16 @@ spec.loader.exec_module(runner)
 
 
 class OwnerTests(unittest.TestCase):
+    def test_bulk_and_cross_cell_modes_are_explicitly_forwarded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            code,receipt,call=self.call(Path(tmp),dict(actual_exit_code=0,timed_out=False,
+                owner_signal=None,owned_child_reaped=True),
+                ('--bulk-encode-workers','8','--cross-cell-batches'))
+        self.assertEqual(code,0)
+        command=call.args[0]
+        self.assertEqual(command[command.index('--bulk-encode-workers')+1],'8')
+        self.assertIn('--cross-cell-batches',command)
+
     def call(self,folder,owned,extra=()):
         fixture=folder/'fixture.json'
         fixture.write_text('{"authored_fixture":true}')
@@ -47,7 +57,9 @@ class OwnerTests(unittest.TestCase):
 
     def test_invalid_limits_or_existing_output_do_not_launch(self):
         for extra in (('--hard-seconds','0'),('--soft-seconds','150'),
-                      ('--batch-size','0'),('--max-leaves','0'),('--max-branches','0')):
+                      ('--batch-size','0'),('--max-leaves','0'),('--max-branches','0'),
+                      ('--bulk-encode-workers','0'),('--bulk-encode-workers','33'),
+                      ('--bulk-encode-workers','8','--batch-size','4097')):
             with tempfile.TemporaryDirectory() as tmp,self.subTest(extra=extra):
                 with self.assertRaisesRegex(RuntimeError,'bounded work'):
                     self.call(Path(tmp),{},extra)

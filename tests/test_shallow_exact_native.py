@@ -58,6 +58,67 @@ class Model:
 
 
 class NativeBindingTests(unittest.TestCase):
+    def bulk_fixture(self):
+        class BulkEncoder(Encoder):
+            def __init__(self):super().__init__();self.bulk_calls=[]
+            def encode_leaf(self,state,fold,turn,lines,authoritative):
+                row=super().encode_leaf(state,fold,turn,lines,authoritative)
+                row['categorical_ids']=struct.pack('<ii',sum(map(ord,state)),turn+len(fold.lines))
+                return row
+            def encode_leaves_packed(self,states,folds,turns,lines,*,workers,engine_authoritative):
+                self.bulk_calls.append((list(states),workers,engine_authoritative))
+                rows=[self.encode_leaf(s,f,t,l,engine_authoritative) for s,f,t,l in zip(states,folds,turns,lines)]
+                return dict(batch_rows=len(rows),**{name:b''.join(r[name] for r in rows) for name in rows[0]})
+        class PackedModel(Model):
+            def eval_obs_packed(self,count,*arrays,byte_order):
+                self.packed=(count,arrays,byte_order)
+                return [.25]*count,[],[],9
+        return BulkEncoder,PackedModel,dict(window=1,tokens=1,categorical_features=2,numeric_features=2)
+
+    def test_bulk_packed_mixed_encoder_runs_preserve_inputs_histories_and_value_frames(self):
+        from dataclasses import replace
+        E,M,spec=self.bulk_fixture();a,b=E(),E()
+        states=[replace(self.root,encoder=a),replace(self.root,state_str='a',encoder=a,fold=Fold(['new'])),
+                replace(self.root,state_str='b',encoder=b,self_side='side_two'),
+                replace(self.root,encoder=a,turn=8,lines=())]
+        flat_model,bulk_model=M(),M()
+        flat=NativeExactBackend(self.native,flat_model,packed_leaves=True,observation_spec=spec)
+        bulk=NativeExactBackend(self.native,bulk_model,packed_leaves=True,
+                               observation_spec=spec,bulk_encode_workers=8)
+        self.assertEqual(flat.evaluate_leaves(states),bulk.evaluate_leaves(states))
+        self.assertEqual(flat_model.packed,bulk_model.packed)
+        self.assertEqual(a.bulk_calls,[(['root','a'],8,False),(['root'],8,False)])
+        self.assertEqual(b.bulk_calls,[(['b'],8,False)])
+        self.assertEqual((bulk.encode_calls,bulk.forward_batches,bulk.unique_leaf_evaluations),(4,1,4))
+
+    def test_bulk_invalid_options_missing_api_and_malformed_batch_refuse_without_forward(self):
+        from dataclasses import replace
+        E,M,spec=self.bulk_fixture()
+        for workers,packed in ((True,True),(0,True),(33,True),(8,False)):
+            with self.assertRaises(ExactSearchRefused):
+                NativeExactBackend(self.native,M(),packed_leaves=packed,
+                    observation_spec=spec,bulk_encode_workers=workers)
+        encoder=E();state=replace(self.root,encoder=encoder)
+        for broken in (None,dict(batch_rows=0),dict(batch_rows=True),dict(batch_rows=1,categorical_ids=b'bad'),
+                       dict(batch_rows=1,categorical_ids=bytearray(8)),[] ):
+            model=M();backend=NativeExactBackend(self.native,model,packed_leaves=True,
+                observation_spec=spec,bulk_encode_workers=2)
+            method=None if broken is None else lambda *a,**k:broken
+            with patch.object(encoder,'encode_leaves_packed',method),self.assertRaises(ExactSearchRefused):
+                backend.evaluate_leaves([state])
+            self.assertFalse(hasattr(model,'packed'))
+        with self.assertRaises(ExactSearchRefused):backend.evaluate_leaves([state]*4097)
+        with self.assertRaises(ExactSearchRefused):backend.evaluate_leaves([replace(state,self_side='unknown')])
+
+    def test_bulk_forward_cardinality_is_still_required(self):
+        from dataclasses import replace
+        E,M,spec=self.bulk_fixture();model=M()
+        model.eval_obs_packed=lambda *a,**k:([],[],[],9)
+        backend=NativeExactBackend(self.native,model,packed_leaves=True,
+            observation_spec=spec,bulk_encode_workers=2)
+        with self.assertRaisesRegex(ExactSearchRefused,'cardinality'):
+            backend.evaluate_leaves([replace(self.root,encoder=E())])
+
     def setUp(self):
         self.env = patch.dict(os.environ, {"POKEZERO_ENUMERATE_ROLLS": "1"})
         self.env.start()

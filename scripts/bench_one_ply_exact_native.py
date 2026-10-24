@@ -57,12 +57,15 @@ def worker(args):
         worlds.append(NativePosition(row["state_str"],{s:tuple(ctx[s]) for s in ('p1','p2')},
             ctx['turn'],native.FoldState.from_payload(row['fold_state']),encoder,row['self_side']))
     model=native.NativeLeafModel(args.model,device=args.device,**fixture['observation_spec'])
-    backend=NativeExactBackend(native,model,max_outcomes_per_call=args.max_branches)
+    backend=NativeExactBackend(native,model,max_outcomes_per_call=args.max_branches,
+        packed_leaves=args.bulk_encode_workers is not None,
+        bulk_encode_workers=args.bulk_encode_workers,observation_spec=fixture['observation_spec'])
     started=time.perf_counter()
     try:
         result=exact_one_ply(worlds,backend,batch_size=args.batch_size,
             max_leaves=args.max_leaves,max_joint_actions=324,
-            max_chance_branches=args.max_branches,max_seconds=args.soft_seconds)
+            max_chance_branches=args.max_branches,max_seconds=args.soft_seconds,
+            cross_cell_batches=args.cross_cell_batches)
         report=dict(complete_decision=True,result=asdict(result),
             authored_sampling_receipts=[sample_equilibrium(result,game_seed=0,turn=1,side=s)
                                         for s in (0,1)])
@@ -78,6 +81,7 @@ def worker(args):
         cpu_encode_target_met=report['complete_decision'] and
             backend.stage_seconds['cpu_encode_and_pack']<1.0,
         exact_roll_probe_values=damage,device=args.device,
+        bulk_encode_workers=args.bulk_encode_workers,cross_cell_batches=args.cross_cell_batches,
         scientific_collection=False,scientific_progress=False,
         limitation="Four prepared authored9x9worlds; excludes root construction/model load. "
                    "Actual CPUencode and total decision costs,not arbitrary-state fidelity or gameplay qualification.")
@@ -90,6 +94,8 @@ def main():
     for name in ('fixture','model','tables','output'):p.add_argument('--'+name,required=True)
     p.add_argument('--device',choices=('cpu','cuda'),default='cuda')
     p.add_argument('--batch-size',type=int,default=1024)
+    p.add_argument('--bulk-encode-workers',type=int,default=None)
+    p.add_argument('--cross-cell-batches',action='store_true')
     p.add_argument('--max-leaves',type=int,default=100_000)
     p.add_argument('--max-branches',type=int,default=200_000)
     p.add_argument('--soft-seconds',type=float,default=120)
@@ -98,6 +104,8 @@ def main():
     args=p.parse_args()
     if args.worker:return worker(args)
     if (not math.isfinite(args.hard_seconds) or not 0<args.soft_seconds<args.hard_seconds
+            or (args.bulk_encode_workers is not None
+                and (not 1<=args.bulk_encode_workers<=32 or args.batch_size>4096))
             or any(type(v) is not int or v<=0 for v in
                    (args.batch_size,args.max_leaves,args.max_branches))):
         raise RuntimeError('positive bounded work/deadlines required')
