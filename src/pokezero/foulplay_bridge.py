@@ -20,7 +20,7 @@ import hashlib
 import json
 import math
 import os
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 import random
 import re
@@ -760,6 +760,14 @@ class ControlledFoulPlayConfig:
     max_decision_rounds: int = 250
     format_id: str = "gen3randombattle"
     policy_mode: str = "root-puct"
+    # Explicit P2 opt-in; these settings are invalid under every other policy.
+    one_ply_trace_path: Path | None = None
+    one_ply_seconds: float | None = None
+    one_ply_batch_size: int | None = None
+    one_ply_bulk_encode_workers: int | None = None
+    one_ply_max_leaves: int | None = None
+    one_ply_max_branches: int | None = None
+    one_ply_model_device: str | None = None
     # Candidate-only opt-in reference settings; None preserves legacy modes.
     reference_seconds: float | None = None
     reference_workers: int | None = None
@@ -990,8 +998,24 @@ class ControlledFoulPlayConfig:
                 raise ValueError("foulplay_mcts_iterations must be positive when set.")
         if self.max_decision_rounds <= 0:
             raise ValueError("max_decision_rounds must be positive.")
-        if self.policy_mode not in {"raw", "root-puct", "engine-mcts", "trajectory-reference"}:
-            raise ValueError("unknown policy_mode; expected raw, root-puct, engine-mcts, or trajectory-reference")
+        if self.policy_mode not in {"raw", "root-puct", "engine-mcts", "trajectory-reference", "informed-one-ply"}:
+            raise ValueError("unknown policy_mode")
+        if self.policy_mode == "informed-one-ply":
+            _informed_policy_config(self)
+            if self.one_ply_model_device not in (None,"cpu","cuda"):
+                raise ValueError("one-ply leaf model device must be cpu or cuda")
+            if (self.one_ply_trace_path is None or self.one_ply_seconds is None
+                    or self.engine_model_path is None or self.engine_tables_path is None):
+                raise ValueError("informed-one-ply requires trace, explicit seconds, model and tables")
+            if (self.allow_search_fallback or not self.belief_set_source_enabled()
+                    or self.value_checkpoint is not None or self.engine_worlds != 4
+                    or self.format_id != "gen3randombattle" or self.temperature != 1.
+                    or self.opponent_policy_mode not in {"foul-play", "raw"}
+                    or self.foulplay_mcts_iterations is not None
+                    or (self.opponent_policy_mode == "foul-play" and self.search_time_ms != 1000)):
+                raise ValueError("informed-one-ply requires public belief, four worlds, unchanged head, no fallback, and raw or Foul Play1000ms")
+        elif any(getattr(self,name) is not None for name in _ONE_PLY_FIELDS):
+            raise ValueError("one-ply settings require policy_mode='informed-one-ply'")
         reference_fields = (
             "reference_seconds", "reference_workers", "reference_alpha", "reference_beta",
             "reference_max_transitions", "reference_allow_earlier_compatible_template",
@@ -2074,7 +2098,7 @@ def _engine_policy_stats(policy: Any, policy_mode: str) -> Mapping[str, Any] | N
     rather than quietly produce an empty telemetry block (the failure mode that
     left every acceptance shard with ``"policy_stats": {}``).
     """
-    if policy_mode not in {"engine-mcts", "trajectory-reference"}:
+    if policy_mode not in {"engine-mcts", "trajectory-reference", "informed-one-ply"}:
         return None
     return policy.stats.to_dict()
 
@@ -2567,6 +2591,17 @@ class ControlledFoulPlayBenchmarkResult:
             payload["root_puct"]["fallback_reasons"] = dict(sorted(root_fallback_reasons.items()))
         if root_fallback_categories:
             payload["root_puct"]["fallback_categories"] = dict(sorted(root_fallback_categories.items()))
+        if self.config.policy_mode == "informed-one-ply":
+            payload["informed_root"] = {
+                "information_model":"informed_adversary_root_minimax",
+                "support_floor":"NONE",
+                "config":asdict(_informed_policy_config(self.config)),
+                "trace_path":str(self.config.one_ply_trace_path),
+                "leaf_model_device":self.config.one_ply_model_device or "cuda",
+                "policy_stats":self.policy_stats,
+                "status":("REFUSED" if (self.policy_stats or {}).get("refusals")
+                    else "COMPLETE" if self.completed_games == self.config.games else "PARTIAL"),
+            }
         if self.config.policy_mode == "trajectory-reference":
             payload["trajectory_reference"] = {
                 **_reference_policy_config(self.config).to_dict(),
@@ -5993,7 +6028,7 @@ async def run_controlled_foulplay_benchmark(
             checkpoint_sha256=checkpoint_sha256,
             value_leaf_provenance=value_leaf_provenance,
             progress_callback=(reference_progress
-                if config.policy_mode == "trajectory-reference" else progress_callback),
+                if config.policy_mode in {"trajectory-reference","informed-one-ply"} else progress_callback),
             trajectory_callback=trajectory_callback,
             live_continuation_probe=live_continuation_probe,
             live_continuation_oracle_controller=live_continuation_oracle_controller,
@@ -6003,6 +6038,13 @@ async def run_controlled_foulplay_benchmark(
             reference_result = benchmark_result
         return benchmark_result
     except BaseException as error:
+        if config.policy_mode == "informed-one-ply":
+            if not policy.stats.refusals:
+                policy.record_failure("benchmark",error)
+            reference_progress(replace(reference_result,policy_stats=policy.stats.to_dict())
+                if reference_result is not None else ControlledFoulPlayBenchmarkResult(
+                    config=config,policy_id=policy.policy_id,games=(),
+                    checkpoint_sha256=checkpoint_sha256,policy_stats=policy.stats.to_dict()))
         if config.policy_mode == "trajectory-reference" and not policy.stats.refusals:
             policy.record_failure("benchmark", error)
             reference_progress(replace(reference_result, policy_stats=policy.stats.to_dict())
@@ -6011,6 +6053,8 @@ async def run_controlled_foulplay_benchmark(
                     checkpoint_sha256=checkpoint_sha256, policy_stats=policy.stats.to_dict()))
         raise
     finally:
+        if config.policy_mode == "informed-one-ply":
+            policy.close()
         if config.policy_mode == "trajectory-reference":
             try:
                 policy.close()
@@ -6148,8 +6192,9 @@ async def _run_controlled_foulplay_games(
                     )
                 )
     except BaseException as error:
-        if config.policy_mode == "trajectory-reference":
-            policy.record_failure("controlled_bridge", error)
+        if config.policy_mode in {"trajectory-reference","informed-one-ply"}:
+            if config.policy_mode == "trajectory-reference" or not policy.stats.refusals:
+                policy.record_failure("controlled_bridge", error)
             if progress_callback is not None:
                 progress_callback(ControlledFoulPlayBenchmarkResult(
                     config=config, policy_id=policy_id, games=tuple(game_results),
@@ -6846,6 +6891,20 @@ _ENGINE_ONLY_FIELDS: tuple[tuple[str, Any], ...] = (
 )
 
 
+_ONE_PLY_FIELDS = ("one_ply_trace_path","one_ply_seconds","one_ply_batch_size","one_ply_model_device",
+                   "one_ply_bulk_encode_workers","one_ply_max_leaves","one_ply_max_branches")
+
+
+def _informed_policy_config(config: ControlledFoulPlayConfig):
+    from .informed_policy import InformedPolicyConfig
+
+    names = {"one_ply_seconds":"max_seconds","one_ply_batch_size":"batch_size",
+             "one_ply_bulk_encode_workers":"bulk_encode_workers",
+             "one_ply_max_leaves":"max_leaves","one_ply_max_branches":"max_chance_branches"}
+    return InformedPolicyConfig(**{dest:getattr(config,name) for name,dest in names.items()
+                                  if getattr(config,name) is not None})
+
+
 def _opponent_seat_config(config: ControlledFoulPlayConfig) -> ControlledFoulPlayConfig:
     """The config that builds the OPPONENT seat's policy.
 
@@ -6891,6 +6950,7 @@ def _opponent_seat_config(config: ControlledFoulPlayConfig) -> ControlledFoulPla
         for name, cleared in _ENGINE_ONLY_FIELDS:
             if getattr(config, name, cleared) != cleared:
                 overrides[name] = cleared
+    overrides.update({name:None for name in _ONE_PLY_FIELDS})
     return replace(config, **overrides)
 
 
@@ -6949,6 +7009,16 @@ def _build_policy(
 
     if config.policy_mode == "raw":
         return raw_policy(policy_id)
+
+    if config.policy_mode == "informed-one-ply":
+        from .informed_policy import InformedRootPolicy
+
+        return InformedRootPolicy(dex=load_showdown_dex_cached(config.showdown_root),
+            set_source=load_gen3_randbat_source_cached(config.showdown_root),
+            checkpoint_path=str(config.checkpoint),model_path=str(config.engine_model_path),
+            tables_path=str(config.engine_tables_path),device=config.one_ply_model_device or "cuda",
+            trace_path=config.one_ply_trace_path,config=_informed_policy_config(config),
+            policy_id=policy_id+"+informed-one-ply")
 
     if config.policy_mode == "trajectory-reference":
         from .mcts_eval.paper_reference_policy import TrajectoryReferencePolicy
@@ -7275,6 +7345,9 @@ def _foulplay_env(config: ControlledFoulPlayConfig) -> dict[str, str]:
     seed = config.resolved_foulplay_random_seed
     return {
         **os.environ,
+        # Exact one-ply chance is the CANDIDATE'S intervention. Never leak its
+        # once-latched engine flag into Foul Play or its worker descendants.
+        "POKEZERO_ENUMERATE_ROLLS": "0",
         "FOULPLAY_LOCAL_NOSEC": "1",
         "PYTHONPATH": str(config.foulplay_root),
         "POKEZERO_FOULPLAY_RANDOM_SEED": str(seed),
@@ -9369,11 +9442,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-decision-rounds", type=int, default=250, help="Decision-round cap.")
     parser.add_argument("--format", dest="format_id", default="gen3randombattle", help="Showdown format id.")
     parser.add_argument(
-        "--policy-mode", choices=("raw", "root-puct", "engine-mcts", "trajectory-reference"), default="root-puct",
+        "--policy-mode", choices=("raw", "root-puct", "engine-mcts", "trajectory-reference", "informed-one-ply"), default="root-puct",
         help="raw = the checkpoint's own argmax; root-puct = the Python root search; "
              "engine-mcts = native Rust search; trajectory-reference = opt-in persistent "
              "CPU workers (requires reference ceiling, belief source on, no fallback).",
     )
+    parser.add_argument("--one-ply-trace-path",type=Path,default=None,
+        help="Exclusive per-shard durable P2 mix/action and refusal trace.")
+    parser.add_argument("--one-ply-seconds",type=float,default=None,
+        help="Explicit cooperative whole P2 decision ceiling; owned outer deadline still required.")
+    parser.add_argument("--one-ply-batch-size",type=int,default=None)
+    parser.add_argument("--one-ply-bulk-encode-workers",type=int,default=None)
+    parser.add_argument("--one-ply-max-leaves",type=int,default=None)
+    parser.add_argument("--one-ply-max-branches",type=int,default=None)
+    parser.add_argument("--one-ply-model-device",choices=("cpu","cuda"),default=None,
+        help="Leaf inference device (P2 default cuda), separate from the unchanged raw/root --device.")
     parser.add_argument("--reference-seconds", type=float, default=None,
         help="Explicit trajectory-reference decision ceiling, excluding separately reported pool startup.")
     parser.add_argument("--reference-workers", type=int, default=None,
@@ -9876,6 +9959,13 @@ def _config_from_args(
         max_decision_rounds=args.max_decision_rounds,
         format_id=args.format_id,
         policy_mode=policy_mode if policy_mode is not None else args.policy_mode,
+        one_ply_trace_path=getattr(args,"one_ply_trace_path",None),
+        one_ply_seconds=getattr(args,"one_ply_seconds",None),
+        one_ply_batch_size=getattr(args,"one_ply_batch_size",None),
+        one_ply_bulk_encode_workers=getattr(args,"one_ply_bulk_encode_workers",None),
+        one_ply_max_leaves=getattr(args,"one_ply_max_leaves",None),
+        one_ply_max_branches=getattr(args,"one_ply_max_branches",None),
+        one_ply_model_device=getattr(args,"one_ply_model_device",None),
         reference_seconds=getattr(args, "reference_seconds", None),
         reference_workers=getattr(args, "reference_workers", None),
         reference_alpha=getattr(args, "reference_alpha", None),

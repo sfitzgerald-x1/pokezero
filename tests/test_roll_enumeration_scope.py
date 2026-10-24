@@ -1051,6 +1051,14 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # or changes the ordinary production search default.
         "scripts/bench_one_ply_exact_native.py",
         "tests/test_one_ply_native_runner.py",
+        # Scott's reviewed October24 P2 gameplay experiment explicitly checks
+        # fresh-process exact chance, never enables it on import, and forces
+        # the flag OFF in the external FoulPlay subprocess for both arms.
+        # This is an opt-in scientific policy, not the production default.
+        "src/pokezero/informed_policy.py",
+        "tests/test_informed_policy.py",
+        "src/pokezero/foulplay_bridge.py",
+        "tests/test_informed_bridge.py",
         # Scoped test precondition only; actual boundary runner supplies it
         # before native load. Importing this suite never enables exact rolls.
         "tests/test_one_ply_native_leaf_routing.py",
