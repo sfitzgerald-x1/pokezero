@@ -122,6 +122,7 @@ jobs:
             tests/_showdown_root.py
             tests/test_leaf_self_recharge_derivation.py
             tests/test_leaf_encoder.py
+            tests/test_leaf_bulk_packed.py
             tests/test_roll_enumeration_scope.py
             src/pokezero/engine_search.py
             src/pokezero/policy_opponent*.py
@@ -1123,6 +1124,22 @@ jobs:
           grep -qE '^OK$' /tmp/paper-reference.log
           if grep -qE '^OK \(.*skipped=' /tmp/paper-reference.log; then
             echo "::error::the paper trajectory reference contracts must not skip"
+            exit 1
+          fi
+
+      - name: Bulk CPU leaf encoder byte parity on the model wheel
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+          PYTHONPATH: src:tests
+          OMP_NUM_THREADS: "1"
+          OPENBLAS_NUM_THREADS: "1"
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_leaf_bulk_packed -v 2>&1 | tee /tmp/leaf-bulk-packed.log
+          grep -qE 'Ran 4 tests' /tmp/leaf-bulk-packed.log
+          grep -qE '^OK$' /tmp/leaf-bulk-packed.log
+          if grep -q 'skipped' /tmp/leaf-bulk-packed.log; then
+            echo '::error::bulk encoder parity did not exercise the native model wheel'
             exit 1
           fi
 

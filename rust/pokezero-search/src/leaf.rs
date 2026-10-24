@@ -2584,6 +2584,13 @@ pub struct PyLeafEncoder {
     ctx: LeafContext,
 }
 
+struct BulkLeafInput<'a> {
+    state: &'a str,
+    fold: &'a FoldStateInner,
+    turn: i64,
+    lines: Option<&'a [String]>,
+}
+
 #[pymethods]
 impl PyLeafEncoder {
     #[new]
@@ -2661,6 +2668,41 @@ impl PyLeafEncoder {
             engine_authoritative,
         )?;
         encoded_to_dict(py, &encoded)
+    }
+
+    /// Opt-in bounded CPU batching. Exactly the serial encoder's five arrays,
+    /// concatenated in input order; no state, history, mask or float conversion
+    /// changes. Read borrows protect every fold while the GIL is released.
+    /// A worker error or panic refuses the entire batch, never a valid prefix.
+    #[pyo3(signature = (state_strs, folds, turns, lines, *, workers, engine_authoritative = false))]
+    fn encode_leaves_packed(
+        &self,
+        py: Python<'_>,
+        state_strs: Vec<String>,
+        folds: Vec<Py<PyFoldState>>,
+        turns: Vec<i64>,
+        lines: Vec<Option<Vec<String>>>,
+        workers: usize,
+        engine_authoritative: bool,
+    ) -> PyResult<Py<PyDict>> {
+        let count = state_strs.len();
+        if count == 0 || count > 4096 || folds.len() != count || turns.len() != count
+            || lines.len() != count || workers == 0 || workers > 32
+        {
+            return Err(err("bulk encoding requires 1..4096 aligned rows and 1..32 explicit workers"));
+        }
+        // Do not clone fold payloads or expose Python objects to Rust workers.
+        // These read guards remain alive until all native work has joined.
+        let guards = folds.iter().map(|fold| fold.try_borrow(py))
+            .collect::<Result<Vec<_>, _>>()?;
+        let inputs: Vec<_> = (0..count).map(|i| BulkLeafInput {
+            state: &state_strs[i], fold: guards[i].inner(), turn: turns[i],
+            lines: lines[i].as_deref(),
+        }).collect();
+        let encoded = py.detach(|| self.encode_bulk_rows(&inputs, workers, engine_authoritative))?;
+        let result = encoded_to_dict(py, &encoded)?;
+        result.bind(py).set_item("batch_rows", count)?;
+        Ok(result)
     }
 
     /// The acting seat's option→action-index correspondence at a state: one
@@ -2796,6 +2838,56 @@ impl PyLeafEncoder {
 }
 
 impl PyLeafEncoder {
+    fn encode_bulk_rows(
+        &self,
+        inputs: &[BulkLeafInput<'_>],
+        workers: usize,
+        authoritative: bool,
+    ) -> PyResult<EncodedArrays> {
+        let size = inputs.len().div_ceil(workers.min(inputs.len()));
+        let rows = std::thread::scope(|scope| {
+            let handles: Vec<_> = inputs.chunks(size).map(|chunk| scope.spawn(move || {
+                chunk.iter().map(|row| {
+                    let state = parse_state(row.state)?;
+                    let (order, meta) = self.branch_context(row.lines);
+                    self.ctx.encode_leaf(&state, row.fold, row.turn,
+                        order.as_deref(), meta.as_ref(), authoritative)
+                }).collect::<PyResult<Vec<_>>>()
+            })).collect();
+            let mut batches = Vec::new();
+            let mut failure = None;
+            // Join ALL workers even after an error, preserving deterministic
+            // input-order error selection and returning no partial arrays.
+            for handle in handles {
+                match handle.join() {
+                    Ok(Ok(rows)) => batches.push(rows),
+                    Ok(Err(error)) => { if failure.is_none() { failure = Some(error); } },
+                    Err(_) => { if failure.is_none() {
+                        failure = Some(err("bulk encode worker panicked; no partial result"));
+                    } },
+                }
+            }
+            match failure { Some(error) => Err(error), None => Ok(batches) }
+        })?;
+        let mut packed = EncodedArrays { categorical: Vec::new(), numeric: Vec::new(),
+            token_types: Vec::new(), attention: Vec::new(), legal: Vec::new() };
+        let mut widths = None;
+        for row in rows.into_iter().flatten() {
+            let shape = (row.categorical.len(), row.numeric.len(), row.token_types.len(),
+                         row.attention.len(), row.legal.len());
+            if widths.is_some_and(|expected| expected != shape) {
+                return Err(err("bulk encode row shapes differ; no partial result"));
+            }
+            widths = Some(shape);
+            packed.categorical.extend(row.categorical);
+            packed.numeric.extend(row.numeric);
+            packed.token_types.extend(row.token_types);
+            packed.attention.extend(row.attention);
+            packed.legal.extend(row.legal);
+        }
+        Ok(packed)
+    }
+
     fn branch_context(
         &self,
         lines: Option<&[String]>,

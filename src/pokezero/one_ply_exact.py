@@ -116,7 +116,8 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
                   batch_size: int = 256, max_leaves: int = 100_000,
                   max_chance_branches: int = 200_000,
                   max_joint_actions: int = 10_000, max_seconds: float = 60.0,
-                  solver_tolerance: float = 1e-8) -> OnePlyResult:
+                  solver_tolerance: float = 1e-8,
+                  cross_cell_batches: bool = False) -> OnePlyResult:
     """Complete one-turn expectations; no successor actions are requested.
 
     Positive native probability mass must sum to 1 within 1e-6. The complete
@@ -124,8 +125,10 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
     reported. Never drop, sample or renormalize a refused branch. Cooperative
     checks are not a hard timeout for a blocked native call: the eventual
     collection owner must supply a hard deadline and native allocation bounds.
+    ``cross_cell_batches`` is explicit opt-in: retain world/cell/branch targets
+    while filling batches across cells, without changing a single expectation.
     """
-    if (not worlds or any(type(v) is not int or v <= 0 for v in
+    if (type(cross_cell_batches) is not bool or not worlds or any(type(v) is not int or v <= 0 for v in
             (batch_size, max_leaves, max_chance_branches, max_joint_actions))
             or not math.isfinite(max_seconds) or max_seconds <= 0):
         raise ExactSearchRefused("nonempty worlds and positive work limits required")
@@ -165,6 +168,28 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
     contributions = [[[] for _ in column_actions] for _ in row_actions]
     leaves = branches_count = batches = 0
     mass_error = 0.0
+    pending, targets = [], []
+
+    def flush():
+        nonlocal batches
+        if not pending:
+            return
+        check()
+        values = list(backend.evaluate_leaves(pending))
+        check()
+        if len(values) != len(pending):
+            raise ExactSearchRefused("leaf evaluator changed cardinality")
+        # Each target is its exact world/cell/branch position, including
+        # terminal holes. No values, weights or histories are deduplicated.
+        for (terms, position, weight), value in zip(targets, values):
+            if position is None:
+                terms.append(weight*score(value))  # Preserve legacy deferred-leaf order.
+            else:
+                terms[position] = weight*score(value)
+        batches += 1
+        pending.clear()
+        targets.clear()
+
     for world in worlds:
         for i, row in enumerate(row_actions):
             for j, col in enumerate(column_actions):
@@ -182,22 +207,7 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
                 if not fan or not math.isfinite(mass) or abs(mass-1) > 1e-6:
                     raise ExactSearchRefused("complete chance fan must retain unit mass")
                 mass_error = max(mass_error, abs(mass-1))
-                pending, weights, terms = [], [], []
-
-                def flush():
-                    nonlocal batches
-                    if not pending:
-                        return
-                    check()
-                    values = list(backend.evaluate_leaves(pending))
-                    check()
-                    if len(values) != len(pending):
-                        raise ExactSearchRefused("leaf evaluator changed cardinality")
-                    terms.extend(p*score(v) for p, v in zip(weights, values))
-                    batches += 1
-                    pending.clear()
-                    weights.clear()
-
+                terms = []
                 for branch in fan:
                     check()
                     terminal = backend.terminal_value(branch.state)
@@ -210,12 +220,17 @@ def exact_one_ply(worlds: Sequence[Any], backend: ExactBackend, *,
                         if leaves > max_leaves:
                             raise ExactSearchRefused("leaf cap; no partial decision")
                         pending.append(branch.state)
-                        weights.append(weight)
+                        targets.append((terms, len(terms) if cross_cell_batches else None, weight))
+                        if cross_cell_batches:
+                            terms.append(None)
                         if len(pending) == batch_size:
                             flush()
-                flush()
-                contributions[i][j].append(math.fsum(terms)/len(worlds))
-    matrix = tuple(tuple(math.fsum(cell) for cell in row) for row in contributions)
+                if not cross_cell_batches:
+                    flush()
+                contributions[i][j].append(terms)
+    flush()
+    matrix = tuple(tuple(math.fsum(math.fsum(terms)/len(worlds) for terms in cell)
+                         for cell in row) for row in contributions)
     check()
     equilibrium = solve_matrix_game_lp(matrix, tolerance=solver_tolerance, deadline=deadline)
     return OnePlyResult(row_actions, column_actions, matrix, equilibrium, len(worlds),

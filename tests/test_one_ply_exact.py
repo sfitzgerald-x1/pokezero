@@ -76,6 +76,48 @@ class Backend:
 
 
 class OnePlyTests(unittest.TestCase):
+    def test_cross_cell_batches_preserve_world_cell_weight_and_leaf_order(self):
+        class Distinct(Backend):
+            def evaluate_leaves(self,states):
+                self.evaluated.extend(states)
+                return [s[3]*(s[0]+1)/4*(1 if s[1]=='a' else -1) for s in states]
+        worlds=[(i,) for i in range(4)];old,new=Distinct(),Distinct()
+        serial=exact_one_ply(worlds,old,batch_size=7)
+        bulk=exact_one_ply(worlds,new,batch_size=7,cross_cell_batches=True)
+        self.assertEqual(serial.root_matrix,bulk.root_matrix)
+        self.assertEqual(serial.equilibrium,bulk.equilibrium)
+        self.assertEqual(old.evaluated,new.evaluated)
+        self.assertEqual(serial.leaf_evaluations,bulk.leaf_evaluations)
+        self.assertEqual((serial.evaluation_batches,bulk.evaluation_batches),(16,5))
+
+    def test_cross_cell_terminal_holes_and_final_partial_batch_preserve_expectations(self):
+        class Mixed(Backend):
+            def terminal_value(self,state):
+                return state[3] if len(state)==4 and state[0]%2==0 and state[2]=='x' else None
+        old,new=Mixed(),Mixed();worlds=[(i,) for i in range(3)]
+        serial=exact_one_ply(worlds,old,batch_size=5)
+        bulk=exact_one_ply(worlds,new,batch_size=5,cross_cell_batches=True)
+        self.assertEqual(serial.root_matrix,bulk.root_matrix)
+        self.assertEqual(old.evaluated,new.evaluated)
+        self.assertEqual(bulk.evaluation_batches,math.ceil(bulk.leaf_evaluations/5))
+
+    def test_cross_cell_mode_keeps_caps_and_whole_decision_refusals(self):
+        for options in (dict(max_leaves=1),dict(max_chance_branches=1),
+                        dict(max_joint_actions=1),dict(cross_cell_batches=1)):
+            kwargs=dict(cross_cell_batches=True);kwargs.update(options)
+            with self.assertRaises(ExactSearchRefused):exact_one_ply([(0,)],Backend(),**kwargs)
+        class Missing(Backend):
+            def evaluate_leaves(self,states):return [0]*(len(states)-1)
+        with self.assertRaisesRegex(ExactSearchRefused,'cardinality'):
+            exact_one_ply([(0,)],Missing(),cross_cell_batches=True)
+        class LateMass(Backend):
+            def outcomes(self,state,row,col):
+                return super().outcomes(state,row,col) if row=='a' else [ChanceBranch((0,row,col,0),.9)]
+        with patch('pokezero.one_ply_exact.solve_matrix_game_lp') as solver:
+            with self.assertRaisesRegex(ExactSearchRefused,'unit mass'):
+                exact_one_ply([(0,)],LateMass(),cross_cell_batches=True)
+            solver.assert_not_called()
+
     def test_four_worlds_complete_one_ply_and_single_tanh_conversion(self):
         backend=Backend()
         result=exact_one_ply([(i,) for i in range(4)],backend,batch_size=1)

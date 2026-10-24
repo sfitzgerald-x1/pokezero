@@ -70,11 +70,15 @@ class NativeExactBackend:
     additive model API, which performs the SAME effective i64/f32/i64/bool/bool
     conversions before the unchanged forward. It is not a new encoder, does
     not compose with memoization in this pilot, and rejects malformed rows.
+    Explicit bulk_encode_workers additionally uses the same native CPU encoder
+    over contiguous same-encoder runs, preserving every state/fold/line/turn and
+    value frame. Missing APIs refuse instead of silently falling back to serial.
     """
 
     def __init__(self, native: Any, model: Any, *, window: int = 1,
                  max_outcomes_per_call: int = 100_000, memoize_leaves: bool = False,
                  packed_leaves: bool = False,
+                 bulk_encode_workers: int | None = None,
                  model_sha256: str | None = None, observation_spec: dict | None = None):
         if os.environ.get("POKEZERO_ENUMERATE_ROLLS") != "1":
             raise ExactSearchRefused("fresh worker must opt into exact damage rolls before engine load")
@@ -88,6 +92,9 @@ class NativeExactBackend:
             raise ExactSearchRefused("packed leaves must be an explicit boolean")
         if packed_leaves and memoize_leaves:
             raise ExactSearchRefused("packed pilot does not compose with leaf memoization")
+        if bulk_encode_workers is not None and (type(bulk_encode_workers) is not int
+                or not 1 <= bulk_encode_workers <= 32 or not packed_leaves):
+            raise ExactSearchRefused("bulk encode requires packed leaves and 1..32 explicit workers")
         if packed_leaves and not callable(getattr(model, "eval_obs_packed", None)):
             raise ExactSearchRefused("packed pilot requires the additive native model API")
         self._row_spec = dict(observation_spec or {})
@@ -98,6 +105,7 @@ class NativeExactBackend:
             raise ExactSearchRefused("memoized/packed leaves require the fixed complete observation spec")
         self.native, self.model = native, model
         self.packed_leaves = packed_leaves
+        self.bulk_encode_workers = bulk_encode_workers
         self._leaf_values = DecisionLeafValues(model, model_sha256=model_sha256) if memoize_leaves else None
         self._model_sha256 = model_sha256
         self.max_outcomes_per_call = max_outcomes_per_call
@@ -192,6 +200,8 @@ class NativeExactBackend:
     def evaluate_leaves(self, states: Sequence[NativePosition]) -> Sequence[float]:
         if not states:
             return []
+        if self.bulk_encode_workers is not None:
+            return self._evaluate_bulk_leaves(states)
         categorical, numeric, token_types, attention = [], [], [], []
         packed_columns = ([], [], [], []) if self.packed_leaves else None
         encoded_rows = []
@@ -261,4 +271,56 @@ class NativeExactBackend:
             raise ExactSearchRefused("native value head changed batch cardinality")
         self.unique_leaf_evaluations += len(states)
         return [float(value) * (1 if state.self_side == "side_one" else -1)
+                for state, value in zip(states, values)]
+
+    def _evaluate_bulk_leaves(self, states: Sequence[NativePosition]) -> Sequence[float]:
+        """Explicit packed CPU path; retain every row and its encoder identity."""
+        started = time.perf_counter()
+        if len(states) > 4096 or any(s.self_side not in ('side_one', 'side_two') for s in states):
+            raise ExactSearchRefused("bulk encode requires <=4096 leaves with known value frames")
+        columns = ([], [], [], [])
+        spec = self._row_spec
+        wt = spec['window']*spec['tokens']
+        names = ('categorical_ids', 'numeric_features', 'token_type_ids', 'attention_mask')
+        widths = (wt*spec['categorical_features']*4, wt*spec['numeric_features']*8, wt*2, wt)
+        offset = 0
+        while offset < len(states):
+            encoder = states[offset].encoder
+            stop = offset+1
+            while stop < len(states) and states[stop].encoder is encoder:
+                stop += 1
+            group = states[offset:stop]
+            method = getattr(encoder, 'encode_leaves_packed', None)
+            if not callable(method):
+                raise ExactSearchRefused("bulk encode API missing; no serial fallback")
+            encoded_at = time.perf_counter()
+            row = method([s.state_str for s in group], [s.fold for s in group],
+                         [s.turn for s in group], [list(s.lines) or None for s in group],
+                         workers=self.bulk_encode_workers, engine_authoritative=False)
+            self.stage_seconds['native_leaf_encode'] += time.perf_counter()-encoded_at
+            self.encode_calls += len(group)
+            packing_at = time.perf_counter()
+            if (not isinstance(row, dict) or type(row.get('batch_rows')) is not int
+                    or row['batch_rows'] != len(group)):
+                raise ExactSearchRefused("bulk encoder changed batch cardinality")
+            for name, width, column in zip(names, widths, columns):
+                data = row.get(name)
+                if type(data) is not bytes or len(data) != width*len(group):
+                    raise ExactSearchRefused("bulk native row has wrong bytes type or width: "+name)
+                column.append(data)
+            self.stage_seconds['python_leaf_pack'] += time.perf_counter()-packing_at
+            offset = stop
+        packing_at = time.perf_counter()
+        packed = tuple(b''.join(column) for column in columns)
+        history = b'\x01'*(len(states)*spec['window'])
+        self.stage_seconds['python_leaf_pack'] += time.perf_counter()-packing_at
+        self.stage_seconds['cpu_encode_and_pack'] += time.perf_counter()-started
+        forward_at = time.perf_counter()
+        values, _, _, _ = self.model.eval_obs_packed(len(states), *packed, history, byte_order='little')
+        self.stage_seconds['champion_forward'] += time.perf_counter()-forward_at
+        self.forward_batches += 1
+        if len(values) != len(states):
+            raise ExactSearchRefused("native value head changed batch cardinality")
+        self.unique_leaf_evaluations += len(states)
+        return [float(value)*(1 if state.self_side == 'side_one' else -1)
                 for state, value in zip(states, values)]

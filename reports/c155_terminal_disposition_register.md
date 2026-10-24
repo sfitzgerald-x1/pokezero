@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`27a31da8a1b17430…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`ca6119d61ab9f191…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -356,6 +356,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1654 integration with full-PP main | Non-rewriting integration combines the two preceding branch inventories: 82 patches, 19 crate sources and 107 total hashed inputs. Both preceding fingerprints remain the real branch points; neither the frozen packed-row microcheck nor historical installed-build receipts are rebound to this combined source. OPEN qualification remains unchanged | `a54026ba49112091…` |
 | Fresh-freeze oracle correction | An appended patch removes the blanket same-turn freeze veto. Pinned Gen3 Showdown permits the ordinary 1/5 thaw before the queued move; an authored native check exposed 0.10 frozen/no-action mass instead of 0.08. The inventory is 83 patches and 108 hashed inputs. The running panel retains its old oracle and outcomes; these new source bytes neither repair historical measurements nor discharge OPEN qualification | `2c87e271684d1e4f…` |
 | Speed Boost entry-turn oracle correction | An appended patch uses same-side/current-slot switch instructions to suppress the entry-turn Speed Boost bonus, preserving established holders and Baton-carried stages. The inventory grows to 84 patches and 109 hashed inputs. Historical sweeps, the running panel's oracle and outcomes, and OPEN qualification remain unchanged | `27a31da8a1b17430…` |
+| Opt-in bulk CPU leaf encoding | An additive `LeafEncoder` method batches the existing serial encoder over immutable folds and ordered scoped workers, returning the same five concatenated byte arrays. The 84 patches and 109 hashed inputs are unchanged in count, but `leaf.rs` changes the fingerprint. Serial/default behavior and historical measurements remain unchanged; byte parity is not cost, fidelity or strength qualification | `ca6119d61ab9f191…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -818,8 +819,8 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure: there are **50 executable** invocation sites at this
-head; the scan resolves **50** of them and leaves **none** unresolved. No invocation-carrying
+rather than inherited from #1205's figure: there are **51 executable** invocation sites at this
+head; the scan resolves **51** of them and leaves **none** unresolved. No invocation-carrying
 comment remains. The own-policy integration, inherited-selector parser, and frozen-root roster
 gates are included, as is the 109-test paper trajectory reference step added by #1504; the counts
 were re-derived from executable workflow bodies. The guarded 13-test synthetic Struggle
@@ -827,7 +828,8 @@ adapter step, both three-test fresh native and model-wheel Struggle steps, and t
 root-prior normalization and model live-path work-separation fixture step are included. The
 eight-test initial-team capture observer, nine-test selected-field comparison and twelve-test
 initial-team source integration steps are included. The seven-test opt-in regret-selection
-step added by #1635 is included; these counts are re-derived on the merged main-based tree.
+step added by #1635 and the four-test bulk CPU leaf-encoder byte-parity step are included;
+these counts are re-derived on the merged main-based tree.
 
 (Was 36/1/35. #1384 added the guarded opponent request-order source pins. Re-derived from the
 merged workflow and scanner rather than incremented.)
@@ -994,7 +996,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 19 |
 | `t1.hashed_input_files` | 109 |
-| `t1.head_fingerprint` | 27a31da8a1b17430 |
+| `t1.head_fingerprint` | ca6119d61ab9f191 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
