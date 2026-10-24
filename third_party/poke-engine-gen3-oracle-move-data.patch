@@ -1,0 +1,17 @@
+diff --git a/src/choices.rs b/src/choices.rs
+--- a/src/choices.rs
++++ b/src/choices.rs
+@@ -19427,2 +19427,13 @@
++    // Gen3 inherits these older priorities/types in pinned Showdown data.
++    // Keep the correction generation-local; later generations are unchanged.
++    #[cfg(feature = "gen3")]
++    {
++        moves.get_mut(&Choices::EXTREMESPEED).unwrap().priority = 1;
++        moves.get_mut(&Choices::PROTECT).unwrap().priority = 3;
++        moves.get_mut(&Choices::MOONLIGHT).unwrap().move_type = PokemonType::NORMAL;
++        moves.get_mut(&Choices::CHARM).unwrap().move_type = PokemonType::NORMAL;
++        moves.get_mut(&Choices::CURSE).unwrap().move_type = PokemonType::TYPELESS;
++    }
++
+     #[cfg(any(feature = "gen1", feature = "gen2", feature = "gen3"))]
+     undo_physical_special_split(&mut moves);
