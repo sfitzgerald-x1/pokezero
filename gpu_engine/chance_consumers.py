@@ -60,7 +60,7 @@ SOURCE_PINS = {
     "entry.py": "c717563781e9d4e665071be544dfe921414f0445c7412b58a3d30e58a7c76d03",
 }
 DOMAIN_MODULES = tuple("absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "e536d5da9c766fabf39832f58b7f7fff30fcc42eb86dfdf3c40fb861ab0880f7"
+DOMAIN_SHA256 = "4e9262c198a7c56e6fa4e99fc67cf0ca185340949ea761c8e3ebe96476bb8755"
 
 
 def _host(value):
