@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'src/pokezero/one_ply_exact.py'
+      - 'src/pokezero/informed_root.py'
+      - 'tests/test_informed_root.py'
       - 'src/pokezero/shallow_exact.py'
       - 'src/pokezero/shallow_exact_native.py'
       - 'tests/test_shallow_exact_native.py'
@@ -18,6 +20,8 @@ on:
     branches: [main]
     paths:
       - 'src/pokezero/one_ply_exact.py'
+      - 'src/pokezero/informed_root.py'
+      - 'tests/test_informed_root.py'
       - 'src/pokezero/shallow_exact.py'
       - 'src/pokezero/shallow_exact_native.py'
       - 'tests/test_shallow_exact_native.py'
@@ -47,4 +51,4 @@ jobs:
       - name: Check one ply LP and preserve historical depth two behavior
         env:
           PYTHONPATH: src:scripts:tests
-        run: python -m unittest test_one_ply_exact test_one_ply_native_runner test_shallow_exact test_shallow_exact_streaming test_shallow_exact_native test_shallow_exact_native_runner -v
+        run: python -m unittest test_informed_root test_one_ply_exact test_one_ply_native_runner test_shallow_exact test_shallow_exact_streaming test_shallow_exact_native test_shallow_exact_native_runner -v
