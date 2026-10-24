@@ -30,7 +30,7 @@ def from_metadata(metadata):
         flag("items",{"choiceband"}),flag("items",{"thickclub"}),flag("items",{"lightball"}),
         flag("species",{"cubone","marowak"}),flag("species",{"pikachu"}),
         flag("items",{"souldew"}),flag("species",{"latias","latios"}),
-        jnp.asarray([{"petayaberry":2,"salacberry":4}.get(name,-1) for name in vocab["items"]]))
+        jnp.asarray([{"liechiberry":0,"petayaberry":2,"salacberry":4}.get(name,-1) for name in vocab["items"]]))
 
 
 def attack_modifier(table,item,species,physical):

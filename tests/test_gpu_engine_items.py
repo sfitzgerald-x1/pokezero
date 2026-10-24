@@ -19,17 +19,17 @@ class ItemTests(unittest.TestCase):
         from gpu_engine import effects,items,mechanics,transition
         from gpu_engine.state import empty_state,legal_actions
         self.jax,self.j,self.i,self.m,self.t,self.empty,self.legal = jax,j,items,mechanics,transition,empty_state,legal_actions
-        self.names = ["_none","tackle","splash","struggle","toxic","rest"]
+        self.names = ["_none","tackle","splash","struggle","toxic","rest","recover","substitute"]
         self.item_names = ["_none","leftovers","lumberry","choiceband","thickclub","lightball",
-            "petayaberry","salacberry"]
+            "petayaberry","salacberry","liechiberry"]
         self.species = ["_none","pikachu","marowak","cubone","ditto"]
         types = ["_none","normal","fighting","flying","poison","ground","rock",
             "bug","ghost","steel","fire","water","grass","electric","psychic","ice","dragon","dark"]
         meta = {"vocabulary":{"moves":self.names,"items":self.item_names,"species":self.species,"types":types}}
         self.it = items.from_metadata(meta)
-        self.table = transition.MoveTable(j.array([0,40,0,50,0,0]),j.array([0,1,1,0,4,14]),
-            j.array([False,True,False,True,False,False]),j.full((6,),100),j.ones((6,),bool),
-            j.zeros((6,),j.int32),j.ones((18,18),j.int32),j.ones((18,18),j.int32),j.array(3),
+        self.table = transition.MoveTable(j.array([0,40,0,50,0,0,0,0]),j.array([0,1,1,0,4,14,1,1]),
+            j.array([False,True,False,True,False,False,False,False]),j.full((8,),100),j.ones((8,),bool),
+            j.zeros((8,),j.int32),j.ones((18,18),j.int32),j.ones((18,18),j.int32),j.array(3),
             effects.from_metadata(meta),self.it)
 
     def live(self,batch=1):
@@ -165,34 +165,55 @@ class ItemTests(unittest.TestCase):
         self.assertEqual(int(self.play(s).hp[0,0,0]),1)
 
     def test_pinch_berries_consume_once_on_living_active_with_thresholds_and_caps(self):
-        j=self.j;rows=j.arange(8);side=j.array([0,1,0,1,0,1,0,1])
-        item=j.array([6,6,7,7,6,7,6,7]);stat=j.where(item==6,2,4)
-        s=self.live(8);s=s._replace(item=s.item.at[rows,side,0].set(item).at[:,:,1].set(6),
-            hp=s.hp.at[rows,side,0].set(j.array([25,25,25,25,26,26,25,25])).at[:,:,1].set(1),
-            boosts=s.boosts.at[6,side[6],0,stat[6]].set(6).at[7,side[7],0,stat[7]].set(-6))
+        j=self.j;rows=j.arange(24);side=j.tile(j.array([0,1]),12)
+        item=j.repeat(j.array([6,7,8]),8);stat=j.repeat(j.array([2,4,0]),8)
+        high=j.array([6,14,22]);low=high+1
+        s=self.live(24);s=s._replace(item=s.item.at[rows,side,0].set(item).at[:,:,1].set(item[:,None]),
+            hp=s.hp.at[rows,side,0].set(j.tile(j.array([25,25,25,25,26,26,25,25]),3)).at[:,:,1].set(1),
+            boosts=s.boosts.at[high,side[high],0,stat[high]].set(6).at[low,side[low],0,stat[low]].set(-6))
         r=self.play(s)
-        self.assertEqual(r.item[rows,side,0].tolist(),[0,0,0,0,6,7,0,0])
-        self.assertEqual(r.boosts[rows,side,0,stat].tolist(),[1,1,1,1,0,0,6,-5])
-        self.assertEqual(r.item[:,:,1].tolist(),[[6,6]]*8)  # low-HP bench holders do not eat
+        self.assertEqual(r.item[rows,side,0].tolist(),sum(([0,0,0,0,i,i,0,0] for i in (6,7,8)),[]))
+        self.assertEqual(r.boosts[rows,side,0,stat].tolist(),[1,1,1,1,0,0,6,-5]*3)
+        self.assertEqual(r.item[:,:,1].tolist(),[[i,i] for i in item.tolist()])  # no bench holder eats
+        for column in range(7):
+            self.assertTrue(bool(j.all(j.where(stat==column,True,r.boosts[rows,side,0,column]==0))))
         for a,b in zip(r.boosts,self.play(r).boosts):self.assertTrue(bool(j.array_equal(a,b)))
-        compiled=self.jax.jit(self.t.step)(s,j.zeros((8,2),j.int32),self.table).state
+        compiled=self.jax.jit(self.t.step)(s,j.zeros((24,2),j.int32),self.table).state
         for a,b in zip(r,compiled):self.assertTrue(bool(j.array_equal(a,b)))
 
     def test_pinch_berry_waits_until_item_residual_before_poison_and_not_replacement(self):
-        j=self.j;s=self.live()
-        s=s._replace(item=s.item.at[0,0,0].set(7),hp=s.hp.at[0,0,0].set(26),
-            status=s.status.at[0,0,0].set(self.m.PSN))
-        r=self.play(s)
-        self.assertEqual((int(r.hp[0,0,0]),int(r.item[0,0,0]),int(r.boosts[0,0,0,4])),(14,7,0))
-        r=self.play(r)
-        self.assertEqual((int(r.hp[0,0,0]),int(r.item[0,0,0]),int(r.boosts[0,0,0,4])),(2,0,1))
-        for forced in (False,True):
-            s=self.live();s=s._replace(hp=s.hp.at[0,0,0].set(0 if forced else 101).at[0,0,1].set(25),
-                item=s.item.at[0,0,1].set(6))
-            result=self.t.step(s,j.array([[4,0]]),self.table)
-            self.assertFalse(bool(result.invalid_actions[0]))
-            self.assertEqual((int(result.state.active[0,0]),int(result.state.item[0,0,1]),
-                int(result.state.boosts[0,0,1,2])),(1,6 if forced else 0,0 if forced else 1))
+        j=self.j
+        for item,stat in ((7,4),(8,0)):
+            s=self.live();s=s._replace(item=s.item.at[0,0,0].set(item),hp=s.hp.at[0,0,0].set(26),
+                status=s.status.at[0,0,0].set(self.m.PSN))
+            r=self.play(s)
+            self.assertEqual((int(r.hp[0,0,0]),int(r.item[0,0,0]),int(r.boosts[0,0,0,stat])),(14,item,0))
+            r=self.play(r)
+            self.assertEqual((int(r.hp[0,0,0]),int(r.item[0,0,0]),int(r.boosts[0,0,0,stat])),(2,0,1))
+        for item,stat in ((6,2),(7,4),(8,0)):
+            for seat in (0,1):
+                for forced in (False,True):
+                    s=self.live();s=s._replace(hp=s.hp.at[0,seat,0].set(0 if forced else 101).at[0,seat,1].set(25),
+                        item=s.item.at[0,seat,1].set(item))
+                    actions=j.zeros((1,2),j.int32).at[0,seat].set(4)
+                    result=self.t.step(s,actions,self.table)
+                    self.assertFalse(bool(result.invalid_actions[0]))
+                    self.assertEqual((int(result.state.active[0,seat]),int(result.state.item[0,seat,1]),
+                        int(result.state.boosts[0,seat,1,stat])),(1,item if forced else 0,0 if forced else 1))
+
+    def test_liechi_does_not_boost_current_action_but_boosts_next_physical_hit(self):
+        for seat in (0,1):
+            s=self.live(8);s=s._replace(hp=s.hp.at[:,seat,0].set(25).at[:,1-seat,0].set(1000),
+                max_hp=s.max_hp.at[:,1-seat,0].set(1000),item=s.item.at[:,seat,0].set(8))
+            moves=("tackle","splash") if seat==0 else ("splash","tackle")
+            control=self.play(s,*moves,table=self.table._replace(items=None))
+            first=self.play(s,*moves)
+            self.assertEqual(first.hp.tolist(),control.hp.tolist())
+            self.assertEqual(first.item[:,seat,0].tolist(),[0]*8)
+            self.assertEqual(first.boosts[:,seat,0,0].tolist(),[1]*8)
+            second=self.play(first,*moves)
+            control=self.play(first._replace(boosts=first.boosts.at[:,seat,0,0].set(0)),*moves)
+            self.assertTrue(bool(self.j.all(second.hp[:,1-seat,0] < control.hp[:,1-seat,0])))
 
     def test_petaya_does_not_boost_the_current_action(self):
         s=self.live(8);s=s._replace(hp=s.hp.at[:,0,0].set(25).at[:,1,0].set(1000),
@@ -272,14 +293,39 @@ class ItemTests(unittest.TestCase):
         self.assertEqual(rows["choice_lock"],"tackle")
         self.assertEqual(rows["unequal_speed_events"],["heal0","status0","heal1","status1"])
         self.assertEqual(rows["equal_speed_event_kinds"],["heal","heal","status","status"])
-        self.assertEqual(rows['pinch_handlers'],dict(petayaberry=[10,4,False],salacberry=[10,4,False]))
+        self.assertEqual(rows['pinch_handlers'],dict(petayaberry=[10,4,False],salacberry=[10,4,False],
+            liechiberry=[10,4,False]))
         cases=rows['pinch'];j=self.j
+        self.assertEqual(len(cases),48)
+        for name in ("petayaberry","salacberry","liechiberry"):
+            self.assertEqual(sum(r["name"]==name for r in cases),16)
         item=j.array([self.item_names.index(r['name']) for r in cases])
         boosts=j.array([r['before'] for r in cases])
         actual_item,actual_boosts=self.i.consume_pinch(self.it,item,boosts,
             j.array([r['hp'] for r in cases]),j.array([r['maxhp'] for r in cases]))
         self.assertEqual(actual_item.tolist(),[self.item_names.index(r['item'] or '_none') for r in cases])
         self.assertEqual(actual_boosts.tolist(),[r['after'] for r in cases])
+        self.assertEqual(len(rows['pinch_turns']),4)
+        self.assertEqual({(r['seat'],r['move']) for r in rows['pinch_turns']},
+            {(seat,move) for seat in (0,1) for move in ('recover','substitute')})
+        for row in rows['pinch_turns']:
+            seat=row['seat'];move=row['move'];s=self.live()
+            s=s._replace(item=s.item.at[0,seat,0].set(8),hp=s.hp.at[0,seat,0].set(row['before_hp']))
+            moves=(move,'splash') if seat==0 else ('splash',move)
+            result=self.play(s,*moves)
+            expected_boosts=[1,0,0,0,0,0,0] if move=='substitute' else [0]*7
+            self.assertEqual(row['boosts'],expected_boosts)
+            self.assertEqual((row['hp'],row['item'],row['substitute_hp']),
+                (25,'',25) if move=='substitute' else (75,'liechiberry',0))
+            self.assertEqual((int(result.hp[0,seat,0]),self.item_names[int(result.item[0,seat,0])],
+                int(result.substitute_hp[0,seat,0]),result.boosts[0,seat,0].tolist()),
+                (row['hp'],row['item'] or '_none',row['substitute_hp'],row['boosts']))
+            self.assertEqual(int(result.pp[0,seat,0,0]),9)
+            self.assertEqual(row['before_pp']-row['after_pp'],1)
+            self.assertEqual(10-int(result.pp[0,seat,0,0]),row['before_pp']-row['after_pp'])
+            self.assertTrue(any('|move|' in line and move.capitalize() in line for line in row['events']))
+            self.assertEqual(any('|-enditem|' in line and 'Liechi Berry' in line for line in row['events']),
+                move=='substitute')
 
 
 if __name__ == "__main__":

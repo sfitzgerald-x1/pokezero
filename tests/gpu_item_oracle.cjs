@@ -28,7 +28,7 @@ function residualOrder(speed0,speed1) {
   return handlers.sort(Battle.prototype.comparePriority).map(h=>h.id);
 }
 const pinch=[],pinch_handlers={};
-for(const name of ['petayaberry','salacberry']){
+for(const name of ['petayaberry','salacberry','liechiberry']){
   const item=dex.items.get(name);
   pinch_handlers[name]=[item.onResidualOrder,item.onResidualSubOrder,!!item.onUpdate];
   for(const seat of [0,1])for(const [hp,maxhp,stage] of
@@ -36,7 +36,7 @@ for(const name of ['petayaberry','salacberry']){
     const b=new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
     for(let s=0;s<2;s++)b.setPlayer(`p${s+1}`,{name:`seat${s}`,team:[
       {species:'Mew',ability:'Limber',item:s===seat?name:'',moves:['splash']}]});
-    const p=b.sides[seat].active[0],key=name==='petayaberry'?'spa':'spe';
+    const p=b.sides[seat].active[0],key={petayaberry:'spa',salacberry:'spe',liechiberry:'atk'}[name];
     p.baseMaxhp=p.maxhp=maxhp;p.hp=hp;p.boosts[key]=stage;
     const fields=['atk','def','spa','spd','spe','accuracy','evasion'];
     const before=fields.map(k=>p.boosts[k]);
@@ -44,6 +44,21 @@ for(const name of ['petayaberry','salacberry']){
     pinch.push({name,seat,hp,maxhp,before,after:fields.map(k=>p.boosts[k]),item:p.item});
     b.destroy();
   }
+}
+const pinch_turns=[];
+for(const seat of [0,1])for(const move of ['recover','substitute']){
+  const b=new Battle({formatid:'gen3customgame',seed:[1,2,3,4]});
+  for(let s=0;s<2;s++)b.setPlayer(`p${s+1}`,{name:`seat${s}`,team:[
+    {species:'Mew',ability:'Limber',item:s===seat?'Liechi Berry':'',moves:[move,'splash']}]});
+  for(const side of b.sides){const p=side.active[0];p.baseMaxhp=p.maxhp=p.hp=101;}
+  const p=b.sides[seat].active[0],before_hp=move==='recover'?25:50,before_pp=p.moveSlots[0].pp;
+  p.hp=before_hp;
+  const choices=['move splash','move splash'];choices[seat]=`move ${move}`;
+  b.makeChoices(...choices);
+  pinch_turns.push({seat,move,before_hp,before_pp,after_pp:p.moveSlots[0].pp,hp:p.hp,item:p.item,
+    boosts:['atk','def','spa','spd','spe','accuracy','evasion'].map(k=>p.boosts[k]),
+    substitute_hp:p.volatiles.substitute?.hp||0,events:b.log.slice()});
+  b.destroy();
 }
 process.stdout.write(JSON.stringify({multipliers:{band:factor('choiceband','onModifyAtk','Ditto'),
   club_cubone:factor('thickclub','onModifyAtk','Cubone'),club_marowak:factor('thickclub','onModifyAtk','Marowak'),
@@ -53,4 +68,4 @@ process.stdout.write(JSON.stringify({multipliers:{band:factor('choiceband','onMo
     psn:[poison.onResidualOrder,poison.onResidualSubOrder]},leftovers_requested_heal:requested,
   lum:{eaten,status:pokemon.status,confused:!!pokemon.volatiles.confusion},choice_lock:lockContext.effectState.move,
   unequal_speed_events:residualOrder(300,200),
-  equal_speed_event_kinds:residualOrder(200,200).map(id=>id.replace(/[01]/,'')),pinch,pinch_handlers}));
+  equal_speed_event_kinds:residualOrder(200,200).map(id=>id.replace(/[01]/,'')),pinch,pinch_handlers,pinch_turns}));
