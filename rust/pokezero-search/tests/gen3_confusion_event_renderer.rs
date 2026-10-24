@@ -51,6 +51,22 @@ fn generate(state: &mut State) -> Vec<StateInstructions> {
     branches
 }
 
+fn assert_marked_callee(branch: &StateInstructions, rendered: &pokezero_search::events::RenderedEvents) -> Option<Choices> {
+    let markers: Vec<_> = branch.instruction_list.iter().filter_map(|i| match i {
+        Instruction::SleepTalkCalled(m) => Some(m), _ => None,
+    }).collect();
+    if markers.is_empty() { return None; } // Woke up or an actual immobilizer fired.
+    assert_eq!(markers.len(), 1);
+    assert!(rendered.lossy.is_empty(), "{rendered:?}");
+    assert!(rendered.attribution_unsafe.is_empty(), "{rendered:?}");
+    let callee = markers[0].move_id;
+    let token = format!("|{}|", format!("{callee:?}").to_ascii_lowercase());
+    let calls: Vec<_> = rendered.lines.iter().filter(|l| l.contains("[from] Sleep Talk")).collect();
+    assert_eq!(calls.len(), 1, "{rendered:?}");
+    assert!(calls[0].contains(&token), "{rendered:?}");
+    Some(callee)
+}
+
 fn render(state: &mut State, branch: &StateInstructions) -> String {
     let before = state.serialize();
     let rendered = render_branch_events(
@@ -1813,66 +1829,17 @@ fn the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract() {
         .get_active()
         .replace_move(PokemonMoveIndex::M2, Choices::SPIDERWEB);
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut saw_subcase = false;
+    let mut seen = std::collections::BTreeSet::new();
     for branch in &branches {
         let r = rendered(&mut state.clone(), branch);
-        for reason in &r.attribution_unsafe {
-            if reason.starts_with("sleeptalk_called_unidentified") {
-                saw_subcase = true;
-                assert_ne!(
-                    reason, "sleeptalk_called_unidentified",
-                    "the bare slug carries no cause and cannot be measured: {:?}",
-                    r.attribution_unsafe
-                );
-                // Pin WHICH sub-case, not merely that one of the two appeared. Accepting
-                // either is a tautology over the implementation's only two outputs:
-                // independent review swapped the literals and the whole suite stayed green.
-                //
-                // Mean Look and Spider Web regenerate byte-identical tails, so the
-                // identification is `ambiguous` BY CONSTRUCTION rather than by luck of the
-                // fixture. And an ambiguous tail of `[ApplyVolatileStatus(TRAPPED)]` is
-                // unrenderable, because the walk emits HP decreases, drags, faints, boosts,
-                // the substitute hit and break, and the direct self-heal -- not a trapping
-                // volatile. So this fixture is the UNRENDERABLE arm: it must still refuse, and
-                // it must say WHICH family blocked it.
-                //
-                // The literal is `:volatile`, and it is derived from the tail through the real
-                // production render path rather than asserted in prose beside a coarser one.
-                // It stays pinned to ONE exact string: accepting a prefix would restore the
-                // tautology review caught. Before the three-way split this assertion read
-                // `:ambiguous`, which is now the arm that does NOT refuse, so leaving it would
-                // have pinned the opposite of the intended behaviour.
-                assert_eq!(
-                    reason, "sleeptalk_called_unidentified:ambiguous_unrenderable:volatile",
-                    "byte-identical callees whose tail carries an effect the walk \
-                     cannot render must refuse, and name that arm: {:?}",
-                    r.attribution_unsafe
-                );
-            }
-        }
-        // The lossy CONTRACT tag stays bare, whatever the sub-case is.
-        if r.attribution_unsafe
-            .iter()
-            .any(|x| x.starts_with("sleeptalk_called_unidentified"))
-        {
-            assert!(
-                r.lossy.iter().any(|x| x == "sleeptalk_called_unidentified"),
-                "the differential matches the lossy tag EXACTLY; it must stay \
-                 unsplit: {:?}",
-                r.lossy
-            );
-            assert!(
-                !r.lossy
-                    .iter()
-                    .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
-                "a sub-cased lossy tag would change which branches the \
-                 differential accepts: {:?}",
-                r.lossy
-            );
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+
         }
     }
-    assert!(saw_subcase, "fixture produced no sleep-talk refusal to measure");
+    assert_eq!(seen, ["MEANLOOK", "SPIDERWEB"].into_iter().map(str::to_owned).collect());
 }
 
 /// A BOOST tail is now rendered, so the branch is usable AND the line is emitted.
@@ -1907,63 +1874,17 @@ fn byte_identical_callees_with_a_boost_tail_are_now_usable_and_render_the_line()
         .get_active()
         .replace_move(PokemonMoveIndex::M2, Choices::WITHDRAW);
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut saw_boost_line = false;
-    let mut saw_lossy_subcase = false;
+    let mut seen = std::collections::BTreeSet::new();
     for branch in &branches {
         let r = rendered(&mut state.clone(), branch);
-
-        assert!(
-            !r.attribution_unsafe
-                .iter()
-                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
-            "a boost tail is fully renderable now and must not refuse: {:?}",
-            r.attribution_unsafe
-        );
-
-        if r.lossy
-            .iter()
-            .any(|x| x == "sleeptalk_called_unidentified")
-        {
-            saw_lossy_subcase = true;
-            // The CONTRACT tag stays bare so the differential still accepts the branch.
-            assert!(
-                !r.lossy
-                    .iter()
-                    .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
-                "the lossy contract tag must stay unsplit: {:?}",
-                r.lossy
-            );
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+            assert!(r.lines.iter().any(|l| l == "|-boost|p2a: Opponent|def|1"), "{r:?}"); assert!(!r.lines.iter().any(|l| l.starts_with("|-boost|") && l != "|-boost|p2a: Opponent|def|1"), "{r:?}");
         }
-        // EXACT LINE, not a prefix. `starts_with("|-boost|")` is a tautology over this
-        // arm's only output shape, and review showed it letting three mutations through the
-        // whole suite: the wrong ident (boost credited to the other Pokemon), the wrong stat
-        // code, and a spurious `[from] item: Leftovers` tag -- which still starts with
-        // `|-boost|` while making the FOLD ignore the boost entirely, since its `-boost` arm
-        // is gated on `from_payload is None`. The sibling refusal test's own comment warns
-        // that "accepting a prefix would restore the tautology that review caught here"; this
-        // one had reintroduced it.
-        if r.lines.iter().any(|line| line == "|-boost|p2a: Opponent|def|1") {
-            saw_boost_line = true;
-        }
-        assert!(
-            !r.lines.iter().any(|line| line.starts_with("|-boost|")
-                && line != "|-boost|p2a: Opponent|def|1"),
-            "no boost line other than the +1 Defense the tail carries: {:?}",
-            r.lines
-        );
     }
-
-    assert!(
-        saw_lossy_subcase,
-        "the ambiguity must still be COUNTED as lossy -- a class that stops refusing must \
-         not stop being measured"
-    );
-    assert!(
-        saw_boost_line,
-        "the walk must EMIT the boost line, not merely stop refusing: admitting the family \
-         without rendering it drops the boost into the fold silently"
-    );
+    assert_eq!(seen, ["HARDEN", "WITHDRAW"].into_iter().map(str::to_owned).collect());
 }
 
 /// A NEGATIVE boost, on the OPPONENT, with an exact line.
@@ -2098,61 +2019,17 @@ fn byte_identical_callees_with_a_renderable_tail_are_usable_not_refused() {
         .get_active()
         .replace_move(PokemonMoveIndex::M2, Choices::SCRATCH);
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut saw_usable = false;
+    let mut seen = std::collections::BTreeSet::new();
     for branch in &branches {
         let r = rendered(&mut state.clone(), branch);
-        if !r
-            .lossy_subcases
-            .iter()
-            .any(|x| x == "sleeptalk_called_unidentified:ambiguous")
-        {
-            continue;
-        }
-        saw_usable = true;
-        // NOT refused: nothing sleep-talk-shaped may reach `attribution_unsafe`.
-        assert!(
-            !r.attribution_unsafe
-                .iter()
-                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
-            "a renderable ambiguous tail must not refuse: {:?}",
-            r.attribution_unsafe
-        );
-        // The differential's contract tag stays bare and present.
-        assert!(
-            r.lossy.iter().any(|x| x == "sleeptalk_called_unidentified"),
-            "the usable arm must still carry the bare lossy tag: {:?}",
-            r.lossy
-        );
-        // ...and NOTHING sub-cased may join it. This is the arm the differential actually
-        // consumes, and it gates usability on exact set equality
-        // (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`). An extra entry makes every
-        // newly-usable branch UNUSABLE to the matcher -- silently deleting this change's
-        // entire benefit. The refusing arm already asserts this, but refused branches are
-        // discarded anyway, so the assertion was on the arm that does not matter.
-        assert!(
-            !r.lossy
-                .iter()
-                .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
-            "a sub-cased lossy tag on the USABLE arm changes which branches the \
-             differential accepts: {:?}",
-            r.lossy
-        );
-        // ...and neither candidate may be NAMED, or the render invents evidence.
-        for callee in ["tackle", "scratch"] {
-            assert!(
-                !r.lines
-                    .iter()
-                    .any(|line| line.starts_with("|move|p2a:") && line.contains(callee)),
-                "named {callee:?} despite ambiguity: {:?}",
-                r.lines
-            );
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+
         }
     }
-    assert!(
-        saw_usable,
-        "fixture produced no USABLE ambiguous branch, so the renderable arm is untested"
-    );
+    assert_eq!(seen, ["TACKLE", "SCRATCH"].into_iter().map(str::to_owned).collect());
 }
 
 /// REGRESSION: the defender's move must no longer break Sleep Talk attribution.
@@ -2466,100 +2343,19 @@ fn byte_identical_callees_that_break_a_substitute_render_both_exact_lines() {
         .insert(PokemonVolatileStatus::SUBSTITUTE);
     state.side_one.substitute_health = 1;
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut saw_break = false;
-    let mut saw_ambiguous = false;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut checks = 0;
     for branch in &branches {
         let r = rendered(&mut state.clone(), branch);
-        if !r
-            .lossy_subcases
-            .iter()
-            .any(|x| x == "sleeptalk_called_unidentified:ambiguous")
-        {
-            continue;
-        }
-        saw_ambiguous = true;
-        // NOT refused. This is the whole point: before this change these branches landed in
-        // `attribution_unsafe` as `:ambiguous_unrenderable` and every world using them was
-        // thrown away.
-        assert!(
-            !r.attribution_unsafe
-                .iter()
-                .any(|x| x.starts_with("sleeptalk_called_unidentified")),
-            "a substitute-break tail is renderable now and must not refuse: {:?}",
-            r.attribution_unsafe
-        );
-        // The differential's contract tag stays bare AND alone -- it gates usability on exact
-        // set equality, so one extra entry silently deletes this change's entire benefit.
-        assert!(
-            r.lossy.iter().any(|x| x == "sleeptalk_called_unidentified"),
-            "the usable arm must still carry the bare lossy tag: {:?}",
-            r.lossy
-        );
-        assert!(
-            !r.lossy
-                .iter()
-                .any(|x| x.starts_with("sleeptalk_called_unidentified:")),
-            "a sub-cased lossy tag on the USABLE arm changes which branches the \
-             differential accepts: {:?}",
-            r.lossy
-        );
-        // Neither candidate may be NAMED, or the render invents evidence it does not have.
-        for callee in ["tackle", "scratch"] {
-            assert!(
-                !r.lines
-                    .iter()
-                    .any(|line| line.starts_with("|move|p2a:") && line.contains(callee)),
-                "an ambiguous callee must stay unnamed, saw {callee}: {:?}",
-                r.lines
-            );
-        }
-        if r.lines
-            .iter()
-            .any(|line| line == "|-end|p1a: Lead|Substitute")
-        {
-            saw_break = true;
-            // ORDER, which is why both arms call `emit_residuals!()` first and why the hit
-            // arm sits ahead of the break arm in the chain. Showdown reports the damage
-            // before the substitute falls; emitting `-end` first is a protocol log no real
-            // battle produces, and #1131 shipped exactly this defect for `[Damage, Boost..]`
-            // with the whole suite green.
-            let hit = r
-                .lines
-                .iter()
-                .position(|line| line == "|-activate|p1a: Lead|Substitute|[damage]")
-                .expect("a break must be preceded by the hit that caused it");
-            let end = r
-                .lines
-                .iter()
-                .position(|line| line == "|-end|p1a: Lead|Substitute")
-                .unwrap();
-            assert!(
-                hit < end,
-                "the substitute hit must precede the break: {:?}",
-                r.lines
-            );
-            // The break belongs to the DEFENDER. Crediting it to the sleeping attacker is the
-            // single most likely wiring error here -- `side_ref` versus `defender` -- and it
-            // survives any prefix assertion.
-            assert!(
-                !r.lines
-                    .iter()
-                    .any(|line| line == "|-end|p2a: Opponent|Substitute"),
-                "the break was credited to the wrong side: {:?}",
-                r.lines
-            );
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+            if let Some(end) = r.lines.iter().position(|l| l == "|-end|p1a: Lead|Substitute") { let hit = r.lines.iter().position(|l| l == "|-activate|p1a: Lead|Substitute|[damage]").expect("break needs a preceding hit"); assert!(hit < end, "{r:?}"); checks += 1; } assert!(!r.lines.iter().any(|l| l == "|-end|p2a: Opponent|Substitute"));
         }
     }
-    assert!(
-        saw_ambiguous,
-        "VACUOUS: no branch was ambiguous, so nothing here exercised the walk"
-    );
-    assert!(
-        saw_break,
-        "VACUOUS: no branch rendered the substitute break, so the new arm never ran \
-         and this test would pass with it deleted"
-    );
+    assert_eq!(seen, ["TACKLE", "SCRATCH"].into_iter().map(str::to_owned).collect());
+    assert!(checks > 0, "effect assertion must be exercised");
 }
 
 /// A PHAZE must keep refusing: `RemoveVolatileStatus(SUBSTITUTE)` has two producers and only
@@ -2611,29 +2407,19 @@ fn a_phaze_that_clears_a_substitute_keeps_refusing_and_renders_no_end_line() {
         .insert(PokemonVolatileStatus::SUBSTITUTE);
     state.side_one.substitute_health = 40;
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut saw_refusal = false;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut checks = 0;
     for branch in &branches {
         let r = rendered(&mut state.clone(), branch);
-        // NO `|-end|Substitute` on ANY branch, refused or not. Showdown emits nothing for a
-        // switch-out volatile clear, so this line is a phantom wherever it appears.
-        assert!(
-            !r.lines.iter().any(|line| line.contains("|Substitute")),
-            "a switch-out substitute clear must render NO substitute line: {:?}",
-            r.lines
-        );
-        if r.attribution_unsafe
-            .iter()
-            .any(|x| x == "sleeptalk_called_unidentified:ambiguous_unrenderable:volatile")
-        {
-            saw_refusal = true;
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+            assert!(!r.lines.iter().any(|l| l.contains("|Substitute")), "{r:?}"); if r.lines.iter().any(|l| l.starts_with("|drag|p1a:")) { checks += 1; }
         }
     }
-    assert!(
-        saw_refusal,
-        "VACUOUS: no branch refused under `volatile`, so this fixture no longer exercises \
-         the phaze case and the phantom-line guard above is unexercised"
-    );
+    assert_eq!(seen, ["ROAR", "WHIRLWIND"].into_iter().map(str::to_owned).collect());
+    assert!(checks > 0, "effect assertion must be exercised");
 }
 
 /// A phaze must not render a phantom `|-unboost|` either: `Boost` has the same two-producer
@@ -2672,38 +2458,19 @@ fn a_phaze_that_resets_boosts_renders_no_unboost_line() {
     // A live boost on the side about to be dragged, so the switch-out reset is nonzero.
     state.side_one.attack_boost = 2;
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut saw_refusal = false;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut checks = 0;
     for branch in &branches {
         let r = rendered(&mut state.clone(), branch);
-        // No boost line of EITHER polarity, on any branch, refused or not — the walk runs
-        // either way and Showdown emits nothing for a switch-out reset.
-        assert!(
-            !r.lines
-                .iter()
-                .any(|line| line.starts_with("|-boost|") || line.starts_with("|-unboost|")),
-            "a switch-out boost reset must render NO boost line: {:?}",
-            r.lines
-        );
-        if r.attribution_unsafe
-            .iter()
-            .any(|x| x.starts_with("sleeptalk_called_unidentified:ambiguous_unrenderable:"))
-        {
-            saw_refusal = true;
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+            assert!(!r.lines.iter().any(|l| l.starts_with("|-boost|") || l.starts_with("|-unboost|")), "{r:?}"); if r.lines.iter().any(|l| l.starts_with("|drag|p1a:")) { checks += 1; }
         }
     }
-    // BOTH guards do independent work, verified by removing each half of the fix:
-    //   * classifier AND walk arm removed (the pre-fix state) -> the phantom appears, and the
-    //     assertion above fires on `|-unboost|p1a: Lead|atk|2` sitting before the drag.
-    //   * classifier removed, walk arm kept -> no phantom, but the tail is ADMITTED and the
-    //     walk renders nothing, i.e. a searched world with a MISSING line. That is a distinct
-    //     defect of the same class, and only this vacuity guard catches it.
-    // So neither assertion is redundant, which is not obvious from reading them.
-    assert!(
-        saw_refusal,
-        "VACUOUS: no branch refused, so either the fixture no longer reaches the reset case \
-         or the tail is being admitted and silently under-rendered"
-    );
+    assert_eq!(seen, ["ROAR", "WHIRLWIND"].into_iter().map(str::to_owned).collect());
+    assert!(checks > 0, "effect assertion must be exercised");
 }
 
 /// The direct self-heal renders EXACTLY `|-heal|{ident}|{condition}` — no `[from]`, right side.
@@ -2755,45 +2522,17 @@ fn a_direct_self_heal_renders_the_exact_bare_line_on_the_healed_side() {
         .get_active()
         .replace_move(PokemonMoveIndex::M2, Choices::SOFTBOILED);
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut saw_heal = false;
+    let mut seen = std::collections::BTreeSet::new();
     for branch in &branches {
         let r = rendered(&mut state.clone(), branch);
-        if !r
-            .lossy_subcases
-            .iter()
-            .any(|x| x == "sleeptalk_called_unidentified:ambiguous")
-        {
-            continue;
-        }
-        // WHOLE-LINE EQUALITY, matching the three sibling pins in this file, and NOT a
-        // structural check over every `-heal` line in the branch. Review found both halves of
-        // that mistake:
-        //
-        //   * Asserting the tag, the side and the FIELD COUNT left the condition VALUE
-        //     unasserted, and two reachable mutants exploited it. Reading
-        //     `sim.hp_condition(side)` BEFORE `sim.apply(instruction)` renders the PRE-heal HP
-        //     (`50/100`) into a SEARCHED world -- the C52 defect class this walk documents,
-        //     where a stale consumer baseline surfaces later as an impossible component. And
-        //     `hp_condition(other_side(side))` puts the opponent's HP inside the attacker's
-        //     heal line: right ident, no tag, four fields, wrong number.
-        //   * Looping over every `-heal|` line in the BRANCH blamed this arm for lines it did
-        //     not emit. With Leftovers on the opponent -- a large share of real gen3 sets --
-        //     an ordinary end-of-turn tick `|-heal|p1a: Lead|56/100|[from] item: Leftovers`
-        //     failed the pin with a message accusing the direct-self-heal arm of fabricating
-        //     a belief.
-        //
-        // The fixture is fully deterministic: maxhp 100, hp set to 50, Recover heals 50.
-        if r.lines.iter().any(|l| l == "|-heal|p2a: Opponent|100/100") {
-            saw_heal = true;
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+            assert!(r.lines.iter().any(|l| l == "|-heal|p2a: Opponent|100/100"), "{r:?}"); assert!(!r.lines.iter().any(|l| l.starts_with("|-heal|p1a:")), "{r:?}");
         }
     }
-    assert!(
-        saw_heal,
-        "VACUOUS: no branch rendered the exact line `|-heal|p2a: Opponent|100/100`, so either \
-         the render arm never ran or it emitted something else -- both of which this test \
-         exists to catch"
-    );
+    assert_eq!(seen, ["RECOVER", "SOFTBOILED"].into_iter().map(str::to_owned).collect());
 }
 
 
@@ -2909,109 +2648,17 @@ fn a_protect_blocked_sleep_talk_callee_renders_the_exact_protect_line() {
         .volatile_statuses
         .insert(PokemonVolatileStatus::PROTECT);
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut saw_protect = false;
+    let mut seen = std::collections::BTreeSet::new();
     for branch in &branches {
-        let events = render(&mut state, branch);
-        if events.contains("Protect") {
-            saw_protect = true;
-            // EXACT string, not a substring match on "Protect". A lowercased keyword or a
-            // dropped `-activate` both survived review's mutation battery precisely
-            // because nothing asserted the literal.
-            assert!(
-                events.contains("|-activate|p1a: Lead|Protect"),
-                "expected the exact Protect activation line, got:\n{events}"
-            );
+        let r = rendered(&mut state.clone(), branch);
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+            assert!(r.lines.iter().any(|l| l == "|-activate|p1a: Lead|Protect"), "{r:?}");
         }
     }
-    assert!(
-        saw_protect,
-        "no branch rendered a Protect line -- the walk arm did not fire. Branches: {}",
-        branches.len()
-    );
-    // AND it must be the UNNAMED path. If a callee gets NAMED, the named renderer emits the
-    // Protect line and this fixture would pass with the new arm deleted -- which is exactly
-    // what the first version did.
-    //
-    // AND the world must actually be RECLAIMED. This is the PR's headline benefit and it was
-    // unverified: `sleeptalk_refusal_is_unsafe` only chooses WHICH tag is emitted, and the
-    // walk renders either way -- so reverting it to the fail-closed form left every world
-    // still refused with the whole suite green (review's M19). The tag is the only thing
-    // that distinguishes "rendered and searched" from "rendered and thrown away".
-    let mut checked = 0;
-    for branch in &branches {
-        let r = rendered(&mut state, branch);
-        let events = r.lines.join("\n");
-        if events.contains("Protect") {
-            assert!(
-                !events.contains("[from] Sleep Talk"),
-                "the callee was NAMED, so the named path rendered Protect and this fixture \
-                 proves nothing about the walk arm:\n{events}"
-            );
-            assert!(
-                r.attribution_unsafe.is_empty(),
-                "the Protect marker is rendered but the world is STILL REFUSED as \
-                 attribution-unsafe, so the fix reclaims nothing: {r:?}"
-            );
-            // AND it must be counted EXACTLY ONCE PER RENDERED LINE. Closing this family
-            // deleted the only number that tracked it: era 62 measured the shape at 3,365
-            // worlds solely because it aborted into `world_failure_reasons`.
-            //
-            // COUNT, not presence. `.any()` was the first version of this assertion and
-            // review killed it: duplicating the `mark_lossy_subcase` call passed all 423
-            // tests. Over-firing is the failure direction the whole change is most exposed
-            // to, because the number it inflates is the one the next era reads as evidence
-            // the fix worked -- and M3 only covers over-firing on the WRONG branch, not
-            // twice on the right one.
-            // KNOWN COVERAGE LIMIT, stated rather than implied. `markers` is 1 in every
-            // branch this fixture generates, so this is operationally `counted == 1` and it
-            // does NOT distinguish once-per-line from once-per-branch: review's N3, which
-            // hoists the push to a single one-per-branch call, survives all 423 tests. It
-            // does kill the duplicate-push mutant, which is the failure direction named
-            // above.
-            //
-            // The denominator is exact despite being a substring match. The renderer has
-            // exactly four `|Protect` producers and all four are `|-activate|{ident}|Protect`
-            // -- `|-singleturn|...|Protect` is never emitted, and move ids render lowercase
-            // so `|move|...|protect` cannot collide with a case-sensitive match. THREE of
-            // the four are NAMED-path sites this counter must never count; the clean-branch
-            // pin in `protected_memento_emits_one_protect_activation` is what holds that.
-            let markers = events.matches("|Protect").count();
-            let counted = r
-                .lossy_subcases
-                .iter()
-                .filter(|s| *s == "sleeptalk_called_unidentified:protect_marker_rendered")
-                .count();
-            assert_eq!(
-                counted, markers,
-                "the Protect counter must fire exactly once per rendered Protect line, \
-                 got {counted} for {markers} line(s): {r:?}"
-            );
-            assert!(
-                counted > 0,
-                "the Protect marker rendered but emitted NO telemetry, so a production era \
-                 cannot tell a firing marker from a silent one: {r:?}"
-            );
-            // AND `set(lossy)` must be UNCHANGED. This is the contract
-            // `engine_transition_differential.py` matches exactly
-            // (`set(lossy) == {_SLEEPTALK_LOSSY_MARKER}`) to decide branch usability, and
-            // that file's bytes are pinned by the certification lifecycle, so it cannot be
-            // edited to follow a renderer change. Counting via a NEW lossy tag would
-            // silently narrow which branches the differential accepts -- green here, wrong
-            // in production. Pinned as a SET so a repeated push of the same tag passes and
-            // an added distinct tag fails.
-            let distinct: std::collections::BTreeSet<&str> =
-                r.lossy.iter().map(String::as_str).collect();
-            assert_eq!(
-                distinct,
-                ["sleeptalk_called_unidentified"].into_iter().collect(),
-                "the Protect counter changed set(lossy); the transition differential's \
-                 acceptance set moves with it: {r:?}"
-            );
-            checked += 1;
-        }
-    }
-    assert!(checked > 0, "no branch reached the tag assertion");
+    assert_eq!(seen, ["TACKLE", "SCRATCH"].into_iter().map(str::to_owned).collect());
 }
 
 /// WITHOUT the PROTECT volatile, no Protect line is rendered.
@@ -3158,55 +2805,17 @@ fn protect_plus_a_bypassing_absorbed_callee_refuses_rather_than_guessing() {
     let maxhp = state.side_one.get_active().maxhp;
     state.side_one.get_active().hp = maxhp;
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut checked = 0;
+    let mut seen = std::collections::BTreeSet::new();
     for branch in &branches {
-        let r = rendered(&mut state, branch);
-        let events = r.lines.join("\n");
-        assert!(
-            !events.contains("Protect"),
-            "a callee whose converted absorb heal survives Protect makes the marker \
-             ambiguous; it must be refused, not guessed:\n{events}"
-        );
-        assert!(
-            !r.lossy_subcases.iter().any(|s| s
-                == "sleeptalk_called_unidentified:protect_marker_rendered_absorb_full_hp"),
-            "the full-HP reclaim counter fired on the genuinely ambiguous case: {r:?}"
-        );
-        // THE COUNTER MUST BE SILENT, and this is the ONLY fixture that can prove it.
-        //
-        // It is the sole case with `defender_protected == true` and NO rendered marker. Its
-        // two sibling negatives both leave PROTECT unset, so a counter hoisted out of the
-        // render arm and gated on `defender_protected` alone passes all of them -- review's
-        // N22, which survived 423/423 while this fixture was still on the string-only
-        // `render()` helper.
-        //
-        // N22 is not merely theoretical. Its spurious counts on REFUSED branches would be
-        // discarded anyway, since the world aborts before the report is built -- but it also
-        // fires on ACCEPTED protected-defender walks whose tail carries no marker, and those
-        // DO reach the shard. That inflates the very number era 63 reads as evidence the fix
-        // works, with worlds that rendered nothing.
-        assert!(
-            !r.lossy_subcases
-                .iter()
-                .any(|s| s == "sleeptalk_called_unidentified:protect_marker_rendered"),
-            "the Protect counter fired on a branch that REFUSED to render the marker: {r:?}"
-        );
-        if r.attribution_unsafe.iter().any(|s| {
-            s == "sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker"
-        }) {
-            checked += 1;
+        let r = rendered(&mut state.clone(), branch);
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+            if callee == Choices::WATERSPORT { assert!(r.lines.iter().any(|l| l == "|-immune|p1a: Lead|[from] ability: Water Absorb"), "{r:?}"); assert!(!r.lines.iter().any(|l| l.contains("Protect")), "{r:?}"); } else { assert!(r.lines.iter().any(|l| l == "|-activate|p1a: Lead|Protect"), "{r:?}"); assert!(!r.lines.iter().any(|l| l.contains("Water Absorb")), "{r:?}"); }
         }
     }
-    // NAME THE WITNESS. "No Protect line was rendered" is satisfied by a fixture that never
-    // built a marker at all, which would make this test pass while proving nothing -- the
-    // failure mode this campaign records as "absence of a class is evidence only where the
-    // class could have fired". So the refusal itself is asserted, by its exact predicate.
-    assert!(
-        checked > 0,
-        "no branch was refused as ambiguous_unrenderable:heal_zero_marker, so this fixture \
-         never reached the guard it exists to pin"
-    );
+    assert_eq!(seen, ["WATERSPORT", "TACKLE"].into_iter().map(str::to_owned).collect());
 }
 
 /// The scan must cover callees AFTER the second match. Found by mutation, not by review.
@@ -3256,27 +2865,17 @@ fn the_callee_scan_covers_candidates_after_the_second_match() {
     let maxhp = state.side_one.get_active().maxhp;
     state.side_one.get_active().hp = maxhp;
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut checked = 0;
+    let mut seen = std::collections::BTreeSet::new();
     for branch in &branches {
-        let r = rendered(&mut state, branch);
-        let events = r.lines.join("\n");
-        assert!(
-            !events.contains("Protect"),
-            "a bypassing absorbed callee in a LATER slot was not scanned, so the marker \
-             was dressed as Protect:\n{events}"
-        );
-        if r.attribution_unsafe.iter().any(|s| {
-            s == "sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker"
-        }) {
-            checked += 1;
+        let r = rendered(&mut state.clone(), branch);
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+            if callee == Choices::WATERSPORT { assert!(r.lines.iter().any(|l| l == "|-immune|p1a: Lead|[from] ability: Water Absorb"), "{r:?}"); assert!(!r.lines.iter().any(|l| l.contains("Protect")), "{r:?}"); } else { assert!(r.lines.iter().any(|l| l == "|-activate|p1a: Lead|Protect"), "{r:?}"); assert!(!r.lines.iter().any(|l| l.contains("Water Absorb")), "{r:?}"); }
         }
     }
-    assert!(
-        checked > 0,
-        "no branch was refused, so this fixture does not reach the guard and cannot pin \
-         the scan's coverage"
-    );
+    assert_eq!(seen, ["TACKLE", "SCRATCH", "WATERSPORT"].into_iter().map(str::to_owned).collect());
 }
 
 /// PROTECT, an absorb ability, FULL HP -- and NO callee that could have converted a heal:
@@ -3321,58 +2920,17 @@ fn protect_plus_an_absorb_ability_with_no_convertible_callee_renders() {
     let maxhp = state.side_one.get_active().maxhp;
     state.side_one.get_active().hp = maxhp;
 
+    // Producer markers separate the formerly identical effect histories.
     let branches = generate(&mut state);
-    let mut checked = 0;
+    let mut seen = std::collections::BTreeSet::new();
     for branch in &branches {
-        let r = rendered(&mut state, branch);
-        let events = r.lines.join("\n");
-        let markers = events.matches("|Protect").count();
-        if markers == 0 {
-            continue;
+        let r = rendered(&mut state.clone(), branch);
+        if let Some(callee) = assert_marked_callee(branch, &r) {
+            seen.insert(format!("{callee:?}"));
+            assert!(r.lines.iter().any(|l| l == "|-activate|p1a: Lead|Protect"), "{r:?}"); assert!(!r.lines.iter().any(|l| l.contains("Water Absorb")), "{r:?}");
         }
-        assert!(
-            !r.attribution_unsafe.iter().any(|s| s
-                == "sleeptalk_called_unidentified:ambiguous_unrenderable:heal_zero_marker"),
-            "the marker rendered AND the branch was still refused: {r:?}"
-        );
-        // COUNT IT, under the token that describes THIS reclaim. `_absorb_headroom` would be
-        // a false statement here (there is no headroom) and would hide this change inside
-        // #1211's series; the bare token would hide it inside #1157's.
-        let counted = |slug: &str| r.lossy_subcases.iter().filter(|s| *s == slug).count();
-        assert_eq!(
-            counted("sleeptalk_called_unidentified:protect_marker_rendered_absorb_full_hp"),
-            markers,
-            "the full-HP reclaim counter must fire exactly once per rendered Protect line: \
-             {r:?}"
-        );
-        assert_eq!(
-            counted("sleeptalk_called_unidentified:protect_marker_rendered_absorb_headroom"),
-            0,
-            "a full-HP render was counted as an HP-headroom render, which redefines #1211's \
-             series under a reader differencing it: {r:?}"
-        );
-        assert_eq!(
-            counted("sleeptalk_called_unidentified:protect_marker_rendered"),
-            0,
-            "a full-HP absorber's render was counted under #1157's bare token: {r:?}"
-        );
-        // `set(lossy)` UNCHANGED -- the contract `engine_transition_differential.py` matches
-        // exactly, whose bytes are pinned by the certification lifecycle.
-        let distinct: std::collections::BTreeSet<&str> =
-            r.lossy.iter().map(String::as_str).collect();
-        assert_eq!(
-            distinct,
-            ["sleeptalk_called_unidentified"].into_iter().collect(),
-            "the reclaim changed set(lossy); the transition differential's acceptance set \
-             moves with it: {r:?}"
-        );
-        checked += 1;
     }
-    assert!(
-        checked > 0,
-        "no branch rendered the Protect marker, so the reclaim this PR exists for is not \
-         exercised by its own fixture"
-    );
+    assert_eq!(seen, ["TACKLE", "SCRATCH"].into_iter().map(str::to_owned).collect());
 }
 
 /// A volatile the defender ALREADY CARRIES is not a miss, and the renderer used to call it

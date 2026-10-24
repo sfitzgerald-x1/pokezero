@@ -1789,3 +1789,9 @@ poke-engine-gen3-fresh-freeze-thaw.patch
 # unconditional callback and append the same-side/current-slot entry guard.
 # Original fixed-panel laws keep their old binary and classifications.
 poke-engine-gen3-speed-boost-entry.patch
+
+# Preserve Sleep Talk's public callee identity before branch deduplication.
+# The R2 quarantined root has Earthquake and Rest with identical empty tails;
+# merging them preserves state but loses the called move. A pure instruction
+# marker separates histories without changing aggregate state probabilities.
+poke-engine-gen3-sleeptalk-called-marker.patch

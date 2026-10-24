@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`ca6119d61ab9f191…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`ca7ee5c35f4b8762…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -357,6 +357,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Fresh-freeze oracle correction | An appended patch removes the blanket same-turn freeze veto. Pinned Gen3 Showdown permits the ordinary 1/5 thaw before the queued move; an authored native check exposed 0.10 frozen/no-action mass instead of 0.08. The inventory is 83 patches and 108 hashed inputs. The running panel retains its old oracle and outcomes; these new source bytes neither repair historical measurements nor discharge OPEN qualification | `2c87e271684d1e4f…` |
 | Speed Boost entry-turn oracle correction | An appended patch uses same-side/current-slot switch instructions to suppress the entry-turn Speed Boost bonus, preserving established holders and Baton-carried stages. The inventory grows to 84 patches and 109 hashed inputs. Historical sweeps, the running panel's oracle and outcomes, and OPEN qualification remain unchanged | `27a31da8a1b17430…` |
 | Opt-in bulk CPU leaf encoding | An additive `LeafEncoder` method batches the existing serial encoder over immutable folds and ordered scoped workers, returning the same five concatenated byte arrays. The 84 patches and 109 hashed inputs are unchanged in count, but `leaf.rs` changes the fingerprint. Serial/default behavior and historical measurements remain unchanged; byte parity is not cost, fidelity or strength qualification | `ca6119d61ab9f191…` |
+| Sleep Talk called-move lineage | A state-neutral instruction retains the actual called move before identical successor histories merge; the strict renderer validates that marker and the exact regenerated tail. One appended patch grows the inventory to 85 patches and 110 hashed inputs. Current source references are re-derived; historical sweeps, stopped rosters and OPEN qualification remain unchanged | `ca7ee5c35f4b8762…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -979,7 +980,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 424 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 84 |
+| `base.patch_stack` | 85 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -1000,8 +1001,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 19 |
-| `t1.hashed_input_files` | 109 |
-| `t1.head_fingerprint` | ca6119d61ab9f191 |
+| `t1.hashed_input_files` | 110 |
+| `t1.head_fingerprint` | ca7ee5c35f4b8762 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -1019,12 +1020,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6594 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6627 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6666 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6699 |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |
