@@ -31,6 +31,7 @@ class MoveEffects(NamedTuple):
     heal_bell: jax.Array
     soundproof: jax.Array
     weather_heal: jax.Array       # [M], Gen 3 Synthesis/Moonlight/Morning Sun
+    belly_drum: jax.Array         # [M], direct half-max HP cost and Attack +12
 
 
 def from_metadata(metadata):
@@ -72,7 +73,7 @@ def from_metadata(metadata):
         flags({"protect","detect"}),flags({"endure"}),move_flag("protect"),move_flag("bypasssub"),
         flags({"healbell"}),jnp.asarray([name=="soundproof" for name in
             metadata["vocabulary"].get("abilities",["_none"])]),
-        flags({"synthesis","moonlight","morningsun"}))
+        flags({"synthesis","moonlight","morningsun"}),flags({"bellydrum"}))
 
 
 def cure_team(state,side,table,*,eligible):

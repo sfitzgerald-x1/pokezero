@@ -37,6 +37,8 @@ def registry():
         'Selected self boost stages with +/-6 clamps','effects','effects')
     group('substitute protect endure detect',
         'Substitute HP/cost and selected stall-counter defense scheduling','effects','defense')
+    group('bellydrum','Gen3 live-HP threshold, direct half-max HP cost and Attack cap',
+        'effects','belly_drum')
     group('recover softboiled milkdrink slackoff rest haze',
         'Half healing, Rest full heal/sleep, or Haze boost reset','effects','effects')
     group('return frustration','Per-Pokemon happiness power','variable_moves','variable_moves')
