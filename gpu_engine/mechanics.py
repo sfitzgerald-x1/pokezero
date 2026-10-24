@@ -112,8 +112,8 @@ class BeforeMove(NamedTuple):
 
 def before_move(status, counter, confusion_counter=0, *, thaw_roll=99,
                 paralysis_roll=99, confusion_roll=0, flinched=False,
-                sleep_usable=False, defrost_move=False, early_bird=False):
-    """Sleep/freeze -> flinch -> confusion -> paralysis, with supplied 0..99 draws.
+                sleep_usable=False, defrost_move=False, early_bird=False, loafing=False):
+    """Sleep/freeze -> Truant -> flinch -> confusion -> paralysis, supplied draws.
 
     Sleep starts at 2..5 (Rest: 3) and decrements before testing whether it ends.
     Confusion similarly starts at 2..5. A defrost move may pass freeze without
@@ -130,7 +130,7 @@ def before_move(status, counter, confusion_counter=0, *, thaw_roll=99,
     new_counter = jnp.where(wake | thaw, 0, jnp.where(sleep, remaining, counter))
     blocked = ((sleep & ~wake & ~jnp.asarray(sleep_usable))
                | ((status == FRZ) & ~thaw & ~jnp.asarray(defrost_move))
-               | jnp.asarray(flinched))
+               | jnp.asarray(loafing) | jnp.asarray(flinched))
     confusion = jnp.asarray(confusion_counter)
     confusion = jnp.where(~blocked, jnp.maximum(0, confusion - 1), confusion)
     self_hit = ~blocked & (confusion > 0) & (jnp.asarray(confusion_roll) >= 50)
