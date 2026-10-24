@@ -1033,7 +1033,7 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # never an import-time/default enabler or production search caller.
         "gpu_engine/fidelity_panel.py",
         "gpu_engine/collect_fidelity_panel.py",
-        "tests/test_gpu_engine_panel_execution.py",
+        "tests/test_native_gpu_panel_execution.py",
         # Build-profile documentation distinguishes the explicit per-process
         # damage-law opt-in from compile-time PP accounting; no executable caller.
         "docs/gen3_oracle_full_pp.md",

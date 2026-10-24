@@ -546,3 +546,7 @@ complete files. Corrupt/missing files remain unknown, even after worker exit0.
 Requested move dispatch counts are exposure only, not executed-effect credit.
 This JAX-sourced exploration cannot establish independent simulator truth,
 85% correct-effect coverage or a production go decision by itself.
+The compiled native/JAX seam profile is explicitly invoked as
+`python -m unittest tests.test_native_gpu_panel_execution`; admission requires
+all three actual controls and zero skips. JAX-only component CI does not build
+the separate native oracle and is not this integration profile.

@@ -1,4 +1,4 @@
-"""Explicitly invoked native/JAX authored seam controls, not panel evidence."""
+"""Native/JAX integration profile, separate from JAX-only CPU components."""
 import itertools
 import importlib.util
 import os
