@@ -12,7 +12,7 @@ from test_gpu_engine_future_state import action_fixture, FAKE
 
 def fixture():
     data, meta = action_fixture()
-    extra = ["struggle", "icebeam", "thunderbolt", "thunder", "doubleteam", "haze",
+    extra = ["overheat", "psychoboost", "struggle", "icebeam", "thunderbolt", "thunder", "doubleteam", "haze",
              "raindance", "sunnyday", "sleeptalk", "encore", "roar", "protect", "spore", "leechseed", "painsplit", "reversal", "flail", "tailglow", "bellydrum"]
     meta["vocabulary"]["moves"] += extra
     return data, meta
@@ -21,8 +21,8 @@ def fixture():
 def table(meta):
     names = meta["vocabulary"]["moves"]
     field = lambda values, default=0: [values.get(name, default) for name in names]
-    return dict(power=field({"tackle": 40, "struggle": 50, "icebeam": 95, "thunderbolt": 95, "thunder": 120}),
-        accuracy=field({"thunder": 70}, 100), always_hit=field({"splash": True, "haze": True, "doubleteam": True}, False),
+    return dict(power=field({"overheat":140,"psychoboost":140,"tackle": 40, "struggle": 50, "icebeam": 95, "thunderbolt": 95, "thunder": 120}),
+        accuracy=field({"overheat":90,"psychoboost":90,"thunder": 70}, 100), always_hit=field({"splash": True, "haze": True, "doubleteam": True}, False),
         priority=field({"protect": 3, "roar": -6}), struggle=names.index("struggle"),
         effects=dict(status=field({"spore": 5}),
             self_boosts=field({"doubleteam": [0, 0, 0, 0, 0, 0, 1], "tailglow": [0,0,2,0,0,0,0]}, [0]*7),
@@ -93,6 +93,20 @@ class ChanceConsumerTests(unittest.TestCase):
             self.assertIsInstance(plan,c.ConsumerPlan,plan)
             self.assertEqual(plan.cardinality,2)
             self.assertEqual(sum(case.mass for case in plan.bounded_cases()),1)
+
+    def test_successful_hit_spa_drop_adds_no_random_coordinate(self):
+        for name in ('overheat','psychoboost'):
+            baseline=None
+            for stage in (-6,-5,0,6):
+                data,meta=fixture();self.choose(data,meta,0,name)
+                data['boosts'][0][0][2]=stage
+                plan=self.plan(data,meta,actions=(0,1))
+                self.assertIsInstance(plan,c.ConsumerPlan,plan)
+                self.assertEqual(sum(case.mass for case in plan.bounded_cases()),1)
+                self.assertGreater(plan.cardinality,2)  # full hit/crit/damage law remains
+                signature=tuple((a.coordinate,a.observations) for a in plan.axes)
+                if baseline is None:baseline=signature
+                self.assertEqual(signature,baseline)
 
     def test_earlier_freeze_and_paralysis_activate_later_status_gates(self):
         data, meta = fixture()
