@@ -285,7 +285,8 @@ jobs:
           workspaces: rust/pokezero-search
 
       - name: Install build tooling
-        run: python -m pip install -e . maturin numpy
+        # Native one-ply routing also executes the declared SciPy LP solver.
+        run: python -m pip install -e '.[analysis]' maturin numpy
 
       - name: Patch stack integrity
         run: |
