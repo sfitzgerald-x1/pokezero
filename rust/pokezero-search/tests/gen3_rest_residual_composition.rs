@@ -238,7 +238,7 @@ fn terminal_rest_turn_never_readds_residual_tail() {
     let list = only_rest_choice_branch(&mut state);
     assert_eq!(
         damage_at(&list, SideReference::SideTwo, 1),
-        0,
+        usize::from(cfg!(feature = "oracle-full-pp")),
         "the fixed hit KOs"
     );
     assert!(

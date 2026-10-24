@@ -41,6 +41,9 @@ default = []
 # Requires a libtorch at build AND run time; the supported recipe links the
 # shared venv's own torch (scripts/build_search_crate_model.sh).
 model = ["dep:tch"]
+# Explicit transition-oracle profile. Legacy/default search keeps its PP
+# abstraction; exact successor-state comparisons must account for every use.
+oracle-full-pp = ["poke-engine/oracle-full-pp"]
 
 # Standalone package: do not get absorbed into any enclosing workspace.
 [workspace]
