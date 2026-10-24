@@ -101,6 +101,41 @@ fn full_profile_charges_sleep_talk_caller_not_called_slot() {
 }
 
 #[test]
+fn fractional_sleep_talk_wakes_on_a_truant_loaf_never_pay_pp() {
+    for pp in [8, 32] {
+        let mut state = State::default();
+        let mon = state.side_one.get_active();
+        mon.ability = Abilities::TRUANT;
+        mon.status = PokemonStatus::SLEEP;
+        mon.rest_turns = 0;
+        mon.sleep_turns = 2;
+        mon.replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+        mon.replace_move(PokemonMoveIndex::M1, Choices::EARTHQUAKE);
+        mon.moves[&PokemonMoveIndex::M0].pp = pp;
+        state.side_one.volatile_statuses.insert(PokemonVolatileStatus::TRUANT);
+        state.side_two.get_active().replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+        let before = state.serialize();
+        let action = MoveChoice::Move(PokemonMoveIndex::M0);
+        let branches = generate_instructions_from_move_pair(&mut state, &action, &action, true);
+        assert_eq!(state.serialize(), before);
+        let (mut woke, mut asleep, mut mass) = (false, false, 0.0);
+        for branch in branches {
+            mass += branch.percentage;
+            if branch.percentage <= 0.0 { continue; }
+            state.apply_instructions(&branch.instruction_list);
+            let mon = state.side_one.get_active_immutable();
+            assert_eq!(mon.moves[&PokemonMoveIndex::M0].pp, pp);
+            woke |= mon.status == PokemonStatus::NONE;
+            asleep |= mon.status == PokemonStatus::SLEEP;
+            state.reverse_instructions(&branch.instruction_list);
+            assert_eq!(state.serialize(), before);
+        }
+        assert!(woke && asleep);
+        assert!((mass - 100.0).abs() < 0.001);
+    }
+}
+
+#[test]
 fn fractional_sleep_talk_wakes_pay_only_after_the_remaining_gates() {
     for pp in [8, 32] { for confused in [false, true] {
         let mut state = State::default();

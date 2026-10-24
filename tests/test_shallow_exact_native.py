@@ -47,7 +47,8 @@ class Encoder:
         self.calls.append((state, fold.lines.copy(), turn, lines, authoritative))
         return {"categorical_ids": struct.pack("<ii", 3, 5),
                 "numeric_features": struct.pack("<dd", 0.5, 0.75),
-                "token_type_ids": struct.pack("<h", 2), "attention_mask": b"\x01"}
+                "token_type_ids": struct.pack("<h", 2), "attention_mask": b"\x01",
+                "legal_action_mask": b"\x01\x00"}
 
 
 class Model:
@@ -126,6 +127,73 @@ class NativeBindingTests(unittest.TestCase):
                 NativeExactBackend(self.native, self.model)
         with self.assertRaisesRegex(ExactSearchRefused, "one-window"):
             NativeExactBackend(self.native, self.model, window=4)
+
+    def test_memoized_nonduplicate_states_history_and_value_frames(self):
+        from dataclasses import replace
+        class RowEncoder(Encoder):
+            def encode_leaf(self, state, fold, turn, lines, authoritative):
+                row = super().encode_leaf(state, fold, turn, lines, authoritative)
+                value = 0.25 if state == "a" else 0.75
+                row["numeric_features"] = struct.pack("<dd", value, turn / 100)
+                row["categorical_ids"] = struct.pack("<ii", 3, 5 + len(fold.lines))
+                return row
+        class ValueModel(Model):
+            def __init__(self):
+                self.calls = []
+            def eval_obs_flat(self, count, *arrays):
+                self.calls.append((count, arrays))
+                return arrays[1][::2], [], [], 0
+        model, encoder = ValueModel(), RowEncoder()
+        backend = NativeExactBackend(self.native, model, memoize_leaves=True, model_sha256="a" * 64,
+            observation_spec=dict(window=1, tokens=1, categorical_features=2, numeric_features=2))
+        first = replace(self.root, state_str="a", encoder=encoder)
+        second = replace(first, state_str="b")
+        revealed = replace(first, fold=Fold(["|root|event", "|revealed|move"]))
+        reflected = replace(first, self_side="side_two")
+        backend.begin_decision()
+        self.assertEqual(backend.evaluate_leaves([first, second, first, reflected]), [0.25, 0.75, 0.25, -0.25])
+        self.assertEqual(backend.evaluate_leaves([second, revealed]), [0.75, 0.25])
+        self.assertEqual((backend.encode_calls, backend.unique_leaf_evaluations, backend.leaf_cache_hits,
+                          backend.forward_batches), (6, 3, 3, 2))
+        self.assertEqual([call[0] for call in model.calls], [2, 1])
+        self.assertEqual(len(encoder.calls), 6)  # No state/fold/history construction is skipped.
+        backend.begin_decision()
+        self.assertEqual(backend.evaluate_leaves([first]), [0.25])
+        self.assertEqual((backend.encode_calls, backend.unique_leaf_evaluations, backend.leaf_cache_hits), (1, 1, 0))
+        backend.model = ValueModel()
+        with self.assertRaisesRegex(ExactSearchRefused, "binding changed"):
+            backend.begin_decision()
+
+    def test_memoization_requires_explicit_fixed_spec_and_model(self):
+        for options in ({}, {"model_sha256": "unbound"},
+                        {"model_sha256": "a" * 64, "observation_spec": {"window": 1}}):
+            with self.subTest(options=options):
+                with self.assertRaises(ExactSearchRefused):
+                    NativeExactBackend(self.native, self.model, memoize_leaves=True, **options)
+
+    def test_complete_nonduplicate_authored_worlds_keep_tree_numerics_and_counts(self):
+        from dataclasses import replace
+        from pokezero.shallow_exact import exact_depth_two
+        class RowEncoder(Encoder):
+            def encode_leaf(self, state, fold, turn, lines, authoritative):
+                row = super().encode_leaf(state, fold, turn, lines, authoritative)
+                row["numeric_features"] = struct.pack("<dd", 0.25 if state == "a" else 0.75,
+                                                      len(fold.lines) / 10)
+                return row
+        class ValueModel(Model):
+            def eval_obs_flat(self, count, *arrays):
+                return arrays[1][::2], [], [], 0
+        encoder = RowEncoder()
+        worlds = [replace(self.root, state_str="world" + str(i), encoder=encoder,
+                          fold=Fold(["|root|" + str(i)] * (i + 1))) for i in range(4)]
+        plain = NativeExactBackend(Native(), ValueModel())
+        cached = NativeExactBackend(Native(), ValueModel(), memoize_leaves=True, model_sha256="a" * 64,
+            observation_spec=dict(window=1, tokens=1, categorical_features=2, numeric_features=2))
+        left, right = [exact_depth_two(worlds, backend, batch_size=3) for backend in (plain, cached)]
+        self.assertEqual(left, right)
+        self.assertEqual((left.leaf_evaluations, cached.encode_calls), (16, 16))
+        self.assertEqual((cached.unique_leaf_evaluations, cached.leaf_cache_hits), (8, 8))
+        self.assertEqual((plain.unique_leaf_evaluations, plain.leaf_cache_hits), (16, 0))
 
 
 if __name__ == "__main__":

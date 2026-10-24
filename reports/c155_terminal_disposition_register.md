@@ -127,13 +127,13 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`b5acf9ea71c8af32…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`91cf4049dfd34cb8…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
-the fingerprint's inputs — the 81 gen3 patches, `poke-engine-gen3-patches.txt`,
+the fingerprint's inputs — the 82 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 18 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
@@ -350,7 +350,8 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Public Trace maybe-trap observation | `request_observer.rs` accepts only an exact current-entry Trace reveal for Gardevoir/Porygon2 copying Arena Trap or Magnet Pull; missing, stale, conflicting and otherwise unsupported changes still refuse. `events.rs` emits those reveals from the actual switch-local ability transition. The rebuilt search extension passes authored source/request and child-branch controls; engine patches, historical receipts and OPEN qualification are unchanged. This is not a new frozen two-consumer sweep or a historical-cause claim | `42ffa04f69a64d7d…` |
 | #1635 default-off positive-advantage selection | New `selection.rs` and `lib.rs`/`tree.rs`/`model.rs` plumbing plus constructor tests in `priors.rs` change the hashed crate source inventory from 17 to 18 and total input inventory from 102 to 103. PUCT remains the default; no historical sweep, freeze declaration or OPEN qualification changes | `4415c16215e271e0…` |
 | #1646 Gen3 oracle move data | One appended Gen3-only patch restores ExtremeSpeed/Protect priorities and Moonlight/Charm/Curse types. The patch inventory grows from 79 to 80 and total hashed inputs from 103 to 104. Historical sweeps, installed-build declarations and OPEN qualification remain unchanged | `c0498c50c53618c0…` |
-| Explicit full-PP oracle profile | One appended opt-in Gen3 patch and its crate feature account for high PP, Pressure clamps and Sleep Talk caller PP, including waking through its remaining gates. Default search behavior stays unchanged. Patch inventory grows from 80 to 81 and hashed inputs from 104 to 105; historical sweeps, installed-build declarations and OPEN qualification remain unchanged | `b5acf9ea71c8af32…` |
+| #1649 Gen3 Truant residual clock | One appended Gen3-only patch replaces damage-triggered Truant with switch-in seeding, BeforeMove observation and residual-order27 toggling. The patch inventory grows from 80 to 81 and total hashed inputs from 104 to 105. JAX has a matching explicit clock and Pursuit registration guard; authored boundary verification is not a new frozen sweep or engine-fidelity qualification. Historical receipts and OPEN qualification remain unchanged | `0ee26f7390036435…` |
+| Explicit full-PP oracle profile | One appended opt-in Gen3 patch and its crate feature account for high PP, Pressure clamps and Sleep Talk caller PP, including waking through its remaining gates. Default search behavior stays unchanged. Patch inventory grows from 81 to 82 and hashed inputs from 105 to 106; historical sweeps, installed-build declarations and OPEN qualification remain unchanged | `91cf4049dfd34cb8…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -967,7 +968,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 423 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 81 |
+| `base.patch_stack` | 82 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -988,8 +989,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 18 |
-| `t1.hashed_input_files` | 105 |
-| `t1.head_fingerprint` | b5acf9ea71c8af32 |
+| `t1.hashed_input_files` | 106 |
+| `t1.head_fingerprint` | 91cf4049dfd34cb8 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

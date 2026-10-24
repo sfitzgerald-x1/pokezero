@@ -35,6 +35,21 @@ diff --git a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.
                      }
                  }
                  // Early Bird decrements Rest's counter twice. At 1 or 2 it
+@@ -3591,10 +3591,13 @@ pub fn generate_instructions_from_move(
+             .volatile_statuses.contains(&PokemonVolatileStatus::TRUANT);
+     if truant_loaf {
+         if !choice.sleep_talk_move {
++            let mut loaf_wakes = Vec::new();
+             generate_instructions_from_existing_status_conditions(
+                 state, &attacking_side, &choice, &mut incoming_instructions,
+-                &mut final_instructions,
++                &mut final_instructions, &mut loaf_wakes,
+             );
++            // Truant stops every awake prefix before lower gates/PP too.
++            final_instructions.extend(loaf_wakes);
+         }
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         if incoming_instructions.percentage > 0.0 {
 @@ -3622,6 +3631,7 @@ pub fn generate_instructions_from_move(
          return;
      }

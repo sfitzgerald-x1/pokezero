@@ -1,0 +1,166 @@
+--- a/src/gen3/abilities.rs
++++ b/src/gen3/abilities.rs
+@@ -416,6 +416,21 @@
+     instructions: &mut StateInstructions,
+ ) {
+     let (attacking_side, defending_side) = state.get_both_sides(side_ref);
++    // This hook is a post-start switch transition. Gen3 onSwitchIn seeds a
++    // native Truant holder to LOAF; an ordinary-turn residual may then flip it
++    // before its first move. Root turn0 phase remains the caller's input.
++    // Do this BEFORE Trace: gaining Truant is not its own onSwitchIn event.
++    if attacking_side.get_active_immutable().ability == Abilities::TRUANT
++        && !attacking_side.volatile_statuses.contains(&PokemonVolatileStatus::TRUANT)
++    {
++        attacking_side.volatile_statuses.insert(PokemonVolatileStatus::TRUANT);
++        instructions.instruction_list.push(Instruction::ApplyVolatileStatus(
++            crate::instruction::ApplyVolatileStatusInstruction {
++                side_ref: *side_ref,
++                volatile_status: PokemonVolatileStatus::TRUANT,
++            },
++        ));
++    }
+     let active_pkmn = attacking_side.get_active();
+     let defending_pkmn = defending_side.get_active_immutable();
+ 
+--- a/src/gen3/choice_effects.rs
++++ b/src/gen3/choice_effects.rs
+@@ -320,7 +320,6 @@
+     hit_sub: bool,
+ ) {
+     let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+-    let attacker_active = attacking_side.get_active();
+     if choice.flags.recharge {
+         let instruction = Instruction::ApplyVolatileStatus(ApplyVolatileStatusInstruction {
+             side_ref: attacking_side_ref.clone(),
+@@ -331,17 +330,9 @@
+             .volatile_statuses
+             .insert(PokemonVolatileStatus::MUSTRECHARGE);
+ 
+-    // Recharging and truant are mutually exclusive, with recharge taking priority
+-    } else if attacker_active.ability == Abilities::TRUANT {
+-        let instruction = Instruction::ApplyVolatileStatus(ApplyVolatileStatusInstruction {
+-            side_ref: attacking_side_ref.clone(),
+-            volatile_status: PokemonVolatileStatus::TRUANT,
+-        });
+-        instructions.instruction_list.push(instruction);
+-        attacking_side
+-            .volatile_statuses
+-            .insert(PokemonVolatileStatus::TRUANT);
+     }
++    // Gen3 Truant is a free-running residual-order27 clock, not a consequence
++    // of a damaging hit. Recharge does not replace or reset that clock.
+     match choice.move_id {
+         Choices::KNOCKOFF => {
+             let defender_active = defending_side.get_active();
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2733,6 +2733,8 @@
+     let (attacking_side, _defending_side) = state.get_both_sides(attacking_side_ref);
+     let current_active_index = attacking_side.active_index;
+     let attacker_ability = attacking_side.get_active_immutable().ability;
++    let truant_loaf = attacker_ability == Abilities::TRUANT
++        && attacking_side.volatile_statuses.contains(&PokemonVolatileStatus::TRUANT);
+     let attacker_active = attacking_side.get_active();
+     // pokezero gen3 fidelity fix (confusion snap-out timing): does this action
+     // actually reach `confusion.onBeforeMove`?
+@@ -3019,6 +3021,13 @@
+             }
+         }
+         _ => {}
++    }
++
++    // Sleep/freeze (priority10) still run on a loaf turn. Truant (priority9)
++    // then stops before confusion, paralysis, and move execution. The phase
++    // itself is not removed here: residual order27 owns the one toggle.
++    if truant_loaf {
++        return;
+     }
+ 
+     // pokezero gen3 fidelity fix (confusion snap-out timing): the ladder already
+@@ -3490,22 +3499,6 @@
+         return;
+     }
+ 
+-    if attacker_side
+-        .volatile_statuses
+-        .contains(&PokemonVolatileStatus::TRUANT)
+-    {
+-        incoming_instructions
+-            .instruction_list
+-            .push(Instruction::RemoveVolatileStatus(
+-                RemoveVolatileStatusInstruction {
+-                    side_ref: attacking_side,
+-                    volatile_status: PokemonVolatileStatus::TRUANT,
+-                },
+-            ));
+-        final_instructions.push(incoming_instructions);
+-        return;
+-    }
+-
+     // TODO: test first-turn dragontail missing - it should not trigger this early return
+     if !choice.first_move && defender_choice.flags.drag {
+         final_instructions.push(incoming_instructions);
+@@ -3579,6 +3572,28 @@
+         return;
+     }
+ 
++    // Gen3 Truant is priority9, after sleep/freeze and before lower-priority
++    // immobilizers. Run only the higher-priority status section; its Truant
++    // return keeps confusion/paralysis untouched. A sleep/thaw branch remains
++    // explicit, and a loaf never spends PP or clears its residual clock.
++    let truant_loaf = state.get_side_immutable(&attacking_side)
++        .get_active_immutable().ability == Abilities::TRUANT
++        && state.get_side_immutable(&attacking_side)
++            .volatile_statuses.contains(&PokemonVolatileStatus::TRUANT);
++    if truant_loaf {
++        if !choice.sleep_talk_move {
++            generate_instructions_from_existing_status_conditions(
++                state, &attacking_side, &choice, &mut incoming_instructions,
++                &mut final_instructions,
++            );
++        }
++        state.reverse_instructions(&incoming_instructions.instruction_list);
++        if incoming_instructions.percentage > 0.0 {
++            final_instructions.push(incoming_instructions);
++        }
++        return;
++    }
++
+     // pokezero gen3 fidelity fix (locked-move PP): remember that THIS turn is the
+     // second half of a two-turn move before the charge volatile is cleared below.
+     // Showdown skips the PP deduction on any turn where `getLockedMove()` returns
+@@ -5571,6 +5586,34 @@
+         }
+     }
+ 
++    // --------------------------------------------------------------- order 27
++    // Gen3 Truant flips for every live holder at every completed residual,
++    // whether it acted, slept, was paralyzed, or recharged. Deferred move-phase
++    // replacements returned above; post-residual replacements have not entered.
++    for side_ref in sides {
++        stop_residuals_if_battle_ended!(state, incoming_instructions);
++        let side = state.get_side(side_ref);
++        if side.get_active_immutable().hp > 0
++            && side.get_active_immutable().ability == Abilities::TRUANT
++        {
++            if side.volatile_statuses.contains(&PokemonVolatileStatus::TRUANT) {
++                side.volatile_statuses.remove(&PokemonVolatileStatus::TRUANT);
++                incoming_instructions.instruction_list.push(Instruction::RemoveVolatileStatus(
++                    RemoveVolatileStatusInstruction {
++                        side_ref: *side_ref, volatile_status: PokemonVolatileStatus::TRUANT,
++                    },
++                ));
++            } else {
++                side.volatile_statuses.insert(PokemonVolatileStatus::TRUANT);
++                incoming_instructions.instruction_list.push(Instruction::ApplyVolatileStatus(
++                    ApplyVolatileStatusInstruction {
++                        side_ref: *side_ref, volatile_status: PokemonVolatileStatus::TRUANT,
++                    },
++                ));
++            }
++        }
++    }
++
+     // ------------------------------------------- order 28.2, then the no-order tail
+     // Slow Start is 28.2. Locked move, flinch and Protect/Endure declare NO
+     // `onResidualOrder` at all, so `resolvePriority` gives them `4294967296` and
