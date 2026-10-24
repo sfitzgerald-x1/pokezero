@@ -1026,6 +1026,9 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # Explains why it does NOT set the flag at import, and exposes
         # --enumerate-rolls for a one-off comparison run.
         "scripts/engine_transition_differential.py",
+        # October 23 GPU fidelity anchor checks for an explicit fresh-process
+        # opt-in before importing native; it never enables the flag itself.
+        "gpu_engine/oracle_anchor.py",
         # Forces the flag OFF so the standing mass gate always measures the
         # collapsed cascade, whatever the ambient environment says.
         "tests/test_branch_mass_reconstruction.py",
