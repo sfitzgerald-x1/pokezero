@@ -1019,6 +1019,9 @@ class RollEnumerationMentionLedger(unittest.TestCase):
     """
 
     _MENTION_ALLOWLIST = {
+        # Fake-backend capture fixtures scope their opt-in to the test call;
+        # importing the module never changes the process roll policy.
+        "tests/test_failure_capture.py",
         # Defines the flag and the enumerate-then-merge arms; default false.
         "third_party/poke-engine-gen3-enumerate-damage-rolls.patch",
         # Registers the patch in the frozen stack and records the decision.
