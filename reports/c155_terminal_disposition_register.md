@@ -809,6 +809,11 @@ removed and prior mutation receipts remain unchanged. Separate C153/C154 changes
 correct ten historical source citation anchors to their current line numbers;
 they do not change historical outcomes or assertions. Appendix A carries 423.
 
+For #1677, re-running the same tracked-JSON selector against main `1814aba3`
+gives 423 members and the integrated branch gives 424. The sole addition is
+`rollout_leaf_witness_mutation_battery_20261024_informed.json`; no member was
+removed and no historical JSON was edited. Appendix A now carries 424.
+
 ⚠ **The second coupling has a failure mode local runs cannot show, and it has already fired.**
 Where CI gates on the merge rather than the branch — as this repo does — **local green and CI green
 are different measurements**, and a step added to `main` after the branch was cut appears only in
@@ -972,7 +977,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 423 |
+| `base.expected_counter_artifacts` | 424 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 84 |
 | `base.section3_rows` | 82 |
