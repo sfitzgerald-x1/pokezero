@@ -46,6 +46,7 @@ def from_metadata(metadata):
     for name, values in {
         "swordsdance":[2,0,0,0,0,0,0], "calmmind":[0,0,1,1,0,0,0],
         "bulkup":[1,1,0,0,0,0,0], "agility":[0,0,0,0,2,0,0],
+        "dragondance":[1,0,0,0,1,0,0],
         "amnesia":[0,0,0,2,0,0,0], "irondefense":[0,2,0,0,0,0,0],
         "barrier":[0,2,0,0,0,0,0], "meditate":[1,0,0,0,0,0,0],
         "howl":[1,0,0,0,0,0,0], "doubleteam":[0,0,0,0,0,0,1],

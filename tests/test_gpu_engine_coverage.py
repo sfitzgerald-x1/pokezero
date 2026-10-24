@@ -44,3 +44,10 @@ class CoverageTests(unittest.TestCase):
         self.assertEqual(r['brickbreak']['status'],'PARTIAL')
         self.assertIn('Screen',r['brickbreak']['missing_intrinsic_effect'])
         self.assertIn('Partial-trap',r['rapidspin']['missing_intrinsic_effect'])
+
+    def test_dragon_dance_source_registration_does_not_award_fidelity_credit(self):
+        result=ledger(dict(move_slots=100,move_frequency=[{'id':'dragondance','count':100}]),
+                      root=Path(__file__).resolve().parents[1])
+        self.assertEqual(result['rows'][0]['status'],'SELECTED_EFFECT_IMPLEMENTED')
+        self.assertIsNone(result['game_qualified_move_share'])
+        self.assertIn('not full-game qualification',result['rows'][0]['evidence'])
