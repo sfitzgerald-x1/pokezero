@@ -46,7 +46,7 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {
-    "transition.py": "80161a3b5d511eed24668bc29585a7df31cc3caf7ac50c6e9a9b8fab9d9d0441",
+    "transition.py": "b8fae9134afa245689c2e690746749e9872529b84aaa286c82422ef68f8926ab",
     "mechanics.py": "704b951ef2df15004e49601a90b934def7bbf63d2f884d73702316eea7e0ea31",
     "pursuit.py": "02988a30c09b592b1a9cc4b0eb3a8c8d24398a6650e3ac0cdfef9e2793752b48",
     "effects.py": "1eda72496a93c594c9927a12c5202d2edd19966601b3d933fd77787fe3f28f0f",
@@ -60,7 +60,7 @@ SOURCE_PINS = {
     "entry.py": "c717563781e9d4e665071be544dfe921414f0445c7412b58a3d30e58a7c76d03",
 }
 DOMAIN_MODULES = tuple("absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "34d9fdaa5ed86862c09ac1abb3b56babc17f03ec7575e3cb11298683f38e9f1d"
+DOMAIN_SHA256 = "b7a8a302adb759f56fd775a14b0d70d76bf21abbaddebdf6578f0407616cc2a2"
 
 
 def _host(value):
@@ -222,6 +222,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap):
                 use(prefix+"3", Observation("less_than", 50))
             random_damage = any(t["power"][move] > 0 or _at(t, "variable_moves", "hidden_power", move)
                 or _at(t, "variable_moves", "returns", move) or _at(t, "variable_moves", "frustration", move)
+                or _at(t, "variable_moves", "hp_dependent", move)
                 for move in selected[s])
             random_damage |= bool(observations[prefix+"3"])
             if random_damage:

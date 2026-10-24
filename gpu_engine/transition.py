@@ -511,7 +511,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.variable_moves is not None:
             power,typ,physical = variable.resolve(table.variable_moves,move,power,typ,physical,
                 _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
-                _active(work.happiness,work,side))
+                _active(work.happiness,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side))
         attack_num,attack_den = (1,1)
         if table.items is not None:
             attack_num,attack_den = held.attack_modifier(table.items,

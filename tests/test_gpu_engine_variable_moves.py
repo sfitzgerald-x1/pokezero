@@ -16,25 +16,26 @@ class VariableMoveTests(unittest.TestCase):
     def setUp(self):
         import jax
         import jax.numpy as j
-        from gpu_engine import absorption,combat,transition,variable_moves
+        from gpu_engine import absorption,combat,damage_moves,effects,transition,variable_moves
         from gpu_engine.state import empty_state
         self.jax,self.j,self.tr,self.v,self.empty=jax,j,transition,variable_moves,empty_state
         self.names=["_none","hiddenpower","hiddenpowerfire","hiddenpowerfighting",
-            "return","frustration","splash","struggle"]
+            "return","frustration","splash","struggle","reversal","flail","seismictoss","protect"]
         self.types=["_none","normal","fighting","flying","poison","ground","rock","bug","ghost",
             "steel","fire","water","grass","electric","psychic","ice","dragon","dark"]
         self.meta={"vocabulary":{"moves":self.names,"types":self.types,
             "abilities":["_none","flashfire","thickfat","guts"],"species":["_none"],"items":["_none"]},
             "moves":[None]+[{"source_type":"Fire" if name=="hiddenpowerfire" else "Normal",
-                "category":"Special" if name=="hiddenpowerfire" else "Physical"}
+                "category":"Special" if name=="hiddenpowerfire" else "Physical","flags":{"protect":1}}
                 for name in self.names[1:]]}
         self.profile=variable_moves.from_metadata(self.meta)
         num=j.ones((18,18),j.int32).at[2,8].set(0).at[2,6].set(2).at[10,12].set(2)
         den=j.ones_like(num).at[10,11].set(2)
-        self.table=transition.MoveTable(j.array([0,0,70,70,0,0,0,50]),
-            j.array([0,1,10,2,1,1,1,0]),j.ones(8,bool),j.full(8,100),j.ones(8,bool),
-            j.zeros(8,j.int32),num,den,j.array(7),
+        self.table=transition.MoveTable(j.array([0,0,70,70,0,0,0,50,0,0,0,0]),
+            j.array([0,1,10,2,1,1,1,0,2,1,2,1]),j.ones(12,bool),j.full(12,100),j.ones(12,bool),
+            j.zeros(12,j.int32).at[11].set(3),num,den,j.array(7),
             absorption=absorption.from_metadata(self.meta),combat=combat.from_metadata(self.meta),
+            damage_moves=damage_moves.from_metadata(self.meta),effects=effects.from_metadata(self.meta),
             variable_moves=self.profile)
 
     def live(self,batch=1):
@@ -52,7 +53,8 @@ class VariableMoveTests(unittest.TestCase):
         j=self.j
         power,typ,physical=self.v.resolve(self.profile,j.array([1,2,3,4,4,5,5]),
             j.zeros(7,j.int32),j.ones(7,j.int32),j.ones(7,bool),
-            j.array([0,10,2,0,0,0,0]),j.array([0,33,40,0,0,0,0]),j.array([255,255,255,0,255,0,255]))
+            j.array([0,10,2,0,0,0,0]),j.array([0,33,40,0,0,0,0]),j.array([255,255,255,0,255,0,255]),
+            j.full(7,1000),j.full(7,1000))
         self.assertEqual(power.tolist(),[70,33,40,1,102,102,1])
         self.assertEqual(typ[:3].tolist(),[17,10,2])
         self.assertEqual(physical[:3].tolist(),[False,False,True])
@@ -110,6 +112,52 @@ class VariableMoveTests(unittest.TestCase):
         del pool["hidden_power_type"]
         with self.assertRaises(KeyError):self.tr.state_from_pool(pool,np.array([[0,1]]))
 
+    def test_reversal_flail_hp_bands_reach_damage_in_both_seats(self):
+        j=self.j;rows=j.arange(4);side=j.array([0,1,0,1]);move=j.array([8,8,9,9])
+        for hp,power in ((1,200),(50,150),(125,100),(250,80),(500,40),(1000,20)):
+            with self.subTest(hp=hp,power=power):
+                s=self.live(4)
+                s=s._replace(moves=s.moves.at[rows,side,0,0].set(move),
+                    hp=s.hp.at[rows,side,0].set(hp),
+                    status=s.status.at[rows,side,0].set(2),  # physical burn modifier still applies
+                    types=s.types.at[rows,side,0,0].set(self.table.type[move]))
+                reference=self.table._replace(variable_moves=None,
+                    power=self.table.power.at[8:10].set(power))
+                actual,expected=self.play(s).state,self.play(s,reference).state
+                self.assertEqual(actual.hp.tolist(),expected.hp.tolist())
+                self.assertTrue(bool(j.all(actual.hp[rows,1-side,0]<1000)))
+                self.assertEqual(actual.pp[rows,side,0,0].tolist(),[9]*4)
+                compiled=self.jax.jit(self.tr.step)(s,j.zeros((4,2),j.int32),self.table).state
+                for a,b in zip(compiled,actual):self.assertTrue(bool(j.array_equal(a,b)))
+
+    def test_reversal_flail_resolve_live_hp_after_earlier_damage(self):
+        j=self.j
+        for side,move in ((0,8),(1,9)):
+            s=self.live(4);foe=1-side
+            s=s._replace(moves=s.moves.at[:,side,0,0].set(move).at[:,foe,0,0].set(10),
+                hp=s.hp.at[:,side,0].set(400),stats=s.stats.at[:,foe,0,5].set(500))
+            # Faster level-73 Seismic Toss changes 400/1000 (BP40) to327/1000 (BP80).
+            reference=self.table._replace(variable_moves=None,power=self.table.power.at[move].set(80))
+            actual,expected=self.play(s).state,self.play(s,reference).state
+            self.assertEqual(actual.hp.tolist(),expected.hp.tolist())
+            self.assertEqual(actual.hp[:,side,0].tolist(),[327]*4)
+            self.assertTrue(bool(j.all(actual.hp[:,foe,0]<1000)))
+
+    def test_reversal_flail_keep_immunity_substitute_and_protect(self):
+        j=self.j
+        for move in (8,9):
+            s=self.live(3);s=s._replace(hp=s.hp.at[:,0,0].set(1),types=s.types.at[0,1,0,0].set(8),
+                substitute_hp=s.substitute_hp.at[1,1,0].set(19),
+                moves=s.moves.at[:,0,0,0].set(move).at[2,1,0,0].set(11))
+            reference=self.table._replace(variable_moves=None,power=self.table.power.at[move].set(200),
+                type_num=self.table.type_num.at[1,8].set(0))
+            table=self.table._replace(type_num=reference.type_num)
+            actual,expected=self.play(s,table).state,self.play(s,reference).state
+            self.assertEqual(actual.hp.tolist(),expected.hp.tolist())
+            self.assertEqual(actual.substitute_hp.tolist(),expected.substitute_hp.tolist())
+            self.assertEqual(actual.hp[:,1,0].tolist(),[1000]*3)
+            self.assertEqual(actual.substitute_hp[:,1,0].tolist(),[0,0,0])
+
     def test_jit_prefix_and_invalid_terminal_identity(self):
         j=self.j;s=self.live(4);s=s._replace(moves=s.moves.at[:,0,0,0].set(1),
             hidden_power_type=s.hidden_power_type.at[:,0,0].set(10),done=s.done.at[3].set(True))
@@ -128,9 +176,17 @@ class VariableMoveTests(unittest.TestCase):
         p=subprocess.run([NODE,str(Path(__file__).with_name("gpu_variable_moves_oracle.cjs")),
             str(Path(SHOWDOWN).resolve())],capture_output=True,text=True)
         self.assertEqual(p.returncode,0,p.stderr)
-        self.assertEqual(json.loads(p.stdout),dict(defaults=[255,102,1],endpoints=[1,102],
+        result=json.loads(p.stdout);bands=result.pop('hpBands')
+        self.assertEqual(result,dict(defaults=[255,102,1],endpoints=[1,102],
             hidden=[["Fire",33,True],["Fighting",40,True]],
             frozen=dict(damage=True,status="frz",flash=False),awake=dict(damage=False,status="",flash=True)))
+        j=self.j;move=j.array([self.names.index(r[0]) for r in bands]);n=len(bands)
+        power,typ,physical=self.v.resolve(self.profile,move,j.zeros(n,j.int32),
+            self.table.type[move],j.ones(n,bool),j.zeros(n,j.int32),j.zeros(n,j.int32),
+            j.full(n,255),j.array([r[1] for r in bands]),j.array([r[2] for r in bands]))
+        self.assertEqual(power.tolist(),[r[3] for r in bands])
+        self.assertEqual(typ.tolist(),self.table.type[move].tolist())
+        self.assertTrue(bool(j.all(physical)))
 
 
 if __name__=="__main__":unittest.main()

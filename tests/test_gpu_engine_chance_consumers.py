@@ -13,7 +13,7 @@ from test_gpu_engine_future_state import action_fixture, FAKE
 def fixture():
     data, meta = action_fixture()
     extra = ["struggle", "icebeam", "thunderbolt", "thunder", "doubleteam", "haze",
-             "raindance", "sunnyday", "sleeptalk", "encore", "roar", "protect", "spore", "leechseed", "painsplit", "tailglow", "bellydrum"]
+             "raindance", "sunnyday", "sleeptalk", "encore", "roar", "protect", "spore", "leechseed", "painsplit", "reversal", "flail", "tailglow", "bellydrum"]
     meta["vocabulary"]["moves"] += extra
     return data, meta
 
@@ -36,6 +36,8 @@ def table(meta):
             allowed_last=[name not in {"_none", "struggle", "encore"} for name in names]),
         phazing=dict(move=field({"roar": True}, False)),
         sustain=dict(seed=field({"leechseed": True}, False)),
+        variable_moves=dict(hidden_power=field({},False),returns=field({},False),
+            frustration=field({},False),hp_dependent=field({"reversal":True,"flail":True},False)),
     )
 
 
@@ -69,6 +71,16 @@ class ChanceConsumerTests(unittest.TestCase):
             plan=self.plan(data,meta,actions=(0,1),cap=2)  # foe's existing unique Splash slot
             self.assertIsInstance(plan,c.ConsumerPlan,plan)
             self.assertEqual(plan.cardinality,2)  # conservative binary action-order coin
+            self.assertEqual(sum(case.mass for case in plan.bounded_cases()),1)
+
+    def test_zero_catalog_hp_moves_retain_existing_critical_and_damage_axes(self):
+        for name in ('reversal','flail'):
+            data,meta=fixture();self.choose(data,meta,0,name)
+            plan=self.plan(data,meta,actions=(0,1))  # foe's unique Splash slot
+            self.assertIsInstance(plan,c.ConsumerPlan,plan)
+            self.assertEqual(len(self.cells(plan,'draws.0.4')),3)
+            self.assertEqual(len(self.cells(plan,'draws.0.5')),16)
+            self.assertEqual(len(self.cells(plan,'draws.1.5')),1)
             self.assertEqual(sum(case.mass for case in plan.bounded_cases()),1)
 
     def test_tail_glow_changes_no_accuracy_or_random_coordinate(self):
