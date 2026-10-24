@@ -32,7 +32,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # unchanged and remains a drift control. The full target-tree digest below also
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "04584c1569930c56588c1b14e5d2ab5b6f8bf85e935fd671a64619df9bb88ffc",
+    "src/gen3/generate_instructions.rs": "73266e593f4fcdaf899d2be4119e02057cbd6ec8e1e3a57e1419461f5977ff98",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
     "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
     "src/gen3/choice_effects.rs": "0b02977627e5e37985c996261092dd05abde2f30a50d42bff8f3d5dd00e51527",
@@ -114,7 +114,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-23:]],
+                [entry.name for entry in applied[-24:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -149,6 +149,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-deferred-recharge-option.patch",
                     "poke-engine-gen3-synthetic-struggle.patch",
                     "poke-engine-gen3-oracle-move-data.patch",
+                    "poke-engine-gen3-oracle-full-pp.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
@@ -227,6 +228,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             self.assertEqual(
                 targets,
                 [
+                    "Cargo.toml",
                     "poke-engine-py/python/poke_engine/poke_engine.pyi",
                     "poke-engine-py/src/lib.rs",
                     "python/poke_engine/__init__.py",

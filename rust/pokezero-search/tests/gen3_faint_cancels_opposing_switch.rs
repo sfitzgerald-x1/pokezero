@@ -196,19 +196,23 @@ fn a_double_ko_cancels_nothing_because_nobody_is_left_standing() {
     outgoing.hp = 1; // Pursuit deals 1, exactly lethal
     outgoing.ability = Abilities::ROUGHSKIN;
 
+    let mut expected = vec![
+        "Damage SideOne: 1".to_string(),
+        "Damage SideTwo: 5".to_string(),
+        "ChangeAbility SideOne: -50".to_string(),
+        "Switch SideOne: P0 -> P1".to_string(),
+        "ToggleSideTwoForceSwitch".to_string(),
+    ];
+    if cfg!(feature = "oracle-full-pp") {
+        expected.insert(0, "DecrementPP SideTwo: M0 1".to_string());
+    }
     assert_eq!(
         only_branch(generate(
             &mut state,
             &MoveChoice::Switch(PokemonIndex::P1),
             &MoveChoice::Move(PokemonMoveIndex::M0),
         )),
-        vec![
-            "Damage SideOne: 1".to_string(),
-            "Damage SideTwo: 5".to_string(),
-            "ChangeAbility SideOne: -50".to_string(),
-            "Switch SideOne: P0 -> P1".to_string(),
-            "ToggleSideTwoForceSwitch".to_string(),
-        ],
+        expected,
         "with both actives fainted nothing is still standing, so getAllActive() is empty \
          and Showdown cancels nothing. Dropping `Switch SideOne: P0 -> P1` here is what a \
          pre-batch force_switch reading does, and no other test or sweep catches it."

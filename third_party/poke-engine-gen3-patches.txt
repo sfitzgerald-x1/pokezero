@@ -1758,3 +1758,12 @@ poke-engine-gen3-synthetic-struggle.patch
 # difference changes outcomes, not merely metadata. No historical run changes.
 # Regression: rust/pokezero-search/tests/gen3_oracle_move_metadata.rs.
 poke-engine-gen3-oracle-move-data.patch
+
+# Full successor-state comparison must account for PP above the legacy search
+# abstraction threshold too. The new Cargo feature oracle-full-pp is OFF by
+# default and Gen3-only in effect. Pressure costs clamp at available PP and
+# Sleep Talk spends its caller PP, not the called move's PP. Gen3's override
+# excludes source-effect calls from Pressure, unlike modern Showdown. Damage
+# enumeration and locked continuations stay unchanged. Oracle consumers must
+# explicitly build and behaviorally attest this profile.
+poke-engine-gen3-oracle-full-pp.patch
