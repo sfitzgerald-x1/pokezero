@@ -27,15 +27,15 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 
 
 # Every digest is measured on a clean replay of the ordered patch stack, never
-# on the mutable vendored build tree. The synthetic-Struggle patch changes
-# generate_instructions.rs, items.rs, and choice_effects.rs; abilities.rs stays
+# on the mutable vendored build tree. The Truant-clock patch changes
+# generate_instructions.rs, abilities.rs, and choice_effects.rs; items.rs stays
 # unchanged and remains a drift control. The full target-tree digest below also
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "04584c1569930c56588c1b14e5d2ab5b6f8bf85e935fd671a64619df9bb88ffc",
+    "src/gen3/generate_instructions.rs": "7edb99db76333f13a15d0af3f5ae79d70d953d51576f0b81a7616b3afce95502",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
-    "src/gen3/abilities.rs": "572550e2a5ba0b45d1c7a388a17fecd7e96db6b94758a139a803128f6b247a1e",
-    "src/gen3/choice_effects.rs": "0b02977627e5e37985c996261092dd05abde2f30a50d42bff8f3d5dd00e51527",
+    "src/gen3/abilities.rs": "b7a0e5f24f12e5a03353bb578dca1abeaa2a962c83705f3bed161836919fa66e",
+    "src/gen3/choice_effects.rs": "a29d431464619c45d603d835ca6663bd7d2f573112c255d5cb9353862f62b161",
 }
 
 
@@ -114,7 +114,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-23:]],
+                [entry.name for entry in applied[-24:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -149,6 +149,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-deferred-recharge-option.patch",
                     "poke-engine-gen3-synthetic-struggle.patch",
                     "poke-engine-gen3-oracle-move-data.patch",
+                    "poke-engine-gen3-truant-residual-clock.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.

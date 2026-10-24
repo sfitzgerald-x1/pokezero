@@ -1758,3 +1758,12 @@ poke-engine-gen3-synthetic-struggle.patch
 # difference changes outcomes, not merely metadata. No historical run changes.
 # Regression: rust/pokezero-search/tests/gen3_oracle_move_metadata.rs.
 poke-engine-gen3-oracle-move-data.patch
+
+# Gen3 Truant is seeded on post-start switch-in and flips at residual order27,
+# independent of damage, sleep, paralysis and recharge. BeforeMove observes
+# that clock after sleep/freeze and before confusion/paralysis; never consume
+# the phase on a move or damage hit. Turn0 root phase remains explicit input.
+# Pinned Showdown fixture: tests/gpu_truant_clock_oracle.cjs; finite engine pins:
+# rust/pokezero-search/tests/gen3_truant_clock.rs. Trace/Skill Swap acquisition
+# and the root materializer's phase inference are not qualified by this patch.
+poke-engine-gen3-truant-residual-clock.patch

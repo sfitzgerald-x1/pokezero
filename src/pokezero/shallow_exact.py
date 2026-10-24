@@ -105,7 +105,11 @@ class ChanceBranch:
 
 
 class ExactBackend(Protocol):
-    """Backend values are side-one champion values on the fixed [-1, 1] scale."""
+    """Backend values are side-one champion values on the fixed [-1, 1] scale.
+
+    A backend may expose ``begin_decision()`` to reset exact input-value caches;
+    the core calls it once before any root validation/expansion.
+    """
 
     def terminal_value(self, state: Any) -> float | None: ...
     def actions(self, state: Any, *, root: bool) -> tuple[Sequence[Hashable], Sequence[Hashable]]: ...
@@ -173,6 +177,12 @@ def exact_depth_two(
     def check_deadline():
         if time.monotonic() >= deadline:
             raise ExactSearchRefused("decision deadline reached; no partial decision is valid")
+    begin = getattr(backend, "begin_decision", None)
+    if begin is not None:
+        if not callable(begin):
+            raise ExactSearchRefused("backend decision reset is not callable")
+        begin()
+        check_deadline()
     leaves: list[Any] = []
     counts = {"nodes": 0, "pairs": 0, "branches": 0}
 

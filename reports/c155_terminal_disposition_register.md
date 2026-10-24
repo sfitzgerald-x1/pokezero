@@ -350,6 +350,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Public Trace maybe-trap observation | `request_observer.rs` accepts only an exact current-entry Trace reveal for Gardevoir/Porygon2 copying Arena Trap or Magnet Pull; missing, stale, conflicting and otherwise unsupported changes still refuse. `events.rs` emits those reveals from the actual switch-local ability transition. The rebuilt search extension passes authored source/request and child-branch controls; engine patches, historical receipts and OPEN qualification are unchanged. This is not a new frozen two-consumer sweep or a historical-cause claim | `42ffa04f69a64d7d…` |
 | #1635 default-off positive-advantage selection | New `selection.rs` and `lib.rs`/`tree.rs`/`model.rs` plumbing plus constructor tests in `priors.rs` change the hashed crate source inventory from 17 to 18 and total input inventory from 102 to 103. PUCT remains the default; no historical sweep, freeze declaration or OPEN qualification changes | `4415c16215e271e0…` |
 | #1646 Gen3 oracle move data | One appended Gen3-only patch restores ExtremeSpeed/Protect priorities and Moonlight/Charm/Curse types. The patch inventory grows from 79 to 80 and total hashed inputs from 103 to 104. Historical sweeps, installed-build declarations and OPEN qualification remain unchanged | `c0498c50c53618c0…` |
+| #1649 Gen3 Truant residual clock | One appended Gen3-only patch replaces damage-triggered Truant with switch-in seeding, BeforeMove observation and residual-order27 toggling. The patch inventory grows from 80 to 81 and total hashed inputs from 104 to 105. JAX has a matching explicit clock and Pursuit registration guard; authored boundary verification is not a new frozen sweep or engine-fidelity qualification. Historical receipts and OPEN qualification remain unchanged | `0ee26f7390036435…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -966,7 +967,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 423 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 80 |
+| `base.patch_stack` | 81 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -987,8 +988,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 18 |
-| `t1.hashed_input_files` | 104 |
-| `t1.head_fingerprint` | c0498c50c53618c0 |
+| `t1.hashed_input_files` | 105 |
+| `t1.head_fingerprint` | 0ee26f7390036435 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

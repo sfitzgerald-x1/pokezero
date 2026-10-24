@@ -70,6 +70,7 @@ class BattleState(NamedTuple):
     keys: jax.Array                # [B,2] legacy uint32 PRNG keys, one per battle
     done: jax.Array                # [B]
     winner: jax.Array              # [B], -1 undecided,0/1 seat,2 tie
+    truant_loaf: jax.Array         # [B,2,6] explicit Gen3 residual clock, not action history
 
 
 def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
@@ -105,7 +106,8 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         residual_draws=jnp.zeros((b,2,12),jnp.int32),replacement_count=battle(),
         phazing_draws=side(), secondary_draws=side(), sleep_talk_draws=side(),
         spikes=side(), wish_counter=side(),weather=battle(), weather_counter=battle(), turn=battle(),
-        keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32))
+        keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32),
+        truant_loaf=jnp.zeros((b,2,6),jnp.bool_))
 
 
 def bench_indices(active: jax.Array) -> jax.Array:
