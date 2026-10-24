@@ -474,32 +474,18 @@ mod tests {
     ///
     /// A renderable ambiguous branch must step CLEANLY, and must still be counted.
     #[test]
-    fn a_renderable_ambiguous_sleeptalk_branch_steps_without_refusing() {
+    fn identical_effect_sleep_talk_calls_keep_their_public_identity_in_env_step() {
         Python::initialize();
         let state = renderable_ambiguous_sleeptalk_fixture();
-        let mut saw_subcase = false;
+        let mut saw_call = false;
         for seed in 0..64u64 {
-            let report = env_step(&state, "splash", "sleeptalk", &ctx_json(), seed, false)
-                .unwrap_or_else(|error| {
-                    panic!(
-                        "a renderable ambiguous Sleep Talk branch must not be refused at \
-                         env_step (seed {seed}): {error}"
-                    )
-                });
-            if report.contains("sleeptalk_called_unidentified:ambiguous") {
-                saw_subcase = true;
-                // Counted on the lossy channel, and NOT on the refusing one.
-                assert!(
-                    report.contains("\"attribution_unsafe\":false"),
-                    "seed {seed}: ambiguous-and-renderable must not be attribution-unsafe: \
-                     {report}"
-                );
-            }
+            let report = env_step(&state, "splash", "sleeptalk", &ctx_json(), seed, false).unwrap();
+            assert!(!report.contains("sleeptalk_called_unidentified"), "{report}");
+            let report: serde_json::Value = serde_json::from_str(&report).unwrap();
+            assert_eq!(report["attribution_unsafe"], false);
+            saw_call |= report.to_string().contains("[from] Sleep Talk");
         }
-        assert!(
-            saw_subcase,
-            "no seed produced a usable ambiguous branch, so this test pins nothing"
-        );
+        assert!(saw_call, "no sampled step carried the callee identity");
     }
 
     #[test]

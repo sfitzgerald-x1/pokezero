@@ -1,11 +1,15 @@
 """Actual native boundary controls; tagged heads are not champion quality evidence."""
 from dataclasses import replace
+import base64
+from hashlib import sha256
 import json
 import math
 import os
+from pathlib import Path
 import struct
 import unittest
 from unittest.mock import patch
+import zlib
 
 from tests import test_leaf_encoder as fixture
 from pokezero.one_ply_exact import exact_one_ply, sample_equilibrium
@@ -183,6 +187,49 @@ class NativeOnePlyLeafRoutingTests(unittest.TestCase):
 
 @unittest.skipUnless(fixture._wheel_has('branch_events'), 'requires native transitions')
 class NativeForcedPassBoundaryTests(unittest.TestCase):
+    def test_saved_r1_failure_worlds_translate_passive_option_without_resampling(self):
+        """All four retained worlds, all replacements; no policy/head/game call."""
+        saved = json.loads((Path(__file__).parent / 'fixtures' / 'native_refusals' /
+                            'passive_no_move_r1.json').read_text())
+        self.assertEqual(saved['root']['decision_index'], 20)
+        self.assertEqual([w['ordinal'] for w in saved['worlds']], [0, 1, 2, 3])
+        self.assertEqual(saved['fold_payload']['encoding'], 'zlib-base64-canonical-json')
+        fold = zlib.decompress(base64.b64decode(saved['fold_payload']['data'], validate=True))
+        self.assertEqual(sha256(fold).hexdigest(), saved['fold_payload']['sha256'])
+        native = fixture.pokezero_search
+        with patch.dict(os.environ, {'POKEZERO_ENUMERATE_ROLLS': '1'}):
+            for world in saved['worlds']:
+                ctx = world['ctx']
+                root = NativePosition(world['state_str'],
+                    {s: tuple(ctx[s]) for s in ('p1', 'p2')}, ctx['turn'],
+                    native.FoldState.from_payload(json.loads(fold)), None, world['self_side'])
+                backend = NativeExactBackend(native, None)
+                actions = backend.actions(root, root=True)
+                self.assertEqual(actions[1], ('No Move',))
+                self.assertTrue(actions[0])
+                self.assertTrue(all(a.startswith('switch ') for a in actions[0]))
+                for row in actions[0]:
+                    with self.subTest(world=world['ordinal'], row=row):
+                        # Recover the original parser failure on its actual
+                        # state; invalid actions are not mapped to a fallback.
+                        with self.assertRaisesRegex(ValueError,
+                                'invalid move for SideTwo: No Move'):
+                            native.branch_events(root.state_str,
+                                row.removeprefix('switch '), 'No Move', json.dumps(ctx),
+                                branch_on_damage=True, include_post_state=True)
+                        direct = json.loads(native.branch_events(root.state_str,
+                            row.removeprefix('switch '), 'none', json.dumps(ctx),
+                            branch_on_damage=True, include_post_state=True))['branches']
+                        branches = list(backend.outcomes(root, row, 'No Move'))
+                        self.assertTrue(branches)
+                        self.assertEqual(len(branches), len(direct))
+                        self.assertAlmostEqual(math.fsum(b.probability for b in branches), 1)
+                        for branch, expected in zip(branches, direct):
+                            self.assertEqual(branch.state.state_str, expected['post_state'])
+                            self.assertEqual(branch.state.lines, tuple(expected['events']))
+                            self.assertFalse(json.loads(native.env_options(
+                                branch.state.state_str, root=True))['p1_force_switch'])
+
     def test_authored_forced_replacement_keeps_passive_seat_and_switch_identity(self):
         from pokezero.poke_engine_adapter import (
             BattleSpec, MoveSpec, PokemonSpec, SideSpec, build_poke_engine_state,

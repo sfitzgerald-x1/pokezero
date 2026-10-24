@@ -986,6 +986,7 @@ fn instruction_side(ins: &Instruction) -> Option<SideReference> {
         // through a production path -- deleting it with only the end-to-end tests in
         // place leaves the suite green.
         Instruction::MoveImmobilized(i) => i.side_ref,
+        Instruction::SleepTalkCalled(i) => i.side_ref,
         _ => return None,
     })
 }
@@ -2202,7 +2203,20 @@ fn render_move_phase(
             let attacker_ident = ctx.active_ident(sim.state, side);
             out.lines
                 .push(format!("|move|{attacker_ident}|sleeptalk|{attacker_ident}"));
-            let called_tail: Vec<Instruction> = tail.to_vec();
+            // Callee identity is producer provenance, not an inference from
+            // effects. Equal empty deltas can mean different public moves.
+            let marker = match tail.first() {
+                Some(Instruction::SleepTalkCalled(marker))
+                    if marker.side_ref == side
+                        && !tail[1..].iter().any(|i| matches!(i, Instruction::SleepTalkCalled(_))) => marker,
+                _ => {
+                    out.mark_attribution_unsafe("sleeptalk_marker_missing_or_conflicting");
+                    for instruction in tail { sim.apply(instruction); }
+                    return;
+                }
+            };
+            let called_tail: Vec<Instruction> = tail[1..].to_vec();
+            sim.apply(&tail[0]); // Pure no-op; retained in the reversible ledger.
             let SleepTalkProbe {
                 ident,
                 callee_can_convert_an_opponent_heal,
@@ -2214,6 +2228,7 @@ fn render_move_phase(
                 &called_tail,
                 branch_on_damage,
                 NoneMatchedTailOrigin { segment, cursor },
+                Some(marker.move_id),
             );
             match ident {
                 SleepTalkIdent::Matched(called_choice) => {
@@ -3587,7 +3602,7 @@ fn render_move_phase(
         out.lines
             .push(format!("|-transform|{attacker_ident}|{defender_ident}"));
     }
-    for ins in tail {
+    for (instruction_index, ins) in tail.iter().enumerate() {
         match ins {
             // Pain Split is not damage: Showdown expresses BOTH halves as
             // `|-sethp|..|[from] move: Pain Split` (target first and
@@ -3688,7 +3703,13 @@ fn render_move_phase(
                     && remove.volatile_status == PokemonVolatileStatus::SUBSTITUTE =>
             {
                 sim.apply(ins);
-                out.lines.push(format!("|-end|{defender_ident}|Substitute"));
+                if substitute_break_side(tail, instruction_index).is_some() {
+                    out.lines.push(format!("|-end|{defender_ident}|Substitute"));
+                } else if !(matches!(choice.move_id, Choices::ROAR | Choices::WHIRLWIND)
+                    && tail[instruction_index + 1..].iter().any(|later|
+                        matches!(later, Instruction::Switch(s) if s.side_ref == remove.side_ref))) {
+                    out.mark_attribution_unsafe("unexplained_substitute_removal");
+                }
             }
             Instruction::Damage(damage) if damage.side_ref == side => {
                 // Attacker-side damage attribution ladder. A bare render is
@@ -3775,10 +3796,11 @@ fn render_move_phase(
                 if heal.heal_amount == 0 && heal.side_ref == defender {
                     if self_faint_target_outcome_rendered {
                         continue;
-                    } else if defender_protected {
+                    } else if defender_protected && choice.flags.protect
+                        && !choice_can_convert_an_opponent_heal(choice) {
                         out.lines
                             .push(format!("|-activate|{defender_ident}|Protect"));
-                    } else if let Some(ability) = absorb {
+                    } else if let Some(ability) = absorb.filter(|_| choice_can_convert_an_opponent_heal(choice)) {
                         out.lines.push(format!(
                             "|-immune|{defender_ident}|[from] ability: {ability}"
                         ));
@@ -3860,6 +3882,12 @@ fn render_move_phase(
             }
             Instruction::Boost(boost) => {
                 sim.apply(ins);
+                if boost_may_be_a_switch_out_reset(tail, instruction_index) {
+                    if !matches!(choice.move_id, Choices::ROAR | Choices::WHIRLWIND) {
+                        out.mark_attribution_unsafe("unexplained_pre_switch_boost");
+                    }
+                    continue;
+                }
                 if ghost_curse {
                     // Engine-model artifact: the gen3 engine applies the
                     // non-Ghost stats-up delta for a Ghost curser; the real
@@ -4853,6 +4881,7 @@ fn unrenderable_family_at_with_protect(
         // cannot produce one, and the caller has already consumed or refused any
         // marker in the enclosing tail before this walk starts.
         Instruction::MoveImmobilized(_) => Some("immobilizer"),
+        Instruction::SleepTalkCalled(_) => Some("callee_marker"),
     }
 }
 
@@ -5147,6 +5176,7 @@ fn identify_sleep_talk_called(
     tail: &[Instruction],
     branch_on_damage: bool,
     origin: NoneMatchedTailOrigin<'_>,
+    marked_callee: Option<Choices>,
 ) -> SleepTalkProbe {
     // GATED DIAGNOSTIC, off unless `POKEZERO_NONE_MATCHED_DUMP=1`. The `NoneMatched`
     // arm was measured unreachable from every turn-start state this repo can construct
@@ -5181,6 +5211,9 @@ fn identify_sleep_talk_called(
     // EVERY shape observed, not the closest one. See `NoneMatchedShapes`.
     let mut shapes = NoneMatchedShapes::default();
     for candidate in candidates {
+        if marked_callee.is_some_and(|id| candidate.move_id != id) {
+            continue;
+        }
         let mut choice = candidate.clone();
         choice.sleep_talk_move = true;
         // Inherit the OUTER Sleep Talk choice's move order, exactly as the engine
@@ -7550,126 +7583,15 @@ mod tests {
              defender choice."
         );
 
-        // THE FIX, pinned. Genuine ambiguity -- two callees whose branches are
-        // byte-identical -- must no longer refuse. The transition is proven (both
-        // regenerated exactly this tail) and the renderer names nobody, so there is
-        // nothing unsafe to reject. Refusing it discarded the whole world, and on the
-        // cluster that class was 49.5% of all world failures.
-        //
-        // Reverting the split in `render_move_phase` sends these back down the
-        // refusing arm and fires this assertion.
-        // Ambiguity splits THREE ways now, and both halves of the split are pinned.
-        //
-        // A renderable tail must be USABLE: refusing it discards a proven transition the
-        // walk can express completely. An unrenderable tail must still REFUSE: the walk
-        // drops boosts, statuses, heals and side conditions, so accepting one would hand
-        // the fold an observation that contradicts the state. Review rejected the first
-        // version of this change for exactly that, and these two assertions are what
-        // stop either half drifting.
-        assert!(
-            multi_label_unattributed > 0,
-            "VACUOUS: no ambiguous branch reached the usable arm, so this test cannot \
-             show the split works at all."
-        );
-        // The fail-closed arm must also be EXERCISED, or the predicate is untested and
-        // could be `|_| true` without anything noticing.
-        // THE CORPUS IS NOW EXHAUSTED, so this guard has to move rather than be weakened.
-        //
-        // It used to assert `multi_label_refused > 0`, to stop
-        // `ambiguous_tail_is_fully_renderable` degenerating to "accept everything" unnoticed.
-        // That was the right guard while the corpus still contained a refusable ambiguity.
-        // It no longer does: #1131 rendered the `boost` family (16 -> 6) and the substitute
-        // break closes the last 6 (6 -> 0), so every ambiguous tail this corpus produces is
-        // fully expressible. Keeping `> 0` would force either a weakened assertion or a
-        // fabricated fixture, and both are worse than moving the guard.
-        //
-        // WHERE THE FAIL-CLOSED ARM IS EXERCISED NOW, so this is a relocation and not a loss:
-        //   * `the_renderable_allowlist_is_exactly_what_it_was` asserts, for one representative
-        //     of EVERY still-blocked family, that `ambiguous_tail_is_fully_renderable` returns
-        //     FALSE. An "accept everything" predicate fails there on all of them.
-        //   * `the_sleeptalk_refusal_subcases_without_moving_the_lossy_contract` drives a real
-        //     Mean Look/Spider Web ambiguity end to end and requires it to refuse under
-        //     `volatile`. It used to use Recover/Soft-Boiled and refuse under `heal`; the
-        //     direct-self-heal change admits exactly that shape, so the guard had to move to a
-        //     family that still blocks -- a knock-on the heal work predicted in advance rather
-        //     than discovered when the suite went red.
-        // The pinned tuple below still catches any drift, in both directions: a refusal
-        // REAPPEARING moves the 0 as loudly as a usable one moving the 237.
-        assert_eq!(
-            multi_label_refused, 0,
-            "an ambiguous refusal reappeared in a corpus that is now fully renderable -- \
-             see the relocation note above before updating this number"
-        );
-        // ...and the two must partition the ambiguous population exactly.
-        assert_eq!(
-            multi_label_unattributed + multi_label_refused,
-            total_branches - agree,
-            "ambiguous branches lost: {multi_label_unattributed} usable + \
-             {multi_label_refused} refused != {} unattributed",
-            total_branches - agree
-        );
-
-        // PRINT BEFORE THE PIN BELOW, deliberately. The pin's own message tells you to
-        // decide whether a change was intended, and that decision needs the
-        // per-defender map -- which an `assert_eq!` placed first would suppress,
-        // because a panic never reaches this line.
-        println!(
-            "#1048 attribution: branches {total_branches}  agree {agree} ({pct}%)  WRONG 0  \
-             ambiguous-USABLE {multi_label_unattributed}  ambiguous-UNRENDERABLE \
-             {multi_label_refused}  refused-single {single_label_refused}  \
-             per-defender {agree_by_defender:?}"
-        );
-
-        // PIN THE TALLIES, not just their shape. Everything above asserts the partition
-        // is non-vacuous and exact -- and both hold for ANY split of the same total, so
-        // a vendored-engine or renderer change can move these numbers with the suite
-        // green. Demonstrated: narrowing the renderability allowlist so `Damage` stops
-        // qualifying gives 20 usable / 217 unrenderable, and every other assertion in
-        // this test still passes.
-        //
-        // They are quoted outside this repo -- the deploy campaign's fallback ledger
-        // states them as the measured effect of #1070 -- so drift is a reporting defect
-        // elsewhere, not merely a test update.
-        //
-        // If you are here because this failed: that is the signal working. The
-        // breakdown printed above says WHERE it moved. Decide whether the change was
-        // intended, then update these values AND the ledger's row-1 disposition
-        // together. Do not update one without the other.
-        assert_eq!(
-            (total_branches, agree, multi_label_unattributed, multi_label_refused),
-            // MOVED DELIBERATELY by the immobilizer-marker change: branches 2614 -> 2720 and
-            // agree 2377 -> 2483, both +106, with usable and unrenderable UNCHANGED at 237/0
-            // and WRONG still 0. This is the change's own measurement and the reason it is
-            // recorded here rather than only in the PR.
-            //
-            // MECHANISM, verified by reverting just the paralysis push and watching the pin
-            // go back to 2614: several callees in this matrix (`bodyslam`, `thunder`)
-            // paralyse the DEFENDER, who then rolls full paralysis on its own ply. Its
-            // fully-paralyzed branch was an EMPTY delta, byte-identical to its same-delta
-            // sibling, so `combine_duplicate_instructions` MERGED the two into one branch --
-            // which is precisely why the renderer could not tell "no move happened" from "a
-            // move happened and changed nothing". Marking the immobilizer separates them:
-            // +106 branches, and all 106 land in `agree` because each now carries its own
-            // exact attribution. Nothing moved OUT of agree, which is the claim that matters.
-            //
-            // The deploy campaign's fallback ledger quotes the OLD pair. That row needs the
-            // same update; it lives outside this repo, so this comment is the handoff.
-            //
-            // 221 -> 231 -> 237 usable, 16 -> 6 -> 0 unrenderable, across two earlier
-            // changes: #1131
-            // rendered the ten `[Boost]` tails, and the substitute break closes the last six
-            // `[DamageSubstitute, RemoveVolatileStatus]`. `branches`, `agree` and WRONG were
-            // UNCHANGED throughout those two, which is the claim that matters -- no attribution moved,
-            // only the refuse-versus-count decision.
-            //
-            // `ambiguous_unrenderable` is therefore CLOSED for this corpus. It is not closed in
-            // production: the corpus contains only the two shapes above, and the era-59 family
-            // split exists precisely because the reachable surface is wider than the corpus
-            // that ranked it.
-            (2720, 2483, 237, 0),
-            "the Sleep Talk attribution oracle moved; see the per-defender breakdown \
-             printed above, and the comment here on what else must be updated."
-        );
+        // Callee markers separate the old merged-history cases. The former
+        // baseline was 2720 branches: 2483 named and 237 unnamed. Keep the
+        // independent restricted-callee oracle above; now EVERY branch must
+        // have exactly the public callee its engine-only label proves.
+        assert_eq!(multi_label_unattributed, 0);
+        assert_eq!(multi_label_refused, 0);
+        assert_eq!(agree, total_branches);
+        assert_eq!(total_branches, 2957);
+        println!("callee-marker oracle: {agree}/{total_branches} named; WRONG 0; {agree_by_defender:?}");
     }
 
     /// The refactor must not change WHICH branches are refused.
@@ -11438,6 +11360,7 @@ mod none_matched_shape_tests {
                     segment: &tail,
                     cursor: 0,
                 },
+                None,
             )
             .callee_can_convert_an_opponent_heal
         };
@@ -12442,6 +12365,7 @@ mod none_matched_shape_call_site {
                 segment: &tail,
                 cursor: 0,
             },
+            None,
         );
         match probe.ident {
             SleepTalkIdent::NoneMatched(shapes) => shapes,

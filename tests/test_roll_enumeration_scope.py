@@ -1022,6 +1022,10 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # Fake-backend capture fixtures scope their opt-in to the test call;
         # importing the module never changes the process roll policy.
         "tests/test_failure_capture.py",
+        # The recovered Sleep Talk root's regression runs in its own Rust
+        # integration-test binary, with an isolated exact-roll OnceLock. It
+        # neither enables enumeration in a Python import nor changes gameplay.
+        "rust/pokezero-search/tests/gen3_sleeptalk_called_identity.rs",
         # Defines the flag and the enumerate-then-merge arms; default false.
         "third_party/poke-engine-gen3-enumerate-damage-rolls.patch",
         # Registers the patch in the frozen stack and records the decision.

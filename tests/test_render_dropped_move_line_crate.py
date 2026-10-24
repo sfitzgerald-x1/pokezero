@@ -21,11 +21,11 @@ THE POSITION. gen3's party-wide cures walk `pokemon_index_iter()` in SLOT ORDER
 statused, and at which slot, decides whether the cure's FIRST instruction lands
 on the active. #1242 guarded `consume_move_prelude`'s wake and thaw arms on the
 active slot, which fixed the layouts where a BENCHED clear leads. It explicitly
-did not fix — and pins as a known remaining gap in
-`rust/pokezero-search/tests/gen3_sleeptalk_party_cure_active_slot_guard.rs` —
-the layouts where the ACTIVE's OWN clear leads, because there the guard cannot
-separate that clear from a genuine wake. Both are exercised below, and they are
-the two directions this instrument has to tell apart.
+did not fix the layouts where the ACTIVE's OWN clear leads, because there the
+guard could not separate that clear from a genuine wake. The engine's explicit
+SleepTalkCalled marker now closes that ambiguity. Both formerly broken layouts
+are positive regression controls below; the forcing tests still require the
+instrument to detect an intentionally dropped announcement.
 """
 
 from __future__ import annotations
@@ -141,6 +141,12 @@ class DroppedCalleeLineThroughTheCrateTests(unittest.TestCase):
             state = build_poke_engine_state(spec).to_string()
         except Exception as exc:  # pragma: no cover - unpatched/absent wheel
             self.skipTest(f"poke_engine fixture unavailable: {exc}")
+        branches = json.loads(pokezero_search.branch_events(
+            state, "sleeptalk", "splash", CTX))["branches"]
+        self.assertTrue(any(
+            line.startswith("|move|p1a:") and line.split("|")[3] == "healbell"
+            and line.endswith("|[from] Sleep Talk")
+            for branch in branches for line in branch["events"]), branches)
         return render_projection_mismatch(
             state_string=state,
             slot_sides=SLOT_SIDES,
@@ -175,43 +181,25 @@ class DroppedCalleeLineThroughTheCrateTests(unittest.TestCase):
         # THE DENOMINATOR. Three announcements were compared, not zero: a silent
         # axis on a boundary where the check never ran would prove nothing.
         self.assertEqual(3, diagnostics["move_lines_compared"])
+        self.assertGreater(diagnostics["matched_clean_branches"], 0)
 
-    def test_the_known_remaining_gap_is_now_VISIBLE(self):
-        """MUST FIRE, on `main`, unforced, TODAY.
+    def test_active_first_cure_now_preserves_the_callee_announcement(self):
+        """The explicit callee marker disambiguates active cure from wake.
 
-        With no statused bench the cure's walk reaches the ACTIVE's own clear
-        first, the wake arm consumes it, `still_asleep` goes false, and
-        `render_move_phase` exits through its "awake Sleep Talk always fails"
-        arm — emitting Sleep Talk's own line and nothing else. `lossy` and
-        `attribution_unsafe` are both empty, which is the whole problem: no
-        refusal, no marker, no direction-1 row. This is the layout
-        `the_active_first_walk_is_a_known_remaining_gap_with_no_bench` pins as
-        UNFIXED, and it is the first time the gap is counted rather than
-        described.
-
-        This test is therefore also the strongest available evidence that the
-        instrument is not fitted to a zero: the defect it detects predates it and
-        is still live in the tree that ships it.
-
-        NULL WORLD: `dropped_move_lines` returning `[]`.
+        Require the real announcement above and a nonempty comparator
+        denominator below, not merely the absence of an alarm.
         """
 
         found, diagnostics = self._run(
             SideSpec(pokemon=(_sleeper(),), active_index=0)
         )
-        self.assertEqual(
-            ["render_move_line_dropped"], [m.axis for m in found], diagnostics
-        )
-        self.assertEqual([CALLEE], diagnostics["move_lines_dropped"])
-        self.assertEqual(
-            f"render_move_line_dropped:{CALLEE}", found[0].predicate
-        )
+        self.assertEqual([], [m.axis for m in found], diagnostics)
+        self.assertEqual([], diagnostics["move_lines_dropped"])
+        self.assertEqual(3, diagnostics["move_lines_compared"])
+        self.assertGreater(diagnostics["matched_clean_branches"], 0)
 
-    def test_the_higher_slot_bench_layout_of_the_same_gap_also_fires(self):
-        """The SECOND layout of the same gap, which an earlier revision of the
-        Rust fixture's note missed: a statused bench at a HIGHER slot than the
-        active is walked AFTER it, so the active's own clear still leads. Pinning
-        one of the two invites the reader to believe the other is fixed."""
+    def test_higher_slot_bench_also_preserves_the_callee_announcement(self):
+        """A higher-slot bench leaves the active cure first; it is fixed too."""
 
         found, diagnostics = self._run(
             SideSpec(
@@ -222,10 +210,10 @@ class DroppedCalleeLineThroughTheCrateTests(unittest.TestCase):
                 active_index=0,
             )
         )
-        self.assertEqual(
-            ["render_move_line_dropped"], [m.axis for m in found], diagnostics
-        )
-        self.assertEqual([CALLEE], diagnostics["move_lines_dropped"])
+        self.assertEqual([], [m.axis for m in found], diagnostics)
+        self.assertEqual([], diagnostics["move_lines_dropped"])
+        self.assertEqual(3, diagnostics["move_lines_compared"])
+        self.assertGreater(diagnostics["matched_clean_branches"], 0)
 
 
 class RenderForcingTests(unittest.TestCase):
