@@ -44,6 +44,7 @@ def registry():
     group('painsplit','Live HP average, per-mon max-HP clamps and target Substitute/Protect gates',
         'effects','pain_split')
     group('return frustration','Per-Pokemon happiness power','variable_moves','variable_moves')
+    group('reversal flail','Gen3 six-band integer live-HP base power','variable_moves','variable_moves')
     group('doubleedge','Floored actual-damage recoil, including Substitute; Rock Head','damage_moves','damage_moves')
     group('seismictoss nightshade sonicboom dragonrage','Fixed level/constant damage with represented target defenses',
         'damage_moves','damage_moves')

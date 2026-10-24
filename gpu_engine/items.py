@@ -20,6 +20,7 @@ class ItemTable(NamedTuple):
     ball_species: jax.Array
     soul_dew: jax.Array
     dew_species: jax.Array
+    pinch_stat: jax.Array
 
 
 def from_metadata(metadata):
@@ -28,7 +29,8 @@ def from_metadata(metadata):
     return ItemTable(flag("items",{"leftovers"}),flag("items",{"lumberry"}),
         flag("items",{"choiceband"}),flag("items",{"thickclub"}),flag("items",{"lightball"}),
         flag("species",{"cubone","marowak"}),flag("species",{"pikachu"}),
-        flag("items",{"souldew"}),flag("species",{"latias","latios"}))
+        flag("items",{"souldew"}),flag("species",{"latias","latios"}),
+        jnp.asarray([{"petayaberry":2,"salacberry":4}.get(name,-1) for name in vocab["items"]]))
 
 
 def attack_modifier(table,item,species,physical):
@@ -64,3 +66,15 @@ def leftovers_heal(table,item,hp,max_hp,*,eligible=True):
     active = jnp.asarray(eligible) & (hp > 0) & table.leftovers[item]
     amount = jnp.maximum(1,max_hp // 16)
     return jnp.where(active,jnp.minimum(max_hp,hp+amount),hp)
+
+
+def consume_pinch(table,item,boosts,hp,max_hp,*,eligible=True):
+    """Selected Gen3 pinch berries: residual order10/suborder4, not onUpdate.
+
+    Consume even at the boost cap, but never on a fainted/ineligible holder.
+    Integer cross-multiplication retains the exact odd-max-HP threshold.
+    """
+    stat=table.pinch_stat[item]
+    consume=jnp.asarray(eligible) & (hp>0) & (hp*4<=max_hp) & (stat>=0)
+    raised=jnp.minimum(6,boosts+(jnp.arange(7)==stat[...,None]))
+    return jnp.where(consume,0,item),jnp.where(consume[...,None],raised,boosts)

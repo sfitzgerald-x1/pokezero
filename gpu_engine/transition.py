@@ -513,7 +513,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.variable_moves is not None:
             power,typ,physical = variable.resolve(table.variable_moves,move,power,typ,physical,
                 _active(work.hidden_power_type,work,side),_active(work.hidden_power_power,work,side),
-                _active(work.happiness,work,side))
+                _active(work.happiness,work,side),_active(work.hp,work,side),_active(work.max_hp,work,side))
         attack_num,attack_den = (1,1)
         if table.items is not None:
             attack_num,attack_den = held.attack_modifier(table.items,
@@ -833,6 +833,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.items is not None:
             healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
                 _active(work.max_hp,work,side),eligible=eligible & heal_event)
+            item,boosts=held.consume_pinch(table.items,_active(work.item,work,side),
+                _active(work.boosts,work,side),hp,_active(work.max_hp,work,side),
+                eligible=eligible & heal_event)
+            work=work._replace(item=_set_active(work.item,work,side,item),
+                boosts=_set_active(work.boosts,work,side,boosts))
         residual = m.major_status_residual(hp,
             _active(work.max_hp, work, side), _active(work.status, work, side),
             _active(work.status_counter, work, side), active=eligible & status_event)

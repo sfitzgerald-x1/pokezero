@@ -30,7 +30,7 @@ CONSUMERS = {
         (8, "effects.stall_success: draw<8//denominator"))},
     "draws.0.0": ("transition first move ordering",),
     "draws.1.0": ("transition residual SpeedBoost ordering",),
-    "draws.0.9": ("transition residual Leftovers ordering",),
+    "draws.0.9": ("transition residual item ordering",),
     "draws.1.9": ("transition residual major-status ordering",),
     "draws.0.10": ("transition residual LeechSeed ordering",),
     "draws.1.10": ("transition replacement runSwitch callback ordering",),
@@ -46,7 +46,7 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {
-    "transition.py": "cda139f701f71b842e0ff619f35aa740fbf70fce27c1de451098e470d6504bba",
+    "transition.py": "76e7552edaf09670af08270497abfc7b33f95a5be1a735536f904988e795f8e8",
     "mechanics.py": "704b951ef2df15004e49601a90b934def7bbf63d2f884d73702316eea7e0ea31",
     "pursuit.py": "a7287b041b219ad790de874684bf0578100084a95dd8f6aff57f2b53916c442e",
     "effects.py": "1eda72496a93c594c9927a12c5202d2edd19966601b3d933fd77787fe3f28f0f",
@@ -60,7 +60,7 @@ SOURCE_PINS = {
     "entry.py": "c717563781e9d4e665071be544dfe921414f0445c7412b58a3d30e58a7c76d03",
 }
 DOMAIN_MODULES = tuple("absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "9cf51125f01f9720908d7af53c3575c71b12e85d278e255b26a98f6c73919d5d"
+DOMAIN_SHA256 = "66dc457c53f7722ca8fbbd423a7ce814fe233e60caec0012b2689241c812ae1b"
 
 
 def _host(value):
@@ -230,6 +230,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap):
                 use(prefix+"3", Observation("less_than", 50))
             random_damage = any(t["power"][move] > 0 or _at(t, "variable_moves", "hidden_power", move)
                 or _at(t, "variable_moves", "returns", move) or _at(t, "variable_moves", "frustration", move)
+                or _at(t, "variable_moves", "hp_dependent", move)
                 for move in selected[s])
             random_damage |= bool(observations[prefix+"3"])
             if random_damage:
@@ -291,7 +292,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap):
         if not replacement and all(statuses[s] & {2, 3, 4} for s in range(2)):
             use("draws.1.9", Observation("identity"))
         inactive("draws.1.0", "SpeedBoost paired callbacks change only own stage; neither can KO or alter the frozen residual ordering")
-        inactive("draws.0.9", "Leftovers paired callbacks only heal their own live holder; neither can KO, resurrect, or alter the other's callback")
+        inactive("draws.0.9", "Selected item callbacks heal or boost only their own live holder; neither can KO, resurrect, or alter the frozen residual ordering or the other's callback")
         inactive("draws.1.11", "Encore residual callbacks change only own counter/lock and cannot KO or alter the other's callback")
         inactive("initial_tie", "Full input mapper refuses unresolved entry_pending; initialize has no eligible initial callback")
         for s in range(2):

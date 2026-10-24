@@ -36,4 +36,13 @@ for(const [type,power] of [['Fire',33],['Fighting',40]]){
   reference.actions.useMove(staticMove,r,t);
   hidden.push([move.type,dynamic,controlled===1000-t.hp && actual>0]);reference.destroy();
 }
-b.destroy();process.stdout.write(JSON.stringify({defaults,endpoints,hidden,frozen:hit(true),awake:hit(false)}));
+// Exhaust the HP lattice at small, odd and realistic maximum HP values. This
+// calls the pinned Gen3 callback; it does not duplicate its six-band formula.
+const hpBands=[];
+for(const name of ['reversal','flail'])for(const max of [1,47,48,321,714]){
+  for(let hp=1;hp<=max;hp++){
+    p.hp=hp;p.maxhp=max;
+    hpBands.push([name,hp,max,b.dex.moves.get(name).basePowerCallback.call(b,p)]);
+  }
+}
+b.destroy();process.stdout.write(JSON.stringify({defaults,endpoints,hidden,hpBands,frozen:hit(true),awake:hit(false)}));
