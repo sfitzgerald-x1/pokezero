@@ -76,6 +76,28 @@ class ToyBackend:
 
 
 class DepthTwoTests(unittest.TestCase):
+    def test_optional_backend_cache_reset_precedes_all_expansion_once(self):
+        class ResetBackend(ToyBackend):
+            def __init__(self):
+                super().__init__()
+                self.resets = 0
+            def begin_decision(self):
+                self.resets += 1
+                self.transitions = 0
+            def actions(self, state, *, root):
+                self.assert_started = self.resets > 0
+                return super().actions(state, root=root)
+        backend = ResetBackend()
+        first = exact_depth_two([(0, ())], backend)
+        second = exact_depth_two([(0, ())], backend)
+        self.assertTrue(backend.assert_started)
+        self.assertEqual(backend.resets, 2)
+        self.assertEqual(backend.transitions, second.joint_actions)
+        self.assertEqual(first.root_matrix, second.root_matrix)
+        backend.begin_decision = 7
+        with self.assertRaisesRegex(ExactSearchRefused, "reset is not callable"):
+            exact_depth_two([(0, ())], backend)
+
     def test_two_complete_plies_four_worlds_and_chance_count(self):
         backend = ToyBackend()
         result = exact_depth_two([(index, ()) for index in range(4)], backend, batch_size=7)

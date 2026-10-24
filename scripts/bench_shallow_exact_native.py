@@ -133,7 +133,9 @@ def worker(args):
             encoder, row["self_side"],
         ))
     backend = NativeExactBackend(native, model, window=spec["window"],
-                                 max_outcomes_per_call=args.max_branches)
+                                 max_outcomes_per_call=args.max_branches,
+                                 memoize_leaves=getattr(args, "memoize_leaves", False),
+                                 model_sha256=sha(args.model), observation_spec=spec)
     started = time.perf_counter()
     try:
         result = exact_depth_two(
@@ -149,6 +151,8 @@ def worker(args):
         code = 1
     report.update(elapsed_seconds=time.perf_counter() - started,
                   encode_calls=backend.encode_calls, forward_batches=backend.forward_batches,
+                  unique_leaf_evaluations=backend.unique_leaf_evaluations,
+                  leaf_cache_hits=backend.leaf_cache_hits,
                   render_refusals=dict(backend.render_refusals), exact_roll_probe_values=damages,
                   render_subcases=dict(backend.render_subcases), stage_seconds=dict(backend.stage_seconds),
                   device=args.device, scientific_collection=False, scientific_progress=False,
@@ -165,6 +169,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--streaming", action="store_true",
                         help="complete exact child matrices with bounded pending leaf batches")
+    parser.add_argument("--memoize-leaves", action="store_true",
+                        help="reuse only complete identical model-bound encoded rows within this decision")
     parser.add_argument("--max-leaves", type=int, default=8192)
     parser.add_argument("--max-joint-actions", type=int, default=4096)
     parser.add_argument("--max-branches", type=int, default=16384)
