@@ -44,7 +44,7 @@ FIELD_POLICY = {
     "volatile": "explicit supported bitset; unknown bits refuse",
     "confusion_counter": "elapsed-hazard versus sampled duration unresolved while active",
     "protect_counter": "JAX denominator0/2/4/8 -> native capped exponent0/1/2/3; other live values refuse",
-    "substitute_hp": "native active substitute health and volatile",
+    "substitute_hp": "native active substitute health and volatile; absent volatile leaves only inert raw native storage",
     "active": "native party index",
     "entry_pending": "unresolved initial events refuse; never silently initialize",
     "active_turns": "completed ordinary boundary age, next action increments before use",
@@ -569,6 +569,20 @@ def canonical_native_future(native_state, certificate):
             gaps.append(Gap("moves", "CONDITIONAL_MECHANICS_CHANGED", "PyState.into recomputes tracking from all12 move inventories"))
         for name in SIDE_NAMES:
             side = values[name]
+            # In the bound Gen3 source, ordinary departure removes SUBSTITUTE
+            # but leaves substitute_health's scalar storage behind. Damage
+            # reads it only under the volatile guard. A new Substitute sets
+            # it to maxhp//4 (the reversible instruction stores new-old).
+            # Thus this absent-volatile value cannot affect a future law.
+            # Do not erase an active/Baton-carried Substitute, or malformed
+            # storage outside native nonnegative i16. Existing suspension
+            # guards below still refuse the whole state; original wire bytes
+            # remain raw_native regardless of any canonicalization.
+            if not 0 <= side['substitute_health'] <= 32767:
+                gaps.append(Gap(name+'.substitute_health', 'INVALID_NATIVE_SUBSTITUTE_HEALTH',
+                                repr(side['substitute_health'])))
+            elif 'substitute' not in side['volatile_statuses']:
+                side['substitute_health'] = 0
             allowed = set(VOLATILES.values()) | {"substitute", "truant", "solarbeam", "trapped"}
             unknown = set(side["volatile_statuses"]) - allowed
             if unknown:
