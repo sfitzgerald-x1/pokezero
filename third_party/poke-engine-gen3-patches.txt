@@ -1776,3 +1776,12 @@ poke-engine-gen3-truant-residual-clock.patch
 # enumeration and locked continuations stay unchanged. Oracle consumers must
 # explicitly build and behaviorally attest this profile.
 poke-engine-gen3-oracle-full-pp.patch
+
+# The real-team exact-outcome panel exposed a 0.02 freeze/status/PP discrepancy.
+# Pinned Showdown Gen3 inherits Gen4 frz.onBeforeMove: even a newly frozen actor
+# receives the 1/5 thaw roll, and Lum cures before the queued action. Remove the
+# blanket incoming-freeze early return introduced by final-defects; leave that
+# historical patch intact. Native authored laws and independent Showdown traces
+# are in test_native_gen3_freeze_gate.py and gpu_freeze_queue_oracle.cjs. This is
+# not retrospective qualification of the frozen panel or its oracle binary.
+poke-engine-gen3-fresh-freeze-thaw.patch

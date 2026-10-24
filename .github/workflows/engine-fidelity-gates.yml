@@ -299,6 +299,18 @@ jobs:
           grep -qE 'Ran 3 tests' /tmp/native-struggle.log
           grep -qE '^OK$' /tmp/native-struggle.log
 
+      - name: Fresh freeze before the queued Gen3 action
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_native_gen3_freeze_gate -v 2>&1 \
+            | tee /tmp/native-freeze.log
+          grep -qE 'Ran 3 tests' /tmp/native-freeze.log
+          grep -qE '^OK$' /tmp/native-freeze.log
+          if grep -q 'skipped' /tmp/native-freeze.log; then
+            echo '::error::native freeze boundary was not exercised'
+            exit 1
+          fi
+
       - name: Public projection oracle (direction 2)
         run: |
           set -o pipefail
