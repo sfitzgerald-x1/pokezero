@@ -170,7 +170,7 @@ def _speeds(state,table):
     return jnp.where(state.hp[rows,sides,state.active] > 0,live_speed,stats[...,5])
 
 
-def initialize(state,table,*,eligible=True):
+def initialize(state,table,*,eligible=True,tie_coin=None):
     """Resolve initial entries before building the first policy observation.
 
     No turn, residual, hazard or ordinary-step RNG is consumed. A dedicated
@@ -182,7 +182,8 @@ def initialize(state,table,*,eligible=True):
     rows = jnp.arange(state.hp.shape[0])
     live = ~state.done & jnp.asarray(eligible)
     speed = _speeds(state,table)
-    coin = jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,314159),(),0,2))(state.keys)
+    coin = (jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,314159),(),0,2))(state.keys)
+        if tie_coin is None else tie_coin)
     first = jnp.where(speed[:,0] != speed[:,1],speed[:,1] > speed[:,0],coin == 1).astype(jnp.int32)
     pending_battle = live & jnp.any(state.entry_pending,axis=1)
     for order in range(2):
@@ -198,6 +199,37 @@ class StepResult(NamedTuple):
     state: BattleState
     invalid_actions: jax.Array      # [B]; invalid live requests freeze that battle
     placeholder_moves: jax.Array   # [B]; every executed move is still a placeholder
+
+
+class ChanceInputs(NamedTuple):
+    """Finite semantic inputs, not a claim of independent PRNG-key outcomes.
+
+    ``draws`` bounds by column are 2,100,100,100,16,16,100,4,8,2,2,2.
+    Auxiliary bounds are phazing 60, secondary 100, Sleep Talk 60 and ties 2.
+    Saved ordinary-turn draws override these during suspended replacements.
+    Reused columns remain shared; enumeration must not break that correlation.
+    """
+    draws: jax.Array               # [B,2,12]
+    phazing: jax.Array             # [B,2]
+    secondary: jax.Array           # [B,2]
+    sleep_talk: jax.Array          # [B,2]
+    entry_ties: jax.Array          # [B,2]
+    initial_tie: jax.Array         # [B]
+
+
+def sample_chance_inputs(state: BattleState) -> ChanceInputs:
+    """The original streams, unchanged; the sampled API owns randomness here."""
+    keys = jax.vmap(lambda key:jax.random.split(key,2))(state.keys)[:,1]
+    draw = lambda salt,limit:jax.vmap(lambda key:jax.random.randint(
+        jax.random.fold_in(key,salt),(2,),0,limit))(keys)
+    return ChanceInputs(
+        jax.vmap(lambda key:jax.random.randint(key,(2,12),0,
+            jnp.array([2,100,100,100,16,16,100,4,8,2,2,2],jnp.int32)))(keys),
+        draw(271828,60),draw(1618033,100),draw(1414213,60),
+        jax.vmap(lambda key,count:jax.random.randint(jax.random.fold_in(
+            key,jnp.uint32(982451653)+count.astype(jnp.uint32)),(2,),0,2))(
+                state.keys,state.replacement_count),
+        jax.vmap(lambda key:jax.random.randint(jax.random.fold_in(key,314159),(),0,2))(state.keys))
 
 
 def action_mask(state,table):
@@ -230,6 +262,22 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     Selected held items are integrated; broader switch/item/ability events remain
     incomplete. Every executed move is still flagged a placeholder.
     """
+    return step_with_chance(state,actions,table,sample_chance_inputs(state))
+
+
+def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
+                     chance_inputs: ChanceInputs) -> StepResult:
+    """Same transition body with supplied finite chance inputs for the oracle.
+
+    Callers must supply in-range integers under ``ChanceInputs``' finite law.
+    This seam does not itself enumerate or certify probabilities. PRNG keys
+    advance identically to the sampled API but do not choose semantic outcomes.
+    """
+    batch = state.hp.shape[0]
+    shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,))
+    for value,shape in zip(chance_inputs,shapes,strict=True):
+        if value.shape != shape or not jnp.issubdtype(value.dtype,jnp.integer):
+            raise ValueError('chance inputs must have declared integer batch shapes')
     if actions.shape != state.active.shape or not jnp.issubdtype(actions.dtype, jnp.integer):
         raise ValueError("actions must be integer [B,2]")
     rows = jnp.arange(state.hp.shape[0])
@@ -243,29 +291,23 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
     live = ~state.done & ~invalid
     resuming = live & state.pending_residual
     splits = jax.vmap(lambda key: jax.random.split(key, 2))(state.keys)
-    draws = jax.vmap(lambda key: jax.random.randint(key, (2, 12), 0,
-        jnp.array([2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2], jnp.int32)))(splits[:, 1])
+    draws = chance_inputs.draws
     draws = jnp.where(resuming[:,None,None],state.residual_draws,draws)
     # Extend the ordinary chance block without changing its existing twelve
     # columns. One fixed roll per seat gives unbiased 1..5-bench selection.
-    phazing_draws=jax.vmap(lambda key:jax.random.randint(
-        jax.random.fold_in(key,271828),(2,),0,60))(splits[:,1])
+    phazing_draws=chance_inputs.phazing
     phazing_draws=jnp.where(resuming[:,None],state.phazing_draws,phazing_draws)
-    secondary_draws=jax.vmap(lambda key:jax.random.randint(
-        jax.random.fold_in(key,1618033),(2,),0,100))(splits[:,1])
+    secondary_draws=chance_inputs.secondary
     secondary_draws=jnp.where(resuming[:,None],state.secondary_draws,secondary_draws)
-    sleep_talk_draws=jax.vmap(lambda key:jax.random.randint(
-        jax.random.fold_in(key,1414213),(2,),0,60))(splits[:,1])
+    sleep_talk_draws=chance_inputs.sleep_talk
     sleep_talk_draws=jnp.where(resuming[:,None],state.sleep_talk_draws,sleep_talk_draws)
     # Replacement requests do not consume another ordinary-turn chance block.
     # A separate counted fold-in distinguishes repeated hazard-KO entry ties.
-    entry_ties = jax.vmap(lambda key,count:jax.random.randint(
-        jax.random.fold_in(key,jnp.uint32(982451653)+count.astype(jnp.uint32)),(2,),0,2))(
-            state.keys,state.replacement_count)
+    entry_ties = chance_inputs.entry_ties
     # nextTurn increments activeTurns before an ordinary request. switchIn
     # later resets an entrant to zero, excluding its entry turn's Speed Boost.
     age = state.active_turns + ((live & ~replacement)[:,None] & (active_hp > 0)).astype(jnp.int32)
-    work = initialize(state,table,eligible=live)._replace(
+    work = initialize(state,table,eligible=live,tie_coin=chance_inputs.initial_tie)._replace(
         keys=jnp.where(resuming[:,None],state.keys,splits[:,0]),active_turns=age)
     work = _lum_update(work,table,live)
     # All action speeds are frozen before ordinary switches. In Gen 3 a
