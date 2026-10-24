@@ -5,6 +5,10 @@ on:
       - 'src/pokezero/one_ply_exact.py'
       - 'src/pokezero/shallow_exact.py'
       - 'tests/test_one_ply_exact.py'
+      - 'scripts/bench_one_ply_exact_native.py'
+      - 'scripts/bench_shallow_exact_native.py'
+      - 'tests/test_one_ply_native_runner.py'
+      - 'tests/test_shallow_exact_native_runner.py'
       - 'tests/test_shallow_exact.py'
       - 'tests/test_shallow_exact_streaming.py'
       - '.github/workflows/one-ply-exact.yml'
@@ -14,6 +18,10 @@ on:
       - 'src/pokezero/one_ply_exact.py'
       - 'src/pokezero/shallow_exact.py'
       - 'tests/test_one_ply_exact.py'
+      - 'scripts/bench_one_ply_exact_native.py'
+      - 'scripts/bench_shallow_exact_native.py'
+      - 'tests/test_one_ply_native_runner.py'
+      - 'tests/test_shallow_exact_native_runner.py'
       - 'tests/test_shallow_exact.py'
       - 'tests/test_shallow_exact_streaming.py'
       - '.github/workflows/one-ply-exact.yml'
@@ -34,5 +42,5 @@ jobs:
         run: python -m pip install -e '.[analysis]'
       - name: Check one ply LP and preserve historical depth two behavior
         env:
-          PYTHONPATH: src:tests
-        run: python -m unittest test_one_ply_exact test_shallow_exact test_shallow_exact_streaming -v
+          PYTHONPATH: src:scripts:tests
+        run: python -m unittest test_one_ply_exact test_one_ply_native_runner test_shallow_exact test_shallow_exact_streaming test_shallow_exact_native_runner -v
