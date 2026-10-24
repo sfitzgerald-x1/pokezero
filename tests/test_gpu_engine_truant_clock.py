@@ -12,21 +12,23 @@ import unittest
 class TruantClockTests(unittest.TestCase):
     def setUp(self):
         import jax.numpy as j
-        from gpu_engine import effects, entry, transition, mechanics
+        from gpu_engine import effects, entry, transition, mechanics, pursuit
         from gpu_engine.state import empty_state
         self.j, self.t, self.m, self.empty = j, transition, mechanics, empty_state
         meta = {"vocabulary": {
-            "moves": ["_none", "splash", "slackoff", "struggle"],
+            "moves": ["_none", "splash", "slackoff", "struggle", "pursuit"],
             "abilities": ["_none", "truant"],
-            "types": ["_none", "normal", "flying", "ground"],
+            "types": ["_none", "normal", "fighting", "flying", "poison", "ground", "rock", "bug", "ghost",
+                "steel", "fire", "water", "grass", "electric", "psychic", "ice", "dragon", "dark"],
             "items": ["_none"], "species": ["_none", "slaking"],
         }}
         self.table = transition.MoveTable(
-            j.array([0, 0, 0, 50]), j.array([0, 1, 1, 0]),
-            j.array([False, False, False, True]), j.full(4, 100),
-            j.ones(4, bool), j.zeros(4, j.int32), j.ones((18, 18), j.int32),
+            j.array([0, 0, 0, 50, 40]), j.array([0, 1, 1, 0, 17]),
+            j.array([False, False, False, True, False]), j.full(5, 100),
+            j.ones(5, bool), j.zeros(5, j.int32), j.ones((18, 18), j.int32),
             j.ones((18, 18), j.int32), j.array(3),
-            effects=effects.from_metadata(meta), entry=entry.from_metadata(meta))
+            effects=effects.from_metadata(meta), entry=entry.from_metadata(meta),
+            pursuit=pursuit.from_metadata(meta))
 
     def live(self):
         j = self.j
@@ -100,6 +102,23 @@ class TruantClockTests(unittest.TestCase):
         self.assertFalse(bool(s.truant_loaf[0, 0, 1]))
         s = self.play(s)
         self.assertEqual(int(s.hp[0, 0, 1]), 600)
+
+    def test_pursuit_registration_excludes_loaf_but_keeps_act_interception(self):
+        for loaf in (False, True):
+            s = self.live()._replace(entry_pending=self.j.zeros((1, 2), bool))
+            s = s._replace(moves=s.moves.at[0, 0, 0, 0].set(4),
+                truant_loaf=s.truant_loaf.at[0, 0, 0].set(loaf),
+                status=s.status.at[0, 0, 0].set(self.m.PAR),
+                confusion_counter=s.confusion_counter.at[0, 0, 0].set(3))
+            s = self.play(s, ((0, 4),))
+            self.assertEqual(int(s.pp[0, 0, 0, 0]), 8 if loaf else 7)
+            self.assertEqual(int(s.hp[0, 1, 1]), 1000)
+            self.assertEqual(int(s.confusion_counter[0, 0, 0]), 3)
+            self.assertEqual(bool(s.truant_loaf[0, 0, 0]), not loaf)
+            if loaf:
+                self.assertEqual(int(s.hp[0, 1, 0]), 1000)
+            else:
+                self.assertLess(int(s.hp[0, 1, 0]), 1000)
 
 
 if __name__ == "__main__":

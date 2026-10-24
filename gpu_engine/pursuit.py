@@ -25,7 +25,7 @@ def from_metadata(metadata):
 def intercept(state, side, slot, move, chance, table, *, eligible):
     """Hit the outgoing target before switch clearing/entry, consuming one move.
 
-    Caller snapshots beforeTurn registration (sleep/freeze exclude it), excludes
+    Caller snapshots beforeTurn registration (sleep/freeze/Truant exclude it), excludes
     forced replacements and retains the chosen switch after KO in Gen 3.
     Interception bypasses paralysis/confusion/flinch and their counters. Wider
     contact/item events outside the spike subset remain placeholders.

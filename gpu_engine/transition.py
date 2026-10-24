@@ -332,8 +332,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     if table.pursuit is not None:
         for side in range(2):
             initial_status = _active(state.status,state,side)
+            initial_loaf = jnp.zeros_like(live)
+            if table.entry is not None and table.entry.truant is not None:
+                initial_loaf = (table.entry.truant[_active(state.ability,state,side)]
+                    & _active(state.truant_loaf,state,side))
             eligible = (live & ~replacement & (actions[:,side]<4) & switches[:,1-side]
-                & ~struggle[:,side] & (initial_status!=m.SLP) & (initial_status!=m.FRZ))
+                & ~struggle[:,side] & (initial_status!=m.SLP) & (initial_status!=m.FRZ)
+                & ~initial_loaf)
             work,used,fainted = intercepts.intercept(work,side,slot[:,side],moves[:,side],
                 draws[:,side],table,eligible=eligible)
             pursuit_used = pursuit_used.at[:,side].set(used)
