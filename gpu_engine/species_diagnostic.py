@@ -96,9 +96,9 @@ def summarize(species, winners, attempted, active_requests, move_requests, vocab
         interpretation='Marginal normal intervals cluster both orientations/original teams within original team pair. Scored rates exclude unknown games; full-roster worst-case bounds retain them. No species-50% null, causal species strength, multiplicity-adjusted test, fidelity qualification or training authorization. Complete-pair seat contrasts are exploratory symmetry checks; missing-pair selection is disclosed, not assumed random.')
 
 
-def accept_step(previous, candidate):
+def accept_step(previous, candidate, *, within_cap=True):
     """A globally failed step cannot create a newly accepted terminal game."""
-    if bool(np.asarray(candidate[-1])):return previous,False
+    if not within_cap or bool(np.asarray(candidate[-1])):return previous,False
     return candidate[:-1],True
 
 
@@ -181,11 +181,14 @@ def measure(pool_path, weights_path, expected_pool_sha, *, start=140000, pairs=8
             if time.monotonic()-start_clock>=seconds:status='WALL_CAP';break
             candidate=jax.block_until_ready(advance(state,ids,j.asarray(request,j.int32),ca,cm))
             requests[offset:offset+batch]+=(~done).astype(np.int32)
+            within_cap=time.monotonic()-start_clock<seconds
             # An invalid action or nonfinite head invalidates this whole NEW
             # step. Preserve earlier valid outcomes and discard every newly
             # generated winner/participation update, not just the culprit row.
-            accepted,valid=accept_step((state,ca,cm),candidate)
-            if not valid:status='INVALID_ACTION_OR_NONFINITE';break
+            accepted,valid=accept_step((state,ca,cm),candidate,within_cap=within_cap)
+            if not valid:
+                status='WALL_CAP' if not within_cap else 'INVALID_ACTION_OR_NONFINITE'
+                break
             state,ca,cm=accepted;done=np.asarray(state.done)
             if done.all():break
         winners[offset:offset+batch]=np.asarray(state.winner)

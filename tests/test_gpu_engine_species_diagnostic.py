@@ -60,6 +60,8 @@ class SpeciesDiagnosticTests(unittest.TestCase):
         self.assertFalse(valid);self.assertIs(accepted,previous)
         accepted,valid=accept_step(previous,([1,0],[3,3],[2,2],False))
         self.assertTrue(valid);self.assertEqual(accepted,([1,0],[3,3],[2,2]))
+        accepted,valid=accept_step(previous,([1,0],[3,3],[2,2],False),within_cap=False)
+        self.assertFalse(valid);self.assertIs(accepted,previous)
 
     def test_seat_ranking_requires_its_own_complete_pair_clusters(self):
         species,winners,attempted,active,moves=self.data(32)
