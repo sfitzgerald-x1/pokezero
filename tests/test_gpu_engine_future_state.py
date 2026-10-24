@@ -139,6 +139,19 @@ class FutureStateTests(unittest.TestCase):
         self.assertTrue(native.certificate.conditional_last)
         self.assertEqual(native.state.side_one.last_used_move, "switch:0")
 
+    def test_hidden_power_uses_actual_type_and_supported_power_not_alias_text(self):
+        data, meta = fixture()
+        data["moves"][0][0][0] = 4  # metadata alias Fire; actual retained type Ice
+        data["hidden_power_type"][0][0] = 3
+        native = self.construct(data, meta)
+        self.assertEqual(native.state.side_one.pokemon[0].moves[0].id, "hiddenpowerice70")
+        data["hidden_power_power"][0][0] = 60
+        native = self.construct(data, meta)
+        self.assertEqual(native.state.side_one.pokemon[0].moves[0].id, "hiddenpowerice60")
+        data["hidden_power_power"][0][0] = 68
+        out = f.native_input_from_jax(data, None, meta, module=FAKE)
+        self.assertIn("NATIVE_POWER_CONVENTION", {g.code for g in out.gaps})
+
     def test_stale_draws_are_explicit_but_suspended_draws_are_never_dropped(self):
         data, meta = fixture()
         native = self.construct(data, meta)

@@ -29,8 +29,8 @@ FIELD_POLICY = {
         "species", "level", "types", "stats", "hp", "max_hp", "moves", "pp",
         "disabled", "item", "ability")},
     "hidden_power_type": "native Hidden Power variant, not metadata alias",
-    "hidden_power_power": "native fixed70; refuse non70 when referenced",
-    "happiness": "native Return102/Frustration1; refuse unequal effective power",
+    "hidden_power_power": "native60/70 variant; refuse other referenced powers",
+    "happiness": "native Return102; Frustration catalog has no bound happiness parameter",
     "status": "native major status; sleep origin/duration requires explicit refusal",
     "status_counter": "active Toxic count; natural sleep latent convention unresolved",
     "sleep_skipped": "Rest provenance/refund unresolved when sleeping; otherwise stale",
@@ -74,7 +74,7 @@ FIELD_POLICY = {
 NATIVE_PATHS = {
     "species": ("side[].pokemon[].id",), "level": ("side[].pokemon[].level",),
     "hidden_power_type": ("side[].pokemon[].moves[].id: HiddenPower variant",),
-    "hidden_power_power": ("MOVES[HiddenPower*].base_power=70",),
+    "hidden_power_power": ("MOVES[HiddenPower*60|HiddenPower*70].base_power",),
     "happiness": ("MOVES[Return|Frustration].base_power",),
     "types": ("side[].pokemon[].types",),
     "stats": ("side[].pokemon[].maxhp", "side[].pokemon[].{attack,defense,special_attack,special_defense,speed}"),
@@ -259,7 +259,8 @@ def _move(metadata, data, side, slot, move):
     name = _vocab(metadata, "moves", move)
     if name.startswith("hiddenpower"):
         typ = _vocab(metadata, "types", data["hidden_power_type"][side][slot])
-        name = "hiddenpower" + ("dark" if typ == "none" else typ)
+        power = data["hidden_power_power"][side][slot]
+        name = "hiddenpower" + ("dark" if typ == "none" else typ) + str(power if power > 0 else 70)
     return name
 
 
@@ -316,10 +317,10 @@ def _prepare(data, metadata, certificate=None):
         for p in range(6):
             path = f"{side_name}.pokemon[{p}]"
             names = [_move(metadata, data, side, p, m) for m in data["moves"][side][p]]
-            if any(m.startswith("hiddenpower") for m in names) and data["hidden_power_power"][side][p] not in (0, 70):
-                add(path+".hidden_power_power", "NATIVE_POWER_CONVENTION", "Native Hidden Power variant has fixed70 power")
+            if any(m.startswith("hiddenpower") for m in names) and data["hidden_power_power"][side][p] not in (0, 60, 70):
+                add(path+".hidden_power_power", "NATIVE_POWER_CONVENTION", "Native Hidden Power variants represent only60/70 power")
             happy = max(0, min(255, data["happiness"][side][p]))
-            if ("return" in names and max(1, happy*10//25) != 102) or ("frustration" in names and max(1, (255-happy)*10//25) != 1):
+            if ("return" in names and max(1, happy*10//25) != 102) or "frustration" in names:
                 add(path+".happiness", "NATIVE_POWER_CONVENTION", "Native fixed Return/Frustration power differs from retained happiness")
             status = data["status"][side][p]
             if not 0 <= status < len(STATUS_NAMES):
