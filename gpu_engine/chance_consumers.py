@@ -49,7 +49,7 @@ SOURCE_PINS = {
     "transition.py": "ca6ae8c1ddd1df82671434131daa97f39aa94423886809cf458b7a40c0b78fdc",
     "mechanics.py": "704b951ef2df15004e49601a90b934def7bbf63d2f884d73702316eea7e0ea31",
     "pursuit.py": "02988a30c09b592b1a9cc4b0eb3a8c8d24398a6650e3ac0cdfef9e2793752b48",
-    "effects.py": "12960461b3afe20c399796e9882c41bc274fe0298e1c8bd88e8242bb50112cf1",
+    "effects.py": "8460154ce3389f934f61a915dd4d559aeddedce126fc442519de62c05538186e",
     "critical.py": "b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e",
     "secondary.py": "8343a381c9dba938cedb7668530ed9e6389250e67cf01d0536b7daecc3a163c2",
     "sleep_talk.py": "5af8fc87ec092ff662ebb0958390b60cc711795e85a3f4b28188be8c004faa91",
@@ -60,7 +60,7 @@ SOURCE_PINS = {
     "entry.py": "c717563781e9d4e665071be544dfe921414f0445c7412b58a3d30e58a7c76d03",
 }
 DOMAIN_MODULES = tuple("absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "e73e3c8f4be6f04539e734bce1a2c6818869f286ca3dfcc929f35afebd007939"
+DOMAIN_SHA256 = "1f5201063568051d530a38d6962f9c104a6176c62372a3427b8d43f223b295a1"
 
 
 def _host(value):

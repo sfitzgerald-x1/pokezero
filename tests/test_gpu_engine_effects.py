@@ -22,13 +22,13 @@ class EffectTests(unittest.TestCase):
         self.jax,self.j,self.m,self.effects,self.t,self.empty = jax,j,m,effects,transition,empty_state
         self.names = ["_none","tackle","splash","struggle","toxic","thunderwave",
             "stunspore","willowisp","sleeppowder","rest","recover","calmmind",
-            "swordsdance","bulkup","haze"]
+            "swordsdance","bulkup","haze","dragondance"]
         self.types = ["_none","normal","fighting","flying","poison","ground","rock",
             "bug","ghost","steel","fire","water","grass","electric","psychic","ice","dragon","dark"]
         self.meta = {"vocabulary":{"moves":self.names,"types":self.types}}
         n = len(self.names)
         self.table = transition.MoveTable(j.array([0,40,0,50]+[0]*(n-4)),
-            j.array([0,1,1,0,4,13,12,10,12,14,1,14,1,2,15]),
+            j.array([0,1,1,0,4,13,12,10,12,14,1,14,1,2,15,16]),
             j.array([False,True,False,True]+[False]*(n-4)),
             j.full((n,),100),j.ones((n,),bool),j.zeros((n,),j.int32),
             j.ones((18,18),j.int32),j.ones((18,18),j.int32),j.array(3),
@@ -112,6 +112,23 @@ class EffectTests(unittest.TestCase):
         self.assertEqual(self.run_move(self.live(),"bulkup").boosts[0,0,0].tolist(),[1,1,0,0,0,0,0])
         self.assertTrue(bool(self.j.all(r.boosts[0,1,0] == 0)))
 
+    def test_dragon_dance_applies_and_clamps_attack_speed_on_either_seat(self):
+        # Authored regression motivated by fixed-panel slot20, not a replay or
+        # a new independent fidelity measurement. Other boosts/party stay put.
+        for actor in (0,1):
+            for attack,speed in ((0,0),(5,6),(6,5),(6,6)):
+                with self.subTest(actor=actor,attack=attack,speed=speed):
+                    state = self.live()._replace(moves=self.live().moves.at[0,actor,0,0].set(
+                        self.names.index("dragondance")), boosts=self.live().boosts
+                        .at[0,actor,0,0].set(attack).at[0,actor,0,4].set(speed))
+                    result = self.t.step(state,self.j.zeros((1,2),self.j.int32),self.table)
+                    expected = state.boosts.at[0,actor,0,0].set(min(6,attack+1))
+                    expected = expected.at[0,actor,0,4].set(min(6,speed+1))
+                    self.assertTrue(bool(self.j.array_equal(result.state.boosts,expected)))
+                    self.assertTrue(bool(self.j.array_equal(result.state.hp,state.hp)))
+                    self.assertEqual(int(result.state.pp[0,actor,0,0]),9)
+                    self.assertFalse(bool(self.j.any(result.invalid_actions)))
+
     def test_haze_clears_both_actives_through_sub_but_not_bench(self):
         s = self.live()
         s = s._replace(boosts=s.boosts.at[0,0,0].set(6).at[0,1,0].set(-6).at[0,0,1].set(3),
@@ -135,7 +152,7 @@ class EffectTests(unittest.TestCase):
         names = ["toxic","poisonpowder","thunderwave","stunspore","willowisp","sleeppowder",
             "hypnosis","spore","sing","recover","softboiled","milkdrink","slackoff","rest","haze",
             "swordsdance","calmmind","bulkup","agility","amnesia","irondefense","barrier",
-            "meditate","howl","doubleteam"]
+            "meditate","howl","doubleteam","dragondance"]
         helper = Path(__file__).with_name("gpu_move_effect_oracle.cjs")
         rows = json.loads(subprocess.run([NODE,str(helper),SHOWDOWN],input=json.dumps(names),
             text=True,capture_output=True,check=True).stdout)

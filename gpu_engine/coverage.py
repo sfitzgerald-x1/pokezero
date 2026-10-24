@@ -33,7 +33,7 @@ def registry():
     group('toxic poisonpowder thunderwave stunspore willowisp sleeppowder hypnosis spore',
         'Major-status application, represented type/ability admission and Gen3 counters; clauses excluded',
         'effects','effects secondary')
-    group('swordsdance calmmind bulkup agility amnesia irondefense barrier meditate howl doubleteam',
+    group('swordsdance calmmind bulkup agility dragondance amnesia irondefense barrier meditate howl doubleteam',
         'Selected self boost stages with +/-6 clamps','effects','effects')
     group('substitute protect endure detect',
         'Substitute HP/cost and selected stall-counter defense scheduling','effects','defense')
