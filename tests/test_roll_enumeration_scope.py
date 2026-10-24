@@ -1054,6 +1054,9 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # Scoped test precondition only; actual boundary runner supplies it
         # before native load. Importing this suite never enables exact rolls.
         "tests/test_one_ply_native_leaf_routing.py",
+        # The dedicated native boundary test STEP supplies exact rolls at
+        # child process creation; other CI steps and imports keep the default.
+        ".github/workflows/engine-fidelity-gates.yml",
         # Forces the flag OFF so the standing mass gate always measures the
         # collapsed cascade, whatever the ambient environment says.
         "tests/test_branch_mass_reconstruction.py",
