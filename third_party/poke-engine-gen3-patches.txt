@@ -1749,3 +1749,12 @@ poke-engine-gen3-deferred-recharge-option.patch
 # Regression: rust/pokezero-search/tests/gen3_struggle_surface.rs plus native
 # sampled-policy and leaf action-map tests.
 poke-engine-gen3-synthetic-struggle.patch
+
+# The GPU oracle's compiled move-data census found modern defaults surviving
+# in the Gen3 table. Pinned Showdown f76228a1 inherits Extreme Speed priority 1,
+# Protect priority 3 and typeless Curse from data/mods/gen4/moves.ts; Moonlight
+# and Charm inherit Normal typing from data/mods/gen5/moves.ts. Gate only Gen3.
+# A both-seat lethal Quick Attack/Extreme Speed witness proves the priority
+# difference changes outcomes, not merely metadata. No historical run changes.
+# Regression: rust/pokezero-search/tests/gen3_oracle_move_metadata.rs.
+poke-engine-gen3-oracle-move-data.patch
