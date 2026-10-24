@@ -90,7 +90,7 @@ def requested_actions(state, table, *, salt):
     return actions, missing, requested
 
 
-def generate_inputs(pool, table, entry, *, choose=requested_actions):
+def generate_inputs(pool, table, entry, *, choose=requested_actions, species_vocabulary=None):
     import jax
     import jax.numpy as jnp
     import numpy as np
@@ -99,7 +99,21 @@ def generate_inputs(pool, table, entry, *, choose=requested_actions):
     indices = np.asarray([r["teams"] for r in rows], np.int32)
     if int(indices.max()) >= len(pool["species"]):
         raise ValueError("fixed roster exceeds immutable pool; never wrap indices")
-    state = transition.state_from_pool(pool, indices, seed=entry["seed"], table=table)
+    gender = entry.get("gender_initialization")
+    if gender is None:
+        state = transition.state_from_pool(pool, indices, seed=entry["seed"], table=table)
+    else:
+        from .gender import initialize_genders
+        if (set(gender) != {"seed", "domain", "root_start", "policy"}
+                or type(gender["root_start"]) is not int or gender["root_start"] < 0
+                or gender["root_start"]+len(rows) > 2**32):
+            raise ValueError("explicit bounded gender initialization domain required")
+        state = transition.state_from_pool(pool, indices, seed=entry["seed"])
+        state = initialize_genders(state, gender["policy"], species_vocabulary,
+            seed=gender["seed"], domain=gender["domain"],
+            root_ids=[r["slot"]+gender["root_start"] for r in rows],
+            explicit_genders=pool["gender"][indices] if "gender" in pool else None)
+        state = transition.initialize(state, table)
     lengths = jnp.asarray([r["prefix_requests"] for r in rows])
     errors = np.zeros(len(rows), bool)
     traces = [[] for _ in rows]
@@ -131,6 +145,13 @@ def runtime_admission(entry):
               for p in sorted((root / "gpu_engine").glob("*.py"))}
     if actual != entry["gpu_sources_sha256"]:
         raise ValueError("full GPU source inventory differs from reviewed entry")
+    gender = entry.get("gender_initialization")
+    if gender is not None:
+        sources = gender["policy"]["provenance"]["generator_sources"]
+        if set(sources) != {"gender_policy.cjs", "generate_teams.cjs"} or any(
+                hashlib.sha256((root/"gpu_engine"/name).read_bytes()).hexdigest() != value
+                for name, value in sources.items()):
+            raise ValueError("gender lookup generator source differs from reviewed policy")
     commit = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
     if commit != entry["source_commit"]:
         raise ValueError("runtime Git commit differs from entry")
@@ -163,12 +184,18 @@ def run(entry, pool_path, out):
     pool, metadata, digest = load_bound_pool(pool_path)
     if digest != entry["pool_sha256"]:
         raise ValueError("immutable pool digest mismatch")
+    if entry.get("gender_initialization") is not None:
+        policy = entry["gender_initialization"]["policy"]
+        if (policy["provenance"]["compiled_tree"] != metadata["compiled_tree"]
+                or policy["provenance"]["pool_sha256"] != digest):
+            raise ValueError("gender policy compiled Dex differs from immutable pool")
     table = tables_from_metadata(metadata)
     out.mkdir()
     started = time.monotonic()
     with (out / "admission.json").open("xb") as stream:
         stream.write(encoded(dict(**admission, device=device.device_kind, entry=entry)))
-    state, actions, roster, traces, source_errors, requested, usable = generate_inputs(pool, table, entry)
+    state, actions, roster, traces, source_errors, requested, usable = generate_inputs(
+        pool, table, entry, species_vocabulary=metadata["vocabulary"]["species"])
     records = []
     # Entire source input artifact closes before the first native/planner call.
     input_digest = hashlib.sha256()

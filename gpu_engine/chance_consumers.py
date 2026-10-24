@@ -56,11 +56,11 @@ SOURCE_PINS = {
     "encore.py": "c682e851f1ea7f10afb0b7502e10a98a3806bd72a2dacf5dc908133492458793",
     "phazing.py": "53ebef4c2202c0dda8227befc959c609e1d8c4ab7a9ede9e8ed8abeadbd0a402",
     "weather.py": "a5014e990f08bfb0cf04ac4aba5bc4cbc44717071601f80d3c340bfac79cade5",
-    "state.py": "2b5ebe1f5332a8c0d98e7aaa53971638f4e0a4ac67bcd3529e336dd02227af95",
+    "state.py": "c14656f1f5c121ae78c8b57f98797f0da560a02ffe66105edb14ad3f3f7bb86e",
     "entry.py": "c717563781e9d4e665071be544dfe921414f0445c7412b58a3d30e58a7c76d03",
 }
 DOMAIN_MODULES = tuple("absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "66dc457c53f7722ca8fbbd423a7ce814fe233e60caec0012b2689241c812ae1b"
+DOMAIN_SHA256 = "e536d5da9c766fabf39832f58b7f7fff30fcc42eb86dfdf3c40fb861ab0880f7"
 
 
 def _host(value):
