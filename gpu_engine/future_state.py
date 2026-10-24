@@ -160,6 +160,7 @@ class Refused:
     raw_jax: tuple = ()
     raw_native: str | None = None
     status: str = "REFUSED"
+    raw_actions: tuple | None = None
 
 
 @dataclass(frozen=True)
@@ -179,6 +180,14 @@ class Certificate:
 class NativeInput:
     state: Any
     certificate: Certificate
+    raw_native: str
+
+
+@dataclass(frozen=True)
+class NativeActions:
+    choices: tuple[str, str]
+    raw_actions: tuple[int, int]
+    raw_jax: tuple
     raw_native: str
 
 
@@ -606,3 +615,89 @@ def field_differences(left, right):
     a, b = dict(left.key if isinstance(left, CanonicalFuture) else left), dict(right.key if isinstance(right, CanonicalFuture) else right)
     return tuple((path, a.get(path, "<MISSING>"), b.get(path, "<MISSING>"))
                  for path in sorted(a.keys() | b.keys()) if a.get(path, "<MISSING>") != b.get(path, "<MISSING>"))
+
+
+def native_actions_from_jax(state, index, actions, native_input):
+    """Exact nine-slot action identities, never public-string first-match coercion.
+
+    Mirrors state.usable_moves/legal_actions and the selected ability traps in
+    transition.action_mask. Native MoveChoice::from_string scans EVERY inactive
+    Pokemon before moves and scans move slots in order, even disabled/0PP slots.
+    Duplicate strings therefore refuse rather than silently choosing a slot.
+    Public generate_instructions takes bare switch species IDs, not the
+    human-facing `switch <species>` strings exported by search option displays.
+    """
+    raw = ()
+    original = _freeze(actions)
+    def refuse(code, detail):
+        return Refused((Gap("actions", code, detail),), raw,
+            native_input.raw_native if isinstance(native_input, NativeInput) else None,
+            raw_actions=original)
+    try:
+        if not isinstance(native_input, NativeInput):
+            return refuse("INPUT_NOT_ADMITTED", "A bound NativeInput certificate is required")
+        data = _sample(state, index)
+        raw = _freeze(data)
+        if raw != native_input.certificate.input_fields or native_input.state.to_string() != native_input.raw_native:
+            return refuse("ACTION_ROOT_BINDING_CHANGED", "Actions must address the exact constructed JAX/native root")
+        if not isinstance(original, tuple) or len(original) != 2 or any(type(a) is not int or not 0 <= a <= 8 for a in original):
+            return refuse("INVALID_NINE_ACTION_REQUEST", "Two integer actions in0..8 required")
+        if data["done"]:
+            return refuse("TERMINAL_NO_ACTION", "Terminal states have no scientific action request")
+        native = _native_wire(native_input.raw_native)
+        active = data["active"]
+        hp = [data["hp"][side][active[side]] for side in range(2)]
+        forced = [bool(data["forced_switch"][s]) or hp[s] <= 0 for s in range(2)]
+        replacement = any(forced)
+        result = []
+        for side, action in enumerate(original):
+            if replacement and not forced[side]:
+                result.append("none")  # genuine ignored waiter, never Struggle
+                continue
+            p = active[side]
+            own = native[SIDE_NAMES[side]]["pokemon"][p]
+            foe = native[SIDE_NAMES[1-side]]["pokemon"][active[1-side]]
+            bench = [i for i in range(6) if i != p]
+            usable = [pp > 0 and not disabled and (not data["choice_move"][side][p] or move == data["choice_move"][side][p])
+                for move, pp, disabled in zip(data["moves"][side][p], data["pp"][side][p], data["disabled"][side][p], strict=True)]
+            charge = data["charge_move"][side][p]
+            if charge:
+                usable = [move == charge for move in data["moves"][side][p]]
+                if not any(usable):
+                    return refuse("COPIED_CHARGE_ACTION_UNREPRESENTED", "JAX fallback release has no matching public native move slot")
+            if action < 4:
+                if forced[side]:
+                    return refuse("ILLEGAL_REPLACEMENT_MOVE", repr(original))
+                if not any(usable):
+                    if action != 0:
+                        return refuse("ILLEGAL_STRUGGLE_SLOT", "Synthetic Struggle occupies canonical slot0 only")
+                    result.append("struggle")
+                    continue
+                if not usable[action]:
+                    return refuse("ILLEGAL_MOVE_SLOT", repr(original))
+                name = own["moves"][action]["id"]
+                if name in {"none", "struggle"}:
+                    return refuse("RESERVED_MOVE_ID", "Real move slot must not turn into a public wait/synthetic action")
+                if sum(move["id"] == name for move in own["moves"]) != 1:
+                    return refuse("DUPLICATE_MOVE_ID", "Public native string cannot bind one selected move slot")
+                if any(native[SIDE_NAMES[side]]["pokemon"][b]["id"] == name for b in bench):
+                    return refuse("MOVE_SWITCH_STRING_COLLISION", "Native parser scans all inactive species before move slots")
+                result.append(name)
+            else:
+                target = bench[action-4]
+                target_mon = native[SIDE_NAMES[side]]["pokemon"][target]
+                grounded = "flying" not in own["types"] and own["ability"] != "levitate"
+                ability_trap = hp[side] > 0 and hp[1-side] > 0 and (foe["ability"] == "shadowtag" or
+                    (foe["ability"] == "magnetpull" and "steel" in own["types"]) or
+                    (foe["ability"] == "arenatrap" and grounded))
+                linked = data["trap_source"][side][p] == active[1-side] and hp[1-side] > 0
+                trapped = data["trapped"][side] or bool(data["volatile"][side][p] & 8) or linked or bool(charge) or ability_trap
+                if target_mon["hp"] <= 0 or (trapped and not forced[side]):
+                    return refuse("ILLEGAL_SWITCH", repr(original))
+                name = target_mon["id"]
+                if name in {"none", "struggle"} or sum(native[SIDE_NAMES[side]]["pokemon"][b]["id"] == name for b in bench) != 1:
+                    return refuse("DUPLICATE_OR_RESERVED_SWITCH_ID", "Public parser must identify exactly this inactive party slot, including fainted duplicates")
+                result.append(name)
+        return NativeActions(tuple(result), original, raw, native_input.raw_native)
+    except (ValueError, IndexError, TypeError, KeyError, AttributeError) as error:
+        return refuse("INVALID_ACTION_BINDING", str(error))

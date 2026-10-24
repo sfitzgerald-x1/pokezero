@@ -31,6 +31,17 @@ def fixture():
     return data, metadata
 
 
+def action_fixture():
+    data, meta = fixture()
+    meta["vocabulary"]["moves"] += ["splash", "growl", "recover"]
+    meta["vocabulary"]["species"] += ["slaking", "pikachu", "blissey", "snorlax", "skarmory"]
+    for side in range(2):
+        for p in range(6):
+            data["species"][side][p] = p+1
+            data["moves"][side][p] = [1, 9, 10, 11]
+    return data, meta
+
+
 def wire_bool(value):
     return str(bool(value)).lower()
 
@@ -245,6 +256,56 @@ class FutureStateTests(unittest.TestCase):
         data, meta = fixture()
         data["unreviewed_timer"] = 0
         self.assertIsInstance(f.native_input_from_jax(data, None, meta, module=FAKE), f.Refused)
+
+    def test_actions_use_exact_native_slot_aliases_and_bare_switch_ids(self):
+        data, meta = action_fixture()
+        data["moves"][0][0][0] = 4
+        data["hidden_power_type"][0][0] = 3
+        native = self.construct(data, meta)
+        result = f.native_actions_from_jax(data, None, (0, 4), native)
+        self.assertIsInstance(result, f.NativeActions)
+        self.assertEqual(result.choices, ("hiddenpowerice70", "slaking"))
+
+    def test_actions_refuse_duplicate_move_even_when_the_other_slot_is_disabled(self):
+        data, meta = action_fixture()
+        data["moves"][0][0][1] = 1
+        data["disabled"][0][0][1] = True
+        native = self.construct(data, meta)
+        out = f.native_actions_from_jax(data, None, (0, 0), native)
+        self.assertIn("DUPLICATE_MOVE_ID", {g.code for g in out.gaps})
+        self.assertEqual(out.raw_actions, (0, 0))
+
+    def test_actions_refuse_switch_ambiguity_even_from_fainted_duplicate(self):
+        data, meta = action_fixture()
+        data["species"][0][2] = data["species"][0][1]
+        data["hp"][0][2] = 0
+        native = self.construct(data, meta)
+        out = f.native_actions_from_jax(data, None, (4, 0), native)
+        self.assertIn("DUPLICATE_OR_RESERVED_SWITCH_ID", {g.code for g in out.gaps})
+
+    def test_waiter_is_not_struggle_and_exhaustion_is_not_wait(self):
+        data, meta = action_fixture()
+        data["pp"][0][0] = [0]*4
+        native = self.construct(data, meta)
+        self.assertEqual(f.native_actions_from_jax(data, None, (0, 0), native).choices, ("struggle", "tackle"))
+        data, meta = action_fixture()
+        data["hp"][0][0] = 0
+        data["forced_switch"][0] = True
+        native = self.construct(data, meta)
+        self.assertEqual(f.native_actions_from_jax(data, None, (4, 0), native).choices, ("slaking", "none"))
+
+    def test_action_legality_trap_and_exact_root_binding(self):
+        data, meta = action_fixture()
+        meta["vocabulary"]["abilities"].append("shadowtag")
+        data["ability"][1][0] = 2
+        native = self.construct(data, meta)
+        out = f.native_actions_from_jax(data, None, (4, 0), native)
+        self.assertIn("ILLEGAL_SWITCH", {g.code for g in out.gaps})
+        out = f.native_actions_from_jax(data, None, (9, 0), native)
+        self.assertIn("INVALID_NINE_ACTION_REQUEST", {g.code for g in out.gaps})
+        data["pp"][0][0][0] -= 1
+        out = f.native_actions_from_jax(data, None, (0, 0), native)
+        self.assertIn("ACTION_ROOT_BINDING_CHANGED", {g.code for g in out.gaps})
 
 
 if __name__ == "__main__":
