@@ -527,3 +527,26 @@ are not qualified gameplay or proof of >=85% correct effects. It does not claim
 the preset <30 games/s failure or <10% covered-divergence success. A negative or
 unqualified spike readout does not authorize a full Gen3/production rewrite.
 The existing `--team-pool` mode remains the explicitly partial core diagnostic.
+
+## Fixed exact-outcome exploration panel
+
+`python -m gpu_engine.panel_owner --entry ENTRY.json --expected-entry-sha SHA
+--team-pool POOL.npz --out NEW_DIRECTORY` runs one prospectively bound attempt.
+The entry pins the complete GPU source inventory, Git commit, pool, compiled
+native profile and Python wrappers/dependencies, fixed roster, probability
+tolerances, case cap and calendar bound. Exact-roll opt-in must precede import.
+All source roots and actions close into one hashed artifact before comparison.
+
+The comparator retains complete represented successor supports, rational JAX
+masses and unnormalized native probabilities. Unsupported positive successors
+invalidate the whole fixed slot; no prefix, redraw or renormalization passes.
+The owner interrupts operations at the calendar bound, drains the owned process
+group, records the actual exit and reconstructs terminal counts from valid
+complete files. Corrupt/missing files remain unknown, even after worker exit0.
+Requested move dispatch counts are exposure only, not executed-effect credit.
+This JAX-sourced exploration cannot establish independent simulator truth,
+85% correct-effect coverage or a production go decision by itself.
+The compiled native/JAX seam profile is explicitly invoked as
+`python -m unittest tests.test_native_gpu_panel_execution`; admission requires
+all three actual controls and zero skips. JAX-only component CI does not build
+the separate native oracle and is not this integration profile.

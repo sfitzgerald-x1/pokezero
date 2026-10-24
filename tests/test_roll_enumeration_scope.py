@@ -1029,6 +1029,11 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # October 23 GPU fidelity anchor checks for an explicit fresh-process
         # opt-in before importing native; it never enables the flag itself.
         "gpu_engine/oracle_anchor.py",
+        # Fixed exact-law fidelity panel: fresh-process opt-in checks only,
+        # never an import-time/default enabler or production search caller.
+        "gpu_engine/fidelity_panel.py",
+        "gpu_engine/collect_fidelity_panel.py",
+        "tests/test_native_gpu_panel_execution.py",
         # Build-profile documentation distinguishes the explicit per-process
         # damage-law opt-in from compile-time PP accounting; no executable caller.
         "docs/gen3_oracle_full_pp.md",
