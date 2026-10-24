@@ -26,6 +26,7 @@ class EntryTable(NamedTuple):
     ground_type: jax.Array
     spikes_move: jax.Array
     speed_boost: jax.Array
+    truant: jax.Array | None = None
 
 
 def from_metadata(metadata):
@@ -36,7 +37,7 @@ def from_metadata(metadata):
         flag({"intimidate"}),flag({"naturalcure"}),flag({"levitate"}),
         flag({"clearbody","whitesmoke","hypercutter"}),flag({"swiftswim"}),flag({"chlorophyll"}),
         jnp.asarray(vocab["types"].index("flying")),jnp.asarray(vocab["types"].index("ground")),
-        jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}))
+        jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}),flag({"truant"}))
 
 
 def speed_modifier(table,ability,effective_weather,speed):
@@ -57,6 +58,9 @@ def depart(state,side,table,*,eligible):
     if table is not None:
         cure |= table.natural_cure[state.ability[rows,side,active]]
     counter=state.status_counter[rows,side,active]
+    old_clock=state.truant_loaf[rows,side,active]
+    state=state._replace(truant_loaf=state.truant_loaf.at[rows,side,active].set(
+        jnp.where(eligible,False,old_clock)))
     state=state._replace(status=state.status.at[rows,side,active].set(
         jnp.where(eligible & cure,m.NONE,status)),
         status_counter=state.status_counter.at[rows,side,active].set(
@@ -78,7 +82,7 @@ def depart(state,side,table,*,eligible):
         jnp.where(eligible[:,None] & (linked==active[:,None]),-1,linked)))
 
 
-def enter(state,side,table,*,eligible,hazards=True):
+def enter(state,side,table,*,eligible,hazards=True,startup=False):
     """One entry event; the caller owns ordering and queued-action cancellation."""
     rows = jnp.arange(state.hp.shape[0])
     active = state.active[rows,side]
@@ -98,6 +102,14 @@ def enter(state,side,table,*,eligible,hazards=True):
     # Gen3 runs status SwitchIn even after a hazard KO, before faintMessages.
     state=restore_sleep(state,side,eligible=eligible)
     starts = eligible & (next_hp > 0)
+    if table.truant is not None:
+        old_clock=state.truant_loaf[rows,side,active]
+        # Gen3 onSwitchIn: turn0 starts ACT; every later entry starts LOAF.
+        # The caller supplies startup context rather than guessing from the
+        # step's completed-turn counter during a first-turn action switch.
+        clock=table.truant[ability] & ~jnp.asarray(startup)
+        state=state._replace(truant_loaf=state.truant_loaf.at[rows,side,active].set(
+            jnp.where(eligible,starts & clock,old_clock)))
     requested = table.weather_ability[ability]
     change = (starts & (requested != weather.NONE)
         & ((state.weather != requested) | (state.weather_counter > 0)))

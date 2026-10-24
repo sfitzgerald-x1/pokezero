@@ -189,7 +189,7 @@ def initialize(state,table,*,eligible=True,tie_coin=None):
     for order in range(2):
         side = jnp.where(order == 0,first,1-first)
         pending = live & state.entry_pending[rows,side]
-        state,_ = arrival.enter(state,side,table.entry,eligible=pending,hazards=False)
+        state,_ = arrival.enter(state,side,table.entry,eligible=pending,hazards=False,startup=state.turn==0)
         state = state._replace(entry_pending=state.entry_pending.at[rows,side].set(
             state.entry_pending[rows,side] & ~pending))
     return _lum_update(state,table,pending_battle)
@@ -416,11 +416,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.sleep_talk is not None:
             sleep_usable=table.sleep_talk.move[move]
             early_bird=table.sleep_talk.early_bird[_active(work.ability,work,side)]
+        loafing=jnp.zeros_like(live)
+        if table.entry is not None and table.entry.truant is not None:
+            loafing=table.entry.truant[_active(work.ability,work,side)] & _active(work.truant_loaf,work,side)
         before = m.before_move(_active(work.status, work, side), _active(work.status_counter, work, side),
             _active(work.confusion_counter, work, side), thaw_roll=chance[:, 1],
             paralysis_roll=chance[:, 2], confusion_roll=chance[:, 3],
             flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
-            sleep_usable=sleep_usable,early_bird=early_bird)
+            sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
         work=talking.before_move(work,side,before.status,eligible=eligible,sleep_usable=sleep_usable)
         for name, value in (("status", before.status), ("status_counter", before.counter),
                             ("confusion_counter", before.confusion_counter)):
@@ -837,6 +840,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             | work.baton_pass) & alive,
         baton_pass=work.baton_pass & ~done[:,None])
     ordinary = turn_context & ~defer_residual
+    if table.entry is not None and table.entry.truant is not None:
+        # Pinned Gen3 ability residual order27. It flips even when no move
+        # executed (sleep/paralysis/etc), and never on an unfinished residual.
+        # An end-of-turn faint replacement enters later and misses this flip.
+        for side in range(2):
+            active=work.active[:,side]
+            old=work.truant_loaf[rows,side,active]
+            holder=table.entry.truant[_active(work.ability,work,side)]
+            tick=ordinary & ~work.done & (_active(work.hp,work,side)>0) & holder
+            work=work._replace(truant_loaf=work.truant_loaf.at[rows,side,active].set(jnp.where(tick,~old,old)))
     if table.solar_beam is not None:
         work=charging.residual(work,eligible=ordinary)
     work = work._replace(volatile=jnp.where(ordinary[:, None, None],
