@@ -127,13 +127,13 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`a54026ba49112091…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`2c87e271684d1e4f…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
-the fingerprint's inputs — the 82 gen3 patches, `poke-engine-gen3-patches.txt`,
+the fingerprint's inputs — the 83 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 19 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
@@ -354,6 +354,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | #1654 default-off packed leaf transport | New `packed_obs.rs` plus additive model transport and isolated diagnostic timers in `model.rs`, `leaf.rs` and `lib.rs` grow the crate source inventory from 18 to 19 and total hashed inputs from 105 to 106. The 81 engine patches and existing flat/default inference semantics remain unchanged. Authored transport parity and root-only cost checks are not a frozen two-consumer sweep, full-tree feasibility or strength qualification; historical receipts and OPEN gates remain unchanged | `b83a04806bf67bc9…` |
 | Explicit full-PP oracle profile | One appended opt-in Gen3 patch and its crate feature account for high PP, Pressure clamps and Sleep Talk caller PP, including waking through its remaining gates. Default search behavior stays unchanged. Patch inventory grows from 81 to 82 and hashed inputs from 105 to 106; historical sweeps, installed-build declarations and OPEN qualification remain unchanged | `91cf4049dfd34cb8…` |
 | #1654 integration with full-PP main | Non-rewriting integration combines the two preceding branch inventories: 82 patches, 19 crate sources and 107 total hashed inputs. Both preceding fingerprints remain the real branch points; neither the frozen packed-row microcheck nor historical installed-build receipts are rebound to this combined source. OPEN qualification remains unchanged | `a54026ba49112091…` |
+| Fresh-freeze oracle correction | An appended patch removes the blanket same-turn freeze veto. Pinned Gen3 Showdown permits the ordinary 1/5 thaw before the queued move; an authored native check exposed 0.10 frozen/no-action mass instead of 0.08. The inventory is 83 patches and 108 hashed inputs. The running panel retains its old oracle and outcomes; these new source bytes neither repair historical measurements nor discharge OPEN qualification | `2c87e271684d1e4f…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -816,8 +817,8 @@ than leaving the next author to rediscover it.
 **The `Ran N tests` guard.** The step carries an exact `Ran 53 tests`, re-derived from the module's
 own AST and from a local run rather than copied. Issue **#1205** records that #1204's guard scan
 covered only part of the workflow, so it was **not** assumed to cover this one. Measured on this tree
-rather than inherited from #1205's figure: there are **48 executable** invocation sites at this
-head; the scan resolves **48** of them and leaves **none** unresolved. No invocation-carrying
+rather than inherited from #1205's figure: there are **49 executable** invocation sites at this
+head; the scan resolves **49** of them and leaves **none** unresolved. No invocation-carrying
 comment remains. The own-policy integration, inherited-selector parser, and frozen-root roster
 gates are included, as is the 109-test paper trajectory reference step added by #1504; the counts
 were re-derived from executable workflow bodies. The guarded 13-test synthetic Struggle
@@ -970,7 +971,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 423 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 82 |
+| `base.patch_stack` | 83 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -991,8 +992,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 19 |
-| `t1.hashed_input_files` | 107 |
-| `t1.head_fingerprint` | a54026ba49112091 |
+| `t1.hashed_input_files` | 108 |
+| `t1.head_fingerprint` | 2c87e271684d1e4f |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

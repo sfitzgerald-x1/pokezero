@@ -1,0 +1,27 @@
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -3519,24 +3519,2 @@
+-    // A freeze inflicted by the first action has already passed its secondary
+-    // roll. Gen 3 does not give the newly frozen, slower Pokemon a second thaw
+-    // roll before its queued action; it simply loses that action. The ordinary
+-    // frozen-status gate below is for a status that existed at turn start.
+-    let active_index = state.get_side_immutable(&attacking_side).active_index;
+-    let frozen_this_turn = incoming_instructions.instruction_list.iter().any(|instruction| {
+-        matches!(
+-            instruction,
+-            Instruction::ChangeStatus(ChangeStatusInstruction {
+-                side_ref,
+-                pokemon_index,
+-                old_status: PokemonStatus::NONE,
+-                new_status: PokemonStatus::FREEZE,
+-            }) if *side_ref == attacking_side && *pokemon_index == active_index
+-        )
+-    });
+-    if frozen_this_turn {
+-        state.reverse_instructions(&incoming_instructions.instruction_list);
+-        final_instructions.push(incoming_instructions);
+-        return;
+-    }
+-
+     let side = state.get_side(&attacking_side);
+     if choice.move_id != Choices::STRUGGLE && side
