@@ -205,7 +205,8 @@ class ChanceInputs(NamedTuple):
     """Finite semantic inputs, not a claim of independent PRNG-key outcomes.
 
     ``draws`` bounds by column are 2,100,100,100,16,16,100,4,8,2,2,2.
-    Auxiliary bounds are phazing 60, secondary 100, Sleep Talk 60 and ties 2.
+    Auxiliary bounds are phazing/Static 60, secondary 100, Sleep Talk 60 and ties 2.
+    Phazing and contact cannot occur on the same dispatched Gen3 move.
     Saved ordinary-turn draws override these during suspended replacements.
     Reused columns remain shared; enumeration must not break that correlation.
     """
@@ -340,7 +341,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 & ~struggle[:,side] & (initial_status!=m.SLP) & (initial_status!=m.FRZ)
                 & ~initial_loaf)
             work,used,fainted = intercepts.intercept(work,side,slot[:,side],moves[:,side],
-                draws[:,side],table,eligible=eligible)
+                draws[:,side],table,eligible=eligible,contact_roll=phazing_draws[:,side])
+            work = _lum_update(work,table,used)
             pursuit_used = pursuit_used.at[:,side].set(used)
             pursuit_faint |= fainted
     bench = bench_indices(state.active)
@@ -605,9 +607,6 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         recoil=jnp.where(is_struggle & (dealt>0),jnp.maximum(1,dealt//4),0)
         if table.damage_moves is not None:
             recoil=special_hits.recoil_damage(table.damage_moves,move,_active(work.ability,work,side),dealt)
-        hp = _active(work.hp, work, side)
-        hp = jnp.maximum(0,hp-recoil)
-        work = work._replace(hp=_set_active(work.hp, work, side, hp))
         if table.effects is not None:
             effects = table.effects
             # Protect/Endure fail if there is no queued move left (including
@@ -737,7 +736,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 jnp.where(thawed,m.NONE,_active(work.status,work,foe))),
                 status_counter=_set_active(work.status_counter,work,foe,
                     jnp.where(thawed,0,_active(work.status_counter,work,foe))))
+        if table.secondary is not None:
+            work = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
+                eligible=acts & hit & (dealt>0) & ~hits_sub)
         work = _lum_update(work,table,live & move_context)
+        # Gen3 applies contact DamagingHit (and immediate Lum cure) before
+        # recoil. A source about to faint can still consume its berry first.
+        hp = jnp.maximum(0,_active(work.hp,work,side)-recoil)
+        work = work._replace(hp=_set_active(work.hp,work,side,hp))
         if table.weather is not None:
             weather,counter = climate.set_move(work.weather,work.weather_counter,
                 table.weather.move_weather[move],eligible=acts)

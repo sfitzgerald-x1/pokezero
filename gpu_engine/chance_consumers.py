@@ -37,7 +37,7 @@ CONSUMERS = {
     "draws.0.11": ("transition switch installation ordering",),
     "draws.1.11": ("transition residual Encore ordering",),
     **{f"{name}.{s}": (use,) for s in range(2) for name, use in (
-        ("phazing", "phazing.choose_bench: draw modulo live bench count"),
+        ("phazing", "phazing.choose_bench modulo bench count OR secondary.apply_contact Static<20; dispatched Gen3 moves are disjoint"),
         ("secondary", "secondary.apply: shared draw<chance*SereneGrace"),
         ("sleep_talk", "sleep_talk.choose: draw modulo callable count before PP test"),
         ("entry_ties", "transition resumed switch/callback ordering"))},
@@ -46,12 +46,12 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {
-    "transition.py": "e4172feb4bf96ac10123bac4c88caa2120b1b0dcbb0f3f9a4425f3ff53993cb0",
+    "transition.py": "cda139f701f71b842e0ff619f35aa740fbf70fce27c1de451098e470d6504bba",
     "mechanics.py": "704b951ef2df15004e49601a90b934def7bbf63d2f884d73702316eea7e0ea31",
-    "pursuit.py": "02988a30c09b592b1a9cc4b0eb3a8c8d24398a6650e3ac0cdfef9e2793752b48",
+    "pursuit.py": "a7287b041b219ad790de874684bf0578100084a95dd8f6aff57f2b53916c442e",
     "effects.py": "1eda72496a93c594c9927a12c5202d2edd19966601b3d933fd77787fe3f28f0f",
     "critical.py": "b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e",
-    "secondary.py": "8343a381c9dba938cedb7668530ed9e6389250e67cf01d0536b7daecc3a163c2",
+    "secondary.py": "1cdb43d30bd157e176a6cdb6ee5f108e884ae8b3c0ac70dca4c6af3ddfa413ea",
     "sleep_talk.py": "5af8fc87ec092ff662ebb0958390b60cc711795e85a3f4b28188be8c004faa91",
     "encore.py": "c682e851f1ea7f10afb0b7502e10a98a3806bd72a2dacf5dc908133492458793",
     "phazing.py": "53ebef4c2202c0dda8227befc959c609e1d8c4ab7a9ede9e8ed8abeadbd0a402",
@@ -60,7 +60,7 @@ SOURCE_PINS = {
     "entry.py": "c717563781e9d4e665071be544dfe921414f0445c7412b58a3d30e58a7c76d03",
 }
 DOMAIN_MODULES = tuple("absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "623b22ca292ae89de9d2249f664127dfb8ebcb8980d8ba3e14db0459d0a1c9ea"
+DOMAIN_SHA256 = "9cf51125f01f9720908d7af53c3575c71b12e85d278e255b26a98f6c73919d5d"
 
 
 def _host(value):
@@ -145,6 +145,10 @@ def plan_for_state(state, index, actions, table, metadata, *, cap):
         if not isinstance(t, dict):
             return refuse("UNRECOGNIZED_KERNEL_TABLE", "MoveTable or an exact host dictionary required")
         moves_count = len(metadata["vocabulary"]["moves"])
+        if any(_at(t, 'secondary', 'contact', move) and _at(t, 'phazing', 'move', move)
+               for move in range(moves_count)):
+            return refuse('CONTACT_PHAZING_OVERLAP',
+                'The shared auxiliary stream requires mutually exclusive dispatched moves')
         if any(len(t[name]) != moves_count for name in ("power", "accuracy", "always_hit", "priority")):
             return refuse("TABLE_VOCABULARY_SHAPE", "Move table/vocabulary lengths must agree")
         active = data["active"]
@@ -184,6 +188,10 @@ def plan_for_state(state, index, actions, table, metadata, *, cap):
 
         statuses = [{data["status"][s][p] for p in participants[s]} for s in range(2)]
         for s in range(2):
+            if (any(_at(t, 'secondary', 'contact', move) for move in selected[s])
+                    and any(_at(t, 'secondary', 'static', data['ability'][1-s][p])
+                            for p in participants[1-s])):
+                statuses[s].add(1)  # conservative own-contact paralysis closure
             for move in selected[1-s]:
                 statuses[s].add(_at(t, "effects", "status", move))
                 statuses[s].add(_at(t, "secondary", "status", move))
@@ -252,6 +260,10 @@ def plan_for_state(state, index, actions, table, metadata, *, cap):
                 use(prefix+"8", Observation("less_than", 8//max(1, denominator)))
             if any(_at(t, "phazing", "move", move) for move in selected[s]):
                 use(f"phazing.{s}", *(Observation("modulo", count) for count in range(1, 6)))
+            if (any(_at(t, 'secondary', 'contact', move) for move in selected[s])
+                    and any(_at(t, 'secondary', 'static', data['ability'][1-s][p])
+                            for p in participants[1-s])):
+                use(f'phazing.{s}', Observation('less_than', 20))
             for move in selected[s]:
                 chance = _at(t, "secondary", "chance", move)
                 if chance:
