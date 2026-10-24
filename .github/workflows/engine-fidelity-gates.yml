@@ -95,6 +95,7 @@ jobs:
             tests/test_native_gen3_substitute_future.py
             tests/test_native_gen3_speed_boost_entry.py
             tests/test_native_gen3_gender_future.py
+            tests/test_native_gen3_weather_future.py
             tests/gpu_substitute_future_oracle.cjs
             tests/test_engine_search.py
             tests/test_opponent_request_order.py
@@ -324,12 +325,12 @@ jobs:
             exit 1
           fi
 
-      - name: Inert Substitute storage and Gen3 continuation/entry/gender controls
+      - name: Inert Substitute storage and Gen3 continuation/entry/gender/weather controls
         run: |
           set -o pipefail
-          python -m unittest tests.test_native_gen3_substitute_future tests.test_native_gen3_speed_boost_entry tests.test_native_gen3_gender_future -v 2>&1 \
+          python -m unittest tests.test_native_gen3_substitute_future tests.test_native_gen3_speed_boost_entry tests.test_native_gen3_gender_future tests.test_native_gen3_weather_future -v 2>&1 \
             | tee /tmp/native-substitute-future.log
-          grep -qE 'Ran 10 tests' /tmp/native-substitute-future.log
+          grep -qE 'Ran 12 tests' /tmp/native-substitute-future.log
           grep -qE '^OK$' /tmp/native-substitute-future.log
           if grep -q 'skipped' /tmp/native-substitute-future.log; then
             echo '::error::native continuation and entry controls were not exercised'

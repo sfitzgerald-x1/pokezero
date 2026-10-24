@@ -115,6 +115,34 @@ class FutureStateTests(unittest.TestCase):
         self.assertIn("side_one.pokemon[0].base_ability", dict(left.key))
         self.assertEqual(set(dict(native.certificate.field_policies)), set(data))
 
+    def test_permanent_weather_clock_convention_retains_raw_and_positive_clocks(self):
+        for weather in range(5):
+            for clock in (0,1,2,5,127):
+                data,meta=fixture();data.update(weather=weather,weather_counter=clock)
+                before=deepcopy(data);native=self.construct(data,meta)
+                expected=-1 if weather and clock==0 else clock
+                self.assertEqual(native.state.weather_turns_remaining,expected)
+                left=f.canonical_jax_future(data,None,meta,certificate=native.certificate)
+                right=f.canonical_native_future(native.state,native.certificate)
+                self.assertEqual(left.key,right.key)
+                self.assertEqual(dict(left.key)['weather_turns_remaining'],expected)
+                self.assertEqual(dict(left.raw_jax)['weather_counter'],clock)
+                self.assertEqual(dict(native.certificate.input_fields)['weather_counter'],clock)
+                self.assertEqual(f._native_wire(right.raw_native)['weather_turns_remaining'],expected)
+                self.assertEqual(data,before)
+
+    def test_native_different_weather_clocks_are_not_normalized_away(self):
+        data,meta=fixture();data.update(weather=1,weather_counter=0)
+        native=self.construct(data,meta);keys=[]
+        for clock in (-1,0,1,2):
+            native.state.weather_turns_remaining=clock
+            result=f.canonical_native_future(native.state,native.certificate)
+            self.assertIsInstance(result,f.CanonicalFuture,result)
+            self.assertEqual(dict(result.key)['weather_turns_remaining'],clock)
+            self.assertEqual(f._native_wire(result.raw_native)['weather_turns_remaining'],clock)
+            keys.append(result.key)
+        self.assertEqual(len(set(keys)),4)
+
     def test_status_boost_item_hazard_weather_and_toxic_are_not_anchor_only(self):
         data, meta = fixture()
         data["status"][0][0] = 4
