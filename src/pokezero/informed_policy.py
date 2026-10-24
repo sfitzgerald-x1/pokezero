@@ -26,7 +26,9 @@ from .informed_root import exact_informed_one_ply, sample_informed_equilibrium
 from .poke_engine_adapter import build_poke_engine_state
 from .policy import PolicyContext, PolicyDecision
 from .shallow_exact import ExactSearchRefused
-from .shallow_exact_native import NativeExactBackend, NativePosition, validate_encoder_frame
+from .shallow_exact_native import (
+    NativeExactBackend, NativePosition, NativeRenderRefused, validate_encoder_frame,
+)
 
 
 @dataclass(frozen=True)
@@ -229,6 +231,8 @@ class InformedRootPolicy:
         except BaseException as error:
             # PyO3 panics (and owner interruptions) can bypass Exception. Save
             # the actual sampled decision before re-raising; NEVER recover it.
+            if isinstance(error, NativeRenderRefused):
+                self._witness["native_render_refusal"] = error.witness
             self.stats.refusals += 1
             self.stats.refusal_reasons[type(error).__name__] += 1
             row.update(status="REFUSED",error_type=type(error).__name__,error=str(error),

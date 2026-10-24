@@ -13,6 +13,7 @@ from unittest.mock import patch
 from pokezero.informed_policy import InformedPolicyConfig, InformedRootPolicy
 from pokezero.informed_root import InformedOnePlyResult, solve_informed_root_lp
 from pokezero.shallow_exact import ExactSearchRefused
+from pokezero.shallow_exact_native import NativeRenderRefused
 
 
 class Adapter:
@@ -154,6 +155,24 @@ class InformedPolicyTests(unittest.TestCase):
         self.assertIn('root_inputs',row['failure_witness'])
         self.assertIn('fold_payload',row['failure_witness'])
         self.assertEqual(p.stats.refusals,1)
+
+    def test_native_render_refusal_is_durable_and_still_aborts_the_decision(self):
+        witness = dict(schema='pokezero.native-render-refusal.v1',
+            root_state_sha256='authored', row_action='surf', column_action='rest',
+            branch_index=2, lossy=['authored-loss'], lossy_subcases=['authored-case'])
+        error = NativeRenderRefused(witness)
+        p = self.policy()
+        with patch('pokezero.informed_policy.exact_informed_one_ply', side_effect=error) as search:
+            with self.assertRaises(NativeRenderRefused) as raised:
+                p.select_action_with_context(self.context(), rng=random.Random(17))
+        self.assertIs(raised.exception, error)
+        self.assertEqual(search.call_count, 1)
+        row = self.records()[0]
+        self.assertEqual(row['status'], 'REFUSED')
+        self.assertEqual(row['failure_witness']['native_render_refusal'], witness)
+        self.assertEqual(len(row['failure_witness']['draws']), 4)
+        self.assertEqual(p.stats.completed_decisions, 0)
+        self.assertEqual(p.stats.refusals, 1)
 
     def test_full_own_action_surface_disagreement_refuses_before_search(self):
         p=self.policy();context=self.context();context.observation.legal_action_mask=(True,False)
