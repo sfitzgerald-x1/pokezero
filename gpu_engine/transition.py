@@ -650,6 +650,19 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(rest,3,_active(work.status_counter,work,side))),
                 sleep_skipped=_set_active(work.sleep_skipped,work,side,
                     jnp.where(rest,0,_active(work.sleep_skipped,work,side))))
+            # Pain Split assigns HP rather than dealing ordinary damage or
+            # healing through callbacks. Read the CURRENT opposing active
+            # after switches/earlier moves; floor the shared average once,
+            # then clamp independently to each mon's own maximum HP. Ghost
+            # typing does not block it, but Protect and target Substitute do.
+            target_hp=_active(work.hp,work,foe)
+            split=(acts & hit & effects.pain_split[move] & (hp>0) & (target_hp>0)
+                & (_active(work.substitute_hp,work,foe)==0))
+            average=jnp.maximum(1,(hp+target_hp)//2)
+            hp=jnp.where(split,jnp.minimum(max_hp,average),hp)
+            target_hp=jnp.where(split,jnp.minimum(_active(work.max_hp,work,foe),average),target_hp)
+            work=work._replace(hp=_set_active(work.hp,work,side,hp))
+            work=work._replace(hp=_set_active(work.hp,work,foe,target_hp))
             boosts = _active(work.boosts,work,side)
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
