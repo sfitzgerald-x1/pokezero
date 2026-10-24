@@ -1051,6 +1051,9 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # or changes the ordinary production search default.
         "scripts/bench_one_ply_exact_native.py",
         "tests/test_one_ply_native_runner.py",
+        # Scoped test precondition only; actual boundary runner supplies it
+        # before native load. Importing this suite never enables exact rolls.
+        "tests/test_one_ply_native_leaf_routing.py",
         # Forces the flag OFF so the standing mass gate always measures the
         # collapsed cascade, whatever the ambient environment says.
         "tests/test_branch_mass_reconstruction.py",
