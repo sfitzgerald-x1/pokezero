@@ -30,7 +30,7 @@ CONSUMERS = {
         (8, "effects.stall_success: draw<8//denominator"))},
     "draws.0.0": ("transition first move ordering",),
     "draws.1.0": ("transition residual SpeedBoost ordering",),
-    "draws.0.9": ("transition residual Leftovers ordering",),
+    "draws.0.9": ("transition residual item ordering",),
     "draws.1.9": ("transition residual major-status ordering",),
     "draws.0.10": ("transition residual LeechSeed ordering",),
     "draws.1.10": ("transition replacement runSwitch callback ordering",),
@@ -46,7 +46,7 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {
-    "transition.py": "74963f3745495adc404af909c63d2b2193da894da5577764710235044abc45a0",
+    "transition.py": "b8fae9134afa245689c2e690746749e9872529b84aaa286c82422ef68f8926ab",
     "mechanics.py": "704b951ef2df15004e49601a90b934def7bbf63d2f884d73702316eea7e0ea31",
     "pursuit.py": "02988a30c09b592b1a9cc4b0eb3a8c8d24398a6650e3ac0cdfef9e2793752b48",
     "effects.py": "1eda72496a93c594c9927a12c5202d2edd19966601b3d933fd77787fe3f28f0f",
@@ -60,7 +60,7 @@ SOURCE_PINS = {
     "entry.py": "c717563781e9d4e665071be544dfe921414f0445c7412b58a3d30e58a7c76d03",
 }
 DOMAIN_MODULES = tuple("absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "7b8db3b2da76141f649650f8f3c883f91ee8fea411ecaa63b7f014caf481c03b"
+DOMAIN_SHA256 = "b7a8a302adb759f56fd775a14b0d70d76bf21abbaddebdf6578f0407616cc2a2"
 
 
 def _host(value):
@@ -280,7 +280,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap):
         if not replacement and all(statuses[s] & {2, 3, 4} for s in range(2)):
             use("draws.1.9", Observation("identity"))
         inactive("draws.1.0", "SpeedBoost paired callbacks change only own stage; neither can KO or alter the frozen residual ordering")
-        inactive("draws.0.9", "Leftovers paired callbacks only heal their own live holder; neither can KO, resurrect, or alter the other's callback")
+        inactive("draws.0.9", "Selected item callbacks heal or boost only their own live holder; neither can KO, resurrect, or alter the frozen residual ordering or the other's callback")
         inactive("draws.1.11", "Encore residual callbacks change only own counter/lock and cannot KO or alter the other's callback")
         inactive("initial_tie", "Full input mapper refuses unresolved entry_pending; initialize has no eligible initial callback")
         for s in range(2):

@@ -174,7 +174,7 @@ class ChanceConsumerTests(unittest.TestCase):
         self.assertEqual(len(self.cells(plan, "draws.0.10")), 2)
         self.assertEqual(len(self.cells(plan, "draws.1.10")), 1)
         self.assertEqual(len(self.cells(plan, "draws.0.9")), 1)
-        self.assertIn("only heal", next(a for a in plan.axes if a.coordinate == "draws.0.9").inactive_reason)
+        self.assertIn("own live holder", next(a for a in plan.axes if a.coordinate == "draws.0.9").inactive_reason)
         plan = self.plan(actions=(4, 4))
         self.assertEqual(len(self.cells(plan, "draws.0.11")), 2)
         self.assertEqual(len(self.cells(plan, "draws.1.10")), 1)
