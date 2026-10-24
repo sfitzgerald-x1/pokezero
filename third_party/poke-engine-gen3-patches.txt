@@ -1785,3 +1785,7 @@ poke-engine-gen3-oracle-full-pp.patch
 # are in test_native_gen3_freeze_gate.py and gpu_freeze_queue_oracle.cjs. This is
 # not retrospective qualification of the frozen panel or its oracle binary.
 poke-engine-gen3-fresh-freeze-thaw.patch
+# Gen3 Speed Boost skips a same-turn incoming switch. Retain the historical
+# unconditional callback and append the same-side/current-slot entry guard.
+# Original fixed-panel laws keep their old binary and classifications.
+poke-engine-gen3-speed-boost-entry.patch

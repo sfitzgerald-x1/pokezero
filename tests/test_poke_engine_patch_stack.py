@@ -34,7 +34,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 EXPECTED_FINAL_SHA256 = {
     "src/gen3/generate_instructions.rs": "377678c2cce1ecb8e0731b3f9f1350ba7963b54dbe0d989b58c5ce196cec6f87",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
-    "src/gen3/abilities.rs": "b7a0e5f24f12e5a03353bb578dca1abeaa2a962c83705f3bed161836919fa66e",
+    "src/gen3/abilities.rs": "d50d7ff36832d74fde26738979766e72f10f9e6be5ab6aea2357fe0a4e73a51a",
     "src/gen3/choice_effects.rs": "a29d431464619c45d603d835ca6663bd7d2f573112c255d5cb9353862f62b161",
 }
 
@@ -114,7 +114,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-26:]],
+                [entry.name for entry in applied[-27:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -152,6 +152,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-truant-residual-clock.patch",
                     "poke-engine-gen3-oracle-full-pp.patch",
                     "poke-engine-gen3-fresh-freeze-thaw.patch",
+                    "poke-engine-gen3-speed-boost-entry.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
