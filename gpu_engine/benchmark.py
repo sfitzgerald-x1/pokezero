@@ -57,6 +57,8 @@ def load_bound_pool(pool_path):
         fields = ("species","level","types","stats","moves","pp","item","ability",
                   "hidden_power_type","hidden_power_power")
         pool = {name:archive[name] for name in fields}
+        if "gender" in archive.files:
+            pool["gender"] = archive["gender"]  # explicit authored overrides must not be discarded
     return pool, metadata, hashlib.sha256(payload).hexdigest()
 
 
