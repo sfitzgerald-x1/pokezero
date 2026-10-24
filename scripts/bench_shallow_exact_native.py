@@ -85,6 +85,15 @@ def run_owned(command, *, env, hard_seconds, reap_seconds=5):
             "owned_child_reaped": child_reaped}
 
 
+def owned_exit_status(owned):
+    if owned["owner_signal"]:
+        return 128 + owned["owner_signal"]
+    if owned["timed_out"] or not owned["owned_child_reaped"]:
+        return 1
+    code = owned["actual_exit_code"]
+    return code if code and code > 0 else 0 if code == 0 else 1
+
+
 def worker(args):
     # The owner supplies this at process creation, before importing native code.
     if os.environ.get("POKEZERO_ENUMERATE_ROLLS") != "1":
@@ -184,12 +193,7 @@ def main():
         handle.write("\n")
     print(json.dumps({"actual_exit_code": owned["actual_exit_code"], "timed_out": owned["timed_out"],
                       "output": str(output)}))
-    if owned["owner_signal"]:
-        return 128 + owned["owner_signal"]
-    if not owned["owned_child_reaped"]:
-        return 1
-    code = owned["actual_exit_code"]
-    return code if code and code > 0 else 0 if code == 0 else 1
+    return owned_exit_status(owned)
 
 
 if __name__ == "__main__":

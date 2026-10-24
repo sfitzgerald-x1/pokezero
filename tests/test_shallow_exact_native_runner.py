@@ -62,6 +62,11 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["stdout"], "partial")
         self.assertEqual(child.communicate.call_args.kwargs, {"timeout": 0.1})
 
+    def test_timeout_stays_failure_even_if_child_naturally_returns_zero_during_reap(self):
+        result = {"actual_exit_code": 0, "timed_out": True,
+                  "owned_child_reaped": True, "owner_signal": None}
+        self.assertEqual(runner.owned_exit_status(result), 1)
+
     def test_owner_term_drains_worker_before_returning(self):
         code = (
             "import importlib.util,os,signal,sys,threading,json;"
