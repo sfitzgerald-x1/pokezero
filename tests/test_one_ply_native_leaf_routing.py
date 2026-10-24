@@ -181,5 +181,56 @@ class NativeOnePlyLeafRoutingTests(unittest.TestCase):
         self.assertTrue(all(all(hp==0 for team in b.state.teams_hp for hp in team) for b in branches))
 
 
+@unittest.skipUnless(fixture._wheel_has('branch_events'), 'requires native transitions')
+class NativeForcedPassBoundaryTests(unittest.TestCase):
+    def test_authored_forced_replacement_keeps_passive_seat_and_switch_identity(self):
+        from pokezero.poke_engine_adapter import (
+            BattleSpec, MoveSpec, PokemonSpec, SideSpec, build_poke_engine_state,
+        )
+        native = fixture.pokezero_search
+
+        def mon(name, hp):
+            return PokemonSpec(name, 100, ('normal',), hp, 100, 100, 100,
+                               100, 100, 100, (MoveSpec('splash', 8),),
+                               ability='none', item='none')
+
+        with patch.dict(os.environ, {'POKEZERO_ENUMERATE_ROLLS': '1'}):
+            for active_side in (0, 1):
+                with self.subTest(active_side=active_side):
+                    sides = [SideSpec((mon('snorlax', 0), mon('blissey', 100)),
+                                      force_switch=True),
+                             SideSpec((mon('ditto', 100),))]
+                    if active_side:
+                        sides.reverse()
+                    state = build_poke_engine_state(BattleSpec(*sides)).to_string()
+                    root = NativePosition(state,
+                        {seat: tuple(p.id for p in side.pokemon)
+                         for seat, side in zip(('p1', 'p2'), sides)},
+                        3, native.FoldState.initial('p1'), None, 'side_one')
+                    backend = NativeExactBackend(native, None)
+                    actions = backend.actions(root, root=True)
+                    self.assertEqual(actions[active_side], ('switch blissey',))
+                    self.assertEqual(actions[1 - active_side], ('No Move',))
+                    tokens = ('blissey', 'none') if active_side == 0 else ('none', 'blissey')
+                    direct = json.loads(native.branch_events(state, *tokens,
+                        json.dumps({**root.party_species, 'turn': root.turn}),
+                        branch_on_damage=True, include_post_state=True))['branches']
+                    branches = list(backend.outcomes(root, actions[0][0], actions[1][0]))
+                    self.assertTrue(branches)
+                    self.assertEqual(len(branches), len(direct))
+                    self.assertAlmostEqual(math.fsum(b.probability for b in branches), 1)
+                    for branch, expected in zip(branches, direct):
+                        self.assertEqual(branch.state.state_str, expected['post_state'])
+                        self.assertEqual(branch.state.lines, tuple(expected['events']))
+                        self.assertEqual(branch.state.turn,
+                                         root.turn + int(expected['turn_completed']))
+                        self.assertEqual(branch.state.teams_hp[1 - active_side], (100,))
+                        options = json.loads(native.env_options(branch.state.state_str, root=True))
+                        self.assertFalse(options['p1_force_switch'])
+                        self.assertFalse(options['p2_force_switch'])
+                        self.assertTrue(any(line.startswith('|switch|' + ('p2' if active_side else 'p1'))
+                                            for line in branch.state.lines))
+
+
 if __name__ == '__main__':
     unittest.main()

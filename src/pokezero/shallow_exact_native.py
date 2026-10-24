@@ -43,6 +43,13 @@ def validate_encoder_frame(root_inputs: str, self_side: str) -> None:
         raise ExactSearchRefused("fixture self_side disagrees with encoder showdown_slot")
 
 
+def _branch_action_token(action: str) -> str:
+    """Translate native option display strings to branch_events parser tokens."""
+    if action == "No Move":
+        return "none"
+    return action.removeprefix("switch ")
+
+
 class NativeExactBackend:
     """Rust transitions/CPU leaf encode plus an existing batched native model.
 
@@ -154,11 +161,12 @@ class NativeExactBackend:
     def outcomes(self, state: NativePosition, row_action: str, column_action: str):
         started = time.perf_counter()
         ctx = json.dumps({**state.party_species, "turn": state.turn})
-        # The legacy branch_events entry point accepts bare switch species;
-        # unlike env_step, it does not strip the public display prefix itself.
+        # Keep display identities in matrices and sampling receipts. The legacy
+        # parser needs bare switch species and "none" for the "No Move" option
+        # of a passive seat (e.g. the opponent during a forced replacement).
         raw = self.native.branch_events(
-            state.state_str, row_action.removeprefix("switch "),
-            column_action.removeprefix("switch "), ctx,
+            state.state_str, _branch_action_token(row_action),
+            _branch_action_token(column_action), ctx,
             branch_on_damage=True, include_post_state=True,
         )
         branches = json.loads(raw)["branches"]

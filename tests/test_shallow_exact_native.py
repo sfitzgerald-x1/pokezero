@@ -143,6 +143,23 @@ class NativeBindingTests(unittest.TestCase):
         self.assertTrue({"native_transition_render_serialize", "fold_history_advance"}
                         <= self.backend.stage_seconds.keys())
 
+    def test_forced_pass_display_is_translated_only_at_transition_call(self):
+        for row, col, expected in (
+            ("surf", "No Move", ("surf", "none")),
+            ("No Move", "switch blissey", ("none", "blissey")),
+            ("No Move", "No Move", ("none", "none")),
+            ("none", "surf", ("none", "surf")),
+        ):
+            with self.subTest(row=row, col=col):
+                list(self.backend.outcomes(self.root, row, col))
+                self.assertEqual(self.native.calls[-1][1:3], expected)
+
+        # This is vocabulary translation, not a fallback for invalid actions.
+        with patch.object(self.native, "branch_events", side_effect=ValueError("invalid move")) as call:
+            with self.assertRaisesRegex(ValueError, "invalid move"):
+                list(self.backend.outcomes(self.root, "unknown move", "surf"))
+            self.assertEqual(call.call_args.args[1:3], ("unknown move", "surf"))
+
     def test_value_frame_and_byte_shapes(self):
         from dataclasses import replace
         reflected = replace(self.root, self_side="side_two")
