@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
+from hashlib import sha256
 import json
 import math
 import os
@@ -20,6 +21,14 @@ from typing import Any, Sequence
 
 from .shallow_exact import ChanceBranch, ExactSearchRefused
 from .shallow_leaf_rows import DecisionLeafValues, encoded_leaf_row
+
+
+class NativeRenderRefused(ExactSearchRefused):
+    """The unchanged strict guard, with its actual branch witness retained."""
+
+    def __init__(self, witness: dict[str, Any]):
+        super().__init__("native event rendering is not lossless for this pilot")
+        self.witness = witness
 
 
 @dataclass(frozen=True)
@@ -175,7 +184,7 @@ class NativeExactBackend:
         # The owned worker hard deadline and memory limit own that residual risk.
         if len(branches) > self.max_outcomes_per_call:
             raise ExactSearchRefused("native outcome-call materialization cap reached")
-        for branch in branches:
+        for branch_index, branch in enumerate(branches):
             started = time.perf_counter()
             self.render_subcases.update(branch.get("lossy_subcases") or ())
             reasons = list(branch.get("lossy") or ())
@@ -183,7 +192,23 @@ class NativeExactBackend:
                 reasons.extend(branch.get("attribution_unsafe_reasons") or ("unsafe_attribution",))
             if reasons:
                 self.render_refusals.update(reasons)
-                raise ExactSearchRefused("native event rendering is not lossless for this pilot")
+                post_state = branch.get("post_state")
+                raise NativeRenderRefused(dict(
+                    schema="pokezero.native-render-refusal.v1",
+                    root_state_sha256=sha256(state.state_str.encode()).hexdigest(),
+                    turn=state.turn, row_action=row_action, column_action=column_action,
+                    native_row_action=_branch_action_token(row_action),
+                    native_column_action=_branch_action_token(column_action),
+                    branch_index=branch_index, branch_count=len(branches),
+                    percentage=branch.get("percentage"),
+                    lossy=branch.get("lossy") or [],
+                    attribution_unsafe=bool(branch.get("attribution_unsafe")),
+                    attribution_unsafe_reasons=branch.get("attribution_unsafe_reasons") or [],
+                    lossy_subcases=branch.get("lossy_subcases") or [],
+                    post_state_sha256=(sha256(post_state.encode()).hexdigest()
+                                       if isinstance(post_state, str) else None),
+                    events=branch.get("events"),
+                ))
             post_state = branch.get("post_state")
             if not isinstance(post_state, str) or not post_state:
                 raise ExactSearchRefused("native outcome lacks complete post-state")

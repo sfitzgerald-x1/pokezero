@@ -1,12 +1,15 @@
 """Binding fixtures; fake native/model objects do not certify native fidelity."""
 import json
+from hashlib import sha256
 import os
 import struct
 import unittest
 from unittest.mock import patch
 
 from pokezero.shallow_exact import ExactSearchRefused
-from pokezero.shallow_exact_native import NativeExactBackend, NativePosition, validate_encoder_frame
+from pokezero.shallow_exact_native import (
+    NativeExactBackend, NativePosition, NativeRenderRefused, validate_encoder_frame,
+)
 
 
 class Fold:
@@ -243,6 +246,30 @@ class NativeBindingTests(unittest.TestCase):
         self.backend.max_outcomes_per_call = 1
         with self.assertRaisesRegex(ExactSearchRefused, "materialization cap"):
             list(self.backend.outcomes(self.root, "surf", "bodyslam"))
+
+    def test_renderer_refusal_retains_actual_second_branch_without_accepting_it(self):
+        self.native.branches[1].update(lossy=['authored_loss'],
+            attribution_unsafe=True, attribution_unsafe_reasons=['authored_unsafe'],
+            lossy_subcases=['authored_subcase'])
+        fan = self.backend.outcomes(self.root, 'surf', 'switch blissey')
+        self.assertEqual(next(fan).probability, .25)
+        with self.assertRaisesRegex(NativeRenderRefused, 'not lossless') as raised:
+            next(fan)
+        witness = raised.exception.witness
+        self.assertEqual(witness['branch_index'], 1)
+        self.assertEqual(witness['branch_count'], 2)
+        self.assertEqual(witness['percentage'], 75)
+        self.assertEqual(witness['row_action'], 'surf')
+        self.assertEqual(witness['column_action'], 'switch blissey')
+        self.assertEqual(witness['native_column_action'], 'blissey')
+        self.assertEqual(witness['lossy'], ['authored_loss'])
+        self.assertEqual(witness['attribution_unsafe_reasons'], ['authored_unsafe'])
+        self.assertEqual(witness['lossy_subcases'], ['authored_subcase'])
+        self.assertEqual(witness['events'], ['|move|b'])
+        self.assertEqual(witness['root_state_sha256'], sha256(self.root.state_str.encode()).hexdigest())
+        self.assertEqual(witness['post_state_sha256'], sha256(b'b').hexdigest())
+        self.assertEqual(json.loads(json.dumps(witness)), witness)
+        self.assertEqual(self.backend.render_refusals, {'authored_loss': 1, 'authored_unsafe': 1})
 
     def test_flag_and_window_require_explicit_compatible_worker(self):
         with patch.dict(os.environ, {"POKEZERO_ENUMERATE_ROLLS": "0"}):
