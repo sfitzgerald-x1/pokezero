@@ -3,7 +3,7 @@ import unittest
 
 import numpy as np
 
-from gpu_engine.species_diagnostic import clustered_ratio, roster, summarize
+from gpu_engine.species_diagnostic import accept_step, clustered_ratio, roster, summarize
 
 
 class SpeciesDiagnosticTests(unittest.TestCase):
@@ -53,6 +53,19 @@ class SpeciesDiagnosticTests(unittest.TestCase):
         self.assertEqual(r['draws'],2);self.assertEqual(r['species'][0]['team_score']['estimate'],.5)
         args[2][:]=False
         with self.assertRaises(ValueError):summarize(*args,['empty','first','second'])
+
+    def test_failed_step_cannot_admit_new_winners_or_counts(self):
+        previous=([-1,0],[2,3],[1,2])
+        accepted,valid=accept_step(previous,([1,0],[3,3],[2,2],True))
+        self.assertFalse(valid);self.assertIs(accepted,previous)
+        accepted,valid=accept_step(previous,([1,0],[3,3],[2,2],False))
+        self.assertTrue(valid);self.assertEqual(accepted,([1,0],[3,3],[2,2]))
+
+    def test_seat_ranking_requires_its_own_complete_pair_clusters(self):
+        species,winners,attempted,active,moves=self.data(32)
+        winners[1::2]=-1
+        r=summarize(species,winners,attempted,active,moves,['empty','first','second'])
+        self.assertEqual(r['exploratory_triage']['largest_absolute_seat_differences'],[])
         args=list(self.data(1));args[0][1]=args[0][0]
         with self.assertRaises(ValueError):summarize(*args,['empty','first','second'])
 
@@ -74,6 +87,18 @@ class SpeciesDiagnosticTests(unittest.TestCase):
         self.assertFalse(bool(invalid));self.assertEqual(active.sum(axis=2).tolist(),[[1,1],[0,0]])
         self.assertEqual(moves.sum(axis=2).tolist(),[[1,1],[0,0]])
         self.assertEqual(int(state.turn[0]),1)
+
+        nonfinite=lambda o:Output(j.full((2,2,9),j.nan),j.zeros((2,2)),j.zeros((2,2,9)))
+        candidate=driver(nonfinite,table)(s,j.array([7,8]),j.array(0),counts,counts)
+        accepted,valid=accept_step((s,counts,counts),candidate)
+        self.assertFalse(valid);self.assertIs(accepted[0],s)
+
+        # One side must replace a fainted active. The healthy side is waiting,
+        # even though its ordinary move mask still contains legal actions.
+        s=s._replace(hp=s.hp.at[0,0,0].set(0).at[0,0,1].set(100))
+        state,active,moves,invalid=driver(forward,table)(s,j.array([7,8]),j.array(0),counts,counts)
+        self.assertFalse(bool(invalid));self.assertEqual(int(active.sum()),0)
+        self.assertEqual(int(moves.sum()),0)
 
 
 if __name__=='__main__':unittest.main()

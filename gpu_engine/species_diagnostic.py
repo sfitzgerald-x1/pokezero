@@ -9,6 +9,7 @@ wise significance test. Extreme rows nominate oracle investigations only.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import time
@@ -85,13 +86,20 @@ def summarize(species, winners, attempted, active_requests, move_requests, vocab
     # These are rankings, not rejection rules or evidence of a bug by themselves.
     low=sorted(eligible,key=lambda r:(r['team_score']['estimate'],r['species']))[:10]
     high=sorted(eligible,key=lambda r:(-r['team_score']['estimate'],r['species']))[:10]
-    seat=sorted(eligible,key=lambda r:(-abs(r['seat0_minus_seat1_complete_pairs']['estimate'] or 0),r['species']))[:10]
+    seat_eligible=[r for r in rows if r['seat0_minus_seat1_complete_pairs']['clusters']>=30]
+    seat=sorted(seat_eligible,key=lambda r:(-abs(r['seat0_minus_seat1_complete_pairs']['estimate']),r['species']))[:10]
     return dict(games=games,attempted_games=int(attempted.sum()),unstarted_games=int((~attempted).sum()),
         terminal_games=int(known.sum()),capped_or_interrupted_games=int((attempted&~known).sum()),
         seat0_wins=int((winners==0).sum()),seat1_wins=int((winners==1).sum()),draws=int((winners==2).sum()),
         complete_game_pairs=int(known.reshape(-1,2).all(axis=1).sum()),species=rows,
         exploratory_triage=dict(low_team_scores=[r['species'] for r in low],high_team_scores=[r['species'] for r in high],largest_absolute_seat_differences=[r['species'] for r in seat]),
         interpretation='Marginal normal intervals cluster both orientations/original teams within original team pair. Scored rates exclude unknown games; full-roster worst-case bounds retain them. No species-50% null, causal species strength, multiplicity-adjusted test, fidelity qualification or training authorization. Complete-pair seat contrasts are exploratory symmetry checks; missing-pair selection is disclosed, not assumed random.')
+
+
+def accept_step(previous, candidate):
+    """A globally failed step cannot create a newly accepted terminal game."""
+    if bool(np.asarray(candidate[-1])):return previous,False
+    return candidate[:-1],True
 
 
 def driver(forward, table):
@@ -105,7 +113,10 @@ def driver(forward, table):
         obs=observation.encode(state,table)
         heads=forward(obs)
         acts=sample_actions(heads.policy_logits,obs.legal_action_mask,policy_keys(ids,j.full_like(ids,request)))
-        live=(~state.done[:,None]) & (j.take_along_axis(state.hp,state.active[...,None],axis=2)[...,0]>0) & j.any(obs.legal_action_mask,axis=2)
+        hp=j.take_along_axis(state.hp,state.active[...,None],axis=2)[...,0]
+        forced=state.forced_switch|(hp<=0)
+        requested=~j.any(forced,axis=1,keepdims=True)|forced
+        live=(~state.done[:,None]) & (hp>0) & requested & j.any(obs.legal_action_mask,axis=2)
         slots=jax.nn.one_hot(state.active,6,dtype=j.int32)
         active=active+slots*live[...,None]
         moves=moves+slots*(live & (acts>=0)&(acts<4))[...,None]
@@ -136,6 +147,16 @@ def measure(pool_path, weights_path, expected_pool_sha, *, start=140000, pairs=8
     with jax.default_device(device):
         params,config,weightmeta=champion.load(weights_path);table=transition.tables_from_metadata(metadata)
     params=jax.device_put(params,device)
+    # Persist the complete fixed roster and bindings BEFORE the first advance.
+    # After an external kill, every absent chunk is still an unknown fixed cell.
+    entry=dict(schema='pokezero.gpu_species_smell_test_entry.v1',source_commit=source,
+        package_sha256=package,team_pool_sha256=digest,weights=weightmeta,seed=seed,
+        team_start=start,pairs=pairs,batch=batch,max_requests=max_requests,wall_cap_seconds=seconds,
+        unknown_recovery='Join durable chunk game IDs to roster.npz; every absent game remains unknown, never redrawn or inferred terminal.')
+    with (folder/'entry.json').open('x') as stream:json.dump(entry,stream,sort_keys=True,indent=2,allow_nan=False);stream.write('\n')
+    with (folder/'roster.npz').open('xb') as stream:
+        np.savez_compressed(stream,game_ids=np.arange(len(teams)),team_indices=teams,species=species)
+    with (folder/'started-chunks.jsonl').open('x'):pass
     forward=lambda obs:champion.forward(params,obs.numeric_features,obs.categorical_ids,obs.token_type_ids,obs.attention_mask,config)
     advance=driver(forward,table)
     winners=np.full(2*pairs,-1,np.int32);attempted=np.zeros(2*pairs,bool)
@@ -144,20 +165,28 @@ def measure(pool_path, weights_path, expected_pool_sha, *, start=140000, pairs=8
     status='ROSTER_COMPLETE';chunk_receipts=[]
     for offset in range(0,len(teams),batch):
         if time.monotonic()-start_clock>=seconds:status='WALL_CAP';break
+        attempted[offset:offset+batch]=True
+        with (folder/'started-chunks.jsonl').open('a') as stream:
+            stream.write(json.dumps(dict(offset=offset,games=batch,elapsed_seconds=time.monotonic()-start_clock))+'\n')
+            stream.flush();os.fsync(stream.fileno())
+        print(json.dumps(dict(event='BATCH_START',offset=offset,games=batch)),flush=True)
         with jax.default_device(device):
             state=transition.state_from_pool(pool,teams[offset:offset+batch],seed=seed)
             ids=j.arange(offset,offset+batch,dtype=j.int32)
             state=state._replace(keys=jax.vmap(lambda n:jax.random.fold_in(jax.random.PRNGKey(seed),n))(ids))
             state=transition.initialize(state,table)
             ca=j.zeros((batch,2,6),j.int32);cm=j.zeros_like(ca)
-        attempted[offset:offset+batch]=True
         before=time.monotonic();done=np.asarray(state.done)
         for request in range(max_requests):
             if time.monotonic()-start_clock>=seconds:status='WALL_CAP';break
-            state,ca,cm,invalid=jax.block_until_ready(advance(state,ids,j.asarray(request,j.int32),ca,cm))
+            candidate=jax.block_until_ready(advance(state,ids,j.asarray(request,j.int32),ca,cm))
             requests[offset:offset+batch]+=(~done).astype(np.int32)
-            done=np.asarray(state.done)
-            if bool(np.asarray(invalid)):status='INVALID_ACTION_OR_NONFINITE';break
+            # An invalid action or nonfinite head invalidates this whole NEW
+            # step. Preserve earlier valid outcomes and discard every newly
+            # generated winner/participation update, not just the culprit row.
+            accepted,valid=accept_step((state,ca,cm),candidate)
+            if not valid:status='INVALID_ACTION_OR_NONFINITE';break
+            state,ca,cm=accepted;done=np.asarray(state.done)
             if done.all():break
         winners[offset:offset+batch]=np.asarray(state.winner)
         active[offset:offset+batch]=np.asarray(ca);moves[offset:offset+batch]=np.asarray(cm)
