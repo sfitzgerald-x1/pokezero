@@ -13,7 +13,7 @@ from test_gpu_engine_future_state import action_fixture, FAKE
 def fixture():
     data, meta = action_fixture()
     extra = ["struggle", "icebeam", "thunderbolt", "thunder", "doubleteam", "haze",
-             "raindance", "sunnyday", "sleeptalk", "encore", "roar", "protect", "spore", "leechseed", "bellydrum"]
+             "raindance", "sunnyday", "sleeptalk", "encore", "roar", "protect", "spore", "leechseed", "painsplit", "bellydrum"]
     meta["vocabulary"]["moves"] += extra
     return data, meta
 
@@ -60,6 +60,16 @@ class ChanceConsumerTests(unittest.TestCase):
         self.assertEqual(tuple(a.coordinate for a in plan.axes), tuple(name for name, _ in COORDINATES))
         self.assertEqual(plan.cardinality, 4608)
         self.assertEqual(sum(case.mass for case in plan.bounded_cases()), 1)
+
+    def test_pain_split_changes_hp_without_adding_a_chance_coordinate(self):
+        data,meta=fixture()
+        self.choose(data,meta,0,"painsplit")
+        for hp in (1,101,999):
+            data["hp"][0][0]=hp
+            plan=self.plan(data,meta,actions=(0,1),cap=2)  # foe's existing unique Splash slot
+            self.assertIsInstance(plan,c.ConsumerPlan,plan)
+            self.assertEqual(plan.cardinality,2)  # conservative binary action-order coin
+            self.assertEqual(sum(case.mass for case in plan.bounded_cases()),1)
 
     def test_earlier_freeze_and_paralysis_activate_later_status_gates(self):
         data, meta = fixture()

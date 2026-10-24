@@ -41,6 +41,8 @@ def registry():
         'effects','belly_drum')
     group('recover softboiled milkdrink slackoff rest haze',
         'Half healing, Rest full heal/sleep, or Haze boost reset','effects','effects')
+    group('painsplit','Live HP average, per-mon max-HP clamps and target Substitute/Protect gates',
+        'effects','pain_split')
     group('return frustration','Per-Pokemon happiness power','variable_moves','variable_moves')
     group('doubleedge','Floored actual-damage recoil, including Substitute; Rock Head','damage_moves','damage_moves')
     group('seismictoss nightshade sonicboom dragonrage','Fixed level/constant damage with represented target defenses',

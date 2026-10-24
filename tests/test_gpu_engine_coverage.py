@@ -45,6 +45,12 @@ class CoverageTests(unittest.TestCase):
         self.assertIn('Screen',r['brickbreak']['missing_intrinsic_effect'])
         self.assertIn('Partial-trap',r['rapidspin']['missing_intrinsic_effect'])
 
+    def test_pain_split_registration_is_not_fidelity_credit(self):
+        result=ledger(dict(move_slots=1,move_frequency=[{'id':'painsplit','count':1}]),
+                      root=Path(__file__).resolve().parents[1])
+        self.assertEqual(result['rows'][0]['status'],'SELECTED_EFFECT_IMPLEMENTED')
+        self.assertIsNone(result['game_qualified_move_share'])
+
     def test_dragon_dance_source_registration_does_not_award_fidelity_credit(self):
         result=ledger(dict(move_slots=100,move_frequency=[{'id':'dragondance','count':100}]),
                       root=Path(__file__).resolve().parents[1])
