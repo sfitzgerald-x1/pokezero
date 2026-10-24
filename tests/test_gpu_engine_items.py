@@ -20,7 +20,8 @@ class ItemTests(unittest.TestCase):
         from gpu_engine.state import empty_state,legal_actions
         self.jax,self.j,self.i,self.m,self.t,self.empty,self.legal = jax,j,items,mechanics,transition,empty_state,legal_actions
         self.names = ["_none","tackle","splash","struggle","toxic","rest"]
-        self.item_names = ["_none","leftovers","lumberry","choiceband","thickclub","lightball"]
+        self.item_names = ["_none","leftovers","lumberry","choiceband","thickclub","lightball",
+            "petayaberry","salacberry"]
         self.species = ["_none","pikachu","marowak","cubone","ditto"]
         types = ["_none","normal","fighting","flying","poison","ground","rock",
             "bug","ghost","steel","fire","water","grass","electric","psychic","ice","dragon","dark"]
@@ -163,6 +164,49 @@ class ItemTests(unittest.TestCase):
             status=s.status.at[0,0,0].set(self.m.PSN))
         self.assertEqual(int(self.play(s).hp[0,0,0]),1)
 
+    def test_pinch_berries_consume_once_on_living_active_with_thresholds_and_caps(self):
+        j=self.j;rows=j.arange(8);side=j.array([0,1,0,1,0,1,0,1])
+        item=j.array([6,6,7,7,6,7,6,7]);stat=j.where(item==6,2,4)
+        s=self.live(8);s=s._replace(item=s.item.at[rows,side,0].set(item).at[:,:,1].set(6),
+            hp=s.hp.at[rows,side,0].set(j.array([25,25,25,25,26,26,25,25])).at[:,:,1].set(1),
+            boosts=s.boosts.at[6,side[6],0,stat[6]].set(6).at[7,side[7],0,stat[7]].set(-6))
+        r=self.play(s)
+        self.assertEqual(r.item[rows,side,0].tolist(),[0,0,0,0,6,7,0,0])
+        self.assertEqual(r.boosts[rows,side,0,stat].tolist(),[1,1,1,1,0,0,6,-5])
+        self.assertEqual(r.item[:,:,1].tolist(),[[6,6]]*8)  # low-HP bench holders do not eat
+        for a,b in zip(r.boosts,self.play(r).boosts):self.assertTrue(bool(j.array_equal(a,b)))
+        compiled=self.jax.jit(self.t.step)(s,j.zeros((8,2),j.int32),self.table).state
+        for a,b in zip(r,compiled):self.assertTrue(bool(j.array_equal(a,b)))
+
+    def test_pinch_berry_waits_until_item_residual_before_poison_and_not_replacement(self):
+        j=self.j;s=self.live()
+        s=s._replace(item=s.item.at[0,0,0].set(7),hp=s.hp.at[0,0,0].set(26),
+            status=s.status.at[0,0,0].set(self.m.PSN))
+        r=self.play(s)
+        self.assertEqual((int(r.hp[0,0,0]),int(r.item[0,0,0]),int(r.boosts[0,0,0,4])),(14,7,0))
+        r=self.play(r)
+        self.assertEqual((int(r.hp[0,0,0]),int(r.item[0,0,0]),int(r.boosts[0,0,0,4])),(2,0,1))
+        for forced in (False,True):
+            s=self.live();s=s._replace(hp=s.hp.at[0,0,0].set(0 if forced else 101).at[0,0,1].set(25),
+                item=s.item.at[0,0,1].set(6))
+            result=self.t.step(s,j.array([[4,0]]),self.table)
+            self.assertFalse(bool(result.invalid_actions[0]))
+            self.assertEqual((int(result.state.active[0,0]),int(result.state.item[0,0,1]),
+                int(result.state.boosts[0,0,1,2])),(1,6 if forced else 0,0 if forced else 1))
+
+    def test_petaya_does_not_boost_the_current_action(self):
+        s=self.live(8);s=s._replace(hp=s.hp.at[:,0,0].set(25).at[:,1,0].set(1000),
+            max_hp=s.max_hp.at[:,1,0].set(1000),item=s.item.at[:,0,0].set(6))
+        # A special-damage table control isolates timing, not catalog coverage.
+        table=self.table._replace(physical=self.table.physical.at[1].set(False))
+        before=self.play(s,"tackle",table=table._replace(items=None))
+        first=self.play(s,"tackle",table=table)
+        self.assertEqual(first.hp.tolist(),before.hp.tolist())
+        self.assertEqual(first.boosts[:,0,0,2].tolist(),[1]*8)
+        second=self.play(first,"tackle",table=table)
+        control=self.play(first._replace(boosts=first.boosts.at[:,0,0,2].set(0)),"tackle",table=table)
+        self.assertTrue(bool(self.j.all(second.hp[:,1,0] < control.hp[:,1,0])))
+
     def test_faster_poison_faint_ends_before_slower_leftovers(self):
         s = self.live()
         s = s._replace(hp=s.hp.at[:,:,1:].set(0).at[0,0,0].set(1).at[0,1,0].set(50),
@@ -206,6 +250,15 @@ class ItemTests(unittest.TestCase):
         self.jax.block_until_ready(b)
         for x,y in zip(self.jax.tree.leaves(a),self.jax.tree.leaves(b)):
             self.assertTrue(bool(self.j.array_equal(x,y)))
+        s=self.live(2);s=s._replace(hp=s.hp.at[:,:,0].set(25),
+            item=s.item.at[:,0,0].set(6).at[:,1,0].set(7),stats=s.stats.at[...,5].set(200))
+        chance=self.t.sample_chance_inputs(s)
+        a=self.t.step_with_chance(s,actions,self.table,
+            chance._replace(draws=chance.draws.at[:,0,9].set(0)))
+        b=self.t.step_with_chance(s,actions,self.table,
+            chance._replace(draws=chance.draws.at[:,0,9].set(1)))
+        for x,y in zip(self.jax.tree.leaves(a),self.jax.tree.leaves(b)):
+            self.assertTrue(bool(self.j.array_equal(x,y)))
 
     @unittest.skipUnless(NODE and SHOWDOWN,"requires pinned Gen 3 item source")
     def test_item_rules_match_pinned_source_handlers(self):
@@ -219,6 +272,14 @@ class ItemTests(unittest.TestCase):
         self.assertEqual(rows["choice_lock"],"tackle")
         self.assertEqual(rows["unequal_speed_events"],["heal0","status0","heal1","status1"])
         self.assertEqual(rows["equal_speed_event_kinds"],["heal","heal","status","status"])
+        self.assertEqual(rows['pinch_handlers'],dict(petayaberry=[10,4,False],salacberry=[10,4,False]))
+        cases=rows['pinch'];j=self.j
+        item=j.array([self.item_names.index(r['name']) for r in cases])
+        boosts=j.array([r['before'] for r in cases])
+        actual_item,actual_boosts=self.i.consume_pinch(self.it,item,boosts,
+            j.array([r['hp'] for r in cases]),j.array([r['maxhp'] for r in cases]))
+        self.assertEqual(actual_item.tolist(),[self.item_names.index(r['item'] or '_none') for r in cases])
+        self.assertEqual(actual_boosts.tolist(),[r['after'] for r in cases])
 
 
 if __name__ == "__main__":
