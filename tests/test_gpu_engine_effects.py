@@ -22,13 +22,13 @@ class EffectTests(unittest.TestCase):
         self.jax,self.j,self.m,self.effects,self.t,self.empty = jax,j,m,effects,transition,empty_state
         self.names = ["_none","tackle","splash","struggle","toxic","thunderwave",
             "stunspore","willowisp","sleeppowder","rest","recover","calmmind",
-            "swordsdance","bulkup","haze","dragondance"]
+            "swordsdance","bulkup","haze","dragondance","tailglow"]
         self.types = ["_none","normal","fighting","flying","poison","ground","rock",
             "bug","ghost","steel","fire","water","grass","electric","psychic","ice","dragon","dark"]
         self.meta = {"vocabulary":{"moves":self.names,"types":self.types}}
         n = len(self.names)
         self.table = transition.MoveTable(j.array([0,40,0,50]+[0]*(n-4)),
-            j.array([0,1,1,0,4,13,12,10,12,14,1,14,1,2,15,16]),
+            j.array([0,1,1,0,4,13,12,10,12,14,1,14,1,2,15,16,7]),
             j.array([False,True,False,True]+[False]*(n-4)),
             j.full((n,),100),j.ones((n,),bool),j.zeros((n,),j.int32),
             j.ones((18,18),j.int32),j.ones((18,18),j.int32),j.array(3),
@@ -129,6 +129,29 @@ class EffectTests(unittest.TestCase):
                     self.assertEqual(int(result.state.pp[0,actor,0,0]),9)
                     self.assertFalse(bool(self.j.any(result.invalid_actions)))
 
+    def test_gen3_tail_glow_adds_two_special_attack_stages_in_both_seats(self):
+        # Motivated by saved slot1057, not a replay or fidelity credit. Gen3
+        # inherits the Gen4 +2 rule, not modern Tail Glow's +3 stages.
+        starts=[-6,-1,0,5,6]*2
+        actors=[0]*5+[1]*5
+        state=self.live(10)
+        for row,(actor,stage) in enumerate(zip(actors,starts)):
+            state=state._replace(moves=state.moves.at[row,actor,0,0].set(self.names.index('tailglow')),
+                boosts=state.boosts.at[row,actor,0,2].set(stage).at[row,actor,0,0].set(1))
+        actions=self.j.zeros((10,2),self.j.int32)
+        eager=self.t.step(state,actions,self.table)
+        compiled=self.jax.jit(self.t.step)(state,actions,self.table)
+        self.jax.block_until_ready(compiled)
+        expected=state.boosts
+        for row,(actor,stage) in enumerate(zip(actors,starts)):
+            expected=expected.at[row,actor,0,2].set(min(6,stage+2))
+            self.assertEqual(int(compiled.state.pp[row,actor,0,0]),9)
+        self.assertTrue(bool(self.j.array_equal(compiled.state.boosts,expected)))
+        self.assertTrue(bool(self.j.array_equal(compiled.state.hp,state.hp)))
+        self.assertFalse(bool(self.j.any(compiled.invalid_actions)))
+        for a,b in zip(self.jax.tree.leaves(eager),self.jax.tree.leaves(compiled)):
+            self.assertTrue(bool(self.j.array_equal(a,b)))
+
     def test_haze_clears_both_actives_through_sub_but_not_bench(self):
         s = self.live()
         s = s._replace(boosts=s.boosts.at[0,0,0].set(6).at[0,1,0].set(-6).at[0,0,1].set(3),
@@ -152,7 +175,7 @@ class EffectTests(unittest.TestCase):
         names = ["toxic","poisonpowder","thunderwave","stunspore","willowisp","sleeppowder",
             "hypnosis","spore","sing","recover","softboiled","milkdrink","slackoff","rest","haze",
             "swordsdance","calmmind","bulkup","agility","amnesia","irondefense","barrier",
-            "meditate","howl","doubleteam","dragondance"]
+            "meditate","howl","doubleteam","dragondance","tailglow"]
         helper = Path(__file__).with_name("gpu_move_effect_oracle.cjs")
         rows = json.loads(subprocess.run([NODE,str(helper),SHOWDOWN],input=json.dumps(names),
             text=True,capture_output=True,check=True).stdout)
