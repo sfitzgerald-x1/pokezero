@@ -128,7 +128,8 @@ class StatModifierTests(unittest.TestCase):
         # Huge Power cannot accidentally amplify this Special Dark move.
         s=s._replace(moves=s.moves.at[:,0,0,0].set(3))
         chance=j.zeros((len(rows),12),j.int32).at[:,4].set(15).at[:,5].set(15)
-        out,used,_=self.p.intercept(s,0,j.zeros(len(rows),j.int32),j.full(len(rows),3),chance,self.table,eligible=True)
+        out,used,_=self.p.intercept(s,0,j.zeros(len(rows),j.int32),j.full(len(rows),3),chance,self.table,
+            eligible=True,contact_roll=j.full(len(rows),59,j.int32))
         special=[dict(r,physical=False) for r in rows];n,d,n2,d2=self.factors(special)
         expected=self.m.gen3_damage(level=73,power=80,attack=103,defense=101,physical=False,
             attack_num=n,attack_den=d,defense_num=n2,defense_den=d2)
@@ -144,7 +145,8 @@ class StatModifierTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stderr);native=json.loads(result.stdout)
         j=self.j;s=self.state(rows);chance=j.zeros((len(rows),12),j.int32).at[:,5].set(15)
         chance=chance.at[:,4].set(j.array([0 if r['critical'] else 15 for r in rows]))
-        out,_,_=self.p.intercept(s,0,j.zeros(len(rows),j.int32),j.full(len(rows),3),chance,self.table,eligible=True)
+        out,_,_=self.p.intercept(s,0,j.zeros(len(rows),j.int32),j.full(len(rows),3),chance,self.table,
+            eligible=True,contact_roll=j.full(len(rows),59,j.int32))
         self.assertEqual((10000-out.hp[:,1,0]).tolist(),[r['damage'] for r in native])
 
     def test_confusion_power_band_burn_and_invalid_terminal_identity(self):
