@@ -2657,6 +2657,12 @@ impl PyLeafEncoder {
         lines: Option<Vec<String>>,
         engine_authoritative: bool,
     ) -> PyResult<Py<PyDict>> {
+        crate::failure_capture::guarded(|| json!({
+            "schema":"pokezero.native-failure-origin.v1", "reason_codes":["crate.leaf_encode"],
+            "engine_state":state_str, "turn":turn, "lines":lines,
+            "instruction_list":{"availability":"unavailable","reason":"encoder receives state/history; caller retains generating instructions"},
+            "offending_instruction":{"availability":"unavailable","reason":"leaf-encode contract, not an instruction cursor"}
+        }), || {
         let state = parse_state(state_str)?;
         let (order, meta) = self.branch_context(lines.as_deref());
         let encoded = self.ctx.encode_leaf(
@@ -2668,6 +2674,7 @@ impl PyLeafEncoder {
             engine_authoritative,
         )?;
         encoded_to_dict(py, &encoded)
+        })
     }
 
     /// Opt-in bounded CPU batching. Exactly the serial encoder's five arrays,
@@ -2846,13 +2853,19 @@ impl PyLeafEncoder {
     ) -> PyResult<EncodedArrays> {
         let size = inputs.len().div_ceil(workers.min(inputs.len()));
         let rows = std::thread::scope(|scope| {
-            let handles: Vec<_> = inputs.chunks(size).map(|chunk| scope.spawn(move || {
-                chunk.iter().map(|row| {
+            let handles: Vec<_> = inputs.chunks(size).enumerate().map(|(chunk_index, chunk)| scope.spawn(move || {
+                chunk.iter().enumerate().map(|(offset, row)| crate::failure_capture::guarded(|| json!({
+                    "schema":"pokezero.native-failure-origin.v1", "reason_codes":["crate.bulk_leaf_encode"],
+                    "engine_state":row.state, "batch_row":chunk_index * size + offset,
+                    "turn":row.turn, "lines":row.lines,
+                    "instruction_list":{"availability":"unavailable","reason":"encoder receives state/history; caller retains generating instructions"},
+                    "offending_instruction":{"availability":"unavailable","reason":"leaf-encode contract, not an instruction cursor"},
+                }), || {
                     let state = parse_state(row.state)?;
                     let (order, meta) = self.branch_context(row.lines);
                     self.ctx.encode_leaf(&state, row.fold, row.turn,
                         order.as_deref(), meta.as_ref(), authoritative)
-                }).collect::<PyResult<Vec<_>>>()
+                })).collect::<PyResult<Vec<_>>>()
             })).collect();
             let mut batches = Vec::new();
             let mut failure = None;

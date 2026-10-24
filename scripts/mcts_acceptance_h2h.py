@@ -91,6 +91,7 @@ def build_policies(checkpoint, showdown_root, device, cfg, annotation_source):
     print(f"artifacts: {artifacts}", flush=True)
     raw = load_transformer_policy(checkpoint, device=device, deterministic=True)
     search = EngineMctsPolicy(
+        scientific_capture=True,
         dex=load_showdown_dex_cached(showdown_root),
         set_source=load_gen3_randbat_source_cached(showdown_root),
         config=EngineMctsConfig(

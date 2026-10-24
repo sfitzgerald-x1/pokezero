@@ -55,6 +55,7 @@ class InformedPolicyTests(unittest.TestCase):
         self.path=Path(self.directory.name)/'decisions.jsonl'
         self.patches=[]
         for patcher in (patch.dict(os.environ,POKEZERO_ENUMERATE_ROLLS='1'),
+                        patch('pokezero.informed_policy.require_capture_admission',return_value={'authored':True}),
                         patch('pokezero.informed_policy.EngineMctsPolicy',Adapter),
                         patch('pokezero.informed_policy.NativeExactBackend',Backend)):
             patcher.start();self.addCleanup(patcher.stop)
@@ -130,7 +131,7 @@ class InformedPolicyTests(unittest.TestCase):
         self.assertIn('error_traceback',row)
         self.assertEqual(p.stats.refusals,1)
         self.assertEqual(json.loads(json.dumps(p.stats.to_dict()))['refusal_reasons'],
-                         {'ExactSearchRefused':1})
+                         {'belief.unsupported-bound':1})
 
     def test_construction_error_preserves_actual_draw_without_replacement(self):
         p=self.policy()

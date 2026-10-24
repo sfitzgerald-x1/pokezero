@@ -7054,6 +7054,12 @@ pub fn branch_events(
     branch_on_damage: bool,
     include_post_state: bool,
 ) -> PyResult<String> {
+    crate::failure_capture::guarded(|| serde_json::json!({
+        "schema":"pokezero.native-failure-origin.v1", "reason_codes":["crate.transition"],
+        "engine_state":state_str, "row_action":s1_move, "column_action":s2_move, "ctx_json":ctx_json,
+        "instruction_list":{"availability":"unavailable","reason":"transition did not return a branch"},
+        "offending_instruction":{"availability":"unavailable","reason":"no branch/instruction identified"}
+    }), || {
     let mut state = parse_state(state_str)?;
     let ctx = EventContext::from_json(ctx_json).map_err(PyValueError::new_err)?;
     let s1 = move_choice_from_str(s1_move, &state, SideReference::SideOne)?;
@@ -7073,7 +7079,14 @@ pub fn branch_events(
             "post": post_state_summary(&state),
         }));
     }
-    for branch in &generated {
+    for (branch_index, branch) in generated.iter().enumerate() {
+        let obj = crate::failure_capture::guarded(|| serde_json::json!({
+            "schema":"pokezero.native-failure-origin.v1", "reason_codes":["crate.branch_render"],
+            "engine_state":state_str, "branch_index":branch_index, "branch_count":generated.len(),
+            "row_action":s1_move, "column_action":s2_move, "ctx_json":ctx_json,
+            "instruction_list":branch.instruction_list.iter().map(|i| format!("{i:?}")).collect::<Vec<_>>(),
+            "offending_instruction":{"availability":"unavailable","reason":"branch failed without a unique instruction cursor"}
+        }), || {
         let legal_roll_state = if include_post_state {
             legal_roll_state_before_direct_damage(
                 &mut state,
@@ -7102,6 +7115,18 @@ pub fn branch_events(
         };
         state.reverse_instructions(&branch.instruction_list);
         let attribution_unsafe = rendered.is_attribution_unsafe();
+        let refusal_witness = if attribution_unsafe || !rendered.lossy.is_empty() {
+            Some(serde_json::json!({
+                "schema": "pokezero.native-failure-origin.v1",
+                "engine_state": state_str,
+                "instruction_list": branch.instruction_list.iter().map(|i| format!("{i:?}")).collect::<Vec<_>>(),
+                "offending_instruction": {"availability": "unavailable", "reason": "renderer reports a branch-level condition, not a unique instruction"},
+                "branch_index": branch_index, "branch_count": generated.len(),
+                "row_action": s1_move, "column_action": s2_move,
+                "ctx_json": ctx_json, "events": rendered.lines,
+                "reason_codes": rendered.lossy_subcases.iter().chain(rendered.attribution_unsafe.iter()).chain(rendered.lossy.iter()).collect::<Vec<_>>(),
+            }))
+        } else { None };
         let mut obj = serde_json::json!({
             "percentage": branch.percentage,
             "events": rendered.lines,
@@ -7114,10 +7139,16 @@ pub fn branch_events(
         });
         if let Some(post_state) = post_state {
             obj["post_state"] = serde_json::Value::String(post_state);
+            obj["instruction_list"] = serde_json::json!(branch.instruction_list.iter().map(|i| format!("{i:?}")).collect::<Vec<_>>());
+        }
+        if let Some(witness) = refusal_witness {
+            obj["refusal_witness"] = witness;
         }
         if let Some(legal_roll_state) = legal_roll_state {
             obj["legal_roll_state"] = serde_json::Value::String(legal_roll_state);
         }
+        Ok(obj)
+        })?;
         branches.push(obj);
     }
     let report = serde_json::json!({
@@ -7126,11 +7157,13 @@ pub fn branch_events(
     });
     serde_json::to_string(&report)
         .map_err(|e| PyValueError::new_err(format!("serialize report: {e}")))
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
 
     // Two of the SIX shapes the renderable allowlist admits are only constructible with
     // these, and `the_renderable_allowlist_is_exactly_what_it_was` pins all six. Imported

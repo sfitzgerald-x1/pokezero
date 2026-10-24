@@ -24,6 +24,8 @@ from functools import lru_cache
 from typing import Any, Mapping, Sequence
 import warnings
 
+from .failure_capture import boundary
+
 from .poke_engine_backend import (
     PokeEngineReversibleSmokeResult,
     PokeEngineUnavailableError,
@@ -300,6 +302,7 @@ def minimal_gen3_fixture() -> BattleSpec:
     )
 
 
+@boundary("world.engine_state", arguments=("spec",), result_field="engine_state")
 def build_poke_engine_state(spec: BattleSpec, module: Any | None = None, *,
                             construction_observer: Any | None = None) -> Any:
     """Build a ``poke_engine.State`` from a curated :class:`BattleSpec`.

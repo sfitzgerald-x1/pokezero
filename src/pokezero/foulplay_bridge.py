@@ -7047,6 +7047,7 @@ def _build_policy(
         from .engine_search import EngineMctsConfig, EngineMctsPolicy
 
         return EngineMctsPolicy(
+            scientific_capture=True,
             dex=load_showdown_dex_cached(config.showdown_root),
             # Always attached, NOT env-gated. The candidate-set source is what
             # the belief sampler draws determinized opponent teams from, so

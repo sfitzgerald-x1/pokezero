@@ -36,6 +36,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import random
 import time
 import warnings
@@ -54,6 +55,9 @@ from .determinization import (
 )
 from .public_action_capture import public_action_rounds_from_trajectory_metadata
 from .engine_world import EngineWorld, EngineWorldUnsupported, world_battle_spec
+from .failure_capture import (boundary, captured_decision, configured_quarantine, current,
+                              record_native_refusals, record_refusal, require_capture_admission,
+                              snapshot as capture_snapshot)
 from .randbat import canonical_gen3_randbat_species_id
 from .poke_engine_adapter import (
     PokeEngineAttractUnsupportedError,
@@ -2272,6 +2276,7 @@ class EngineMctsStats:
     # unfiltered list. Fixed cells carry neither field.
     root_decision_rows: list[dict[str, Any]] = field(default_factory=list)
     root_decision_rows_dropped: int = 0
+    capture_telemetry: dict | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -2632,6 +2637,8 @@ class EngineMctsStats:
             )
         if self.decisions:
             payload["wall_per_decision"] = self.decision_wall_seconds / self.decisions
+        if self.capture_telemetry is not None:
+            payload["failure_capture"] = dict(self.capture_telemetry)
         return payload
 
 
@@ -4676,6 +4683,18 @@ class EngineMctsPolicy:
     _world_observer: Any | None = None
     _world_attempt_observer: Any | None = None
 
+    def _remember_capture_world(self, world, state):
+        if current():
+            self._capture_world_origins[id(world)] = capture_snapshot({
+                **current().fields, "world_spec":world.spec, "engine_state":state.to_string()})
+
+    def _bind_capture_world(self, world, state):
+        if current():
+            origin = getattr(self, "_capture_world_origins", {}).get(id(world))
+            if origin is None:
+                raise ValueError("scientific world lacks its construction-time capture origin")
+            current().update(**origin)
+
     def __init__(
         self,
         *,
@@ -4687,7 +4706,13 @@ class EngineMctsPolicy:
         fixed_override: Any | None = None,
         annotation_source: Any | None = None,
         world_observer: Any | None = None,
+        scientific_capture: bool = False,
     ) -> None:
+        if scientific_capture:
+            self._quarantine = configured_quarantine(required=True)
+            self._capture_admission = require_capture_admission(
+                os.environ.get("POKEZERO_CAPTURE_ADMISSION"), build=self._quarantine.build,
+                scientific_path="engine-mcts")
         if module is None:
             import poke_engine as module  # noqa: PLC0415 — optional native dependency
 
@@ -4870,6 +4895,7 @@ class EngineMctsPolicy:
         legal = legal_action_indices(observation.legal_action_mask)
         return PolicyDecision(action_index=rng.choice(legal), policy_id=self.policy_id)
 
+    @captured_decision
     def select_action_with_context(
         self, context: PolicyContext, *, rng: random.Random
     ) -> PolicyDecision:
@@ -5025,6 +5051,7 @@ class EngineMctsPolicy:
         truant_slots = self._truant_loaf_slots(context)
 
         worlds: list[tuple[EngineWorld, Any]] = []
+        self._capture_world_origins = {}
         attempts_budget = self._config.worlds * self._config.sample_retry_factor
         attempts = 0
         while len(worlds) < self._config.worlds and attempts < attempts_budget:
@@ -5035,6 +5062,13 @@ class EngineMctsPolicy:
                 break
             attempts += 1
             self.stats.worlds_attempted += 1
+            if current():
+                current().update(world_ordinal=attempts - 1, rng_state_before_draw=rng.getstate(),
+                    player_teams={"availability":"unavailable","reason":"draw has not returned"},
+                    world_spec={"availability":"unavailable","reason":"draw has not returned"},
+                    engine_state={"availability":"unavailable","reason":"draw has not returned"},
+                    instruction_list={"availability":"unavailable","reason":"no transition in this attempt"},
+                    **{"world.construct":{"availability":"unavailable","reason":"this attempt has not entered construction"}})
             if self._fixed_override is not None:
                 override, sample_failure = self._fixed_override, None
             else:
@@ -5046,6 +5080,7 @@ class EngineMctsPolicy:
                 )
             self._notify_world_attempt_observer(context, attempts - 1, override)
             if override is None:
+                record_refusal("belief", codes=["belief." + str(sample_failure or "unknown")])
                 self.stats.world_failure_reasons[
                     f"belief_sample: {sample_failure or 'unknown'}"
                 ] += 1
@@ -5055,6 +5090,8 @@ class EngineMctsPolicy:
                     )
                 continue
             try:
+                if current():
+                    current().update(player_teams=dict(override.player_teams))
                 world = world_battle_spec(
                     context.public_materialization_state,
                     override,
@@ -5125,6 +5162,7 @@ class EngineMctsPolicy:
                 if self._config.policy_opponent or self._config.record_joint_actions:
                     raise EngineSearchWitnessError(f"policy opponent world construction refused: {error}") from error
                 continue
+            self._remember_capture_world(world, state)
             worlds.append((world, state))
             self._notify_world_observer(context, world, state)
 
@@ -5178,6 +5216,7 @@ class EngineMctsPolicy:
         aggregated: Counter = Counter()
         search_started = time.perf_counter()
         for world, state in worlds:
+            self._bind_capture_world(world, state)
             result = self._module.monte_carlo_tree_search(
                 state, self._config.search_time_ms, threads=self._config.threads
             )
@@ -5251,19 +5290,23 @@ class EngineMctsPolicy:
         worlds_searched_here = 0
         search_started = time.perf_counter()
         for world, state in worlds:
+            self._bind_capture_world(world, state)
             side_key = (
                 "side_one"
                 if world.slot_sides[context.player_id] == "side_one"
                 else "side_two"
             )
             try:
+                native_world_seed = rng.getrandbits(63)
+                if current():
+                    current().update(native_world_seed=native_world_seed)
                 report = json.loads(
                     pokezero_search.puct_search_multi(
                         state.to_string(),
                         config.search_sims,
                         max_depth=config.search_depth,
                         c_puct=config.c_puct,
-                        seed=rng.getrandbits(63),
+                        seed=native_world_seed,
                         deep_ko_split=config.deep_ko_split,
                         # Keyword, and omitted entirely when unset, so this call
                         # stays runnable against a pre-FPU wheel: the depth study
@@ -5277,6 +5320,9 @@ class EngineMctsPolicy:
                     )
                 )
             except Exception as error:  # noqa: BLE001 — count, keep the other worlds
+                if current():
+                    record_refusal("crate.hp_fraction", error, witness=dict(
+                        engine_state=state.to_string(), world_spec=capture_snapshot(world.spec)))
                 detail = (
                     _bounded_reason_detail(str(error).splitlines()[0])
                     if str(error)
@@ -5376,19 +5422,24 @@ class EngineMctsPolicy:
         leaves_priced = 0
         search_started = time.perf_counter()
         for world_index, (world, state) in enumerate(worlds):
+            self._bind_capture_world(world, state)
             side_key = (
                 "side_one"
                 if world.slot_sides[context.player_id] == "side_one"
                 else "side_two"
             )
             try:
+                native_world_seed = rng.getrandbits(63)
+                native_rollout_seed = rng.getrandbits(63)
+                if current():
+                    current().update(native_world_seed=native_world_seed, rollout_seed=native_rollout_seed)
                 report = json.loads(
                     pokezero_search.puct_search_multi_rollout(
                         state.to_string(),
                         config.search_sims,
                         max_depth=config.search_depth,
                         c_puct=config.c_puct,
-                        seed=rng.getrandbits(63),
+                        seed=native_world_seed,
                         deep_ko_split=config.deep_ko_split,
                         rollouts=config.rollout_count,
                         rollout_max_plies=config.rollout_max_plies,
@@ -5397,7 +5448,7 @@ class EngineMctsPolicy:
                         # RNG as the search seed so a replayed decision replays
                         # its rollouts too -- but a SEPARATE draw, so the two
                         # streams cannot alias.
-                        rollout_seed=rng.getrandbits(63),
+                        rollout_seed=native_rollout_seed,
                         rollout_threads=config.rollout_threads,
                         leaf_batch=config.leaf_batch,
                         leaf_mode="rollout",
@@ -5415,6 +5466,9 @@ class EngineMctsPolicy:
                     else type(error).__name__
                 )
                 self.stats.world_failure_reasons[f"crate_search_rollout: {detail}"] += 1
+                if current():
+                    record_refusal("crate.rollout", error, witness=dict(
+                        engine_state=state.to_string(), world_spec=capture_snapshot(world.spec)))
                 continue
             del world_index
             entries = report[side_key]
@@ -5534,12 +5588,16 @@ class EngineMctsPolicy:
             fold = FoldState.initial(perspective_slot=context.player_id)
             consumed = 0
         if len(events) < consumed:
+            record_refusal("crate.live_fold", codes=["crate.public_event_stream_rewound"],
+                witness=dict(consumed_public_events=consumed, actual_public_events=len(events),
+                             fold_payload=fold.to_payload()))
             self._mark_fold_broken(context, key, "public event stream rewound")
             return None
         new_lines = [event.raw_line for event in events[consumed:]]
         try:
             fold.advance_in_place(new_lines)
         except Exception as error:  # noqa: BLE001 — loud, then fail closed
+            record_refusal("crate.live_fold", error)
             self._mark_fold_broken(
                 context, key, f"advance failed: {type(error).__name__}: {error}"
             )
@@ -5733,6 +5791,7 @@ class EngineMctsPolicy:
                             "the re-seat path is no longer sound."
                         )
         except Exception as error:  # noqa: BLE001 — loud, then fail closed
+            record_refusal("crate.fold_overlay", error)
             self._mark_fold_broken(
                 context, key, f"tier2 overlay failed: {type(error).__name__}: {error}"
             )
@@ -5857,6 +5916,7 @@ class EngineMctsPolicy:
     # Full in-crate pipeline (leaf_eval="model")
     # ------------------------------------------------------------------------------
 
+    @boundary("crate.root_inputs")
     def _root_inputs_json(self, context: PolicyContext) -> str:
         """The crate encoder's sanctioned input surface for the LIVE decision.
 
@@ -6362,8 +6422,11 @@ class EngineMctsPolicy:
         try:
             root_inputs = self._root_inputs_json(context)
             fold_payload = live_fold.to_payload()
+            if current():
+                current().update(root_inputs_json=root_inputs, root_fold_payload=fold_payload)
             rust_fold = pokezero_search.FoldState.from_payload(fold_payload)
         except Exception as error:  # noqa: BLE001 — taxonomy, never a crash
+            record_refusal("crate.model_root_inputs", error)
             self.stats.world_failure_reasons[
                 f"root_inputs: {type(error).__name__}: {str(error)[:120]}"
             ] += 1
@@ -6505,6 +6568,11 @@ class EngineMctsPolicy:
             prefetched: _ParallelWorldPrefetch | None = None,
         ) -> Optional[dict]:
             nonlocal budget_skipped_worlds, native_budget_exhausted
+            if current():
+                current().update(**record.get("capture_origin", {}))
+                current().update(engine_state=record["state_str"],
+                    native_world_seed=record["seed"], native_context=record.get("ctx_json"),
+                    world_spec=record.get("world_spec", {"availability": "unavailable", "reason": "legacy record omitted world spec"}))
             time_budget_ms: int | None = None
             expected_requested_iterations: int | None = None
             native_invocation_started = False
@@ -6607,6 +6675,7 @@ class EngineMctsPolicy:
                     # rejects the whole decision.  The dispatch mode may change
                     # throughput, never that failure boundary.
                     report = payload
+                record_native_refusals(report)
                 validate_native_selection(config, report)
                 if config.record_joint_actions:
                     joint = validate_native_joint_action_witness(report)
@@ -6823,6 +6892,8 @@ class EngineMctsPolicy:
                     if config.override_telemetry and isinstance(error, TypeError)
                     else detail
                 )
+                record_refusal("crate.model_search", error, witness=dict(
+                    engine_state=record["state_str"], native_world_seed=record["seed"]))
                 if native_invocation_started:
                     # The native call occurred but did not produce a receipt we
                     # can trust.  Keep the boundary facts and bounded reason;
@@ -7237,6 +7308,7 @@ class EngineMctsPolicy:
             return report
 
         for world, state in worlds:
+            self._bind_capture_world(world, state)
             opponent_order_resolution = opponent_request_order_resolution(
                 context,
                 world.party_species["p2" if context.player_id == "p1" else "p1"],
@@ -7278,6 +7350,12 @@ class EngineMctsPolicy:
                 "seed": world_seed,
                 "side_key": side_key,
             }
+            if current():
+                record["world_spec"] = capture_snapshot(world.spec)
+                origin = getattr(self, "_capture_world_origins", {}).get(id(world))
+                if origin is None:
+                    raise ValueError("scientific model world lacks construction-time capture origin")
+                record["capture_origin"] = capture_snapshot(origin)
             if config.use_opponent_priors:
                 record["_opponent_request_order_status"] = (
                     opponent_order_resolution.status
@@ -7421,6 +7499,10 @@ class EngineMctsPolicy:
                         )
                     )
             except Exception as error:  # noqa: BLE001 -- a setup failure is not a crash
+                if current():
+                    current().update(parallel_setup_records=[dict(r) for _, group in duplicate_groups for r in group],
+                                     root_fold_payload=fold_payload)
+                record_refusal("crate.model_world_parallel_setup", error)
                 detail = (
                     _bounded_reason_detail(str(error).splitlines()[0])
                     if str(error)
@@ -8865,6 +8947,7 @@ class EngineMctsPolicy:
         *,
         engine_mcts_extra: Mapping[str, Any] | None = None,
     ) -> PolicyDecision:
+        record_refusal("fallback", codes=["fallback." + reason])
         self.stats.fallback_decisions += 1
         self.stats.fallback_reasons[reason] += 1
         battle_id = getattr(context, "battle_id", "?")

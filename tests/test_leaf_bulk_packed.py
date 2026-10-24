@@ -111,7 +111,14 @@ class BulkLeafPackedTests(unittest.TestCase):
     def test_invalid_middle_row_refuses_entire_batch_and_next_call_remains_valid(self):
         args=self.rows(self.roots[0]);serial=self.serial(args)
         invalid=[args[0],*[list(c) for c in args[1:]]];invalid[1][2]='not a native state'
-        with self.assertRaises(ValueError):self.bulk(invalid)
+        with self.assertRaises(ValueError) as raised:self.bulk(invalid)
+        origin = json.loads(raised.exception.pokezero_failure_witness)
+        self.assertEqual(origin['reason_codes'], ['crate.bulk_leaf_encode'])
+        self.assertEqual(origin['engine_state'], 'not a native state')
+        self.assertEqual(origin['batch_row'], 2)
+        self.assertEqual(origin['turn'], invalid[3][2])
+        self.assertEqual(origin['lines'], invalid[4][2])
+        self.assertEqual(origin['offending_instruction']['availability'], 'unavailable')
         self.assert_rows(self.bulk(args),serial)
 
 
