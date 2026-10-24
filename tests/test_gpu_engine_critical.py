@@ -69,12 +69,12 @@ class CriticalTests(unittest.TestCase):
         # Interception precedes switching, so only the outgoing holder vetoes.
         armed=s._replace(ability=s.ability.at[:,1,0].set(2))
         r,used,_=pursuit.intercept(armed,0,j.zeros(16,j.int32),j.full(16,4),chances,
-            self.table,eligible=j.ones(16,bool))
+            self.table,eligible=j.ones(16,bool),contact_roll=j.full(16,59,j.int32))
         self.assertTrue(bool(j.all(used)))
         self.assertEqual(len(set(r.hp[:,1,0].tolist())),1)
         bench=s._replace(ability=s.ability.at[:,1,1].set(2))
         r,_,_=pursuit.intercept(bench,0,j.zeros(16,j.int32),j.full(16,4),chances,
-            self.table,eligible=j.ones(16,bool))
+            self.table,eligible=j.ones(16,bool),contact_roll=j.full(16,59,j.int32))
         self.assertLess(int(r.hp[0,1,0]),int(r.hp[1,1,0]))
 
     def test_jit_batch_prefix_and_invalid_terminal_identity(self):
