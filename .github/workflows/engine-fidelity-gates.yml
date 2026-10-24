@@ -89,6 +89,11 @@ jobs:
             tests/test_native_gen3_freeze_gate.py
             tests/test_gpu_engine_freeze_queue.py
             tests/gpu_freeze_queue_oracle.cjs
+            gpu_engine/future_state.py
+            tests/test_gpu_engine_future_state.py
+            tests/test_gpu_engine_substitute_future.py
+            tests/test_native_gen3_substitute_future.py
+            tests/gpu_substitute_future_oracle.cjs
             tests/test_engine_search.py
             tests/test_opponent_request_order.py
             tests/test_public_projection.py
@@ -311,6 +316,18 @@ jobs:
           grep -qE '^OK$' /tmp/native-freeze.log
           if grep -q 'skipped' /tmp/native-freeze.log; then
             echo '::error::native freeze boundary was not exercised'
+            exit 1
+          fi
+
+      - name: Inert Substitute storage and live Gen3 continuations
+        run: |
+          set -o pipefail
+          python -m unittest tests.test_native_gen3_substitute_future -v 2>&1 \
+            | tee /tmp/native-substitute-future.log
+          grep -qE 'Ran 4 tests' /tmp/native-substitute-future.log
+          grep -qE '^OK$' /tmp/native-substitute-future.log
+          if grep -q 'skipped' /tmp/native-substitute-future.log; then
+            echo '::error::native Substitute continuations were not exercised'
             exit 1
           fi
 
