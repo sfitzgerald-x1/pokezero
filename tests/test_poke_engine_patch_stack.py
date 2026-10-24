@@ -32,10 +32,10 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # unchanged and remains a drift control. The full target-tree digest below also
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "c6cc2b8e318a08105a1cda4fcbe0ded4359692bf1cb180e0e21c1ecde260e8fc",
+    "src/gen3/generate_instructions.rs": "7edb99db76333f13a15d0af3f5ae79d70d953d51576f0b81a7616b3afce95502",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
     "src/gen3/abilities.rs": "b7a0e5f24f12e5a03353bb578dca1abeaa2a962c83705f3bed161836919fa66e",
-    "src/gen3/choice_effects.rs": "7b6e74453112a23707262fcadd7c475411ebdb15a261b81b5491bb9d12b47328",
+    "src/gen3/choice_effects.rs": "a29d431464619c45d603d835ca6663bd7d2f573112c255d5cb9353862f62b161",
 }
 
 

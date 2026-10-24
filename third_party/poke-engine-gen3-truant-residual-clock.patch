@@ -24,7 +24,15 @@
  
 --- a/src/gen3/choice_effects.rs
 +++ b/src/gen3/choice_effects.rs
-@@ -331,17 +331,9 @@
+@@ -320,7 +320,6 @@
+     hit_sub: bool,
+ ) {
+     let (attacking_side, defending_side) = state.get_both_sides(attacking_side_ref);
+-    let attacker_active = attacking_side.get_active();
+     if choice.flags.recharge {
+         let instruction = Instruction::ApplyVolatileStatus(ApplyVolatileStatusInstruction {
+             side_ref: attacking_side_ref.clone(),
+@@ -331,17 +330,9 @@
              .volatile_statuses
              .insert(PokemonVolatileStatus::MUSTRECHARGE);
  
@@ -38,8 +46,7 @@
 -        attacking_side
 -            .volatile_statuses
 -            .insert(PokemonVolatileStatus::TRUANT);
--    }
-+    }
+     }
 +    // Gen3 Truant is a free-running residual-order27 clock, not a consequence
 +    // of a damaging hit. Recharge does not replace or reset that clock.
      match choice.move_id {
@@ -93,13 +100,10 @@
      // TODO: test first-turn dragontail missing - it should not trigger this early return
      if !choice.first_move && defender_choice.flags.drag {
          final_instructions.push(incoming_instructions);
-@@ -3576,6 +3569,28 @@
-     {
-         state.reverse_instructions(&incoming_instructions.instruction_list);
-         final_instructions.push(incoming_instructions);
-+        return;
-+    }
-+
+@@ -3579,6 +3572,28 @@
+         return;
+     }
+ 
 +    // Gen3 Truant is priority9, after sleep/freeze and before lower-priority
 +    // immobilizers. Run only the higher-priority status section; its Truant
 +    // return keeps confusion/paralysis untouched. A sleep/thaw branch remains
@@ -119,18 +123,16 @@
 +        if incoming_instructions.percentage > 0.0 {
 +            final_instructions.push(incoming_instructions);
 +        }
-         return;
-     }
- 
-@@ -5566,8 +5581,35 @@
-                     ApplyVolatileStatusInstruction {
-                         side_ref: *side_ref,
-                         volatile_status: PokemonVolatileStatus::PERISH3,
-+                    },
-+                ));
-+        }
++        return;
 +    }
 +
+     // pokezero gen3 fidelity fix (locked-move PP): remember that THIS turn is the
+     // second half of a two-turn move before the charge volatile is cleared below.
+     // Showdown skips the PP deduction on any turn where `getLockedMove()` returns
+@@ -5571,6 +5586,34 @@
+         }
+     }
+ 
 +    // --------------------------------------------------------------- order 27
 +    // Gen3 Truant flips for every live holder at every completed residual,
 +    // whether it acted, slept, was paralyzed, or recharged. Deferred move-phase
@@ -141,12 +143,13 @@
 +        if side.get_active_immutable().hp > 0
 +            && side.get_active_immutable().ability == Abilities::TRUANT
 +        {
-+            if side.volatile_statuses.remove(&PokemonVolatileStatus::TRUANT) {
++            if side.volatile_statuses.contains(&PokemonVolatileStatus::TRUANT) {
++                side.volatile_statuses.remove(&PokemonVolatileStatus::TRUANT);
 +                incoming_instructions.instruction_list.push(Instruction::RemoveVolatileStatus(
 +                    RemoveVolatileStatusInstruction {
 +                        side_ref: *side_ref, volatile_status: PokemonVolatileStatus::TRUANT,
-                     },
-                 ));
++                    },
++                ));
 +            } else {
 +                side.volatile_statuses.insert(PokemonVolatileStatus::TRUANT);
 +                incoming_instructions.instruction_list.push(Instruction::ApplyVolatileStatus(
@@ -155,6 +158,9 @@
 +                    },
 +                ));
 +            }
-         }
-     }
- 
++        }
++    }
++
+     // ------------------------------------------- order 28.2, then the no-order tail
+     // Slow Start is 28.2. Locked move, flinch and Protect/Endure declare NO
+     // `onResidualOrder` at all, so `resolvePriority` gives them `4294967296` and
