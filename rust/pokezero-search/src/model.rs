@@ -30,8 +30,9 @@
 
 use std::time::Instant;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyBool, PyBytes, PyInt};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use tch::{CModule, Device, IValue, Kind, TchError, Tensor};
@@ -2110,6 +2111,56 @@ impl NativeLeafModel {
                 output.action_count,
             ))
         })
+    }
+
+    /// Additive canonical-byte transport for the SAME five effective tensors
+    /// and unchanged eval_obs_flat forward. Encoder output is i32/f64/i16/
+    /// boolean bytes, explicitly little endian; no Python scalar expansion.
+    /// The old list API/default remains unchanged. Nonfinite or f32-overflow
+    /// input is outside this strict packed pilot domain and is rejected.
+    #[pyo3(signature = (
+        batch, categorical_ids, numeric_features, token_type_ids,
+        attention_mask, history_mask, *, byte_order, legal_mask = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn eval_obs_packed(
+        &self,
+        py: Python<'_>,
+        batch: &Bound<'_, PyAny>,
+        categorical_ids: &Bound<'_, PyBytes>,
+        numeric_features: &Bound<'_, PyBytes>,
+        token_type_ids: &Bound<'_, PyBytes>,
+        attention_mask: &Bound<'_, PyBytes>,
+        history_mask: &Bound<'_, PyBytes>,
+        byte_order: &str,
+        legal_mask: Option<&Bound<'_, PyBytes>>,
+    ) -> PyResult<EvalObsFlatResult> {
+        if !batch.is_instance_of::<PyInt>() || batch.is_instance_of::<PyBool>() {
+            return Err(PyTypeError::new_err("packed batch must be an integer, not boolean"));
+        }
+        let batch: usize = batch.extract()?;
+        let spec = self.evaluator.spec();
+        let dimension = |value| usize::try_from(value)
+            .map_err(|_| PyValueError::new_err("packed model dimensions must be positive"));
+        i64::try_from(batch).map_err(|_| PyValueError::new_err("packed batch exceeds i64"))?;
+        let shape = crate::packed_obs::PackedShape {
+            batch,
+            window: dimension(spec.window)?, tokens: dimension(spec.tokens)?,
+            categorical_features: dimension(spec.categorical_features)?,
+            numeric_features: dimension(spec.numeric_features)?,
+        };
+        let (c, n, t, a, h) = (categorical_ids.as_bytes(), numeric_features.as_bytes(),
+            token_type_ids.as_bytes(), attention_mask.as_bytes(), history_mask.as_bytes());
+        let decoded = py.detach(|| crate::packed_obs::decode(shape, byte_order, c, n, t, a, h))
+            .map_err(PyValueError::new_err)?;
+        let legal = legal_mask.map(|mask| {
+            if mask.as_bytes().iter().any(|&value| value > 1) {
+                return Err(PyValueError::new_err("packed legal mask requires boolean bytes 0 or 1"));
+            }
+            Ok(mask.as_bytes().iter().map(|&value| value == 1).collect::<Vec<_>>())
+        }).transpose()?;
+        self.eval_obs_flat(py, batch, decoded.categorical, decoded.numeric,
+            decoded.token_types, decoded.attention, decoded.history, legal)
     }
 
     /// Forward-only throughput probe: evals/s at `batch_size` (deterministic

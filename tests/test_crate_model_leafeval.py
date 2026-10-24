@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -137,6 +138,47 @@ class CrateTorchScriptParityTest(unittest.TestCase):
                 f"crate/torch divergence {diff:.3e} at batch {batch} exceeds {PARITY_TOLERANCE}",
             )
         print(f"\n[parity] crate vs venv torch, max abs diff across batches: {worst:.3e}")
+
+    def test_packed_transport_matches_unchanged_flat_forward(self) -> None:
+        for batch in (1, 4):
+            inputs = self.export.make_random_inputs(self.config, batch, seed=811 + batch)
+            flat = _flatten_inputs(inputs)
+            packed = [b"".join(struct.pack(code, value) for value in column)
+                      for code, column in zip(("<i", "<d", "<h", "<?", "<?"), flat)]
+            old = self.native.eval_obs_flat(batch, *flat)
+            new = self.native.eval_obs_packed(batch, *packed, byte_order="little")
+            self.assertEqual(old, new)  # Same effective arrays, batch, runtime and forward.
+            legal = [index % 9 == 0 for index in range(batch * 9)]
+            self.assertEqual(self.native.eval_obs_flat(batch, *flat, legal_mask=legal),
+                self.native.eval_obs_packed(batch, *packed, byte_order="little", legal_mask=bytes(legal)))
+
+    def test_packed_transport_rejects_noncanonical_buffers(self) -> None:
+        inputs = _flatten_inputs(self.export.make_random_inputs(self.config, 1, seed=812))
+        packed = [b"".join(struct.pack(code, value) for value in column)
+                  for code, column in zip(("<i", "<d", "<h", "<?", "<?"), inputs)]
+        for index in range(5):
+            bad = list(packed); bad[index] = bad[index][:-1]
+            with self.assertRaises(ValueError):
+                self.native.eval_obs_packed(1, *bad, byte_order="little")
+            bad = list(packed); bad[index] = list(bad[index])
+            with self.assertRaises(TypeError):
+                self.native.eval_obs_packed(1, *bad, byte_order="little")
+        with self.assertRaises(ValueError):
+            self.native.eval_obs_packed(1, *packed, byte_order="big")
+        with self.assertRaises(TypeError):
+            self.native.eval_obs_packed(1, *packed)  # Explicit endianness is mandatory.
+        for batch in (True, 1.0, "1"):
+            with self.assertRaises(TypeError):
+                self.native.eval_obs_packed(batch, *packed, byte_order="little")
+        for value in (bytearray(packed[0]), memoryview(packed[0])):
+            with self.assertRaises(TypeError):
+                self.native.eval_obs_packed(1, value, *packed[1:], byte_order="little")
+        for index in (3, 4):
+            bad = list(packed); bad[index] = b"\x02" + bad[index][1:]
+            with self.assertRaises(ValueError):
+                self.native.eval_obs_packed(1, *bad, byte_order="little")
+        with self.assertRaises(ValueError):
+            self.native.eval_obs_packed(1, *packed, byte_order="little", legal_mask=b"\x02" * 9)
 
     def test_legal_mask_priors_match_masked_softmax(self) -> None:
         batch = 4

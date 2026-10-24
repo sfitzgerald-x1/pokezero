@@ -64,10 +64,17 @@ class NativeExactBackend:
     batch cardinalities may change floating-point kernel roundoff, so native
     numerical parity still needs a declared tolerance; this is not a bitwise
     cross-batch arithmetic claim.
+
+    Separate default-off packed transport retains every encode and batch. It
+    passes the encoder's canonical i32/f64/i16/bool little-endian bytes to the
+    additive model API, which performs the SAME effective i64/f32/i64/bool/bool
+    conversions before the unchanged forward. It is not a new encoder, does
+    not compose with memoization in this pilot, and rejects malformed rows.
     """
 
     def __init__(self, native: Any, model: Any, *, window: int = 1,
                  max_outcomes_per_call: int = 100_000, memoize_leaves: bool = False,
+                 packed_leaves: bool = False,
                  model_sha256: str | None = None, observation_spec: dict | None = None):
         if os.environ.get("POKEZERO_ENUMERATE_ROLLS") != "1":
             raise ExactSearchRefused("fresh worker must opt into exact damage rolls before engine load")
@@ -77,13 +84,20 @@ class NativeExactBackend:
             raise ExactSearchRefused("positive native outcome-call limit required")
         if type(memoize_leaves) is not bool:
             raise ExactSearchRefused("leaf memoization must be an explicit boolean")
+        if type(packed_leaves) is not bool:
+            raise ExactSearchRefused("packed leaves must be an explicit boolean")
+        if packed_leaves and memoize_leaves:
+            raise ExactSearchRefused("packed pilot does not compose with leaf memoization")
+        if packed_leaves and not callable(getattr(model, "eval_obs_packed", None)):
+            raise ExactSearchRefused("packed pilot requires the additive native model API")
         self._row_spec = dict(observation_spec or {})
-        if memoize_leaves and (set(self._row_spec) != {
+        if (memoize_leaves or packed_leaves) and (set(self._row_spec) != {
                 "window", "tokens", "categorical_features", "numeric_features"}
                 or any(type(value) is not int or value <= 0 for value in self._row_spec.values())
                 or self._row_spec["window"] != window):
-            raise ExactSearchRefused("memoized leaves require the fixed complete observation spec")
+            raise ExactSearchRefused("memoized/packed leaves require the fixed complete observation spec")
         self.native, self.model = native, model
+        self.packed_leaves = packed_leaves
         self._leaf_values = DecisionLeafValues(model, model_sha256=model_sha256) if memoize_leaves else None
         self._model_sha256 = model_sha256
         self.max_outcomes_per_call = max_outcomes_per_call
@@ -179,14 +193,31 @@ class NativeExactBackend:
         if not states:
             return []
         categorical, numeric, token_types, attention = [], [], [], []
+        packed_columns = ([], [], [], []) if self.packed_leaves else None
         encoded_rows = []
         started = time.perf_counter()
         for state in states:
             if state.self_side not in ("side_one", "side_two"):
                 raise ExactSearchRefused("unknown encoder value perspective")
+            encoded_at = time.perf_counter()
             row = state.encoder.encode_leaf(state.state_str, state.fold, state.turn,
                                             list(state.lines) or None, False)
+            self.stage_seconds["native_leaf_encode"] += time.perf_counter() - encoded_at
             self.encode_calls += 1
+            packing_at = time.perf_counter()
+            if packed_columns is not None:
+                spec = self._row_spec
+                wt = spec["window"] * spec["tokens"]
+                for name, width, column in zip(
+                        ("categorical_ids", "numeric_features", "token_type_ids", "attention_mask"),
+                        (wt * spec["categorical_features"] * 4,
+                         wt * spec["numeric_features"] * 8, wt * 2, wt), packed_columns):
+                    data = row[name]
+                    if type(data) is not bytes or len(data) != width:
+                        raise ExactSearchRefused("packed native row has wrong bytes type or width: " + name)
+                    column.append(data)
+                self.stage_seconds["python_leaf_pack"] += time.perf_counter() - packing_at
+                continue
             if self._leaf_values is not None:
                 encoded_rows.append(encoded_leaf_row(row, model_sha256=self._model_sha256, **self._row_spec))
                 continue
@@ -196,6 +227,7 @@ class NativeExactBackend:
             if any(value not in (0, 1) for value in row["attention_mask"]):
                 raise ExactSearchRefused("native attention mask is not boolean")
             attention.extend(bool(value) for value in row["attention_mask"])
+            self.stage_seconds["python_leaf_pack"] += time.perf_counter() - packing_at
         if self._leaf_values is not None:
             previous_forward_seconds = self._leaf_values.forward_seconds
             try:
@@ -209,12 +241,20 @@ class NativeExactBackend:
                 self.leaf_cache_hits = self._leaf_values.cache_hits
             return [value * (1 if state.self_side == "side_one" else -1)
                     for state, value in zip(states, values)]
+        if packed_columns is not None:
+            packing_at = time.perf_counter()
+            packed = tuple(b"".join(column) for column in packed_columns)
+            history = b"\x01" * (len(states) * self._row_spec["window"])
+            self.stage_seconds["python_leaf_pack"] += time.perf_counter() - packing_at
         self.stage_seconds["cpu_encode_and_pack"] += time.perf_counter() - started
         started = time.perf_counter()
-        values, _, _, _ = self.model.eval_obs_flat(
-            len(states), categorical, numeric, token_types, attention,
-            [True] * len(states),
-        )
+        if packed_columns is not None:
+            values, _, _, _ = self.model.eval_obs_packed(len(states), *packed, history, byte_order="little")
+        else:
+            values, _, _, _ = self.model.eval_obs_flat(
+                len(states), categorical, numeric, token_types, attention,
+                [True] * len(states),
+            )
         self.stage_seconds["champion_forward"] += time.perf_counter() - started
         self.forward_batches += 1
         if len(values) != len(states):

@@ -135,6 +135,7 @@ def worker(args):
     backend = NativeExactBackend(native, model, window=spec["window"],
                                  max_outcomes_per_call=args.max_branches,
                                  memoize_leaves=getattr(args, "memoize_leaves", False),
+                                 packed_leaves=getattr(args, "packed_leaves", False),
                                  model_sha256=sha(args.model), observation_spec=spec)
     started = time.perf_counter()
     try:
@@ -168,6 +169,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--memoize-leaves", action="store_true",
                         help="reuse only complete identical model-bound encoded rows within this decision")
+    parser.add_argument("--packed-leaves", action="store_true",
+                        help="pass identical canonical row bytes through the additive native transport API")
     parser.add_argument("--max-leaves", type=int, default=8192)
     parser.add_argument("--max-joint-actions", type=int, default=4096)
     parser.add_argument("--max-branches", type=int, default=16384)

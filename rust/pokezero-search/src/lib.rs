@@ -15,6 +15,7 @@ pub mod events;
 pub mod fold;
 pub mod leaf;
 pub mod panic_guard;
+pub(crate) mod packed_obs;
 #[cfg(feature = "model")]
 pub mod model;
 // NOT feature-gated even though `model` is its only caller: the gather/apply
@@ -463,6 +464,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rollout::price_uniform_rollout_rows, m)?)?;
     m.add_function(wrap_pyfunction!(events::branch_events, m)?)?;
     m.add_function(wrap_pyfunction!(encoder::encode_decision, m)?)?;
+    m.add_function(wrap_pyfunction!(leaf::drain_leaf_encode_subphases, m)?)?;
     m.add_function(wrap_pyfunction!(envstep::env_options, m)?)?;
     m.add_function(wrap_pyfunction!(envstep::env_step, m)?)?;
     m.add_function(wrap_pyfunction!(envstep::env_battle_over, m)?)?;
