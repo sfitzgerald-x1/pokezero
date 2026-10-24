@@ -32,7 +32,7 @@ FIELD_POLICY = {
     "hidden_power_power": "native60/70 variant; refuse other referenced powers",
     "happiness": "native Return102; Frustration catalog has no bound happiness parameter",
     "status": "native major status; sleep origin/duration requires explicit refusal",
-    "status_counter": "active Toxic count; natural sleep latent convention unresolved",
+    "status_counter": "active Toxic quotient min(count,14); natural sleep latent convention unresolved",
     "sleep_skipped": "Rest provenance/refund unresolved when sleeping; otherwise stale",
     "choice_move": "Choice Band disabled-slot representation; ambiguous locks refuse",
     "last_move": "native selected slot only when conditional tracking is enabled",
@@ -43,7 +43,7 @@ FIELD_POLICY = {
     "boosts": "native active side boosts; nonzero bench state refuses",
     "volatile": "explicit supported bitset; unknown bits refuse",
     "confusion_counter": "elapsed-hazard versus sampled duration unresolved while active",
-    "protect_counter": "native active side Protect streak; nonzero bench state refuses",
+    "protect_counter": "JAX denominator0/2/4/8 -> native capped exponent0/1/2/3; other live values refuse",
     "substitute_hp": "native active substitute health and volatile",
     "active": "native party index",
     "entry_pending": "unresolved initial events refuse; never silently initialize",
@@ -94,7 +94,7 @@ NATIVE_PATHS = {
     "boosts": ("side[].{attack,defense,special_attack,special_defense,speed,accuracy,evasion}_boost",),
     "volatile": ("side[].volatile_statuses: explicitly enumerated bits",),
     "confusion_counter": ("UNRESOLVED: side[].volatile_status_durations.confusion",),
-    "protect_counter": ("side[].side_conditions.protect",),
+    "protect_counter": ("side[].side_conditions.protect: denominator-to-exponent, capped3",),
     "substitute_hp": ("side[].substitute_health", "side[].volatile_statuses.SUBSTITUTE"),
     "active": ("side[].active_index",), "entry_pending": ("UNRESOLVED: pending initial event queue",),
     "active_turns": ("NO_NATIVE_FIELD: inactive age at admitted complete ordinary boundary",),
@@ -390,8 +390,19 @@ def _prepare(data, metadata, certificate=None):
         if data["wish_counter"][side]:
             add(side_name+".wish_counter", "WISH_HEAL_AMOUNT_NOT_RETAINED", "JAX recipient-dependent healing cannot manufacture native stored heal amount/history")
         conditions = {k: 0 for k in CONDITIONS}
-        conditions.update(spikes=data["spikes"][side], protect=data["protect_counter"][side][active],
-            toxic_count=data["status_counter"][side][active] if data["status"][side][active] == 4 else 0)
+        # These are documented future-law quotients, NOT raw-state equality.
+        # Native Protect uses min(streak,3) as a success exponent; JAX stores
+        # the next attempt denominator. Native Toxic saturates14, JAX15, but
+        # both next ticks use min(counter,14)+1 and preserve that saturation.
+        denominator = data["protect_counter"][side][active]
+        protect = {0: 0, 2: 1, 4: 2, 8: 3}.get(denominator)
+        if protect is None:
+            add(side_name+".protect_counter", "INVALID_PROTECT_DENOMINATOR", "Live JAX denominator must be0/2/4/8")
+        toxic = data["status_counter"][side][active] if data["status"][side][active] == 4 else 0
+        if toxic < 0:
+            add(side_name+".status_counter", "INVALID_TOXIC_COUNTER", "Negative Toxic count")
+        conditions.update(spikes=data["spikes"][side], protect=protect if protect is not None else 0,
+            toxic_count=min(toxic, 14))
         last = "move:none"
         if use_last:
             used = data["last_move"][side][active]
@@ -556,6 +567,10 @@ def canonical_native_future(native_state, certificate):
             for field, value in side["side_conditions"].items():
                 if value and field not in {"spikes", "protect", "toxic_count"}:
                     gaps.append(Gap(name+".side_conditions."+field, "NATIVE_UNREPRESENTED_CONDITION", repr(value)))
+            if side["side_conditions"]["protect"] < 0 or side["side_conditions"]["toxic_count"] < 0:
+                gaps.append(Gap(name+".side_conditions", "INVALID_NATIVE_COUNTER", "Negative Protect/Toxic count"))
+            side["side_conditions"]["protect"] = min(side["side_conditions"]["protect"], 3)
+            side["side_conditions"]["toxic_count"] = min(side["side_conditions"]["toxic_count"], 14)
             for field, value in side["volatile_status_durations"].items():
                 if value:
                     gaps.append(Gap(name+".volatile_status_durations."+field, "LATENT_DURATION_CONVENTION", repr(value)))

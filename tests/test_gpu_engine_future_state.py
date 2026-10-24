@@ -152,6 +152,41 @@ class FutureStateTests(unittest.TestCase):
         out = f.native_input_from_jax(data, None, meta, module=FAKE)
         self.assertIn("NATIVE_POWER_CONVENTION", {g.code for g in out.gaps})
 
+    def test_protect_constructor_maps_denominator_not_streak_identity(self):
+        for denominator, streak in ((0, 0), (2, 1), (4, 2), (8, 3)):
+            data, meta = fixture()
+            data["protect_counter"][0][0] = denominator
+            native = self.construct(data, meta)
+            self.assertEqual(native.state.side_one.side_conditions.protect, streak)
+        for invalid in (-1, 1, 3, 16):
+            data, meta = fixture()
+            data["protect_counter"][0][0] = invalid
+            out = f.native_input_from_jax(data, None, meta, module=FAKE)
+            self.assertIn("INVALID_PROTECT_DENOMINATOR", {g.code for g in out.gaps})
+
+    def test_protect_posttransition_capped_quotient_keeps_both_raw_states(self):
+        data, meta = fixture()
+        native = self.construct(data, meta)
+        data["protect_counter"][0][0] = 8
+        native.state.side_one.side_conditions.protect = 9
+        left = f.canonical_jax_future(data, None, meta, certificate=native.certificate)
+        right = f.canonical_native_future(native.state, native.certificate)
+        self.assertEqual(left.key, right.key)
+        self.assertEqual(dict(left.raw_jax)["protect_counter"][0][0], 8)
+        self.assertEqual(f._native_wire(right.raw_native)["side_one"]["side_conditions"]["protect"], 9)
+
+    def test_toxic_saturation_uses_future_equivalence_not_raw_identity(self):
+        for counter in (0, 1, 13, 14, 15):
+            data, meta = fixture()
+            data["status"][0][0] = 4
+            data["status_counter"][0][0] = counter
+            native = self.construct(data, meta)
+            self.assertEqual(native.state.side_one.side_conditions.toxic_count, min(counter, 14))
+            left = f.canonical_jax_future(data, None, meta, certificate=native.certificate)
+            right = f.canonical_native_future(native.state, native.certificate)
+            self.assertEqual(left.key, right.key)
+            self.assertEqual(dict(left.raw_jax)["status_counter"][0][0], counter)
+
     def test_stale_draws_are_explicit_but_suspended_draws_are_never_dropped(self):
         data, meta = fixture()
         native = self.construct(data, meta)
