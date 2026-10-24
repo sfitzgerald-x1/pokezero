@@ -103,6 +103,51 @@ class NativeBindingTests(unittest.TestCase):
             self.backend.terminal_value(replace(self.root, state_str="loss"))
         self.assertIsNone(self.backend.terminal_value(self.root))
 
+    def test_packed_rows_preserve_all_effective_inputs_order_and_value_frame(self):
+        from dataclasses import replace
+        class PackedModel(Model):
+            def eval_obs_packed(self, count, cats, nums, kinds, attention, history, *, byte_order):
+                self.packed = (count, cats, nums, kinds, attention, history, byte_order)
+                self.effective = (list(struct.unpack("<" + "i" * (len(cats) // 4), cats)),
+                    [struct.unpack("<f", struct.pack("<f", value[0]))[0]
+                     for value in struct.iter_unpack("<d", nums)],
+                    list(struct.unpack("<" + "h" * (len(kinds) // 2), kinds)),
+                    [value == 1 for value in attention], [value == 1 for value in history])
+                return [0.25] * count, [], [], 9
+        model = PackedModel()
+        backend = NativeExactBackend(self.native, model, packed_leaves=True,
+            observation_spec=dict(window=1, tokens=1, categorical_features=2, numeric_features=2))
+        states = [self.root, replace(self.root, self_side="side_two"), self.root]
+        self.assertEqual(backend.evaluate_leaves(states), self.backend.evaluate_leaves(states))
+        self.assertEqual(model.effective, self.model.last[1])
+        self.assertEqual(model.packed[-1], "little")
+        self.assertEqual((backend.encode_calls, backend.forward_batches, backend.unique_leaf_evaluations), (3, 1, 3))
+        self.assertTrue({"native_leaf_encode", "python_leaf_pack", "cpu_encode_and_pack", "champion_forward"}
+                        <= backend.stage_seconds.keys())
+        self.assertEqual(len(self.encoder.calls), 6)  # Both paths encode every state/history.
+
+    def test_packed_pilot_refuses_incompatible_api_spec_type_or_width(self):
+        class PackedModel(Model):
+            def eval_obs_packed(self, *args, **kwargs):
+                self.fail = True
+                raise AssertionError("bad input must not reach forward")
+        spec = dict(window=1, tokens=1, categorical_features=2, numeric_features=2)
+        for options in ({"packed_leaves": 1}, {"packed_leaves": True},
+                        {"packed_leaves": True, "observation_spec": spec},
+                        {"packed_leaves": True, "memoize_leaves": True, "observation_spec": spec}):
+            with self.subTest(options=options), self.assertRaises(ExactSearchRefused):
+                NativeExactBackend(self.native, self.model, **options)
+        model = PackedModel()
+        for replacement in (b"short", bytearray(struct.pack("<ii", 3, 5))):
+            backend = NativeExactBackend(self.native, model, packed_leaves=True, observation_spec=spec)
+            original = self.encoder.encode_leaf
+            def wrong(*args):
+                return {**original(*args), "categorical_ids": replacement}
+            with patch.object(self.encoder, "encode_leaf", wrong):
+                with self.assertRaisesRegex(ExactSearchRefused, "bytes type or width"):
+                    backend.evaluate_leaves([self.root])
+            self.assertFalse(getattr(model, "fail", False))
+
     def test_fixture_label_cannot_override_actual_encoder_frame(self):
         row = json.dumps({"observation_metadata": {"showdown_slot": "p2"}})
         validate_encoder_frame(row, "side_two")

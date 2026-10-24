@@ -29,9 +29,11 @@
 //! batched search consumes model VALUES and keeps uniform priors.
 
 use std::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::{PyBool, PyBytes, PyInt};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use tch::{CModule, Device, IValue, Kind, TchError, Tensor};
@@ -2008,6 +2010,10 @@ type EvalObsFlatResult = (Vec<f32>, Vec<f32>, Vec<f32>, usize);
 #[pyclass]
 pub struct NativeLeafModel {
     evaluator: TorchScriptLeafEval,
+    packed_decode_calls: AtomicU64,
+    packed_decode_nanos: AtomicU64,
+    flat_forward_calls: AtomicU64,
+    flat_forward_nanos: AtomicU64,
 }
 
 #[pymethods]
@@ -2042,12 +2048,28 @@ impl NativeLeafModel {
         };
         Ok(Self {
             evaluator: TorchScriptLeafEval::load(model_path, parse_device(device)?, spec)?,
+            packed_decode_calls: AtomicU64::new(0),
+            packed_decode_nanos: AtomicU64::new(0),
+            flat_forward_calls: AtomicU64::new(0),
+            flat_forward_nanos: AtomicU64::new(0),
         })
     }
 
     #[getter]
     fn device(&self) -> String {
         format!("{:?}", self.evaluator.device)
+    }
+
+    /// Isolated-worker diagnostics only: (packed decode calls/seconds,
+    /// native flat tensor+forward calls/seconds), resetting these counters.
+    /// Automatic PyO3 list extraction occurs BEFORE eval_obs_flat enters Rust
+    /// and is deliberately not mislabeled as measured native decode time.
+    /// These counters do not participate in inference or search control flow.
+    fn drain_transport_timings(&self) -> (u64, f64, u64, f64) {
+        (self.packed_decode_calls.swap(0, Ordering::Relaxed),
+         self.packed_decode_nanos.swap(0, Ordering::Relaxed) as f64 / 1e9,
+         self.flat_forward_calls.swap(0, Ordering::Relaxed),
+         self.flat_forward_nanos.swap(0, Ordering::Relaxed) as f64 / 1e9)
     }
 
     /// Debug/parity entrypoint: evaluate `batch` pre-encoded observations
@@ -2078,7 +2100,8 @@ impl NativeLeafModel {
         if batch == 0 {
             return Err(PyValueError::new_err("batch must be > 0"));
         }
-        py.detach(|| {
+        let started = Instant::now();
+        let result = py.detach(|| {
             let spec = self.evaluator.spec();
             let obs = ObsBatch::from_flat(
                 &spec,
@@ -2109,7 +2132,63 @@ impl NativeLeafModel {
                 output.priors,
                 output.action_count,
             ))
-        })
+        });
+        self.flat_forward_calls.fetch_add(1, Ordering::Relaxed);
+        self.flat_forward_nanos.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        result
+    }
+
+    /// Additive canonical-byte transport for the SAME five effective tensors
+    /// and unchanged eval_obs_flat forward. Encoder output is i32/f64/i16/
+    /// boolean bytes, explicitly little endian; no Python scalar expansion.
+    /// The old list API/default remains unchanged. Nonfinite or f32-overflow
+    /// input is outside this strict packed pilot domain and is rejected.
+    #[pyo3(signature = (
+        batch, categorical_ids, numeric_features, token_type_ids,
+        attention_mask, history_mask, *, byte_order, legal_mask = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn eval_obs_packed(
+        &self,
+        py: Python<'_>,
+        batch: &Bound<'_, PyAny>,
+        categorical_ids: &Bound<'_, PyBytes>,
+        numeric_features: &Bound<'_, PyBytes>,
+        token_type_ids: &Bound<'_, PyBytes>,
+        attention_mask: &Bound<'_, PyBytes>,
+        history_mask: &Bound<'_, PyBytes>,
+        byte_order: &str,
+        legal_mask: Option<&Bound<'_, PyBytes>>,
+    ) -> PyResult<EvalObsFlatResult> {
+        if !batch.is_instance_of::<PyInt>() || batch.is_instance_of::<PyBool>() {
+            return Err(PyTypeError::new_err("packed batch must be an integer, not boolean"));
+        }
+        let batch: usize = batch.extract()?;
+        let spec = self.evaluator.spec();
+        let dimension = |value| usize::try_from(value)
+            .map_err(|_| PyValueError::new_err("packed model dimensions must be positive"));
+        i64::try_from(batch).map_err(|_| PyValueError::new_err("packed batch exceeds i64"))?;
+        let shape = crate::packed_obs::PackedShape {
+            batch,
+            window: dimension(spec.window)?, tokens: dimension(spec.tokens)?,
+            categorical_features: dimension(spec.categorical_features)?,
+            numeric_features: dimension(spec.numeric_features)?,
+        };
+        let (c, n, t, a, h) = (categorical_ids.as_bytes(), numeric_features.as_bytes(),
+            token_type_ids.as_bytes(), attention_mask.as_bytes(), history_mask.as_bytes());
+        let started = Instant::now();
+        let decoded = py.detach(|| crate::packed_obs::decode(shape, byte_order, c, n, t, a, h));
+        self.packed_decode_calls.fetch_add(1, Ordering::Relaxed);
+        self.packed_decode_nanos.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        let decoded = decoded.map_err(PyValueError::new_err)?;
+        let legal = legal_mask.map(|mask| {
+            if mask.as_bytes().iter().any(|&value| value > 1) {
+                return Err(PyValueError::new_err("packed legal mask requires boolean bytes 0 or 1"));
+            }
+            Ok(mask.as_bytes().iter().map(|&value| value == 1).collect::<Vec<_>>())
+        }).transpose()?;
+        self.eval_obs_flat(py, batch, decoded.categorical, decoded.numeric,
+            decoded.token_types, decoded.attention, decoded.history, legal)
     }
 
     /// Forward-only throughput probe: evals/s at `batch_size` (deterministic

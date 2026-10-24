@@ -58,6 +58,14 @@ pub(crate) fn drain_encode_subphases() -> (f64, f64, f64) {
         ROW_WRITE_NANOS.swap(0, Ordering::Relaxed) as f64 / 1e9,
     )
 }
+
+/// Diagnostic process-global seconds (row inputs, fold products, row writing).
+/// Resets existing counters; call only in an isolated diagnostic worker, never
+/// concurrently with a production search whose timing receipt uses them.
+#[pyfunction]
+pub fn drain_leaf_encode_subphases() -> (f64, f64, f64) {
+    drain_encode_subphases()
+}
 use pyo3::types::PyDict;
 use serde_json::{json, Map, Value};
 
