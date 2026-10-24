@@ -65,7 +65,7 @@ FIELD_POLICY = {
     "spikes": "native side condition",
     "wish_counter": "nonzero Wish needs missing caster/recipient heal-amount correspondence",
     "weather": "native field weather",
-    "weather_counter": "native field weather duration",
+    "weather_counter": "native duration; non-NONE JAX0 permanent maps to native-1, positive clocks unchanged",
     "turn": "external ordinary-turn address; startup must already be resolved",
     "keys": "external PRNG address; exact-law driver supplies chance, not key enumeration",
     "done": "derived from all12 party HP; inconsistency refuses",
@@ -113,7 +113,7 @@ NATIVE_PATHS = {
     "replacement_count": ("EXTERNAL_CHANCE: conditional tie-stream address",),
     "spikes": ("side[].side_conditions.spikes",),
     "wish_counter": ("UNRESOLVED: side[].wish=(counter,stored_heal_amount)",),
-    "weather": ("State.weather.weather_type",), "weather_counter": ("State.weather.turns_remaining",),
+    "weather": ("State.weather.weather_type",), "weather_counter": ("State.weather.turns_remaining: active JAX0 -> native-1",),
     "turn": ("EXTERNAL_CHANCE: turn address; startup already resolved",),
     "keys": ("EXTERNAL_CHANCE: PRNG address, not exact semantic outcome state",),
     "done": ("derived from complete party HP",), "winner": ("derived from complete party HP",),
@@ -322,7 +322,13 @@ def _prepare(data, metadata, certificate=None):
     winner = -1 if not done else 0 if alive[0] else 1 if alive[1] else 2
     if bool(data["done"]) != done or data["winner"] != winner:
         add("done/winner", "INCONSISTENT_TERMINAL", "Terminal flags do not match complete party HP")
-    result = {"weather": WEATHER_NAMES[data["weather"]], "weather_turns_remaining": data["weather_counter"],
+    # JAX's non-NONE zero clock is permanent. Native Gen3 weather abilities
+    # write WEATHER_ABILITY_TURNS=-1; use that convention at construction AND
+    # in the JAX future key, not a quotient over arbitrary native clocks.
+    # Raw JAX0 remains retained in the certificate/representative; native wire
+    # clocks remain unmodified, including malformed/different-clock evidence.
+    native_weather_clock = -1 if data["weather"] and data["weather_counter"] == 0 else data["weather_counter"]
+    result = {"weather": WEATHER_NAMES[data["weather"]], "weather_turns_remaining": native_weather_clock,
         "terrain": "none", "terrain_turns_remaining": 0, "trick_room": False,
         "trick_room_turns_remaining": 0, "team_preview": False,
         "derived_done": done, "derived_winner": winner,
