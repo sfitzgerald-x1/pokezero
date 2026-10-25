@@ -162,6 +162,24 @@ class ExactSessionContracts(unittest.TestCase):
             self.assertFalse(batch['model_invoked'])
             self.assertEqual(len(raw.calls),3,'only the declared startup warmup ran')
 
+    def test_leaf_cap_keeps_trigger_outside_pending_without_forward_or_choice(self):
+        from pokezero.one_ply_exact import exact_one_ply
+        with tempfile.TemporaryDirectory() as d,patch.dict(os.environ,POKEZERO_ENUMERATE_ROLLS='1'):
+            q=Quarantine(d,build={})
+            with self.assertRaisesRegex(ExactSearchRefused,'leaf cap'):
+                with decision_scope(q,SimpleNamespace(),random.Random(1)):
+                    root,raw,b=self.fixture()
+                    exact_one_ply([root],b,max_leaves=1,batch_size=4,cross_cell_batches=True)
+            bundle=json.loads(next(Path(d).glob('failure-*.json')).read_text())
+            self.assertEqual(bundle['reason_codes'],['p2.decision.leaf_cap'])
+            evidence=bundle['lazy_evidence']['native_one_ply']
+            self.assertEqual([r['branch_index'] for r in evidence['rows']],[0])
+            trigger=evidence['last_addressed_leaf']
+            self.assertEqual(trigger['branch_index'],1)
+            self.assertEqual(trigger['native']['post_state'],'post-1')
+            self.assertFalse(evidence['model_invoked'])
+            self.assertEqual(len(raw.calls),3,'only startup warmup, never a partial-decision forward')
+
     def test_encode_failure_identifies_group_and_does_not_claim_an_earlier_forward(self):
         with tempfile.TemporaryDirectory() as d,patch.dict(os.environ,POKEZERO_ENUMERATE_ROLLS='1'):
             q=Quarantine(d,build={})

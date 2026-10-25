@@ -165,19 +165,29 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
             raise ExactSearchRefused('backend pending-list binding is not callable')
         bind_pending(pending)
 
-    def check():
-        now = time.monotonic()
-        if now >= deadline:
-            error = ExactSearchRefused("decision deadline reached; no partial decision")
-            error.failure_codes = ['p2.decision.deadline']
-            error.work = dict(phase=phase, world_ordinal=world_index,
+    def refusal(message, code, *, now=None):
+        error = ExactSearchRefused(message)
+        error.failure_codes = [code]
+        error.work = dict(phase=phase, world_ordinal=world_index,
                 row_action=row_action, column_action=column_action, branch_index=branch_index,
                 worlds_enumerated=worlds_enumerated, cells_enumerated=cells_enumerated,
                 joint_actions_planned=joint_actions, chance_branches_checked=branches_count,
-                leaves_queued=leaves, batches_accepted=batches, pending_leaves=len(pending),
-                elapsed_seconds=now-deadline+max_seconds,
-                count_basis='Counters advance at existing guarded checkpoints; in-flight work may be excluded.')
-            raise error
+                leaves_queued=leaves-int(code == 'p2.decision.leaf_cap'),
+                leaves_attempted=leaves, batches_accepted=batches, pending_leaves=len(pending),
+                limits=dict(max_leaves=max_leaves, max_chance_branches=max_chance_branches,
+                            max_joint_actions=max_joint_actions, batch_size=batch_size,
+                            max_seconds=max_seconds),
+                elapsed_seconds=(time.monotonic() if now is None else now)-deadline+max_seconds,
+                count_basis='Counters advance at existing guarded checkpoints. Nonterminal '
+                    'leaves_attempted includes a cap-rejected current leaf; leaves_queued excludes it. '
+                    'In-flight work may be excluded.')
+        return error
+
+    def check():
+        now = time.monotonic()
+        if now >= deadline:
+            raise refusal("decision deadline reached; no partial decision",
+                          'p2.decision.deadline', now=now)
 
     def score(value):
         value = float(value)
@@ -214,7 +224,7 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
                    for a in actions]
     joint_actions = sum(len(a[0])*len(a[1]) for a in actions)
     if joint_actions > max_joint_actions:
-        raise ExactSearchRefused("joint-action cap; no partial decision")
+        raise refusal("joint-action cap; no partial decision", 'p2.decision.joint_action_cap')
     contributions = []
     mass_error = 0.0
 
@@ -252,7 +262,8 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
                     check()
                     branches_count += 1
                     if branches_count > max_chance_branches:
-                        raise ExactSearchRefused("chance-branch cap; no partial decision")
+                        raise refusal("chance-branch cap; no partial decision",
+                                      'p2.decision.chance_branch_cap')
                     if not math.isfinite(branch.probability) or branch.probability <= 0:
                         raise ExactSearchRefused("positive finite chance mass required")
                     fan.append(branch)
@@ -272,7 +283,7 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
                     else:
                         leaves += 1
                         if leaves > max_leaves:
-                            raise ExactSearchRefused("leaf cap; no partial decision")
+                            raise refusal("leaf cap; no partial decision", 'p2.decision.leaf_cap')
                         pending.append(branch.state)
                         targets.append((terms, len(terms) if cross_cell_batches else None, weight))
                         if cross_cell_batches:
