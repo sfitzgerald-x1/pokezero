@@ -4712,7 +4712,7 @@ class EngineMctsPolicy:
             self._quarantine = configured_quarantine(required=True)
             self._capture_admission = require_capture_admission(
                 os.environ.get("POKEZERO_CAPTURE_ADMISSION"), build=self._quarantine.build,
-                scientific_path="engine-mcts")
+                scientific_path="engine-mcts", capture_directory=self._quarantine.directory)
         if module is None:
             import poke_engine as module  # noqa: PLC0415 — optional native dependency
 

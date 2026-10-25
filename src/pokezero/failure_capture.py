@@ -449,7 +449,61 @@ def require_fixture_coverage(observed_codes, manifest, *, build_fingerprint, evi
             raise ValueError("fixture gate: missing bundle-derived verified class " + code)
 
 
-def require_capture_admission(path, *, build, scientific_path="p2-informed-one-ply"):
+def _first_engine_capture_inventory(manifest, inventory, *, evidence_root, capture_directory):
+    """Audit first use without inventing a historical captured failure.
+
+    The prospective roster's own directory is excluded: new failures need
+    fixtures before the *next roster*, not between games of this roster.
+    Previous runs and qualification failures remain in the persistent scope.
+    """
+    audit = _read_evidence(inventory.get("capture_history_audit"), evidence_root)
+    if (not isinstance(manifest.get("fixtures"), list)
+            or audit.get("schema") != "pokezero.engine-mcts-capture-history.v1"
+            or audit.get("path") != "engine-mcts"
+            or not isinstance(audit.get("adoption_boundary"), str)
+            or not audit["adoption_boundary"].strip()
+            or not isinstance(audit.get("audited_locations"), list)
+            or not audit["audited_locations"]
+            or any(not isinstance(p, str) or not p.strip() for p in audit["audited_locations"])):
+        raise ValueError("first engine capture admission requires an explicit history audit")
+    root = Path(evidence_root).resolve()
+    history_name = audit.get("capture_history_root")
+    prospective_name = audit.get("prospective_capture_directory")
+    if (not isinstance(history_name, str) or not history_name
+            or not isinstance(prospective_name, str) or not prospective_name
+            or capture_directory is None):
+        raise ValueError("first engine capture admission must bind its history and prospective directory")
+    history = (root / history_name).resolve()
+    prospective = (root / prospective_name).resolve()
+    if (not history.is_relative_to(root) or not history.is_dir()
+            or prospective == history or not prospective.is_relative_to(history)
+            or Path(capture_directory).resolve() != prospective):
+        raise ValueError("first engine capture history/prospective directory is invalid")
+    legacy = _read_evidence(audit.get("legacy_history"), root)
+    if (legacy.get("schema") != "pokezero.legacy-refusal-history.v1"
+            or legacy.get("path") != "engine-mcts"
+            or legacy.get("capture_completeness") not in ("incomplete", "unavailable")
+            or not isinstance(legacy.get("sources"), list) or not legacy["sources"]):
+        raise ValueError("legacy fallback history must be disclosed separately from captured history")
+    for source in legacy["sources"]:
+        _read_evidence(source, root)
+    observed = set(manifest["observed_reason_codes"])
+    for path in history.rglob("failure-*.json"):
+        actual = path.resolve()
+        if not actual.is_relative_to(history):
+            raise ValueError("captured history link escapes audited history")
+        if actual.is_relative_to(prospective):
+            continue
+        value = json.loads(actual.read_text())
+        codes = value.get("reason_codes") if isinstance(value, dict) else None
+        if (not isinstance(codes, list) or not codes
+                or any(not isinstance(c, str) or not c for c in codes)
+                or not set(codes) <= observed):
+            raise ValueError("capture history contains an unrepresented refusal class")
+
+
+def require_capture_admission(path, *, build, scientific_path="p2-informed-one-ply",
+                              capture_directory=None):
     if not path:
         raise ValueError("scientific policy requires a reviewed capture/fixture admission manifest before a roster")
     path = Path(path)
@@ -460,11 +514,21 @@ def require_capture_admission(path, *, build, scientific_path="p2-informed-one-p
     if not isinstance(observed, list) or any(not isinstance(c, str) or not c for c in observed):
         raise ValueError("capture admission must name the observed refusal classes")
     inventory = _read_evidence(manifest.get("observed_inventory"), path.parent)
+    first_engine = manifest.get("admission_mode") == "first-capture-enabled-engine-mcts"
+    if first_engine:
+        if scientific_path != "engine-mcts":
+            raise ValueError("first capture admission is restricted to engine-mcts")
+        _first_engine_capture_inventory(manifest, inventory, evidence_root=path.parent,
+                                        capture_directory=capture_directory)
+    sources = inventory.get("source_runs")
     if (inventory.get("schema") != "pokezero.observed-refusal-inventory.v1"
             or inventory.get("path") != scientific_path
-            or not inventory.get("source_runs")
-            or set(observed) != set(inventory.get("reason_codes", [])) or not observed):
-        raise ValueError("P2 admission inventory must cover its recorded nonempty refusal history")
+            or not isinstance(sources, list)
+            or not isinstance(inventory.get("reason_codes"), list)
+            or set(observed) != set(inventory["reason_codes"])
+            or bool(sources) != bool(observed)
+            or (not first_engine and not observed)):
+        raise ValueError("capture admission inventory must cover its recorded refusal history")
     recovered_codes = set()
     run_ids = set()
     for source in inventory["source_runs"]:

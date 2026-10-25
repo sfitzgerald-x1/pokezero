@@ -484,5 +484,130 @@ class FailureCaptureTests(unittest.TestCase):
             require_capture_admission(None, build={"fingerprint":"new-runtime"})
 
 
+class FirstEngineCaptureAdmissionTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.q = Quarantine(self.root, build={"fingerprint": "runtime"})
+        self.history = self.root / "history"
+        self.current = self.history / "current"
+        self.current.mkdir(parents=True)
+        self.legacy_source = self.q.write("legacy-source", dict(
+            authored_fixture=True, fallback_occurrences=3, canonical_reason_codes=None))
+
+    def manifest(self, *, audit_changes=None, inventory_changes=None,
+                 manifest_changes=None, legacy_changes=None):
+        legacy = self.q.write("legacy", dict({
+            "schema": "pokezero.legacy-refusal-history.v1", "path": "engine-mcts",
+            "capture_completeness": "unavailable", "sources": [self.legacy_source],
+        }, **(legacy_changes or {})))
+        audit = self.q.write("audit", dict({
+            "schema": "pokezero.engine-mcts-capture-history.v1", "path": "engine-mcts",
+            "adoption_boundary": "authored fixture: first capture-enabled roster",
+            "audited_locations": ["history"], "capture_history_root": "history",
+            "prospective_capture_directory": "history/current", "legacy_history": legacy,
+        }, **(audit_changes or {})))
+        inventory = self.q.write("inventory", dict({
+            "schema": "pokezero.observed-refusal-inventory.v1", "path": "engine-mcts",
+            "reason_codes": [], "source_runs": [], "capture_history_audit": audit,
+        }, **(inventory_changes or {})))
+        link = self.q.write("admission", dict({
+            "schema": "pokezero.capture-admission.v1", "build_fingerprint": "runtime",
+            "admission_mode": "first-capture-enabled-engine-mcts",
+            "observed_reason_codes": [], "observed_inventory": inventory, "fixtures": [],
+        }, **(manifest_changes or {})))
+        return self.root / link["file"]
+
+    def admit(self, path, **kwargs):
+        return require_capture_admission(path, build={"fingerprint": "runtime"},
+            scientific_path="engine-mcts", capture_directory=self.current, **kwargs)
+
+    def test_first_engine_admission_preserves_nonzero_legacy_disclosure(self):
+        admitted = self.admit(self.manifest())
+        self.assertEqual(admitted["reason_codes"], [])
+        source = json.loads((self.root / self.legacy_source["file"]).read_text())
+        self.assertEqual(source["fallback_occurrences"], 3)
+        self.assertIsNone(source["canonical_reason_codes"])
+
+    def test_p2_and_unspecified_empty_histories_still_refuse(self):
+        path = self.manifest()
+        with self.assertRaises(ValueError):
+            require_capture_admission(path, build={"fingerprint": "runtime"})
+        with self.assertRaises(ValueError):
+            self.admit(self.manifest(manifest_changes={"admission_mode": None}))
+
+    def test_first_mode_is_not_a_generic_new_path_bypass(self):
+        with self.assertRaises(ValueError):
+            require_capture_admission(self.manifest(), build={"fingerprint": "runtime"},
+                scientific_path="different-path", capture_directory=self.current)
+
+    def test_malformed_or_unbound_audits_refuse(self):
+        mutations = ({"adoption_boundary": ""}, {"audited_locations": []},
+            {"audited_locations": [None]}, {"path": "p2-informed-one-ply"},
+            {"capture_history_root": ".."}, {"capture_history_root": "missing"},
+            {"prospective_capture_directory": "history"},
+            {"prospective_capture_directory": "history/different"})
+        for change in mutations:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.admit(self.manifest(audit_changes=change))
+        with self.assertRaises(ValueError):
+            require_capture_admission(self.manifest(), build={"fingerprint": "runtime"},
+                scientific_path="engine-mcts")
+
+    def test_malformed_inventory_lists_and_fixture_types_refuse(self):
+        for change in ({"source_runs": {}}, {"reason_codes": {}},
+                       {"reason_codes": ["omitted.class"]}, {"path": "different"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.admit(self.manifest(inventory_changes=change))
+        with self.assertRaises(ValueError):
+            self.admit(self.manifest(manifest_changes={"fixtures": {}}))
+
+    def test_legacy_evidence_cannot_disappear_or_be_called_complete(self):
+        for change in ({"sources": []}, {"capture_completeness": "complete"},
+                       {"path": "different"},
+                       {"sources": [{**self.legacy_source, "sha256": "0" * 64}]}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.admit(self.manifest(legacy_changes=change))
+
+    def test_actual_prior_capture_cannot_be_omitted_or_reset_by_new_build(self):
+        previous = Quarantine(self.history / "previous", build={"fingerprint": "old"})
+        previous.write("failure", dict(root={"seed": 17}, reason_codes=["crate.actual"]))
+        with self.assertRaisesRegex(ValueError, "unrepresented refusal"):
+            self.admit(self.manifest())
+        path = self.manifest(manifest_changes={"build_fingerprint": "new"})
+        with self.assertRaisesRegex(ValueError, "unrepresented refusal"):
+            require_capture_admission(path, build={"fingerprint": "new"},
+                scientific_path="engine-mcts", capture_directory=self.current)
+
+    def test_current_roster_captures_gate_the_next_roster_not_the_next_game(self):
+        path = self.manifest()
+        self.admit(path)
+        active = Quarantine(self.current, build={"fingerprint": "runtime"})
+        active.write("failure", dict(root={"seed": 18}, reason_codes=["crate.new"]))
+        self.admit(path)  # Same frozen roster may finish with declared fallbacks.
+        next_directory = self.history / "next"
+        next_directory.mkdir()
+        next_path = self.manifest(audit_changes={"prospective_capture_directory": "history/next"})
+        with self.assertRaisesRegex(ValueError, "unrepresented refusal"):
+            require_capture_admission(next_path, build={"fingerprint": "runtime"},
+                scientific_path="engine-mcts", capture_directory=next_directory)
+
+    def test_build_binding_remains_required_for_empty_first_admission(self):
+        with self.assertRaisesRegex(ValueError, "actual runtime build"):
+            require_capture_admission(self.manifest(), build={"fingerprint": "different"},
+                scientific_path="engine-mcts", capture_directory=self.current)
+
+    def test_known_codes_still_need_real_closed_run_and_fixture_links(self):
+        previous = Quarantine(self.history / "previous", build={"fingerprint": "old"})
+        previous.write("failure", dict(root={"seed": 17}, reason_codes=["crate.actual"]))
+        path = self.manifest(inventory_changes={
+            "reason_codes": ["crate.actual"],
+            "source_runs": [{"run_id": "missing-links", "terminal": {}}]},
+            manifest_changes={"observed_reason_codes": ["crate.actual"]})
+        with self.assertRaises(ValueError):
+            self.admit(path)
+
+
 if __name__ == "__main__":
     unittest.main()
