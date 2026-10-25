@@ -78,6 +78,44 @@ class Backend:
 
 
 class OnePlyTests(unittest.TestCase):
+    def test_r6_leaf_cap_fixture_preserves_trigger_work_and_never_solves(self):
+        from pokezero.informed_root import exact_informed_one_ply
+        fixture=json.loads((Path(__file__).parent/'fixtures/p2_leaf_cap_r6.json').read_text())
+        class CountShape(Backend):
+            def actions(self,state,*,root):
+                w=fixture['worlds'][state[0]]
+                return tuple(w['own_actions']),tuple(w['opponent_actions'])
+            def outcomes(self,state,row,col):
+                w=fixture['worlds'][state[0]]
+                count=w['branch_counts'][w['own_actions'].index(row)][w['opponent_actions'].index(col)]
+                return (ChanceBranch((state[0],row,col,index),1/count) for index in range(count))
+            def evaluate_leaves(self,states):return [0.0]*len(states)
+        with patch('pokezero.informed_root.solve_informed_root_lp') as solve:
+            with self.assertRaisesRegex(ExactSearchRefused,'leaf cap') as caught:
+                exact_informed_one_ply([(i,) for i in range(4)],CountShape(),acting_side=0,
+                    max_leaves=100000,max_chance_branches=200000,max_joint_actions=324,
+                    batch_size=1024,cross_cell_batches=True)
+        solve.assert_not_called()
+        error=caught.exception;work=error.work;expected=fixture['expected_trigger']
+        self.assertEqual(error.failure_codes,['p2.decision.leaf_cap'])
+        for key in ('world_ordinal','row_action','column_action','branch_index',
+                    'leaves_queued','leaves_attempted','chance_branches_checked','cells_enumerated'):
+            self.assertEqual(work[key],expected[key],key)
+        self.assertEqual((work['batches_accepted'],work['pending_leaves']),(97,672))
+        self.assertEqual(work['leaves_queued'],97*1024+672)
+        self.assertEqual(work['phase'],'leaf_terminal_check')
+        self.assertEqual(work['limits']['max_leaves'],100000)
+
+    def test_all_count_caps_have_specific_reasons_and_registered_limits(self):
+        for option,code in (('max_leaves','leaf_cap'),('max_chance_branches','chance_branch_cap'),
+                            ('max_joint_actions','joint_action_cap')):
+            with self.subTest(option=option),patch('pokezero.one_ply_exact.solve_matrix_game_lp') as solve:
+                with self.assertRaises(ExactSearchRefused) as caught:
+                    exact_one_ply([(0,)],Backend(),**{option:1})
+                self.assertEqual(caught.exception.failure_codes,['p2.decision.'+code])
+                self.assertEqual(caught.exception.work['limits'][option],1)
+                solve.assert_not_called()
+
     def test_r4_bundle_deadline_fixture_retains_exact_failed_address_without_a_choice(self):
         fixture = json.loads((Path(__file__).parent/'fixtures/p2_deadline_r4.json').read_text())
         clock = [0.0]
