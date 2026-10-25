@@ -159,6 +159,7 @@ jobs:
             tests/test_mcts_acceptance_report.py
             tests/test_rollout_leaf_arbiter.py
             tests/test_rollout_leaf_witness_mutation_battery.py
+            tests/test_search_label_native.py
             tests/test_price_uniform_rollout_leaves.py
             scripts/convert_value_head.py
             tests/test_convert_value_head.py
@@ -1043,6 +1044,23 @@ jobs:
             exit 1
           fi
           python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
+
+      - name: Search target statistics preserve both native seat searches
+        env:
+          POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
+        run: |
+          search_label_torch_lib="$(python -c 'import torch,pathlib;print(pathlib.Path(torch.__file__).parent/"lib")')"
+          export LD_LIBRARY_PATH="${search_label_torch_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+          python - <<'PY'
+          import unittest
+          import pokezero_search as native
+          assert native.MODEL_FEATURE_ENABLED and native.TRAINING_ROOT_STATS_VERSION == 1
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              'tests.test_search_label_native.SearchLabelNativeIntegration.test_optional_root_statistics_preserve_search_on_both_native_sides')
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if not result.wasSuccessful() or result.skipped or result.testsRun != 1:
+              raise SystemExit(1)
+          PY
 
       - name: Synthetic Struggle on the model wheel
         run: |

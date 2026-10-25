@@ -5,7 +5,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 from pokezero.collection import write_rollout_record
 from pokezero.dataset import (
@@ -33,6 +36,7 @@ def record_with_labels():
     return r
 
 
+@unittest.skipIf(np is None, "requires optional NumPy dependency")
 class SearchLabelDatasetTest(unittest.TestCase):
     def assert_labels(self, batch, offset=0):
         np.testing.assert_allclose(batch.search_policy_targets[offset], POLICY)
@@ -153,7 +157,9 @@ class SearchLabelDatasetTest(unittest.TestCase):
                 next(iter_training_cache_batches(cache, batch_size=3))
 
     def test_torch_conversion_preserves_targets_and_omits_off_columns(self):
-        from pokezero.neural_policy import training_batch_to_torch
+        from pokezero.neural_policy import training_batch_to_torch, torch_available
+        if not torch_available():
+            self.skipTest("requires optional PyTorch dependency")
         import torch
 
         old = training_batch_from_examples(list(examples_from_record(rollout_record())))

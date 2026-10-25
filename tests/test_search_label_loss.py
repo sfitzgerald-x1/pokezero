@@ -7,7 +7,10 @@ import socket
 import tempfile
 import unittest
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 from pokezero.neural_policy import (
     DistributedTrainingContext, TransformerPolicyOutput, TransformerTrainingConfig,
@@ -105,6 +108,7 @@ def distributed_worker(rank, port, root):
         torch.distributed.destroy_process_group()
 
 
+@unittest.skipIf(torch is None, "requires optional PyTorch dependency")
 class SearchLabelLossTest(unittest.TestCase):
     def test_hand_computed_loss_and_gradients_with_gae_and_independent_masks(self):
         for clipped in (False, True):

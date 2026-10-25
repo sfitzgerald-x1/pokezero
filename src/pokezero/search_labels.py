@@ -111,12 +111,15 @@ class SearchLabelPolicy:
     produce explicit unlabeled records; capture failures inherit BaseException and
     remain fatal. The real teacher owns mandatory reproduction capture.
     """
+    requires_public_materialization_state = True
+
     def __init__(self, actor: Any, *, teacher_factory: Callable[[], Any],
                  fraction: float, teacher_identity: Mapping[str, Any]):
         if not math.isfinite(fraction) or not 0.0 < fraction <= 1.0:
             raise ValueError("an active search label wrapper requires fraction in (0, 1]")
         self._actor = actor
         self._teacher_factory = teacher_factory
+        self._teacher = None
         self._fraction = fraction
         self._teacher_identity = dict(teacher_identity)
 
@@ -126,6 +129,13 @@ class SearchLabelPolicy:
 
     def __getattr__(self, name):
         return getattr(object.__getattribute__(self, "_actor"), name)
+
+    def reset(self):
+        reset = getattr(self._actor, "reset", None)
+        if callable(reset):
+            reset()
+        # Do not keep a previous battle's fold or native handle alive.
+        self._teacher = None
 
     def select_action(self, observation, *, rng: random.Random) -> PolicyDecision:
         raise ValueError("search labels require a live policy context")
@@ -138,7 +148,9 @@ class SearchLabelPolicy:
             return decision
         # Deliberately outside the search exception handler: a missing native
         # capability/export is a configuration failure, not a missing data label.
-        teacher = self._teacher_factory()
+        if self._teacher is None:
+            self._teacher = self._teacher_factory()
+        teacher = self._teacher
         label: dict[str, Any] = {"status": "UNLABELED", "teacher": dict(self._teacher_identity)}
         teacher_rng = random.Random(_seed("pokezero-search-label-teacher-v1", context))
         try:

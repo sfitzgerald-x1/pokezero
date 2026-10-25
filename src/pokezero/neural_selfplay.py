@@ -52,6 +52,7 @@ from .opponents import (
     require_historical_opponent_pool_size,
 )
 from .policy import RandomLegalPolicy, SimpleLegalPolicy
+from .search_label_teacher import SearchLabelCollectionConfig, prepare_search_label_teacher
 from .run_manifest import auto_promotion_config_dict, opponent_pool_config_dict
 from .rollout import RolloutConfig
 from .selfplay import POST_ITERATION_AUDIT_FAILURE_MODES, _report_post_iteration_audit_warnings, collect_selfplay_rollouts
@@ -420,7 +421,12 @@ def run_neural_selfplay_iterations(
     write_rollout_jsonl: bool = True,
     learning_rate_schedule_completed_games: int | None = None,
     resume: bool = False,
+    search_label_config: SearchLabelCollectionConfig | None = None,
 ) -> NeuralSelfPlayRunResult:
+    if search_label_config is None and (training_config.search_policy_loss_weight or training_config.search_value_mix_weight):
+        raise ValueError("search label losses in self-play require label collection")
+    if search_label_config is not None and training_config.objective != "ppo":
+        raise ValueError("search label collection in neural self-play requires PPO")
     require_torch()
     if iterations <= 0:
         raise ValueError("iterations must be positive.")
@@ -635,6 +641,10 @@ def run_neural_selfplay_iterations(
             allow_duplicate=auto_promotion_config.allow_duplicate if auto_promotion_config is not None else False,
         ),
     }
+    if search_label_config is not None:
+        invocation_config["search_labels"] = search_label_config.to_dict()
+    search_teacher = None
+    teacher_refresh_iteration = None
     results: list[NeuralSelfPlayIterationResult] = []
     next_benchmark_seed_start = next_evaluation_seed_start
     tensorboard_logger = (
@@ -690,6 +700,18 @@ def run_neural_selfplay_iterations(
                 else None
             )
 
+            label_options = {}
+            if search_label_config is not None:
+                if search_teacher is None or iteration - teacher_refresh_iteration >= search_label_config.refresh_iterations:
+                    teacher_checkpoint = _neural_checkpoint_path_from_policy_spec(current_policy_spec)
+                    if teacher_checkpoint is None:
+                        raise ValueError("search label teacher requires a current neural checkpoint")
+                    search_teacher = prepare_search_label_teacher(search_label_config, teacher_checkpoint, iteration=iteration)
+                    teacher_refresh_iteration = iteration
+                label_options["learner_policy_wrapper"] = search_teacher.wrap
+                (iteration_dir / "search-teacher.json").write_text(
+                    json.dumps(search_teacher.identity, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
             metrics = collect_selfplay_rollouts(
                 output_path=rollout_path,
                 training_output_path=training_rollout_path,
@@ -706,6 +728,7 @@ def run_neural_selfplay_iterations(
                 current_policy_spec=collection_current_policy_spec,
                 opponent_policy_specs=opponent_policy_specs,
                 worker_count=worker_count,
+                **label_options,
             )
             if training_cache_paths_out is not None:
                 training_cache_paths = tuple(training_cache_paths_out)

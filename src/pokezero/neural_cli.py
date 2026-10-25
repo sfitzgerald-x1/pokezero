@@ -669,6 +669,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     train.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
+    train.add_argument("--search-policy-loss-weight", type=float, default=0.0,
+                         help="Optional search-label cross-entropy weight (PPO only; default off).")
+    train.add_argument("--search-value-mix-weight", type=float, default=0.0,
+                         help="Optional search value fraction in PPO/GAE regression target (default off).")
     train.add_argument(
         "--value-clip-range",
         type=float,
@@ -1860,6 +1864,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     iterate.add_argument("--value-loss-weight", type=float, default=0.25, help="Scalar value-head MSE loss weight.")
+    iterate.add_argument("--search-labels", action="store_true",
+                         help="Query search labels on learner decisions; the raw policy still acts.")
+    iterate.add_argument("--search-label-fraction", type=float, default=0.1)
+    iterate.add_argument("--search-label-device", choices=("cpu", "cuda", "mps"), default=None,
+                         help="Teacher export/search device (defaults to the training device).")
+    iterate.add_argument("--search-policy-loss-weight", type=float, default=0.0,
+                         help="Optional search-label cross-entropy weight (PPO only; default off).")
+    iterate.add_argument("--search-value-mix-weight", type=float, default=0.0,
+                         help="Optional search value fraction in PPO/GAE regression target (default off).")
     iterate.add_argument(
         "--value-clip-range",
         type=float,
@@ -3089,6 +3102,8 @@ def _train(args: argparse.Namespace) -> int:
         turn_penalty_after=args.turn_penalty_after,
         turn_penalty=args.turn_penalty,
         value_loss_weight=args.value_loss_weight,
+        search_policy_loss_weight=args.search_policy_loss_weight,
+        search_value_mix_weight=args.search_value_mix_weight,
         value_clip_range=args.value_clip_range,
         value_ranking_loss_weight=args.value_ranking_loss_weight,
         value_ranking_margin=args.value_ranking_margin,
@@ -5832,6 +5847,8 @@ def _iterate(args: argparse.Namespace) -> int:
         turn_penalty=args.turn_penalty,
         shaping_weights=iterate_shaping_json,
         value_loss_weight=args.value_loss_weight,
+        search_policy_loss_weight=args.search_policy_loss_weight,
+        search_value_mix_weight=args.search_value_mix_weight,
         value_clip_range=args.value_clip_range,
         value_ranking_loss_weight=args.value_ranking_loss_weight,
         value_ranking_margin=args.value_ranking_margin,
@@ -5949,6 +5966,12 @@ def _iterate(args: argparse.Namespace) -> int:
         extra_model_configs=(model_config,),
         context="neural iterate",
     )
+    search_label_options = {}
+    if args.search_labels:
+        from .search_label_teacher import SearchLabelCollectionConfig
+        search_label_options["search_label_config"] = SearchLabelCollectionConfig(
+            showdown_root=env_config.resolved_showdown_root(), fraction=args.search_label_fraction,
+            device=args.search_label_device or resolve_torch_device(args.device))
     result = run_neural_selfplay_iterations(
         run_dir=args.run_dir,
         iterations=args.iterations,
@@ -5987,6 +6010,7 @@ def _iterate(args: argparse.Namespace) -> int:
         write_rollout_jsonl=args.write_rollout_jsonl,
         learning_rate_schedule_completed_games=args.learning_rate_schedule_completed_games,
         resume=args.resume,
+        **search_label_options,
     )
     if args.json:
         print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
