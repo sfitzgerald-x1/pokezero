@@ -45,7 +45,7 @@ class SearchLabelCollectionTest(unittest.TestCase):
                 for enabled in (False, True):
                     extra = {}
                     if enabled:
-                        extra["learner_policy_wrapper"] = lambda actor: with_search_labels(
+                        extra["learner_policy_wrapper"] = lambda actor, env: with_search_labels(
                             actor, fraction=1, teacher_factory=Teacher,
                             teacher_identity={"checkpoint_sha256": "a" * 64})
                     name = "labels" if enabled else "off"
@@ -112,7 +112,7 @@ class SearchLabelCollectionTest(unittest.TestCase):
             self.assertFalse(cfg.early_stop); self.assertIsNone(cfg.fpu_reduction)
             stack.enter_context(patch("pokezero.dex.load_showdown_dex_cached"))
             constructor = stack.enter_context(patch("pokezero.engine_search.EngineMctsPolicy"))
-            teacher.make_policy()
+            teacher.make_policy(env=MultiActionEnv())
             self.assertIs(constructor.call_args.kwargs["scientific_capture"], True)
 
     def test_original_env_and_policy_initialization_order_is_preserved(self):
@@ -125,7 +125,8 @@ class SearchLabelCollectionTest(unittest.TestCase):
                     def make():
                         events.append(name); return RawActor()
                     return make
-                def wrap(actor):
+                def wrap(actor, live_env):
+                    self.assertIsInstance(live_env, MultiActionEnv)
                     events.append("wrap"); return actor
                 _run_selfplay_game_record(game_index=0, seed_start=1, env_provider=env,
                     rollout_config=RolloutConfig(max_decision_rounds=2), current_policy_spec="learner",
@@ -161,12 +162,12 @@ class SearchLabelCollectionTest(unittest.TestCase):
                 constructor = stack.enter_context(patch("pokezero.engine_search.EngineMctsPolicy"))
                 teacher = SearchLabelTeacher.from_manifest(manifest)
                 if mutation == "valid":
-                    teacher.make_policy(); self.assertTrue(constructor.call_args.kwargs["scientific_capture"])
+                    teacher.make_policy(env=MultiActionEnv()); self.assertTrue(constructor.call_args.kwargs["scientific_capture"])
                 elif mutation in paths:
                     paths[mutation].write_bytes(b"changed after load")
                     # Factory failure is outside ordinary search exception masking.
                     actor = with_search_labels(RawActor(), fraction=1,
-                        teacher_factory=teacher.make_policy, teacher_identity=teacher.identity)
+                        teacher_factory=lambda: teacher.make_policy(env=MultiActionEnv()), teacher_identity=teacher.identity)
                     with self.assertRaisesRegex(ValueError, "provenance drift"):
                         actor.select_action_with_context(context(), rng=random.Random(3))
                     constructor.assert_not_called()
@@ -251,3 +252,71 @@ class SearchLabelCollectionTest(unittest.TestCase):
             self.assertIn("iteration-0027", generations[2][1])
             self.assertTrue(all("learner_policy_wrapper" in call for call in collected))
             self.assertEqual(json.loads((run / "iteration-0028" / "search-teacher.json").read_text())["refresh_iteration"], 28)
+
+
+class SearchLabelLiveEnvironmentTest(unittest.TestCase):
+    def test_real_teacher_fold_tracks_live_annotations_on_each_seat(self):
+        """The label factory must preserve tracker conclusions, not just hashes."""
+        from pokezero.engine_search import EngineMctsConfig
+        from tests.test_engine_search import LiveFoldAdvanceTests, _FakeAnnotationToken
+        import sys
+
+        class AnnotatedEnv:
+            def __init__(self):
+                self.tokens = {seat: [_FakeAnnotationToken(), _FakeAnnotationToken()]
+                               for seat in ("p1", "p2")}
+            def tier2_residuals_active(self):
+                return True
+            def _state_for_player(self, seat):
+                return SimpleNamespace(transition_tokens=self.tokens[seat])
+
+        for seat, residual in (("p1", .25), ("p2", -.5)):
+            with self.subTest(seat=seat), tempfile.TemporaryDirectory() as t, ExitStack() as stack:
+                env = AnnotatedEnv()
+                teacher = SearchLabelTeacher(SearchLabelCollectionConfig(Path(t)), EngineMctsConfig(), {})
+                stack.enter_context(patch.object(SearchLabelTeacher, "validate_artifacts"))
+                stack.enter_context(patch("pokezero.dex.load_showdown_dex_cached"))
+                stack.enter_context(patch("pokezero.randbat.load_gen3_randbat_source_cached"))
+                stack.enter_context(patch("pokezero.engine_search.configured_quarantine",
+                    return_value=SimpleNamespace(build={}, directory=Path(t))))
+                stack.enter_context(patch("pokezero.engine_search.require_capture_admission"))
+                stack.enter_context(patch.dict(sys.modules, {"poke_engine": SimpleNamespace()}))
+                policy = teacher.make_policy(env=env)
+                helper = LiveFoldAdvanceTests()
+                first = helper._context(helper.LEAD); first.player_id = seat
+                policy._advance_live_fold(first)
+                env.tokens[seat].append(_FakeAnnotationToken(residual=residual, residual_valid=True))
+                second = helper._context(helper.LEAD + helper.ROUND2, round_index=1); second.player_id = seat
+                fold = policy._advance_live_fold(second)
+                self.assertIsNotNone(fold)
+                token = fold.products().transition_tokens[2]
+                self.assertEqual(token.residual, residual)
+                self.assertTrue(token.residual_valid)
+                self.assertEqual(policy.stats.fold_annotations_applied, 1)
+
+    def test_worker_environment_is_bound_to_only_its_learner_teacher(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+
+        for workers in (1, 2):
+            with self.subTest(workers=workers), tempfile.TemporaryDirectory() as t:
+                teacher = SearchLabelTeacher(SearchLabelCollectionConfig(Path(t), fraction=1), None, {})
+                seen = []; lock = threading.Lock()
+                def make_policy(*, env):
+                    with lock:
+                        seen.append(env)
+                    return Teacher()
+                def play(index):
+                    env = MultiActionEnv()
+                    raw, learner = _run_selfplay_game_record(game_index=index, seed_start=1,
+                        env_provider=lambda: env, rollout_config=RolloutConfig(max_decision_rounds=2),
+                        current_policy_spec="raw", opponent_specs=("raw",), opponent_pool_entries=None,
+                        policy_factories={"raw": RawActor}, learner_policy_wrapper=teacher.wrap)
+                    labeled = [step for step in learner.trajectory.steps if "search_label" in step.metadata]
+                    self.assertEqual(len(labeled), 1)
+                    self.assertEqual(labeled[0].player_id, "p1" if index % 2 == 0 else "p2")
+                    return env
+                with patch.object(SearchLabelTeacher, "make_policy", side_effect=make_policy):
+                    with ThreadPoolExecutor(max_workers=workers) as pool:
+                        envs = list(pool.map(play, range(4)))
+                self.assertCountEqual([id(env) for env in seen], [id(env) for env in envs])

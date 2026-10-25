@@ -36,10 +36,10 @@ class SearchLabelTeacher:
     search_config: object
     identity: dict
 
-    def make_policy(self):
+    def make_policy(self, *, env):
         from .dex import load_showdown_dex_cached
         from .randbat import load_gen3_randbat_source_cached
-        from .engine_search import EngineMctsPolicy
+        from .engine_search import EngineMctsPolicy, EnvTier2AnnotationSource
 
         self.validate_artifacts()
         # Mandatory on every real teacher. Recording targets alone does not
@@ -48,11 +48,13 @@ class SearchLabelTeacher:
             dex=load_showdown_dex_cached(self.settings.showdown_root),
             set_source=load_gen3_randbat_source_cached(self.settings.showdown_root),
             config=self.search_config, scientific_capture=True,
+            annotation_source=EnvTier2AnnotationSource(env),
         )
 
-    def wrap(self, actor):
+    def wrap(self, actor, env):
         return with_search_labels(actor, fraction=self.settings.fraction,
-                                  teacher_factory=self.make_policy, teacher_identity=self.identity)
+                                  teacher_factory=lambda: self.make_policy(env=env),
+                                  teacher_identity=self.identity)
 
     def validate_artifacts(self):
         from .failure_capture import configured_quarantine
