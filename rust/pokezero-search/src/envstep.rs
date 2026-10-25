@@ -145,6 +145,13 @@ pub fn env_step(
     seed: u64,
     branch_on_damage: bool,
 ) -> PyResult<String> {
+    crate::failure_capture::guarded(|| serde_json::json!({
+        "schema":"pokezero.native-failure-origin.v1", "reason_codes":["crate.env_step"],
+        "engine_state":state_str, "row_action":s1_move, "column_action":s2_move,
+        "ctx_json":ctx_json, "seed":seed,
+        "instruction_list":{"availability":"unavailable","reason":"step failed before a selected branch was available"},
+        "offending_instruction":{"availability":"unavailable","reason":"no instruction cursor"}
+    }), || {
     let mut state = parse_state(state_str)?;
     let ctx = EventContext::from_json(ctx_json).map_err(PyValueError::new_err)?;
     let s1 = env_move_choice(s1_move, &state, SideReference::SideOne)?;
@@ -175,7 +182,13 @@ pub fn env_step(
     let mut rng = StdRng::seed_from_u64(seed);
     let index = sample_branch_index(&mut rng, &branches);
     let branch = &branches[index];
-
+    crate::failure_capture::guarded(|| serde_json::json!({
+        "schema":"pokezero.native-failure-origin.v1", "reason_codes":["crate.env_step_branch"],
+        "engine_state":state_str, "row_action":s1_move, "column_action":s2_move,
+        "ctx_json":ctx_json, "seed":seed, "branch_index":index,
+        "instruction_list":branch.instruction_list.iter().map(|i| format!("{i:?}")).collect::<Vec<_>>(),
+        "offending_instruction":{"availability":"unavailable","reason":"branch-level failure; no instruction cursor"}
+    }), || {
     // The mapper wants the PRE-branch state; `render_branch_events` mutates
     // and restores in place, so render before applying.
     let rendered = render_branch_events(
@@ -189,7 +202,15 @@ pub fn env_step(
     // Do not apply an exact engine endpoint while handing the caller an event
     // stream that cannot prove its action owner. The caller can retain its
     // current fold/state and choose its established fallback/error handling.
-    reject_attribution_unsafe(&rendered, "env_step")?;
+    reject_attribution_unsafe(&rendered, "env_step").map_err(|error| crate::failure_capture::attach(error,
+        serde_json::json!({
+            "schema":"pokezero.native-failure-origin.v1",
+            "reason_codes":rendered.attribution_unsafe.iter().map(|r| format!("renderer.{r}")).collect::<Vec<_>>(),
+            "engine_state":state_str, "row_action":s1_move, "column_action":s2_move,
+            "branch_index":index, "ctx_json":ctx_json, "seed":seed,
+            "instruction_list":branch.instruction_list.iter().map(|i| format!("{i:?}")).collect::<Vec<_>>(),
+            "offending_instruction":{"availability":"unavailable","reason":"branch attribution condition, no unique instruction"}
+        })))?;
     state.apply_instructions(&branch.instruction_list);
     let attribution_unsafe = rendered.is_attribution_unsafe();
 
@@ -208,6 +229,8 @@ pub fn env_step(
     });
     serde_json::to_string(&report)
         .map_err(|e| PyValueError::new_err(format!("serialize step: {e}")))
+    })
+    })
 }
 
 #[cfg(test)]

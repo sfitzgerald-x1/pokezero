@@ -37,6 +37,7 @@ from typing import Any, Mapping, Sequence
 
 from .dex import ShowdownDex, normalize_id
 from .env import BattleStartOverride
+from .failure_capture import boundary
 from .gen3_damage import gen3_hp_stat, gen3_stat
 from .poke_engine_adapter import (
     BattleSpec,
@@ -379,6 +380,11 @@ class EngineWorld:
     party_species: Mapping[str, tuple[str, ...]]
 
 
+@boundary("world.construct", arguments=("payload", "override", "approximate_sleep_turns",
+    "approximate_substitute_health", "approximate_partial_trap_turns",
+    "approximate_hidden_duration_volatiles", "blocked_slots", "encored_moves",
+    "removed_item_species", "current_item_overrides", "recharging_slots", "truant_slots",
+    "transformed_slots"), result_field="world_spec")
 def battle_spec_from_payload(
     payload: Mapping[str, Any],
     override: BattleStartOverride,
@@ -1124,6 +1130,7 @@ def pending_baton_opponent_action(public_lines: Sequence[str], *, turn: int, pas
     return proof
 
 
+@boundary("world.public_payload", arguments=("override",))
 def world_battle_spec(
     state: Any,
     override: BattleStartOverride,

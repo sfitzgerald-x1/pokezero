@@ -117,6 +117,8 @@ _EXPECTED_HARNESS_CLOSURE = frozenset(
         "src/pokezero/env.py",
         "src/pokezero/evaluation.py",
         "src/pokezero/evaluation_profiles.py",
+        # World/adapter boundaries now persist failures through this shared sink.
+        "src/pokezero/failure_capture.py",
         "src/pokezero/gen3_damage.py",
         "src/pokezero/golden_corpus.py",
         "src/pokezero/golden_corpus_fold.py",

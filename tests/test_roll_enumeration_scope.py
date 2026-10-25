@@ -1019,6 +1019,9 @@ class RollEnumerationMentionLedger(unittest.TestCase):
     """
 
     _MENTION_ALLOWLIST = {
+        # Fake-backend capture fixtures scope their opt-in to the test call;
+        # importing the module never changes the process roll policy.
+        "tests/test_failure_capture.py",
         # The recovered Sleep Talk root's regression runs in its own Rust
         # integration-test binary, with an isolated exact-roll OnceLock. It
         # neither enables enumeration in a Python import nor changes gameplay.

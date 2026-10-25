@@ -241,7 +241,10 @@ _CORPUS_TREES = ("reports", "docs")
 # 423 -> 424: measured against main 1814aba3; the sole added reports/docs
 # JSON is rollout_leaf_witness_mutation_battery_20261024_informed.json.
 # The selected sets have no removals; no historical JSON is changed.
-_EXPECTED_COUNTER_ARTIFACTS = 424
+# 424 -> 425: against merged main 34519b2c, the sole reports/docs JSON
+# addition is the fresh full shared-capture rollout-leaf mutation receipt.
+# Previous receipts and corpus membership rules are unchanged.
+_EXPECTED_COUNTER_ARTIFACTS = 425
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

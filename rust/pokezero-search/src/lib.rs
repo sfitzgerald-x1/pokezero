@@ -12,6 +12,7 @@ pub mod abort_telemetry;
 pub mod encoder;
 pub mod envstep;
 pub mod events;
+pub(crate) mod failure_capture;
 pub mod fold;
 pub mod leaf;
 pub mod panic_guard;

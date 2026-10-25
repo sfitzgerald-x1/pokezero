@@ -44,7 +44,8 @@ use poke_engine::instruction::Instruction;
 use poke_engine::state::State;
 
 use crate::priors::{
-    branch_seats, is_single_none, resolve_root_priors, resolve_round_priors, root_seats, HeadPair,
+    branch_seats, is_single_none, resolve_root_priors_captured as resolve_root_priors,
+    resolve_round_priors_captured as resolve_round_priors, root_seats, HeadPair,
     HeadSource, PriorFallbackReasonCounts,
 };
 use crate::tree::{
@@ -1130,6 +1131,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     time_budget_ms: Option<u64>,
     time_budget_started: Option<Instant>,
     lossy_subcases: &mut crate::abort_telemetry::LossySubcaseLedger,
+    capture_refusals: &std::cell::RefCell<Vec<serde_json::Value>>,
     policy_opponent: Option<(&crate::policy_bridge::PolicyOpponentBridge, u64)>,
     record_joint_actions: bool,
     regret_selection: bool,
@@ -1327,6 +1329,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 leaf_ctx,
                 &map,
                 opponent_map.as_deref(),
+                &mut |row, branch, seat, code, map| capture_refusals.borrow_mut().push(serde_json::json!({
+                    "schema":"pokezero.native-failure-origin.v1", "reason_codes":[format!("crate.prior.{code}")],
+                    "engine_state":state_str, "instruction_list":[],
+                    "root_inputs_json":{"availability":"retained_by_caller","reason":"Python decision capture retains root encoder inputs"},
+                    "batch_row":row,"branch":branch,"prior_seat":seat,"action_map":map,
+                    "offending_instruction":{"availability":"unavailable","reason":"root prior contract; no generating branch"}
+                })),
             );
             root_priors = resolved.acting;
             root_prior_fallbacks += resolved.fallbacks;
@@ -1349,6 +1358,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         let traversal_budget = batch_size.min(iterations - completed);
         let mut traversals: Vec<Traversal> = Vec::with_capacity(traversal_budget);
         let mut pending: Vec<crate::encoder::EncodedArrays> = Vec::new();
+        // State + lineage must outlive the pricing closure if the subsequent
+        // model forward fails. No batch is accepted partially.
+        let mut pending_origins: Vec<serde_json::Value> = Vec::new();
         // Rollout rows for this round, parallel with `rollout_ordinals`. Empty
         // and untouched on the production path.
         let mut rollout_rows: Vec<State> = Vec::new();
@@ -1379,6 +1391,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
             }) < batch_size
         {
             let mut price = |leaf: &State, seam: &BranchSeam| {
+                let result = crate::failure_capture::guarded(
+                    || crate::failure_capture::branch_origin(leaf, seam, &["crate.branch_pricing".into()]),
+                    || Ok((|| {
                     if leaf_error.is_some() {
                         return LeafPrice::Ready(0.5);
                     }
@@ -1406,9 +1421,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                     rec.meta.clone(),
                                 ),
                                 None => {
-                                    leaf_error = Some(PyValueError::new_err(
-                                        "parent branch fold missing (traversal order violated)",
-                                    ));
+                                    leaf_error = Some(crate::failure_capture::branch_error(
+                                        PyValueError::new_err("parent branch fold missing (traversal order violated)"),
+                                        leaf, seam, "crate.parent_fold_missing"));
                                     return LeafPrice::Ready(0.5);
                                 }
                             },
@@ -1441,14 +1456,17 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     }
                     if let Err(error) = seam.reject_attribution_unsafe(&rendered) {
                         attribution_unsafe_renders += 1;
-                        leaf_error = Some(error);
+                        let codes: Vec<_> = rendered.attribution_unsafe.iter()
+                            .map(|code| format!("renderer.{code}")).collect();
+                        leaf_error = Some(crate::failure_capture::attach(error,
+                            crate::failure_capture::branch_origin(leaf, seam, &codes)));
                         return LeafPrice::Ready(0.5);
                     }
                     let advance_started = Instant::now();
                     let advance_result = fold.advance_in_place(&rendered.lines);
                     fold_advance_nanos += advance_started.elapsed().as_nanos();
                     if let Err(error) = advance_result {
-                        leaf_error = Some(error);
+                        leaf_error = Some(crate::failure_capture::branch_error(error, leaf, seam, "crate.fold_advance"));
                         return LeafPrice::Ready(0.5);
                     }
                     if rendered.turn_completed {
@@ -1522,12 +1540,13 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                         let encoded = match encoded_result {
                             Ok(encoded) => encoded,
                             Err(error) => {
-                                leaf_error = Some(error);
+                                leaf_error = Some(crate::failure_capture::branch_error(error, leaf, seam, "crate.leaf_encode"));
                                 return LeafPrice::Ready(0.5);
                             }
                         };
                         row = pending.len();
                         pending.push(encoded);
+                        pending_origins.push(crate::failure_capture::branch_origin(leaf, seam, &[]));
                     } else {
                         encode_skipped += 1;
                     }
@@ -1571,7 +1590,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                     pending_maps.push(((seam.chance, seam.branch_index), row, map))
                                 }
                                 Err(error) => {
-                                    leaf_error = Some(error);
+                                    leaf_error = Some(crate::failure_capture::branch_error(error, leaf, seam, "crate.self_action_map"));
                                     return LeafPrice::Ready(0.5);
                                 }
                             }
@@ -1604,7 +1623,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                                         ));
                                     }
                                     Err(error) => {
-                                        leaf_error = Some(error);
+                                        leaf_error = Some(crate::failure_capture::branch_error(error, leaf, seam, "crate.opponent_action_map"));
                                         return LeafPrice::Ready(0.5);
                                     }
                                 }
@@ -1613,7 +1632,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     }
                     if let Some((bridge, _)) = policy_opponent {
                         if let Err(error) = bridge.record(seam.parent, (seam.chance, seam.branch_index), &rendered.lines, &ctx, &meta) {
-                            leaf_error = Some(error);
+                            leaf_error = Some(crate::failure_capture::branch_error(error, leaf, seam, "crate.policy_observe"));
                             return LeafPrice::Ready(0.5);
                         }
                     }
@@ -1641,12 +1660,24 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                     } else {
                         LeafPrice::Deferred(row)
                     }
-                };
+                })()));
+                match result {
+                    Ok(price) => price,
+                    Err(error) => { leaf_error = Some(error); LeafPrice::Ready(0.5) }
+                }
+            };
             let traversal = if let Some((bridge, _)) = policy_opponent {
                 crate::tree::traverse_with_policy_opponent(
                     &mut tree, &mut state, &mut rng, &cfg, &mut counters, &mut price,
                     policy_sampler.as_mut().expect("registered policy sampler"),
-                    &mut |reached, node, parent| bridge.provide(reached, node, parent, event_ctx),
+                    &mut |reached, node, parent| crate::failure_capture::guarded(|| serde_json::json!({
+                        "schema":"pokezero.native-failure-origin.v1", "reason_codes":["crate.policy_provider"],
+                        "engine_state":reached.serialize(), "parent":parent,
+                        "options":{"p1":node.s1_options.iter().map(|a| format!("{a:?}")).collect::<Vec<_>>(),
+                                   "p2":node.s2_options.iter().map(|a| format!("{a:?}")).collect::<Vec<_>>()},
+                        "instruction_list":{"availability":"unavailable","reason":"decision-node provider has no branch seam"},
+                        "offending_instruction":{"availability":"unavailable","reason":"provider contract, not an instruction cursor"}
+                    }), || bridge.provide(reached, node, parent, event_ctx)),
                 )?
             } else {
                 traverse(&mut tree, &mut state, &mut rng, &cfg, &mut counters, &mut price)
@@ -1685,14 +1716,24 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
         let model_values = if pending.is_empty() {
             Vec::new()
         } else {
+            let batch_origin = |code: &str| serde_json::json!({
+                "schema":"pokezero.native-failure-origin.v1", "reason_codes":[code],
+                "batch_rows":pending_origins,
+                "engine_state":{"availability":"unavailable","reason":"batch failure; every exact row is retained in batch_rows"},
+                "instruction_list":{"availability":"unavailable","reason":"per-row lists retained in batch_rows"},
+                "offending_instruction":{"availability":"unavailable","reason":"model did not identify a unique failing row"}
+            });
             let encode_started = Instant::now();
-            let batch = ObsBatch::from_encoded(spec, &pending)?;
+            let batch = crate::failure_capture::guarded(|| batch_origin("crate.model_batch"),
+                || ObsBatch::from_encoded(spec, &pending))?;
             encode_nanos += encode_started.elapsed().as_nanos();
             let model_started = Instant::now();
-            let output = evaluator.eval_batch(&batch, None)?;
+            let output = crate::failure_capture::guarded(|| batch_origin("crate.model_forward"),
+                || evaluator.eval_batch(&batch, None))?;
             model_nanos += model_started.elapsed().as_nanos();
             model_evals += pending.len();
-            let heads = head_pair(&output, cfg.use_opponent_priors)?;
+            let heads = crate::failure_capture::guarded(|| batch_origin("crate.model_heads"),
+                || head_pair(&output, cfg.use_opponent_priors))?;
             // Resolve this round's prior maps against the batch's policy
             // rows: store on the branch (consumed at child creation) and
             // re-apply onto a child that was already created THIS round
@@ -1709,6 +1750,15 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 &pending_opponent_maps,
                 &heads,
                 leaf_ctx,
+                &mut |row, branch, seat, code, map| {
+                    let mut witness = pending_origins[row].clone();
+                    witness["reason_codes"] = serde_json::json!([format!("crate.prior.{code}")]);
+                    witness["batch_row"] = serde_json::json!(row);
+                    witness["branch"] = serde_json::json!(branch);
+                    witness["prior_seat"] = serde_json::json!(seat);
+                    witness["action_map"] = serde_json::json!(map);
+                    capture_refusals.borrow_mut().push(witness);
+                },
             );
             prior_branches += resolved.applied;
             branch_prior_fallbacks += resolved.fallbacks;
@@ -1985,6 +2035,9 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
                 shadow_fields,
             )
         }
+    };
+    let extra = if capture_refusals.borrow().is_empty() { extra } else {
+        format!("{extra},\"capture_refusals\":{}", serde_json::to_string(&*capture_refusals.borrow()).unwrap())
     };
     Ok(multiply_report_json(
         &outcome,
@@ -2651,7 +2704,15 @@ impl NativeLeafModel {
             // but the attribute's presence marks "a search ran and aborted", not "any
             // error left this function". Python treats a missing attribute and an empty
             // payload identically, so the counter is the same either way.
-            crate::abort_telemetry::guarded_search_with_ledger(|lossy_subcases| {
+            let capture_refusals = std::cell::RefCell::new(Vec::new());
+            let result = crate::failure_capture::guarded(|| serde_json::json!({
+                "schema":"pokezero.native-failure-origin.v1", "reason_codes":["crate.model_search"],
+                "engine_state":state_str, "root_inputs_json":root_inputs_json, "ctx_json":ctx_json,
+                "seed":seed,
+                "root_fold":{"availability":"retained_by_caller","reason":"Python decision capture retains the root fold payload"},
+                "instruction_list":{"availability":"unavailable","reason":"search-level failure before a local branch witness"},
+                "offending_instruction":{"availability":"unavailable","reason":"no unique branch cursor"}
+            }), || crate::abort_telemetry::guarded_search_with_ledger(|lossy_subcases| {
                 multiply_batched_encoded_core(
                     state_str,
                     iterations,
@@ -2680,11 +2741,13 @@ impl NativeLeafModel {
                     time_budget_ms,
                     time_budget_started,
                     lossy_subcases,
+                    &capture_refusals,
                     policy_bridge.as_ref().map(|bridge| (bridge, policy_opponent_seed.expect("validated policy seed"))),
                     record_joint_actions,
                     regret_selection,
                 )
-            })
+            }));
+            result.map_err(|error| crate::failure_capture::attach_events(error, &capture_refusals.borrow()))
         })
     }
 }

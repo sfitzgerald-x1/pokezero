@@ -22,6 +22,9 @@ from .determinization import _gen3_randbat_belief_start_override_result
 from .engine_search import (EngineMctsConfig, EngineMctsPolicy,
                             _root_toxic_zero_after_upkeep_attestation)
 from .engine_world import world_battle_spec
+from .failure_capture import (Quarantine, captured_decision, current,
+                              record_refusal, runtime_build, snapshot, unavailable,
+                              require_capture_admission)
 from .informed_root import exact_informed_one_ply, sample_informed_equilibrium
 from .poke_engine_adapter import build_poke_engine_state
 from .policy import PolicyContext, PolicyDecision
@@ -62,11 +65,13 @@ class InformedPolicyStats:
     decision_wall_seconds: float = 0.0
     refusal_reasons: Counter = field(default_factory=Counter)
     last_decision: dict = field(default_factory=dict)
+    capture_telemetry: dict | None = None
 
     def to_dict(self):
         return dict(decisions=self.decisions,completed_decisions=self.completed_decisions,
             refusals=self.refusals,decision_wall_seconds=self.decision_wall_seconds,
-            refusal_reasons=dict(self.refusal_reasons),last_decision=dict(self.last_decision))
+            refusal_reasons=dict(self.refusal_reasons),last_decision=dict(self.last_decision),
+            failure_capture=self.capture_telemetry)
 
 
 class InformedRootPolicy:
@@ -75,7 +80,8 @@ class InformedRootPolicy:
     def __init__(self, *, dex, set_source, checkpoint_path: str, model_path: str,
                  tables_path: str, device: str, trace_path: Path,
                  config: InformedPolicyConfig | None = None,
-                 policy_id: str = "informed-one-ply", module=None, native=None, model=None):
+                 policy_id: str = "informed-one-ply", module=None, native=None, model=None,
+                 capture_admission_path: Path | None = None):
         if os.environ.get("POKEZERO_ENUMERATE_ROLLS") != "1":
             raise ExactSearchRefused("P2 requires fresh-process exact damage-roll opt-in")
         self.policy_id = policy_id
@@ -92,6 +98,12 @@ class InformedRootPolicy:
         self._model = model
         # Exclusive per-shard trace creation is deliberately before any game.
         # A collection owner supplies the existing parent and a fresh filename.
+        self._quarantine = Quarantine(
+            os.environ.get("POKEZERO_QUARANTINE_DIR") or Path(trace_path).parent / "quarantine",
+            build=runtime_build(native))
+        self._capture_admission = require_capture_admission(
+            capture_admission_path or os.environ.get("POKEZERO_CAPTURE_ADMISSION"),
+            build=self._quarantine.build)
         self._trace = Path(trace_path).open("x",encoding="utf-8")
         self.stats = InformedPolicyStats()
         self._witness: dict[str, Any] = {}
@@ -124,13 +136,24 @@ class InformedRootPolicy:
         for ordinal in range(self.config.worlds):
             draw = {"ordinal":ordinal,"rng_state_before_draw":rng.getstate()}
             self._witness["draws"].append(draw)
+            if current():
+                current().update(world_ordinal=ordinal, rng_state_before_draw=draw["rng_state_before_draw"],
+                    player_teams=unavailable("belief draw has not returned"),
+                    world_spec=unavailable("this world has not been constructed"),
+                    engine_state=unavailable("this world has not been constructed"),
+                    instruction_list=unavailable("this world's transition has not been generated"))
             adapter.stats.worlds_attempted += 1
             override, reason = _gen3_randbat_belief_start_override_result(
                 context=context,set_source=adapter._set_source,rng=rng,witnessed_fallback=True)
             if override is None:
                 draw["refusal"] = reason
-                raise ExactSearchRefused(f"P2 belief draw {ordinal} refused: {reason}")
+                error = ExactSearchRefused(f"P2 belief draw {ordinal} refused: {reason}")
+                error.failure_codes = ["belief." + str(reason or "unknown")]
+                raise error
             draw["player_teams"] = dict(override.player_teams)
+            if current():
+                current().update(world_ordinal=ordinal, rng_state_before_draw=draw["rng_state_before_draw"],
+                                 player_teams=draw["player_teams"])
             world = world_battle_spec(context.public_materialization_state,override,
                 dex=adapter._dex, approximate_sleep_turns=True,
                 approximate_substitute_health=True, approximate_partial_trap_turns=True,
@@ -147,10 +170,17 @@ class InformedRootPolicy:
                 context.public_materialization_state.replay)
             state_str = state.to_string()
             draw.update(state_str=state_str,ctx=ctx,self_side=side)
+            if current():
+                current().update(world_spec=world.spec, engine_state=state_str,
+                                 event_context=ctx, root_inputs=root_inputs, fold_payload=fold_payload)
             encoder = native.LeafEncoder(adapter._tables_json,root_inputs,json.dumps(ctx),state_str)
             positions.append(NativePosition(state_str,
                 {s:tuple(world.party_species[s]) for s in ("p1","p2")},
-                turn,native.FoldState.from_payload(fold_payload),encoder,side))
+                turn,native.FoldState.from_payload(fold_payload),encoder,side,
+                origin=snapshot(dict(world_ordinal=ordinal, world_spec=world.spec,
+                    player_teams=draw["player_teams"], rng_state_before_draw=draw["rng_state_before_draw"],
+                    event_context=ctx, **({"world.construct":current().fields.get("world.construct")}
+                                        if current() else {})))))
         return positions, turn
 
     def _record(self, row):
@@ -168,6 +198,7 @@ class InformedRootPolicy:
         self._record(row)
         self.stats.last_decision = row
 
+    @captured_decision
     def select_action_with_context(self, context: PolicyContext, *, rng: random.Random):
         started = time.perf_counter()
         self.stats.decisions += 1
@@ -233,10 +264,17 @@ class InformedRootPolicy:
             # the actual sampled decision before re-raising; NEVER recover it.
             if isinstance(error, NativeRenderRefused):
                 self._witness["native_render_refusal"] = error.witness
+            witness = error.witness if isinstance(error, NativeRenderRefused) else None
+            codes = (["renderer." + code for code in
+                      (list(witness.get("lossy_subcases") or []) + list(witness.get("lossy") or [])
+                       + list(witness.get("attribution_unsafe_reasons") or []))]
+                     if witness else ["p2.decision.contract_failure"])
+            receipt = record_refusal("p2.decision", error, codes=codes, witness=witness)
             self.stats.refusals += 1
-            self.stats.refusal_reasons[type(error).__name__] += 1
+            self.stats.refusal_reasons.update(receipt["reason_codes"] if receipt else codes)
             row.update(status="REFUSED",error_type=type(error).__name__,error=str(error),
                 error_traceback=traceback.format_exc(),failure_witness=self._witness,
+                quarantine_receipt=receipt,capture_telemetry=self._quarantine.telemetry(),
                 elapsed_seconds=time.perf_counter()-started)
             self._record(row)
             self.stats.last_decision = {k:row[k] for k in

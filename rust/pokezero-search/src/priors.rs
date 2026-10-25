@@ -519,12 +519,26 @@ pub(crate) struct PriorResolution {
 /// verbatim so the lazy application at child creation
 /// ([`crate::tree::apply_branch_child_priors`]) is a plain write to that
 /// seat's stats with no negation anywhere.
+pub(crate) type PriorRefusalObserver<'a> = dyn FnMut(usize, Option<(usize, usize)>, &'static str, &'static str, &[Option<usize>]) + 'a;
+
 fn resolve_pending_priors(
     tree: &mut Tree,
     pending: &[((usize, usize), usize, Vec<Option<usize>>)],
     heads: &HeadPair<'_>,
     self_side_one: bool,
     seat: PriorSeat,
+) -> PriorResolution {
+    resolve_pending_priors_captured(tree, pending, heads, self_side_one, seat,
+                                    &mut |_, _, _, _, _| {})
+}
+
+fn resolve_pending_priors_captured(
+    tree: &mut Tree,
+    pending: &[((usize, usize), usize, Vec<Option<usize>>)],
+    heads: &HeadPair<'_>,
+    self_side_one: bool,
+    seat: PriorSeat,
+    observe: &mut PriorRefusalObserver<'_>,
 ) -> PriorResolution {
     let side_one = seat.owning_side_one(self_side_one);
     let mut resolution = PriorResolution::default();
@@ -536,6 +550,7 @@ fn resolve_pending_priors(
         let priors = match priors {
             Ok(priors) => priors,
             Err(reason) => {
+                observe(*row, Some(*key), if seat == PriorSeat::Acting { "acting" } else { "opponent" }, reason.as_str(), map);
                 resolution.fallbacks += 1;
                 resolution.fallback_reasons.record_gather_failure(reason);
                 continue;
@@ -559,6 +574,7 @@ fn resolve_pending_priors(
         if applied {
             resolution.applied += 1;
         } else {
+            observe(*row, Some(*key), if seat == PriorSeat::Acting { "acting" } else { "opponent" }, "decision_arm_count_mismatch", map);
             resolution.fallbacks += 1;
             resolution.fallback_reasons.record_arm_count_mismatch();
         }
@@ -581,20 +597,34 @@ pub(crate) fn resolve_round_priors(
     heads: &HeadPair<'_>,
     seat_source: &dyn SearchingSeat,
 ) -> PriorResolution {
+    resolve_round_priors_captured(tree, acting_pending, opponent_pending, heads, seat_source,
+                                 &mut |_, _, _, _, _| {})
+}
+
+pub(crate) fn resolve_round_priors_captured(
+    tree: &mut Tree,
+    acting_pending: &[((usize, usize), usize, Vec<Option<usize>>)],
+    opponent_pending: &[((usize, usize), usize, Vec<Option<usize>>)],
+    heads: &HeadPair<'_>,
+    seat_source: &dyn SearchingSeat,
+    observe: &mut PriorRefusalObserver<'_>,
+) -> PriorResolution {
     let self_side_one = seat_source.searching_side_one();
-    let acting = resolve_pending_priors(
+    let acting = resolve_pending_priors_captured(
         tree,
         acting_pending,
         heads,
         self_side_one,
         PriorSeat::Acting,
+        observe,
     );
-    let opponent = resolve_pending_priors(
+    let opponent = resolve_pending_priors_captured(
         tree,
         opponent_pending,
         heads,
         self_side_one,
         PriorSeat::Opponent,
+        observe,
     );
     PriorResolution {
         applied: acting.applied + opponent.applied,
@@ -731,6 +761,18 @@ pub(crate) fn resolve_root_priors(
     acting_map: &[Option<usize>],
     opponent_map: Option<&[Option<usize>]>,
 ) -> RootPriorResolution {
+    resolve_root_priors_captured(root, heads, seat_source, acting_map, opponent_map,
+                                &mut |_, _, _, _, _| {})
+}
+
+pub(crate) fn resolve_root_priors_captured(
+    root: &mut DecisionNode,
+    heads: &HeadPair<'_>,
+    seat_source: &dyn SearchingSeat,
+    acting_map: &[Option<usize>],
+    opponent_map: Option<&[Option<usize>]>,
+    observe: &mut PriorRefusalObserver<'_>,
+) -> RootPriorResolution {
     let self_side_one = seat_source.searching_side_one();
     let mut resolution = RootPriorResolution::default();
     for (seat, map) in [
@@ -750,12 +792,13 @@ pub(crate) fn resolve_root_priors(
                 }
             }
             outcome => {
+                let reason = match outcome {
+                    Err(reason) => reason.as_str(), Ok(_) => "decision_arm_count_mismatch",
+                };
+                observe(0, None, if seat == PriorSeat::Acting { "acting" } else { "opponent" }, reason, map);
                 resolution.fallbacks += 1;
                 if seat == PriorSeat::Acting {
-                    resolution.acting_fallback_reason = Some(match outcome {
-                        Err(reason) => reason.as_str(),
-                        Ok(_) => "decision_arm_count_mismatch",
-                    });
+                    resolution.acting_fallback_reason = Some(reason);
                 }
             }
         }
@@ -1522,6 +1565,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             &[0.5, 0.5],
         );
+    }
+
+    #[test]
+    fn captured_prior_fallback_names_actual_row_seat_map_without_changing_uniform_behavior() {
+        let mut tree = tree_with_child(2, 2);
+        let pending = vec![((0, 0), 0, vec![Some(0), None])];
+        let heads = opponent_only_heads(&ROW);
+        let mut seen = Vec::new();
+        let result = resolve_pending_priors_captured(&mut tree, &pending, &heads, true, PriorSeat::Opponent,
+            &mut |row, key, seat, reason, map| seen.push((row, key, seat, reason, map.to_vec())));
+        assert_eq!(seen, vec![(0, Some((0, 0)), "opponent", "unmapped_action", vec![Some(0), None])]);
+        assert_eq!(result.fallbacks, 1);
+        assert!(tree.chances[0].branches[0].child_opponent_priors.is_none());
+        approx(&tree.decisions[1].s2_stats.iter().map(|s| s.prior).collect::<Vec<_>>(), &[0.5, 0.5]);
     }
 
     /// A bare branch-fallback total cannot tell an intentionally unavailable

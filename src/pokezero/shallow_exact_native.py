@@ -21,6 +21,7 @@ from typing import Any, Sequence
 
 from .shallow_exact import ChanceBranch, ExactSearchRefused
 from .shallow_leaf_rows import DecisionLeafValues, encoded_leaf_row
+from .failure_capture import current, record_refusal, unavailable
 
 
 class NativeRenderRefused(ExactSearchRefused):
@@ -42,6 +43,8 @@ class NativePosition:
     # Complete synthesized history relative to this encoder's original root.
     lines: tuple[str, ...] = ()
     teams_hp: tuple[tuple[int, ...], tuple[int, ...]] | None = None
+    instruction_list: tuple[str, ...] | None = None
+    origin: dict[str, Any] | None = None
 
 
 def validate_encoder_frame(root_inputs: str, self_side: str) -> None:
@@ -133,6 +136,16 @@ class NativeExactBackend:
         self.unique_leaf_evaluations = 0
         self.leaf_cache_hits = 0
 
+    def _capture_position(self, state):
+        if current():
+            current().update(**{
+                **{key:unavailable("this root has no generating branch address") for key in
+                   ("row_action", "column_action", "branch_index", "generating_pre_state", "generating_turn")},
+                **(state.origin or {}), "engine_state":state.state_str,
+                "instruction_list":(list(state.instruction_list) if state.instruction_list is not None
+                                  else unavailable("root position: no generating transition")),
+                "offending_instruction":unavailable("no failing instruction reported")})
+
     def begin_decision(self):
         """No value reuse crosses a decision, model or observation contract."""
         if self._leaf_values is not None:
@@ -142,7 +155,14 @@ class NativeExactBackend:
         self.stage_seconds.clear()
         self.encode_calls = self.forward_batches = self.unique_leaf_evaluations = self.leaf_cache_hits = 0
 
+    def _capture_batch_context(self):
+        if current():
+            current().update(**{key:unavailable("batch context: exact per-row evidence retained in leaf_inputs")
+                for key in ("engine_state", "instruction_list", "world_spec", "world_ordinal",
+                            "row_action", "column_action", "branch_index", "generating_pre_state", "generating_turn")})
+
     def terminal_value(self, state: NativePosition) -> float | None:
+        self._capture_position(state)
         if state.teams_hp is not None:
             exhausted = tuple(all(hp == 0 for hp in side) for side in state.teams_hp)
             if all(exhausted):
@@ -162,14 +182,21 @@ class NativeExactBackend:
         return None
 
     def actions(self, state: NativePosition, *, root: bool):
+        self._capture_position(state)
         started = time.perf_counter()
         report = json.loads(self.native.env_options(state.state_str, root=root))
         self.stage_seconds["native_options_terminal"] += time.perf_counter() - started
         return tuple(report["p1"]), tuple(report["p2"])
 
     def outcomes(self, state: NativePosition, row_action: str, column_action: str):
+        self._capture_position(state)
         started = time.perf_counter()
         ctx = json.dumps({**state.party_species, "turn": state.turn})
+        if current():
+            current().update(engine_state=state.state_str, row_action=row_action,
+                column_action=column_action, event_context=json.loads(ctx),
+                instruction_list=unavailable("native transition has not returned"),
+                offending_instruction=unavailable("native transition has not returned"))
         # Keep display identities in matrices and sampling receipts. The legacy
         # parser needs bare switch species and "none" for the "No Move" option
         # of a passive seat (e.g. the opponent during a forced replacement).
@@ -188,12 +215,15 @@ class NativeExactBackend:
             started = time.perf_counter()
             self.render_subcases.update(branch.get("lossy_subcases") or ())
             reasons = list(branch.get("lossy") or ())
+            if current():
+                current().update(branch_index=branch_index,
+                    instruction_list=branch.get("instruction_list", unavailable("binary omitted instruction list")))
             if branch.get("attribution_unsafe"):
                 reasons.extend(branch.get("attribution_unsafe_reasons") or ("unsafe_attribution",))
             if reasons:
                 self.render_refusals.update(reasons)
                 post_state = branch.get("post_state")
-                raise NativeRenderRefused(dict(
+                witness = dict(
                     schema="pokezero.native-render-refusal.v1",
                     root_state_sha256=sha256(state.state_str.encode()).hexdigest(),
                     turn=state.turn, row_action=row_action, column_action=column_action,
@@ -208,7 +238,15 @@ class NativeExactBackend:
                     post_state_sha256=(sha256(post_state.encode()).hexdigest()
                                        if isinstance(post_state, str) else None),
                     events=branch.get("events"),
-                ))
+                    engine_state=state.state_str,
+                    instruction_list=branch.get("instruction_list", unavailable("binary omitted instruction list")),
+                    native_origin=branch.get("refusal_witness"),
+                    offending_instruction=unavailable("branch-level refusal, no unique instruction"),
+                )
+                error = NativeRenderRefused(witness)
+                record_refusal("renderer", error, codes=["renderer." + r for r in
+                    (reasons + list(branch.get("lossy_subcases") or []))], witness=witness)
+                raise error
             post_state = branch.get("post_state")
             if not isinstance(post_state, str) or not post_state:
                 raise ExactSearchRefused("native outcome lacks complete post-state")
@@ -226,6 +264,10 @@ class NativeExactBackend:
                 post_state, state.party_species,
                 state.turn + int(bool(branch["turn_completed"])), fold,
                 state.encoder, state.self_side, state.lines + events, teams_hp,
+                tuple(branch["instruction_list"]) if "instruction_list" in branch else None,
+                {**(state.origin or {}), "row_action":row_action, "column_action":column_action,
+                 "branch_index":branch_index, "generating_pre_state":state.state_str,
+                 "generating_turn":state.turn},
             ), float(branch["percentage"]) / 100.0)
             self.stage_seconds["fold_history_advance"] += time.perf_counter() - started
             yield child
@@ -233,6 +275,19 @@ class NativeExactBackend:
     def evaluate_leaves(self, states: Sequence[NativePosition]) -> Sequence[float]:
         if not states:
             return []
+        if current():
+            current().update(leaf_inputs=[dict(engine_state=s.state_str, turn=s.turn, origin=s.origin,
+                fold_payload=s.fold.to_payload(), lines=list(s.lines),
+                instruction_list=s.instruction_list or unavailable("no transition instructions supplied")) for s in states],
+                engine_state=unavailable("batched encode: exact inputs retained in leaf_inputs"),
+                world_spec=unavailable("batched encode: per-row worlds retained in leaf_inputs"),
+                world_ordinal=unavailable("batched encode: per-row ordinals retained in leaf_inputs"),
+                row_action=unavailable("batched encode: per-row address retained in leaf_inputs"),
+                column_action=unavailable("batched encode: per-row address retained in leaf_inputs"),
+                branch_index=unavailable("batched encode: per-row address retained in leaf_inputs"),
+                instruction_list=unavailable("batched encode: per-input lists retained in leaf_inputs"),
+                offending_instruction=unavailable("no failing batch row reported"))
+            self._capture_batch_context()
         if self.bulk_encode_workers is not None:
             return self._evaluate_bulk_leaves(states)
         categorical, numeric, token_types, attention = [], [], [], []
@@ -240,6 +295,7 @@ class NativeExactBackend:
         encoded_rows = []
         started = time.perf_counter()
         for state in states:
+            self._capture_position(state)
             if state.self_side not in ("side_one", "side_two"):
                 raise ExactSearchRefused("unknown encoder value perspective")
             encoded_at = time.perf_counter()
@@ -272,6 +328,13 @@ class NativeExactBackend:
             attention.extend(bool(value) for value in row["attention_mask"])
             self.stage_seconds["python_leaf_pack"] += time.perf_counter() - packing_at
         if self._leaf_values is not None:
+            self._capture_batch_context()
+            if current():
+                current().update(engine_state=unavailable("model batch: see leaf_inputs"),
+                    instruction_list=unavailable("model batch: see per-row leaf_inputs"),
+                    row_action=unavailable("model batch: see per-row leaf_inputs"),
+                    column_action=unavailable("model batch: see per-row leaf_inputs"),
+                    branch_index=unavailable("model batch: see per-row leaf_inputs"))
             previous_forward_seconds = self._leaf_values.forward_seconds
             try:
                 values = self._leaf_values.evaluate(encoded_rows, self.model)
@@ -291,6 +354,13 @@ class NativeExactBackend:
             self.stage_seconds["python_leaf_pack"] += time.perf_counter() - packing_at
         self.stage_seconds["cpu_encode_and_pack"] += time.perf_counter() - started
         started = time.perf_counter()
+        self._capture_batch_context()
+        if current():
+            current().update(engine_state=unavailable("model batch: see leaf_inputs"),
+                instruction_list=unavailable("model batch: see per-row leaf_inputs"),
+                row_action=unavailable("model batch: see per-row leaf_inputs"),
+                column_action=unavailable("model batch: see per-row leaf_inputs"),
+                branch_index=unavailable("model batch: see per-row leaf_inputs"))
         if packed_columns is not None:
             values, _, _, _ = self.model.eval_obs_packed(len(states), *packed, history, byte_order="little")
         else:
@@ -327,6 +397,8 @@ class NativeExactBackend:
             if not callable(method):
                 raise ExactSearchRefused("bulk encode API missing; no serial fallback")
             encoded_at = time.perf_counter()
+            if current():
+                current().update(leaf_encode_group_start=offset, leaf_encode_group_stop=stop)
             row = method([s.state_str for s in group], [s.fold for s in group],
                          [s.turn for s in group], [list(s.lines) or None for s in group],
                          workers=self.bulk_encode_workers, engine_authoritative=False)
