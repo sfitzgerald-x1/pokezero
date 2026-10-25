@@ -1512,6 +1512,11 @@ def training_batch_to_torch(batch: TrainingBatch, *, device: str | Any | None = 
         "action_probability_mask": tensor(batch.action_probability_mask, dtype=torch_module.bool, device=device),
         "training_weights": tensor(batch.training_weights, dtype=torch_module.float32, device=device),
     }
+    if batch.search_policy_targets is not None:
+        for name in ("search_policy_targets", "search_policy_target_mask",
+                     "search_value_targets", "search_value_target_mask"):
+            tensors[name] = tensor(getattr(batch, name), dtype=(torch_module.bool if name.endswith("mask")
+                                                               else torch_module.float32), device=device)
     if batch.window_row_indices is not None:
         tensors.update(
             {
