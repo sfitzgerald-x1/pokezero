@@ -127,14 +127,14 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`9d6395965283a729…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`68e6483cfeacad45…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
-the fingerprint's inputs — the 84 gen3 patches, `poke-engine-gen3-patches.txt`,
-`poke-engine-base-source.json`, the 19 crate sources, and the `Cargo.toml` / `Cargo.lock` /
+the fingerprint's inputs — the 85 gen3 patches, `poke-engine-gen3-patches.txt`,
+`poke-engine-base-source.json`, the 21 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
@@ -360,6 +360,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Shared quarantine failure capture | A new native `failure_capture.rs` and boundary witnesses retain reproduction evidence before unwinding or a specified fallback. The crate source inventory grows from 19 to 20 and hashed inputs from 109 to 110; the 84 engine patches and decision rules remain unchanged. Historical receipts, stopped rosters and OPEN qualification remain unchanged | `fb14a0e02c74843c…` |
 | Sleep Talk called-move lineage | A state-neutral instruction retains the actual called move before identical successor histories merge; the strict renderer validates that marker and the exact regenerated tail. One appended patch grows the inventory to 85 patches and 110 hashed inputs. Current source references are re-derived; historical sweeps, stopped rosters and OPEN qualification remain unchanged | `ca7ee5c35f4b8762…` |
 | Shared-capture integration with called-move lineage | Non-rewriting integration combines both reviewed branches: 85 patches, 20 crate sources and 111 hashed inputs. Both branch fingerprints remain historical branch identities; no stopped roster, installed-build receipt or OPEN qualification is rebound to this combined source | `9d6395965283a729…` |
+| Native one-ply sessions and lazy capture | Adds the bounded exact-session module and an explicit model timing barrier: 85 patches, 21 crate sources and 112 hashed inputs. Root/branch capture, rendered-line observation law, exact chance and scientific gates remain explicit; historical sweeps and installed-build receipts retain their original identities | `68e6483cfeacad45…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -1002,9 +1003,9 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.hashed_crate_sources` | 20 |
-| `t1.hashed_input_files` | 111 |
-| `t1.head_fingerprint` | 9d6395965283a729 |
+| `t1.hashed_crate_sources` | 21 |
+| `t1.hashed_input_files` | 112 |
+| `t1.head_fingerprint` | 68e6483cfeacad45 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

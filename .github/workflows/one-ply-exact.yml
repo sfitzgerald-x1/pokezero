@@ -10,6 +10,8 @@ on:
       - 'scripts/p2_paired_dry_run.py'
       - 'tests/test_p2_paired_dry_run.py'
       - 'src/pokezero/informed_policy.py'
+      - 'src/pokezero/exact_session.py'
+      - 'tests/test_exact_session.py'
       - 'src/pokezero/foulplay_bridge.py'
       - 'tests/test_informed_policy.py'
       - 'tests/test_informed_bridge.py'
@@ -37,6 +39,8 @@ on:
       - 'scripts/p2_paired_dry_run.py'
       - 'tests/test_p2_paired_dry_run.py'
       - 'src/pokezero/informed_policy.py'
+      - 'src/pokezero/exact_session.py'
+      - 'tests/test_exact_session.py'
       - 'src/pokezero/foulplay_bridge.py'
       - 'tests/test_informed_policy.py'
       - 'tests/test_informed_bridge.py'
@@ -71,4 +75,4 @@ jobs:
       - name: Check one ply LP and preserve historical depth two behavior
         env:
           PYTHONPATH: src:scripts:tests
-        run: python -m unittest test_failure_capture test_p2_paired_dry_run test_informed_root test_one_ply_exact test_one_ply_native_runner test_shallow_exact test_shallow_exact_streaming test_shallow_exact_native test_shallow_exact_native_runner test_informed_policy test_informed_bridge test_foulplay_trajectory_reference test_roll_enumeration_scope.RollEnumerationMentionLedger -v
+        run: python -m unittest test_exact_session test_failure_capture test_p2_paired_dry_run test_informed_root test_one_ply_exact test_one_ply_native_runner test_shallow_exact test_shallow_exact_streaming test_shallow_exact_native test_shallow_exact_native_runner test_informed_policy test_informed_bridge test_foulplay_trajectory_reference test_roll_enumeration_scope.RollEnumerationMentionLedger -v

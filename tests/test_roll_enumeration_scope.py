@@ -1063,6 +1063,11 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # the flag OFF in the external FoulPlay subprocess for both arms.
         # This is an opt-in scientific policy, not the production default.
         "src/pokezero/informed_policy.py",
+        # Native P2 transport checks the same fresh-process opt-in; authored
+        # fixtures scope their test settings and never enable it at import.
+        "src/pokezero/exact_session.py",
+        "tests/test_exact_session.py",
+        "tests/test_exact_session_native.py",
         "tests/test_informed_policy.py",
         "src/pokezero/foulplay_bridge.py",
         "tests/test_informed_bridge.py",

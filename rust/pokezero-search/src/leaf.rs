@@ -2581,7 +2581,7 @@ fn side_condition_counts(side: &Side) -> Value {
 /// observations from (leaf engine state, advanced fold state, leaf turn).
 #[pyclass(name = "LeafEncoder", module = "pokezero_search")]
 pub struct PyLeafEncoder {
-    ctx: LeafContext,
+    pub(crate) ctx: LeafContext,
 }
 
 struct BulkLeafInput<'a> {
@@ -2901,7 +2901,7 @@ impl PyLeafEncoder {
         Ok(packed)
     }
 
-    fn branch_context(
+    pub(crate) fn branch_context(
         &self,
         lines: Option<&[String]>,
     ) -> (Option<Vec<String>>, Option<LeafMeta>) {
