@@ -247,7 +247,10 @@ _CORPUS_TREES = ("reports", "docs")
 # 425 -> 426: measured against main 8c7bb3d5; the sole added JSON is
 # rollout_leaf_witness_mutation_battery_20261025_engine_admission.json.
 # No selected files were removed and no historical JSON content changed.
-_EXPECTED_COUNTER_ARTIFACTS = 426
+# 426 -> 427: the sole addition for optional search labels is the complete
+# rollout_leaf_witness_mutation_battery_20261025_search_labels.json receipt.
+# All historical artifacts are retained unchanged.
+_EXPECTED_COUNTER_ARTIFACTS = 427
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

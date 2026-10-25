@@ -15,6 +15,11 @@ from time import perf_counter
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from .actions import ACTION_COUNT
+from .search_label_data import (
+    SEARCH_COLUMNS, SEARCH_PROVENANCE, SearchLabelRows, columns_from_examples,
+    empty_columns, targets_from_metadata, validate_array_set,
+    validate_batch_columns, validate_cache_columns, validate_optional_targets,
+)
 from .collection import RolloutRecord, iter_rollout_records
 from .observation import require_current_observation_schema
 from .padding import zeros_like as _zeros_like
@@ -293,8 +298,11 @@ class TrajectoryExample:
     # caches can raise this for certified high-surprise rows without changing the
     # primary rollout data contract.
     training_weight: float = 1.0
+    search_policy_target: tuple[float, ...] | None = None
+    search_value_target: float | None = None
 
     def __post_init__(self) -> None:
+        validate_optional_targets(self.search_policy_target, self.search_value_target, self.legal_action_mask)
         if not math.isfinite(float(self.training_weight)) or float(self.training_weight) <= 0.0:
             raise ValueError("training_weight must be positive and finite.")
 
@@ -337,11 +345,16 @@ class TrainingBatch:
     row_token_type_ids: Any | None = None
     row_attention_mask: Any | None = None
     window_row_indices: Any | None = None
+    search_policy_targets: Any | None = None
+    search_policy_target_mask: Any | None = None
+    search_value_targets: Any | None = None
+    search_value_target_mask: Any | None = None
 
     def __post_init__(self) -> None:
         batch_size = len(self.action_indices)
         if batch_size == 0:
             raise ValueError("TrainingBatch must contain at least one example.")
+        validate_batch_columns(self)
         row_indexed = self.window_row_indices is not None
         for name, values in (
             ("history_mask", self.history_mask),
@@ -493,6 +506,7 @@ class TrainingCacheBuilder:
         self._seeds: list[int] = []
         self._turn_indices: list[int] = []
         self._terminal_capped: list[bool] = []
+        self._search_labels = SearchLabelRows()
         # Dense shaping components, populated only when the config enables potential
         # shaping (written as an OPTIONAL shaping_rewards.npy array; readers must
         # tolerate its absence — legacy caches never carry it).
@@ -534,6 +548,7 @@ class TrainingCacheBuilder:
             self._numeric_rows.append(example.numeric_features[-1])
             self._token_type_rows.append(example.token_type_ids[-1])
             self._attention_rows.append(example.attention_mask[-1])
+            self._search_labels.append(example)
             self._legal_action_masks.append(example.legal_action_mask)
             self._action_indices.append(example.action_index)
             self._rewards.append(example.reward)
@@ -595,6 +610,7 @@ class TrainingCacheBuilder:
         self._record_count += 1
 
     def _append_example_targets(self, example: TrajectoryExample) -> None:
+        self._search_labels.append(example)
         self._legal_action_masks.append(example.legal_action_mask)
         self._action_indices.append(example.action_index)
         self._rewards.append(example.reward)
@@ -718,6 +734,7 @@ class TrainingCacheBuilder:
                     "semantic": "summed category embeddings are identical to dense zero-padded rows",
                 },
             }
+            metadata.update(self._search_labels.metadata())
             if metadata_overrides is not None:
                 extra = dict(metadata_overrides)
                 collisions = sorted(set(extra) & set(metadata))
@@ -795,6 +812,7 @@ class TrainingCacheBuilder:
             "action_probabilities": numpy.asarray(self._action_probabilities, dtype=numpy.float32),
             "action_probability_mask": numpy.asarray(self._action_probability_masks, dtype=numpy.bool_),
             "training_weights": numpy.asarray(self._training_weights, dtype=numpy.float32),
+            **self._search_labels.arrays(numpy),
             "seeds": numpy.asarray(self._seeds, dtype=numpy.int64),
             "turn_indices": numpy.asarray(self._turn_indices, dtype=numpy.int32),
             "terminal_capped": numpy.asarray(self._terminal_capped, dtype=numpy.bool_),
@@ -846,7 +864,8 @@ def concat_training_caches(
     are zero-padded to the widest compaction width (documented as semantically
     identity: "summed category embeddings are identical to dense zero-padded
     rows"). Optional arrays (e.g. ``shaping_rewards``) must be present in all
-    parts or none. Fails closed on any config/schema/mask mismatch. The output
+    parts or none, except optional search targets: absent legacy columns get
+    false masks. Fails closed on any config/schema/mask mismatch. The output
     is assembled in a temp dir and atomically renamed into place.
     """
     numpy = _require_numpy()
@@ -898,15 +917,19 @@ def concat_training_caches(
             candidate_path=path,
         )
 
-    array_names = sorted(p.stem for p in (normalized[0]).glob("*.npy"))
-    for path in normalized[1:]:
-        if sorted(p.stem for p in path.glob("*.npy")) != array_names:
+    sets = [{p.stem for p in path.glob("*.npy")} for path in normalized]
+    for names in sets:
+        validate_array_set(names)
+    for path, names in zip(normalized[1:], sets[1:], strict=True):
+        if names - set(SEARCH_COLUMNS) != sets[0] - set(SEARCH_COLUMNS):
             raise ValueError(f"cache {path} is not concatenable: array set differs from {normalized[0]}.")
-
+    array_names = sorted(set.union(*sets))
     loaded: dict[str, list[Any]] = {name: [] for name in array_names}
-    for path in normalized:
+    for path, meta, names in zip(normalized, metadatas, sets, strict=True):
+        missing = empty_columns(numpy, int(meta["example_count"])) if set(SEARCH_COLUMNS) & (set(array_names) - names) else {}
         for name in array_names:
-            loaded[name].append(numpy.load(path / f"{name}.npy", allow_pickle=False))
+            loaded[name].append(missing[name] if name not in names else numpy.load(path / f"{name}.npy", allow_pickle=False))
+        validate_cache_columns({name: loaded[name][-1] for name in array_names if name in names}, meta)
 
     # Categorical compaction width: pad every part to the widest with zeros.
     cat_parts = loaded["categorical_ids"]
@@ -971,6 +994,14 @@ def concat_training_caches(
     fidelities = {_normalized_belief_fidelity(meta) for meta in metadatas}
     metadata[BELIEF_FIDELITY_KEY] = next(iter(fidelities)) if len(fidelities) == 1 else None
     _merge_special_training_metadata(metadata=metadata, parts=metadatas)
+    provenance_rows = {}
+    offset = 0
+    for meta, count in zip(metadatas, example_counts, strict=True):
+        for index, value in meta.get(SEARCH_PROVENANCE, {}).items():
+            provenance_rows[str(int(index) + offset)] = value
+        offset += count
+    if provenance_rows:
+        metadata[SEARCH_PROVENANCE] = provenance_rows
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.tmp-", dir=output_path.parent))
@@ -1318,6 +1349,7 @@ def write_training_cache_streaming(
         "opponent_action_indices", "opponent_action_mask", "action_probabilities",
         "action_probability_mask", "training_weights", "seeds", "turn_indices", "terminal_capped",
     )}
+    search_labels = SearchLabelRows()
     shaping_rewards: list[Any] = []  # optional; populated only when potential_shaping is enabled
     belief_set_source_hashes: set[str | None] = set()
     opponent_pool_provenance: list[dict[str, Any]] = []
@@ -1344,6 +1376,7 @@ def write_training_cache_streaming(
                 if tt_row.size:
                     if int(tt_row.min()) < 0 or int(tt_row.max()) > uint8_max:
                         raise ValueError("token type ids exceed uint8 training-cache range.")
+                search_labels.append(example)
                 legal_masks.append(example.legal_action_mask)
                 small["action_indices"].append(example.action_index)
                 small["rewards"].append(example.reward)
@@ -1391,6 +1424,8 @@ def write_training_cache_streaming(
             + n * ACTION_COUNT                           # legal_action_mask bool
             + n * 48                                     # ~scalar arrays (overestimate)
         )
+        if search_labels.rows:
+            est += n * (ACTION_COUNT * 4 + 4 + 2)
         est += max(16 * 1024 * 1024, est // 100)
         if current_bytes + est > max_cache_root_bytes:
             raise ValueError(
@@ -1455,6 +1490,9 @@ def write_training_cache_streaming(
         }
         for name, dtype in _scalar_dtypes.items():
             numpy.save(temp_path / f"{name}.npy", numpy.asarray(small[name], dtype=dtype))
+        search_arrays = search_labels.arrays(numpy)
+        for name, array in search_arrays.items():
+            numpy.save(temp_path / f"{name}.npy", array, allow_pickle=False)
         # Optional shaping array: only for shaping-enabled caches (raw env reward stays in `rewards`).
         if cfg.potential_shaping is not None:
             numpy.save(temp_path / "shaping_rewards.npy", numpy.asarray(shaping_rewards, dtype=numpy.float32))
@@ -1477,6 +1515,7 @@ def write_training_cache_streaming(
                 "token_type_ids": "uint8", "attention_mask": "bool",
                 "window_indices": "uint32", "legal_action_mask": "bool",
                 **{name: str(numpy.dtype(dtype)) for name, dtype in _scalar_dtypes.items()},
+                **{name: str(array.dtype) for name, array in search_arrays.items()},
                 **({"shaping_rewards": "float32"} if cfg.potential_shaping is not None else {}),
             },
             "belief_set_source_hash": (
@@ -1507,6 +1546,7 @@ def write_training_cache_streaming(
                 "semantic": "summed category embeddings are identical to dense zero-padded rows",
             },
         }
+        metadata.update(search_labels.metadata())
         (temp_path / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         if out.exists():
             if out.is_dir():
@@ -1617,6 +1657,7 @@ def _combine_training_batches(batches: Sequence[TrainingBatch]) -> TrainingBatch
         turn_indices=_concat_batch_field(tuple(batch.turn_indices for batch in batches)),
         terminal_capped=_concat_batch_field(tuple(batch.terminal_capped for batch in batches)),
         step_metadata=_concat_batch_field(tuple(batch.step_metadata for batch in batches)),
+        **_combine_search_columns(batches),
     )
 
 
@@ -1659,6 +1700,7 @@ def _combine_row_indexed_training_batches(batches: Sequence[TrainingBatch]) -> T
         turn_indices=_concat_batch_field(tuple(batch.turn_indices for batch in batches)),
         terminal_capped=_concat_batch_field(tuple(batch.terminal_capped for batch in batches)),
         step_metadata=_concat_batch_field(tuple(batch.step_metadata for batch in batches)),
+        **_combine_search_columns(batches),
         row_categorical_ids=_concat_categorical_batch_field(tuple(batch.row_categorical_ids for batch in batches)),
         row_numeric_features=_concat_batch_field(tuple(batch.row_numeric_features for batch in batches)),
         row_token_type_ids=_concat_batch_field(tuple(batch.row_token_type_ids for batch in batches)),
@@ -1757,6 +1799,8 @@ def slice_training_batch(batch: TrainingBatch, start: int, stop: int) -> Trainin
         turn_indices=_slice_batch_field(batch.turn_indices, start, stop),
         terminal_capped=_slice_batch_field(batch.terminal_capped, start, stop),
         step_metadata=_slice_batch_field(batch.step_metadata, start, stop),
+        **{name: _slice_batch_field(getattr(batch, name), start, stop)
+           for name in SEARCH_COLUMNS if getattr(batch, name) is not None},
         row_categorical_ids=row_categorical_ids,
         row_numeric_features=row_numeric_features,
         row_token_type_ids=row_token_type_ids,
@@ -1900,7 +1944,8 @@ def iter_training_cache_batches(
                 player_ids=tuple("" for _ in range(batch_len)),
                 turn_indices=_owned_array(arrays["turn_indices"][example_slice]),
                 terminal_capped=_owned_array(arrays["terminal_capped"][example_slice]),
-                step_metadata=tuple({} for _ in range(batch_len)),
+                step_metadata=_search_cache_metadata(metadata, start, stop),
+                **_search_cache_columns(arrays, example_slice),
                 row_categorical_ids=_owned_array(arrays["categorical_ids"][unique_row_indices]),
                 row_numeric_features=_owned_array(arrays["numeric_features"][unique_row_indices]),
                 row_token_type_ids=_owned_array(arrays["token_type_ids"][unique_row_indices]),
@@ -1935,7 +1980,8 @@ def iter_training_cache_batches(
             player_ids=tuple("" for _ in range(batch_len)),
             turn_indices=_owned_array(arrays["turn_indices"][example_slice]),
             terminal_capped=_owned_array(arrays["terminal_capped"][example_slice]),
-            step_metadata=tuple({} for _ in range(batch_len)),
+            step_metadata=_search_cache_metadata(metadata, start, stop),
+            **_search_cache_columns(arrays, example_slice),
         )
 
 
@@ -1975,6 +2021,7 @@ def training_batch_from_examples(examples: Sequence[TrajectoryExample]) -> Train
         turn_indices=tuple(example.turn_index for example in examples),
         terminal_capped=tuple(example.terminal_capped for example in examples),
         step_metadata=tuple(dict(example.step_metadata or {}) for example in examples),
+        **columns_from_examples(examples),
     )
 
 
@@ -2023,6 +2070,7 @@ def _example_from_window(
         opponent_action_index=step.opponent_action_index,
         action_probability=step.action_probability,
         step_metadata=dict(step.metadata),
+        **targets_from_metadata(step.metadata, step.legal_action_mask),
         terminal_capped=bool((record.terminal or record.trajectory.terminal) and (record.terminal or record.trajectory.terminal).capped),
         shaping_reward=shaping_reward,
     )
@@ -2372,6 +2420,11 @@ def _load_training_cache_arrays(path: Path, numpy: Any) -> dict[str, Any]:
         arrays["value_estimate_mask"] = numpy.zeros_like(arrays["returns"], dtype=numpy.bool_)
     if "training_weights" not in arrays:
         arrays["training_weights"] = numpy.ones_like(arrays["returns"], dtype=numpy.float32)
+    present = [name for name in SEARCH_COLUMNS if (path / f"{name}.npy").exists()]
+    validate_array_set(present)
+    for name in present:
+        arrays[name] = numpy.load(path / f"{name}.npy", mmap_mode="c")
+    validate_cache_columns(arrays, _read_training_cache_metadata(path))
     return arrays
 
 
@@ -2427,3 +2480,23 @@ def _optional_action_index(value: int | None) -> int:
 
 def _optional_float(value: float | None) -> float:
     return 0.0 if value is None else float(value)
+
+
+def _combine_search_columns(batches):
+    if all(batch.search_policy_targets is None for batch in batches):
+        return {}
+    numpy = _require_numpy()
+    parts = [{n: getattr(batch, n) for n in SEARCH_COLUMNS} if batch.search_policy_targets is not None
+             else empty_columns(numpy, batch.batch_size) for batch in batches]
+    return {n: numpy.concatenate([numpy.asarray(p[n], dtype=numpy.bool_ if n.endswith("mask")
+                                               else numpy.float32) for p in parts], axis=0)
+            for n in SEARCH_COLUMNS}
+
+
+def _search_cache_columns(arrays, example_slice):
+    return {n: _owned_array(arrays[n][example_slice]) for n in SEARCH_COLUMNS if n in arrays}
+
+
+def _search_cache_metadata(metadata, start, stop):
+    rows = metadata.get(SEARCH_PROVENANCE, {})
+    return tuple(dict(rows.get(str(i), {})) for i in range(start, stop))

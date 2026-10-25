@@ -595,6 +595,7 @@ def collect_selfplay_rollouts(
     opponent_pool_self_play_share: float = 0.0,
     worker_count: int = 1,
     policy_factory_overrides: Mapping[str, Callable[[], Any]] | None = None,
+    learner_policy_wrapper: Callable[[Any], Any] | None = None,
 ) -> CollectionMetrics:
     if games <= 0:
         raise ValueError("games must be positive.")
@@ -670,6 +671,7 @@ def collect_selfplay_rollouts(
                     opponent_specs=opponent_specs,
                     opponent_pool_entries=weighted_opponent_pool,
                     policy_factories=policy_factories,
+                    learner_policy_wrapper=learner_policy_wrapper,
                     worker_count=worker_count,
                     rss_recorder=lambda phase: _record_process_peak_rss(collection_peak_rss_mb_by_phase, phase),
                 )
@@ -730,6 +732,7 @@ def _collect_selfplay_records(
     policy_factories: Mapping[str, Callable[[], Any]],
     worker_count: int,
     rss_recorder: Callable[[str], None] | None = None,
+    learner_policy_wrapper: Callable[[Any], Any] | None = None,
 ) -> None:
     # Each worker thread reuses one warm env across the games it runs (bridge process not respawned
     # per game). close_all() tears the per-thread processes down when collection finishes.
@@ -746,6 +749,7 @@ def _collect_selfplay_records(
                     opponent_specs=opponent_specs,
                     opponent_pool_entries=opponent_pool_entries,
                     policy_factories=policy_factories,
+                    learner_policy_wrapper=learner_policy_wrapper,
                 )
                 for game_index in range(games)
             )
@@ -777,6 +781,7 @@ def _collect_selfplay_records(
                         opponent_specs=opponent_specs,
                         opponent_pool_entries=opponent_pool_entries,
                         policy_factories=policy_factories,
+                        learner_policy_wrapper=learner_policy_wrapper,
                     ),
                     range(games),
                     buffersize=max_workers * 2,
@@ -956,6 +961,7 @@ def _run_selfplay_game_record(
     opponent_specs: tuple[str, ...],
     opponent_pool_entries: tuple[OpponentPoolEntry, ...] | None,
     policy_factories: Mapping[str, Callable[[], Any]],
+    learner_policy_wrapper: Callable[[Any], Any] | None = None,
 ) -> tuple[RolloutRecord, RolloutRecord]:
     seed = seed_start + game_index
     opponent_entry = (
@@ -974,14 +980,17 @@ def _run_selfplay_game_record(
         game_index=game_index,
     )
     current_player = "p1" if game_index % 2 == 0 else "p2"
+    # Preserve original evaluation order: warm env first, then p1/p2 factories.
+    env = env_provider()
+    # Wrap only the assigned learner seat, even in a mirror.
+    policies = {"p1": policy_factories[p1_spec](), "p2": policy_factories[p2_spec]()}
+    if learner_policy_wrapper is not None:
+        policies[current_player] = learner_policy_wrapper(policies[current_player])
     # env_provider returns this worker thread's reused (warm) env; the bridge process stays alive
     # across games instead of being respawned per game.
     record = run_rollout_record_on_env(
-        env=env_provider(),
-        policies={
-            "p1": policy_factories[p1_spec](),
-            "p2": policy_factories[p2_spec](),
-        },
+        env=env,
+        policies=policies,
         rollout_config=rollout_config,
         seed=seed,
         battle_id=f"selfplay-{seed}",

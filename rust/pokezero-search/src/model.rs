@@ -1135,6 +1135,7 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     policy_opponent: Option<(&crate::policy_bridge::PolicyOpponentBridge, u64)>,
     record_joint_actions: bool,
     regret_selection: bool,
+    training_root_stats: bool,
 ) -> PyResult<String> {
     let mut state = parse_state(state_str)?;
     if state.battle_is_over() != 0.0 {
@@ -2039,6 +2040,10 @@ fn multiply_batched_encoded_core<E: BatchLeafEval>(
     let extra = if capture_refusals.borrow().is_empty() { extra } else {
         format!("{extra},\"capture_refusals\":{}", serde_json::to_string(&*capture_refusals.borrow()).unwrap())
     };
+    let extra = if training_root_stats {
+        format!("{extra},\"training_root_stats\":{}",
+            crate::root_training_stats_json(&outcome.tree.decisions[0].s1_stats))
+    } else { extra };
     Ok(multiply_report_json(
         &outcome,
         completed,
@@ -2521,6 +2526,7 @@ impl NativeLeafModel {
         record_joint_actions = false,
         policy_opponent_public_lines = None,
         selection = "puct",
+        training_root_stats = false,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn search_batched_multi_encoded(
@@ -2557,6 +2563,7 @@ impl NativeLeafModel {
         record_joint_actions: bool,
         policy_opponent_public_lines: Option<Vec<String>>,
         selection: &str,
+        training_root_stats: bool,
     ) -> PyResult<String> {
         if iterations == 0 || batch_size == 0 {
             return Err(PyValueError::new_err(
@@ -2753,6 +2760,7 @@ impl NativeLeafModel {
                     policy_bridge.as_ref().map(|bridge| (bridge, policy_opponent_seed.expect("validated policy seed"))),
                     record_joint_actions,
                     regret_selection,
+                    training_root_stats,
                 )
             }));
             result.map_err(|error| crate::failure_capture::attach_events(error, &capture_refusals.borrow()))

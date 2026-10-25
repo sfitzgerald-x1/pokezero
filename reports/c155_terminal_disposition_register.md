@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`98e9ff8fd7844584…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`6eaf2113d3d4c7e0…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -362,6 +362,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Shared-capture integration with called-move lineage | Non-rewriting integration combines both reviewed branches: 85 patches, 20 crate sources and 111 hashed inputs. Both branch fingerprints remain historical branch identities; no stopped roster, installed-build receipt or OPEN qualification is rebound to this combined source | `9d6395965283a729…` |
 | Native one-ply sessions and lazy capture | Adds the bounded exact-session module and an explicit model timing barrier: 85 patches, 21 crate sources and 112 hashed inputs. Root/branch capture, rendered-line observation law, exact chance and scientific gates remain explicit; historical sweeps and installed-build receipts retain their original identities | `68e6483cfeacad45…` |
 | Native one-ply enumeration phase timings | Adds bounded last-cell generation, post-generation processing and native-body timings on success and failure. The 85 patches, 21 crate sources and 112 hashed inputs are unchanged in membership. This is diagnostic instrumentation, not a speedup, new sweep, changed outcome law or qualification; historical receipts and OPEN gates remain unchanged | `98e9ff8fd7844584…` |
+| Default-off search-label root statistics | `lib.rs` and `model.rs` add optional exact root visit/value totals after search. Both-seat authored model-wheel checks preserve visits, values and selected actions with the flag omitted, off and on. The 85 patches, 21 crate sources and 112 hashed inputs retain the same membership. This is current-source identity and isolated model-wheel verification, not a new frozen two-consumer sweep or strength qualification; historical receipts and OPEN gates remain unchanged | `6eaf2113d3d4c7e0…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -802,6 +803,11 @@ properties of the **whole** workflow, so a PR that adds any unittest step to it 
 until the two numbers are re-derived. Both are deliberate and they are the whole point: the document
 that goes stale is the one nothing forces an author through.
 
+The optional search-label change adds only
+`rollout_leaf_witness_mutation_battery_20261025_search_labels.json` to the tracked
+JSON corpus: 426 members before, 427 after. It records a fresh full execution on
+the current source; every historical receipt remains unchanged.
+
 For #1635, re-running the tracked-JSON selector against main `a310e5ed` gives 421
 members and the integrated branch gives 422. The sole addition is the freshly executed
 `rollout_leaf_witness_mutation_battery_20261023_regret_selection.json`; no member was removed
@@ -982,7 +988,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 426 |
+| `base.expected_counter_artifacts` | 427 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 85 |
 | `base.section3_rows` | 82 |
@@ -1006,7 +1012,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 21 |
 | `t1.hashed_input_files` | 112 |
-| `t1.head_fingerprint` | 98e9ff8fd7844584 |
+| `t1.head_fingerprint` | 6eaf2113d3d4c7e0 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

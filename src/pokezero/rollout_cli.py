@@ -105,6 +105,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "into the cache and must match the central trainer config."
         ),
     )
+    collect_selfplay_cache.add_argument("--search-label-teacher", type=Path, default=None,
+        help="Validated teacher manifest for optional learner-only labels; raw actions are unchanged.")
     collect_selfplay_cache.add_argument("--games", type=int, required=True, help="Number of games to collect.")
     collect_selfplay_cache.add_argument("--out", type=Path, required=True, help="Training cache output directory.")
     collect_selfplay_cache.add_argument(
@@ -731,6 +733,15 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         args, env_config, (current_policy, *opponent_policies), opponent_pool_entries
     )
     cache_paths: list[Path] = []
+    search_label_options = {}
+    if args.search_label_teacher is not None:
+        if collection_env != COLLECTION_ENV_SHOWDOWN:
+            raise ValueError("search labels require the original Showdown collection backend")
+        from .search_label_teacher import SearchLabelTeacher
+        teacher = SearchLabelTeacher.from_manifest(args.search_label_teacher)
+        if teacher.settings.showdown_root != policy_showdown_root.resolve():
+            raise ValueError("search teacher and collector Showdown roots differ")
+        search_label_options["learner_policy_wrapper"] = teacher.wrap
     metrics = collect_selfplay_rollouts(
         output_path=None,
         training_output_path=None,
@@ -755,6 +766,7 @@ def _collect_selfplay_training_cache(args: argparse.Namespace) -> int:
         training_cache_observation_schema=env_config.observation_spec.schema_version,
         training_cache_collection_env=collection_env,
         training_cache_belief_fidelity=belief_fidelity,
+        **search_label_options,
     )
     _print_metrics(metrics.to_dict())
     if opponent_pool_entries is not None:

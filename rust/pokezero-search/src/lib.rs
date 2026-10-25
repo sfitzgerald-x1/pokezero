@@ -212,6 +212,33 @@ struct MoveStats {
     total_value: f32,
 }
 
+fn root_training_stats_json(stats: &[MoveStats]) -> serde_json::Value {
+    // Match the root value's existing f32 accumulation, then promote before
+    // serialization so all bits survive the JSON/Python boundary.
+    let visits: u32 = stats.iter().map(|s| s.visits).sum();
+    let total: f32 = stats.iter().map(|s| s.total_value).sum();
+    serde_json::json!({"visits": visits, "side_one_value_total": total as f64})
+}
+
+#[cfg(test)]
+mod root_training_stats_tests {
+    use super::*;
+
+    #[test]
+    fn completed_visits_and_full_f32_total_survive_json() {
+        let value = f32::from_bits(0x3eaaaaab);
+        let stats = vec![MoveStats {
+            display: "a".into(), prior: 1.0, visits: 3, total_value: value,
+        }];
+        let json = serde_json::to_string(&root_training_stats_json(&stats)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["visits"], 3);
+        assert_eq!(parsed["side_one_value_total"].as_f64(), Some(value as f64));
+        assert_ne!(parsed["side_one_value_total"].as_f64(), Some(0.333333));
+        assert_eq!(root_training_stats_json(&[])["visits"], 0);
+    }
+}
+
 impl MoveStats {
     fn mean(&self) -> f32 {
         if self.visits == 0 {
@@ -459,6 +486,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ENGINE_FEATURES", "gen3 (residual-order patched)")?;
     // True when the crate was built with `--features model` (tch-rs linked).
     m.add("MODEL_FEATURE_ENABLED", cfg!(feature = "model"))?;
+    m.add("TRAINING_ROOT_STATS_VERSION", if cfg!(feature = "model") { 1 } else { 0 })?;
     m.add_function(wrap_pyfunction!(bench_apply_reverse, m)?)?;
     m.add_function(wrap_pyfunction!(puct_search, m)?)?;
     m.add_function(wrap_pyfunction!(tree::puct_search_multi, m)?)?;
