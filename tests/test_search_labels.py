@@ -85,6 +85,13 @@ class NativeSearchTargetTests(unittest.TestCase):
         target = self.targets([a, a, b])
         self.assertAlmostEqual(target["value_target"], 1 / 3)
 
+    def test_unequal_visit_counts_do_not_turn_equal_belief_draws_into_visit_weights(self):
+        low = self.world(total=1., visits=1, entries=[{"move": "a", "visits": 1}])
+        high = self.world(total=0., visits=99, entries=[{"move": "b", "visits": 99}])
+        target = self.targets([low, high])
+        self.assertEqual(target["policy_target"], [.5, .5] + [0.] * 7)
+        self.assertEqual(target["value_target"], 0.)
+
     def test_unmapped_or_illegal_positive_mass_is_not_silently_renormalized(self):
         for mapping in ({"a": 0}, {"a": 0, "b": 8}):
             with self.subTest(mapping=mapping), self.assertRaises(ValueError):
@@ -101,6 +108,57 @@ class NativeSearchTargetTests(unittest.TestCase):
                 self.targets([world])
         with self.assertRaises(ValueError):
             self.targets([])
+
+
+class NativeSearchTargetRoutingTests(unittest.TestCase):
+    def test_opt_in_requires_model_leaves_and_omits_the_keyword_when_disabled(self):
+        from pokezero.engine_search import EngineMctsConfig, native_training_kwargs
+        self.assertEqual(native_training_kwargs(EngineMctsConfig()), {})
+        self.assertEqual(native_training_kwargs(SimpleNamespace()), {})
+        enabled = EngineMctsConfig(leaf_eval="model", model_path="model.pt",
+                                  checkpoint_path="checkpoint.pt", tables_path="tables.json",
+                                  record_training_targets=True)
+        self.assertEqual(native_training_kwargs(enabled), {"training_root_stats": True})
+        with self.assertRaises(ValueError):
+            EngineMctsConfig(record_training_targets=True)
+        with self.assertRaises(ValueError):
+            EngineMctsConfig(record_training_targets=1)
+
+    def test_missing_native_capability_is_a_configuration_error(self):
+        from pokezero.engine_search import require_training_target_capability
+        require_training_target_capability(SimpleNamespace(TRAINING_ROOT_STATS_VERSION=1))
+        for version in (None, 0, 2, True, 1.0):
+            with self.subTest(version=version), self.assertRaises(ValueError):
+                require_training_target_capability(SimpleNamespace(TRAINING_ROOT_STATS_VERSION=version))
+
+    def test_caller_uses_pure_lookup_and_masks_incomplete_work(self):
+        from pokezero.engine_search import EngineMctsPolicy
+        policy = object.__new__(EngineMctsPolicy)
+        calls = []
+        policy._choice_vocabulary = lambda ctx: SimpleNamespace(
+            action_index=lambda choice: calls.append(choice) or {"a": 0, "b": 1}.get(choice))
+        policy._map_choices = lambda *args: self.fail("label extraction must not repeat action mapping")
+        world = NativeSearchTargetTests().world()
+        result = policy._training_targets(context(), [world], complete=True)
+        self.assertEqual(result["status"], "LABELED")
+        self.assertEqual(calls, ["a", "b"])
+        calls.clear()
+        self.assertEqual(policy._training_targets(context(), [world], complete=False),
+            {"status": "UNLABELED", "reason": "incomplete_search_work"})
+        self.assertEqual(calls, [])
+
+    def test_invalid_report_is_captured_and_cannot_become_a_uniform_label(self):
+        from unittest.mock import patch
+        from pokezero.engine_search import EngineMctsPolicy
+        policy = object.__new__(EngineMctsPolicy)
+        policy._choice_vocabulary = lambda ctx: SimpleNamespace(action_index=lambda choice: None)
+        world = NativeSearchTargetTests().world()
+        with patch("pokezero.engine_search.record_refusal") as capture:
+            result = policy._training_targets(context(), [world], complete=True)
+        self.assertEqual(result, {"status": "UNLABELED", "reason": "invalid_native_training_target"})
+        capture.assert_called_once()
+        self.assertEqual(capture.call_args.kwargs["codes"], ["training.targets_invalid"])
+        self.assertEqual(capture.call_args.kwargs["witness"], {"world_reports": [world["report"]]})
 
 
 class SearchLabelPolicyTests(unittest.TestCase):

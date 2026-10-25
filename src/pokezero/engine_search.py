@@ -923,6 +923,8 @@ class EngineMctsConfig:
     policy_opponent_seed: int | None = None
     # Opt-in measurement only: finalized node-local joint action backups.
     record_joint_actions: bool = False
+    # Reporting only; the label-only collector consumes exact native targets.
+    record_training_targets: bool = False
     # First-play urgency for UNVISITED arms in the native PUCT selection.
     # None = the flat 0.5 the crate has always used (`MoveStats::mean` at zero
     # visits); a float r prices an unvisited arm at
@@ -1041,6 +1043,10 @@ class EngineMctsConfig:
     fold_cross_check: bool = False
 
     def __post_init__(self) -> None:
+        if type(self.record_training_targets) is not bool:
+            raise ValueError("record_training_targets must be a bool.")
+        if self.record_training_targets and self.leaf_eval != "model":
+            raise ValueError("training targets require model-leaf search.")
         if type(self.selection) is not str or self.selection not in ("puct", "regret"):
             raise ValueError("selection must be 'puct' or 'regret'.")
         if self.selection == "regret" and (
@@ -2890,6 +2896,17 @@ def native_selection_kwargs(config: EngineMctsConfig) -> dict[str, str]:
     if mode not in ("puct", "regret"):
         raise ValueError("selection must be 'puct' or 'regret'.")
     return {"selection": "regret"} if mode == "regret" else {}
+
+
+def native_training_kwargs(config: EngineMctsConfig) -> dict[str, bool]:
+    """Keep the legacy native call unchanged unless exact targets are requested."""
+    return {"training_root_stats": True} if getattr(config, "record_training_targets", False) else {}
+
+
+def require_training_target_capability(module) -> None:
+    version = getattr(module, "TRAINING_ROOT_STATS_VERSION", None)
+    if type(version) is not int or version != 1:
+        raise ValueError("search labels require a model native build with exact root statistics")
 
 
 def validate_native_selection(config: EngineMctsConfig, report: Mapping[str, Any]) -> None:
@@ -4778,6 +4795,9 @@ class EngineMctsPolicy:
         self._dex = dex
         self._set_source = set_source
         self._config = config or EngineMctsConfig()
+        if self._config.record_training_targets:
+            import pokezero_search
+            require_training_target_capability(pokezero_search)
         self._module = module
         self.stats = EngineMctsStats()
         self._world_failures_before: dict[str, int] = {}
@@ -6632,6 +6652,7 @@ class EngineMctsPolicy:
                     )
                     policy_kwargs = self._policy_opponent_native_kwargs(context, record)
                     policy_kwargs.update(native_selection_kwargs(config))
+                    policy_kwargs.update(native_training_kwargs(config))
                     if config.record_joint_actions:
                         policy_kwargs["record_joint_actions"] = True
                     native_invocation_started = time_budget_ms is not None
@@ -7530,6 +7551,7 @@ class EngineMctsPolicy:
                         payload=json.loads(handle.search_batched_multi_encoded(
                             *search_args, **self._policy_opponent_native_kwargs(context, _record),
                             **native_selection_kwargs(config),
+                            **native_training_kwargs(config),
                             **({"record_joint_actions": True} if config.record_joint_actions else {}))),
                         native_invocation_started=True,
                     )
@@ -7577,6 +7599,7 @@ class EngineMctsPolicy:
                         )
                         policy_kwargs = self._policy_opponent_native_kwargs(context, record)
                         policy_kwargs.update(native_selection_kwargs(config))
+                        policy_kwargs.update(native_training_kwargs(config))
                         if config.record_joint_actions:
                             policy_kwargs["record_joint_actions"] = True
                     except Exception as error:
@@ -7968,6 +7991,11 @@ class EngineMctsPolicy:
         metadata = {
             "engine_mcts": {
                 "leaf_eval": "model",
+                **({"training_targets": self._training_targets(
+                    context, world_runs,
+                    complete=(len(world_runs) == len(worlds)
+                              and not deadline_tree_prefix and locked_choice is None),
+                )} if config.record_training_targets else {}),
                 **({"selection": "regret"} if config.selection == "regret" else {}),
                 **({"joint_actions": {
                     "scope": "per_native_invocation_without_belief_reweighting",
@@ -8938,6 +8966,21 @@ class EngineMctsPolicy:
         return best_index
 
 
+
+    def _training_targets(self, context, world_runs, *, complete):
+        if not complete:
+            return {"status": "UNLABELED", "reason": "incomplete_search_work"}
+        from .search_labels import search_targets_from_reports
+        try:
+            vocabulary = self._choice_vocabulary(context)
+            return search_targets_from_reports(
+                world_runs, context.observation.legal_action_mask, vocabulary.action_index,
+            )
+        except Exception as error:
+            record_refusal("search.training_targets", error,
+                codes=["training.targets_invalid"],
+                witness={"world_reports": [r["report"] for r in world_runs]})
+            return {"status": "UNLABELED", "reason": "invalid_native_training_target"}
 
     def _fallback(
         self,
