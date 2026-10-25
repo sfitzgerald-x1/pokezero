@@ -17,6 +17,28 @@ from .shallow_exact import ChanceBranch, ExactSearchRefused
 from .shallow_exact_native import _branch_action_token, _drain_model_transport
 
 
+def configure_p2_arithmetic():
+    """Freeze explicit FP32 arithmetic before loading/warming P2's model.
+
+    CUDA's high/TF32 default produced a 4.3e-5 real-value difference between
+    variable and padded batches on a saved input. Strict FP32 passed the same
+    predeclared tolerances. This is P2 startup only, never an import-time or
+    ordinary-search default change. The prospective entry must bind it.
+    """
+    from .neural_policy import require_torch
+    torch=require_torch()
+    torch.set_float32_matmul_precision('highest')
+    torch.backends.cuda.matmul.allow_tf32=False
+    torch.backends.cudnn.allow_tf32=False
+    contract=dict(name='strict_fp32',float32_matmul_precision=torch.get_float32_matmul_precision(),
+        matmul_allow_tf32=torch.backends.cuda.matmul.allow_tf32,
+        cudnn_allow_tf32=torch.backends.cudnn.allow_tf32)
+    if (contract['float32_matmul_precision']!='highest'
+            or contract['matmul_allow_tf32'] or contract['cudnn_allow_tf32']):
+        raise ExactSearchRefused('P2 strict FP32 arithmetic could not be applied')
+    return contract
+
+
 class FixedShapeModel:
     """Pad with deterministic dummy observations; discard all padded outputs.
 

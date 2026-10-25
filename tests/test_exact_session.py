@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from pokezero.exact_session import FixedShapeModel,NativeSessionBackend
+from pokezero.exact_session import FixedShapeModel,NativeSessionBackend,configure_p2_arithmetic
 from pokezero.failure_capture import CaptureFailed,Quarantine,decision_scope,current
 from pokezero.shallow_exact import ExactSearchRefused
 
@@ -42,6 +42,19 @@ class Session:
             instruction_list=['authored-'+str(branch)]))
 
 class ExactSessionContracts(unittest.TestCase):
+    def test_explicit_startup_arithmetic_disables_reduced_precision_and_reports_actual_flags(self):
+        settings={'precision':'high'}
+        torch=SimpleNamespace(
+            set_float32_matmul_precision=lambda p:settings.update(precision=p),
+            get_float32_matmul_precision=lambda:settings['precision'],
+            backends=SimpleNamespace(cuda=SimpleNamespace(matmul=SimpleNamespace(allow_tf32=True)),
+                                     cudnn=SimpleNamespace(allow_tf32=True)))
+        with patch('pokezero.neural_policy.require_torch',return_value=torch):
+            self.assertEqual(configure_p2_arithmetic(),dict(name='strict_fp32',
+                float32_matmul_precision='highest',matmul_allow_tf32=False,cudnn_allow_tf32=False))
+            torch.get_float32_matmul_precision=lambda:'high'
+            with self.assertRaises(ExactSearchRefused):configure_p2_arithmetic()
+
     def test_fixed_shape_warms_three_times_then_preserves_real_rows_and_discards_padding(self):
         raw=Model();model=FixedShapeModel(raw,SPEC,4)
         self.assertEqual(len(raw.calls),3)

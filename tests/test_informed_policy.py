@@ -60,7 +60,7 @@ class InformedPolicyTests(unittest.TestCase):
         for patcher in (patch.dict(os.environ,POKEZERO_ENUMERATE_ROLLS='1'),
                         patch('pokezero.informed_policy.require_capture_admission',return_value={'authored':True}),
                         patch('pokezero.informed_policy.EngineMctsPolicy',Adapter),
-                        patch('pokezero.neural_policy.require_torch',return_value=SimpleNamespace()),
+                        patch('pokezero.informed_policy.configure_p2_arithmetic',return_value={'name':'strict_fp32'}),
                         patch('pokezero.informed_policy.FixedShapeModel',
                               side_effect=lambda *a:SimpleNamespace(warmup=[{'authored':True}]*3)),
                         patch('pokezero.informed_policy.NativeExactBackend',Backend)):

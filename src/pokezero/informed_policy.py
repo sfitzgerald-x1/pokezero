@@ -32,7 +32,8 @@ from .shallow_exact import ExactSearchRefused
 from .shallow_exact_native import (
     NativePosition, NativeRenderRefused, validate_encoder_frame,
 )
-from .exact_session import NativeSessionBackend as NativeExactBackend, FixedShapeModel
+from .exact_session import (NativeSessionBackend as NativeExactBackend, FixedShapeModel,
+                            configure_p2_arithmetic)
 
 
 @dataclass(frozen=True)
@@ -45,9 +46,10 @@ class InformedPolicyConfig:
     max_joint_actions: int = 324
     max_seconds: float = 60.0
     solver_tolerance: float = 1e-8
+    model_arithmetic: str = 'strict_fp32'
 
     def __post_init__(self):
-        if (type(self.worlds) is not int or self.worlds != 4
+        if (self.model_arithmetic!='strict_fp32' or type(self.worlds) is not int or self.worlds != 4
                 or any(type(v) is not int or v <= 0 for v in
                        (self.batch_size,self.bulk_encode_workers,self.max_leaves,
                         self.max_chance_branches,self.max_joint_actions))
@@ -112,8 +114,7 @@ class InformedRootPolicy:
         # thread settings before native model work, then execute a fixed three
         # dummy calls without using the game's RNG or any source root.
         try:
-            from .neural_policy import require_torch
-            require_torch()
+            self._arithmetic=configure_p2_arithmetic()
             layout = json.loads(self._adapter._tables_json)['layout']
             self._observation_spec = dict(window=1,tokens=int(layout['token_count']),
                 categorical_features=int(layout['categorical_feature_count']),
@@ -224,6 +225,7 @@ class InformedRootPolicy:
                    information_model="informed_adversary_root_minimax",
                    leaf_model_device=self.model_device,
                    startup_warmup=self._model.warmup,
+                   arithmetic_contract=self._arithmetic,
                    config=asdict(self.config))
         self._witness = {}
         backend = None
