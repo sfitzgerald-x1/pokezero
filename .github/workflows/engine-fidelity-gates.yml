@@ -125,6 +125,7 @@ jobs:
             tests/test_leaf_self_recharge_derivation.py
             tests/test_leaf_encoder.py
             tests/test_leaf_bulk_packed.py
+            tests/test_exact_session_native.py
             tests/test_one_ply_native_leaf_routing.py
             tests/fixtures/native_refusals/passive_no_move_r1.json
             tests/test_roll_enumeration_scope.py
@@ -1141,8 +1142,8 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
         run: |
           set -o pipefail
-          python -m unittest tests.test_leaf_bulk_packed tests.test_one_ply_native_leaf_routing -v 2>&1 | tee /tmp/leaf-bulk-packed.log
-          grep -qE 'Ran 9 tests' /tmp/leaf-bulk-packed.log
+          python -m unittest tests.test_leaf_bulk_packed tests.test_one_ply_native_leaf_routing tests.test_exact_session_native -v 2>&1 | tee /tmp/leaf-bulk-packed.log
+          grep -qE 'Ran 12 tests' /tmp/leaf-bulk-packed.log
           grep -qE '^OK$' /tmp/leaf-bulk-packed.log
           if grep -q 'skipped' /tmp/leaf-bulk-packed.log; then
             echo '::error::bulk encoder parity did not exercise the native model wheel'

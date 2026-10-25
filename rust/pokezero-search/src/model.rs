@@ -2113,6 +2113,14 @@ impl NativeLeafModel {
         format!("{:?}", self.evaluator.device)
     }
 
+    /// Explicit timing barrier for the fixed-shape P2 transport. CPU is
+    /// already synchronous; CUDA waits on this evaluator's actual device.
+    fn synchronize(&self) {
+        if let Device::Cuda(index) = self.evaluator.device {
+            tch::Cuda::synchronize(index as i64);
+        }
+    }
+
     /// Isolated-worker diagnostics only: (packed decode calls/seconds,
     /// native flat tensor+forward calls/seconds), resetting these counters.
     /// Automatic PyO3 list extraction occurs BEFORE eval_obs_flat enters Rust

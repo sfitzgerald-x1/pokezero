@@ -157,6 +157,13 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
     world_index = row_action = column_action = branch_index = None
     phase = 'decision_reset'
     pending, targets = [], []
+    # Additive diagnostics hook: bind this list once, never copy it per leaf
+    # or batch. A deadline before evaluate_leaves must retain queued rows too.
+    bind_pending = getattr(backend, 'bind_pending', None)
+    if bind_pending is not None:
+        if not callable(bind_pending):
+            raise ExactSearchRefused('backend pending-list binding is not callable')
+        bind_pending(pending)
 
     def check():
         now = time.monotonic()

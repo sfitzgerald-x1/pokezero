@@ -45,6 +45,7 @@ class Backend:
     def __init__(self,*args,**kwargs):
         self.stage_seconds=Counter()
         self.model_call_timings=[]
+    def prepare_roots(self,positions):self.positions=positions
     def actions(self,position,*,root):
         assert root
         return (('first','second'),('opponent',)) if position.self_side=='side_one' \
@@ -59,6 +60,9 @@ class InformedPolicyTests(unittest.TestCase):
         for patcher in (patch.dict(os.environ,POKEZERO_ENUMERATE_ROLLS='1'),
                         patch('pokezero.informed_policy.require_capture_admission',return_value={'authored':True}),
                         patch('pokezero.informed_policy.EngineMctsPolicy',Adapter),
+                        patch('pokezero.neural_policy.require_torch',return_value=SimpleNamespace()),
+                        patch('pokezero.informed_policy.FixedShapeModel',
+                              side_effect=lambda *a:SimpleNamespace(warmup=[{'authored':True}]*3)),
                         patch('pokezero.informed_policy.NativeExactBackend',Backend)):
             patcher.start();self.addCleanup(patcher.stop)
         self.draws=[]

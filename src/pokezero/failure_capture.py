@@ -200,6 +200,18 @@ class DecisionCapture:
         )
         self._errors = []  # Hold objects: id reuse must not suppress another failure.
         self.receipts = []
+        self._lazy = {}
+
+    def defer(self, name, provider):
+        """Retain a failure-only evidence provider; never evaluate on success.
+
+        The owner freezes roots once and keeps native sessions alive. Providers
+        must reconstruct the precise active branch/batch without RNG or writes
+        to scientific rosters. Failure to produce evidence remains fail-closed.
+        """
+        if name in self._lazy or not isinstance(name, str) or not callable(provider):
+            raise CaptureFailed('capture.failed: duplicate/invalid lazy evidence provider')
+        self._lazy[name] = provider
 
     def update(self, **fields):
         try:
@@ -242,6 +254,9 @@ class DecisionCapture:
             payload = dict(schema="pokezero.quarantined-failure.v1", stage=stage,
                 reason_codes=codes, build=q.build, captured_unix=time.time(),
                 **snapshot(self.fields))
+            if self._lazy:
+                payload['lazy_evidence'] = {name:snapshot(provider())
+                    for name,provider in self._lazy.items()}
             if witness is not None:
                 payload["origin_witness"] = snapshot(witness)
                 for key in ("engine_state", "instruction_list", "offending_instruction"):

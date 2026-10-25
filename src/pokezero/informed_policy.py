@@ -30,8 +30,9 @@ from .poke_engine_adapter import build_poke_engine_state
 from .policy import PolicyContext, PolicyDecision
 from .shallow_exact import ExactSearchRefused
 from .shallow_exact_native import (
-    NativeExactBackend, NativePosition, NativeRenderRefused, validate_encoder_frame,
+    NativePosition, NativeRenderRefused, validate_encoder_frame,
 )
+from .exact_session import NativeSessionBackend as NativeExactBackend, FixedShapeModel
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,21 @@ class InformedRootPolicy:
         self._trace = Path(trace_path).open("x",encoding="utf-8")
         self.stats = InformedPolicyStats()
         self._witness: dict[str, Any] = {}
+        # Process-start initialization, outside every decision clock. Apply
+        # thread settings before native model work, then execute a fixed three
+        # dummy calls without using the game's RNG or any source root.
+        try:
+            from .neural_policy import require_torch
+            require_torch()
+            layout = json.loads(self._adapter._tables_json)['layout']
+            self._observation_spec = dict(window=1,tokens=int(layout['token_count']),
+                categorical_features=int(layout['categorical_feature_count']),
+                numeric_features=int(layout['numeric_feature_count']))
+            self._model = FixedShapeModel(model if model is not None else self._adapter._native(),
+                self._observation_spec,self.config.batch_size)
+        except BaseException:
+            self._trace.close()
+            raise
 
     def reset(self):
         self._adapter.reset()
@@ -207,6 +223,7 @@ class InformedRootPolicy:
                    decision_index=context.decision_round_index,
                    information_model="informed_adversary_root_minimax",
                    leaf_model_device=self.model_device,
+                   startup_warmup=self._model.warmup,
                    config=asdict(self.config))
         self._witness = {}
         backend = None
@@ -219,14 +236,11 @@ class InformedRootPolicy:
             vocabulary = self._adapter._choice_vocabulary(context)
             if vocabulary is None:
                 raise ExactSearchRefused("P2 request lacks action candidates")
-            model = self._model if self._model is not None else self._adapter._native()
-            layout = json.loads(self._adapter._tables_json)["layout"]
-            backend = NativeExactBackend(self._native,model,packed_leaves=True,
+            backend = NativeExactBackend(self._native,self._model,packed_leaves=True,
                 bulk_encode_workers=self.config.bulk_encode_workers,
                 max_outcomes_per_call=self.config.max_chance_branches,
-                observation_spec=dict(window=1,tokens=int(layout["token_count"]),
-                    categorical_features=int(layout["categorical_feature_count"]),
-                    numeric_features=int(layout["numeric_feature_count"])))
+                observation_spec=self._observation_spec)
+            backend.prepare_roots(positions)
             # Check EVERY own root action against the real request before
             # expansion; never condition on whether a sampled action maps.
             legal = {i for i,p in enumerate(context.observation.legal_action_mask) if p}

@@ -15,6 +15,7 @@ pub mod events;
 pub(crate) mod failure_capture;
 pub mod fold;
 pub mod leaf;
+mod exact_session;
 pub mod panic_guard;
 pub(crate) mod packed_obs;
 #[cfg(feature = "model")]
@@ -472,6 +473,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(policy_request::sampled_policy_request, m)?)?;
     m.add_class::<encoder::NativeEncoder>()?;
     m.add_class::<leaf::PyLeafEncoder>()?;
+    m.add_class::<exact_session::ExactSession>()?;
     m.add_class::<fold::PyFoldState>()?;
     #[cfg(feature = "model")]
     m.add_class::<model::NativeLeafModel>()?;
