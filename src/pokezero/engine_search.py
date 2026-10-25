@@ -8979,7 +8979,8 @@ class EngineMctsPolicy:
         except Exception as error:
             record_refusal("search.training_targets", error,
                 codes=["training.targets_invalid"],
-                witness={"world_reports": [r["report"] for r in world_runs]})
+                witness={"world_runs": [{"side_key": r["side_key"], "report": r["report"]}
+                                        for r in world_runs]})
             return {"status": "UNLABELED", "reason": "invalid_native_training_target"}
 
     def _fallback(

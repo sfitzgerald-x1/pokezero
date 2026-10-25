@@ -158,7 +158,7 @@ class NativeSearchTargetRoutingTests(unittest.TestCase):
         self.assertEqual(result, {"status": "UNLABELED", "reason": "invalid_native_training_target"})
         capture.assert_called_once()
         self.assertEqual(capture.call_args.kwargs["codes"], ["training.targets_invalid"])
-        self.assertEqual(capture.call_args.kwargs["witness"], {"world_reports": [world["report"]]})
+        self.assertEqual(capture.call_args.kwargs["witness"], {"world_runs": [world]})
 
 
 class SearchLabelPolicyTests(unittest.TestCase):
