@@ -253,6 +253,7 @@ class InformedRootPolicy:
             row.update(status="COMPLETE",turn=turn,sampling=sampling,request_action_index=action,
                 result=asdict(result),certificate_gap=result.equilibrium.gap,
                 stage_seconds=dict(backend.stage_seconds),
+                model_call_timings=list(backend.model_call_timings),
                 root_state_sha256=[sha256(p.state_str.encode()).hexdigest() for p in positions],
                 elapsed_seconds=time.perf_counter()-started)
             self._record(row)
@@ -272,6 +273,7 @@ class InformedRootPolicy:
                 preparation_seconds=preparation_seconds,
                 exact_work=getattr(error,'work',unavailable('core work counters not attached to this failure')),
                 backend_stage_seconds=dict(backend.stage_seconds) if backend is not None else {},
+                model_call_timings=list(backend.model_call_timings) if backend is not None else [],
                 backend_counts={key:getattr(backend,key,None) for key in
                     ('encode_calls','forward_batches','unique_leaf_evaluations',
                      'capture_context_updates','captured_leaf_rows')},

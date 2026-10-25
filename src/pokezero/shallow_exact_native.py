@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from hashlib import sha256
 import json
 import math
+import marshal
 import os
 import struct
 import time
@@ -81,6 +82,49 @@ def _same_capture_value(saved, value):
     if kind in (str, int, bool, type(None)):
         return saved == value
     return False
+
+
+def _same_capture_snapshot(saved, value):
+    """Conservatively compare against a detached DecisionCapture snapshot.
+
+    Container snapshots contain built-in JSON values, with nonfinite floats
+    represented by explicit marker dictionaries. Marshal's C encoder preserves
+    scalar/container types and float bits, so equality cannot merge True/1/1.0,
+    signed zero, tuple/list or changed mapping keys. It never loads or executes
+    a serialized object. Unsupported values take the ordinary snapshot path.
+
+    Format 2 deliberately avoids object-identity references, so separately
+    allocated equal inputs still match. Mapping-order differences may return
+    false for equal JSON: that merely refreshes the detached snapshot. Serialize
+    BOTH sides every time; no cache can hide mutation. The saved side must come
+    from DecisionCapture. No serialized bytes are loaded or written to evidence.
+    """
+    if type(saved) is not type(value):
+        return False
+    if type(value) not in (dict, list):
+        return _same_capture_value(saved, value)
+    try:
+        return marshal.dumps(saved, 2) == marshal.dumps(value, 2)
+    except (ValueError, TypeError, OverflowError):
+        return False
+
+
+def _drain_model_transport(model):
+    """Optional diagnostics never replace a model result or its exception."""
+    try:
+        drain = getattr(model, 'drain_transport_timings', None)
+        if not callable(drain):
+            return dict(status='UNAVAILABLE_API')
+        values = drain()
+        if (type(values) not in (tuple, list) or len(values) != 4
+                or any(type(values[i]) is not int or values[i] < 0 for i in (0, 2))
+                or any(type(values[i]) not in (int, float)
+                       or not math.isfinite(values[i]) or values[i] < 0 for i in (1, 3))):
+            return dict(status='UNAVAILABLE_INVALID_COUNTERS')
+        return dict(status='MEASURED',packed_decode_calls=values[0],packed_decode_seconds=values[1],
+                    native_tensor_forward_output_calls=values[2],native_tensor_forward_output_seconds=values[3])
+    except Exception as error:
+        return dict(status='UNAVAILABLE_ERROR',error_type=type(error).__name__)
 
 
 class NativeExactBackend:
@@ -158,6 +202,7 @@ class NativeExactBackend:
         self.leaf_cache_hits = 0
         self.capture_context_updates = 0
         self.captured_leaf_rows = 0
+        self.model_call_timings = []
 
     def _capture_position(self, state):
         capture = current()
@@ -171,8 +216,8 @@ class NativeExactBackend:
                 # one world. Compare against the detached snapshot, so changes
                 # (including in-place mutations or batch unavailable markers)
                 # still force a fresh copy. Never cache by world ordinal alone.
-                equal = key in capture.fields and _same_capture_value(capture.fields[key], value)
-                if key in dynamic or not equal:
+                if (key in dynamic or key not in capture.fields
+                        or not _same_capture_snapshot(capture.fields[key], value)):
                     origin[key] = value
             capture.update(**{
                 **{key:unavailable("this root has no generating branch address") for key in
@@ -193,6 +238,7 @@ class NativeExactBackend:
         self.stage_seconds.clear()
         self.encode_calls = self.forward_batches = self.unique_leaf_evaluations = self.leaf_cache_hits = 0
         self.capture_context_updates = self.captured_leaf_rows = 0
+        self.model_call_timings.clear()
 
     def _capture_batch_context(self):
         if current():
@@ -462,9 +508,19 @@ class NativeExactBackend:
         history = b'\x01'*(len(states)*spec['window'])
         self.stage_seconds['python_leaf_pack'] += time.perf_counter()-packing_at
         self.stage_seconds['cpu_encode_and_pack'] += time.perf_counter()-started
+        previous_transport = _drain_model_transport(self.model)  # Reset only diagnostic counters.
+        returned = False
         forward_at = time.perf_counter()
-        values, _, _, _ = self.model.eval_obs_packed(len(states), *packed, history, byte_order='little')
-        self.stage_seconds['champion_forward'] += time.perf_counter()-forward_at
+        try:
+            values, _, _, _ = self.model.eval_obs_packed(len(states), *packed, history, byte_order='little')
+            returned = True
+        finally:
+            elapsed = time.perf_counter()-forward_at
+            self.stage_seconds['champion_forward'] += elapsed
+            transport = (_drain_model_transport(self.model) if previous_transport['status'] == 'MEASURED'
+                         else previous_transport)
+            self.model_call_timings.append(dict(batch_rows=len(states),returned=returned,
+                wrapper_wall_seconds=elapsed,transport=transport))
         self.forward_batches += 1
         if len(values) != len(states):
             raise ExactSearchRefused("native value head changed batch cardinality")

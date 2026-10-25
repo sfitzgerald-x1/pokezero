@@ -78,6 +78,59 @@ class NativeBindingTests(unittest.TestCase):
                 return [.25]*count,[],[],9
         return BulkEncoder,PackedModel,dict(window=1,tokens=1,categorical_features=2,numeric_features=2)
 
+    def test_bulk_model_timing_is_per_call_and_does_not_change_values(self):
+        E,M,spec=self.bulk_fixture()
+        class TimedModel(M):
+            def __init__(self):self.drain_calls=0;self.calls=0
+            def drain_transport_timings(self):
+                self.drain_calls+=1
+                return (0,0.0,0,0.0) if self.drain_calls%2 else (1,0.01,1,0.02)
+            def eval_obs_packed(self,*args,**kwargs):
+                self.calls+=1
+                return super().eval_obs_packed(*args,**kwargs)
+        with patch.dict(os.environ,{'POKEZERO_ENUMERATE_ROLLS':'1'}):
+            model=TimedModel();backend=NativeExactBackend(Native(),model,packed_leaves=True,
+                bulk_encode_workers=2,observation_spec=spec)
+            from dataclasses import replace
+            states=[replace(self.root,encoder=E())]
+            self.assertEqual(backend.evaluate_leaves(states),[.25])
+            self.assertEqual(backend.evaluate_leaves(states),[.25])
+            self.assertEqual((model.calls,model.drain_calls),(2,4))
+            self.assertEqual(len(backend.model_call_timings),2)
+            for row in backend.model_call_timings:
+                self.assertTrue(row['returned'])
+                self.assertEqual(row['batch_rows'],1)
+                self.assertEqual(row['transport'],dict(status='MEASURED',packed_decode_calls=1,
+                    packed_decode_seconds=.01,native_tensor_forward_output_calls=1,
+                    native_tensor_forward_output_seconds=.02))
+            backend.begin_decision()
+            self.assertEqual(backend.model_call_timings,[])
+
+    def test_bulk_model_error_keeps_its_identity_and_timing(self):
+        E,M,spec=self.bulk_fixture();error=ExactSearchRefused('authored model failure')
+        class BrokenModel(M):
+            def eval_obs_packed(self,*args,**kwargs):raise error
+            def drain_transport_timings(self):raise ValueError('unavailable diagnostic')
+        with patch.dict(os.environ,{'POKEZERO_ENUMERATE_ROLLS':'1'}):
+            backend=NativeExactBackend(Native(),BrokenModel(),packed_leaves=True,
+                bulk_encode_workers=2,observation_spec=spec)
+            from dataclasses import replace
+            with self.assertRaises(ExactSearchRefused) as caught:
+                backend.evaluate_leaves([replace(self.root,encoder=E())])
+            self.assertIs(caught.exception,error)
+            self.assertEqual(backend.forward_batches,0)
+            row,=backend.model_call_timings
+            self.assertFalse(row['returned'])
+            self.assertEqual(row['transport'],dict(status='UNAVAILABLE_ERROR',error_type='ValueError'))
+
+    def test_missing_or_invalid_transport_diagnostics_do_not_change_model_output(self):
+        from pokezero.shallow_exact_native import _drain_model_transport
+        self.assertEqual(_drain_model_transport(object()),dict(status='UNAVAILABLE_API'))
+        for values in ((True,0.0,1,0.0),(1,float('nan'),1,0.0),(1,-1.0,1,0.0),(1,0.0)):
+            with self.subTest(values=values):
+                model=type('Diagnostic',(),{'drain_transport_timings':lambda self:values})()
+                self.assertEqual(_drain_model_transport(model),dict(status='UNAVAILABLE_INVALID_COUNTERS'))
+
     def test_bulk_packed_mixed_encoder_runs_preserve_inputs_histories_and_value_frames(self):
         from dataclasses import replace
         E,M,spec=self.bulk_fixture();a,b=E(),E()
