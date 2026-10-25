@@ -595,7 +595,7 @@ def collect_selfplay_rollouts(
     opponent_pool_self_play_share: float = 0.0,
     worker_count: int = 1,
     policy_factory_overrides: Mapping[str, Callable[[], Any]] | None = None,
-    learner_policy_wrapper: Callable[[Any], Any] | None = None,
+    learner_policy_wrapper: Callable[[Any, PokeZeroEnv], Any] | None = None,
 ) -> CollectionMetrics:
     if games <= 0:
         raise ValueError("games must be positive.")
@@ -732,7 +732,7 @@ def _collect_selfplay_records(
     policy_factories: Mapping[str, Callable[[], Any]],
     worker_count: int,
     rss_recorder: Callable[[str], None] | None = None,
-    learner_policy_wrapper: Callable[[Any], Any] | None = None,
+    learner_policy_wrapper: Callable[[Any, PokeZeroEnv], Any] | None = None,
 ) -> None:
     # Each worker thread reuses one warm env across the games it runs (bridge process not respawned
     # per game). close_all() tears the per-thread processes down when collection finishes.
@@ -961,7 +961,7 @@ def _run_selfplay_game_record(
     opponent_specs: tuple[str, ...],
     opponent_pool_entries: tuple[OpponentPoolEntry, ...] | None,
     policy_factories: Mapping[str, Callable[[], Any]],
-    learner_policy_wrapper: Callable[[Any], Any] | None = None,
+    learner_policy_wrapper: Callable[[Any, PokeZeroEnv], Any] | None = None,
 ) -> tuple[RolloutRecord, RolloutRecord]:
     seed = seed_start + game_index
     opponent_entry = (
@@ -985,7 +985,7 @@ def _run_selfplay_game_record(
     # Wrap only the assigned learner seat, even in a mirror.
     policies = {"p1": policy_factories[p1_spec](), "p2": policy_factories[p2_spec]()}
     if learner_policy_wrapper is not None:
-        policies[current_player] = learner_policy_wrapper(policies[current_player])
+        policies[current_player] = learner_policy_wrapper(policies[current_player], env)
     # env_provider returns this worker thread's reused (warm) env; the bridge process stays alive
     # across games instead of being respawned per game.
     record = run_rollout_record_on_env(

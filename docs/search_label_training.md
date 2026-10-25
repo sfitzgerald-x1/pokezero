@@ -13,7 +13,9 @@ the training device and can be specified with `--search-label-device`.
 
 The teacher uses model leaves, 2,048 simulations, depth 8, batch 64, one belief
 world and one world worker, both policy priors, c_puct 1.4, unset FPU reduction,
-and no early stop. Exports are prepared from the current checkpoint before
+and no early stop. Each teacher is bound to its collection worker's live
+environment so its fold receives the same Tier-2 tracker annotations as the
+acting policy's observation. Exports are prepared from the current checkpoint before
 collection at startup/resume and after each 25 iterations. For a fresh run this
 is iterations 1, 26, 51, etc. Every attempted label retains the checkpoint,
 export hashes, refresh iteration, configuration and capture build. Changed
