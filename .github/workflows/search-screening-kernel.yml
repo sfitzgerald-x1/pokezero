@@ -14,6 +14,8 @@ on:
       - tests/test_search_over_raw_budget16384.py
       - src/pokezero/mcts_eval/fullgame_strength.py
       - tests/test_fullgame_strength.py
+      - src/pokezero/mcts_eval/training_strength.py
+      - tests/test_training_strength.py
       - scripts/run_fullgame_panel.py
       - tests/test_fullgame_panel.py
       - src/pokezero/foulplay_bridge.py
@@ -42,6 +44,8 @@ on:
       - tests/test_search_over_raw_budget16384.py
       - src/pokezero/mcts_eval/fullgame_strength.py
       - tests/test_fullgame_strength.py
+      - src/pokezero/mcts_eval/training_strength.py
+      - tests/test_training_strength.py
       - scripts/run_fullgame_panel.py
       - tests/test_fullgame_panel.py
       - src/pokezero/foulplay_bridge.py
@@ -73,4 +77,4 @@ jobs:
       - name: Run standalone contracts
         env:
           PYTHONPATH: src:tests
-        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity test_search_over_raw_margin test_search_over_raw_budget16384 test_fullgame_strength test_fullgame_panel test_fullgame_phase_progress test_fullgame_coordinator test_reference_bundle_install test_reference_materialization_coverage -v
+        run: python -m unittest test_search_over_raw_screening test_search_over_raw_deviations test_search_over_raw_sparse_sensitivity test_search_over_raw_margin test_search_over_raw_budget16384 test_fullgame_strength test_training_strength test_fullgame_panel test_fullgame_phase_progress test_fullgame_coordinator test_reference_bundle_install test_reference_materialization_coverage -v
