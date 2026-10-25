@@ -817,6 +817,59 @@ class TestASwallowedFailureIsNotAFinding:
 
 
 class TestHookUnwindingUnderLoad:
+    @pytest.mark.parametrize("extra", [None, {"model_time_budget": {"exhausted": False}}])
+    def test_fallback_metadata_is_forwarded_without_changing_the_decision(self, extra):
+        # Gate0's first refused decision reached crate_search_failed with this
+        # keyword; the observer's narrower signature crashed before delegation.
+        import random
+
+        policy = _FakePolicy()
+        context = _Context("gate0-hook-contract", 7, "p1")
+        rng = random.Random(42)
+        expected_rng = random.Random(42)
+        expected_decision = object()
+        received = []
+
+        def fallback(actual_context, actual_rng, reason, *, engine_mcts_extra=None):
+            received.append((actual_context, actual_rng, reason, engine_mcts_extra))
+            assert recorder.records[0].reason == reason  # capture precedes delegation
+            assert actual_rng.random() == expected_rng.random()
+            return expected_decision
+
+        policy._fallback = fallback
+        recorder = attach_refusal_recorder(policy)
+        policy.select_action_with_context(context, rng=rng)
+        result = policy._fallback(
+            context, rng, "crate_search_failed", engine_mcts_extra=extra
+        )
+        assert result is expected_decision
+        assert len(received) == 1
+        assert received[0][0] is context
+        assert received[0][1] is rng
+        assert received[0][2] == "crate_search_failed"
+        assert received[0][3] is extra
+        assert rng.getstate() == expected_rng.getstate()
+        assert not recorder.errors
+
+    @pytest.mark.parametrize("fatal", [False, True])
+    def test_keyword_fallback_preserves_the_original_exception(self, fatal):
+        from pokezero.failure_capture import CaptureFailed
+
+        policy = _FakePolicy()
+        failure = CaptureFailed("capture lost") if fatal else RuntimeError("policy fallback failed")
+
+        def fallback(context, rng, reason, *, engine_mcts_extra=None):
+            raise failure
+
+        policy._fallback = fallback
+        recorder = attach_refusal_recorder(policy)
+        context = _Context("gate0-hook-contract", 8, "p2")
+        policy.select_action_with_context(context, rng=None)
+        with pytest.raises(type(failure)) as caught:
+            policy._fallback(context, None, "crate_search_failed", engine_mcts_extra={})
+        assert caught.value is failure
+        assert [record.reason for record in recorder.records] == ["crate_search_failed"]
+
     def test_a_decision_between_detaches_reaches_only_the_live_recorder(self):
         # `_Hook.remove`'s `if self.recorders: return` is the single line making
         # unwinding order-independent, and deleting it survived the previous
