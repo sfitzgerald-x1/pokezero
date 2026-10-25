@@ -29,6 +29,50 @@ class FailureCaptureTests(unittest.TestCase):
     def bundles(self):
         return [json.loads(p.read_text()) for p in self.path.glob("failure-*.json")]
 
+    def test_snapshot_memo_is_detached_and_never_hides_later_input_changes(self):
+        shared = {'world_spec':{'hp':[200,180]},'draw_state':[1,2,3]}
+        batch = [{'origin':shared,'branch':0},{'origin':shared,'branch':1}]
+        first = snapshot(batch)
+        expected = [{'origin':snapshot(shared),'branch':0},{'origin':snapshot(shared),'branch':1}]
+        self.assertEqual(canonical(first),canonical(expected))
+        frozen = canonical(first)
+        shared['world_spec']['hp'][1] = 0
+        shared['draw_state'].append(4)
+        self.assertEqual(canonical(first),frozen)
+        second = snapshot(batch)
+        self.assertEqual(second[0]['origin']['world_spec']['hp'],[200,0])
+        self.assertNotEqual(canonical(second),frozen)
+
+    def test_cyclic_capture_input_fails_closed_without_a_partial_update(self):
+        cycle = [];cycle.append(cycle)
+        with self.assertRaises(CaptureFailed):
+            with decision_scope(self.q,self.context,self.rng):
+                current().update(cyclic=cycle)
+        self.assertEqual(self.q.failures,1)
+
+    def test_memo_preserves_supported_typed_values_and_detaches_numpy_inputs(self):
+        from dataclasses import dataclass
+        from enum import Enum
+        import numpy as np
+        class Mode(Enum):
+            VALUE = 'declared'
+        @dataclass
+        class Record:
+            value: list
+        array = np.array([[1.0,2.0]],dtype='<f8')
+        payload = dict(mode=Mode.VALUE,records=[Record([1]),Record([2])],
+            ordering=frozenset((3,1)),array=array,alias=array,tuple_value=(True,1,1.0,-0.0))
+        captured = snapshot(payload)
+        expected_array = dict(encoding='numpy-c-order-hex',dtype='<f8',shape=[1,2],
+                              data=array.tobytes().hex())
+        self.assertEqual(captured,dict(mode='declared',records=[{'value':[1]},{'value':[2]}],
+            ordering=[1,3],array=expected_array,alias=expected_array,
+            tuple_value=[True,1,1.0,-0.0]))
+        frozen = canonical(captured)
+        array[0,0] = 99
+        self.assertEqual(canonical(captured),frozen)
+        self.assertNotEqual(snapshot(payload)['array']['data'],expected_array['data'])
+
     def test_position_capture_matches_complete_snapshot_across_mutation_and_batch_reset(self):
         from collections import Counter
         from pokezero.shallow_exact_native import NativeExactBackend

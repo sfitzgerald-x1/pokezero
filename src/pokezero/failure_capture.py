@@ -71,26 +71,51 @@ def unavailable(reason):
 
 
 def snapshot(value):
+    """Detached snapshot; repeated objects are copied once within this call.
+
+    The memo never crosses calls, so subsequent input mutation is observed.
+    It retains originals as well as copies to prevent temporary id reuse.
+    """
+    return _snapshot(value, {}, set())
+
+
+def _snapshot(value, memo, visiting):
+    if value is None or type(value) in (str, int, float, bool):
+        if type(value) is float and not math.isfinite(value):
+            return dict(encoding="ieee754-binary64-big-endian-hex",
+                        data=struct.pack(">d", value).hex())
+        return value
+    identity = id(value)
+    if identity in visiting:
+        raise TypeError("capture cannot serialize a cyclic input")
+    if identity in memo:
+        original, copied = memo[identity]
+        assert original is value
+        return copied
+    visiting.add(identity)
+    try:
+        copied = _snapshot_container(value, memo, visiting)
+        memo[identity] = (value, copied)
+        return copied
+    finally:
+        visiting.remove(identity)
+
+
+def _snapshot_container(value, memo, visiting):
     if isinstance(value, Enum):
-        return snapshot(value.value)
+        return _snapshot(value.value, memo, visiting)
     if is_dataclass(value) and not isinstance(value, type):
-        return snapshot(asdict(value))
+        return _snapshot(asdict(value), memo, visiting)
     if isinstance(value, Mapping):
-        return {str(k): snapshot(v) for k, v in value.items()}
+        return {str(k): _snapshot(v, memo, visiting) for k, v in value.items()}
     if isinstance(value, (tuple, list)):
-        return [snapshot(v) for v in value]
+        return [_snapshot(v, memo, visiting) for v in value]
     if isinstance(value, (set, frozenset)):
-        return sorted((snapshot(v) for v in value), key=lambda v: json.dumps(v, sort_keys=True))
+        return sorted((_snapshot(v, memo, visiting) for v in value),
+                      key=lambda v: json.dumps(v, sort_keys=True))
     if type(value).__module__.startswith("numpy") and hasattr(value, "tobytes"):
         return dict(encoding="numpy-c-order-hex", dtype=value.dtype.str,
                     shape=list(value.shape), data=value.tobytes(order="C").hex())
-    if type(value) is float and not math.isfinite(value):
-        # Invalid model inputs are evidence too. Preserve the exact bits rather
-        # than refusing to capture the failure which diagnosed them.
-        return dict(encoding="ieee754-binary64-big-endian-hex",
-                    data=struct.pack(">d", value).hex())
-    if value is None or type(value) in (str, int, float, bool):
-        return value
     raise TypeError("capture cannot serialize " + type(value).__name__)
 
 
@@ -177,7 +202,13 @@ class DecisionCapture:
         self.receipts = []
 
     def update(self, **fields):
-        self.fields.update(snapshot(fields))
+        try:
+            self.fields.update(snapshot(fields))
+        except BaseException as error:
+            if isinstance(error, CaptureFailed):
+                raise _count_capture_loss(self.quarantine, error)
+            raise _count_capture_loss(self.quarantine, CaptureFailed(
+                f"capture.failed snapshotting decision fields: {error}")) from error
 
     def capture(self, stage, error=None, *, codes=None, witness=None):
         if isinstance(error, CaptureFailed):
