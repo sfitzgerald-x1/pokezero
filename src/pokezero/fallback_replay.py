@@ -324,7 +324,7 @@ class _Hook:
                 )
             return base_map(context, aggregated)
 
-        def _fallback(context: Any, rng: Any, reason: str) -> Any:
+        def _fallback(context: Any, rng: Any, reason: str, **kwargs: Any) -> Any:
             # Recorded BEFORE delegating. Precisely: the real `_fallback`
             # increments `fallback_decisions`, `fallback_reasons` and
             # `fallback_samples` -- NONE of which `DecisionSnapshot` reads, so
@@ -337,7 +337,10 @@ class _Hook:
             # `test_capture_happens_before_the_policys_own_fallback_runs`.
             for recorder in tuple(self.recorders):
                 recorder._guard(lambda r=recorder: r._record(context, reason))
-            return base_fallback(context, rng, reason)
+            # This observer must preserve optional policy metadata as well as
+            # the legacy three-argument call. Do not inject default keywords:
+            # older policy implementations need not accept them.
+            return base_fallback(context, rng, reason, **kwargs)
 
         policy.select_action_with_context = select_action_with_context
         policy._map_choices = _map_choices
