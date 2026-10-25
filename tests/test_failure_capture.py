@@ -118,6 +118,49 @@ class FailureCaptureTests(unittest.TestCase):
             self.assertEqual(canonical(current().fields),retained)  # Detached from later input mutation.
         self.assertEqual(backend.capture_context_updates,10)
 
+    def test_snapshot_comparison_never_hides_typed_or_in_place_changes(self):
+        from pokezero.shallow_exact_native import _same_capture_snapshot
+        original = {'nested':[True,1,1.0,-0.0,{'move':'surf'}]}
+        saved = snapshot(original)
+        self.assertTrue(_same_capture_snapshot(saved, original))
+        for value in (1,1.0,0.0,None,(True,1,1.0,-0.0,{'move':'surf'})):
+            changed = {'nested':value}
+            self.assertFalse(_same_capture_snapshot(saved,changed),value)
+        for before,after in ((True,1),(1,1.0),(-0.0,0.0),('1',1),
+                             ([1],(1,)),({'1':2},{1:2})):
+            with self.subTest(before=before,after=after):
+                self.assertFalse(_same_capture_snapshot(snapshot({'x':before}),{'x':after}))
+        original['nested'][4]['move'] = 'icebeam'
+        self.assertFalse(_same_capture_snapshot(saved,original))
+        # A saved field changed in place must also be observed: no cached bytes.
+        saved['nested'][4]['move'] = 'thunderbolt'
+        self.assertFalse(_same_capture_snapshot(saved,original))
+
+    def test_snapshot_comparison_matches_independent_allocations_and_alias_patterns(self):
+        from pokezero.shallow_exact_native import _same_capture_snapshot
+        shared = {'species':'independently allocated long species label','hp':[200,180]}
+        payload = {'world':[shared,shared],'draw':[17,[2,3,4]]}
+        encoded = json.dumps(payload)
+        first = json.loads(encoded)
+        second = json.loads(encoded)
+        self.assertIsNot(first['world'][0]['species'],second['world'][0]['species'])
+        self.assertTrue(_same_capture_snapshot(snapshot(first),second))
+        self.assertTrue(_same_capture_snapshot(snapshot(payload),second))
+
+    def test_snapshot_comparison_rejects_nonfinite_cycles_and_custom_reducers(self):
+        from pokezero.shallow_exact_native import _same_capture_snapshot
+        class Hostile:
+            def __reduce__(self):
+                raise AssertionError('comparison must not invoke reducers')
+        class Integer(int):
+            pass
+        for value in (float('nan'),float('inf'),-float('inf'),Hostile(),Integer(1)):
+            self.assertFalse(_same_capture_snapshot({'x':1},{'x':value}))
+        cycle=[];cycle.append(cycle)
+        self.assertFalse(_same_capture_snapshot({'x':[]},{'x':cycle}))
+        for value in (float('nan'),float('inf'),-float('inf')):
+            self.assertFalse(_same_capture_snapshot(snapshot({'x':value}),{'x':value}))
+
     def test_early_failure_has_request_prefix_seed_and_explicit_unavailable_fields(self):
         error = ValueError("before world construction")
         with self.assertRaises(ValueError) as raised:

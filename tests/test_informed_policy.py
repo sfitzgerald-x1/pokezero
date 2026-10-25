@@ -42,7 +42,9 @@ class Native:
 
 
 class Backend:
-    def __init__(self,*args,**kwargs):self.stage_seconds=Counter()
+    def __init__(self,*args,**kwargs):
+        self.stage_seconds=Counter()
+        self.model_call_timings=[]
     def actions(self,position,*,root):
         assert root
         return (('first','second'),('opponent',)) if position.self_side=='side_one' \
@@ -102,6 +104,8 @@ class InformedPolicyTests(unittest.TestCase):
             backend = args[1]
             backend.stage_seconds.update(native_transition_render_serialize=1.0,capture_context_snapshot=2.0)
             backend.encode_calls=4096;backend.forward_batches=4
+            backend.model_call_timings.append(dict(batch_rows=1024,returned=True,
+                wrapper_wall_seconds=.5,transport={'status':'UNAVAILABLE_API'}))
             raise error
         with patch('pokezero.informed_policy.exact_informed_one_ply',side_effect=fail), \
                 patch('pokezero.informed_policy.sample_informed_equilibrium') as choose:
@@ -115,6 +119,8 @@ class InformedPolicyTests(unittest.TestCase):
         self.assertEqual(diagnostics['exact_work'],error.work)
         self.assertEqual(diagnostics['backend_stage_seconds']['capture_context_snapshot'],2.0)
         self.assertEqual(diagnostics['backend_counts']['encode_calls'],4096)
+        self.assertEqual(diagnostics['model_call_timings'],[dict(batch_rows=1024,returned=True,
+            wrapper_wall_seconds=.5,transport={'status':'UNAVAILABLE_API'})])
         bundle = json.loads((p._quarantine.directory/row['quarantine_receipt']['file']).read_text())
         self.assertEqual(bundle['decision_diagnostics'],diagnostics)
         self.assertEqual(p.stats.completed_decisions,0)
