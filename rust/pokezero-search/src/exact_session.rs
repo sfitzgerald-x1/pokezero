@@ -13,6 +13,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use serde_json::{json, Value};
+use std::time::Instant;
 
 fn err(message: impl Into<String>) -> PyErr {
     PyValueError::new_err(message.into())
@@ -24,18 +25,18 @@ mod tests {
     #[test]
     fn hp_attestation_ignores_padding_and_refuses_empty_or_negative_teams() {
         Python::initialize();
-        let mut state=State::default();
+        let mut state = State::default();
         assert!(terminal(&state).is_err()); // NONE padding has HP100.
-        state.side_one.pokemon.pkmn[0].id=PokemonName::SNORLAX;
-        state.side_two.pokemon.pkmn[0].id=PokemonName::BLISSEY;
-        assert_eq!(terminal(&state).unwrap(),None);
-        state.side_one.pokemon.pkmn[0].hp=0;
-        assert_eq!(terminal(&state).unwrap(),Some(-1.));
-        state.side_two.pokemon.pkmn[0].hp=0;
-        assert_eq!(terminal(&state).unwrap(),Some(0.));
-        state.side_one.pokemon.pkmn[0].hp=100;
-        assert_eq!(terminal(&state).unwrap(),Some(1.));
-        state.side_two.pokemon.pkmn[0].hp=-1;
+        state.side_one.pokemon.pkmn[0].id = PokemonName::SNORLAX;
+        state.side_two.pokemon.pkmn[0].id = PokemonName::BLISSEY;
+        assert_eq!(terminal(&state).unwrap(), None);
+        state.side_one.pokemon.pkmn[0].hp = 0;
+        assert_eq!(terminal(&state).unwrap(), Some(-1.));
+        state.side_two.pokemon.pkmn[0].hp = 0;
+        assert_eq!(terminal(&state).unwrap(), Some(0.));
+        state.side_one.pokemon.pkmn[0].hp = 100;
+        assert_eq!(terminal(&state).unwrap(), Some(1.));
+        state.side_two.pokemon.pkmn[0].hp = -1;
         assert!(terminal(&state).is_err());
     }
 }
@@ -94,6 +95,7 @@ pub struct ExactSession {
     retained_branches: usize,
     cells: Vec<Cell>,
     encoder: Py<PyLeafEncoder>,
+    enumeration_timing: Option<Value>,
 }
 
 impl ExactSession {
@@ -237,6 +239,7 @@ impl ExactSession {
             max_cells,
             retained_branches: 0,
             cells: Vec::new(),
+            enumeration_timing: None,
             encoder,
         })
     }
@@ -264,95 +267,131 @@ impl ExactSession {
         row: &str,
         column: &str,
     ) -> PyResult<(usize, Vec<(f64, Option<f64>)>, Vec<String>)> {
-        if self.cells.len() >= self.max_cells {
-            return Err(err("exact session cell cap"));
-        }
-        let mut state = self.root.clone();
-        let one = move_choice_from_str(row, &state, SideReference::SideOne)?;
-        let two = move_choice_from_str(column, &state, SideReference::SideTwo)?;
-        let generated = crate::failure_capture::guarded(
-            || {
-                json!({
-                    "schema":"pokezero.native-failure-origin.v1","reason_codes":["crate.transition"],
-                    "engine_state":self.root.serialize(),"row_action":row,"column_action":column,
-                    "instruction_list":{"availability":"unavailable","reason":"generator failed before returning branches"}
-                })
-            },
-            || {
-                Ok(generate_instructions_from_move_pair(
-                    &mut state, &one, &two, true,
-                ))
-            },
-        )?;
-        if generated.is_empty() || generated.len() > self.max_branches - self.retained_branches {
-            return Err(err("exact session empty fan or retained branch cap"));
-        }
-        let mut branches = Vec::new();
-        let mut report = Vec::new();
-        let mut subcases = Vec::new();
-        let branch_count = generated.len();
-        for (index, instructions) in generated.into_iter().enumerate() {
-            let (rendered, value) = crate::failure_capture::guarded(
+        // One bounded timing record per cell, never a per-leaf timer. All
+        // generation, rendering and acceptance logic stays inside this body.
+        // Record failures too; no values or partial cells are accepted here.
+        let started = Instant::now();
+        let cell_index = self.cells.len();
+        let mut phase = "validation";
+        let mut generation_seconds = 0.0;
+        let mut generated_branches = 0;
+        let mut post_started: Option<Instant> = None;
+        let result: PyResult<(usize, Vec<(f64, Option<f64>)>, Vec<String>)> = (|| {
+            if self.cells.len() >= self.max_cells {
+                return Err(err("exact session cell cap"));
+            }
+            let mut state = self.root.clone();
+            let one = move_choice_from_str(row, &state, SideReference::SideOne)?;
+            let two = move_choice_from_str(column, &state, SideReference::SideTwo)?;
+            phase = "generation";
+            let generation_started = Instant::now();
+            let generated_result = crate::failure_capture::guarded(
                 || {
                     json!({
-                        "schema":"pokezero.native-failure-origin.v1","reason_codes":["crate.exact_transition_branch"],
-                        "engine_state":self.root.serialize(),"row_action":row,"column_action":column,"branch_index":index,
-                        "branch_count":branch_count,
-                        "instruction_list":instructions.instruction_list.iter().map(|i|format!("{i:?}")).collect::<Vec<_>>()
+                        "schema":"pokezero.native-failure-origin.v1","reason_codes":["crate.transition"],
+                        "engine_state":self.root.serialize(),"row_action":row,"column_action":column,
+                        "instruction_list":{"availability":"unavailable","reason":"generator failed before returning branches"}
                     })
                 },
                 || {
-                    let rendered = render_branch_events(
-                        &mut state,
-                        &one,
-                        &two,
-                        &instructions.instruction_list,
-                        true,
-                        &self.context,
-                    );
-                    if !rendered.lossy.is_empty() || !rendered.attribution_unsafe.is_empty() {
-                        let codes: Vec<_> = rendered
-                            .lossy
-                            .iter()
-                            .chain(&rendered.attribution_unsafe)
-                            .chain(&rendered.lossy_subcases)
-                            .map(|r| format!("renderer.{r}"))
-                            .collect();
-                        return Err(crate::failure_capture::attach(
-                            err("native event rendering is not lossless for P2"),
-                            json!({
-                                "schema":"pokezero.native-failure-origin.v1","reason_codes":codes,
-                                "engine_state":self.root.serialize(),"row_action":row,"column_action":column,"branch_index":index,
-                                "instruction_list":instructions.instruction_list.iter().map(|i|format!("{i:?}")).collect::<Vec<_>>(),
-                                "events":rendered.lines,"lossy":rendered.lossy,"lossy_subcases":rendered.lossy_subcases,
-                                "attribution_unsafe_reasons":rendered.attribution_unsafe,
-                                "offending_instruction":{"availability":"unavailable","reason":"branch-level refusal"}
-                            }),
-                        ));
-                    }
-                    state.apply_instructions(&instructions.instruction_list);
-                    let value = terminal(&state);
-                    state.reverse_instructions(&instructions.instruction_list);
-                    Ok((rendered, value?))
+                    Ok(generate_instructions_from_move_pair(
+                        &mut state, &one, &two, true,
+                    ))
                 },
-            )?;
-            report.push((f64::from(instructions.percentage) / 100.0, value));
-            subcases.extend(rendered.lossy_subcases);
-            branches.push(Branch {
-                instructions,
-                lines: rendered.lines,
-                turn: self.turn + i64::from(rendered.turn_completed),
-                terminal: value,
+            );
+            generation_seconds = generation_started.elapsed().as_secs_f64();
+            let generated = generated_result?;
+            generated_branches = generated.len();
+            phase = "post_generation";
+            post_started = Some(Instant::now());
+            if generated.is_empty() || generated.len() > self.max_branches - self.retained_branches
+            {
+                return Err(err("exact session empty fan or retained branch cap"));
+            }
+            let mut branches = Vec::new();
+            let mut report = Vec::new();
+            let mut subcases = Vec::new();
+            let branch_count = generated.len();
+            for (index, instructions) in generated.into_iter().enumerate() {
+                let (rendered, value) = crate::failure_capture::guarded(
+                    || {
+                        json!({
+                            "schema":"pokezero.native-failure-origin.v1","reason_codes":["crate.exact_transition_branch"],
+                            "engine_state":self.root.serialize(),"row_action":row,"column_action":column,"branch_index":index,
+                            "branch_count":branch_count,
+                            "instruction_list":instructions.instruction_list.iter().map(|i|format!("{i:?}")).collect::<Vec<_>>()
+                        })
+                    },
+                    || {
+                        let rendered = render_branch_events(
+                            &mut state,
+                            &one,
+                            &two,
+                            &instructions.instruction_list,
+                            true,
+                            &self.context,
+                        );
+                        if !rendered.lossy.is_empty() || !rendered.attribution_unsafe.is_empty() {
+                            let codes: Vec<_> = rendered
+                                .lossy
+                                .iter()
+                                .chain(&rendered.attribution_unsafe)
+                                .chain(&rendered.lossy_subcases)
+                                .map(|r| format!("renderer.{r}"))
+                                .collect();
+                            return Err(crate::failure_capture::attach(
+                                err("native event rendering is not lossless for P2"),
+                                json!({
+                                    "schema":"pokezero.native-failure-origin.v1","reason_codes":codes,
+                                    "engine_state":self.root.serialize(),"row_action":row,"column_action":column,"branch_index":index,
+                                    "instruction_list":instructions.instruction_list.iter().map(|i|format!("{i:?}")).collect::<Vec<_>>(),
+                                    "events":rendered.lines,"lossy":rendered.lossy,"lossy_subcases":rendered.lossy_subcases,
+                                    "attribution_unsafe_reasons":rendered.attribution_unsafe,
+                                    "offending_instruction":{"availability":"unavailable","reason":"branch-level refusal"}
+                                }),
+                            ));
+                        }
+                        state.apply_instructions(&instructions.instruction_list);
+                        let value = terminal(&state);
+                        state.reverse_instructions(&instructions.instruction_list);
+                        Ok((rendered, value?))
+                    },
+                )?;
+                report.push((f64::from(instructions.percentage) / 100.0, value));
+                subcases.extend(rendered.lossy_subcases);
+                branches.push(Branch {
+                    instructions,
+                    lines: rendered.lines,
+                    turn: self.turn + i64::from(rendered.turn_completed),
+                    terminal: value,
+                });
+            }
+            let index = self.cells.len();
+            self.retained_branches += branches.len();
+            self.cells.push(Cell {
+                row: row.to_string(),
+                column: column.to_string(),
+                branches,
             });
-        }
-        let index = self.cells.len();
-        self.retained_branches += branches.len();
-        self.cells.push(Cell {
-            row: row.to_string(),
-            column: column.to_string(),
-            branches,
-        });
-        Ok((index, report, subcases))
+            Ok((index, report, subcases))
+        })();
+        let post_generation_seconds = post_started.map_or(0.0, |t| t.elapsed().as_secs_f64());
+        let native_body_seconds = started.elapsed().as_secs_f64();
+        self.enumeration_timing = Some(json!({
+            "schema":"pokezero.exact-enumeration-timing.v1",
+            "status":if result.is_ok() {"COMPLETE"} else {"FAILED"},
+            "phase":phase,"cell_index":cell_index,"generated_branches":generated_branches,
+            "generation_seconds":generation_seconds,
+            "post_generation_seconds":post_generation_seconds,
+            "native_body_seconds":native_body_seconds,
+            "scope":"Native body only; post-generation includes validation, rendering, apply/terminal/reverse and retention. Python return conversion is excluded."
+        }));
+        result
+    }
+
+    /// Last cell only: bounded diagnostics, never a per-branch history.
+    fn last_enumeration_timing(&self) -> Option<String> {
+        self.enumeration_timing.as_ref().map(Value::to_string)
     }
 
     fn encode_packed(

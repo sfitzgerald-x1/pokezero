@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`68e6483cfeacad45…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`98e9ff8fd7844584…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -361,6 +361,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Sleep Talk called-move lineage | A state-neutral instruction retains the actual called move before identical successor histories merge; the strict renderer validates that marker and the exact regenerated tail. One appended patch grows the inventory to 85 patches and 110 hashed inputs. Current source references are re-derived; historical sweeps, stopped rosters and OPEN qualification remain unchanged | `ca7ee5c35f4b8762…` |
 | Shared-capture integration with called-move lineage | Non-rewriting integration combines both reviewed branches: 85 patches, 20 crate sources and 111 hashed inputs. Both branch fingerprints remain historical branch identities; no stopped roster, installed-build receipt or OPEN qualification is rebound to this combined source | `9d6395965283a729…` |
 | Native one-ply sessions and lazy capture | Adds the bounded exact-session module and an explicit model timing barrier: 85 patches, 21 crate sources and 112 hashed inputs. Root/branch capture, rendered-line observation law, exact chance and scientific gates remain explicit; historical sweeps and installed-build receipts retain their original identities | `68e6483cfeacad45…` |
+| Native one-ply enumeration phase timings | Adds bounded last-cell generation, post-generation processing and native-body timings on success and failure. The 85 patches, 21 crate sources and 112 hashed inputs are unchanged in membership. This is diagnostic instrumentation, not a speedup, new sweep, changed outcome law or qualification; historical receipts and OPEN gates remain unchanged | `98e9ff8fd7844584…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -1005,7 +1006,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 21 |
 | `t1.hashed_input_files` | 112 |
-| `t1.head_fingerprint` | 68e6483cfeacad45 |
+| `t1.head_fingerprint` | 98e9ff8fd7844584 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

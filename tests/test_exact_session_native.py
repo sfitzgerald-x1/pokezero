@@ -26,6 +26,7 @@ class NativeSessionParity(unittest.TestCase):
         with patch.dict(os.environ,POKEZERO_ENUMERATE_ROLLS='1'):
             for root in self.roots.values():
                 session=self.session(root)
+                self.assertIsNone(session.last_enumeration_timing())
                 old=NativeExactBackend(self.native,None)
                 self.assertEqual(session.root_actions(),tuple(list(s) for s in old.actions(root,root=True)))
                 self.assertIsNone(session.root_terminal())
@@ -34,6 +35,13 @@ class NativeSessionParity(unittest.TestCase):
                     display=(row,col)
                     previous=list(old.outcomes(root,*display))
                     cell,report,subcases=session.enumerate_cell(row.removeprefix('switch '),col)
+                    timing=json.loads(session.last_enumeration_timing())
+                    self.assertEqual((timing['status'],timing['phase']),('COMPLETE','post_generation'))
+                    self.assertEqual((timing['cell_index'],timing['generated_branches']),(cell,len(report)))
+                    self.assertGreater(timing['generation_seconds'],0)
+                    self.assertGreaterEqual(timing['post_generation_seconds'],0)
+                    self.assertLessEqual(timing['generation_seconds']+timing['post_generation_seconds'],
+                        timing['native_body_seconds'])
                     self.assertEqual([p for p,_ in report],[b.probability for b in previous])
                     self.assertEqual([v for _,v in report],[old.terminal_value(b.state) for b in previous])
                     addresses=[(cell,i) for i,(_,v) in enumerate(report) if v is None]
@@ -58,11 +66,18 @@ class NativeSessionParity(unittest.TestCase):
         actions=session.root_actions()
         cell,branches,_=session.enumerate_cell('earthquake','fireblast')
         with self.assertRaises(ValueError):session.enumerate_cell('earthquake','fireblast')
+        timing=json.loads(session.last_enumeration_timing())
+        self.assertEqual((timing['status'],timing['phase']),('FAILED','validation'))
+        self.assertEqual((timing['generation_seconds'],timing['post_generation_seconds']),(0,0))
         for addresses,workers in (([],1),([(0,0)],0),([(999,0)],1),([(0,len(branches))],1)):
             with self.assertRaises(ValueError):session.encode_packed(addresses,workers)
         with self.assertRaises(ValueError):session.reconstruct(999,0)
         small=self.session(root,max_branches=1)
         with self.assertRaises(ValueError):small.enumerate_cell('earthquake','fireblast')
+        timing=json.loads(small.last_enumeration_timing())
+        self.assertEqual((timing['status'],timing['phase']),('FAILED','post_generation'))
+        self.assertGreater(timing['generated_branches'],1)
+        self.assertGreater(timing['generation_seconds'],0)
         self.assertEqual(session.root_actions(),actions)
         self.assertIsNone(session.root_terminal())
         # An invalid row must not poison a subsequent valid encode.
