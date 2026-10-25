@@ -488,6 +488,9 @@ def _first_engine_capture_inventory(manifest, inventory, *, evidence_root, captu
     for source in legacy["sources"]:
         _read_evidence(source, root)
     observed = set(manifest["observed_reason_codes"])
+    for directory, children, _ in os.walk(history, followlinks=False):
+        if any((Path(directory) / child).is_symlink() for child in children):
+            raise ValueError("capture history contains an uninspected directory link")
     for path in history.rglob("failure-*.json"):
         actual = path.resolve()
         if not actual.is_relative_to(history):

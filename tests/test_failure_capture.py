@@ -593,6 +593,14 @@ class FirstEngineCaptureAdmissionTests(unittest.TestCase):
             require_capture_admission(next_path, build={"fingerprint": "runtime"},
                 scientific_path="engine-mcts", capture_directory=next_directory)
 
+    def test_linked_prior_history_cannot_be_silently_skipped(self):
+        archive = self.root / "archived-history"
+        previous = Quarantine(archive, build={"fingerprint": "old"})
+        previous.write("failure", dict(root={"seed": 19}, reason_codes=["crate.actual"]))
+        (self.history / "previous").symlink_to(archive, target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, "uninspected directory link"):
+            self.admit(self.manifest())
+
     def test_build_binding_remains_required_for_empty_first_admission(self):
         with self.assertRaisesRegex(ValueError, "actual runtime build"):
             require_capture_admission(self.manifest(), build={"fingerprint": "different"},
