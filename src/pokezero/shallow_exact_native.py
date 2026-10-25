@@ -62,6 +62,27 @@ def _branch_action_token(action: str) -> str:
     return action.removeprefix("switch ")
 
 
+def _same_capture_value(saved, value):
+    """Exact plain-JSON equality; unsupported types take the full snapshot path.
+
+    Python equality alone merges True/1/1.0 and signed zero, which would lose
+    evidence of invalid type/value changes inside an otherwise identical world.
+    """
+    kind = type(value)
+    if type(saved) is not kind:
+        return False
+    if kind is dict:
+        return (all(type(k) is str for k in value) and saved.keys() == value.keys()
+                and all(_same_capture_value(saved[k], v) for k, v in value.items()))
+    if kind is list:
+        return len(saved) == len(value) and all(_same_capture_value(a, b) for a, b in zip(saved, value))
+    if kind is float:
+        return math.isfinite(value) and saved.hex() == value.hex()
+    if kind in (str, int, bool, type(None)):
+        return saved == value
+    return False
+
+
 class NativeExactBackend:
     """Rust transitions/CPU leaf encode plus an existing batched native model.
 
@@ -135,16 +156,33 @@ class NativeExactBackend:
         self.forward_batches = 0
         self.unique_leaf_evaluations = 0
         self.leaf_cache_hits = 0
+        self.capture_context_updates = 0
+        self.captured_leaf_rows = 0
 
     def _capture_position(self, state):
-        if current():
-            current().update(**{
+        capture = current()
+        if capture:
+            started = time.perf_counter()
+            dynamic = {"row_action", "column_action", "branch_index",
+                       "generating_pre_state", "generating_turn"}
+            origin = {}
+            for key, value in (state.origin or {}).items():
+                # The saved origin is mostly identical for every successor in
+                # one world. Compare against the detached snapshot, so changes
+                # (including in-place mutations or batch unavailable markers)
+                # still force a fresh copy. Never cache by world ordinal alone.
+                equal = key in capture.fields and _same_capture_value(capture.fields[key], value)
+                if key in dynamic or not equal:
+                    origin[key] = value
+            capture.update(**{
                 **{key:unavailable("this root has no generating branch address") for key in
                    ("row_action", "column_action", "branch_index", "generating_pre_state", "generating_turn")},
-                **(state.origin or {}), "engine_state":state.state_str,
+                **origin, "engine_state":state.state_str,
                 "instruction_list":(list(state.instruction_list) if state.instruction_list is not None
                                   else unavailable("root position: no generating transition")),
                 "offending_instruction":unavailable("no failing instruction reported")})
+            self.stage_seconds['capture_context_snapshot'] += time.perf_counter()-started
+            self.capture_context_updates += 1
 
     def begin_decision(self):
         """No value reuse crosses a decision, model or observation contract."""
@@ -154,6 +192,7 @@ class NativeExactBackend:
         self.render_subcases.clear()
         self.stage_seconds.clear()
         self.encode_calls = self.forward_batches = self.unique_leaf_evaluations = self.leaf_cache_hits = 0
+        self.capture_context_updates = self.captured_leaf_rows = 0
 
     def _capture_batch_context(self):
         if current():
@@ -276,6 +315,7 @@ class NativeExactBackend:
         if not states:
             return []
         if current():
+            capture_started = time.perf_counter()
             current().update(leaf_inputs=[dict(engine_state=s.state_str, turn=s.turn, origin=s.origin,
                 fold_payload=s.fold.to_payload(), lines=list(s.lines),
                 instruction_list=s.instruction_list or unavailable("no transition instructions supplied")) for s in states],
@@ -288,6 +328,8 @@ class NativeExactBackend:
                 instruction_list=unavailable("batched encode: per-input lists retained in leaf_inputs"),
                 offending_instruction=unavailable("no failing batch row reported"))
             self._capture_batch_context()
+            self.stage_seconds['capture_batch_snapshot'] += time.perf_counter()-capture_started
+            self.captured_leaf_rows += len(states)
         if self.bulk_encode_workers is not None:
             return self._evaluate_bulk_leaves(states)
         categorical, numeric, token_types, attention = [], [], [], []

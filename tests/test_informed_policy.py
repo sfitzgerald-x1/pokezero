@@ -91,6 +91,34 @@ class InformedPolicyTests(unittest.TestCase):
 
     def records(self):return [json.loads(s) for s in self.path.read_text().splitlines()]
 
+    def test_deadline_retains_specific_reason_and_pre_capture_work_in_bundle_and_trace(self):
+        p = self.policy()
+        error = ExactSearchRefused('decision deadline reached; no partial decision')
+        error.failure_codes = ['p2.decision.deadline']
+        error.work = dict(phase='leaf_terminal_check',world_ordinal=2,
+            row_action='switch mewtwo',column_action='aerialace',branch_index=12,
+            chance_branches_checked=5000,leaves_queued=4096,batches_accepted=4)
+        def fail(*args,**kwargs):
+            backend = args[1]
+            backend.stage_seconds.update(native_transition_render_serialize=1.0,capture_context_snapshot=2.0)
+            backend.encode_calls=4096;backend.forward_batches=4
+            raise error
+        with patch('pokezero.informed_policy.exact_informed_one_ply',side_effect=fail), \
+                patch('pokezero.informed_policy.sample_informed_equilibrium') as choose:
+            with self.assertRaises(ExactSearchRefused) as caught:
+                p.select_action_with_context(self.context(),rng=random.Random(17))
+        self.assertIs(caught.exception,error)
+        choose.assert_not_called()
+        row = self.records()[0]
+        self.assertEqual(row['quarantine_receipt']['reason_codes'],['p2.decision.deadline'])
+        diagnostics = row['failure_diagnostics']
+        self.assertEqual(diagnostics['exact_work'],error.work)
+        self.assertEqual(diagnostics['backend_stage_seconds']['capture_context_snapshot'],2.0)
+        self.assertEqual(diagnostics['backend_counts']['encode_calls'],4096)
+        bundle = json.loads((p._quarantine.directory/row['quarantine_receipt']['file']).read_text())
+        self.assertEqual(bundle['decision_diagnostics'],diagnostics)
+        self.assertEqual(p.stats.completed_decisions,0)
+
     def test_four_draws_sample_then_map_exact_actor_action_and_persist(self):
         for side in (0,1):
             with self.subTest(side=side):

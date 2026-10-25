@@ -209,6 +209,8 @@ class InformedRootPolicy:
                    leaf_model_device=self.model_device,
                    config=asdict(self.config))
         self._witness = {}
+        backend = None
+        preparation_seconds = None
         try:
             positions, turn = self._positions(context,rng)
             side = {"p1":0,"p2":1}.get(context.player_id)
@@ -234,6 +236,7 @@ class InformedRootPolicy:
                 if None in mapped or len(set(mapped)) != len(mapped) or set(mapped) != legal:
                     raise ExactSearchRefused("P2 native/request own action surface disagrees")
             remaining = self.config.max_seconds-(time.perf_counter()-started)
+            preparation_seconds = time.perf_counter()-started
             if remaining <= 0:
                 raise ExactSearchRefused("P2 decision deadline reached during world construction")
             result = exact_informed_one_ply(positions,backend,acting_side=side,
@@ -264,17 +267,30 @@ class InformedRootPolicy:
             # the actual sampled decision before re-raising; NEVER recover it.
             if isinstance(error, NativeRenderRefused):
                 self._witness["native_render_refusal"] = error.witness
+            diagnostics = dict(
+                before_failure_capture_seconds=time.perf_counter()-started,
+                preparation_seconds=preparation_seconds,
+                exact_work=getattr(error,'work',unavailable('core work counters not attached to this failure')),
+                backend_stage_seconds=dict(backend.stage_seconds) if backend is not None else {},
+                backend_counts={key:getattr(backend,key,None) for key in
+                    ('encode_calls','forward_batches','unique_leaf_evaluations',
+                     'capture_context_updates','captured_leaf_rows')},
+                timing_scope='Backend categories can overlap; capture_context_snapshot overlaps fold_history_advance. '
+                             'Failure serialization and filesystem synchronization occur after this snapshot.')
+            if current():
+                current().update(decision_diagnostics=diagnostics)
             witness = error.witness if isinstance(error, NativeRenderRefused) else None
             codes = (["renderer." + code for code in
                       (list(witness.get("lossy_subcases") or []) + list(witness.get("lossy") or [])
                        + list(witness.get("attribution_unsafe_reasons") or []))]
-                     if witness else ["p2.decision.contract_failure"])
+                     if witness else getattr(error,'failure_codes',None) or ["p2.decision.contract_failure"])
             receipt = record_refusal("p2.decision", error, codes=codes, witness=witness)
             self.stats.refusals += 1
             self.stats.refusal_reasons.update(receipt["reason_codes"] if receipt else codes)
             row.update(status="REFUSED",error_type=type(error).__name__,error=str(error),
                 error_traceback=traceback.format_exc(),failure_witness=self._witness,
                 quarantine_receipt=receipt,capture_telemetry=self._quarantine.telemetry(),
+                failure_diagnostics=diagnostics,
                 elapsed_seconds=time.perf_counter()-started)
             self._record(row)
             self.stats.last_decision = {k:row[k] for k in
