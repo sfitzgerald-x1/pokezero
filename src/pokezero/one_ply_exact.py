@@ -152,10 +152,25 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
             or not math.isfinite(max_seconds) or max_seconds <= 0):
         raise ExactSearchRefused("nonempty worlds and positive work limits required")
     deadline = time.monotonic()+max_seconds
+    leaves = branches_count = batches = joint_actions = 0
+    worlds_enumerated = cells_enumerated = 0
+    world_index = row_action = column_action = branch_index = None
+    phase = 'decision_reset'
+    pending, targets = [], []
 
     def check():
-        if time.monotonic() >= deadline:
-            raise ExactSearchRefused("decision deadline reached; no partial decision")
+        now = time.monotonic()
+        if now >= deadline:
+            error = ExactSearchRefused("decision deadline reached; no partial decision")
+            error.failure_codes = ['p2.decision.deadline']
+            error.work = dict(phase=phase, world_ordinal=world_index,
+                row_action=row_action, column_action=column_action, branch_index=branch_index,
+                worlds_enumerated=worlds_enumerated, cells_enumerated=cells_enumerated,
+                joint_actions_planned=joint_actions, chance_branches_checked=branches_count,
+                leaves_queued=leaves, batches_accepted=batches, pending_leaves=len(pending),
+                elapsed_seconds=now-deadline+max_seconds,
+                count_basis='Counters advance at existing guarded checkpoints; in-flight work may be excluded.')
+            raise error
 
     def score(value):
         value = float(value)
@@ -170,7 +185,8 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
         begin()
         check()
     actions = []
-    for world in worlds:
+    phase = 'root_actions'
+    for world_index, world in enumerate(worlds):
         check()
         if backend.terminal_value(world) is not None:
             raise ExactSearchRefused("root worlds must be nonterminal")
@@ -193,15 +209,14 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
     if joint_actions > max_joint_actions:
         raise ExactSearchRefused("joint-action cap; no partial decision")
     contributions = []
-    leaves = branches_count = batches = 0
     mass_error = 0.0
-    pending, targets = [], []
 
     def flush():
-        nonlocal batches
+        nonlocal batches, phase
         if not pending:
             return
         check()
+        phase = 'leaf_evaluation'
         values = list(backend.evaluate_leaves(pending))
         check()
         if len(values) != len(pending):
@@ -217,14 +232,16 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
         pending.clear()
         targets.clear()
 
-    for world, (row_actions, column_actions) in zip(worlds, actions):
+    for world_index, (world, (row_actions, column_actions)) in enumerate(zip(worlds, actions)):
         cells = [[[] for _ in column_actions] for _ in row_actions]
         contributions.append(cells)
         for i, row in enumerate(row_actions):
             for j, col in enumerate(column_actions):
+                phase = 'transition_fan'
+                row_action, column_action, branch_index = row, col, None
                 check()
                 fan = []
-                for branch in backend.outcomes(world, row, col):
+                for branch_index, branch in enumerate(backend.outcomes(world, row, col)):
                     check()
                     branches_count += 1
                     if branches_count > max_chance_branches:
@@ -237,7 +254,8 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
                     raise ExactSearchRefused("complete chance fan must retain unit mass")
                 mass_error = max(mass_error, abs(mass-1))
                 terms = []
-                for branch in fan:
+                for branch_index, branch in enumerate(fan):
+                    phase = 'leaf_terminal_check'
                     check()
                     terminal = backend.terminal_value(branch.state)
                     check()
@@ -257,7 +275,10 @@ def _exact_world_matrices(worlds: Sequence[Any], backend: ExactBackend, *,
                 if not cross_cell_batches:
                     flush()
                 cells[i][j] = terms
+                cells_enumerated += 1
+        worlds_enumerated += 1
     flush()
+    phase = 'matrix_assembly'
     matrices = tuple(tuple(tuple(math.fsum(terms) for terms in row) for row in cells)
                      for cells in contributions)
     check()

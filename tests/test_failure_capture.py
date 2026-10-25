@@ -10,7 +10,7 @@ import unittest
 from unittest.mock import patch
 
 from pokezero.failure_capture import (CaptureFailed, Quarantine, boundary,
-    canonical, current, decision_scope, digest_file, record_refusal,
+    canonical, current, decision_scope, digest_file, record_refusal, snapshot,
     record_native_refusals, require_capture_admission, require_fixture_coverage, runtime_build)
 
 
@@ -28,6 +28,95 @@ class FailureCaptureTests(unittest.TestCase):
 
     def bundles(self):
         return [json.loads(p.read_text()) for p in self.path.glob("failure-*.json")]
+
+    def test_snapshot_memo_is_detached_and_never_hides_later_input_changes(self):
+        shared = {'world_spec':{'hp':[200,180]},'draw_state':[1,2,3]}
+        batch = [{'origin':shared,'branch':0},{'origin':shared,'branch':1}]
+        first = snapshot(batch)
+        expected = [{'origin':snapshot(shared),'branch':0},{'origin':snapshot(shared),'branch':1}]
+        self.assertEqual(canonical(first),canonical(expected))
+        frozen = canonical(first)
+        shared['world_spec']['hp'][1] = 0
+        shared['draw_state'].append(4)
+        self.assertEqual(canonical(first),frozen)
+        second = snapshot(batch)
+        self.assertEqual(second[0]['origin']['world_spec']['hp'],[200,0])
+        self.assertNotEqual(canonical(second),frozen)
+
+    def test_cyclic_capture_input_fails_closed_without_a_partial_update(self):
+        cycle = [];cycle.append(cycle)
+        with self.assertRaises(CaptureFailed):
+            with decision_scope(self.q,self.context,self.rng):
+                current().update(cyclic=cycle)
+        self.assertEqual(self.q.failures,1)
+
+    def test_memo_preserves_supported_typed_values_and_detaches_numpy_inputs(self):
+        from dataclasses import dataclass
+        from enum import Enum
+        import numpy as np
+        class Mode(Enum):
+            VALUE = 'declared'
+        @dataclass
+        class Record:
+            value: list
+        array = np.array([[1.0,2.0]],dtype='<f8')
+        payload = dict(mode=Mode.VALUE,records=[Record([1]),Record([2])],
+            ordering=frozenset((3,1)),array=array,alias=array,tuple_value=(True,1,1.0,-0.0))
+        captured = snapshot(payload)
+        expected_array = dict(encoding='numpy-c-order-hex',dtype='<f8',shape=[1,2],
+                              data=array.tobytes().hex())
+        self.assertEqual(captured,dict(mode='declared',records=[{'value':[1]},{'value':[2]}],
+            ordering=[1,3],array=expected_array,alias=expected_array,
+            tuple_value=[True,1,1.0,-0.0]))
+        frozen = canonical(captured)
+        array[0,0] = 99
+        self.assertEqual(canonical(captured),frozen)
+        self.assertNotEqual(snapshot(payload)['array']['data'],expected_array['data'])
+
+    def test_position_capture_matches_complete_snapshot_across_mutation_and_batch_reset(self):
+        from collections import Counter
+        from pokezero.shallow_exact_native import NativeExactBackend
+        from pokezero.failure_capture import unavailable
+        backend = object.__new__(NativeExactBackend)
+        backend.stage_seconds = Counter()
+        backend.capture_context_updates = 0
+        shared = dict(world_ordinal=2,world_spec={'hp':[200,180]},
+            rng_state_before_draw=[1,[2,3]],row_action='switch mewtwo',
+            column_action='aerialace',branch_index=12,generating_pre_state='root',generating_turn=1)
+        position = SimpleNamespace(origin=shared,state_str='post',instruction_list=('Damage SideOne: 1',))
+        with decision_scope(self.q,self.context,self.rng):
+            for change in ('first','same','mutated','integer_to_bool','integer_to_float',
+                           'negative_zero','positive_zero','batch_reset','new_world','no_origin'):
+                if change == 'mutated':
+                    shared['world_spec']['hp'][1] = 179
+                    shared['rng_state_before_draw'][1].append(4)
+                elif change == 'batch_reset':
+                    backend._capture_batch_context()
+                elif change == 'integer_to_bool':
+                    shared['world_spec']['hp'][1] = True
+                elif change == 'integer_to_float':
+                    shared['world_spec']['hp'][1] = 1.0
+                elif change == 'negative_zero':
+                    shared['world_spec']['hp'][1] = -0.0
+                elif change == 'positive_zero':
+                    shared['world_spec']['hp'][1] = 0.0
+                elif change == 'new_world':
+                    shared['world_ordinal'] = 3
+                elif change == 'no_origin':
+                    position.origin = None
+                reference = snapshot(current().fields)
+                reference.update(snapshot({
+                    **{key:unavailable('this root has no generating branch address') for key in
+                       ('row_action','column_action','branch_index','generating_pre_state','generating_turn')},
+                    **(position.origin or {}),'engine_state':position.state_str,
+                    'instruction_list':list(position.instruction_list),
+                    'offending_instruction':unavailable('no failing instruction reported')}))
+                backend._capture_position(position)
+                self.assertEqual(canonical(current().fields),canonical(reference),change)
+            retained = canonical(current().fields)
+            shared['world_spec']['hp'][0] = 0
+            self.assertEqual(canonical(current().fields),retained)  # Detached from later input mutation.
+        self.assertEqual(backend.capture_context_updates,10)
 
     def test_early_failure_has_request_prefix_seed_and_explicit_unavailable_fields(self):
         error = ValueError("before world construction")
@@ -198,8 +287,11 @@ class FailureCaptureTests(unittest.TestCase):
         self.assertEqual(len(list(self.path.glob("decision-terminal-*.json"))), 0)
 
     def test_position_rebind_uses_failed_world_not_last_constructed_world(self):
+        from collections import Counter
         from pokezero.shallow_exact_native import NativeExactBackend, NativePosition
         backend = object.__new__(NativeExactBackend)
+        backend.stage_seconds = Counter()
+        backend.capture_context_updates = 0
         position = NativePosition("world-zero-state", {}, 3, None, None, "side_one",
             origin={"world_ordinal": 0, "world_spec": {"id": "zero"},
                     "engine_state": "stale-origin-state"})

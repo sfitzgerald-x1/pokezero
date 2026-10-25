@@ -1,6 +1,8 @@
 """Authored one-ply/LP contracts, not measured gameplay or fidelity credit."""
 from dataclasses import replace
+import json
 import math
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
@@ -76,6 +78,68 @@ class Backend:
 
 
 class OnePlyTests(unittest.TestCase):
+    def test_r4_bundle_deadline_fixture_retains_exact_failed_address_without_a_choice(self):
+        fixture = json.loads((Path(__file__).parent/'fixtures/p2_deadline_r4.json').read_text())
+        clock = [0.0]
+        class CapturedAddress(Backend):
+            def actions(self,state,*,root):
+                return (fixture['row'],),(fixture['column'],)
+            def outcomes(self,state,row,col):
+                count = fixture['branch_index']+1
+                return [ChanceBranch((state[0],row,col,index),1/count) for index in range(count)]
+            def terminal_value(self,state):
+                if len(state) == 4 and state[0] == fixture['world_ordinal'] and state[3] == fixture['branch_index']:
+                    clock[0] = fixture['deadline_seconds']+1
+                return None
+            def evaluate_leaves(self,states):
+                return [0.0]*len(states)
+        with patch('pokezero.one_ply_exact.time.monotonic',side_effect=lambda:clock[0]), \
+                patch('pokezero.one_ply_exact.solve_matrix_game_lp') as solve:
+            with self.assertRaisesRegex(ExactSearchRefused,fixture['original_error']) as caught:
+                exact_one_ply([(i,) for i in range(4)],CapturedAddress(),
+                    max_seconds=fixture['deadline_seconds'],cross_cell_batches=True)
+        solve.assert_not_called()
+        work = caught.exception.work
+        self.assertEqual(caught.exception.failure_codes,['p2.decision.deadline'])
+        self.assertEqual((work['world_ordinal'],work['row_action'],work['column_action'],work['branch_index']),
+            (fixture['world_ordinal'],fixture['row'],fixture['column'],fixture['branch_index']))
+        self.assertEqual(work['phase'],'leaf_terminal_check')
+        self.assertEqual(work['worlds_enumerated'],fixture['world_ordinal'])
+
+    def test_deadline_after_terminal_check_retains_guarded_work_and_never_solves(self):
+        clock = [0.0]
+        class LateTerminal(Backend):
+            def terminal_value(self,state):
+                if len(state) == 4:
+                    clock[0] = 2.0
+                return None
+        with patch('pokezero.one_ply_exact.time.monotonic',side_effect=lambda:clock[0]), \
+                patch('pokezero.one_ply_exact.solve_matrix_game_lp') as solve:
+            with self.assertRaisesRegex(ExactSearchRefused,'deadline reached') as caught:
+                exact_one_ply([(0,)],LateTerminal(),max_seconds=1)
+        solve.assert_not_called()
+        self.assertEqual(caught.exception.failure_codes,['p2.decision.deadline'])
+        work = caught.exception.work
+        self.assertEqual(work['phase'],'leaf_terminal_check')
+        self.assertEqual((work['world_ordinal'],work['row_action'],work['column_action'],work['branch_index']),
+                         (0,'a','x',0))
+        self.assertEqual((work['chance_branches_checked'],work['leaves_queued'],
+                          work['batches_accepted'],work['pending_leaves']),(2,0,0,0))
+        self.assertEqual(work['worlds_enumerated'],0)
+
+    def test_deadline_after_forward_distinguishes_accepted_batch_from_inflight_work(self):
+        clock = [0.0]
+        class LateForward(Backend):
+            def evaluate_leaves(self,states):
+                clock[0] = 2.0
+                return super().evaluate_leaves(states)
+        with patch('pokezero.one_ply_exact.time.monotonic',side_effect=lambda:clock[0]):
+            with self.assertRaises(ExactSearchRefused) as caught:
+                exact_one_ply([(0,)],LateForward(),max_seconds=1,batch_size=2)
+        work = caught.exception.work
+        self.assertEqual(work['phase'],'leaf_evaluation')
+        self.assertEqual((work['leaves_queued'],work['pending_leaves'],work['batches_accepted']),(2,2,0))
+
     def test_cross_cell_batches_preserve_world_cell_weight_and_leaf_order(self):
         class Distinct(Backend):
             def evaluate_leaves(self,states):
