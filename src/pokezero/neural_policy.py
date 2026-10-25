@@ -721,6 +721,8 @@ class TransformerTrainingConfig:
     turn_penalty_after: int | None = None
     turn_penalty: float = 0.0
     value_loss_weight: float = 0.25
+    search_policy_loss_weight: float = 0.0
+    search_value_mix_weight: float = 0.0
     value_clip_range: float | None = None
     value_ranking_loss_weight: float = 0.0
     value_ranking_margin: float = 0.0
@@ -775,6 +777,11 @@ class TransformerTrainingConfig:
     batch_replay: bool = False
 
     def __post_init__(self) -> None:
+        if (not math.isfinite(self.search_policy_loss_weight) or self.search_policy_loss_weight < 0
+                or not math.isfinite(self.search_value_mix_weight) or not 0 <= self.search_value_mix_weight <= 1):
+            raise ValueError("search loss weight must be finite/nonnegative and value mix in [0, 1]")
+        if (self.search_policy_loss_weight or self.search_value_mix_weight) and self.objective != "ppo":
+            raise ValueError("search label losses require objective='ppo'")
         if self.objective not in ("behavior-cloning", "reward-weighted", "ppo", "value-only"):
             raise ValueError("objective must be 'behavior-cloning', 'reward-weighted', 'ppo', or 'value-only'.")
         if self.ppo_target_mode not in {"returns", "gae"}:
@@ -911,7 +918,12 @@ class TransformerTrainingConfig:
         return ShapingConfig.from_json(self.shaping_weights)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        # Legacy checkpoint/config bytes do not gain fields for a disabled feature.
+        for name in ("search_policy_loss_weight", "search_value_mix_weight"):
+            if payload[name] == 0.0:
+                del payload[name]
+        return payload
 
 
 @dataclass(frozen=True)
@@ -960,8 +972,17 @@ class TransformerEpochMetrics:
     average_batch_elapsed_seconds: float | None = None
     examples_per_second: float | None = None
 
+    search_policy_loss: float | None = None
+    search_policy_weight_sum: float | None = None
+    search_policy_examples: int | None = None
+    search_value_examples: int | None = None
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        for name in ("search_policy_loss", "search_policy_weight_sum", "search_policy_examples", "search_value_examples"):
+            if payload[name] is None:
+                del payload[name]
+        return payload
 
 
 @dataclass(frozen=True)
@@ -2441,7 +2462,7 @@ def _distributed_value_loss(
 
     torch_module = require_torch()
     values = output.value
-    targets = _value_targets(tensors, config.objective)
+    targets = _training_value_targets(tensors, config)
     training_weights = _training_sample_weights(tensors)
     if not active:
         training_weights = training_weights * 0.0
@@ -2500,7 +2521,7 @@ def _distributed_value_ranking_loss(
     else:
         local_sum, local_count = _value_ranking_loss_sum_and_count(
             output.value,
-            _value_targets(tensors, config.objective),
+            _training_value_targets(tensors, config),
             config,
         )
     local_denominator = local_sum.new_tensor(float(local_count)) if local_count else zero
@@ -2636,7 +2657,7 @@ def _distributed_transformer_loss(
             # Same objective gate as every other _value_targets call site: under value-only the
             # target source differs from ppo, so an ungated call scores the critic against a
             # different target than the loss it is paired with.
-            ev_targets = _value_targets(tensors, config.objective)[ev_mask].detach()
+            ev_targets = _training_value_targets(tensors, config)[ev_mask].detach()
             ev_residual = ev_targets - output.value[ev_mask].detach()
             local_ev_target_sum = ev_targets.sum()
             local_ev_target_square_sum = (ev_targets * ev_targets).sum()
@@ -2838,7 +2859,22 @@ def _distributed_transformer_loss(
             + (config.switch_target_loss_weight * switch_metric)
         )
 
+    search_metrics = {}
+    if config.search_policy_loss_weight:
+        search_sum, search_denominator = _search_policy_loss_sums(masked_policy_logits, tensors, active=active)
+        search_gradient, search_metric, search_weight = _distributed_loss_term(
+            search_sum, search_denominator, context=context)
+        loss_gradient = loss_gradient + config.search_policy_loss_weight * search_gradient
+        loss_metric += config.search_policy_loss_weight * search_metric
+        search_metrics = {"search_policy_loss": search_metric, "search_policy_weight_sum": search_weight,
+                          "search_policy_loss_sum": search_metric * max(search_weight, 1.0),
+                          "search_policy_examples": _distributed_int_sum(context,
+                              _search_label_count(tensors, "search_policy_target_mask", active=active), device=output.value.device)}
+    if config.search_value_mix_weight:
+        search_metrics["search_value_examples"] = _distributed_int_sum(context,
+            _search_label_count(tensors, "search_value_target_mask", active=active), device=output.value.device)
     return loss_gradient, {
+        **search_metrics,
         "loss": loss_metric,
         "policy_loss": policy_metric,
         "policy_correct": policy_correct,
@@ -3254,6 +3290,10 @@ def load_transformer_checkpoint(path: str | PathLike[str] | Path, *, map_locatio
                 loss=float(metrics["loss"]),
                 policy_loss=float(metrics["policy_loss"]),
                 policy_accuracy=float(metrics["policy_accuracy"]),
+                search_policy_loss=_optional_float(metrics.get("search_policy_loss")),
+                search_policy_weight_sum=_optional_float(metrics.get("search_policy_weight_sum")),
+                search_policy_examples=_optional_int(metrics.get("search_policy_examples")),
+                search_value_examples=_optional_int(metrics.get("search_value_examples")),
                 value_loss=_optional_float(metrics.get("value_loss")),
                 value_ranking_loss=_optional_float(metrics.get("value_ranking_loss")),
                 value_ranking_pairs=_optional_int(metrics.get("value_ranking_pairs")),
@@ -3399,7 +3439,18 @@ class _TorchMetricTotals:
     value_ev_residual_sum: float = 0.0
     value_ev_residual_square_sum: float = 0.0
 
+    search_policy_loss_sum: float = 0.0
+    search_policy_weight_sum: float | None = None
+    search_policy_examples: int | None = None
+    search_value_examples: int | None = None
+
     def add(self, batch_size: int, pieces: Mapping[str, float | int]) -> None:
+        if "search_policy_weight_sum" in pieces:
+            self.search_policy_weight_sum = (self.search_policy_weight_sum or 0) + float(pieces["search_policy_weight_sum"])
+            self.search_policy_loss_sum += float(pieces["search_policy_loss_sum"])
+            self.search_policy_examples = (self.search_policy_examples or 0) + int(pieces["search_policy_examples"])
+        if "search_value_examples" in pieces:
+            self.search_value_examples = (self.search_value_examples or 0) + int(pieces["search_value_examples"])
         self.examples += batch_size
         self.loss += float(pieces["loss"]) * batch_size
         self.policy_loss += float(pieces["policy_loss"]) * batch_size
@@ -3510,6 +3561,11 @@ class _TorchMetricTotals:
             gradient_clipped_fraction = self.gradient_clip_count / self.gradient_norm_samples
         timing_payload = dict(timing or {})
         return TransformerEpochMetrics(
+            search_policy_loss=(self.search_policy_loss_sum / max(self.search_policy_weight_sum, 1.0)
+                                if self.search_policy_weight_sum is not None else None),
+            search_policy_weight_sum=self.search_policy_weight_sum,
+            search_policy_examples=self.search_policy_examples,
+            search_value_examples=self.search_value_examples,
             epoch=epoch,
             examples=self.examples,
             loss=self.loss / self.examples,
@@ -3726,7 +3782,7 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
     functional = torch_module.nn.functional
     masked_policy_logits = output.policy_logits.masked_fill(~tensors["legal_action_mask"], -1e9)
     policy_correct = int((masked_policy_logits.argmax(dim=1) == tensors["action_indices"]).sum().item())
-    value_targets = _value_targets(tensors, config.objective)
+    value_targets = _training_value_targets(tensors, config)
     training_weights = _training_sample_weights(tensors)
     value_loss, ppo_value_clip_eligible_examples, ppo_value_clip_count = _value_loss_terms(
         output.value,
@@ -3866,7 +3922,19 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         switch_loss, switch_loss_value, switch_correct, switch_examples = _switch_target_loss_terms(masked_policy_logits, tensors, config)
         if switch_loss is not None:
             loss = loss + (config.switch_target_loss_weight * switch_loss)
+    search_metrics = {}
+    if config.search_policy_loss_weight:
+        search_sum, search_denominator = _search_policy_loss_sums(masked_policy_logits, tensors)
+        search_policy_loss = search_sum / search_denominator.clamp(min=1.0)
+        loss = loss + config.search_policy_loss_weight * search_policy_loss
+        search_metrics = {"search_policy_loss": float(search_policy_loss.detach().item()),
+                          "search_policy_weight_sum": float(search_denominator.detach().item()),
+                          "search_policy_loss_sum": float(search_sum.detach().item()),
+                          "search_policy_examples": _search_label_count(tensors, "search_policy_target_mask")}
+    if config.search_value_mix_weight:
+        search_metrics["search_value_examples"] = _search_label_count(tensors, "search_value_target_mask")
     return loss, {
+        **search_metrics,
         "loss": float(loss.detach().item()),
         "policy_loss": float(policy_loss.detach().item()),
         "policy_correct": policy_correct,
@@ -3899,6 +3967,39 @@ def _transformer_loss(output: TransformerPolicyOutput, tensors: Mapping[str, Any
         "value_ev_residual_sum": value_ev_residual_sum,
         "value_ev_residual_square_sum": value_ev_residual_square_sum,
     }
+
+
+def _search_label_count(tensors, mask_name, *, active=True):
+    if not active or mask_name not in tensors:
+        return 0
+    return int((tensors[mask_name] & (_training_sample_weights(tensors) > 0)).sum().detach().item())
+
+
+def _search_policy_loss_sums(masked_logits, tensors, *, active=True):
+    """Select labels before arithmetic, so masked-out NaNs never enter a loss."""
+    zero = masked_logits.sum() * 0.0
+    if not active or "search_policy_target_mask" not in tensors:
+        return zero, zero
+    mask = tensors["search_policy_target_mask"]
+    if not bool(mask.any()):
+        return zero, zero
+    target = tensors["search_policy_targets"][mask].detach()
+    log_prob = masked_logits[mask].log_softmax(dim=1)
+    weights = _training_sample_weights(tensors)[mask]
+    return (-(target * log_prob).sum(dim=1) * weights).sum(), weights.sum()
+
+
+def _training_value_targets(tensors, config):
+    base = _value_targets(tensors, config.objective)
+    if not config.search_value_mix_weight or "search_value_target_mask" not in tensors:
+        return base
+    mask = tensors["search_value_target_mask"]
+    if not bool(mask.any()):
+        return base
+    blended = base.clone()
+    mix = config.search_value_mix_weight
+    blended[mask] = (1.0 - mix) * base[mask] + mix * tensors["search_value_targets"][mask].detach()
+    return blended
 
 
 def _value_targets(tensors: Mapping[str, Any], objective: str = "ppo"):
