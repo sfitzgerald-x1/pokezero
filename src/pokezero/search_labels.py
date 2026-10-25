@@ -49,6 +49,60 @@ def validate_search_targets(
     return probabilities, value
 
 
+def search_targets_from_reports(world_runs, legal_mask, action_index_for_choice):
+    """Read exact visits and unrounded value totals before telemetry rounding.
+
+    ``world_runs`` contains one record per belief draw. Collapsed draws have
+    already been expanded by the caller and must not be weighted a second time.
+    Native values are side-one win probabilities; ``side_key`` names the
+    searching side after materialization and is the authority for conversion.
+    No unknown positive mass is dropped or replaced with a uniform target.
+    """
+    if not world_runs:
+        raise ValueError("search targets require a completed world")
+    probabilities = [0.0] * ACTION_COUNT
+    values = []
+    for record in world_runs:
+        side = record["side_key"]
+        if side not in ("side_one", "side_two"):
+            raise ValueError("search target has an unknown native side")
+        report = record["report"]
+        stats = report["training_root_stats"]
+        visits = stats["visits"]
+        total = stats["side_one_value_total"]
+        if type(visits) is not int or visits <= 0 or type(total) not in (int, float):
+            raise ValueError("search target requires positive visits and a numeric value total")
+        total = float(total)
+        if not math.isfinite(total) or not 0.0 <= total <= visits:
+            raise ValueError("search target value total is outside its visit count")
+        counts = [0] * ACTION_COUNT
+        observed = 0
+        for entry in report[side]:
+            count = entry["visits"]
+            if type(count) is not int or count < 0:
+                raise ValueError("search target visits must be nonnegative integers")
+            observed += count
+            if count == 0:
+                continue
+            index = action_index_for_choice(entry["move"])
+            if (type(index) is not int or not 0 <= index < ACTION_COUNT
+                    or len(legal_mask) != ACTION_COUNT or not legal_mask[index]):
+                raise ValueError("search target contains unmapped or illegal positive visit mass")
+            counts[index] += count
+        if observed != visits:
+            raise ValueError("search target visit denominator disagrees with the native root")
+        for index, count in enumerate(counts):
+            probabilities[index] += count / visits / len(world_runs)
+        side_one_value = total / visits
+        actor_value = side_one_value if side == "side_one" else 1.0 - side_one_value
+        values.append(2.0 * actor_value - 1.0)
+    distribution, value = validate_search_targets(
+        probabilities, sum(values) / len(values), legal_mask,
+    )
+    return {"status": "LABELED", "policy_target": list(distribution),
+            "value_target": value}
+
+
 class SearchLabelPolicy:
     """Run the raw actor once, then query a separate teacher for selected labels.
 

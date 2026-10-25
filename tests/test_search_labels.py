@@ -4,7 +4,8 @@ from types import SimpleNamespace
 import unittest
 
 from pokezero.policy import PolicyDecision
-from pokezero.search_labels import select_search_label, validate_search_targets, with_search_labels
+from pokezero.search_labels import (select_search_label, validate_search_targets,
+                                    with_search_labels, search_targets_from_reports)
 
 
 def context(seed=7, seat="p1", decision=0):
@@ -42,6 +43,64 @@ class Teacher:
         # This proposed action is deliberately illegal in the raw request.
         # It is discarded; the wrapper must return the raw actor's action.
         return PolicyDecision(action_index=8, policy_id="teacher", metadata=self.metadata)
+
+
+class NativeSearchTargetTests(unittest.TestCase):
+    mask = (True, True) + (False,) * 7
+
+    def world(self, side="side_one", total=2.0, visits=3, entries=None):
+        return {"side_key": side, "report": {
+            "training_root_stats": {"visits": visits, "side_one_value_total": total},
+            side: entries if entries is not None else [
+                {"move": "a", "visits": 1}, {"move": "b", "visits": 2}],
+            # These deliberately disagree: targets must never use rounded q.
+            "root_value": .123456,
+        }}
+
+    def targets(self, worlds, mapping=None):
+        mapping = mapping or {"a": 0, "b": 1}
+        return search_targets_from_reports(worlds, self.mask, mapping.get)
+
+    def test_integer_visits_and_full_value_total_precede_rounded_telemetry(self):
+        target = self.targets([self.world()])
+        self.assertEqual(target["policy_target"], [1 / 3, 2 / 3] + [0.] * 7)
+        self.assertEqual(target["value_target"], 2 * (2 / 3) - 1)
+
+    def test_native_side_key_controls_the_value_frame(self):
+        first = self.targets([self.world(side="side_one")])
+        second = self.targets([self.world(side="side_two")])
+        self.assertAlmostEqual(first["value_target"], -second["value_target"])
+        self.assertEqual(first["policy_target"], second["policy_target"])
+
+    def test_aliases_accumulate_without_dropping_visits(self):
+        entries = [{"move": "a", "visits": 1}, {"move": "alias_a", "visits": 1},
+                   {"move": "b", "visits": 1}]
+        target = self.targets([self.world(entries=entries)], {"a": 0, "alias_a": 0, "b": 1})
+        self.assertEqual(target["policy_target"], [2 / 3, 1 / 3] + [0.] * 7)
+
+    def test_belief_draws_are_equal_weight_and_collapsed_copies_are_not_counted_twice(self):
+        a = self.world(total=3.)
+        a["_collapse_multiplicity"] = 2
+        b = self.world(total=0.)
+        target = self.targets([a, a, b])
+        self.assertAlmostEqual(target["value_target"], 1 / 3)
+
+    def test_unmapped_or_illegal_positive_mass_is_not_silently_renormalized(self):
+        for mapping in ({"a": 0}, {"a": 0, "b": 8}):
+            with self.subTest(mapping=mapping), self.assertRaises(ValueError):
+                self.targets([self.world()], mapping)
+        zero = self.world(entries=[{"move": "a", "visits": 3}, {"move": "unknown", "visits": 0}])
+        self.assertEqual(self.targets([zero])["policy_target"], [1.] + [0.] * 8)
+
+    def test_malformed_or_missing_native_work_cannot_become_a_label(self):
+        for world in (self.world(visits=0), self.world(visits=True),
+                      self.world(total=float("nan")), self.world(total=4.),
+                      self.world(visits=4), self.world(side="p1"),
+                      self.world(entries=[{"move": "a", "visits": True}])):
+            with self.subTest(world=world), self.assertRaises(ValueError):
+                self.targets([world])
+        with self.assertRaises(ValueError):
+            self.targets([])
 
 
 class SearchLabelPolicyTests(unittest.TestCase):
