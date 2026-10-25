@@ -1,0 +1,484 @@
+{
+  "schema": "pokezero.r6-leaf-cap-count-shape.v1",
+  "source_bundle_sha256": "1736ae830ec8cc07d0ebde477834f2957ef20ee48c9032e74a90dd373165d601",
+  "diagnostic_terminal_sha256": "5b5e2e35cc46674a4e4ab2d94d2d4e4e0f8e2601d2d605557b4cabf6a619cd84",
+  "root": {
+    "battle_id": "battle-gen3randombattle-controlled-4130245009",
+    "decision_round_index": 12,
+    "player_id": "p1",
+    "seed": 4130245009
+  },
+  "scope": "Bundle-derived counts and address; the unit backend uses authored uniform masses and zero leaf values, not a replay of engine/value semantics or a playing-strength measurement.",
+  "expected_trigger": {
+    "branch_index": 10344,
+    "chance_branches_checked": 107236,
+    "column_action": "icepunch",
+    "leaves_queued": 100000,
+    "row_action": "icepunch",
+    "world_ordinal": 1,
+    "cells_enumerated": 82,
+    "leaves_attempted": 100001
+  },
+  "worlds": [
+    {
+      "world_ordinal": 0,
+      "root_state_sha256": "4b0c7222c83a6bdd796d4ce7373e2c1b169cb74fb9c51420d444892d0bc6b675",
+      "own_actions": [
+        "substitute",
+        "icepunch",
+        "thunderbolt",
+        "focuspunch",
+        "switch vaporeon",
+        "switch zangoose",
+        "switch hooh",
+        "switch hitmonlee"
+      ],
+      "opponent_actions": [
+        "firepunch",
+        "icepunch",
+        "thunderbolt",
+        "hiddenpowergrass70",
+        "switch stantler",
+        "switch huntail",
+        "switch exeggutor",
+        "switch donphan",
+        "switch banette"
+      ],
+      "branch_counts": [
+        [
+          115,
+          167,
+          85,
+          35,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        [
+          15344,
+          17580,
+          8481,
+          5656,
+          3,
+          38,
+          41,
+          33,
+          60
+        ],
+        [
+          8451,
+          8503,
+          5452,
+          2727,
+          1,
+          1,
+          58,
+          1,
+          33
+        ],
+        [
+          104,
+          156,
+          75,
+          25,
+          1,
+          29,
+          25,
+          29,
+          1
+        ],
+        [
+          32,
+          32,
+          33,
+          32,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          58,
+          58,
+          35,
+          28,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          13,
+          44,
+          33,
+          7,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          46,
+          46,
+          31,
+          22,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      ]
+    },
+    {
+      "world_ordinal": 1,
+      "root_state_sha256": "28e9f9cf8b4e885f13c9865dc98165e79f631d88d95244983eb58de357678f5a",
+      "own_actions": [
+        "substitute",
+        "icepunch",
+        "thunderbolt",
+        "focuspunch",
+        "switch vaporeon",
+        "switch zangoose",
+        "switch hooh",
+        "switch hitmonlee"
+      ],
+      "opponent_actions": [
+        "firepunch",
+        "icepunch",
+        "thunderbolt",
+        "hiddenpowergrass70",
+        "switch stantler",
+        "switch huntail",
+        "switch ampharos",
+        "switch donphan",
+        "switch beautifly"
+      ],
+      "branch_counts": [
+        [
+          115,
+          167,
+          85,
+          35,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        [
+          15344,
+          17580,
+          8481,
+          5656,
+          3,
+          38,
+          112,
+          33,
+          33
+        ],
+        [
+          8451,
+          8503,
+          5452,
+          2727,
+          1,
+          1,
+          54,
+          1,
+          13
+        ],
+        [
+          104,
+          156,
+          75,
+          25,
+          1,
+          29,
+          64,
+          29,
+          16
+        ],
+        [
+          32,
+          32,
+          33,
+          32,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          58,
+          58,
+          35,
+          28,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          13,
+          44,
+          33,
+          7,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          46,
+          46,
+          31,
+          22,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      ]
+    },
+    {
+      "world_ordinal": 2,
+      "root_state_sha256": "1bc9ec47c73dcc1ca67f6b32da390a4133414aaaf503e31e4df1c16655b54273",
+      "own_actions": [
+        "substitute",
+        "icepunch",
+        "thunderbolt",
+        "focuspunch",
+        "switch vaporeon",
+        "switch zangoose",
+        "switch hooh",
+        "switch hitmonlee"
+      ],
+      "opponent_actions": [
+        "firepunch",
+        "icepunch",
+        "thunderbolt",
+        "hiddenpowergrass70",
+        "switch stantler",
+        "switch huntail",
+        "switch latias",
+        "switch donphan",
+        "switch dugtrio"
+      ],
+      "branch_counts": [
+        [
+          115,
+          167,
+          85,
+          35,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        [
+          15344,
+          17580,
+          8481,
+          5656,
+          3,
+          38,
+          60,
+          33,
+          33
+        ],
+        [
+          8451,
+          8503,
+          5452,
+          2727,
+          1,
+          1,
+          40,
+          1,
+          1
+        ],
+        [
+          104,
+          156,
+          75,
+          25,
+          1,
+          29,
+          26,
+          29,
+          17
+        ],
+        [
+          32,
+          32,
+          33,
+          32,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          58,
+          58,
+          35,
+          28,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          13,
+          44,
+          33,
+          7,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          46,
+          46,
+          31,
+          22,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      ]
+    },
+    {
+      "world_ordinal": 3,
+      "root_state_sha256": "ee854ab6103d21fa2f455019b9eeb128c500b2bd4f45ce3ef628bcccdf3b7844",
+      "own_actions": [
+        "substitute",
+        "icepunch",
+        "thunderbolt",
+        "focuspunch",
+        "switch vaporeon",
+        "switch zangoose",
+        "switch hooh",
+        "switch hitmonlee"
+      ],
+      "opponent_actions": [
+        "firepunch",
+        "icepunch",
+        "thunderbolt",
+        "hiddenpowergrass70",
+        "switch stantler",
+        "switch huntail",
+        "switch regice",
+        "switch donphan",
+        "switch manectric"
+      ],
+      "branch_counts": [
+        [
+          115,
+          167,
+          85,
+          35,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        [
+          15344,
+          17580,
+          8481,
+          5656,
+          3,
+          38,
+          11,
+          33,
+          124
+        ],
+        [
+          8451,
+          8503,
+          5452,
+          2727,
+          1,
+          1,
+          56,
+          1,
+          60
+        ],
+        [
+          104,
+          156,
+          75,
+          25,
+          1,
+          29,
+          17,
+          29,
+          64
+        ],
+        [
+          32,
+          32,
+          33,
+          32,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          58,
+          58,
+          35,
+          28,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          13,
+          44,
+          33,
+          7,
+          2,
+          2,
+          2,
+          2,
+          2
+        ],
+        [
+          46,
+          46,
+          31,
+          22,
+          2,
+          2,
+          2,
+          2,
+          2
+        ]
+      ]
+    }
+  ]
+}

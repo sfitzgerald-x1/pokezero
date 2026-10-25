@@ -182,8 +182,14 @@ class NativeSessionBackend:
                 native=json.loads(p.session.reconstruct(p.cell,p.branch)))
         pending=self._pending if self._pending is not None else self._last_batch
         if pending:
+            # A work cap can reject the next leaf before it joins pending.
+            # Preserve that address separately; never substitute it for any
+            # ordered queued/model rows. Reconstruction remains failure-only.
+            last_checked=(address(self._last_position)
+                if isinstance(self._last_position,AddressedLeaf) else None)
             return dict(kind='ordered_model_batch' if self._batch_stage!='pending' else 'ordered_pending_batch',
                 stage=self._batch_stage,rows=[address(p) for p in pending],
+                last_addressed_leaf=last_checked,
                 real_rows=len(pending),model_rows=self.model.batch_size,
                 padded_rows=self.model.batch_size-len(pending),
                 padding='zero_features_true_attention_history',
