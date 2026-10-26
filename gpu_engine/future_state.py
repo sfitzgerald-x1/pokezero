@@ -275,12 +275,20 @@ def _move(metadata, data, side, slot, move):
     return name
 
 
-def _prepare(data, metadata, certificate=None, *, boundary="ordinary"):
+def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
+             original_static=None, original_genders=None):
     """Make complete expected native fields, or enumerate named mapping gaps."""
     if boundary not in ("ordinary", "suspended"):
         raise ValueError("unknown correspondence boundary policy")
     gaps = []
     add = lambda field, code, detail: gaps.append(Gap(field, code, detail))
+    if certificate is not None and (original_static is not None or original_genders is not None):
+        raise ValueError("ambiguous original static provenance")
+    if original_static is not None:
+        required = {f"{side}.pokemon[{p}]" for side in SIDE_NAMES for p in range(6)}
+        if set(dict(original_static)) != required or original_genders is None:
+            add("source", "INCOMPLETE_ORIGINAL_STATIC", "All12 constructor records and retained genders required")
+            return None, gaps, (), False, False
     expected = set(FIELD_POLICY) - {"truant_loaf", "gender"}  # legacy fields remain explicitly unknown
     if set(data) - set(FIELD_POLICY) or expected - set(data):
         add("schema", "UNCLASSIFIED_JAX_FIELD", repr(sorted(set(data) ^ expected)))
@@ -325,11 +333,14 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary"):
     if inventory & DYNAMIC_INVENTORY:
         add("moves", "DYNAMIC_HISTORY_CONTEXT_UNRESOLVED", "Dynamic move acquisition/callers defeat the fixed-inventory inactive-history proof; do not erase lastMove/damage conditioning")
     genders = data.get("gender", ((-1,)*6,)*2)
+    if original_genders is not None and genders != original_genders:
+        add("gender", "RETAINED_GENDER_CHANGED", "Gender differs from original constructor provenance")
     if certificate is not None and genders != dict(certificate.input_fields).get("gender", ((-1,)*6,)*2):
         add("gender", "RETAINED_GENDER_CHANGED", "Unknown and genderless are distinct immutable constructor values")
     if any(type(g) is not int or g not in (-1, 0, 1, 2) for party in genders for g in party):
         add("gender", "INVALID_RETAINED_GENDER", "Expected immutable codes-1/0/1/2")
-    base_cute = certificate is not None and any(extras[5] == "cutecharm" for _, extras in certificate.static_native)
+    retained_static = certificate.static_native if certificate is not None else original_static or ()
+    base_cute = any(extras[5] == "cutecharm" for _, extras in retained_static)
     sensitive = bool(inventory & {"attract"}) or base_cute or any(
         _vocab(metadata, "abilities", a) == "cutecharm" for party in data["ability"] for a in party)
     if sensitive and any(g == -1 for party in genders for g in party):
@@ -352,7 +363,7 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary"):
         "trick_room_turns_remaining": 0, "team_preview": False,
         "derived_done": done, "derived_winner": winner,
         "conditional_last": use_last, "conditional_damage": use_damage}
-    static = dict(certificate.static_native) if certificate else {}
+    static = dict(retained_static)
     for side, side_name in enumerate(SIDE_NAMES):
         active = data["active"][side]
         if type(active) is not int or not 0 <= active < 6:
@@ -392,7 +403,7 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary"):
             if certificate is not None and gender != extras[2]:
                 add(path+".gender", "RETAINED_GENDER_CHANGED", "Gender is immutable across admitted Gen3 futures")
             extras = (*extras[:2], gender, *extras[3:])
-            if certificate is None and "oracle_species" in metadata:
+            if certificate is None and original_static is None and "oracle_species" in metadata:
                 species = _vocab(metadata, "species", data["species"][side][p])
                 extras = (*extras[:3], _f32(metadata["oracle_species"][species]["weight_kg"]), *extras[4:])
             static[path] = extras
@@ -507,7 +518,17 @@ def native_input_from_jax(state, index, metadata, *, module=None):
     try:
         data = _sample(state, index)
         raw = _freeze(data)
-        expected, gaps, static, last, damage = _prepare(data, metadata)
+    except (ValueError, KeyError, IndexError, TypeError) as error:
+        return Refused((Gap("schema", "INVALID_INPUT", str(error)),), raw)
+    return _native_input_from_data(data, metadata, module=module)
+
+
+def _native_input_from_data(data, metadata, *, module=None,
+                            original_static=None, original_genders=None):
+    raw = _freeze(data)
+    try:
+        expected, gaps, static, last, damage = _prepare(data, metadata,
+            original_static=original_static, original_genders=original_genders)
     except (ValueError, KeyError, IndexError, TypeError) as error:
         return Refused((Gap("schema", "INVALID_INPUT", str(error)),), raw)
     if gaps:

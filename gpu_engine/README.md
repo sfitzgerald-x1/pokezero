@@ -550,3 +550,37 @@ The compiled native/JAX seam profile is explicitly invoked as
 `python -m unittest tests.test_native_gpu_panel_execution`; admission requires
 all three actual controls and zero skips. JAX-only component CI does not build
 the separate native oracle and is not this integration profile.
+
+## Conditional continuation and original constructors
+
+`conditional_law.plan_for_suspension` is an explicit opt-in adapter for the
+bounded native continuation domain. It binds the full paused state, saved
+chance capsule, legal replacement action, supplied move table and source pins.
+It evaluates all four fresh entry-tie cases in the native oracle before JAX,
+retains each case's original mass and refuses the whole slot if any positive
+successor is unsupported. Cached native evaluation is actual execution, not
+validation-only admission. A deterministic JAX table defect remains a divergence.
+
+`source_provenance` retains original constructors separately from correspondence.
+Load a byte-bound immutable pool with its Nature/EVs and optional happiness and
+gender overrides. Build a prospective context from the source-bound Gen3 weight
+catalog, both native extensions' runtime attestation and, for generated genders,
+the complete source-bound gender policy. Capture after gender assignment and
+before entry callbacks. Generated values are checked against a separate replay
+of the bound policy/seed/domain/root; the live state and its keys are untouched.
+Unresolved weights or constructor fields refuse their root rather than redrawing.
+
+The capture is provenance only: it never clears `entry_pending` or issues a
+native certificate. After entry, `native_input_with_provenance` checks constructor
+identity and proves the complete physical mapping using the retained base types,
+base ability, Nature, EVs, gender and native float weight. Current copied Trace
+ability remains distinct from original base Trace; it does not widen the native
+conditional domain. Original pool metadata and enriched mapping metadata retain
+separate identities. The context expects independently verified prospective
+source admission; a catalog's self-reported provenance is not independent proof.
+
+These APIs do not connect the collector, select actions, admit a scientific run
+or change any historical panel. Their authored tests run in the isolated
+`conditioned-oracle` CI profile with both native bindings and zero skips. Fresh
+collector admission, broader suspension mechanics and full engine qualification
+remain separate work.
