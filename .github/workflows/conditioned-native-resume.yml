@@ -48,6 +48,6 @@ jobs:
           assert pokezero_search.CONDITIONED_ORACLE_ENABLED
           suite = unittest.defaultTestLoader.loadTestsFromName('tests.test_conditioned_native_resume')
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 7 and not result.skipped
+          assert result.testsRun >= 11 and not result.skipped
           assert result.wasSuccessful()
           PY

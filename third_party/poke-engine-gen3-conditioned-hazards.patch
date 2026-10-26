@@ -1,0 +1,271 @@
+diff --git a/src/gen3/conditioned_resume.rs b/src/gen3/conditioned_resume.rs
+index 566f250..24354a0 100644
+--- a/src/gen3/conditioned_resume.rs
++++ b/src/gen3/conditioned_resume.rs
+@@ -2,9 +2,9 @@
+ //!
+ //! The capsule carries the entire suspended JAX chance/queue context. This
+ //! domain admits direct Baton Pass with queued Thunderbolt/Body Slam or an
+-//! already empty action queue;
++//! already empty action queue, plus counted replacement chains after a KO;
+ //! unsupported consumers return a reason before native generation. In
+-//! particular Sleep Talk, hazards and tied residual ordering are not
++//! particular Sleep Talk, non-Spikes entry effects and tied residual ordering are not
+ //! silently integrated out. Ordinary search never constructs this context.
+ use super::abilities::Abilities;
+ use super::generate_instructions::generate_instructions_from_move_pair;
+@@ -123,14 +123,23 @@ fn validate(
+     {
+         return Err("SUSPENSION_FLAGS_MISMATCH");
+     }
+-    let replacing = match capsule.baton_pass {
++    let replacing = match capsule.forced_switch {
+         [true, false] => 0,
+         [false, true] => 1,
+         _ => return Err("UNSUPPORTED_SUSPENSION_CAUSE"),
+     };
+-    if capsule.forced_switch != capsule.baton_pass
++    let direct_baton = capsule.baton_pass == capsule.forced_switch
++        && capsule.replacement_count == 0
++        && sides[replacing].get_active_immutable().hp > 0;
++    // Each unfinished replacement consumes a distinct living party member.
++    // With six party slots and no revival in this domain, at most five KOs
++    // can leave another replacement owed; a sixth closes the battle.
++    let hazard_chain = capsule.baton_pass == [false; 2]
++        && (1..=5).contains(&capsule.replacement_count)
++        && sides[replacing].get_active_immutable().hp == 0
++        && capsule.queued_actor == -1;
++    if (!direct_baton && !hazard_chain)
+         || ![-1, (1 - replacing) as i8].contains(&capsule.queued_actor)
+-        || capsule.replacement_count != 0
+     {
+         return Err("UNSUPPORTED_SUSPENSION_QUEUE");
+     }
+@@ -142,7 +151,12 @@ fn validate(
+     {
+         return Err("UNSUPPORTED_FIELD_CONTEXT");
+     }
+-    for side in sides {
++    for (side_id, side) in sides.iter().enumerate() {
++        let mut conditions = side.side_conditions.clone();
++        if !(0..=3).contains(&conditions.spikes) {
++            return Err("UNSUPPORTED_SPIKES_LAYERS");
++        }
++        conditions.spikes = 0;
+         if side.shed_tailing
+             || side.slow_uturn_move
+             || side.force_trapped
+@@ -152,7 +166,7 @@ fn validate(
+             || side.substitute_health != 0
+             || side.volatile_status_durations.serialize()
+                 != VolatileStatusDurations::default().serialize()
+-            || side.side_conditions.serialize() != SideConditions::default().serialize()
++            || conditions.serialize() != SideConditions::default().serialize()
+             || side.attack_boost != 0
+             || side.defense_boost != 0
+             || side.special_attack_boost != 0
+@@ -177,7 +191,7 @@ fn validate(
+                 return Err("UNSUPPORTED_PARTY_CONTEXT");
+             }
+         }
+-        if side.get_active_immutable().hp <= 0 {
++        if side.get_active_immutable().hp <= 0 && !(hazard_chain && side_id == replacing) {
+             return Err("UNSUPPORTED_FAINT_SUSPENSION");
+         }
+     }
+@@ -252,10 +266,15 @@ pub fn resume(
+         let mut successor = native.clone();
+         successor.apply_instructions(&instructions.instruction_list);
+         successor.oracle_resume = None;
+-        if successor.side_one.force_switch
+-            || successor.side_two.force_switch
+-            || successor.side_one.baton_passing
++        let pending = successor.side_one.force_switch || successor.side_two.force_switch;
++        let successor_sides = [&successor.side_one, &successor.side_two];
++        if successor.side_one.baton_passing
+             || successor.side_two.baton_passing
++            || (pending
++                && (successor_sides[1 - replacing].force_switch
++                    || !successor_sides[replacing].force_switch
++                    || successor_sides[replacing].get_active_immutable().hp != 0
++                    || successor_sides[replacing].visible_alive_pkmn() == 0))
+         {
+             return Err("UNSUPPORTED_SUCCESSOR_SUSPENSION");
+         }
+@@ -289,7 +308,7 @@ pub fn resume(
+             return Err("NATIVE_REVERSE_MISMATCH");
+         }
+         let mut carry = capsule.clone();
+-        carry.pending_residual = false;
++        carry.pending_residual = pending;
+         carry.forced_switch = [
+             successor.side_one.get_active_immutable().hp <= 0
+                 && successor.side_one.visible_alive_pkmn() > 0,
+@@ -300,11 +319,18 @@ pub fn resume(
+         carry.queued_actor = -1;
+         carry.queued_actions = [0; 2];
+         carry.queued_stall = [0; 2];
+-        carry.residual_draws = [[0; 12]; 2];
+-        carry.phazing_draws = [0; 2];
+-        carry.secondary_draws = [0; 2];
+-        carry.sleep_talk_draws = [0; 2];
+-        carry.replacement_count = 0;
++        if pending {
++            carry.replacement_count = capsule
++                .replacement_count
++                .checked_add(1)
++                .ok_or("REPLACEMENT_COUNT_OVERFLOW")?;
++        } else {
++            carry.residual_draws = [[0; 12]; 2];
++            carry.phazing_draws = [0; 2];
++            carry.secondary_draws = [0; 2];
++            carry.sleep_talk_draws = [0; 2];
++            carry.replacement_count = 0;
++        }
+         result.push(ResumeBranch {
+             percentage: instructions.percentage,
+             instructions,
+@@ -469,6 +495,100 @@ mod tests {
+         );
+     }
+     #[test]
++    fn hazard_chain_cancels_move_and_defers_residual_until_survivor() {
++        for replacing in 0..2 {
++            let (mut state, capsule) = fixture(replacing);
++            let pivot = state.get_side(&if replacing == 0 {
++                SideReference::SideOne
++            } else {
++                SideReference::SideTwo
++            });
++            pivot.side_conditions.spikes = 1;
++            for p in [PokemonIndex::P1, PokemonIndex::P2, PokemonIndex::P3] {
++                pivot.pokemon[p].maxhp = 300;
++                pivot.pokemon[p].speed = 200;
++                pivot.pokemon[p].hp = if p == PokemonIndex::P3 { 200 } else { 1 };
++                pivot.pokemon[p].item = Items::NONE;
++            }
++            let before = state.serialize();
++            let first = resume(&state, &capsule, PokemonIndex::P1, [0, 1])
++                .unwrap()
++                .remove(0);
++            assert_eq!(state.serialize(), before);
++            assert!(first.capsule.pending_residual);
++            assert_eq!(first.capsule.replacement_count, 1);
++            assert_eq!(first.capsule.residual_draws, capsule.residual_draws);
++            assert_eq!(first.capsule.phazing_draws, capsule.phazing_draws);
++            assert_eq!(first.capsule.secondary_draws, capsule.secondary_draws);
++            assert_eq!(first.capsule.sleep_talk_draws, capsule.sleep_talk_draws);
++            assert_eq!(first.capsule.queued_actor, -1);
++            assert_eq!(first.capsule.queued_actions, [0; 2]);
++            let waiter = if replacing == 0 {
++                SideReference::SideTwo
++            } else {
++                SideReference::SideOne
++            };
++            assert_eq!(
++                first
++                    .state
++                    .get_side_immutable(&waiter)
++                    .switch_out_move_second_saved_move,
++                Choices::NONE
++            );
++            assert_eq!(
++                first
++                    .state
++                    .get_side_immutable(&waiter)
++                    .get_active_immutable()
++                    .moves[&PokemonMoveIndex::M0]
++                    .pp,
++                10
++            );
++            assert_eq!(
++                first
++                    .state
++                    .get_side_immutable(&waiter)
++                    .get_active_immutable()
++                    .hp,
++                100
++            );
++            let second = resume(&first.state, &first.capsule, PokemonIndex::P2, [1, 0])
++                .unwrap()
++                .remove(0);
++            assert_eq!(second.capsule.replacement_count, 2);
++            assert_eq!(second.capsule.residual_draws, capsule.residual_draws);
++            let last = resume(&second.state, &second.capsule, PokemonIndex::P3, [0, 1])
++                .unwrap()
++                .remove(0);
++            assert!(!last.capsule.pending_residual);
++            assert_eq!(last.capsule.replacement_count, 0);
++            assert_eq!(last.capsule.residual_draws, [[0; 12]; 2]);
++            assert_eq!(last.capsule.keys, capsule.keys);
++            assert_eq!(last.capsule.turn, capsule.turn);
++            assert_eq!(
++                last.state
++                    .get_side_immutable(&waiter)
++                    .get_active_immutable()
++                    .hp,
++                88
++            );
++            assert_eq!(
++                last.state
++                    .get_side_immutable(&waiter)
++                    .get_active_immutable()
++                    .moves[&PokemonMoveIndex::M0]
++                    .pp,
++                10
++            );
++            let pivot = last.state.get_side_immutable(&if replacing == 0 {
++                SideReference::SideOne
++            } else {
++                SideReference::SideTwo
++            });
++            assert_eq!(pivot.get_active_immutable().hp, 163);
++        }
++    }
++    #[test]
+     fn unsupported_context_refuses_before_generation() {
+         let (state, capsule) = fixture(0);
+         let mut bad = capsule.clone();
+@@ -478,7 +598,7 @@ mod tests {
+             "INVALID_OR_UNSUPPORTED_CHANCE_CAPSULE"
+         );
+         let mut bad_state = state.clone();
+-        bad_state.side_one.side_conditions.spikes = 1;
++        bad_state.side_one.side_conditions.stealth_rock = 1;
+         assert_eq!(
+             resume(&bad_state, &capsule, PokemonIndex::P1, [0, 1]).unwrap_err(),
+             "UNSUPPORTED_SIDE_CONTEXT"
+diff --git a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+index b6228fa..7cc820a 100644
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -400,7 +400,29 @@ fn generate_instructions_from_switch(
+     let should_last_used_move = state.use_last_used_move;
+     state.apply_instructions(&incoming_instructions.instruction_list);
+ 
++    #[cfg(feature = "conditioned-oracle")]
++    let conditioned = state.oracle_resume.is_some();
+     let (side, opposite_side) = state.get_both_sides(&switching_side_ref);
++    // Retire a fainted outgoing mon's major-status storage explicitly. The
++    // conditional domain admits only NONE/POISON and has no corpse-status
++    // consumer. JAX departure clears this field; Showdown marks the corpse
++    // fnt rather than retaining its prior major status. Keep the change
++    // reversible and scoped to the opt-in continuation, never in a mapper.
++    #[cfg(feature = "conditioned-oracle")]
++    if conditioned && side.get_active_immutable().hp == 0 {
++        let previous_status = side.get_active_immutable().status;
++        if previous_status != PokemonStatus::NONE {
++            incoming_instructions.instruction_list.push(Instruction::ChangeStatus(
++                ChangeStatusInstruction {
++                    side_ref: switching_side_ref,
++                    pokemon_index: side.active_index,
++                    old_status: previous_status,
++                    new_status: PokemonStatus::NONE,
++                },
++            ));
++            side.get_active().status = PokemonStatus::NONE;
++        }
++    }
+     if side.force_switch {
+         side.force_switch = false;
+         match switching_side_ref {

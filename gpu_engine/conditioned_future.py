@@ -32,6 +32,11 @@ class SuspendedNativeInput:
     integrity_sha256: str
 
 
+@dataclass(frozen=True)
+class ConditionedFuture(mapping.CanonicalFuture):
+    capsule: tuple = ()
+
+
 def _binding_digest(raw_native, raw_jax, capsule, certificate, source_certificate):
     payload = [raw_native, raw_jax, capsule, asdict(certificate), asdict(source_certificate)]
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":"),
@@ -91,7 +96,7 @@ def _from_data(data):
                      "version": 1, "schema": "pokezero.suspended-turn"})
 
 
-def suspended_input_from_jax(state, index, metadata, *, certificate, module=None):
+def suspended_input_from_jax(state, index, metadata, *, certificate, module=None, native_successor=None):
     """Bind an explicit suspension to retained original constructor provenance.
 
     This verifies physical construction and capsule types. The native API then
@@ -116,11 +121,20 @@ def suspended_input_from_jax(state, index, metadata, *, certificate, module=None
         if gaps:
             return mapping.Refused(tuple(gaps), raw)
         capsule = _from_data(data)
-        if dict(capsule)["replacement_count"] != 0:
-            raise ValueError("UNSUPPORTED_SUSPENSION_QUEUE")
         module = import_module("poke_engine") if module is None else module
-        native_wire = mapping._construct_native(expected, module).to_string()
+        if native_successor is not None:
+            if not isinstance(native_successor, ConditionedFuture) or native_successor.capsule != capsule:
+                raise ValueError("NATIVE_SUCCESSOR_CAPSULE_MISMATCH")
+            if (native_successor.certificate.static_native != certificate.static_native
+                    or native_successor.certificate.metadata_sha256 != certificate.metadata_sha256):
+                raise ValueError("NATIVE_SUCCESSOR_PROVENANCE_MISMATCH")
+            native_wire = native_successor.raw_native
+        else:
+            native_wire = mapping._construct_native(expected, module).to_string()
+        if type(native_wire) is not str:
+            raise ValueError("NATIVE_WIRE_REQUIRED")
         physical = mapping._native_wire(native_wire)
+        _pending_context(physical, capsule)
         alive = [any(mon["hp"] > 0 for mon in physical[side]["pokemon"]) for side in mapping.SIDE_NAMES]
         done = not all(alive)
         physical.update(derived_done=done,
@@ -137,6 +151,11 @@ def suspended_input_from_jax(state, index, metadata, *, certificate, module=None
         bound_certificate = replace(certificate, field_policies=tuple(sorted(policies.items())),
             field_native_paths=tuple(sorted(paths.items())), input_fields=raw,
             static_native=static, inactive_addresses=())
+        if native_successor is not None:
+            complete = _complete_key(mapping.CanonicalFuture(tuple(mapping._flat(expected)),
+                bound_certificate, raw, native_wire), capsule)
+            if complete.key != native_successor.key:
+                raise ValueError("NATIVE_SUCCESSOR_KEY_MISMATCH")
         digest = _binding_digest(native_wire, raw, capsule, bound_certificate, certificate)
         return SuspendedNativeInput(native_wire, raw, capsule, bound_certificate, certificate, digest)
     except (ValueError, TypeError, KeyError, IndexError, AttributeError) as error:
@@ -148,8 +167,37 @@ def _complete_key(physical, capsule):
         return physical
     # Complete physical state and all future-reused/external carry participate.
     # No capsule field can disappear merely because physical HP agrees.
-    return replace(physical, key=tuple(sorted((*physical.key,
-        *mapping._flat({"capsule": dict(capsule)})))))
+    return ConditionedFuture(tuple(sorted((*physical.key,
+        *mapping._flat({"capsule": dict(capsule)})))), physical.certificate,
+        physical.raw_jax, physical.raw_native, capsule)
+
+
+def _pending_context(physical, capsule):
+    """Validate physical pending flags and exact queued identity together."""
+    c = dict(capsule)
+    sides = [physical[side] for side in mapping.SIDE_NAMES]
+    forced = tuple(side["force_switch"] for side in sides)
+    baton = tuple(side["baton_passing"] for side in sides)
+    if not c["pending_residual"] or forced != c["forced_switch"] or baton != c["baton_pass"] or sum(forced) != 1:
+        raise ValueError("SUSPENSION_FLAGS_MISMATCH")
+    replacing = forced.index(True)
+    active = sides[replacing]["pokemon"][int(sides[replacing]["active_index"])]
+    direct = baton == forced and c["replacement_count"] == 0 and active["hp"] > 0
+    chain = (not any(baton) and 1 <= c["replacement_count"] <= 5 and active["hp"] == 0
+        and c["queued_actor"] == -1 and any(p["hp"] > 0 for p in sides[replacing]["pokemon"]))
+    if not (direct or chain):
+        raise ValueError("UNSUPPORTED_SUSPENSION_QUEUE")
+    if c["queued_actor"] == -1:
+        if c["queued_actions"] != (0, 0) or any(side["switch_out_move_second_saved_move"] != "none" for side in sides):
+            raise ValueError("UNSUPPORTED_EMPTY_QUEUE_CONTEXT")
+    else:
+        actor = c["queued_actor"]
+        if actor != 1-replacing or sides[replacing]["switch_out_move_second_saved_move"] != "none":
+            raise ValueError("UNSUPPORTED_SUSPENSION_QUEUE")
+        waiter = sides[actor]
+        move = waiter["pokemon"][int(waiter["active_index"])]["moves"][c["queued_actions"][actor]]["id"]
+        if waiter["switch_out_move_second_saved_move"] != move:
+            raise ValueError("QUEUED_COMMITMENT_MISMATCH")
 
 
 def canonical_resumed_jax(state, index, metadata, *, native_input):
@@ -160,7 +208,24 @@ def canonical_resumed_jax(state, index, metadata, *, native_input):
     except (ValueError, TypeError, KeyError, AttributeError) as error:
         return mapping.Refused((mapping.Gap("suspension", "SUSPENSION_BINDING_CHANGED", str(error)),),
             native_input.raw_jax, native_input.raw_native)
-    physical = mapping.canonical_jax_future(state, index, metadata, certificate=native_input.certificate)
+    try:
+        data = mapping._sample(state, index)
+    except (ValueError, TypeError, KeyError, IndexError) as error:
+        return mapping.Refused((mapping.Gap("suspension", "INVALID_SUCCESSOR", str(error)),))
+    if data["pending_residual"]:
+        try:
+            expected, gaps, _, last, damage = mapping._prepare(data, metadata,
+                native_input.certificate, boundary="suspended")
+            if (last, damage) != (native_input.certificate.conditional_last, native_input.certificate.conditional_damage):
+                raise ValueError("CONDITIONAL_MECHANICS_CHANGED")
+            if gaps:
+                return mapping.Refused(tuple(gaps), mapping._freeze(data))
+            physical = mapping.CanonicalFuture(tuple(mapping._flat(expected)),
+                native_input.certificate, mapping._freeze(data))
+        except (ValueError, TypeError, KeyError, IndexError) as error:
+            return mapping.Refused((mapping.Gap("suspension", "UNSUPPORTED_PENDING_SUCCESSOR", str(error)),),mapping._freeze(data))
+    else:
+        physical = mapping.canonical_jax_future(state, index, metadata, certificate=native_input.certificate)
     try:
         return _complete_key(physical, _from_data(mapping._sample(state, index)))
     except (ValueError, TypeError, KeyError, IndexError) as error:
@@ -206,11 +271,19 @@ def native_successors(native_input, replacement, entry_ties, *, module=None):
             mass = branch["percentage"]
             if type(mass) not in (int, float) or not math.isfinite(mass) or mass <= 0:
                 raise ValueError("INVALID_CONDITIONAL_MASS")
-            physical = mapping.canonical_native_future(branch["state"], native_input.certificate)
+            try:
+                carry = _capsule(branch["capsule"])
+                if dict(carry)["pending_residual"]:
+                    _pending_context(mapping._native_wire(branch["state"]), carry)
+                    physical = mapping._canonical_native_future(branch["state"],
+                        native_input.certificate, boundary="suspended")
+                else:
+                    physical = mapping.canonical_native_future(branch["state"], native_input.certificate)
+            except (ValueError, TypeError, KeyError, IndexError) as error:
+                return refuse("UNSUPPORTED_POSITIVE_SUCCESSOR", str(error))
             if isinstance(physical, mapping.Refused):
                 return refuse("UNSUPPORTED_POSITIVE_SUCCESSOR", repr(physical.gaps))
-            carry = _capsule(branch["capsule"])
-            if dict(carry)["pending_residual"] or any(dict(carry)["baton_pass"]):
+            if any(dict(carry)["baton_pass"]) and not dict(carry)["pending_residual"]:
                 return refuse("UNSUPPORTED_POSITIVE_SUCCESSOR", "Successor is still suspended")
             results.append((mass / 100, _complete_key(physical, carry)))
         if not results or abs(math.fsum(mass for mass, _ in results) - 1) > 1e-6:

@@ -127,13 +127,13 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`79c8e0b11d6e479c…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`d91517651f3a39fb…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
-the fingerprint's inputs — the 87 gen3 patches, `poke-engine-gen3-patches.txt`,
+the fingerprint's inputs — the 88 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 22 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
@@ -365,6 +365,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Default-off search-label root statistics | `lib.rs` and `model.rs` add optional exact root visit/value totals after search. Both-seat authored model-wheel checks preserve visits, values and selected actions with the flag omitted, off and on. The 85 patches, 21 crate sources and 112 hashed inputs retain the same membership. This is current-source identity and isolated model-wheel verification, not a new frozen two-consumer sweep or strength qualification; historical receipts and OPEN gates remain unchanged | `6eaf2113d3d4c7e0…` |
 | Opt-in conditional suspension oracle | Adds a feature-gated continuation capsule and native saved-chance hooks for the authored Baton Pass/Thunderbolt domain, with terminal-poison carry and minimum-one damage regressions. Inventory grows to 86 patches, 22 crate sources and 114 hashed inputs. The default binding omits the API; general suspension refusals, historical sweeps, stopped rosters, installed-build receipts and OPEN qualification remain unchanged | `9986a78d55b50578…` |
 | Conditional contact and completed action queue | An appended opt-in patch separates saved Static contact chance from Body Slam target chance and supports a completed empty queue after second-action Baton. Inventory grows to 87 patches and 115 hashed inputs, with 22 crate sources unchanged. Both-seat authored full successor/carry checks cover independent rolls, incoming/outgoing Static, poison, immunity and one residual without action replay. Historical rows, measurements, stopped rosters and OPEN qualification remain unchanged | `79c8e0b11d6e479c…` |
+| Conditional replacement chains | An appended opt-in patch supports Spikes and queued-attack KOs across counted replacement chains. It cancels completed commitments reversibly, retains deferred chance, and declares retired fainted major status through an explicit conditioned transition. Inventory grows to 88 patches and 116 hashed inputs, with 22 crate sources unchanged. Authored both-seat physical/capsule comparisons include repeated KOs, immunity, terminal exhaustion and post-residual requests. Historical rows, measurements, stopped rosters, default generation and OPEN qualification remain unchanged | `d91517651f3a39fb…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -992,7 +993,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 427 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 87 |
+| `base.patch_stack` | 88 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -1013,8 +1014,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 22 |
-| `t1.hashed_input_files` | 115 |
-| `t1.head_fingerprint` | 79c8e0b11d6e479c |
+| `t1.hashed_input_files` | 116 |
+| `t1.head_fingerprint` | d91517651f3a39fb |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

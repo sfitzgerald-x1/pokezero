@@ -21,7 +21,7 @@ class ConditionedResumeTests(unittest.TestCase):
         import jax
         import jax.numpy as j
         import poke_engine
-        from gpu_engine import baton, future_state as f, items, secondary, transition as t
+        from gpu_engine import baton, entry, future_state as f, items, secondary, transition as t
         from gpu_engine.state import empty_state
         cls.jax, cls.j, cls.engine, cls.f, cls.t = jax, j, poke_engine, f, t
         names = ["_none", "batonpass", "thunderbolt", "splash", "struggle", "bodyslam"]
@@ -38,12 +38,12 @@ class ConditionedResumeTests(unittest.TestCase):
             j.array([True, True, False, True, False, False]), j.zeros(6, j.int32),
             j.ones((18, 18), j.int32).at[13, 5].set(0).at[1, 8].set(0),
             j.ones((18, 18), j.int32).at[13, 12].set(2), j.array(4),
-            baton=baton.from_metadata(cls.meta), items=items.from_metadata(cls.meta),
+            baton=baton.from_metadata(cls.meta), entry=entry.from_metadata(cls.meta), items=items.from_metadata(cls.meta),
             secondary=secondary.from_metadata(cls.meta))
         cls.empty = staticmethod(empty_state)
         cls.step = staticmethod(jax.jit(t.step_with_chance))
 
-    def fixture(self, replacing, secondary_roll, boundary=None, *, contact_roll=59, queued_move="thunderbolt", static_at=None, poison=True, queued_slot=0):
+    def fixture(self, replacing, secondary_roll, boundary=None, *, contact_roll=59, queued_move="thunderbolt", static_at=None, poison=True, queued_slot=0, hazard_layers=0, chain_poison=False, recipient_flying=False, hazard_chain=False, terminal_chain=False):
         j = self.j
         state = self.empty(1, seed=771)._replace(
             hp=j.full((1, 2, 6), 1000), max_hp=j.full((1, 2, 6), 1000),
@@ -66,6 +66,8 @@ class ConditionedResumeTests(unittest.TestCase):
             j.array([[0, 1]]), j.array([0]))
         if boundary == "terminal_poison":
             state = state._replace(hp=state.hp.at[:, queued, :].set(0).at[:, queued, 0].set(100))
+        elif boundary == "post_residual_poison":
+            state = state._replace(hp=state.hp.at[:, queued, 0].set(100))
         elif boundary in ("minimum_damage", "immunity"):
             state = state._replace(
                 stats=state.stats.at[:, queued, 0, 3].set(1)
@@ -79,6 +81,20 @@ class ConditionedResumeTests(unittest.TestCase):
             state = state._replace(types=state.types.at[:, replacing, 1, 0].set(8))
         if queued_move == "splash":
             state = state._replace(stats=state.stats.at[:, queued, :, 5].set(501))
+        if hazard_layers:
+            damage=(0,125,166,250)[hazard_layers]
+            state=state._replace(spikes=state.spikes.at[:,replacing].set(hazard_layers),
+                hp=state.hp.at[:,replacing,1].set(damage),
+                status=state.status.at[:,replacing,1].set(3 if chain_poison else 0))
+            if hazard_chain:
+                state=state._replace(hp=state.hp.at[:,replacing,2].set(damage).at[:,replacing,3].set(800),
+                    stats=state.stats.at[:,replacing,2:4,5].set(200),
+                    status=state.status.at[:,replacing,2].set(3 if chain_poison else 0),
+                    item=state.item.at[:,replacing,2:4].set(1))
+            if recipient_flying:
+                state=state._replace(types=state.types.at[:,replacing,1,0].set(3))
+            if terminal_chain:
+                state=state._replace(hp=state.hp.at[:,replacing,2:].set(0).at[:,replacing,0].set(damage))
         native = self.f.native_input_from_jax(state, 0, self.meta, module=self.engine)
         self.assertIsInstance(native, self.f.NativeInput, native)
         branches = self.engine.generate_instructions(native.state, "batonpass" if replacing == 0 else queued_move,
@@ -296,14 +312,14 @@ class ConditionedResumeTests(unittest.TestCase):
                       paused._replace(wish_counter=paused.wish_counter.at[:,0].set(1))):
             value=c.suspended_input_from_jax(state,0,self.meta,certificate=certificate,module=self.engine)
             self.assertIsInstance(value,self.f.Refused,value)
-        # Full construction can preserve a hazard, but the current native
-        # continuation domain must refuse it before executing any transition.
-        hazard=paused._replace(spikes=paused.spikes.at[:,0].set(1))
-        bound=c.suspended_input_from_jax(hazard,0,self.meta,certificate=certificate,module=self.engine)
+        # Full construction preserves weather, but the native continuation
+        # domain still refuses it before executing any transition.
+        unsupported=paused._replace(weather=self.j.array([2]))
+        bound=c.suspended_input_from_jax(unsupported,0,self.meta,certificate=certificate,module=self.engine)
         self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
         value=c.native_successors(bound,1,[0,1])
         self.assertIsInstance(value,self.f.Refused,value)
-        self.assertIn("UNSUPPORTED_SIDE_CONTEXT",repr(value.gaps))
+        self.assertIn("UNSUPPORTED_FIELD_CONTEXT",repr(value.gaps))
         # The general mapper still refuses, and no capsule can be rebound to
         # another JAX root by retaining its old correspondence certificate.
         bound=c.suspended_input_from_jax(paused,0,self.meta,certificate=certificate,module=self.engine)
@@ -346,6 +362,150 @@ class ConditionedResumeTests(unittest.TestCase):
         self.assertEqual(refused.gaps[0].code,"UNSUPPORTED_POSITIVE_SUCCESSOR")
         self.assertEqual(dict(refused.raw_actions),dict(replacement_index=1,entry_ties=(0,1)))
         self.assertIn("offending_successor",refused.gaps[0].detail)
+
+    def test_spikes_chain_cancels_move_keeps_chance_and_residual_waits(self):
+        from gpu_engine import conditioned_future as c
+        for replacing in (0,1):
+            for layers in (1,2,3):
+                for move in ("thunderbolt","bodyslam","splash"):
+                    for poisoned in (False,True):
+                        with self.subTest(replacing=replacing,layers=layers,move=move,poisoned=poisoned):
+                            paused,native,certificate,capsule,chance=self.fixture(replacing,9,
+                                queued_move=move,static_at=1,contact_roll=0,
+                                hazard_layers=layers,hazard_chain=True,chain_poison=poisoned)
+                            bound=c.suspended_input_from_jax(paused,0,self.meta,certificate=certificate,module=self.engine)
+                            self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+                            for count,target in enumerate((1,2,3),1):
+                                actions=self.j.array([[target+3,3] if replacing==0 else [3,target+3]])
+                                result=self.step(paused,actions,self.table,chance).state
+                                branches=c.native_successors(bound,target,[0,1])
+                                self.assertIsInstance(branches,tuple,branches)
+                                self.assertEqual(len(branches),1)
+                                self.assertEqual(branches[0][0],1)
+                                actual=c.canonical_resumed_jax(result,0,self.meta,native_input=bound)
+                                self.assertIsInstance(actual,self.f.CanonicalFuture,actual)
+                                self.assertEqual(self.f.field_differences(actual,branches[0][1]),())
+                                self.assertEqual(int(result.pp[0,1-replacing,0,0]),9 if move=="splash" else 10)
+                                self.assertEqual(int(result.queued_actor[0]),-1)
+                                self.assertEqual(int(result.hp[0,1-replacing,0]),1000 if count<3 else 875)
+                                self.assertEqual(result.keys.tolist(),paused.keys.tolist())
+                                self.assertEqual(int(result.turn[0]),int(paused.turn[0]))
+                                self.assertEqual(bool(result.pending_residual[0]),count<3)
+                                if count<3:
+                                    self.assertEqual(int(result.replacement_count[0]),count)
+                                    for field in ("residual_draws","phazing_draws","secondary_draws","sleep_talk_draws"):
+                                        self.assertEqual(getattr(result,field).tolist(),getattr(paused,field).tolist())
+                                    # The actual native successor is retained and sealed;
+                                    # constructing a neutralized pending clone is forbidden.
+                                    bound=c.suspended_input_from_jax(result,0,self.meta,certificate=certificate,
+                                        module=self.engine,native_successor=branches[0][1])
+                                    self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+                                    self.assertEqual(bound.raw_native,branches[0][1].raw_native)
+                                paused=result
+
+    def test_spikes_survival_immunity_and_terminal_exhaustion_controls(self):
+        from gpu_engine import conditioned_future as c
+        for replacing in (0,1):
+            for layers in (1,2,3):
+                for control in ("one_hp","flying","terminal"):
+                    with self.subTest(replacing=replacing,layers=layers,control=control):
+                        paused,native,certificate,_,chance=self.fixture(replacing,9,
+                            queued_move="bodyslam" if control=="flying" else "thunderbolt",
+                            static_at=1,contact_roll=0,poison=control!="flying",
+                            hazard_layers=layers,recipient_flying=control=="flying",
+                            terminal_chain=control=="terminal")
+                        if control=="one_hp":
+                            # Survive Spikes at precisely one HP; Ground immunity
+                            # keeps the queued Thunderbolt from obscuring it.
+                            paused=paused._replace(hp=paused.hp.at[:,replacing,1].add(1),
+                                types=paused.types.at[:,replacing,1,0].set(5))
+                            # This authored root's retained original base type
+                            # is normal; current Ground typing is represented
+                            # separately by both constructors, without erasure.
+                        bound=c.suspended_input_from_jax(paused,0,self.meta,certificate=certificate,module=self.engine)
+                        self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+                        for target in ((1,0) if control=="terminal" else (1,)):
+                            bench=[p for p in range(6) if p!=int(paused.active[0,replacing])]
+                            action=4+bench.index(target)
+                            actions=self.j.array([[action,3] if replacing==0 else [3,action]])
+                            result=self.step(paused,actions,self.table,chance).state
+                            branches=c.native_successors(bound,target,[1,0])
+                            self.assertIsInstance(branches,tuple,branches)
+                            self.assertEqual(len(branches),1)
+                            actual=c.canonical_resumed_jax(result,0,self.meta,native_input=bound)
+                            self.assertIsInstance(actual,self.f.CanonicalFuture,actual)
+                            self.assertEqual(self.f.field_differences(actual,branches[0][1]),())
+                            if control=="terminal":
+                                self.assertEqual(int(result.pp[0,1-replacing,0,0]),10)
+                                self.assertEqual(int(result.hp[0,1-replacing,0]),1000)
+                                self.assertEqual(bool(result.pending_residual[0]),target==1)
+                                if target==1:
+                                    bound=c.suspended_input_from_jax(result,0,self.meta,certificate=certificate,
+                                        module=self.engine,native_successor=branches[0][1])
+                                    self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+                                else:
+                                    self.assertTrue(bool(result.done[0]))
+                                    self.assertEqual(int(result.winner[0]),1-replacing)
+                            else:
+                                self.assertFalse(bool(result.pending_residual[0]))
+                                self.assertEqual(int(result.pp[0,1-replacing,0,0]),9)
+                                if control=="one_hp":self.assertEqual(int(result.hp[0,replacing,1]),63)
+                                else:
+                                    self.assertEqual(int(result.status[0,replacing,1]),1)
+                                    self.assertEqual(int(result.status[0,1-replacing,0]),1)
+                            paused=result
+
+    def test_queued_attack_ko_spends_pp_once_then_residual_replacement(self):
+        from dataclasses import replace
+        from gpu_engine import conditioned_future as c
+        for replacing in (0,1):
+            for layers in (0,1):
+                with self.subTest(replacing=replacing,layers=layers):
+                    paused,_,certificate,_,chance=self.fixture(replacing,99,hazard_layers=layers)
+                    paused=paused._replace(hp=paused.hp.at[:,replacing,1].set(1+(125 if layers else 0)))
+                    bound=c.suspended_input_from_jax(paused,0,self.meta,certificate=certificate,module=self.engine)
+                    self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+                    for target in (1,2):
+                        actions=self.j.array([[target+3,3] if replacing==0 else [3,target+3]])
+                        result=self.step(paused,actions,self.table,chance).state
+                        branches=c.native_successors(bound,target,[0,1])
+                        self.assertIsInstance(branches,tuple,branches)
+                        actual=c.canonical_resumed_jax(result,0,self.meta,native_input=bound)
+                        self.assertEqual(self.f.field_differences(actual,branches[0][1]),())
+                        self.assertEqual(int(result.pp[0,1-replacing,0,0]),9)
+                        self.assertEqual(int(result.hp[0,1-replacing,0]),1000 if target==1 else 875)
+                        self.assertEqual(bool(result.pending_residual[0]),target==1)
+                        if target==1:
+                            self.assertEqual(int(result.replacement_count[0]),1)
+                            self.assertEqual(int(result.queued_actor[0]),-1)
+                            # A native carry mismatch cannot be overwritten by JAX
+                            # while binding an otherwise identical physical wire.
+                            bad=replace(branches[0][1],capsule=tuple((k,(123,456) if k=="keys" else v)
+                                for k,v in branches[0][1].capsule))
+                            self.assertIsInstance(c.suspended_input_from_jax(result,0,self.meta,
+                                certificate=certificate,module=self.engine,native_successor=bad),self.f.Refused)
+                            bound=c.suspended_input_from_jax(result,0,self.meta,certificate=certificate,
+                                module=self.engine,native_successor=branches[0][1])
+                            self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+                            self.assertEqual(bound.capsule,branches[0][1].capsule)
+                        paused=result
+
+    def test_post_residual_faint_is_a_request_without_deferred_carry(self):
+        from gpu_engine import conditioned_future as c
+        for replacing in (0,1):
+            paused,_,certificate,_,chance=self.fixture(replacing,99,"post_residual_poison")
+            bound=c.suspended_input_from_jax(paused,0,self.meta,certificate=certificate,module=self.engine)
+            branches=c.native_successors(bound,1,[0,1])
+            self.assertIsInstance(branches,tuple,branches)
+            result=self.step(paused,self.j.array([[4,3] if replacing==0 else [3,4]]),self.table,chance).state
+            actual=c.canonical_resumed_jax(result,0,self.meta,native_input=bound)
+            self.assertEqual(self.f.field_differences(actual,branches[0][1]),())
+            self.assertFalse(bool(result.pending_residual[0]))
+            self.assertTrue(bool(result.forced_switch[0,1-replacing]))
+            self.assertFalse(bool(result.done[0]))
+            self.assertFalse(any(dict(branches[0][1].capsule)["residual_draws"][0]))
+            self.assertIsInstance(c.suspended_input_from_jax(result,0,self.meta,certificate=certificate,
+                module=self.engine,native_successor=branches[0][1]),self.f.Refused)
 
 
 if __name__ == "__main__":
