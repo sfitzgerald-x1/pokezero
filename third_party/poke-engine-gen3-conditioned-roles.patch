@@ -1,0 +1,315 @@
+diff --git a/src/gen3/conditioned_resume.rs b/src/gen3/conditioned_resume.rs
+--- a/src/gen3/conditioned_resume.rs
++++ b/src/gen3/conditioned_resume.rs
+@@ -177,11 +177,24 @@
+         {
+             return Err("UNSUPPORTED_SIDE_CONTEXT");
+         }
+-        for p in side.pokemon.into_iter() {
+-            if !matches!(p.ability, Abilities::NONE | Abilities::STATIC)
+-                || !matches!(p.base_ability, Abilities::NONE | Abilities::STATIC)
+-                || !matches!(p.item, Items::NONE | Items::LEFTOVERS)
+-                || !matches!(p.status, PokemonStatus::NONE | PokemonStatus::POISON)
++        for (party_index, p) in side.pokemon.into_iter().enumerate() {
++            // Only the entrant and the other side's current active can reach
++            // entry/attack/residual consumers. Untouched bench fields are
++            // retained verbatim. The outgoing carrier already spent its move;
++            // departure handles Natural Cure and base restoration explicitly.
++            let reached = if side_id == replacing {
++                party_index == replacement as usize
++            } else {
++                party_index == side.active_index as usize
++            };
++            if reached
++                && (!matches!(p.ability, Abilities::NONE | Abilities::STATIC)
++                    || !matches!(p.base_ability, Abilities::NONE | Abilities::STATIC)
++                    || !matches!(p.item, Items::NONE | Items::LEFTOVERS))
++            {
++                return Err("UNSUPPORTED_PARTY_CONTEXT");
++            }
++            if !matches!(p.status, PokemonStatus::NONE | PokemonStatus::POISON)
+                 || p.pre_transform.is_some()
+                 || p.rest_sleep_pending_refund != 0
+                 || p.rest_turns != 0
+@@ -348,6 +361,9 @@
+ mod tests {
+     use super::*;
+     fn fixture(replacing: usize) -> (State, ResumeCapsule) {
++        fixture_with_move(replacing, Choices::THUNDERBOLT)
++    }
++    fn fixture_with_move(replacing: usize, queued_move: Choices) -> (State, ResumeCapsule) {
+         let mut state = State::default();
+         let (pivot, queued) = if replacing == 0 {
+             (&mut state.side_one, &mut state.side_two)
+@@ -366,7 +382,7 @@
+         queued.get_active().status = PokemonStatus::POISON;
+         queued
+             .get_active()
+-            .replace_move(PokemonMoveIndex::M0, Choices::THUNDERBOLT);
++            .replace_move(PokemonMoveIndex::M0, queued_move);
+         queued.get_active().moves[&PokemonMoveIndex::M0].pp = 10;
+         let (a, b) = (
+             MoveChoice::Move(PokemonMoveIndex::M0),
+@@ -406,6 +422,262 @@
+         capsule.baton_pass[replacing] = true;
+         capsule.residual_draws[1 - replacing][4] = 15; // noncritical
+         (state, capsule)
++    }
++    #[test]
++    fn untouched_bench_context_is_retained_without_changing_the_law() {
++        for replacing in 0..2 {
++            let (plain, capsule) = fixture(replacing);
++            let reference = resume(&plain, &capsule, PokemonIndex::P1, [0, 1]).unwrap();
++            let mut state = plain.clone();
++            for side in [&SideReference::SideOne, &SideReference::SideTwo] {
++                let bench = &mut state.get_side(side).pokemon[PokemonIndex::P2];
++                bench.ability = Abilities::EFFECTSPORE;
++                bench.base_ability = Abilities::TRACE;
++                bench.item = Items::CHOICEBAND;
++                bench.status = PokemonStatus::POISON;
++            }
++            let before = state.serialize();
++            let out = resume(&state, &capsule, PokemonIndex::P1, [0, 1]).unwrap();
++            assert_eq!(out.len(), reference.len());
++            for (actual, expected) in out.iter().zip(reference.iter()) {
++                assert_eq!(actual.percentage, expected.percentage);
++                assert_eq!(actual.capsule, expected.capsule);
++                for side in [&SideReference::SideOne, &SideReference::SideTwo] {
++                    assert_eq!(
++                        actual
++                            .state
++                            .get_side_immutable(side)
++                            .get_active_immutable()
++                            .serialize(),
++                        expected
++                            .state
++                            .get_side_immutable(side)
++                            .get_active_immutable()
++                            .serialize()
++                    );
++                    assert_eq!(
++                        actual.state.get_side_immutable(side).pokemon[PokemonIndex::P2].serialize(),
++                        state.get_side_immutable(side).pokemon[PokemonIndex::P2].serialize()
++                    );
++                }
++            }
++            assert_eq!(state.serialize(), before);
++        }
++    }
++    #[test]
++    fn actual_carrier_abilities_and_items_are_not_reached_attack_consumers() {
++        let abilities = [
++            Abilities::SWARM,
++            Abilities::INSOMNIA,
++            Abilities::SYNCHRONIZE,
++            Abilities::INNERFOCUS,
++            Abilities::SPEEDBOOST,
++            Abilities::WONDERGUARD,
++            Abilities::VOLTABSORB,
++            Abilities::CUTECHARM,
++            Abilities::PRESSURE,
++            Abilities::RUNAWAY,
++            Abilities::PICKUP,
++            Abilities::SOUNDPROOF,
++            Abilities::SHIELDDUST,
++            Abilities::INTIMIDATE,
++            Abilities::LEVITATE,
++            Abilities::NATURALCURE,
++            Abilities::PLUS,
++            Abilities::EARLYBIRD,
++            Abilities::MINUS,
++        ];
++        for (replacing, queued_move) in [
++            (0, Choices::THUNDERBOLT),
++            (1, Choices::THUNDERBOLT),
++            (0, Choices::BODYSLAM),
++            (1, Choices::BODYSLAM),
++        ] {
++            let (plain, capsule) = fixture_with_move(replacing, queued_move);
++            let pivot = if replacing == 0 {
++                SideReference::SideOne
++            } else {
++                SideReference::SideTwo
++            };
++            let reference = resume(&plain, &capsule, PokemonIndex::P1, [0, 1]).unwrap();
++            for ability in abilities {
++                for item in [Items::LEFTOVERS, Items::LUMBERRY, Items::CHOICEBAND] {
++                    let mut state = plain.clone();
++                    let carrier = state.get_side(&pivot).get_active();
++                    carrier.ability = ability;
++                    carrier.base_ability = ability;
++                    carrier.item = item;
++                    let before = state.serialize();
++                    let out = resume(&state, &capsule, PokemonIndex::P1, [0, 1]).unwrap();
++                    assert_eq!(out.len(), reference.len());
++                    for (actual, expected) in out.iter().zip(reference.iter()) {
++                        assert_eq!(actual.percentage, expected.percentage);
++                        assert_eq!(actual.capsule, expected.capsule);
++                        assert_eq!(
++                            actual
++                                .state
++                                .get_side_immutable(&pivot)
++                                .get_active_immutable()
++                                .serialize(),
++                            expected
++                                .state
++                                .get_side_immutable(&pivot)
++                                .get_active_immutable()
++                                .serialize()
++                        );
++                        let retired =
++                            &actual.state.get_side_immutable(&pivot).pokemon[PokemonIndex::P0];
++                        assert_eq!(retired.ability, ability);
++                        assert_eq!(retired.base_ability, ability);
++                        assert_eq!(retired.item, item);
++                        let mut complete_reference = expected.state.clone();
++                        let original =
++                            &mut complete_reference.get_side(&pivot).pokemon[PokemonIndex::P0];
++                        original.ability = ability;
++                        original.base_ability = ability;
++                        original.item = item;
++                        assert_eq!(actual.state.serialize(), complete_reference.serialize());
++                    }
++                    assert_eq!(state.serialize(), before);
++                }
++            }
++        }
++    }
++    #[test]
++    fn nonzero_outgoing_and_replacement_indices_reclassify_each_hazard_request() {
++        for replacing in 0..2 {
++            let (mut state, capsule) = fixture(replacing);
++            let pivot = if replacing == 0 {
++                SideReference::SideOne
++            } else {
++                SideReference::SideTwo
++            };
++            let side = state.get_side(&pivot);
++            let carrier = side.pokemon[PokemonIndex::P0].clone();
++            side.pokemon[PokemonIndex::P0] = side.pokemon[PokemonIndex::P3].clone();
++            side.pokemon[PokemonIndex::P3] = carrier;
++            side.active_index = PokemonIndex::P3;
++            side.pokemon[PokemonIndex::P3].ability = Abilities::SWARM;
++            side.pokemon[PokemonIndex::P3].base_ability = Abilities::SWARM;
++            side.pokemon[PokemonIndex::P0].ability = Abilities::HUSTLE;
++            side.pokemon[PokemonIndex::P0].base_ability = Abilities::HUSTLE;
++            side.pokemon[PokemonIndex::P0].item = Items::CHOICEBAND;
++            side.pokemon[PokemonIndex::P4] = side.pokemon[PokemonIndex::P1].clone();
++            side.pokemon[PokemonIndex::P4].hp = 1;
++            side.pokemon[PokemonIndex::P2].speed = 200;
++            side.side_conditions.spikes = 1;
++            let before = state.serialize();
++            let first = resume(&state, &capsule, PokemonIndex::P4, [0, 1])
++                .unwrap()
++                .remove(0);
++            assert_eq!(state.serialize(), before);
++            assert_eq!(
++                first.state.get_side_immutable(&pivot).active_index,
++                PokemonIndex::P4
++            );
++            assert!(first.capsule.pending_residual);
++            assert_eq!(first.capsule.replacement_count, 1);
++            assert_eq!(first.capsule.queued_actor, -1);
++            let next_before = first.state.serialize();
++            let next = resume(&first.state, &first.capsule, PokemonIndex::P2, [1, 0])
++                .unwrap()
++                .remove(0);
++            assert_eq!(first.state.serialize(), next_before);
++            assert_eq!(
++                next.state.get_side_immutable(&pivot).active_index,
++                PokemonIndex::P2
++            );
++            assert!(!next.capsule.pending_residual);
++            assert_eq!(next.capsule.keys, capsule.keys);
++            let retained = &next.state.get_side_immutable(&pivot).pokemon[PokemonIndex::P0];
++            assert_eq!(retained.ability, Abilities::HUSTLE);
++            assert_eq!(retained.item, Items::CHOICEBAND);
++            assert_eq!(
++                next.state.get_side_immutable(&pivot).pokemon[PokemonIndex::P3].ability,
++                Abilities::SWARM
++            );
++        }
++    }
++    #[test]
++    fn reached_entry_and_attack_abilities_still_refuse_before_generation() {
++        for replacing in 0..2 {
++            let (plain, capsule) = fixture(replacing);
++            let pivot = if replacing == 0 {
++                SideReference::SideOne
++            } else {
++                SideReference::SideTwo
++            };
++            let waiter = if replacing == 0 {
++                SideReference::SideTwo
++            } else {
++                SideReference::SideOne
++            };
++            for entrant in [false, true] {
++                for ability in [
++                    Abilities::HUSTLE,
++                    Abilities::SERENEGRACE,
++                    Abilities::EFFECTSPORE,
++                ] {
++                    let mut state = plain.clone();
++                    let target = if entrant {
++                        &mut state.get_side(&pivot).pokemon[PokemonIndex::P1]
++                    } else {
++                        state.get_side(&waiter).get_active()
++                    };
++                    target.ability = ability;
++                    target.base_ability = ability;
++                    let before = state.serialize();
++                    assert_eq!(
++                        resume(&state, &capsule, PokemonIndex::P1, [0, 1]).unwrap_err(),
++                        "UNSUPPORTED_PARTY_CONTEXT"
++                    );
++                    assert_eq!(state.serialize(), before);
++                }
++            }
++        }
++    }
++    #[test]
++    fn outgoing_natural_cure_and_base_restoration_are_explicit_departure_effects() {
++        for replacing in 0..2 {
++            let (plain, capsule) = fixture(replacing);
++            let pivot = if replacing == 0 {
++                SideReference::SideOne
++            } else {
++                SideReference::SideTwo
++            };
++            for (current, base, status, expected_status) in [
++                (
++                    Abilities::NATURALCURE,
++                    Abilities::NATURALCURE,
++                    PokemonStatus::POISON,
++                    PokemonStatus::NONE,
++                ),
++                (
++                    Abilities::STATIC,
++                    Abilities::TRACE,
++                    PokemonStatus::POISON,
++                    PokemonStatus::POISON,
++                ),
++            ] {
++                let mut state = plain.clone();
++                let carrier = state.get_side(&pivot).get_active();
++                carrier.ability = current;
++                carrier.base_ability = base;
++                carrier.status = status;
++                carrier.item = Items::CHOICEBAND;
++                let before = state.serialize();
++                let out = resume(&state, &capsule, PokemonIndex::P1, [0, 1]).unwrap();
++                for branch in out {
++                    let retired =
++                        &branch.state.get_side_immutable(&pivot).pokemon[PokemonIndex::P0];
++                    assert_eq!(retired.ability, base);
++                    assert_eq!(retired.base_ability, base);
++                    assert_eq!(retired.status, expected_status);
++                    assert_eq!(retired.item, Items::CHOICEBAND);
++                }
++                assert_eq!(state.serialize(), before);
++            }
++        }
+     }
+     #[test]
+     fn saved_secondary_changes_full_resume_and_preserves_parent() {

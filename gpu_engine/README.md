@@ -610,7 +610,14 @@ This opt-in implements collection plumbing; it supplies no launch admission or
 historical coverage credit. A new reviewed frozen entry and the standing saved-
 root cost check are still required before any future scientific attempt. Trace
 entry execution, Sleep Talk and broader suspension contexts remain unfinished.
-The current native continuation validator still restricts every party member's
-ability to None/Static; the preserved real-team pool has no teams in that domain.
-Native context support must expand before this path can compare real-pool live
-suspensions. The collector integration itself supplies no such mechanic credit.
+The native continuation validator now applies its existing None/Static ability
+and None/Leftovers item whitelist to the entrant and remaining active. Untouched
+bench fields and outgoing-carrier abilities/items are retained; departure runs
+Natural Cure and base-ability restoration explicitly. General status, side,
+weather and saved-chance guards remain. The old all-party rule excluded every
+team in the preserved pool; role separation removes that blanket restriction
+without claiming measured real-pool acceptance or broader consumer support.
+Authored full-law checks preserve complete party/carry state. Original Trace
+departure exposes the exact JAX copied-ability restoration difference as DIVERGE;
+Stick remains a named construction refusal. These are implementation controls,
+not historical coverage or fresh scientific credit.

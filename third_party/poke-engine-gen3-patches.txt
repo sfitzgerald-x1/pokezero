@@ -1798,3 +1798,4 @@ poke-engine-gen3-sleeptalk-called-marker.patch
 poke-engine-gen3-conditioned-resume.patch
 poke-engine-gen3-conditioned-contact.patch
 poke-engine-gen3-conditioned-hazards.patch
+poke-engine-gen3-conditioned-roles.patch
