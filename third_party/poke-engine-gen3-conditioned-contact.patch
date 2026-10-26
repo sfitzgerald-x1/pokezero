@@ -1,0 +1,167 @@
+--- a/src/gen3/conditioned_resume.rs
++++ b/src/gen3/conditioned_resume.rs
+@@ -1,15 +1,16 @@
+ //! Opt-in conditional continuation, not unconditional chance enumeration.
+ //!
+ //! The capsule carries the entire suspended JAX chance/queue context. This
+-//! first domain admits clean direct Baton Pass followed by Thunderbolt only;
++//! domain admits direct Baton Pass with queued Thunderbolt/Body Slam or an
++//! already empty action queue;
+ //! unsupported consumers return a reason before native generation. In
+-//! particular contact, Sleep Talk, hazards and tied residual ordering are not
++//! particular Sleep Talk, hazards and tied residual ordering are not
+ //! silently integrated out. Ordinary search never constructs this context.
+ use super::abilities::Abilities;
+ use super::generate_instructions::generate_instructions_from_move_pair;
+ use super::items::Items;
+ use super::state::{MoveChoice, Weather};
+-use crate::choices::{Choices, MOVES};
++use crate::choices::{Choices, Effect, MoveTarget, Secondary, MOVES};
+ use crate::instruction::{Instruction, SetSecondMoveSwitchOutMoveInstruction, StateInstructions};
+ use crate::state::{
+     PokemonIndex, PokemonMoveIndex, PokemonStatus, SideConditions, SideReference, State,
+@@ -47,8 +48,22 @@
+             self.capsule.residual_draws[s][5],
+         )
+     }
+-    pub(crate) fn secondary_hits(&self, side: &SideReference, chance: f32) -> bool {
+-        (self.capsule.secondary_draws[seat(side)] as f32) < chance
++    pub(crate) fn secondary_hits(&self, side: &SideReference, secondary: &Secondary) -> bool {
++        // The validated move/ability domain has exactly these two event
++        // shapes. Never reuse the target-secondary roll for contact Static.
++        match (&secondary.target, &secondary.effect) {
++            (MoveTarget::User, Effect::Status(PokemonStatus::PARALYZE))
++                if secondary.chance == 100.0 / 3.0 =>
++            {
++                self.capsule.phazing_draws[seat(side)] < 20
++            }
++            (MoveTarget::Opponent, Effect::Status(PokemonStatus::PARALYZE))
++                if secondary.chance == 10.0 || secondary.chance == 30.0 =>
++            {
++                (self.capsule.secondary_draws[seat(side)] as f32) < secondary.chance
++            }
++            _ => panic!("CONDITIONED_UNSUPPORTED_SECONDARY_SHAPE"),
++        }
+     }
+ }
+ fn seat(side: &SideReference) -> usize {
+@@ -114,7 +129,7 @@
+         _ => return Err("UNSUPPORTED_SUSPENSION_CAUSE"),
+     };
+     if capsule.forced_switch != capsule.baton_pass
+-        || capsule.queued_actor != (1 - replacing) as i8
++        || ![-1, (1 - replacing) as i8].contains(&capsule.queued_actor)
+         || capsule.replacement_count != 0
+     {
+         return Err("UNSUPPORTED_SUSPENSION_QUEUE");
+@@ -149,8 +164,8 @@
+             return Err("UNSUPPORTED_SIDE_CONTEXT");
+         }
+         for p in side.pokemon.into_iter() {
+-            if p.ability != Abilities::NONE
+-                || p.base_ability != Abilities::NONE
++            if !matches!(p.ability, Abilities::NONE | Abilities::STATIC)
++                || !matches!(p.base_ability, Abilities::NONE | Abilities::STATIC)
+                 || !matches!(p.item, Items::NONE | Items::LEFTOVERS)
+                 || !matches!(p.status, PokemonStatus::NONE | PokemonStatus::POISON)
+                 || p.pre_transform.is_some()
+@@ -167,23 +182,35 @@
+         }
+     }
+     let queued = sides[1 - replacing];
+-    let index = move_index(capsule.queued_actions[1 - replacing])?;
+-    let mv = &queued.get_active_immutable().moves[&index];
+-    if queued.switch_out_move_second_saved_move != Choices::THUNDERBOLT
+-        || sides[replacing].switch_out_move_second_saved_move != Choices::NONE
+-        || mv.id != Choices::THUNDERBOLT
+-        || mv.disabled
+-        || mv.pp <= 0
+-        || format!("{:?}", mv.choice) != format!("{:?}", MOVES.get(&Choices::THUNDERBOLT).unwrap())
+-    {
+-        return Err("UNSUPPORTED_QUEUED_MOVE");
++    if capsule.queued_actor == -1 {
++        if capsule.queued_actions != [0, 0]
++            || queued.switch_out_move_second_saved_move != Choices::NONE
++            || sides[replacing].switch_out_move_second_saved_move != Choices::NONE
++        {
++            return Err("UNSUPPORTED_EMPTY_QUEUE_CONTEXT");
++        }
++    } else {
++        let index = move_index(capsule.queued_actions[1 - replacing])?;
++        let mv = &queued.get_active_immutable().moves[&index];
++        if queued.switch_out_move_second_saved_move != mv.id
++            || sides[replacing].switch_out_move_second_saved_move != Choices::NONE
++            || !matches!(mv.id, Choices::THUNDERBOLT | Choices::BODYSLAM)
++            || mv.disabled
++            || mv.pp <= 0
++            || format!("{:?}", mv.choice) != format!("{:?}", MOVES.get(&mv.id).unwrap())
++        {
++            return Err("UNSUPPORTED_QUEUED_MOVE");
++        }
+     }
+     // The admitted domain has no tie-dependent ability/item interactions.
+     // Refuse a tie anyway, so future consumers cannot inherit a false proof
+     // that fresh entry_ties and saved residual ordering are interchangeable.
+     let entrant = &sides[replacing].pokemon[replacement];
+     let opponent = queued.get_active_immutable();
+-    if entrant.speed == opponent.speed || entrant.speed / 4 == opponent.speed {
++    if [entrant.speed, entrant.speed / 4]
++        .iter()
++        .any(|a| [opponent.speed, opponent.speed / 4].iter().any(|b| a == b))
++    {
+         return Err("UNSUPPORTED_RESIDUAL_SPEED_TIE");
+     }
+     Ok(replacing)
+@@ -205,7 +232,10 @@
+     }));
+     let mut actions = [MoveChoice::None; 2];
+     actions[replacing] = MoveChoice::Switch(replacement);
+-    actions[1 - replacing] = MoveChoice::Move(move_index(capsule.queued_actions[1 - replacing])?);
++    if capsule.queued_actor >= 0 {
++        actions[1 - replacing] =
++            MoveChoice::Move(move_index(capsule.queued_actions[1 - replacing])?);
++    }
+     let before = native.serialize();
+     let branches =
+         generate_instructions_from_move_pair(&mut native, &actions[0], &actions[1], true);
+@@ -416,6 +446,29 @@
+         assert!(hp(&capsule) < low);
+     }
+     #[test]
++    fn contact_paralysis_cannot_introduce_an_unconditioned_residual_tie() {
++        let (mut state, capsule) = fixture(0);
++        state.side_two.get_active().speed = 800;
++        // Entrant speed200 ties the queued actor only after contact paralysis.
++        assert_eq!(
++            resume(&state, &capsule, PokemonIndex::P1, [0, 1]).unwrap_err(),
++            "UNSUPPORTED_RESIDUAL_SPEED_TIE"
++        );
++    }
++    #[test]
++    #[should_panic(expected = "CONDITIONED_UNSUPPORTED_SECONDARY_SHAPE")]
++    fn an_unknown_secondary_shape_cannot_be_silently_conditioned() {
++        let (_, capsule) = fixture(0);
++        ValidatedResume { capsule }.secondary_hits(
++            &SideReference::SideTwo,
++            &Secondary {
++                chance: 50.0,
++                target: MoveTarget::User,
++                effect: Effect::Status(PokemonStatus::BURN),
++            },
++        );
++    }
++    #[test]
+     fn unsupported_context_refuses_before_generation() {
+         let (state, capsule) = fixture(0);
+         let mut bad = capsule.clone();
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1296,7 +1296,7 @@
+         let secondary_percent_hit = (secondary.chance / 100.0).min(1.0);
+         #[cfg(feature = "conditioned-oracle")]
+         let secondary_percent_hit = match &state.oracle_resume {
+-            Some(context) => if context.secondary_hits(side_reference, secondary.chance) { 1.0 } else { 0.0 },
++            Some(context) => if context.secondary_hits(side_reference, secondary) { 1.0 } else { 0.0 },
+             None => secondary_percent_hit,
+         };
+ 

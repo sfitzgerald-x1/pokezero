@@ -32,7 +32,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # unchanged and remains a drift control. The full target-tree digest below also
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "829cf79c9464b4fe2e70efb70545606d78c7f3bb695be3bec2b7260be8afcae7",
+    "src/gen3/generate_instructions.rs": "4e48208d8e528f3bef6080c2aaa28b2fcc1eeb9764dbf8a2de5fcc3beda1b274",
     "src/instruction.rs": "c9c7f69819dc77171a54918e32cfb064329144f6d3b8991c2068adcbeceb0a57",
     "src/state.rs": "d3a381f4854ad4755844bcbc32f456ae4e26557d78a313eec1532c0a507023eb",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
@@ -116,7 +116,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-29:]],
+                [entry.name for entry in applied[-30:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -157,6 +157,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-speed-boost-entry.patch",
                     "poke-engine-gen3-sleeptalk-called-marker.patch",
                     "poke-engine-gen3-conditioned-resume.patch",
+                    "poke-engine-gen3-conditioned-contact.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
