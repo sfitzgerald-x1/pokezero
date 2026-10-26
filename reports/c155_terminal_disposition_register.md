@@ -127,14 +127,14 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`6eaf2113d3d4c7e0…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`9986a78d55b50578…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
-the fingerprint's inputs — the 85 gen3 patches, `poke-engine-gen3-patches.txt`,
-`poke-engine-base-source.json`, the 21 crate sources, and the `Cargo.toml` / `Cargo.lock` /
+the fingerprint's inputs — the 86 gen3 patches, `poke-engine-gen3-patches.txt`,
+`poke-engine-base-source.json`, the 22 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
 first write** — it carried `+403 −74`, which was neither this file's numstat nor any other
@@ -363,6 +363,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Native one-ply sessions and lazy capture | Adds the bounded exact-session module and an explicit model timing barrier: 85 patches, 21 crate sources and 112 hashed inputs. Root/branch capture, rendered-line observation law, exact chance and scientific gates remain explicit; historical sweeps and installed-build receipts retain their original identities | `68e6483cfeacad45…` |
 | Native one-ply enumeration phase timings | Adds bounded last-cell generation, post-generation processing and native-body timings on success and failure. The 85 patches, 21 crate sources and 112 hashed inputs are unchanged in membership. This is diagnostic instrumentation, not a speedup, new sweep, changed outcome law or qualification; historical receipts and OPEN gates remain unchanged | `98e9ff8fd7844584…` |
 | Default-off search-label root statistics | `lib.rs` and `model.rs` add optional exact root visit/value totals after search. Both-seat authored model-wheel checks preserve visits, values and selected actions with the flag omitted, off and on. The 85 patches, 21 crate sources and 112 hashed inputs retain the same membership. This is current-source identity and isolated model-wheel verification, not a new frozen two-consumer sweep or strength qualification; historical receipts and OPEN gates remain unchanged | `6eaf2113d3d4c7e0…` |
+| Opt-in conditional suspension oracle | Adds a feature-gated continuation capsule and native saved-chance hooks for the authored Baton Pass/Thunderbolt domain, with terminal-poison carry and minimum-one damage regressions. Inventory grows to 86 patches, 22 crate sources and 114 hashed inputs. The default binding omits the API; general suspension refusals, historical sweeps, stopped rosters, installed-build receipts and OPEN qualification remain unchanged | `9986a78d55b50578…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -990,7 +991,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 427 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 85 |
+| `base.patch_stack` | 86 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -1010,9 +1011,9 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `scope.section4_rows_corrected_by_c154` | 13 |
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
-| `t1.hashed_crate_sources` | 21 |
-| `t1.hashed_input_files` | 112 |
-| `t1.head_fingerprint` | 6eaf2113d3d4c7e0 |
+| `t1.hashed_crate_sources` | 22 |
+| `t1.hashed_input_files` | 114 |
+| `t1.head_fingerprint` | 9986a78d55b50578 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
