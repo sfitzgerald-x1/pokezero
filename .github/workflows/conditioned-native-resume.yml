@@ -24,7 +24,6 @@ jobs:
     timeout-minutes: 20
     env:
       JAX_PLATFORMS: cpu
-      POKEZERO_ENUMERATE_ROLLS: '1'
       OMP_NUM_THREADS: '2'
       OPENBLAS_NUM_THREADS: '2'
       PYTHONPATH: src:.
@@ -50,6 +49,8 @@ jobs:
           python -m maturin build --manifest-path rust/pokezero-search/Cargo.toml --release --no-default-features --features conditioned-oracle --out /tmp/conditioned-wheels
           python -m pip install /tmp/conditioned-wheels/*.whl
       - name: Compare complete authored successors without skips
+        env:
+          POKEZERO_ENUMERATE_ROLLS: '1'
         run: |
           python - <<'PY'
           import unittest, pokezero_search
