@@ -9,6 +9,8 @@
 //! Search quality is explicitly NOT the goal of this skeleton.
 
 pub mod abort_telemetry;
+#[cfg(feature = "conditioned-oracle")]
+mod conditioned_resume;
 pub mod encoder;
 pub mod envstep;
 pub mod events;
@@ -486,6 +488,7 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ENGINE_FEATURES", "gen3 (residual-order patched)")?;
     // True when the crate was built with `--features model` (tch-rs linked).
     m.add("MODEL_FEATURE_ENABLED", cfg!(feature = "model"))?;
+    m.add("CONDITIONED_ORACLE_ENABLED", cfg!(feature = "conditioned-oracle"))?;
     m.add("TRAINING_ROOT_STATS_VERSION", if cfg!(feature = "model") { 1 } else { 0 })?;
     m.add_function(wrap_pyfunction!(bench_apply_reverse, m)?)?;
     m.add_function(wrap_pyfunction!(puct_search, m)?)?;
@@ -503,6 +506,8 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<leaf::PyLeafEncoder>()?;
     m.add_class::<exact_session::ExactSession>()?;
     m.add_class::<fold::PyFoldState>()?;
+    #[cfg(feature = "conditioned-oracle")]
+    m.add_function(wrap_pyfunction!(conditioned_resume::conditioned_resume, m)?)?;
     #[cfg(feature = "model")]
     m.add_class::<model::NativeLeafModel>()?;
     Ok(())

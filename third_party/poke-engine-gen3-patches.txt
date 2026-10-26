@@ -1795,3 +1795,4 @@ poke-engine-gen3-speed-boost-entry.patch
 # merging them preserves state but loses the called move. A pure instruction
 # marker separates histories without changing aggregate state probabilities.
 poke-engine-gen3-sleeptalk-called-marker.patch
+poke-engine-gen3-conditioned-resume.patch

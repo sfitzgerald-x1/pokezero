@@ -1,0 +1,573 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 8233137..408ca6a 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -31,6 +31,8 @@ rand = "0.9.1"
+ # Full successor-state PP accounting for explicitly built Gen3 oracles only.
+ # Existing search builds retain their historical high-PP abstraction.
+ oracle-full-pp = []
++# Conditional continuation oracle; never enabled by ordinary search builds.
++conditioned-oracle = ["gen3", "oracle-full-pp"]
+ remove_low_chance_instructions = []
+ gen1 = []
+ gen2 = []
+diff --git a/poke-engine-py/Cargo.toml b/poke-engine-py/Cargo.toml
+index d1b21cf..f68d4b5 100644
+--- a/poke-engine-py/Cargo.toml
++++ b/poke-engine-py/Cargo.toml
+@@ -13,4 +13,5 @@ pyo3 = { version = "0.26.0", features = ["extension-module"] }
+ poke-engine = { path = "../" }
+ 
+ [features]
++conditioned-oracle = ["poke-engine/conditioned-oracle"]
+ default = ["poke-engine/gen4"]
+diff --git a/poke-engine-py/src/lib.rs b/poke-engine-py/src/lib.rs
+index 19906f7..7fb46a9 100644
+--- a/poke-engine-py/src/lib.rs
++++ b/poke-engine-py/src/lib.rs
+@@ -81,6 +81,8 @@ impl Into<State> for PyState {
+             },
+             team_preview: self.team_preview,
+             use_last_used_move: false,
++            #[cfg(feature = "conditioned-oracle")]
++            oracle_resume: None,
+             use_damage_dealt: false,
+         };
+         state.set_conditional_mechanics();
+diff --git a/src/gen3/conditioned_resume.rs b/src/gen3/conditioned_resume.rs
+new file mode 100644
+index 0000000..25bf2d3
+--- /dev/null
++++ b/src/gen3/conditioned_resume.rs
+@@ -0,0 +1,446 @@
++//! Opt-in conditional continuation, not unconditional chance enumeration.
++//!
++//! The capsule carries the entire suspended JAX chance/queue context. This
++//! first domain admits clean direct Baton Pass followed by Thunderbolt only;
++//! unsupported consumers return a reason before native generation. In
++//! particular contact, Sleep Talk, hazards and tied residual ordering are not
++//! silently integrated out. Ordinary search never constructs this context.
++use super::abilities::Abilities;
++use super::generate_instructions::generate_instructions_from_move_pair;
++use super::items::Items;
++use super::state::{MoveChoice, Weather};
++use crate::choices::{Choices, MOVES};
++use crate::instruction::{Instruction, SetSecondMoveSwitchOutMoveInstruction, StateInstructions};
++use crate::state::{
++    PokemonIndex, PokemonMoveIndex, PokemonStatus, SideConditions, SideReference, State,
++    VolatileStatusDurations,
++};
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct ResumeCapsule {
++    pub pending_residual: bool,
++    pub forced_switch: [bool; 2],
++    pub baton_pass: [bool; 2],
++    pub queued_actor: i8,
++    pub queued_actions: [u8; 2],
++    pub queued_stall: [u8; 2],
++    pub residual_draws: [[u8; 12]; 2],
++    pub phazing_draws: [u8; 2],
++    pub secondary_draws: [u8; 2],
++    pub sleep_talk_draws: [u8; 2],
++    pub replacement_count: u32,
++    pub turn: u32,
++    pub keys: [u32; 2],
++}
++
++/// Private fields prevent callers from activating conditioning without the
++/// domain proof in `resume`. Stored on a private clone, never on its parent.
++#[derive(Debug, Clone)]
++pub struct ValidatedResume {
++    capsule: ResumeCapsule,
++}
++impl ValidatedResume {
++    pub(crate) fn damage_roll(&self, side: &SideReference) -> (bool, u8) {
++        let s = seat(side);
++        (
++            self.capsule.residual_draws[s][4] == 0,
++            self.capsule.residual_draws[s][5],
++        )
++    }
++    pub(crate) fn secondary_hits(&self, side: &SideReference, chance: f32) -> bool {
++        (self.capsule.secondary_draws[seat(side)] as f32) < chance
++    }
++}
++fn seat(side: &SideReference) -> usize {
++    match side {
++        SideReference::SideOne => 0,
++        SideReference::SideTwo => 1,
++    }
++}
++
++#[derive(Debug)]
++pub struct ResumeBranch {
++    pub percentage: f32,
++    pub instructions: StateInstructions,
++    pub state: State,
++    pub capsule: ResumeCapsule,
++}
++
++fn move_index(n: u8) -> Result<PokemonMoveIndex, &'static str> {
++    match n {
++        0 => Ok(PokemonMoveIndex::M0),
++        1 => Ok(PokemonMoveIndex::M1),
++        2 => Ok(PokemonMoveIndex::M2),
++        3 => Ok(PokemonMoveIndex::M3),
++        _ => Err("INVALID_QUEUED_SLOT"),
++    }
++}
++
++fn validate(
++    state: &State,
++    capsule: &ResumeCapsule,
++    replacement: PokemonIndex,
++    entry_ties: [u8; 2],
++) -> Result<usize, &'static str> {
++    const BOUNDS: [u8; 12] = [2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2];
++    if state.oracle_resume.is_some() {
++        return Err("NESTED_CONDITIONED_RESUME");
++    }
++    if !capsule.pending_residual {
++        return Err("NO_PENDING_RESIDUAL");
++    }
++    if entry_ties.iter().any(|x| *x >= 2)
++        || capsule
++            .residual_draws
++            .iter()
++            .any(|row| row.iter().zip(BOUNDS).any(|(v, b)| *v >= b))
++        || capsule.phazing_draws.iter().any(|x| *x >= 60)
++        || capsule.secondary_draws.iter().any(|x| *x >= 100)
++        || capsule.sleep_talk_draws.iter().any(|x| *x >= 60)
++        || capsule.queued_actions.iter().any(|x| *x > 3)
++        || capsule.queued_stall != [0, 0]
++    {
++        return Err("INVALID_OR_UNSUPPORTED_CHANCE_CAPSULE");
++    }
++    let sides = [&state.side_one, &state.side_two];
++    if capsule.forced_switch != [state.side_one.force_switch, state.side_two.force_switch]
++        || capsule.baton_pass != [state.side_one.baton_passing, state.side_two.baton_passing]
++    {
++        return Err("SUSPENSION_FLAGS_MISMATCH");
++    }
++    let replacing = match capsule.baton_pass {
++        [true, false] => 0,
++        [false, true] => 1,
++        _ => return Err("UNSUPPORTED_SUSPENSION_CAUSE"),
++    };
++    if capsule.forced_switch != capsule.baton_pass
++        || capsule.queued_actor != (1 - replacing) as i8
++        || capsule.replacement_count != 0
++    {
++        return Err("UNSUPPORTED_SUSPENSION_QUEUE");
++    }
++    if replacement == sides[replacing].active_index || sides[replacing].pokemon[replacement].hp <= 0
++    {
++        return Err("INVALID_REPLACEMENT");
++    }
++    if state.weather.weather_type != Weather::NONE || state.trick_room.active || state.team_preview
++    {
++        return Err("UNSUPPORTED_FIELD_CONTEXT");
++    }
++    for side in sides {
++        if side.shed_tailing
++            || side.slow_uturn_move
++            || side.force_trapped
++            || side.wish != (0, 0)
++            || side.future_sight.0 != 0
++            || !side.volatile_statuses.is_empty()
++            || side.substitute_health != 0
++            || side.volatile_status_durations.serialize()
++                != VolatileStatusDurations::default().serialize()
++            || side.side_conditions.serialize() != SideConditions::default().serialize()
++            || side.attack_boost != 0
++            || side.defense_boost != 0
++            || side.special_attack_boost != 0
++            || side.special_defense_boost != 0
++            || side.speed_boost != 0
++            || side.accuracy_boost != 0
++            || side.evasion_boost != 0
++        {
++            return Err("UNSUPPORTED_SIDE_CONTEXT");
++        }
++        for p in side.pokemon.into_iter() {
++            if p.ability != Abilities::NONE
++                || p.base_ability != Abilities::NONE
++                || !matches!(p.item, Items::NONE | Items::LEFTOVERS)
++                || !matches!(p.status, PokemonStatus::NONE | PokemonStatus::POISON)
++                || p.pre_transform.is_some()
++                || p.rest_sleep_pending_refund != 0
++                || p.rest_turns != 0
++                || p.sleep_turns != 0
++                || p.terastallized
++            {
++                return Err("UNSUPPORTED_PARTY_CONTEXT");
++            }
++        }
++        if side.get_active_immutable().hp <= 0 {
++            return Err("UNSUPPORTED_FAINT_SUSPENSION");
++        }
++    }
++    let queued = sides[1 - replacing];
++    let index = move_index(capsule.queued_actions[1 - replacing])?;
++    let mv = &queued.get_active_immutable().moves[&index];
++    if queued.switch_out_move_second_saved_move != Choices::THUNDERBOLT
++        || sides[replacing].switch_out_move_second_saved_move != Choices::NONE
++        || mv.id != Choices::THUNDERBOLT
++        || mv.disabled
++        || mv.pp <= 0
++        || format!("{:?}", mv.choice) != format!("{:?}", MOVES.get(&Choices::THUNDERBOLT).unwrap())
++    {
++        return Err("UNSUPPORTED_QUEUED_MOVE");
++    }
++    // The admitted domain has no tie-dependent ability/item interactions.
++    // Refuse a tie anyway, so future consumers cannot inherit a false proof
++    // that fresh entry_ties and saved residual ordering are interchangeable.
++    let entrant = &sides[replacing].pokemon[replacement];
++    let opponent = queued.get_active_immutable();
++    if entrant.speed == opponent.speed || entrant.speed / 4 == opponent.speed {
++        return Err("UNSUPPORTED_RESIDUAL_SPEED_TIE");
++    }
++    Ok(replacing)
++}
++
++/// Resume with the original selected move slot and saved chance context.
++/// `entry_ties` is a fresh replacement coordinate, not an ordinary-turn redraw.
++/// Parent state/capsule are immutable. No action is selected and no game scored.
++pub fn resume(
++    state: &State,
++    capsule: &ResumeCapsule,
++    replacement: PokemonIndex,
++    entry_ties: [u8; 2],
++) -> Result<Vec<ResumeBranch>, &'static str> {
++    let replacing = validate(state, capsule, replacement, entry_ties)?;
++    let mut native = state.clone();
++    native.oracle_resume = Some(Box::new(ValidatedResume {
++        capsule: capsule.clone(),
++    }));
++    let mut actions = [MoveChoice::None; 2];
++    actions[replacing] = MoveChoice::Switch(replacement);
++    actions[1 - replacing] = MoveChoice::Move(move_index(capsule.queued_actions[1 - replacing])?);
++    let before = native.serialize();
++    let branches =
++        generate_instructions_from_move_pair(&mut native, &actions[0], &actions[1], true);
++    if native.serialize() != before {
++        return Err("NATIVE_PARENT_MUTATED");
++    }
++    let mut result = Vec::with_capacity(branches.len());
++    let mut mass = 0.0;
++    for mut instructions in branches {
++        if !instructions.percentage.is_finite() || instructions.percentage <= 0.0 {
++            return Err("INVALID_CONDITIONAL_MASS");
++        }
++        mass += instructions.percentage;
++        let mut successor = native.clone();
++        successor.apply_instructions(&instructions.instruction_list);
++        successor.oracle_resume = None;
++        if successor.side_one.force_switch
++            || successor.side_two.force_switch
++            || successor.side_one.baton_passing
++            || successor.side_two.baton_passing
++        {
++            return Err("UNSUPPORTED_SUCCESSOR_SUSPENSION");
++        }
++        // The ordinary generator leaves this commitment as stale storage.
++        // This API owns the completed queue: clear it explicitly and
++        // reversibly, rather than erasing it in the correspondence mapper.
++        for side in [SideReference::SideOne, SideReference::SideTwo] {
++            let old = successor
++                .get_side_immutable(&side)
++                .switch_out_move_second_saved_move;
++            if old != Choices::NONE {
++                let change = SetSecondMoveSwitchOutMoveInstruction {
++                    new_choice: Choices::NONE,
++                    previous_choice: old,
++                };
++                let instruction = match side {
++                    SideReference::SideOne => {
++                        Instruction::SetSideOneMoveSecondSwitchOutMove(change)
++                    }
++                    SideReference::SideTwo => {
++                        Instruction::SetSideTwoMoveSecondSwitchOutMove(change)
++                    }
++                };
++                successor.apply_instructions(&vec![instruction.clone()]);
++                instructions.instruction_list.push(instruction);
++            }
++        }
++        let mut reverse = successor.clone();
++        reverse.reverse_instructions(&instructions.instruction_list);
++        if reverse.serialize() != before {
++            return Err("NATIVE_REVERSE_MISMATCH");
++        }
++        let mut carry = capsule.clone();
++        carry.pending_residual = false;
++        carry.forced_switch = [
++            successor.side_one.get_active_immutable().hp <= 0
++                && successor.side_one.visible_alive_pkmn() > 0,
++            successor.side_two.get_active_immutable().hp <= 0
++                && successor.side_two.visible_alive_pkmn() > 0,
++        ];
++        carry.baton_pass = [false; 2];
++        carry.queued_actor = -1;
++        carry.queued_actions = [0; 2];
++        carry.queued_stall = [0; 2];
++        carry.residual_draws = [[0; 12]; 2];
++        carry.phazing_draws = [0; 2];
++        carry.secondary_draws = [0; 2];
++        carry.sleep_talk_draws = [0; 2];
++        carry.replacement_count = 0;
++        result.push(ResumeBranch {
++            percentage: instructions.percentage,
++            instructions,
++            state: successor,
++            capsule: carry,
++        });
++    }
++    if (mass - 100.0).abs() > 0.0001 {
++        return Err("CONDITIONAL_MASS_NOT_ONE");
++    }
++    Ok(result)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn fixture(replacing: usize) -> (State, ResumeCapsule) {
++        let mut state = State::default();
++        let (pivot, queued) = if replacing == 0 {
++            (&mut state.side_one, &mut state.side_two)
++        } else {
++            (&mut state.side_two, &mut state.side_one)
++        };
++        pivot.get_active().speed = 300;
++        pivot
++            .get_active()
++            .replace_move(PokemonMoveIndex::M0, Choices::BATONPASS);
++        pivot.pokemon[PokemonIndex::P1].hp = 200;
++        pivot.pokemon[PokemonIndex::P1].maxhp = 300;
++        pivot.pokemon[PokemonIndex::P1].speed = 200;
++        pivot.pokemon[PokemonIndex::P1].item = Items::LEFTOVERS;
++        queued.get_active().speed = 101;
++        queued.get_active().status = PokemonStatus::POISON;
++        queued
++            .get_active()
++            .replace_move(PokemonMoveIndex::M0, Choices::THUNDERBOLT);
++        queued.get_active().moves[&PokemonMoveIndex::M0].pp = 10;
++        let (a, b) = (
++            MoveChoice::Move(PokemonMoveIndex::M0),
++            MoveChoice::Move(PokemonMoveIndex::M0),
++        );
++        let split = generate_instructions_from_move_pair(&mut state, &a, &b, true);
++        assert_eq!(split.len(), 1);
++        state.apply_instructions(&split[0].instruction_list);
++        assert_eq!(
++            state
++                .get_side_immutable(&if replacing == 0 {
++                    SideReference::SideTwo
++                } else {
++                    SideReference::SideOne
++                })
++                .get_active_immutable()
++                .hp,
++            100,
++            "poison residual must remain deferred"
++        );
++        let mut capsule = ResumeCapsule {
++            pending_residual: true,
++            forced_switch: [false; 2],
++            baton_pass: [false; 2],
++            queued_actor: (1 - replacing) as i8,
++            queued_actions: [0; 2],
++            queued_stall: [0; 2],
++            residual_draws: [[0; 12]; 2],
++            phazing_draws: [59; 2],
++            secondary_draws: [99; 2],
++            sleep_talk_draws: [59; 2],
++            replacement_count: 0,
++            turn: 7,
++            keys: [123, 456],
++        };
++        capsule.forced_switch[replacing] = true;
++        capsule.baton_pass[replacing] = true;
++        capsule.residual_draws[1 - replacing][4] = 15; // noncritical
++        (state, capsule)
++    }
++    #[test]
++    fn saved_secondary_changes_full_resume_and_preserves_parent() {
++        for replacing in 0..2 {
++            let (state, mut capsule) = fixture(replacing);
++            let before = state.serialize();
++            let mut observed = vec![];
++            for secondary in [9, 10] {
++                capsule.secondary_draws[1 - replacing] = secondary;
++                let before_capsule = capsule.clone();
++                let branches = resume(&state, &capsule, PokemonIndex::P1, [0, 1]).unwrap();
++                assert_eq!(
++                    branches.len(),
++                    1,
++                    "conditioning must not emit a fresh 10/90 mixture"
++                );
++                let out = &branches[0];
++                assert_eq!(out.percentage, 100.0);
++                let sides = [&out.state.side_one, &out.state.side_two];
++                assert_eq!(sides[replacing].active_index, PokemonIndex::P1);
++                assert_eq!(
++                    sides[replacing].get_active_immutable().status,
++                    if secondary < 10 {
++                        PokemonStatus::PARALYZE
++                    } else {
++                        PokemonStatus::NONE
++                    }
++                );
++                assert_eq!(
++                    sides[1 - replacing].get_active_immutable().moves[&PokemonMoveIndex::M0].pp,
++                    9
++                );
++                assert_eq!(
++                    sides[1 - replacing].get_active_immutable().hp,
++                    88,
++                    "one poison residual"
++                );
++                assert_eq!(out.capsule.turn, 7);
++                assert_eq!(out.capsule.keys, [123, 456]);
++                assert!(!out.capsule.pending_residual);
++                assert_eq!(out.capsule.secondary_draws, [0; 2]);
++                assert_eq!(capsule, before_capsule);
++                observed.push(sides[replacing].get_active_immutable().hp);
++            }
++            assert_eq!(observed[0], observed[1], "secondary cannot redraw damage");
++            assert_eq!(state.serialize(), before);
++        }
++    }
++    #[test]
++    fn saved_damage_and_crit_are_not_averaged() {
++        let (state, mut capsule) = fixture(0);
++        let hp = |c: &ResumeCapsule| {
++            resume(&state, c, PokemonIndex::P1, [0, 1]).unwrap()[0]
++                .state
++                .side_one
++                .get_active_immutable()
++                .hp
++        };
++        capsule.residual_draws[1][5] = 0;
++        let low = hp(&capsule);
++        capsule.residual_draws[1][5] = 15;
++        assert!(hp(&capsule) < low);
++        capsule.residual_draws[1][4] = 0;
++        assert!(hp(&capsule) < low);
++    }
++    #[test]
++    fn unsupported_context_refuses_before_generation() {
++        let (state, capsule) = fixture(0);
++        let mut bad = capsule.clone();
++        bad.secondary_draws[1] = 100;
++        assert_eq!(
++            resume(&state, &bad, PokemonIndex::P1, [0, 1]).unwrap_err(),
++            "INVALID_OR_UNSUPPORTED_CHANCE_CAPSULE"
++        );
++        let mut bad_state = state.clone();
++        bad_state.side_one.side_conditions.spikes = 1;
++        assert_eq!(
++            resume(&bad_state, &capsule, PokemonIndex::P1, [0, 1]).unwrap_err(),
++            "UNSUPPORTED_SIDE_CONTEXT"
++        );
++        let mut bad_state = state.clone();
++        bad_state.side_two.get_active().status = PokemonStatus::SLEEP;
++        assert_eq!(
++            resume(&bad_state, &capsule, PokemonIndex::P1, [0, 1]).unwrap_err(),
++            "UNSUPPORTED_PARTY_CONTEXT"
++        );
++        let mut bad = capsule.clone();
++        bad.queued_actions[1] = 3;
++        assert_eq!(
++            resume(&state, &bad, PokemonIndex::P1, [0, 1]).unwrap_err(),
++            "UNSUPPORTED_QUEUED_MOVE"
++        );
++    }
++}
+diff --git a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+index e398cf0..79aa610 100644
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1294,6 +1294,11 @@ fn get_instructions_from_secondaries(
+             continue;
+         }
+         let secondary_percent_hit = (secondary.chance / 100.0).min(1.0);
++        #[cfg(feature = "conditioned-oracle")]
++        let secondary_percent_hit = match &state.oracle_resume {
++            Some(context) => if context.secondary_hits(side_reference, secondary.chance) { 1.0 } else { 0.0 },
++            None => secondary_percent_hit,
++        };
+ 
+         let mut i = 0;
+         while i < return_instruction_list.len() {
+@@ -4092,6 +4097,10 @@ fn generate_instructions_after_status(
+     // on the boundary it exists for. reports/c135 sections 2-3, cause A8.
+     let residual_thresholds = residual_lethality_thresholds(state, &attacking_side, choice);
+ 
++    #[cfg(feature = "conditioned-oracle")]
++    let conditioned_roll = state.oracle_resume.as_ref().map(|context| context.damage_roll(&attacking_side));
++    #[cfg(not(feature = "conditioned-oracle"))]
++    let conditioned_roll: Option<(bool, u8)> = None;
+     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
+     // pokezero gen3 fidelity fix (G8, roll-dependent Leech Seed drain). Read
+     // BEFORE `get_active()`: `get_both_sides` hands back `&mut Side`, so the
+@@ -4167,7 +4176,14 @@ fn generate_instructions_after_status(
+         } else {
+             min_damage_dealt
+         };
+-        if enumerate_damage_rolls() && branch_on_damage && fixed_damage.is_none() {
++        if let Some((critical, roll)) = conditioned_roll {
++            // One already sampled ordinary-turn coordinate, reused after the
++            // pivot. No new crit/roll mass and no representative damage bucket.
++            let maximum = if critical { max_crit_damage } else { max_damage_dealt };
++            // Immunity was rejected before damage calculation. A successful
++            // nonimmune hit still deals at least one after randomization.
++            regular_damage = cmp::max(1, ((maximum as i32 * (85 + roll as i32)) / 100) as i16);
++        } else if enumerate_damage_rolls() && branch_on_damage && fixed_damage.is_none() {
+             // ENUMERATE-THEN-MERGE. One arm per distinct roll, mass 1/16 each,
+             // times the crit split. No threshold is consulted and no
+             // representative roll is chosen, so there is no collapse to tax:
+diff --git a/src/gen3/mod.rs b/src/gen3/mod.rs
+index fcab748..8d7cf28 100644
+--- a/src/gen3/mod.rs
++++ b/src/gen3/mod.rs
+@@ -6,3 +6,6 @@ pub mod evaluate;
+ pub mod generate_instructions;
+ pub mod items;
+ pub mod state;
++
++#[cfg(feature = "conditioned-oracle")]
++pub mod conditioned_resume;
+diff --git a/src/state.rs b/src/state.rs
+index bd8abf6..7d45916 100644
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -1493,6 +1493,8 @@ pub struct State {
+     pub team_preview: bool,
+     pub use_last_used_move: bool,
+     pub use_damage_dealt: bool,
++    #[cfg(feature = "conditioned-oracle")]
++    pub oracle_resume: Option<Box<crate::engine::conditioned_resume::ValidatedResume>>,
+ }
+ impl Default for State {
+     fn default() -> State {
+@@ -1512,6 +1514,8 @@ impl Default for State {
+                 turns_remaining: 0,
+             },
+             team_preview: false,
++            #[cfg(feature = "conditioned-oracle")]
++            oracle_resume: None,
+             use_damage_dealt: false,
+             use_last_used_move: false,
+         };
+@@ -2641,6 +2645,8 @@ impl State {
+             terrain: StateTerrain::deserialize(split[3]),
+             trick_room: StateTrickRoom::deserialize(split[4]),
+             team_preview: split[5].parse::<bool>().unwrap(),
++            #[cfg(feature = "conditioned-oracle")]
++            oracle_resume: None,
+             use_damage_dealt: false,
+             use_last_used_move: false,
+         };
