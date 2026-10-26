@@ -44,6 +44,8 @@ model = ["dep:tch"]
 # Explicit transition-oracle profile. Legacy/default search keeps its PP
 # abstraction; exact successor-state comparisons must account for every use.
 oracle-full-pp = ["poke-engine/oracle-full-pp"]
+# Isolated fidelity oracle only. Ordinary search builds expose no resume API.
+conditioned-oracle = ["oracle-full-pp", "poke-engine/conditioned-oracle"]
 
 # Standalone package: do not get absorbed into any enclosing workspace.
 [workspace]
