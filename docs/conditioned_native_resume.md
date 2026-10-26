@@ -23,6 +23,24 @@ The general future-state mapper's
 provide no historical-panel reclassification, pool coverage or whole-engine
 qualification.
 
+`gpu_engine.conditioned_future.suspended_input_from_jax` is the separate,
+explicit bridge for this bounded domain. It requires the original constructor
+certificate to retain base types/ability, weight, gender and native-only static
+provenance. It constructs native suspension flags and the exact saved move
+slot directly, compares every constructed physical field with the wire, and
+retains the entire typed chance/queue capsule. Saved coordinates are active
+inputs. A construction seal binds the native wire, raw JAX state, capsule and
+both certificates; a changed HP, PP, saved coordinate or provenance refuses
+before continuation. The ordinary constructor still refuses suspension.
+
+`native_successors` accepts an explicit replacement index and entry-tie pair;
+it does not choose an action. `canonical_resumed_jax` and the native results
+compare physical state plus every capsule field. An unsupported positive
+successor refuses the whole request, retaining the parent, replacement/tie
+request and offending successor. There is no supported-prefix normalization
+or fallback to ordinary chance enumeration. The bridge is not connected to a
+historical panel or collector and gives no new pool-coverage claim.
+
 From a clean checkout, vendor the pinned source with
 `scripts/vendor_poke_engine_src.sh <isolated-python>`, then use that interpreter
 to run `maturin build --no-default-features --features conditioned-oracle` in

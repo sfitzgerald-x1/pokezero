@@ -1,7 +1,7 @@
 """Authored suspension correspondence, not fresh-root or pool fidelity credit.
 
 Requires an isolated `conditioned-oracle` search wheel and full-PP binding.
-The historical mapper and every historical panel remain unchanged.
+Ordinary mapping and every historical panel's admission remain unchanged.
 """
 from copy import deepcopy
 import importlib.util
@@ -43,7 +43,7 @@ class ConditionedResumeTests(unittest.TestCase):
         cls.empty = staticmethod(empty_state)
         cls.step = staticmethod(jax.jit(t.step_with_chance))
 
-    def fixture(self, replacing, secondary_roll, boundary=None, *, contact_roll=59, queued_move="thunderbolt", static_at=None, poison=True):
+    def fixture(self, replacing, secondary_roll, boundary=None, *, contact_roll=59, queued_move="thunderbolt", static_at=None, poison=True, queued_slot=0):
         j = self.j
         state = self.empty(1, seed=771)._replace(
             hp=j.full((1, 2, 6), 1000), max_hp=j.full((1, 2, 6), 1000),
@@ -56,7 +56,7 @@ class ConditionedResumeTests(unittest.TestCase):
         state = state._replace(
             stats=state.stats.at[:, replacing, :, 5].set(300)
                 .at[:, replacing, 1, 5].set(200).at[:, queued, :, 5].set(101),
-            moves=state.moves.at[:, replacing, 0, 0].set(1).at[:, queued, 0, 0].set(self.meta["vocabulary"]["moves"].index(queued_move)),
+            moves=state.moves.at[:, replacing, 0, 0].set(1).at[:, queued, 0, queued_slot].set(self.meta["vocabulary"]["moves"].index(queued_move)),
             status=state.status.at[:, queued, 0].set(3 if poison else 0),
             hp=state.hp.at[:, replacing, 1].set(800),
             item=state.item.at[:, replacing, 1].set(1))
@@ -85,9 +85,10 @@ class ConditionedResumeTests(unittest.TestCase):
             queued_move if replacing == 0 else "batonpass")
         self.assertEqual(len(branches), 1)
         paused_native = native.state.apply_instructions(branches[0])
-        paused = self.step(state, j.zeros((1, 2), j.int32), self.table, chance).state
+        initial_actions=j.array([[0,queued_slot] if replacing==0 else [queued_slot,0]])
+        paused = self.step(state, initial_actions, self.table, chance).state
         self.assertTrue(bool(paused.pending_residual[0]))
-        self.assertEqual(int(paused.pp[0, queued, 0, 0]), 9 if queued_move == "splash" else 10)
+        self.assertEqual(int(paused.pp[0, queued, 0, queued_slot]), 9 if queued_move == "splash" else 10)
         self.assertEqual(int(paused.hp[0, queued, 0]), int(state.hp[0, queued, 0]),
             "poison must not tick before replacement")
         # The general mapper must still refuse this unqualified domain.
@@ -255,6 +256,96 @@ class ConditionedResumeTests(unittest.TestCase):
             first_capsule["queued_actor"]=-1
             with self.assertRaisesRegex(ValueError,"UNSUPPORTED_EMPTY_QUEUE_CONTEXT"):
                 pokezero_search.conditioned_resume(first_native.to_string(),json.dumps(first_capsule),1,[0,1])
+
+    def test_bridge_constructs_real_paused_state_and_complete_successor(self):
+        from gpu_engine import conditioned_future as c
+        for replacing in (0, 1):
+            for move, contact, secondary, slot in (("thunderbolt",59,9,0), ("thunderbolt",59,10,3),
+                    ("bodyslam",19,29,2), ("bodyslam",20,30,0), ("splash",59,9,0)):
+                with self.subTest(replacing=replacing,move=move,contact=contact,secondary=secondary):
+                    paused,native,certificate,capsule,chance=self.fixture(replacing,secondary,
+                        queued_move=move,contact_roll=contact,static_at=1 if move=="bodyslam" else None,
+                        poison=move!="bodyslam",queued_slot=slot)
+                    before=self.f._sample(paused,0)
+                    bound=c.suspended_input_from_jax(paused,0,self.meta,
+                        certificate=certificate,module=self.engine)
+                    self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+                    self.assertEqual(bound.raw_native,native.to_string())
+                    self.assertEqual(bound.certificate.inactive_addresses,())
+                    self.assertEqual(dict(bound.capsule),{k:before[k] for k in c.CAPSULE_FIELDS})
+                    self.assertEqual(bound.certificate.static_native,certificate.static_native)
+                    self.assertEqual(before,self.f._sample(paused,0))
+                    branches=c.native_successors(bound,1,[0,1])
+                    self.assertIsInstance(branches,tuple,branches)
+                    self.assertEqual(len(branches),1)
+                    self.assertEqual(branches[0][0],1)
+                    actions=self.j.array([[4,3] if replacing==0 else [3,4]])
+                    expected=self.step(paused,actions,self.table,chance).state
+                    actual=c.canonical_resumed_jax(expected,0,self.meta,native_input=bound)
+                    self.assertIsInstance(actual,self.f.CanonicalFuture,actual)
+                    self.assertEqual(self.f.field_differences(actual,branches[0][1]),())
+
+    def test_bridge_refuses_missing_provenance_gaps_and_unsupported_native_domain(self):
+        from dataclasses import replace
+        from gpu_engine import conditioned_future as c
+        paused,_,certificate,_,_=self.fixture(0,9)
+        for cert in (None,replace(certificate,static_native=())):
+            value=c.suspended_input_from_jax(paused,0,self.meta,certificate=cert,module=self.engine)
+            self.assertIsInstance(value,self.f.Refused,value)
+        for state in (paused._replace(secondary_draws=paused.secondary_draws.at[:,1].set(100)),
+                      paused._replace(wish_counter=paused.wish_counter.at[:,0].set(1))):
+            value=c.suspended_input_from_jax(state,0,self.meta,certificate=certificate,module=self.engine)
+            self.assertIsInstance(value,self.f.Refused,value)
+        # Full construction can preserve a hazard, but the current native
+        # continuation domain must refuse it before executing any transition.
+        hazard=paused._replace(spikes=paused.spikes.at[:,0].set(1))
+        bound=c.suspended_input_from_jax(hazard,0,self.meta,certificate=certificate,module=self.engine)
+        self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
+        value=c.native_successors(bound,1,[0,1])
+        self.assertIsInstance(value,self.f.Refused,value)
+        self.assertIn("UNSUPPORTED_SIDE_CONTEXT",repr(value.gaps))
+        # The general mapper still refuses, and no capsule can be rebound to
+        # another JAX root by retaining its old correspondence certificate.
+        bound=c.suspended_input_from_jax(paused,0,self.meta,certificate=certificate,module=self.engine)
+        wrong=replace(bound,capsule=tuple((k, (99,99) if k=="secondary_draws" else v) for k,v in bound.capsule))
+        self.assertIsInstance(c.native_successors(wrong,1,[0,1]),self.f.Refused)
+        # The construction seal covers physical bytes and both provenance
+        # certificates. Every mutation refuses before the native API is called.
+        from types import SimpleNamespace
+        calls=[]
+        never=SimpleNamespace(CONDITIONED_ORACLE_ENABLED=True,
+            conditioned_resume=lambda *args:calls.append(args))
+        parts=bound.raw_native.split("/")
+        hp_side=parts[0].split("=");hp_mon=hp_side[0].split(",");hp_mon[6]="999"
+        hp_side[0]=",".join(hp_mon);hp_parts=list(parts);hp_parts[0]="=".join(hp_side)
+        pp_side=parts[1].split("=");pp_mon=pp_side[0].split(",")
+        pp_move=pp_mon[22].split(";");pp_move[2]="7";pp_mon[22]=";".join(pp_move)
+        pp_side[0]=",".join(pp_mon);pp_parts=list(parts);pp_parts[1]="=".join(pp_side)
+        mutations=(replace(bound,raw_native="/".join(hp_parts)),
+            replace(bound,raw_native="/".join(pp_parts)),
+            replace(bound,certificate=replace(bound.certificate,static_native=())),
+            replace(bound,source_certificate=replace(bound.source_certificate,static_native=())))
+        for changed in mutations:
+            refused=c.native_successors(changed,1,[0,1],module=never)
+            self.assertIsInstance(refused,self.f.Refused,refused)
+            self.assertIn("SUSPENSION_BINDING_CHANGED",repr(refused.gaps))
+            self.assertIsInstance(c.canonical_resumed_jax(paused,0,self.meta,native_input=changed),self.f.Refused)
+        self.assertEqual(calls,[])
+        # A later unsupported positive branch invalidates the entire result;
+        # an earlier supported prefix must never escape as a partial law.
+        from types import SimpleNamespace
+        payload=json.loads(pokezero_search.conditioned_resume(bound.raw_native,
+            json.dumps(dict(bound.capsule,version=1,schema="pokezero.suspended-turn")),1,[0,1]))
+        good=payload["branches"][0];good["percentage"]=50
+        bad=deepcopy(good);bad["capsule"]["pending_residual"]=True
+        payload["branches"]=[good,bad]
+        mocked=SimpleNamespace(CONDITIONED_ORACLE_ENABLED=True,
+            conditioned_resume=lambda *args:json.dumps(payload))
+        refused=c.native_successors(bound,1,[0,1],module=mocked)
+        self.assertIsInstance(refused,self.f.Refused,refused)
+        self.assertEqual(refused.gaps[0].code,"UNSUPPORTED_POSITIVE_SUCCESSOR")
+        self.assertEqual(dict(refused.raw_actions),dict(replacement_index=1,entry_ties=(0,1)))
+        self.assertIn("offending_successor",refused.gaps[0].detail)
 
 
 if __name__ == "__main__":
