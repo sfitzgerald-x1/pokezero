@@ -507,6 +507,125 @@ class ConditionedResumeTests(unittest.TestCase):
             self.assertIsInstance(c.suspended_input_from_jax(result,0,self.meta,certificate=certificate,
                 module=self.engine,native_successor=branches[0][1]),self.f.Refused)
 
+    def test_conditional_law_enumerates_four_native_cases_and_complete_unit_mass(self):
+        from types import SimpleNamespace
+        from gpu_engine import conditional_law as law, fidelity_panel as panel
+        for replacing in (0,1):
+            for move,hazard in (("thunderbolt",0),("splash",0),("bodyslam",1)):
+                with self.subTest(replacing=replacing,move=move,hazard=hazard):
+                    paused,_,certificate,_,_=self.fixture(replacing,9,queued_move=move,hazard_layers=hazard)
+                    actions=(4,3) if replacing==0 else (3,4)
+                    calls=[]
+                    def counted(*args):
+                        calls.append(args)
+                        return pokezero_search.conditioned_resume(*args)
+                    native=SimpleNamespace(CONDITIONED_ORACLE_ENABLED=True,conditioned_resume=counted)
+                    plan=law.plan_for_suspension(paused,0,actions,self.table,self.meta,
+                        certificate=certificate,cap=4,native_module=self.engine,search_module=native)
+                    self.assertIsInstance(plan,law.ConditionalConsumerPlan,plan)
+                    self.assertEqual(plan.cardinality,4)
+                    self.assertEqual(len(calls),4)
+                    self.assertEqual({tuple(call[3]) for call in calls},{(0,0),(0,1),(1,0),(1,1)})
+                    self.assertEqual(len(plan.native_evidence()),4)
+                    execute=panel.JaxCaseExecutor(paused,actions,self.table,plan,batch_size=4)
+                    result=panel.compare_slot(plan,execute,plan.native_results,batch_size=4,
+                        mass_tolerance=1e-6,probability_tolerance=1e-6)
+                    self.assertEqual(result["status"],"AGREE",result)
+                    self.assertEqual(result["exact_cases"],4)
+                    self.assertEqual(len(result["outcomes"]),1)
+                    self.assertEqual(result["outcomes"][0]["jax_probability"],"1")
+                    self.assertEqual(result["native_mass"],1)
+                    self.assertEqual(len(calls),4,"cached native cases must not execute again")
+
+    def test_conditional_law_cap_and_fourth_native_refusal_never_execute_jax(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from gpu_engine import conditional_law as law, fidelity_panel as panel
+        paused,_,certificate,_,_=self.fixture(0,9)
+        calls=[]
+        def forbidden(*args):
+            self.fail("engine ran before the fixed-case cap was admitted")
+        no_native=SimpleNamespace(CONDITIONED_ORACLE_ENABLED=True,conditioned_resume=forbidden)
+        with patch.object(self.t,'action_mask',forbidden):
+            small=law.plan_for_suspension(paused,0,(4,3),self.table,self.meta,
+                certificate=certificate,cap=3,native_module=no_native,search_module=no_native)
+        self.assertIsInstance(small,self.f.Refused,small)
+        self.assertEqual(small.gaps[0].code,"CHANCE_CARDINALITY_CAP")
+        def fourth(*args):
+            calls.append(args)
+            if len(calls)==4:raise ValueError("AUTHORED_LAST_CASE_REFUSAL")
+            return pokezero_search.conditioned_resume(*args)
+        native=SimpleNamespace(CONDITIONED_ORACLE_ENABLED=True,conditioned_resume=fourth)
+        with patch.object(self.t,'step_with_chance',forbidden):
+            refusal=law.plan_for_suspension(paused,0,(4,3),self.table,self.meta,
+                certificate=certificate,cap=4,native_module=self.engine,search_module=native)
+            result=panel.compare_slot(refusal,forbidden,forbidden,batch_size=4,
+                mass_tolerance=1e-6,probability_tolerance=1e-6)
+        self.assertEqual(len(calls),4)
+        self.assertIsInstance(refusal,self.f.Refused,refusal)
+        evidence=json.loads(refusal.gaps[0].detail)
+        self.assertEqual(evidence['completed_native_cases'],3)
+        self.assertEqual(len(evidence['native_case_evidence']),3)
+        self.assertEqual(result['status'],'UNKNOWN')
+        self.assertEqual(result['unknown_mass'],'1')
+        self.assertNotIn('outcomes',result)
+
+    def test_conditional_law_binding_checks_root_actions_table_and_provenance(self):
+        from dataclasses import replace
+        from gpu_engine import conditional_law as law, fidelity_panel as panel
+        paused,_,certificate,_,_=self.fixture(0,9)
+        plan=law.plan_for_suspension(paused,0,(4,3),self.table,self.meta,
+            certificate=certificate,cap=4,native_module=self.engine)
+        self.assertIsInstance(plan,law.ConditionalConsumerPlan,plan)
+        changed=paused._replace(hp=paused.hp.at[:,0,1].add(1))
+        with self.assertRaisesRegex(ValueError,"root differs"):
+            panel.JaxCaseExecutor(changed,(4,3),self.table,plan,batch_size=4)
+        with self.assertRaisesRegex(ValueError,"actions differ"):
+            panel.JaxCaseExecutor(paused,(4,0),self.table,plan,batch_size=4)
+        changed_table=self.table._replace(power=self.table.power.at[2].set(0))
+        with self.assertRaisesRegex(ValueError,"table differs"):
+            panel.JaxCaseExecutor(paused,(4,3),changed_table,plan,batch_size=4)
+        mutated=replace(plan,native_input=replace(plan.native_input,
+            source_certificate=replace(certificate,static_native=())))
+        with self.assertRaises(panel.WholeSlotUnknown):
+            mutated.native_results()
+        invalid=law.plan_for_suspension(paused,0,(0,3),self.table,self.meta,
+            certificate=certificate,cap=4,native_module=self.engine)
+        self.assertIsInstance(invalid,self.f.Refused,invalid)
+        self.assertEqual(invalid.gaps[0].code,'ILLEGAL_REPLACEMENT_REQUEST')
+
+    def test_changed_deterministic_table_is_compared_and_reported_as_divergent(self):
+        from gpu_engine import conditional_law as law, fidelity_panel as panel
+        paused,_,certificate,_,_=self.fixture(0,99)
+        changed_table=self.table._replace(power=self.table.power.at[2].set(0))
+        plan=law.plan_for_suspension(paused,0,(4,3),changed_table,self.meta,
+            certificate=certificate,cap=4,native_module=self.engine)
+        self.assertIsInstance(plan,law.ConditionalConsumerPlan,plan)
+        execute=panel.JaxCaseExecutor(paused,(4,3),changed_table,plan,batch_size=4)
+        result=panel.compare_slot(plan,execute,plan.native_results,batch_size=4,
+            mass_tolerance=1e-6,probability_tolerance=1e-6)
+        self.assertEqual(result['status'],'DIVERGE',result)
+        self.assertEqual(result['identified_mass'],'1')
+        self.assertFalse(result['support_equal'])
+
+    def test_conditional_law_missing_source_and_implicit_sample_refuse_before_engines(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from gpu_engine import conditional_law as law
+        paused,_,certificate,_,_=self.fixture(0,99)
+        def forbidden(*args):self.fail('engine executed after source/sample admission refusal')
+        native=SimpleNamespace(CONDITIONED_ORACLE_ENABLED=True,conditioned_resume=forbidden)
+        with patch.object(self.t,'action_mask',forbidden):
+            value=law.plan_for_suspension(paused,None,(4,3),self.table,self.meta,
+                certificate=certificate,cap=4,native_module=native,search_module=native)
+            self.assertIsInstance(value,self.f.Refused,value)
+            self.assertEqual(value.gaps[0].code,'INVALID_EXPLICIT_SAMPLE_INDEX')
+            with patch.object(law,'_source_certificate',side_effect=FileNotFoundError('authored missing source')):
+                value=law.plan_for_suspension(paused,0,(4,3),self.table,self.meta,
+                    certificate=certificate,cap=4,native_module=native,search_module=native)
+                self.assertIsInstance(value,self.f.Refused,value)
+                self.assertEqual(value.gaps[0].code,'CONSUMER_SOURCE_REFUSED')
+
 
 if __name__ == "__main__":
     unittest.main()
