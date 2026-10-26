@@ -275,8 +275,10 @@ def _move(metadata, data, side, slot, move):
     return name
 
 
-def _prepare(data, metadata, certificate=None):
+def _prepare(data, metadata, certificate=None, *, boundary="ordinary"):
     """Make complete expected native fields, or enumerate named mapping gaps."""
+    if boundary not in ("ordinary", "suspended"):
+        raise ValueError("unknown correspondence boundary policy")
     gaps = []
     add = lambda field, code, detail: gaps.append(Gap(field, code, detail))
     expected = set(FIELD_POLICY) - {"truant_loaf", "gender"}  # legacy fields remain explicitly unknown
@@ -295,14 +297,26 @@ def _prepare(data, metadata, certificate=None):
         add("active_turns", "INVALID_ACTIVE_AGE", "Negative active age is not an ordinary boundary")
     if certificate is not None and _metadata_sha(metadata) != certificate.metadata_sha256:
         add("metadata", "METADATA_BINDING_CHANGED", "Vocabulary/static-field source differs from construction certificate")
-    if data["pending_residual"] or any(data["baton_pass"]):
+    if boundary == "ordinary" and (data["pending_residual"] or any(data["baton_pass"])):
         add("pending_residual", "LIVE_SUSPENSION_INTERFACE", "Saved chance arrays and queued action are future-reused; native wrapper lacks the complete conditioning/carry interface")
+    if boundary == "suspended":
+        if (not data["pending_residual"] or sum(data["baton_pass"]) != 1
+                or data["forced_switch"] != data["baton_pass"]):
+            add("pending_residual", "UNSUPPORTED_SUSPENSION_CAUSE", "Only a single direct Baton Pass boundary is currently mapped")
+        if certificate is None:
+            add("metadata", "SUSPENSION_PROVENANCE_REQUIRED", "The original construction certificate retains native-only static fields")
     if any(data["entry_pending"]):
         add("entry_pending", "UNRESOLVED_ENTRY", "Initial entry events must be resolved by the bound caller, never silently by this mapper")
     inventory = {_move(metadata, data, side, p, move) for side in range(2) for p in range(6)
                  for move in data["moves"][side][p]}
     use_last = bool(inventory & CONDITIONAL_LAST)
     use_damage = bool(inventory & CONDITIONAL_DAMAGE)
+    if boundary == "suspended" and (use_last or use_damage):
+        add("moves", "SUSPENDED_HISTORY_UNSUPPORTED", "Ordinary-boundary history inactivity is not a suspended-turn proof")
+    if boundary == "suspended" and (data["queued_actor"] not in (-1, 0, 1)
+            or (data["queued_actor"] >= 0 and data["baton_pass"][data["queued_actor"]])
+            or (data["queued_actor"] == -1 and data["queued_actions"] != (0, 0))):
+        add("queued_actor", "UNSUPPORTED_SUSPENSION_QUEUE", "Queued actor must be the waiter, or an explicitly empty queue")
     if inventory & DYNAMIC_INVENTORY:
         add("moves", "DYNAMIC_HISTORY_CONTEXT_UNRESOLVED", "Dynamic move acquisition/callers defeat the fixed-inventory inactive-history proof; do not erase lastMove/damage conditioning")
     genders = data.get("gender", ((-1,)*6,)*2)
@@ -450,14 +464,36 @@ def _prepare(data, metadata, certificate=None):
         expected_request = data["hp"][side][active] <= 0 and alive[side]
         if bool(data["forced_switch"][side]) != expected_request and not data["pending_residual"]:
             add(side_name+".forced_switch", "INCONSISTENT_REQUEST", "Replacement request disagrees with active HP")
+        saved_move = "none"
+        if boundary == "suspended" and data["queued_actor"] == side:
+            slot = data["queued_actions"][side]
+            if type(slot) is not int or not 0 <= slot < 4:
+                add(side_name+".queued_actions", "INVALID_QUEUED_SLOT", "Saved action must identify an exact move slot")
+            else:
+                saved_move = mons[active]["moves"][slot]["id"]
         result[side_name] = dict(pokemon=tuple(mons), active_index=str(active),
             side_conditions=conditions, volatile_status_durations={k: 0 for k in DURATIONS},
             volatile_statuses=tuple(sorted(volatiles)), substitute_health=data["substitute_hp"][side][active],
             **{name+"_boost": data["boosts"][side][active][i] for i, name in enumerate(BOOST_NAMES)},
-            wish=(0, 0), future_sight=(0, "0"), force_switch=False,
-            switch_out_move_second_saved_move="none", baton_passing=False, shed_tailing=False,
+            wish=(0, 0), future_sight=(0, "0"),
+            force_switch=bool(data["forced_switch"][side]) if boundary == "suspended" else False,
+            switch_out_move_second_saved_move=saved_move,
+            baton_passing=bool(data["baton_pass"][side]) if boundary == "suspended" else False, shed_tailing=False,
             force_trapped=bool(data["trapped"][side]), last_used_move=last, slow_uturn_move=False)
     return result, gaps, tuple(sorted(static.items())), use_last, use_damage
+
+
+def _construct_native(expected, module):
+    """Shared physical constructor; boundary policy is applied before this call."""
+    arguments = {k: v for k, v in expected.items() if k not in (*SIDE_NAMES, "derived_done", "derived_winner", "conditional_last", "conditional_damage")}
+    for name in SIDE_NAMES:
+        side = dict(expected[name])
+        side["pokemon"] = [module.Pokemon(**dict(mon, moves=[module.Move(**move) for move in mon["moves"]])) for mon in side["pokemon"]]
+        side["side_conditions"] = module.SideConditions(**side["side_conditions"])
+        side["volatile_status_durations"] = module.VolatileStatusDurations(**side["volatile_status_durations"])
+        side["volatile_statuses"] = set(side["volatile_statuses"])
+        arguments[name] = module.Side(**side)
+    return module.State(**arguments)
 
 
 def native_input_from_jax(state, index, metadata, *, module=None):
@@ -477,15 +513,7 @@ def native_input_from_jax(state, index, metadata, *, module=None):
         tuple((k, NATIVE_PATHS[k]) for k in sorted(data)), raw, static, _metadata_sha(metadata), last, damage, inactive)
     module = import_module("poke_engine") if module is None else module
     try:
-        arguments = {k: v for k, v in expected.items() if k not in (*SIDE_NAMES, "derived_done", "derived_winner", "conditional_last", "conditional_damage")}
-        for name in SIDE_NAMES:
-            side = dict(expected[name])
-            side["pokemon"] = [module.Pokemon(**dict(mon, moves=[module.Move(**move) for move in mon["moves"]])) for mon in side["pokemon"]]
-            side["side_conditions"] = module.SideConditions(**side["side_conditions"])
-            side["volatile_status_durations"] = module.VolatileStatusDurations(**side["volatile_status_durations"])
-            side["volatile_statuses"] = set(side["volatile_statuses"])
-            arguments[name] = module.Side(**side)
-        native = module.State(**arguments)
+        native = _construct_native(expected, module)
         raw_native = native.to_string()
     except (ValueError, TypeError, AttributeError) as error:
         return Refused((Gap("native", "CONSTRUCTION_FAILED", str(error)),), raw)
