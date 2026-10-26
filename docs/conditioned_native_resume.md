@@ -9,11 +9,16 @@ validated; completed queue fields are cleared explicitly and reversibly.
 The caller retains the original input on refusal. This API selects no action,
 scores no game and is not connected to a scientific collector.
 
-The current admitted domain is a clean, first-action direct Baton Pass followed
-by queued Thunderbolt, in either seat. It supports ordinary poison residuals
-and Leftovers, and refuses unsupported abilities, statuses, volatiles, hazards,
-ties and other queued moves. Contact, Sleep Talk, entry-tie correlations and
-hazard-KO chains remain follow-on work. The general future-state mapper's
+The current admitted domain is a clean direct Baton Pass with either queued
+Thunderbolt/Body Slam or an already empty action queue, in either seat.
+Body Slam's target paralysis uses the saved secondary coordinate; Static's
+contact paralysis uses the actor's separate saved phazing coordinate (20/60).
+An empty queue requires both native commitments and queued slots to be empty;
+the replacement runs only the deferred residual, with no repeated move or PP.
+It supports ordinary poison residuals and Leftovers, and refuses unsupported
+abilities, statuses, volatiles, hazards, residual ties and other queued moves.
+Sleep Talk, entry-tie correlations and hazard-KO chains remain follow-on work.
+The general future-state mapper's
 `LIVE_SUSPENSION_INTERFACE` refusal remains in place. These authored fixtures
 provide no historical-panel reclassification, pool coverage or whole-engine
 qualification.
@@ -32,5 +37,7 @@ and both opt-in bindings installed. CI requires the profile and rejects skips.
 The tests compare complete canonical successors and every capsule field in
 both seats, check the saved 9/10 secondary threshold against contradictory
 new ordinary draws, and cover terminal poison KOs, minimum-one nonimmune
-damage and preserved Ground immunity. Unsupported capsules must raise rather
+damage, Ground immunity, independent contact/target rolls, incoming versus
+outgoing Static, poison and Ghost controls, and second-action Baton without a
+queued move. Unsupported capsules must raise rather
 than fall back to unconditional enumeration.

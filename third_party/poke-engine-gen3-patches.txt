@@ -1796,3 +1796,4 @@ poke-engine-gen3-speed-boost-entry.patch
 # marker separates histories without changing aggregate state probabilities.
 poke-engine-gen3-sleeptalk-called-marker.patch
 poke-engine-gen3-conditioned-resume.patch
+poke-engine-gen3-conditioned-contact.patch
