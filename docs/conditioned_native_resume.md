@@ -10,14 +10,16 @@ The caller retains the original input on refusal. This API selects no action,
 scores no game and is not connected to a scientific collector.
 
 The current admitted domain is a clean direct Baton Pass with either queued
-Thunderbolt/Body Slam or an already empty action queue, in either seat.
+Thunderbolt/Body Slam or an already empty action queue, in either seat,
+plus counted replacement chains after entry or queued-attack KOs.
 Body Slam's target paralysis uses the saved secondary coordinate; Static's
 contact paralysis uses the actor's separate saved phazing coordinate (20/60).
 An empty queue requires both native commitments and queued slots to be empty;
 the replacement runs only the deferred residual, with no repeated move or PP.
 It supports ordinary poison residuals and Leftovers, and refuses unsupported
-abilities, statuses, volatiles, hazards, residual ties and other queued moves.
-Sleep Talk, entry-tie correlations and hazard-KO chains remain follow-on work.
+abilities, statuses, volatiles, residual ties and other queued moves. Spikes
+layers 0–3 are admitted; other entry interactions remain unsupported.
+Sleep Talk and entry-tie correlations remain follow-on work.
 The general future-state mapper's
 `LIVE_SUSPENSION_INTERFACE` refusal remains in place. These authored fixtures
 provide no historical-panel reclassification, pool coverage or whole-engine
@@ -40,6 +42,21 @@ successor refuses the whole request, retaining the parent, replacement/tie
 request and offending successor. There is no supported-prefix normalization
 or fallback to ordinary chance enumeration. The bridge is not connected to a
 historical panel or collector and gives no new pool-coverage claim.
+
+A replacement KO cancels the waiting move and its native commitment explicitly;
+it spends no queued PP when Spikes causes the KO. A queued attack that KOs its
+recipient spends PP once. Both forms retain deferred residual draws, keys and
+turn, increment the replacement count, and empty the queue. Subsequent entries
+can continue to faint; the first survivor runs residuals once. Terminal party
+exhaustion clears carry without running residuals. A faint caused by the
+residual itself creates a replacement request with no deferred carry. Native
+deferred flags distinguish these phases; active HP alone does not.
+
+Pending successors have an explicit physical-plus-capsule comparison path.
+`native_successor` rebinding retains the actual native wire and capsule after
+checking complete agreement and original provenance, then seals that input.
+The conditional switch path declares retired fainted major status as native
+NONE using a reversible instruction; ordinary native execution is unchanged.
 
 From a clean checkout, vendor the pinned source with
 `scripts/vendor_poke_engine_src.sh <isolated-python>`, then use that interpreter

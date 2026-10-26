@@ -300,9 +300,14 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary"):
     if boundary == "ordinary" and (data["pending_residual"] or any(data["baton_pass"])):
         add("pending_residual", "LIVE_SUSPENSION_INTERFACE", "Saved chance arrays and queued action are future-reused; native wrapper lacks the complete conditioning/carry interface")
     if boundary == "suspended":
-        if (not data["pending_residual"] or sum(data["baton_pass"]) != 1
-                or data["forced_switch"] != data["baton_pass"]):
-            add("pending_residual", "UNSUPPORTED_SUSPENSION_CAUSE", "Only a single direct Baton Pass boundary is currently mapped")
+        direct = (sum(data["baton_pass"]) == 1 and data["forced_switch"] == data["baton_pass"]
+            and data["replacement_count"] == 0)
+        chain = (not any(data["baton_pass"]) and sum(data["forced_switch"]) == 1
+            and 1 <= data["replacement_count"] <= 5 and data["queued_actor"] == -1
+            and all(not forced or data["hp"][side][data["active"][side]] == 0
+                for side, forced in enumerate(data["forced_switch"])))
+        if not data["pending_residual"] or not (direct or chain):
+            add("pending_residual", "UNSUPPORTED_SUSPENSION_CAUSE", "Direct Baton or its counted hazard-KO replacement chain required")
         if certificate is None:
             add("metadata", "SUSPENSION_PROVENANCE_REQUIRED", "The original construction certificate retains native-only static fields")
     if any(data["entry_pending"]):
@@ -607,6 +612,12 @@ def _native_wire(raw):
 
 def canonical_native_future(native_state, certificate):
     """Parse complete bound wire state; unknown live native-only fields refuse."""
+    return _canonical_native_future(native_state, certificate)
+
+
+def _canonical_native_future(native_state, certificate, *, boundary="ordinary"):
+    if boundary not in ("ordinary", "suspended"):
+        raise ValueError("unknown correspondence boundary policy")
     raw = native_state if isinstance(native_state, str) else native_state.to_string()
     gaps = []
     try:
@@ -646,10 +657,12 @@ def canonical_native_future(native_state, certificate):
                 if value:
                     gaps.append(Gap(name+".volatile_status_durations."+field, "LATENT_DURATION_CONVENTION", repr(value)))
             for field in ("wish", "future_sight", "force_switch", "baton_passing", "shed_tailing", "slow_uturn_move"):
+                if boundary == "suspended" and field in ("force_switch", "baton_passing"):
+                    continue  # explicit capsule policy validates these live fields
                 value = side[field]
                 if value not in (False, (0, 0), (0, "0")):
                     gaps.append(Gap(name+"."+field, "NATIVE_LIVE_FUTURE_FIELD", repr(value)))
-            if side["switch_out_move_second_saved_move"] != "none":
+            if boundary == "ordinary" and side["switch_out_move_second_saved_move"] != "none":
                 gaps.append(Gap(name+".switch_out_move_second_saved_move", "LIVE_SUSPENSION_INTERFACE", "Saved action must not be erased"))
             for p, mon in enumerate(side["pokemon"]):
                 expected_gender = dict(certificate.static_native)[f"{name}.pokemon[{p}]"][2]
