@@ -9,6 +9,9 @@ on:
       - 'gpu_engine/**'
       - 'tests/test_conditioned_native_resume.py'
       - 'tests/test_constructor_provenance.py'
+      - 'tests/test_prospective_fidelity_panel.py'
+      - 'tests/test_gpu_engine_panel_owner.py'
+      - 'tests/test_native_gpu_panel_execution.py'
       - '.github/workflows/conditioned-native-resume.yml'
 permissions:
   contents: read
@@ -46,13 +49,17 @@ jobs:
           python -m maturin build --manifest-path rust/pokezero-search/Cargo.toml --release --no-default-features --features conditioned-oracle --out /tmp/conditioned-wheels
           python -m pip install /tmp/conditioned-wheels/*.whl
       - name: Compare complete authored successors without skips
+        env:
+          POKEZERO_ENUMERATE_ROLLS: '1'
         run: |
           python - <<'PY'
           import unittest, pokezero_search
           assert pokezero_search.CONDITIONED_ORACLE_ENABLED
           suite = unittest.defaultTestLoader.loadTestsFromNames([
-              'tests.test_conditioned_native_resume', 'tests.test_constructor_provenance'])
+              'tests.test_conditioned_native_resume', 'tests.test_constructor_provenance',
+              'tests.test_prospective_fidelity_panel', 'tests.test_gpu_engine_panel_owner',
+              'tests.test_native_gpu_panel_execution'])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 23 and not result.skipped
+          assert result.testsRun >= 47 and not result.skipped
           assert result.wasSuccessful()
           PY

@@ -59,12 +59,25 @@ def reconstruct(panel, entry):
     counts, issues = Counter(), {}
     try:
         frozen = json.loads((panel / "inputs-frozen.json").read_bytes())
+        prospective=entry.get("constructor_provenance") is not None
+        if prospective and "constructor_context_file_sha256" not in frozen:
+            raise ValueError("opt-in source freeze requires constructor context evidence")
+        if "constructor_context_file_sha256" in frozen:
+            context_payload=(panel/"constructor-context.json").read_bytes()
+            if hashlib.sha256(context_payload).hexdigest()!=frozen["constructor_context_file_sha256"]:
+                raise ValueError("prospective constructor context changed after source freeze")
+            context=json.loads(context_payload)
         digest, number = hashlib.sha256(), 0
         with gzip.open(panel / "inputs.jsonl.gz", "rb") as stream:
             for line in stream:
                 item = json.loads(line)
                 if item["slot"] != number:
                     raise ValueError("input roster order/identity mismatch")
+                if prospective and (not {"constructor_provenance","post_entry_state","constructor_context_sha256"}<=item.keys()
+                        or not isinstance(item["constructor_provenance"],dict)
+                        or set(item["post_entry_state"])!=set(mapping.FIELD_POLICY)
+                        or item["constructor_context_sha256"]!=context["context"]["sha256"]):
+                    raise ValueError("opt-in source record has missing constructor evidence")
                 digest.update(line)
                 number += 1
         if (number != fixed or frozen["slots"] != fixed

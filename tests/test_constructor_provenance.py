@@ -11,6 +11,9 @@ import tempfile
 import unittest
 
 AVAILABLE=all(importlib.util.find_spec(name) for name in ('jax','numpy','poke_engine','pokezero_search'))
+if AVAILABLE:
+    import pokezero_search
+    AVAILABLE=bool(getattr(pokezero_search,'CONDITIONED_ORACLE_ENABLED',False))
 
 
 @unittest.skipUnless(AVAILABLE,'requires isolated JAX and both native bindings')
@@ -27,7 +30,7 @@ class ConstructorProvenanceTests(unittest.TestCase):
         cls.empty=staticmethod(empty_state)
         cls.runtime=p.attest_native_runtime()
 
-    def fixture(self,replacing=0,*,generated=False,happiness=None):
+    def fixture(self,replacing=0,*,generated=False,happiness=None,trace=True):
         j,np=self.j,self.np
         types=['_none','normal','fighting','flying','poison','ground','rock','bug','ghost',
             'steel','fire','water','grass','electric','psychic','ice','dragon','dark']
@@ -39,6 +42,10 @@ class ConstructorProvenanceTests(unittest.TestCase):
                 'category':'Special' if name=='thunderbolt' else 'Status','flags':{'protect':1}}
                 for name in names[1:]],
             'compiled_tree':{'sha256':'1'*64,'files':1},'source_commit_label':'f'*40}
+        meta['type_chart']=[[1]*17 for _ in range(17)]
+        for move in meta['moves'][1:]:
+            move.update(base_power=95 if move['id']=='thunderbolt' else 50 if move['id']=='struggle' else 0,
+                type=13 if move['id']=='thunderbolt' else 1,accuracy=True,priority=0)
         state=self.empty(1,seed=471)._replace(species=j.ones((1,2,6),j.int32),level=j.full((1,2,6),100),
             types=j.zeros((1,2,6,2),j.int32).at[...,0].set(1),
             hp=j.full((1,2,6),1000),max_hp=j.full((1,2,6),1000),
@@ -46,7 +53,7 @@ class ConstructorProvenanceTests(unittest.TestCase):
                 .at[:,replacing,:,5].set(300).at[:,replacing,1,5].set(200).at[:,1-replacing,:,5].set(101),
             moves=j.ones((1,2,6,4),j.int32).at[:,replacing,0,0].set(2).at[:,1-replacing,0,0].set(3),
             pp=j.full((1,2,6,4),10),ability=j.zeros((1,2,6),j.int32)
-                .at[:,replacing,0].set(2).at[:,1-replacing,0].set(1),
+                .at[:,replacing,0].set(2 if trace else 0).at[:,1-replacing,0].set(1),
             gender=j.full((1,2,6),1,j.int32).at[:,1,:].set(2),
             entry_pending=j.ones((1,2),bool),done=j.array([False]))
         if happiness is not None:state=state._replace(happiness=j.full((1,2,6),happiness,j.int32))
