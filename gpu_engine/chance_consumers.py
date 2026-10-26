@@ -107,7 +107,7 @@ class ConsumerPlan:
             certificate=self.native_input.certificate)
 
 
-def plan_for_state(state, index, actions, table, metadata, *, cap):
+def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=None):
     """Precount an exact conservative source partition; emit no sampled prefix.
 
     ``cap`` is mandatory and must be prospectively bound by the panel entry.
@@ -134,9 +134,19 @@ def plan_for_state(state, index, actions, table, metadata, *, cap):
                                 for name in DOMAIN_MODULES)).hexdigest()
         if domain != DOMAIN_SHA256:
             return refuse("CONSUMER_DOMAIN_DRIFT", domain)
-        native = mapping.native_input_from_jax(state, index, metadata)
+        native = (mapping.native_input_from_jax(state, index, metadata)
+                  if native_input is None else native_input)
         if isinstance(native, mapping.Refused):
             return native
+        if native_input is not None:
+            if not isinstance(native,mapping.NativeInput):
+                return refuse("PROVIDED_NATIVE_INPUT_REQUIRED", "Explicit complete native correspondence required")
+            expected=mapping.canonical_jax_future(state,index,metadata,certificate=native.certificate)
+            physical=mapping.canonical_native_future(native.state,native.certificate)
+            if isinstance(expected,mapping.Refused):return expected
+            if isinstance(physical,mapping.Refused):return physical
+            if expected.key!=physical.key:
+                return refuse("PROVIDED_NATIVE_INPUT_MISMATCH", "Provided original-static correspondence differs from current physical state")
         bound_actions = mapping.native_actions_from_jax(state, index, actions, native)
         if isinstance(bound_actions, mapping.Refused):
             return bound_actions

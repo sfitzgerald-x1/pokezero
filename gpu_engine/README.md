@@ -579,8 +579,38 @@ conditional domain. Original pool metadata and enriched mapping metadata retain
 separate identities. The context expects independently verified prospective
 source admission; a catalog's self-reported provenance is not independent proof.
 
-These APIs do not connect the collector, select actions, admit a scientific run
-or change any historical panel. Their authored tests run in the isolated
-`conditioned-oracle` CI profile with both native bindings and zero skips. Fresh
+These primitive APIs retain no action-selection or scientific launch authority.
+Their authored tests run in the isolated `conditioned-oracle` CI profile with
+both native bindings and zero skips. Historical panels remain unchanged; fresh
 collector admission, broader suspension mechanics and full engine qualification
 remain separate work.
+
+New panel entries can explicitly opt into `constructor_provenance` with schema
+`pokezero.prospective-constructors.v1`, the complete catalog, both-binding runtime
+attestation, a bounded `root_start` and the simulator checkout `showdown_root`.
+Before source generation the worker regenerates the weight catalog and optional
+gender policy against that actual checkout/compiled tree and exact commit. Both
+artifacts must equal the prospectively bound entry. It builds JAX tables from
+the original pool metadata; correspondence uses the separately enriched metadata.
+
+The collector captures originals before entry, retains the full post-entry state
+before prefixes and closes every final root/action/source error plus provenance
+and context identity in its hashed input artifact before native mapping. Missing
+or unsupported originals remain whole-slot UNKNOWN without legacy fallback.
+Unresolved generated genders keep their original slots; other root occurrences
+and their draw addresses stay unchanged. For ordinary comparisons, the planner
+receives a full current-root NativeInput with original statics. Suspended roots
+first prove immutable constructor lineage, then use the original post-entry
+certificate and cached conditional laws. All four native case witnesses remain
+in the slot evidence. Owner reconstruction requires the referenced context file
+and its digest for opt-in entries. Exclusive attempts, deadlines and actual exit
+and cleanup checks remain in force.
+
+This opt-in implements collection plumbing; it supplies no launch admission or
+historical coverage credit. A new reviewed frozen entry and the standing saved-
+root cost check are still required before any future scientific attempt. Trace
+entry execution, Sleep Talk and broader suspension contexts remain unfinished.
+The current native continuation validator still restricts every party member's
+ability to None/Static; the preserved real-team pool has no teams in that domain.
+Native context support must expand before this path can compare real-pool live
+suspensions. The collector integration itself supplies no such mechanic credit.

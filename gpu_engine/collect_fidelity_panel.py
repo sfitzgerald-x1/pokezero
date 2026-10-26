@@ -90,7 +90,8 @@ def requested_actions(state, table, *, salt):
     return actions, missing, requested
 
 
-def generate_inputs(pool, table, entry, *, choose=requested_actions, species_vocabulary=None):
+def generate_inputs(pool, table, entry, *, choose=requested_actions, species_vocabulary=None,
+                    constructors=None):
     import jax
     import jax.numpy as jnp
     import numpy as np
@@ -100,8 +101,12 @@ def generate_inputs(pool, table, entry, *, choose=requested_actions, species_voc
     if int(indices.max()) >= len(pool["species"]):
         raise ValueError("fixed roster exceeds immutable pool; never wrap indices")
     gender = entry.get("gender_initialization")
+    constructor_errors=np.zeros(len(rows),bool)
     if gender is None:
-        state = transition.state_from_pool(pool, indices, seed=entry["seed"], table=table)
+        state = transition.state_from_pool(pool, indices, seed=entry["seed"],
+            table=table if constructors is None else None)
+        if constructors is not None:
+            state=state._replace(gender=jnp.asarray(pool["gender"][indices],jnp.int32))
     else:
         from .gender import initialize_genders
         if (set(gender) != {"seed", "domain", "root_start", "policy"}
@@ -109,31 +114,51 @@ def generate_inputs(pool, table, entry, *, choose=requested_actions, species_voc
                 or gender["root_start"]+len(rows) > 2**32):
             raise ValueError("explicit bounded gender initialization domain required")
         state = transition.state_from_pool(pool, indices, seed=entry["seed"])
-        state = initialize_genders(state, gender["policy"], species_vocabulary,
-            seed=gender["seed"], domain=gender["domain"],
-            root_ids=[r["slot"]+gender["root_start"] for r in rows],
-            explicit_genders=pool["gender"][indices] if "gender" in pool else None)
+        if constructors is None:
+            state = initialize_genders(state, gender["policy"], species_vocabulary,
+                seed=gender["seed"], domain=gender["domain"],
+                root_ids=[r["slot"]+gender["root_start"] for r in rows],
+                explicit_genders=pool["gender"][indices] if "gender" in pool else None)
+        else:
+            from .gender import validate_policy
+            codes=validate_policy(gender["policy"],species_vocabulary)
+            explicit=(pool["gender"][indices] if "gender" in pool else np.full(state.gender.shape,-1,np.int32))
+            constructor_errors=np.any((codes[np.asarray(state.species)]==-1)&(explicit==-1),axis=(1,2))
+            valid=np.flatnonzero(~constructor_errors)
+            if len(valid):
+                proof=jax.tree.map(lambda x:x[valid],state)
+                proof=initialize_genders(proof,gender["policy"],species_vocabulary,
+                    seed=gender["seed"],domain=gender["domain"],
+                    root_ids=[rows[i]["slot"]+gender["root_start"] for i in valid],
+                    explicit_genders=explicit[valid])
+                state=state._replace(gender=state.gender.at[valid].set(proof.gender))
+    if constructors is not None:
+        originals=tuple(constructors.capture(state,i,row["teams"],entry) for i,row in enumerate(rows))
+    if gender is not None or constructors is not None:
         state = transition.initialize(state, table)
+    if constructors is not None:
+        post_entry=jax.device_get(state)
     lengths = jnp.asarray([r["prefix_requests"] for r in rows])
-    errors = np.zeros(len(rows), bool)
+    errors = constructor_errors.copy()
     traces = [[] for _ in rows]
     compiled = jax.jit(transition.step)
     for request in range(entry["prefix_cycle"] - 1):
         actions, missing, _ = choose(state, table, salt=entry["rng_domain"] + request)
         result = jax.block_until_ready(compiled(state, actions, table))
-        advance = lengths > request
+        advance = (lengths > request) & ~constructor_errors
         errors |= np.asarray(advance & (missing | result.invalid_actions))
         host_actions = np.asarray(actions)
         for i, row in enumerate(rows):
-            if row["prefix_requests"] > request:
+            if row["prefix_requests"] > request and not constructor_errors[i]:
                 traces[i].append(host_actions[i].tolist())
         state = jax.tree.map(lambda old, new: jnp.where(
             advance.reshape((len(rows),) + (1,)*(old.ndim-1)), new, old), state, result.state)
     actions, missing, requested = choose(state, table, salt=entry["rng_domain"] + entry["prefix_cycle"])
     errors |= np.asarray(missing)
     from .state import usable_moves
-    return (jax.device_get(state), np.asarray(actions), rows, traces, errors,
+    result=(jax.device_get(state), np.asarray(actions), rows, traces, errors,
             np.asarray(requested), np.asarray(usable_moves(state)))
+    return result if constructors is None else (*result,originals,post_entry,constructor_errors)
 
 
 def runtime_admission(entry):
@@ -164,6 +189,9 @@ def runtime_admission(entry):
                     for name in ("jax", "jaxlib", "numpy", "poke-engine")})
     if package != entry["native_python_sha256"] or versions != entry["runtime_versions"]:
         raise ValueError("native wrapper/dependency versions differ from entry")
+    if entry.get("constructor_provenance") is not None:
+        from .source_provenance import RuntimeAttestation,verify_native_runtime
+        verify_native_runtime(RuntimeAttestation(**entry["constructor_provenance"]["runtime"]))
     return dict(source_commit=commit, native=str(native), source_inventory=actual,
                 native_python_sha256=package, runtime_versions=versions)
 
@@ -181,7 +209,14 @@ def run(entry, pool_path, out):
         raise FileExistsError("exclusive new panel directory required; no resume")
     admission = runtime_admission(entry)
     device = sole_gpu()
-    pool, metadata, digest = load_bound_pool(pool_path)
+    constructors=None
+    if entry.get("constructor_provenance") is None:
+        pool, metadata, digest = load_bound_pool(pool_path)
+    else:
+        from .prospective_panel import admit
+        constructors=admit(entry,pool_path)
+        pool=constructors.pool.arrays;metadata=constructors.context.metadata()
+        digest=constructors.context.pool_sha256
     if digest != entry["pool_sha256"]:
         raise ValueError("immutable pool digest mismatch")
     if entry.get("gender_initialization") is not None:
@@ -189,14 +224,20 @@ def run(entry, pool_path, out):
         if (policy["provenance"]["compiled_tree"] != metadata["compiled_tree"]
                 or policy["provenance"]["pool_sha256"] != digest):
             raise ValueError("gender policy compiled Dex differs from immutable pool")
-    table = tables_from_metadata(metadata)
+    table = tables_from_metadata(metadata if constructors is None else constructors.pool.metadata())
     out.mkdir()
     started = time.monotonic()
     with (out / "admission.json").open("xb") as stream:
         stream.write(encoded(dict(**admission, device=device.device_kind, entry=entry)))
-    state, actions, roster, traces, source_errors, requested, usable = generate_inputs(
-        pool, table, entry, species_vocabulary=metadata["vocabulary"]["species"])
+    generated = generate_inputs(pool, table, entry,
+        species_vocabulary=metadata["vocabulary"]["species"],constructors=constructors)
+    state, actions, roster, traces, source_errors, requested, usable = generated[:7]
+    if constructors is not None:
+        originals,post_entry,constructor_errors=generated[7:]
+        with (out/"constructor-context.json").open("xb") as stream:
+            stream.write(encoded(constructors.frozen_context()))
     records = []
+    record_hashes=[]
     # Entire source input artifact closes before the first native/planner call.
     input_digest = hashlib.sha256()
     with gzip.open(out / "inputs.jsonl.gz", "xb") as stream:
@@ -207,12 +248,22 @@ def run(entry, pool_path, out):
                 terminal=bool(raw["done"]), requested=requested[i].tolist(),
                 request_labels=request_labels(raw, actions[i].tolist(), requested[i].tolist(),
                     usable[i].tolist(), metadata["vocabulary"]["moves"]))
+            if constructors is not None:
+                record.update(constructor_provenance=asdict(originals[i]),
+                    post_entry_state=mapping._sample(post_entry,i),
+                    constructor_context_sha256=constructors.context.sha256,
+                    constructor_source_error=bool(constructor_errors[i]))
             records.append(record)
+            if constructors is not None:
+                from .source_provenance import _sha
+                record_hashes.append(_sha(record))
             line = encoded(record) + b"\n"
             input_digest.update(line)
             stream.write(line)
     frozen = dict(slots=len(records), input_jsonl_sha256=input_digest.hexdigest(),
                   compressed_sha256=hashlib.sha256((out / "inputs.jsonl.gz").read_bytes()).hexdigest())
+    if constructors is not None:
+        frozen["constructor_context_file_sha256"]=hashlib.sha256((out/"constructor-context.json").read_bytes()).hexdigest()
     with (out / "inputs-frozen.json").open("xb") as stream:
         stream.write(encoded(frozen))
     print(json.dumps(dict(event="INPUTS_FROZEN", **frozen)), flush=True)
@@ -225,11 +276,18 @@ def run(entry, pool_path, out):
         # Preserve exact source dtypes, notably uint32 PRNG addresses.
         root = jax.tree.map(lambda x: jnp.asarray(x[index:index+1]), state)
         if record["source_error"] or record["terminal"]:
-            result = dict(status="UNKNOWN", category="SOURCE_REQUEST_FAILURE" if record["source_error"]
+            result = dict(status="UNKNOWN", category="SOURCE_CONSTRUCTOR_FAILURE" if record.get("constructor_source_error")
+                          else "SOURCE_REQUEST_FAILURE" if record["source_error"]
                           else "TERMINAL_SOURCE_ROOT", identified_mass="0", unknown_mass="1")
         else:
-            plan = plan_for_state(root, 0, tuple(record["actions"]), table, metadata,
-                                  cap=entry["max_cases"])
+            if constructors is None:
+                plan = plan_for_state(root, 0, tuple(record["actions"]), table, metadata,
+                                      cap=entry["max_cases"])
+            else:
+                from .prospective_panel import plan_for_record
+                initial=jax.tree.map(lambda x:jnp.asarray(x[index:index+1]),post_entry)
+                plan=plan_for_record(root,initial,record,originals[index],constructors,table,entry,
+                    record_sha256=record_hashes[index])
             if isinstance(plan, mapping.Refused):
                 codes = sorted({gap.code for gap in plan.gaps})
                 result = dict(status="UNKNOWN", category="CASE_CAP" if "CHANCE_CARDINALITY_CAP" in codes
@@ -238,13 +296,17 @@ def run(entry, pool_path, out):
             else:
                 executor = JaxCaseExecutor(root, tuple(record["actions"]), table, plan,
                                           batch_size=entry["case_batch"])
-                result = compare_slot(plan, executor, lambda: native_executor(plan),
+                execute_native=(plan.native_results if constructors is not None and record["state"]["pending_residual"]
+                                else lambda:native_executor(plan))
+                result = compare_slot(plan, executor, execute_native,
                     batch_size=entry["case_batch"], mass_tolerance=entry["mass_tolerance"],
                     probability_tolerance=entry["probability_tolerance"])
                 result["consumer_certificate"] = dict(source=plan.source_certificate,
                     table=plan.table_certificate, axes=[asdict(axis) for axis in plan.axes],
                     cardinality=plan.cardinality, native_input=plan.native_input.raw_native,
-                    native_actions=plan.native_actions.choices)
+                    native_actions=(asdict(plan.native_actions) if constructors is not None else plan.native_actions.choices))
+                if constructors is not None and record["state"]["pending_residual"]:
+                    result["consumer_certificate"]["native_cases"]=plan.native_evidence()
         result.update(slot=index, input_jsonl_sha256=frozen["input_jsonl_sha256"])
         # Exclusive per-slot compressed full law; no accepted-prefix rewriting.
         with gzip.open(out / f"slot-{index:04d}.json.gz", "xb") as stream:
