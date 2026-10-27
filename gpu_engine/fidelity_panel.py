@@ -7,7 +7,7 @@ The owned run supervisor, not this module, enforces the operation-time deadline.
 """
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from dataclasses import asdict
 from fractions import Fraction
 import itertools
@@ -79,7 +79,9 @@ def compare_slot(plan, execute_cases, execute_native, *, batch_size,
             for case, result in zip(batch, results, strict=True):
                 future = require_future(result)
                 exact[future.key] += case.mass
-                representatives.setdefault(future.key, {})["jax"] = asdict(future)
+                representative = representatives.setdefault(future.key, {})
+                if "jax" not in representative:
+                    representative["jax"] = asdict(future)
                 completed_cases += 1
         if completed_cases != plan.cardinality or sum(exact.values()) != 1:
             raise RuntimeError("incomplete exact law; no prefix may be accepted")
@@ -92,7 +94,9 @@ def compare_slot(plan, execute_cases, execute_native, *, batch_size,
                 continue
             future = require_future(result)
             native[future.key] += probability
-            representatives.setdefault(future.key, {})["native"] = asdict(future)
+            representative = representatives.setdefault(future.key, {})
+            if "native" not in representative:
+                representative["native"] = asdict(future)
         if not native or abs(math.fsum(native.values()) - 1) > mass_tolerance:
             raise WholeSlotUnknown("INVALID_NATIVE_MASS", dict(
                 mass=math.fsum(native.values()), tolerance=mass_tolerance))
@@ -116,6 +120,50 @@ def compare_slot(plan, execute_cases, execute_native, *, batch_size,
             for key in sorted(set(exact) | set(native), key=repr)])
 
 
+class _PhysicalSuccessorCache:
+    """Root-local canonicalization memo; no cases or probabilities are removed.
+
+    A key includes every returned state field's name, dtype, shape and exact
+    bytes. The bound mapping context is checked once per batch; changing it
+    clears the memo so existing correspondence/refusal checks run again.
+    """
+    def __init__(self, fields, batch_size, *, limit=1024):
+        if type(limit) is not int or limit <= 0:
+            raise ValueError("positive canonical successor cache bound required")
+        self.fields, self.size, self.limit = tuple(fields), batch_size, limit
+        self.context = None
+        self.values = OrderedDict()
+
+    def canonicalize(self, host, count, plan):
+        import numpy as np
+        data = host._asdict()
+        if tuple(data) != self.fields or not 0 < count <= self.size:
+            raise ValueError("complete fixed-size successor state required")
+        context = (mapping._metadata_sha(plan.metadata), plan.native_input.certificate)
+        if context != self.context:
+            self.values.clear()
+            self.context = context
+        arrays = tuple(np.asarray(data[name]) for name in self.fields)
+        if any(a.ndim == 0 or a.shape[0] != self.size or a.dtype.hasobject for a in arrays):
+            raise ValueError("complete non-object successor arrays required")
+        header = tuple((name, a.dtype.str, a.shape[1:])
+                       for name, a in zip(self.fields, arrays, strict=True))
+        rows = np.concatenate(tuple(np.ascontiguousarray(a).reshape(self.size, -1)
+            .view(np.uint8).reshape(self.size, -1) for a in arrays), axis=1)
+        results = []
+        for index in range(count):
+            key = (header, rows[index].tobytes())
+            if key in self.values:
+                future = self.values.pop(key)
+            else:
+                future = plan.canonical_successor(host, index)
+            self.values[key] = future
+            if len(self.values) > self.limit:
+                self.values.popitem(last=False)
+            results.append(future)
+        return tuple(results)
+
+
 class JaxCaseExecutor:
     """Fixed-size padded execution; padding never enters the probability law."""
     def __init__(self, state, actions, table, plan, *, batch_size):
@@ -137,6 +185,7 @@ class JaxCaseExecutor:
         self.actions = jnp.repeat(jnp.asarray([actions], jnp.int32), batch_size, axis=0)
         self.table = table
         self.compiled = jax.jit(step_with_chance)
+        self.canonical_cache = _PhysicalSuccessorCache(self.state._fields, batch_size)
 
     def __call__(self, cases):
         import numpy as np
@@ -157,7 +206,7 @@ class JaxCaseExecutor:
         if np.asarray(result.invalid_actions)[:len(cases)].any():
             raise WholeSlotUnknown("INVALID_JAX_ACTION", "bound requested action refused")
         host = self.jax.device_get(result.state)
-        return tuple(self.plan.canonical_successor(host, i) for i in range(len(cases)))
+        return self.canonical_cache.canonicalize(host, len(cases), self.plan)
 
 
 def native_executor(plan):
