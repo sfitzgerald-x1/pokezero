@@ -57,6 +57,10 @@ def depart(state,side,table,*,eligible):
     cure=hp<=0
     if table is not None:
         cure |= table.natural_cure[state.ability[rows,side,active]]
+    # Departure consumers see the current ability first (including a copied
+    # Natural Cure). Restore the immutable constructor ability afterwards.
+    state=state._replace(ability=state.ability.at[rows,side,active].set(jnp.where(
+        eligible,state.base_ability[rows,side,active],state.ability[rows,side,active])))
     counter=state.status_counter[rows,side,active]
     old_clock=state.truant_loaf[rows,side,active]
     state=state._replace(truant_loaf=state.truant_loaf.at[rows,side,active].set(

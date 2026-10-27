@@ -37,7 +37,7 @@ class ConditionedRoleTests(unittest.TestCase):
         cls.jax,cls.j,cls.engine,cls.f,cls.t=jax,j,poke_engine,f,t
         cls.empty=staticmethod(empty_state);cls.step=staticmethod(jax.jit(t.step_with_chance))
 
-    def setup_case(self,replacing,ability,item,queued_move,*,poison_carrier=False,trace_base=False):
+    def setup_case(self,replacing,ability,item,queued_move,*,poison_carrier=False,trace_base=False,copied_ability=None,inert_bench=True):
         from gpu_engine import conditioned_future as c
         helper=self.fixtures('test_full_successors_both_seats_saved_secondary_and_no_redraw')
         _,_,certificate,_,chance=helper.fixture(replacing,99,queued_move=queued_move,poison=False,static_at=1)
@@ -51,12 +51,15 @@ class ConditionedRoleTests(unittest.TestCase):
         if poison_carrier:state=state._replace(status=state.status.at[:,replacing,0].set(3))
         # Both parties retain a reached-unsafe ability/item on an untouched
         # bench Pokemon. Full successor comparison must retain it without hooks.
-        state=state._replace(ability=state.ability.at[:,:,2].set(self.meta['vocabulary']['abilities'].index('effectspore')),
-            item=state.item.at[:,:,2].set(self.meta['vocabulary']['items'].index('choiceband')))
+        if inert_bench:
+            state=state._replace(ability=state.ability.at[:,:,2].set(self.meta['vocabulary']['abilities'].index('effectspore')),
+                item=state.item.at[:,:,2].set(self.meta['vocabulary']['items'].index('choiceband')))
+        state=state._replace(base_ability=state.ability)
         original=self.f.native_input_from_jax(state,0,self.meta,module=self.engine)
         self.assertIsInstance(original,self.f.NativeInput,original)
-        if trace_base:
-            state=state._replace(ability=state.ability.at[:,replacing,0].set(1))
+        if trace_base or copied_ability is not None:
+            current=1 if copied_ability is None else self.meta['vocabulary']['abilities'].index(copied_ability)
+            state=state._replace(ability=state.ability.at[:,replacing,0].set(current))
             original=self.f._native_input_from_data(self.f._sample(state,0),self.meta,module=self.engine,
                 original_static=original.certificate.static_native,
                 original_genders=dict(original.certificate.input_fields)['gender'])
@@ -80,10 +83,10 @@ class ConditionedRoleTests(unittest.TestCase):
         self.assertEqual(native_key.key,jax_key.key)
         return paused,original.certificate
 
-    def compare(self,state,certificate,replacing):
+    def compare(self,state,certificate,replacing,action=4):
         from gpu_engine.conditional_law import plan_for_suspension,ConditionalConsumerPlan
         from gpu_engine.fidelity_panel import JaxCaseExecutor,compare_slot
-        actions=(4,0) if replacing==0 else (0,4)
+        actions=(action,0) if replacing==0 else (0,action)
         plan=plan_for_suspension(state,0,actions,self.table,self.meta,certificate=certificate,cap=4)
         self.assertIsInstance(plan,ConditionalConsumerPlan,plan)
         return compare_slot(plan,JaxCaseExecutor(state,actions,self.table,plan,batch_size=4),
@@ -106,16 +109,46 @@ class ConditionedRoleTests(unittest.TestCase):
                 result=self.compare(state,certificate,side)
                 self.assertEqual(result['status'],'AGREE',result)
 
-    def test_original_trace_departure_exposes_jax_base_restoration_gap(self):
+    def test_original_trace_departure_matches_full_law(self):
         for side in (0,1):
             state,certificate=self.setup_case(side,'trace','leftovers','thunderbolt',trace_base=True)
             result=self.compare(state,certificate,side)
-            self.assertEqual(result['status'],'DIVERGE',result)
-            self.assertFalse(result['support_equal'])
-            jax_key=next(row['key'] for row in result['outcomes'] if row['jax_probability']=='1')
-            native_key=next(row['key'] for row in result['outcomes'] if row['native_probability']==1.)
-            expected=f"{self.f.SIDE_NAMES[side]}.pokemon[0].ability"
-            self.assertEqual(self.f.field_differences(jax_key,native_key),((expected,'static','trace'),))
+            self.assertEqual(result['status'],'AGREE',result)
+
+    def test_copied_natural_cure_and_original_natural_cure_are_asymmetric_full_laws(self):
+        for side in (0,1):
+            for original,current,expected_status in (('trace','naturalcure',0),('naturalcure','static',3)):
+                state,certificate=self.setup_case(side,original,'leftovers','thunderbolt',
+                    poison_carrier=True,copied_ability=current)
+                result=self.compare(state,certificate,side)
+                self.assertEqual(result['status'],'AGREE',result)
+                chance=self.t.ChanceInputs(self.j.zeros((1,2,12),self.j.int32),self.j.zeros((1,2),self.j.int32),
+                    self.j.zeros((1,2),self.j.int32),self.j.zeros((1,2),self.j.int32),
+                    self.j.array([[0,1]]),self.j.array([0]))
+                actions=self.j.array([[4,0] if side==0 else [0,4]])
+                after=self.step(state,actions,self.table,chance).state
+                self.assertEqual(int(after.status[0,side,0]),expected_status)
+                self.assertEqual(int(after.ability[0,side,0]),self.meta['vocabulary']['abilities'].index(original))
+                self.assertTrue(bool(self.j.array_equal(after.base_ability,state.base_ability)))
+
+    def test_trace_originals_survive_hazard_ko_and_following_replacement_laws(self):
+        for side in (0,1):
+            state,certificate=self.setup_case(side,'trace','leftovers','thunderbolt',
+                trace_base=True,inert_bench=False)
+            state=state._replace(spikes=state.spikes.at[:,side].set(1),
+                hp=state.hp.at[:,side,1].set(125))
+            first=self.compare(state,certificate,side)
+            self.assertEqual(first['status'],'AGREE',first)
+            chance=self.t.ChanceInputs(self.j.zeros((1,2,12),self.j.int32),self.j.zeros((1,2),self.j.int32),
+                self.j.zeros((1,2),self.j.int32),self.j.zeros((1,2),self.j.int32),
+                self.j.array([[0,1]]),self.j.array([0]))
+            actions=self.j.array([[4,0] if side==0 else [0,4]])
+            paused=self.step(state,actions,self.table,chance).state
+            self.assertTrue(bool(paused.pending_residual[0]))
+            self.assertEqual(int(paused.ability[0,side,0]),self.meta['vocabulary']['abilities'].index('trace'))
+            self.assertTrue(bool(self.j.array_equal(paused.base_ability,state.base_ability)))
+            second=self.compare(paused,certificate,side,action=5)
+            self.assertEqual(second['status'],'AGREE',second)
 
     def test_unrepresented_stick_is_a_named_construction_refusal(self):
         helper=self.fixtures('test_full_successors_both_seats_saved_secondary_and_no_redraw')

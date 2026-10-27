@@ -62,6 +62,6 @@ jobs:
               'tests.test_prospective_fidelity_panel', 'tests.test_gpu_engine_panel_owner',
               'tests.test_native_gpu_panel_execution'])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 51 and not result.skipped
+          assert result.testsRun >= 54 and not result.skipped
           assert result.wasSuccessful()
           PY

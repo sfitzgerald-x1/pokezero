@@ -95,6 +95,7 @@ class ConditionedResumeTests(unittest.TestCase):
                 state=state._replace(types=state.types.at[:,replacing,1,0].set(3))
             if terminal_chain:
                 state=state._replace(hp=state.hp.at[:,replacing,2:].set(0).at[:,replacing,0].set(damage))
+        state=state._replace(base_ability=state.ability)
         native = self.f.native_input_from_jax(state, 0, self.meta, module=self.engine)
         self.assertIsInstance(native, self.f.NativeInput, native)
         branches = self.engine.generate_instructions(native.state, "batonpass" if replacing == 0 else queued_move,

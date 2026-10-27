@@ -224,7 +224,7 @@ class ConstructorProvenance:
 _POOL_STATE_FIELDS = ("species","level","types","stats","moves","pp","item","ability",
     "hidden_power_type","hidden_power_power")
 _IMMUTABLE_FIELDS = ("species","level","stats","max_hp","moves","hidden_power_type",
-    "hidden_power_power","happiness","gender")
+    "hidden_power_power","happiness","gender","base_ability")
 
 
 class _GenderInput(NamedTuple):
@@ -266,6 +266,8 @@ def capture_before_entry(state,index,pool,team_indices,*,context,runtime,root_id
             if "happiness" in pool else ((255,)*6,)*2)
         if any(data[name]!=selected[name] for name in _POOL_STATE_FIELDS):
             raise ValueError("CONSTRUCTOR_POOL_IDENTITY_CHANGED")
+        if data["base_ability"]!=selected["ability"]:
+            raise ValueError("CONSTRUCTOR_BASE_ABILITY_CHANGED")
         if data["happiness"]!=selected["happiness"] or any(type(v) is not int or not 0<=v<=255
                 for party in selected["happiness"] for v in party):
             raise ValueError("CONSTRUCTOR_HAPPINESS_CHANGED")
