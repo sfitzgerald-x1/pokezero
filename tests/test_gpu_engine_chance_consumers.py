@@ -29,7 +29,8 @@ def table(meta):
             haze=field({"haze": True}, False), protect=field({"protect": True}, False), endure=field({}),
         ), secondary=dict(chance=field({"icebeam": 10, "thunderbolt": 10, "thunder": 30}),
             status=field({"icebeam": 6, "thunderbolt": 1, "thunder": 1}),
-            contact=field({}, False), static=[False]*len(meta['vocabulary']['abilities'])),
+            contact=field({}, False), static=[False]*len(meta['vocabulary']['abilities']),
+            synchronize=[False]*len(meta['vocabulary']['abilities'])),
         weather=dict(move_weather=field({"raindance": 1, "sunnyday": 2}), thunder=field({"thunder": True}, False)),
         sleep_talk=dict(move=field({"sleeptalk": True}, False),
             callable=[name not in {"_none", "sleeptalk", "struggle"} for name in names]),
@@ -57,6 +58,59 @@ class ChanceConsumerTests(unittest.TestCase):
     def cells(self, plan, coordinate):
         axis = next(a for a in plan.axes if a.coordinate == coordinate)
         return partition(dict(COORDINATES)[coordinate], axis.observations)
+
+    def test_synchronize_after_static_keeps_other_seats_paralysis_axis(self):
+        for actor in (0,1):
+            data,meta=fixture();meta['vocabulary']['abilities']+=['synchronize','static']
+            data['ability'][actor][0]=2;data['base_ability'][actor][0]=2
+            data['ability'][1-actor][0]=3;data['base_ability'][1-actor][0]=3
+            # Return is a non-paralysis contact fixture: reflection is the
+            # only path by which the waiting Static holder can become paralyzed.
+            for seat in (0,1):self.choose(data,meta,seat,'return')
+            move=meta['vocabulary']['moves'].index('return')
+            t=table(meta);t['power'][move]=102;t['secondary']['contact'][move]=True
+            t['secondary']['static'][3]=True;t['secondary']['synchronize'][2]=True
+            plan=self.plan(data,meta,kernel_table=t)
+            self.assertIsInstance(plan,c.ConsumerPlan,plan)
+            self.assertEqual(len(self.cells(plan,f'draws.{1-actor}.2')),2)
+            t['secondary']['synchronize'][2]=False
+            plain=self.plan(data,meta,kernel_table=t)
+            self.assertEqual(len(self.cells(plain,f'draws.{1-actor}.2')),1)
+
+    def test_trace_copied_synchronize_is_in_reflected_status_closure(self):
+        for actor in (0,1):
+            data,meta=fixture();meta['vocabulary']['abilities']+=['synchronize','trace']
+            meta['vocabulary']['moves'].append('bodyslam');move=len(meta['vocabulary']['moves'])-1
+            data['ability'][actor][0]=2;data['base_ability'][actor][0]=2
+            data['ability'][1-actor][1]=3;data['base_ability'][1-actor][1]=3
+            data['moves'][actor][0][0]=move
+            t=table(meta);t['power'][move]=85;t['secondary']['contact'][move]=True
+            t['secondary']['chance'][move]=30;t['secondary']['status'][move]=1
+            t['secondary']['synchronize'][2]=True
+            t['entry']={'trace':[False,False,False,True],'weather_ability':[0,0,0,0]}
+            actions=(0,4) if actor==0 else (4,0)
+            plan=self.plan(data,meta,actions=actions,kernel_table=t)
+            self.assertIsInstance(plan,c.ConsumerPlan,plan)
+            self.assertEqual(len(self.cells(plan,f'draws.{actor}.2')),2)
+            t['entry']['trace'][3]=False
+            plain=self.plan(data,meta,actions=actions,kernel_table=t)
+            self.assertEqual(len(self.cells(plain,f'draws.{actor}.2')),1)
+
+    def test_synchronize_toxic_activates_both_sides_residual_status_coin(self):
+        for actor in (0,1):
+            data,meta=fixture();meta['vocabulary']['abilities'].append('synchronize')
+            meta['vocabulary']['moves'].append('toxic');move=len(meta['vocabulary']['moves'])-1
+            data['ability'][1-actor][0]=2;data['base_ability'][1-actor][0]=2
+            data['moves'][actor][0][0]=move
+            t=table(meta);t['effects']['status'][move]=4;t['secondary']['synchronize'][2]=True
+            actions=(0,1) if actor==0 else (1,0)
+            plan=self.plan(data,meta,actions=actions,kernel_table=t)
+            self.assertIsInstance(plan,c.ConsumerPlan,plan)
+            self.assertEqual(len(self.cells(plan,'draws.1.9')),2)
+            self.assertEqual(len(self.cells(plan,f'draws.{actor}.2')),1)
+            t['secondary']['synchronize'][2]=False
+            plain=self.plan(data,meta,actions=actions,kernel_table=t)
+            self.assertEqual(len(self.cells(plain,'draws.1.9')),1)
 
     def test_complete_physical_inventory_and_exact_unit_mass(self):
         plan = self.plan()

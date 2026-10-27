@@ -12,6 +12,7 @@ import numpy as np
 
 from . import mechanics as m
 from .effects import from_metadata as effects_from_metadata
+from .items import consume_lum
 from .state import FLINCH,FOCUS_PUNCH
 from .weather import SUN
 
@@ -53,6 +54,7 @@ class SecondaryTable(NamedTuple):
     static: jax.Array            # [A], Gen3 one-third contact paralysis
     speed_drop: jax.Array        # [M], selected target Speed secondary
     self_omni: jax.Array         # [M], five user stages; not target Dust/Sub gated
+    synchronize: jax.Array       # [A], deterministic reflection of fresh status
 
 
 def from_metadata(metadata):
@@ -76,10 +78,52 @@ def from_metadata(metadata):
         flags({"innerfocus"}), jnp.asarray(immunity), effects_from_metadata(metadata).status_immunity,
         jnp.asarray(contact), flags({'static'}),
         jnp.asarray([name == 'mudshot' for name in vocab['moves']]),
-        jnp.asarray([name in {'silverwind', 'ancientpower'} for name in vocab['moves']]))
+        jnp.asarray([name in {'silverwind', 'ancientpower'} for name in vocab['moves']]),
+        flags({'synchronize'}))
 
 
-def apply_contact(state, side, move, roll, table, *, eligible):
+def after_status_event(state, source, afflicted, status, table, *, applied, item_table=None):
+    """Gen3 AfterSetStatus: reflect first, then consume each event's Lum.
+
+    The caller has just installed a fresh status and supplies that exact mask.
+    Synchronize uses no new chance and bypasses the source's Substitute. Toxic
+    reflects as ordinary poison; sleep/freeze and self-infliction do not reflect.
+    Existing type/ability immunity and a living, unstatused source still apply.
+    """
+    rows=jnp.arange(state.hp.shape[0])
+    own,target=state.active[rows,source],state.active[rows,afflicted]
+    reflected=jnp.where(status==m.TOX,m.PSN,status)
+    reflects=(jnp.asarray(applied) & (source!=afflicted)
+        & table.synchronize[state.ability[rows,afflicted,target]]
+        & ((status==m.PAR)|(status==m.BRN)|(status==m.PSN)|(status==m.TOX))
+        & (state.hp[rows,source,own]>0) & (state.status[rows,source,own]==m.NONE)
+        & status_allowed(table,reflected,state.types[rows,source,own],state.ability[rows,source,own]))
+    updates={}
+    for name,value in [('status',reflected),('status_counter',0),('sleep_skipped',0),('rest_origin',False)]:
+        old=getattr(state,name)
+        updates[name]=old.at[rows,source,own].set(jnp.where(reflects,value,old[rows,source,own]))
+    state=state._replace(**updates)
+    if item_table is not None:
+        # A nested reflection finishes before the original holder's Lum event.
+        # Cure now, before a later contact event can inflict/reflect again.
+        for side,changed in ((source,reflects),(afflicted,jnp.asarray(applied))):
+            active=state.active[rows,side]
+            get=lambda a:a[rows,side,active]
+            old_item=get(state.item)
+            result=consume_lum(item_table,old_item,get(state.status),get(state.status_counter),
+                get(state.confusion_counter),get(state.hp),eligible=changed)
+            consumed=result.item!=old_item
+            updates={}
+            for name,value in zip(('item','status','status_counter','confusion_counter'),result):
+                updates[name]=getattr(state,name).at[rows,side,active].set(value)
+            for name in ('sleep_skipped','rest_origin'):
+                old=getattr(state,name)
+                updates[name]=old.at[rows,side,active].set(jnp.where(consumed,jnp.zeros_like(get(old)),get(old)))
+            state=state._replace(**updates)
+    return state
+
+
+def apply_contact(state, side, move, roll, table, *, eligible, item_table=None):
     """Static's Gen3 onDamagingHit, after damage/secondaries, before Lum.
 
     The existing uniform [0,60) auxiliary draw gives exactly 20/60 = 1/3.
@@ -100,10 +144,12 @@ def apply_contact(state, side, move, roll, table, *, eligible):
         & table.static[state.ability[rows, foe, target]] & (jnp.asarray(roll) < 20)
         & (state.hp[rows, side, own] > 0) & (state.status[rows, side, own] == m.NONE)
         & ~table.ability_immunity[ability, m.PAR])
-    return state._replace(
+    state=state._replace(
         status=state.status.at[rows, side, own].set(jnp.where(proc, m.PAR, state.status[rows, side, own])),
         status_counter=state.status_counter.at[rows, side, own].set(
             jnp.where(proc, 0, state.status_counter[rows, side, own])))
+    return after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
+        applied=proc,item_table=item_table)
 
 
 def status_allowed(table, status, types, ability, *, effective_weather=0):
@@ -113,7 +159,8 @@ def status_allowed(table, status, types, ability, *, effective_weather=0):
     return ~immune
 
 
-def apply(state, side, move, roll, table, *, eligible, effective_weather=0, substitute_hit=False):
+def apply(state, side, move, roll, table, *, eligible, effective_weather=0, substitute_hit=False,
+          item_table=None):
     rows = jnp.arange(state.hp.shape[0]); foe = 1 - side
     own, target = state.active[rows, side], state.active[rows, foe]
     get = lambda value: value[rows, foe, target]
@@ -136,10 +183,11 @@ def apply(state, side, move, roll, table, *, eligible, effective_weather=0, subs
         jnp.clip(own_boosts[:, :5] + 1, -6, 6), own_boosts[:, :5]))
     flinch = (proc & table.flinch[move] & ~table.inner_focus[ability]
         & ((get(state.volatile) & FOCUS_PUNCH)==0))
-    return state._replace(
+    state=state._replace(
         status=state.status.at[rows, foe, target].set(jnp.where(changes, status, get(state.status))),
         status_counter=state.status_counter.at[rows, foe, target].set(
             jnp.where(changes, 0, get(state.status_counter))),
         boosts=state.boosts.at[rows, foe, target].set(boosts).at[rows, side, own].set(own_boosts),
         volatile=state.volatile.at[rows, foe, target].set(
             get(state.volatile) | jnp.where(flinch, jnp.uint32(FLINCH), jnp.uint32(0))))
+    return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table)
