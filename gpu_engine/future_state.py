@@ -213,6 +213,10 @@ class CanonicalFuture:
 
 
 def _freeze(value):
+    # Array samples contain mostly exact Python primitives after tolist().
+    # Avoid container/array introspection on each scalar in the party state.
+    if type(value) in (int, bool, str, float) or value is None:
+        return value
     if hasattr(value, "tolist"):
         value = value.tolist()
     if isinstance(value, dict):
@@ -598,7 +602,9 @@ def canonical_jax_future(state, index, metadata, *, certificate):
     raw = ()
     try:
         data = _sample(state, index)
-        raw = _freeze(data)
+        # _sample has recursively frozen every value already. Retain the same
+        # sorted complete record without walking all party fields a second time.
+        raw = tuple((str(name), value) for name, value in sorted(data.items()))
         expected, gaps, _, last, damage = _prepare(data, metadata, certificate)
     except (ValueError, KeyError, IndexError, TypeError) as error:
         return Refused((Gap("schema", "INVALID_FUTURE", str(error)),), raw)
