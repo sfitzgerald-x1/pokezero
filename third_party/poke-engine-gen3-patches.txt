@@ -1799,3 +1799,6 @@ poke-engine-gen3-conditioned-resume.patch
 poke-engine-gen3-conditioned-contact.patch
 poke-engine-gen3-conditioned-hazards.patch
 poke-engine-gen3-conditioned-roles.patch
+
+# Reached Pressure/Levitate have deterministic PP/grounding effects; retained base abilities are inert.
+poke-engine-gen3-conditioned-deterministic-abilities.patch

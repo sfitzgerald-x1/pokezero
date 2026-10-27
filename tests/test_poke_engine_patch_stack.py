@@ -116,7 +116,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-32:]],
+                [entry.name for entry in applied[-33:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -160,6 +160,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-conditioned-contact.patch",
                     "poke-engine-gen3-conditioned-hazards.patch",
                     "poke-engine-gen3-conditioned-roles.patch",
+                    "poke-engine-gen3-conditioned-deterministic-abilities.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.

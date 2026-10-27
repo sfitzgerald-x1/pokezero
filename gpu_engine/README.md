@@ -610,8 +610,11 @@ This opt-in implements collection plumbing; it supplies no launch admission or
 historical coverage credit. A new reviewed frozen entry and the standing saved-
 root cost check are still required before any future scientific attempt. Broader
 Trace effects, Sleep Talk and suspension contexts remain unfinished.
-The native continuation validator now applies its existing None/Static ability
-and None/Leftovers item whitelist to the entrant and remaining active. Untouched
+The native continuation validator admits current None/Static/Pressure/Levitate
+abilities and None/Leftovers items on the entrant and remaining active. Pressure
+adds deterministic PP cost and Levitate changes grounding in the admitted queued
+move context. Retained original abilities are inert until departure, so their
+values remain bound and compared without a current-consumer whitelist. Untouched
 bench fields and outgoing-carrier abilities/items are retained; departure runs
 Natural Cure and base-ability restoration explicitly. General status, side,
 weather and saved-chance guards remain. The old all-party rule excluded every
