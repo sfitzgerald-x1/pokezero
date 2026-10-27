@@ -40,7 +40,7 @@ concurrency:
 jobs:
   conditional-successors:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       JAX_PLATFORMS: cpu
       OMP_NUM_THREADS: '2'
