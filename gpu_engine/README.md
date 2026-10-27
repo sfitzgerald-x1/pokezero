@@ -700,3 +700,16 @@ Every fixed slot is retained without refill, normalization or an all-AGREE rule.
 The accounting reports no automatic comparison-cost, fidelity or strength
 qualification. Independently reviewed frozen source ranges, runtime, resources
 and entries are still required before any scientific collection.
+
+Rest-origin state is produced only by a successful Rest and ends on wake/cure.
+It binds remaining1–3 and Sleep Talk refund0–3 to the corresponding native
+Rest fields at ordinary boundaries; the refund follows the sleeping party
+member and is spent only on re-entry. Natural sleep still refuses because
+sampled remaining duration is not the native elapsed-hazard convention.
+Native91 Lum's stale cured Rest fields remain a named refusal. This state
+correspondence does not qualify Sleep Clause, all sleep consumers, or full-game
+fidelity; the conditional native execution guards are unchanged.
+Native91 also retains an overbroad Sleep Talk callee pool (charge moves are
+not excluded). Its positive charge branch is preserved as a separate mismatch
+control; the exact Rest carry cycles isolate the shared Rest/Sleep Talk/Splash
+callee domain and do not qualify all called-move sets.

@@ -46,6 +46,12 @@ def before_move(state,side,before_status,*,eligible,sleep_usable):
     rows=jnp.arange(state.hp.shape[0]);active=state.active[rows,side]
     old=state.sleep_skipped[rows,side,active]
     sleeping=(state.status[rows,side,active]==m.SLP) & (before_status==m.SLP)
-    skipped=jnp.where(sleeping & sleep_usable,old+1,0)
+    origin=state.rest_origin[rows,side,active]
+    # Rust's Rest refund is bounded by the counter's native 0..3 domain.
+    # Natural sleep retains its separate sampled-duration bookkeeping.
+    bank=jnp.where(origin,jnp.minimum(3,old+1),old+1)
+    skipped=jnp.where(sleeping & sleep_usable,bank,0)
     return state._replace(sleep_skipped=state.sleep_skipped.at[rows,side,active].set(
-        jnp.where(eligible,skipped,old)))
+        jnp.where(eligible,skipped,old)),
+        rest_origin=state.rest_origin.at[rows,side,active].set(
+            jnp.where(eligible,origin & sleeping,origin)))

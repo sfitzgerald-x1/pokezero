@@ -91,9 +91,9 @@ def cure_team(state,side,table,*,eligible):
     cured=(jnp.asarray(eligible)[:,None] & (state.hp[rows,side]>0) & (status!=m.NONE)
         & ~table.soundproof[state.ability[rows,side]])
     updates={}
-    for name in ("status","status_counter","sleep_skipped"):
+    for name in ("status","status_counter","sleep_skipped","rest_origin"):
         value=getattr(state,name)
-        updates[name]=value.at[rows,side].set(jnp.where(cured,0,value[rows,side]))
+        updates[name]=value.at[rows,side].set(jnp.where(cured,jnp.zeros_like(value[rows,side]),value[rows,side]))
     return state._replace(**updates)
 def weather_healing(max_hp, weather):
     """Pinned Gen 3 fractional healing, truncated once (not modern 0.667)."""

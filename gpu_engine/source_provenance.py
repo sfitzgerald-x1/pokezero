@@ -249,7 +249,7 @@ def capture_before_entry(state,index,pool,team_indices,*,context,runtime,root_id
             raise ValueError("PRE_ENTRY_CONSTRUCTOR_STAGE_REQUIRED")
         if data['last_action_kind'] != (0,0) or data['last_action_index'] != (-1,-1):
             raise ValueError('PRE_ENTRY_ACTION_HISTORY_MUST_BE_NONE')
-        zero_fields=("status","status_counter","sleep_skipped","disabled","choice_move","last_move",
+        zero_fields=("status","status_counter","sleep_skipped","rest_origin","disabled","choice_move","last_move",
             "encore_move","encore_counter","charge_move","charge_counter","boosts","volatile",
             "confusion_counter","protect_counter","substitute_hp","active_turns","trapped",
             "queued_actions","queued_stall","residual_draws","phazing_draws","secondary_draws",

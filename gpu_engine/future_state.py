@@ -33,9 +33,10 @@ FIELD_POLICY = {
     "hidden_power_power": "native60/70 variant; refuse other referenced powers",
     "happiness": "native Return102; Frustration catalog has no bound happiness parameter",
     "gender": "retained immutable -1unknown/0genderless/1male/2female; unknown permitted only under gender-insensitive inventory proof",
-    "status": "native major status; sleep origin/duration requires explicit refusal",
+    "status": "native major status; natural sleep latent duration remains refused",
     "status_counter": "active Toxic quotient min(count,14); natural sleep latent convention unresolved",
-    "sleep_skipped": "Rest provenance/refund unresolved when sleeping; otherwise stale",
+    "sleep_skipped": "exact pending Rest refund; must be zero outside sleep; natural sleep convention unresolved",
+    "rest_origin": "dynamic producer-owned Rest provenance; never inferred from remaining counter",
     "choice_move": "Choice Band disabled-slot representation; ambiguous locks refuse",
     "last_move": "inactive caller-identity observation; all Encore/history consumers use side-owned kind/index",
     "last_action_kind": "explicit side-owned NONE/SWITCH/MOVE/STRUGGLE; native tracking follows inventory flag",
@@ -86,8 +87,9 @@ NATIVE_PATHS = {
     "stats": ("side[].pokemon[].maxhp", "side[].pokemon[].{attack,defense,special_attack,special_defense,speed}"),
     "hp": ("side[].pokemon[].hp",), "max_hp": ("side[].pokemon[].maxhp",),
     "status": ("side[].pokemon[].status",),
-    "status_counter": ("side[].side_conditions.toxic_count", "UNRESOLVED: rest_turns/sleep_turns"),
-    "sleep_skipped": ("UNRESOLVED: side[].pokemon[].rest_sleep_pending_refund",),
+    "status_counter": ("side[].side_conditions.toxic_count", "side[].pokemon[].rest_turns", "UNRESOLVED: natural sleep_turns"),
+    "sleep_skipped": ("side[].pokemon[].rest_sleep_pending_refund",),
+    "rest_origin": ("side[].pokemon[].status=SLEEP + rest_turns>0",),
     "moves": ("side[].pokemon[].moves[].id",), "pp": ("side[].pokemon[].moves[].pp",),
     "disabled": ("side[].pokemon[].moves[].disabled",),
     "choice_move": ("side[].pokemon[].moves[].disabled: Choice Band lock mask",),
@@ -145,7 +147,7 @@ CONDITIONAL_LAST = frozenset(("encore", "fakeout"))
 CONDITIONAL_DAMAGE = frozenset(("counter", "mirrorcoat", "focuspunch"))
 DYNAMIC_INVENTORY = frozenset(("transform", "mimic", "sketch", "metronome", "assist", "mirrormove", "naturepower"))
 SHAPES = {name: (2, 6) for name in ("species", "level", "hidden_power_type", "hidden_power_power",
-    "happiness", "gender", "hp", "max_hp", "status", "status_counter", "sleep_skipped", "choice_move", "last_move",
+    "happiness", "gender", "hp", "max_hp", "status", "status_counter", "sleep_skipped", "rest_origin", "choice_move", "last_move",
     "encore_move", "encore_counter", "charge_move", "charge_counter", "item", "ability", "base_ability", "volatile",
     "confusion_counter", "protect_counter", "substitute_hp", "trap_source", "truant_loaf")}
 SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns", "trapped", "forced_switch",
@@ -302,6 +304,9 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
     if "wish_amount" not in data:
         add("wish_amount", "WISH_HISTORY_REQUIRED", "Retain the actual stored Wish history, including after counter expiry; never infer it from current HP")
         return None, gaps, (), False, False
+    if "rest_origin" not in data:
+        add("rest_origin", "REST_ORIGIN_REQUIRED", "Retain the producer-owned sleep origin; never infer Rest from a three-turn counter")
+        return None, gaps, (), False, False
     if original_static is not None:
         required = {f"{side}.pokemon[{p}]" for side in SIDE_NAMES for p in range(6)}
         if set(dict(original_static)) != required or original_genders is None:
@@ -410,8 +415,19 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
             status = data["status"][side][p]
             if not 0 <= status < len(STATUS_NAMES):
                 raise ValueError("unknown major status id")
-            if status == 5:
-                add(path+".status_counter", "SLEEP_ORIGIN_AND_LATENT_DURATION", "JAX lacks Rest origin; sampled remaining duration is not native elapsed-hazard sleep state")
+            origin=data["rest_origin"][side][p]
+            counter=data["status_counter"][side][p]
+            refund=data["sleep_skipped"][side][p]
+            if type(origin) is not bool:
+                add(path+".rest_origin", "INVALID_REST_ORIGIN", "Expected explicit boolean producer-owned provenance")
+            elif origin:
+                if (status != 5 or type(counter) is not int or not 1 <= counter <= 3
+                        or type(refund) is not int or not 0 <= refund <= 3):
+                    add(path+".rest_origin", "INVALID_REST_SLEEP_STATE", "Rest requires SLEEP, remaining1..3 and refund0..3")
+            elif status == 5:
+                add(path+".status_counter", "SLEEP_ORIGIN_AND_LATENT_DURATION", "Sampled natural remaining duration is not native elapsed-hazard sleep state")
+            elif refund != 0:
+                add(path+".sleep_skipped", "INCONSISTENT_SLEEP_REFUND", "A non-sleeping Pokemon cannot retain a sleep-stint refund")
             for name in ("confusion_counter", "encore_move", "encore_counter"):
                 if data[name][side][p]:
                     add(path+"."+name, "LATENT_DURATION_CONVENTION", "Sampled remaining duration is not an elapsed-hazard/pending-expiry state")
@@ -445,7 +461,8 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
                 ability=ability, base_ability=extras[5], item=_vocab(metadata, "items", data["item"][side][p]),
                 nature=extras[0], evs=extras[1], gender=extras[2], weight_kg=extras[3],
                 attack=stats[1], defense=stats[2], special_attack=stats[3], special_defense=stats[4], speed=stats[5],
-                status=STATUS_NAMES[status], rest_turns=0, sleep_turns=0, rest_sleep_pending_refund=0,
+                status=STATUS_NAMES[status], rest_turns=counter if origin else 0, sleep_turns=0,
+                rest_sleep_pending_refund=refund if origin else 0,
                 pre_transform="", terastallized=False, tera_type="normal",
                 moves=tuple(dict(id=name, disabled=bool(disabled), pp=pp) for name, disabled, pp in
                     zip(names, data["disabled"][side][p], data["pp"][side][p], strict=True)))
@@ -721,11 +738,18 @@ def _canonical_native_future(native_state, certificate, *, boundary="ordinary"):
                     gaps.append(Gap(f"{name}.pokemon[{p}].gender", "NATIVE_GENDER_CHANGED", "Retained constructor gender changed"))
                 if mon["base_ability"] != original[5]:
                     gaps.append(Gap(f"{name}.pokemon[{p}].base_ability", "NATIVE_BASE_ABILITY_CHANGED", "Retained original ability changed"))
-                for field in ("pre_transform", "rest_sleep_pending_refund", "rest_turns", "sleep_turns"):
-                    if mon[field]:
-                        gaps.append(Gap(f"{name}.pokemon[{p}].{field}", "NATIVE_LIVE_FUTURE_FIELD", repr(mon[field])))
-                if mon["status"] == "sleep":
-                    gaps.append(Gap(f"{name}.pokemon[{p}].status", "SLEEP_ORIGIN_AND_LATENT_DURATION", "Native Rest/elapsed sleep cannot be silently projected"))
+                if mon["pre_transform"]:
+                    gaps.append(Gap(f"{name}.pokemon[{p}].pre_transform", "NATIVE_LIVE_FUTURE_FIELD", repr(mon["pre_transform"])))
+                rest,elapsed,refund=mon["rest_turns"],mon["sleep_turns"],mon["rest_sleep_pending_refund"]
+                if mon["status"] == "sleep" and rest > 0:
+                    if not 1 <= rest <= 3 or elapsed != 0 or not 0 <= refund <= 3:
+                        gaps.append(Gap(f"{name}.pokemon[{p}].rest_turns", "INVALID_NATIVE_REST_SLEEP_STATE", "Rest requires remaining1..3, elapsed0 and refund0..3"))
+                else:
+                    for field in ("rest_sleep_pending_refund", "rest_turns", "sleep_turns"):
+                        if mon[field]:
+                            gaps.append(Gap(f"{name}.pokemon[{p}].{field}", "NATIVE_LIVE_FUTURE_FIELD", repr(mon[field])))
+                    if mon["status"] == "sleep":
+                        gaps.append(Gap(f"{name}.pokemon[{p}].status", "SLEEP_ORIGIN_AND_LATENT_DURATION", "Native natural elapsed sleep cannot be silently projected"))
                 if mon["terastallized"]:
                     gaps.append(Gap(f"{name}.pokemon[{p}].terastallized", "NATIVE_UNREPRESENTED_FIELD", "No JAX Gen3 Tera state"))
         if values["terrain"] != "none" or values["terrain_turns_remaining"] or values["trick_room"] or values["trick_room_turns_remaining"] or values["team_preview"]:

@@ -148,7 +148,9 @@ def _lum_update(state,table,eligible):
         for name,value in zip(("item","status","status_counter","confusion_counter"),result):
             state = state._replace(**{name:_set_active(getattr(state,name),state,side,value)})
         state=state._replace(sleep_skipped=_set_active(state.sleep_skipped,state,side,
-            jnp.where(result.status==m.SLP,_active(state.sleep_skipped,state,side),0)))
+            jnp.where(result.status==m.SLP,_active(state.sleep_skipped,state,side),0)),
+            rest_origin=_set_active(state.rest_origin,state,side,
+                _active(state.rest_origin,state,side) & (result.status==m.SLP)))
     return state
 
 
@@ -651,7 +653,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 status_counter=_set_active(work.status_counter,work,side,
                     jnp.where(rest,3,_active(work.status_counter,work,side))),
                 sleep_skipped=_set_active(work.sleep_skipped,work,side,
-                    jnp.where(rest,0,_active(work.sleep_skipped,work,side))))
+                    jnp.where(rest,0,_active(work.sleep_skipped,work,side))),
+                rest_origin=_set_active(work.rest_origin,work,side,
+                    jnp.where(rest,True,_active(work.rest_origin,work,side))))
             # Pain Split assigns HP rather than dealing ordinary damage or
             # healing through callbacks. Read the CURRENT opposing active
             # after switches/earlier moves; floor the shared average once,
@@ -703,7 +707,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(apply_status,jnp.where(status == m.SLP,2 + chance[:,7],0),
                               _active(work.status_counter,work,foe))),
                 sleep_skipped=_set_active(work.sleep_skipped,work,foe,
-                    jnp.where(apply_status,0,_active(work.sleep_skipped,work,foe))))
+                    jnp.where(apply_status,0,_active(work.sleep_skipped,work,foe))),
+                rest_origin=_set_active(work.rest_origin,work,foe,
+                    jnp.where(apply_status,False,_active(work.rest_origin,work,foe))))
         if table.sustain is not None:
             seeded = recovery.seed_target(table.sustain,move,_active(work.types,work,foe),
                 _active(work.hp,work,foe),_active(work.substitute_hp,work,foe),

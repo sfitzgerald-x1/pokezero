@@ -77,7 +77,9 @@ def depart(state,side,table,*,eligible):
         status_counter=state.status_counter.at[rows,side,active].set(
             jnp.where(eligible & (cure | (status==m.TOX)),0,counter)),
         sleep_skipped=state.sleep_skipped.at[rows,side,active].set(jnp.where(
-            eligible & (cure | (status!=m.SLP)),0,state.sleep_skipped[rows,side,active])))
+            eligible & (cure | (status!=m.SLP)),0,state.sleep_skipped[rows,side,active])),
+        rest_origin=state.rest_origin.at[rows,side,active].set(jnp.where(
+            eligible & (cure | (status!=m.SLP)),False,state.rest_origin[rows,side,active])))
     for name in ("boosts","volatile","confusion_counter","protect_counter","substitute_hp","choice_move",
                  "last_move","encore_move","encore_counter","charge_move","charge_counter"):
         value=getattr(state,name);old=value[rows,side,active]
@@ -137,7 +139,9 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False):
             status_counter=state.status_counter.at[rows,side,active].set(jnp.where(
                 cure,0,state.status_counter[rows,side,active])),
             sleep_skipped=state.sleep_skipped.at[rows,side,active].set(jnp.where(
-                cure,0,state.sleep_skipped[rows,side,active])))
+                cure,0,state.sleep_skipped[rows,side,active])),
+            rest_origin=state.rest_origin.at[rows,side,active].set(jnp.where(
+                cure,False,state.rest_origin[rows,side,active])))
     if table.own_tempo is not None:
         state=state._replace(confusion_counter=state.confusion_counter.at[rows,side,active].set(jnp.where(
             starts & table.own_tempo[current],0,state.confusion_counter[rows,side,active])))
@@ -160,6 +164,8 @@ def restore_sleep(state,side,*,eligible):
     skipped=state.sleep_skipped[rows,side,active]
     sleeping=state.status[rows,side,active]==m.SLP
     counter=state.status_counter[rows,side,active]
+    refunded=counter+skipped
+    refunded=jnp.where(state.rest_origin[rows,side,active],jnp.minimum(3,refunded),refunded)
     return state._replace(status_counter=state.status_counter.at[rows,side,active].set(
-        jnp.where(eligible & sleeping,counter+skipped,counter)),
+        jnp.where(eligible & sleeping,refunded,counter)),
         sleep_skipped=state.sleep_skipped.at[rows,side,active].set(jnp.where(eligible,0,skipped)))

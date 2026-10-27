@@ -24,6 +24,7 @@ def fixture():
             data["stats"][side][p] = [1000, 200, 200, 200, 200, 301 if side == 0 else 199]
     data.update(queued_actor=-1, done=False, winner=-1)
     data['last_action_index'] = [-1, -1]
+    data['rest_origin'] = nested(f.SHAPES['rest_origin'], False)
     metadata = {"vocabulary": {
         "species": ["_none", "ditto"], "types": ["_none", "normal", "fire", "ice"],
         "abilities": ["_none", "truant"], "items": ["_none", "choiceband"],

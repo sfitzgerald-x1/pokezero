@@ -18,9 +18,9 @@ from .finite_law import Axis, Case, COORDINATES, Observation, Plan
 
 
 KERNEL_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-KERNEL_SHA256 = "dc4211104835e7b3ecb2e1c750c79e98853bcce3cca5f5e761a0c94d0c5cf273"
+KERNEL_SHA256 = "998c129e34db30bbbe6324b33e272cccaebb1666411a4b5ce294d0c820d8a786"
 MAPPING_PINS = {
-    "future_state.py": "85df6b9428f233d353f1eaba4434e1b697e1ba635ad825da9dd8bc16dd80217a",
+    "future_state.py": "e29ff9874a9f48f3dc66eac0a5252a3a1209921ac5985718f8258854ee0a62aa",
     "conditioned_future.py": "274d8c20aa93eca9228b65e9d9b0eec172b302daaa91d9e969b93b67f2fe65a7",
     "finite_law.py": "d999cdbaddebc33cf3f84583e584e2110d7ee79f37bf365f715d0eb7f424ae8c",
     "fidelity_panel.py": "8bb00fde83082211c013e44ffe89865642d7b2d1d2e318649e39a41991901611",

@@ -132,6 +132,11 @@ class ConstructorProvenanceTests(unittest.TestCase):
         self.assertEqual(int(changed.wish_counter[0,0]),0)
         self.assertIsInstance(self.capture(changed,pool,context,assignment),self.f.Refused)
 
+    def test_pre_entry_constructor_cannot_invent_rest_origin(self):
+        state,pool,context,_,assignment=self.fixture()
+        changed=state._replace(rest_origin=state.rest_origin.at[0,0,0].set(True))
+        self.assertIsInstance(self.capture(changed,pool,context,assignment),self.f.Refused)
+
     def native_reference(self,state,pool,replacing):
         data=self.f._sample(state,0);meta=pool.metadata();sides=[]
         for side in range(2):

@@ -46,22 +46,22 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {
-    "transition.py": "7c949dbce4954545b561b8e63e9431882d37dea3115f45b171cfba148ec2c679",
+    "transition.py": "462ba22adbd15e4bb84ecc4011fc74e9923f3e87c2bcd3a3a590b9d181e509bb",
     "mechanics.py": "704b951ef2df15004e49601a90b934def7bbf63d2f884d73702316eea7e0ea31",
     "pursuit.py": "2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309",
-    "effects.py": "4df3dcc232bbe27003f6808a8d788591e005fe5f7f149248594cfaf4dc91eb9a",
+    "effects.py": "0138f0e90811c4829666960a106d80ed2d59f6cd06a8ff83324d189465f73104",
     "critical.py": "b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e",
     "secondary.py": "1cdb43d30bd157e176a6cdb6ee5f108e884ae8b3c0ac70dca4c6af3ddfa413ea",
-    "sleep_talk.py": "5af8fc87ec092ff662ebb0958390b60cc711795e85a3f4b28188be8c004faa91",
+    "sleep_talk.py": "968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154",
     "encore.py": "63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd",
     "phazing.py": "8f82d4894f03b39936de0e79b17f0b7715fdfe2f0edb6a7a42d44f1840671bee",
     "weather.py": "a5014e990f08bfb0cf04ac4aba5bc4cbc44717071601f80d3c340bfac79cade5",
-    "state.py": "0d20e81a9404462db8d84f436e5acbafe7a12d2478ebc3bfd337748814bc23b5",
-    "entry.py": "806aff3adfe67f64c8bc4719c94f0a6158d81eb53c7840df28ff5c12fa3cd626",
+    "state.py": "e657242e2d7191c4c7c1acb265d8f5751a6f00acaa08c08998af208d90124fe6",
+    "entry.py": "b53080d3995b488477e28183d815aa8162fc91aef25e677c427e811c75714b2f",
     "action_history.py": "a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407",
 }
 DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "dc4211104835e7b3ecb2e1c750c79e98853bcce3cca5f5e761a0c94d0c5cf273"
+DOMAIN_SHA256 = "998c129e34db30bbbe6324b33e272cccaebb1666411a4b5ce294d0c820d8a786"
 
 
 def _host(value):
