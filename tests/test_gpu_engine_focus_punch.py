@@ -41,7 +41,9 @@ class FocusPunchTests(unittest.TestCase):
         return s._replace(stats=j.full_like(s.stats,200).at[:,0,:,5].set(300),level=j.full_like(s.level,100),
             hp=j.full_like(s.hp,1000),max_hp=j.full_like(s.hp,1000),moves=j.full_like(s.moves,3)
                 .at[:,0,0,:].set(j.array([1,2,3,3])).at[:,1,0,0].set(foe),
-            pp=j.full_like(s.pp,8),last_move=s.last_move.at[:,0,0].set(2),done=j.zeros_like(s.done))
+            pp=j.full_like(s.pp,8),last_move=s.last_move.at[:,0,0].set(2),
+            last_action_kind=s.last_action_kind.at[:,0].set(2),
+            last_action_index=s.last_action_index.at[:,0].set(1),done=j.zeros_like(s.done))
 
     def play(self,s,actions=None,table=None):
         return self.t.step(s,self.j.zeros(s.active.shape,self.j.int32) if actions is None else actions,

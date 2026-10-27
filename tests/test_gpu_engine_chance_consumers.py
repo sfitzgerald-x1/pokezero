@@ -147,7 +147,10 @@ class ChanceConsumerTests(unittest.TestCase):
         self.choose(data, meta, 0, "encore")
         self.choose(data, meta, 1, "sleeptalk", 1)
         self.choose(data, meta, 1, "icebeam", 2)
-        data["last_move"][1][0] = meta["vocabulary"]["moves"].index("sleeptalk")
+        # The diagnostic identity may be stale; the retained slot owns Encore.
+        data["last_move"][1][0] = 0
+        data['last_action_kind'][1] = 2
+        data['last_action_index'][1] = 1
         data["pp"][1][0][2] = 0
         plan = self.plan(data, meta)
         self.assertIsInstance(plan, c.ConsumerPlan, plan)

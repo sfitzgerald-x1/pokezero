@@ -10,6 +10,7 @@ import jax.numpy as jnp
 
 from . import items as held
 from . import mechanics as m
+from . import action_history as history
 from . import pressure as pp_cost
 from . import critical as crits
 from . import secondary as secondaries
@@ -78,6 +79,7 @@ def intercept(state, side, slot, move, chance, table, *, eligible, contact_roll)
     state = state._replace(pp=state.pp.at[rows,side,own,slot].set(jnp.where(used,jnp.maximum(0,pp-cost),pp)))
     last=state.last_move[rows,side,own]
     state=state._replace(last_move=state.last_move.at[rows,side,own].set(jnp.where(used,move,last)))
+    state=history.record_move(state,side,slot,eligible=used)
     # The inherited interception handler locks only after successful useMove.
     # Keep this explicit even though Dark has no type immunity in Gen 3.
     successful = used & (dealt>0)

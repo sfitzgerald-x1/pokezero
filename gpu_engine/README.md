@@ -452,6 +452,19 @@ The existing [0,4) duration column and unused residual tie column preserve the
 original fixed chance block; primary sleep and Encore cannot share a dispatch.
 Other move locks and full move/game qualification remain outside this component.
 
+`last_action_kind` and `last_action_index` retain Rust's side-owned
+NONE, SWITCH(party index), MOVE(exact dispatch slot) and STRUGGLE history.
+Initial entry callbacks preserve NONE; committed voluntary/forced/Baton/phaze
+switches record their target before hazards. Moves record after BeforeMove/PP,
+before accuracy or target failure, including Sleep Talk's caller and Pursuit's
+separate dispatch. Fainting preserves this side history while clearing the
+per-Pokemon `last_move` identity. Encore uses the exact retained slot for its
+mask, queued override and PP expiry, including duplicate identities. Native
+correspondence refuses legacy states missing the explicit history instead of
+guessing from active age; original-constructor provenance requires NONE/-1.
+These are ports of the Rust lastmove/PP/Sleep Talk regression rules, not new
+Fake Out support, widened suspension admission, coverage or strength evidence.
+
 ## Selected effect ledger
 
 `python -m gpu_engine.coverage --team-pool POOL --expected-pool-sha POOL_SHA
