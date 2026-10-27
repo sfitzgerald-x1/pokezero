@@ -161,14 +161,21 @@ class OrdinaryCarryTests(unittest.TestCase):
         with mock.patch.object(self.f,'native_input_from_jax',side_effect=AssertionError('unexpected reconstruction')):
             self.compare(s,a,native_input=original)
 
-    def test_low_damage_gap_is_explicit_whole_slot_refusal_and_immunity_stays_admitted(self):
-        s,a=self.fixture(('thunderbolt','splash'))
-        s=s._replace(stats=s.stats.at[:,0,0,3].set(1).at[:,1,0,4].set(30000),
-            types=s.types.at[:,1,0,0].set(12))
-        result,_=self.compare(s,a,expected='UNKNOWN')
-        self.assertIn('STEP_ORDINARY_MINIMUM_DAMAGE_REPAIR_PENDING',result['detail'])
-        s=s._replace(types=s.types.at[:,1,0,0].set(5))
-        self.compare(s,a)
+    def test_low_nonimmune_minimum_and_true_immunity_complete_laws_both_seats(self):
+        table=self.table._replace(type_den=self.table.type_den.at[13,16].set(2)
+            .at[1,6].set(2).at[1,9].set(2))
+        for side in (0,1):
+            for move in ('thunderbolt','bodyslam','explosion'):
+                for kind in ('single','double','immune'):
+                    with self.subTest(side=side,move=move,kind=kind):
+                        names=['splash','splash'];names[side]=move
+                        s,a=self.fixture(names,fast=side)
+                        electric=move=='thunderbolt'
+                        s=s._replace(stats=s.stats.at[:,side,0,1].set(1).at[:,side,0,3].set(1)
+                                .at[:,1-side,0,2].set(30000).at[:,1-side,0,4].set(30000),
+                            types=s.types.at[:,1-side,0,0].set((5 if electric else 8) if kind=='immune' else (12 if electric else 6))
+                                .at[:,1-side,0,1].set((16 if electric else 9) if kind=='double' else 0))
+                        self.compare(s,a,table)
 
 
 if __name__=='__main__':unittest.main()

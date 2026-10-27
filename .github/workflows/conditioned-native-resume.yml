@@ -23,6 +23,7 @@ on:
       - 'tests/test_rest_origin_native.py'
       - 'tests/test_native_gen3_natural_cure_cleanup.py'
       - 'tests/test_native_gen3_stall_pp.py'
+      - 'rust/pokezero-search/tests/gen3_minimum_damage.rs'
       - 'tests/test_native_gen3_choice_band_before_move.py'
       - 'tests/test_native_gpu_secondary_move_effects.py'
       - 'tests/test_gpu_engine_secondary_move_effects.py'
@@ -60,6 +61,9 @@ jobs:
           python -m pip install 'jax==0.12.0' 'numpy==2.5.4' 'maturin>=1.5,<2'
           scripts/vendor_poke_engine_src.sh "$(command -v python)"
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features gen3 --test test_gen3
+          POKEZERO_ENUMERATE_ROLLS=0 cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --test gen3_minimum_damage
+          POKEZERO_ENUMERATE_ROLLS=1 cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --test gen3_minimum_damage
+          POKEZERO_ENUMERATE_ROLLS=1 cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --test gen3_minimum_damage
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features conditioned-oracle --lib conditioned_resume
           POKEZERO_ENUMERATE_ROLLS=1 cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features conditioned-oracle --lib conditioned_step::tests -- --test-threads=1
           PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --lib conditioned_resume::tests
