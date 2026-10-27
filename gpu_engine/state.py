@@ -68,6 +68,7 @@ class BattleState(NamedTuple):
     replacement_count: jax.Array   # [B], tie stream within a suspended turn
     spikes: jax.Array              # [B,2]
     wish_counter: jax.Array        # [B,2], slot condition; persists across switches
+    wish_amount: jax.Array         # [B,2], native stored caster half-max-HP; retained after expiry
     weather: jax.Array             # [B]
     weather_counter: jax.Array     # [B]
     turn: jax.Array                # [B]
@@ -112,7 +113,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         pending_residual=jnp.zeros((b,),jnp.bool_),
         residual_draws=jnp.zeros((b,2,12),jnp.int32),replacement_count=battle(),
         phazing_draws=side(), secondary_draws=side(), sleep_talk_draws=side(),
-        spikes=side(), wish_counter=side(),weather=battle(), weather_counter=battle(), turn=battle(),
+        spikes=side(), wish_counter=side(),wish_amount=side(),weather=battle(), weather_counter=battle(), turn=battle(),
         keys=keys, done=jnp.ones((b,), jnp.bool_), winner=jnp.full((b,), -1, jnp.int32),
         truant_loaf=jnp.zeros((b,2,6),jnp.bool_))
 

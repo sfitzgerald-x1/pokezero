@@ -89,6 +89,38 @@ FAKE = SimpleNamespace(State=FakeState, Side=SimpleNamespace, Pokemon=SimpleName
 
 
 class FutureStateTests(unittest.TestCase):
+    def test_wish_history_maps_exactly_including_expired_and_zero_amount(self):
+        for counter,amount in ((0,0),(0,150),(1,0),(1,150),(2,50),(127,32767)):
+            data,meta=fixture()
+            data['wish_counter']=[counter,0]
+            data['wish_amount']=[amount,0]
+            native=self.construct(data,meta)
+            self.assertEqual(native.state.side_one.wish,(counter,amount))
+            left=f.canonical_jax_future(data,None,meta,certificate=native.certificate)
+            right=f.canonical_native_future(native.state,native.certificate)
+            self.assertEqual(left.key,right.key)
+            native.state.side_one.wish=(counter,amount+1 if amount<32767 else 0)
+            changed=f.canonical_native_future(native.state,native.certificate)
+            self.assertIsInstance(changed,f.CanonicalFuture,type(changed).__name__)
+            self.assertNotEqual(left.key,changed.key)
+
+    def test_missing_and_range_invalid_wish_history_is_never_reconstructed(self):
+        data,meta=fixture();data.pop('wish_amount',None)
+        refused=f.native_input_from_jax(data,None,meta,module=FAKE)
+        self.assertIsInstance(refused,f.Refused,type(refused).__name__)
+        self.assertIn('WISH_HISTORY_REQUIRED',{g.code for g in refused.gaps})
+        for counter,amount in ((-1,0),(128,0),(1,-1),(0,32768),(True,0),(0,True)):
+            data,meta=fixture();data['wish_counter']=[counter,0];data['wish_amount']=[amount,0]
+            refused=f.native_input_from_jax(data,None,meta,module=FAKE)
+            self.assertIsInstance(refused,f.Refused,type(refused).__name__)
+            self.assertIn('INVALID_WISH_HISTORY',{g.code for g in refused.gaps})
+        for counter,amount in ((-1,0),(128,0),(1,-1),(0,32768)):
+            native=self.construct()
+            native.state.side_one.wish=(counter,amount)
+            refused=f.canonical_native_future(native.state,native.certificate)
+            self.assertIsInstance(refused,f.Refused,type(refused).__name__)
+            self.assertIn('INVALID_NATIVE_WISH_HISTORY',{g.code for g in refused.gaps})
+
     def test_explicit_last_action_distinguishes_none_switch_slot_and_struggle(self):
         for kind, index, expected in ((0, -1, 'move:none'), (1, 0, 'switch:0'),
                                       (2, 2, 'move:2'), (3, -1, 'move:struggle')):

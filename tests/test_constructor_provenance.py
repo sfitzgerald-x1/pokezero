@@ -126,6 +126,12 @@ class ConstructorProvenanceTests(unittest.TestCase):
             self.assertIsInstance(refused,self.f.Refused)
             self.assertIn('PRE_ENTRY_ACTION_HISTORY_MUST_BE_NONE',repr(refused.gaps))
 
+    def test_pre_entry_constructor_cannot_contain_expired_wish_history(self):
+        state,pool,context,_,assignment=self.fixture()
+        changed=state._replace(wish_amount=state.wish_amount.at[0,0].set(150))
+        self.assertEqual(int(changed.wish_counter[0,0]),0)
+        self.assertIsInstance(self.capture(changed,pool,context,assignment),self.f.Refused)
+
     def native_reference(self,state,pool,replacing):
         data=self.f._sample(state,0);meta=pool.metadata();sides=[]
         for side in range(2):

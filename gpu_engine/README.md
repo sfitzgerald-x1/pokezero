@@ -465,6 +465,16 @@ guessing from active age; original-constructor provenance requires NONE/-1.
 These are ports of the Rust lastmove/PP/Sleep Talk regression rules, not new
 Fake Out support, widened suspension admission, coverage or strength evidence.
 
+Wish retains a side-owned `wish_amount` alongside its counter, matching the
+native wire. Only a successful new Wish stores the caster's floored half-max-HP;
+pending recasts leave it unchanged. Expiry, switching, faints and terminal
+truncation preserve this history. Gen3 healing still uses the current recipient's
+half-max-HP, so a stored150 can heal50 on a101-HP recipient. Both correspondence
+directions retain the exact tuple, including expired nonzero and zero-amount
+states; missing legacy history refuses rather than being reconstructed.
+Original-constructor capture requires zero stored amount. The native conditional
+continuation guard is unchanged and still refuses any nonzero Wish tuple.
+
 ## Selected effect ledger
 
 `python -m gpu_engine.coverage --team-pool POOL --expected-pool-sha POOL_SHA
