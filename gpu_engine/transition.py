@@ -122,7 +122,7 @@ def state_from_pool(pool, team_indices, *, seed=0, table=None) -> BattleState:
     if "happiness" in pool:
         values["happiness"] = jnp.asarray(pool["happiness"][indices], jnp.int32)
     hp = values["stats"][..., 0]
-    state = state._replace(**values, hp=hp, max_hp=hp, done=jnp.zeros_like(state.done),
+    state = state._replace(**values, base_ability=values["ability"], hp=hp, max_hp=hp, done=jnp.zeros_like(state.done),
         entry_pending=jnp.ones_like(state.entry_pending))
     return initialize(state,table) if table is not None else state
 

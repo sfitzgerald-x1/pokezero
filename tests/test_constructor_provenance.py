@@ -56,6 +56,7 @@ class ConstructorProvenanceTests(unittest.TestCase):
                 .at[:,replacing,0].set(2 if trace else 0).at[:,1-replacing,0].set(1),
             gender=j.full((1,2,6),1,j.int32).at[:,1,:].set(2),
             entry_pending=j.ones((1,2),bool),done=j.array([False]))
+        state=state._replace(base_ability=state.ability)
         if happiness is not None:state=state._replace(happiness=j.full((1,2,6),happiness,j.int32))
         data=self.f._sample(state,0)
         arrays={name:np.asarray(data[name]) for name in self.p._POOL_STATE_FIELDS}
@@ -140,7 +141,7 @@ class ConstructorProvenanceTests(unittest.TestCase):
         self.assertEqual(len(branches),1)
         return native.apply_instructions(branches[0])
 
-    def test_native_trace_copy_preserves_original_base_and_exposes_departure_difference(self):
+    def test_native_trace_copy_preserves_original_base_through_departure(self):
         from gpu_engine import baton,entry,items,secondary,conditioned_future as c
         for replacing in (0,1):
             state,pool,context,_,assignment=self.fixture(replacing)
@@ -175,8 +176,20 @@ class ConstructorProvenanceTests(unittest.TestCase):
             resumed=self.jax.jit(self.t.step_with_chance)(paused,actions,table,chance).state
             actual=c.canonical_resumed_jax(resumed,0,meta,native_input=bound)
             self.assertNotIsInstance(actual,self.f.Refused,actual)
-            self.assertEqual(self.f.field_differences(actual,branches[0][1]),
-                ((f'{self.f.SIDE_NAMES[replacing]}.pokemon[0].ability','static','trace'),))
+            self.assertEqual(self.f.field_differences(actual,branches[0][1]),())
+
+    def test_original_ability_cannot_be_rewritten_before_or_after_entry(self):
+        state,pool,context,_,assignment=self.fixture()
+        changed=state._replace(base_ability=state.base_ability.at[:,0,0].set(0))
+        refused=self.capture(changed,pool,context,assignment)
+        self.assertIsInstance(refused,self.f.Refused)
+        self.assertIn('CONSTRUCTOR_BASE_ABILITY_CHANGED',repr(refused.gaps))
+        source=self.capture(state,pool,context,assignment)
+        post=state._replace(entry_pending=self.j.zeros((1,2),bool))
+        changed=post._replace(base_ability=post.base_ability.at[:,0,0].set(0))
+        refused=self.construct(changed,source,context)
+        self.assertIsInstance(refused,self.f.Refused)
+        self.assertIn('IMMUTABLE_CONSTRUCTOR_IDENTITY_CHANGED',repr(refused.gaps))
 
     def test_missing_tampered_and_wrong_root_provenance_never_make_a_certificate(self):
         state,pool,context,_,assignment=self.fixture();source=self.capture(state,pool,context,assignment)

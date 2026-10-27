@@ -28,6 +28,7 @@ FIELD_POLICY = {
     **{name: "native party field" for name in (
         "species", "level", "types", "stats", "hp", "max_hp", "moves", "pp",
         "disabled", "item", "ability")},
+    "base_ability": "immutable original constructor ability, retained separately from current ability",
     "hidden_power_type": "native Hidden Power variant, not metadata alias",
     "hidden_power_power": "native60/70 variant; refuse other referenced powers",
     "happiness": "native Return102; Frustration catalog has no bound happiness parameter",
@@ -93,6 +94,7 @@ NATIVE_PATHS = {
     "charge_move": ("side[].volatile_statuses.SOLARBEAM",),
     "charge_counter": ("side[].volatile_statuses.SOLARBEAM: one-release boundary",),
     "item": ("side[].pokemon[].item",), "ability": ("side[].pokemon[].ability",),
+    "base_ability": ("side[].pokemon[].base_ability",),
     "boosts": ("side[].{attack,defense,special_attack,special_defense,speed,accuracy,evasion}_boost",),
     "volatile": ("side[].volatile_statuses: explicitly enumerated bits",),
     "confusion_counter": ("UNRESOLVED: side[].volatile_status_durations.confusion",),
@@ -138,7 +140,7 @@ CONDITIONAL_DAMAGE = frozenset(("counter", "mirrorcoat", "focuspunch"))
 DYNAMIC_INVENTORY = frozenset(("transform", "mimic", "sketch", "metronome", "assist", "mirrormove", "naturepower"))
 SHAPES = {name: (2, 6) for name in ("species", "level", "hidden_power_type", "hidden_power_power",
     "happiness", "gender", "hp", "max_hp", "status", "status_counter", "sleep_skipped", "choice_move", "last_move",
-    "encore_move", "encore_counter", "charge_move", "charge_counter", "item", "ability", "volatile",
+    "encore_move", "encore_counter", "charge_move", "charge_counter", "item", "ability", "base_ability", "volatile",
     "confusion_counter", "protect_counter", "substitute_hp", "trap_source", "truant_loaf")}
 SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns", "trapped", "forced_switch",
     "baton_pass", "queued_actions", "queued_stall", "phazing_draws", "secondary_draws", "sleep_talk_draws",
@@ -284,6 +286,9 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
     add = lambda field, code, detail: gaps.append(Gap(field, code, detail))
     if certificate is not None and (original_static is not None or original_genders is not None):
         raise ValueError("ambiguous original static provenance")
+    if "base_ability" not in data:
+        add("base_ability", "ORIGINAL_BASE_ABILITY_REQUIRED", "Do not infer an original ability from a possibly copied current ability")
+        return None, gaps, (), False, False
     if original_static is not None:
         required = {f"{side}.pokemon[{p}]" for side in SIDE_NAMES for p in range(6)}
         if set(dict(original_static)) != required or original_genders is None:
@@ -398,7 +403,10 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
             if stats[0] != data["max_hp"][side][p]:
                 add(path+".stats[0]", "DISTINCT_HP_STAT", "Native exposes maxhp, not an additional distinct immutable HP stat")
             ability = _vocab(metadata, "abilities", data["ability"][side][p])
-            extras = static.get(path, ("serious", (85,)*6, "none", 1.0, types, ability))
+            base_ability = _vocab(metadata, "abilities", data["base_ability"][side][p])
+            extras = static.get(path, ("serious", (85,)*6, "none", 1.0, types, base_ability))
+            if base_ability != extras[5]:
+                add(path+".base_ability", "RETAINED_BASE_ABILITY_CHANGED", "Original ability differs from retained constructor evidence")
             gender = {-1:"none", 0:"none", 1:"male", 2:"female"}.get(genders[side][p], "none")
             if certificate is not None and gender != extras[2]:
                 add(path+".gender", "RETAINED_GENDER_CHANGED", "Gender is immutable across admitted Gen3 futures")
@@ -686,9 +694,12 @@ def _canonical_native_future(native_state, certificate, *, boundary="ordinary"):
             if boundary == "ordinary" and side["switch_out_move_second_saved_move"] != "none":
                 gaps.append(Gap(name+".switch_out_move_second_saved_move", "LIVE_SUSPENSION_INTERFACE", "Saved action must not be erased"))
             for p, mon in enumerate(side["pokemon"]):
-                expected_gender = dict(certificate.static_native)[f"{name}.pokemon[{p}]"][2]
+                original = dict(certificate.static_native)[f"{name}.pokemon[{p}]"]
+                expected_gender = original[2]
                 if mon["gender"] != expected_gender:
                     gaps.append(Gap(f"{name}.pokemon[{p}].gender", "NATIVE_GENDER_CHANGED", "Retained constructor gender changed"))
+                if mon["base_ability"] != original[5]:
+                    gaps.append(Gap(f"{name}.pokemon[{p}].base_ability", "NATIVE_BASE_ABILITY_CHANGED", "Retained original ability changed"))
                 for field in ("pre_transform", "rest_sleep_pending_refund", "rest_turns", "sleep_turns"):
                     if mon[field]:
                         gaps.append(Gap(f"{name}.pokemon[{p}].{field}", "NATIVE_LIVE_FUTURE_FIELD", repr(mon[field])))

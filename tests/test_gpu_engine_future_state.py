@@ -115,6 +115,31 @@ class FutureStateTests(unittest.TestCase):
         self.assertIn("side_one.pokemon[0].base_ability", dict(left.key))
         self.assertEqual(set(dict(native.certificate.field_policies)), set(data))
 
+    def test_native_original_ability_cannot_contradict_its_certificate(self):
+        native=self.construct()
+        native.state.side_two.pokemon[5].base_ability='truant'
+        for boundary in ('ordinary','suspended'):
+            refused=f._canonical_native_future(native.state,native.certificate,boundary=boundary)
+            self.assertIsInstance(refused,f.Refused)
+            self.assertIn('NATIVE_BASE_ABILITY_CHANGED',{g.code for g in refused.gaps})
+            self.assertIn('TRUANT',refused.raw_native.upper())
+
+    def test_original_ability_is_explicit_and_certificate_bound(self):
+        data,meta=fixture()
+        data['base_ability'][0][0]=1
+        native=self.construct(data,meta)
+        self.assertEqual((native.state.side_one.pokemon[0].ability,
+            native.state.side_one.pokemon[0].base_ability),('none','truant'))
+        data['base_ability'][0][0]=0
+        refused=f.canonical_jax_future(data,None,meta,certificate=native.certificate)
+        self.assertIn('RETAINED_BASE_ABILITY_CHANGED',{g.code for g in refused.gaps})
+        data,meta=fixture();del data['base_ability']
+        refused=f.native_input_from_jax(data,None,meta,module=FAKE)
+        self.assertEqual([g.code for g in refused.gaps],['ORIGINAL_BASE_ABILITY_REQUIRED'])
+        for bad in (-1,2,True):
+            data,meta=fixture();data['base_ability'][0][0]=bad
+            self.assertIsInstance(f.native_input_from_jax(data,None,meta,module=FAKE),f.Refused)
+
     def test_permanent_weather_clock_convention_retains_raw_and_positive_clocks(self):
         for weather in range(5):
             for clock in (0,1,2,5,127):

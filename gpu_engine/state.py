@@ -42,6 +42,7 @@ class BattleState(NamedTuple):
     charge_counter: jax.Array      # [B,2,6], includes charging turn's residual
     item: jax.Array                # [B,2,6]
     ability: jax.Array             # [B,2,6]
+    base_ability: jax.Array        # [B,2,6], immutable original constructor ability
     boosts: jax.Array              # [B,2,6,7]: Atk,Def,SpA,SpD,Spe,Acc,Eva
     volatile: jax.Array            # [B,2,6], uint32 bitmask
     confusion_counter: jax.Array   # [B,2,6]
@@ -95,7 +96,7 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         status=mon(), status_counter=mon(), sleep_skipped=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
         pp=jnp.zeros((b, 2, 6, 4), jnp.int32), disabled=jnp.zeros((b, 2, 6, 4), jnp.bool_),
         choice_move=mon(),last_move=mon(),encore_move=mon(),encore_counter=mon(),charge_move=mon(),charge_counter=mon(),
-        item=mon(), ability=mon(), boosts=jnp.zeros((b, 2, 6, 7), jnp.int32),
+        item=mon(), ability=mon(), base_ability=mon(), boosts=jnp.zeros((b, 2, 6, 7), jnp.int32),
         volatile=jnp.zeros((b, 2, 6), jnp.uint32), confusion_counter=mon(),
         protect_counter=mon(), substitute_hp=mon(), active=side(),
         entry_pending=jnp.zeros((b,2),jnp.bool_),

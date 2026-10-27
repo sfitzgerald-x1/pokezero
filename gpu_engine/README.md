@@ -617,7 +617,13 @@ Natural Cure and base-ability restoration explicitly. General status, side,
 weather and saved-chance guards remain. The old all-party rule excluded every
 team in the preserved pool; role separation removes that blanket restriction
 without claiming measured real-pool acceptance or broader consumer support.
-Authored full-law checks preserve complete party/carry state. Original Trace
-departure exposes the exact JAX copied-ability restoration difference as DIVERGE;
-Stick remains a named construction refusal. These are implementation controls,
-not historical coverage or fresh scientific credit.
+Authored full-law checks preserve complete party/carry state. The JAX state
+retains immutable `base_ability` separately from current `ability`, initialized
+from the selected pool before entry and verified against original constructor
+evidence. Departure evaluates current Natural Cure before restoring the original
+ability, including phazing and suspended replacements. Both JAX and native
+correspondence reject changed originals; legacy state without that field refuses
+instead of inferring it from a copied ability. The former isolated Trace
+departure mismatch now agrees in both seats. Trace entry execution remains
+unimplemented, and Stick remains a named construction refusal. These are
+implementation controls, not historical coverage or fresh scientific credit.
