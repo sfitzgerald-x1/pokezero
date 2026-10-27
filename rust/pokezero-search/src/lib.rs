@@ -508,6 +508,8 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<fold::PyFoldState>()?;
     #[cfg(feature = "conditioned-oracle")]
     m.add_function(wrap_pyfunction!(conditioned_resume::conditioned_resume, m)?)?;
+    #[cfg(feature = "conditioned-oracle")]
+    m.add_function(wrap_pyfunction!(conditioned_resume::conditioned_resume_joint, m)?)?;
     #[cfg(feature = "model")]
     m.add_class::<model::NativeLeafModel>()?;
     Ok(())

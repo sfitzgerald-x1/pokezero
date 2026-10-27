@@ -349,12 +349,12 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
     if boundary == "suspended":
         direct = (sum(data["baton_pass"]) == 1 and data["forced_switch"] == data["baton_pass"]
             and data["replacement_count"] == 0)
-        chain = (not any(data["baton_pass"]) and sum(data["forced_switch"]) == 1
-            and 1 <= data["replacement_count"] <= 5 and data["queued_actor"] == -1
+        chain = (not any(data["baton_pass"]) and 1 <= sum(data["forced_switch"]) <= 2
+            and 0 <= data["replacement_count"] <= 5 and data["queued_actor"] == -1
             and all(not forced or data["hp"][side][data["active"][side]] == 0
                 for side, forced in enumerate(data["forced_switch"])))
         if not data["pending_residual"] or not (direct or chain):
-            add("pending_residual", "UNSUPPORTED_SUSPENSION_CAUSE", "Direct Baton or its counted hazard-KO replacement chain required")
+            add("pending_residual", "UNSUPPORTED_SUSPENSION_CAUSE", "Direct Baton or an initial/counted faint-replacement request required")
         if certificate is None:
             add("metadata", "SUSPENSION_PROVENANCE_REQUIRED", "The original construction certificate retains native-only static fields")
     if any(data["entry_pending"]):

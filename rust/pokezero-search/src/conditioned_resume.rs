@@ -1,9 +1,10 @@
 //! JSON boundary for the explicitly built conditional continuation oracle.
 //! No sampling, action selection, scoring, model, or ordinary-search caller.
-use poke_engine::engine::conditioned_resume::{resume, ResumeCapsule};
+use poke_engine::engine::conditioned_resume::{resume, resume_joint, ResumeCapsule};
 use poke_engine::state::PokemonIndex;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyInt, PyList, PyTuple};
 use serde_json::{json, Value};
 
 const FIELDS: [&str; 15] = [
@@ -99,6 +100,53 @@ pub fn conditioned_resume(
                 "instructions":format!("{:?}", b.instructions.instruction_list)})
             })
             .collect();
+        Ok(json!({"version":1,"branches":result}).to_string())
+    })
+}
+
+#[pyfunction]
+pub fn conditioned_resume_joint(
+    state_str: &str,
+    capsule: &str,
+    replacements: &Bound<'_, PyAny>,
+    entry_ties: &Bound<'_, PyAny>,
+) -> PyResult<String> {
+    fn exact_pair(raw: &Bound<'_, PyAny>, optional: bool) -> PyResult<[Option<u8>; 2]> {
+        if !(raw.is_instance_of::<PyTuple>() || raw.is_instance_of::<PyList>()) || raw.len()? != 2 {
+            return Err(PyValueError::new_err("EXACT_TWO_COORDINATES_REQUIRED"));
+        }
+        let coordinate = |index| -> PyResult<Option<u8>> {
+            let value = raw.get_item(index)?;
+            if optional && value.is_none() { return Ok(None); }
+            if !value.is_exact_instance_of::<PyInt>() {
+                return Err(PyValueError::new_err("EXACT_INTEGER_COORDINATE_REQUIRED"));
+            }
+            Ok(Some(value.extract::<u8>()?))
+        };
+        Ok([coordinate(0)?, coordinate(1)?])
+    }
+    let replacements = exact_pair(replacements, true)?;
+    let ties = exact_pair(entry_ties, false)?;
+    let entry_ties = [ties[0].unwrap(), ties[1].unwrap()];
+    let convert = |value: Option<u8>| -> PyResult<Option<PokemonIndex>> {
+        value.map(|index| match index {
+            0 => Ok(PokemonIndex::P0), 1 => Ok(PokemonIndex::P1),
+            2 => Ok(PokemonIndex::P2), 3 => Ok(PokemonIndex::P3),
+            4 => Ok(PokemonIndex::P4), 5 => Ok(PokemonIndex::P5),
+            _ => Err(PyValueError::new_err("INVALID_REPLACEMENT_INDEX")),
+        }).transpose()
+    };
+    let choices = [convert(replacements[0])?, convert(replacements[1])?];
+    let capsule = capsule_from_json(capsule).map_err(PyValueError::new_err)?;
+    crate::panic_guard::catch_native_panic(|| {
+        let state = crate::parse_state(state_str)?;
+        let branches = resume_joint(&state, &capsule, choices, entry_ties)
+            .map_err(PyValueError::new_err)?;
+        let result: Vec<_> = branches.into_iter().map(|b| {
+            json!({"percentage":b.percentage,"state":b.state.serialize(),
+                "capsule":capsule_json(&b.capsule),
+                "instructions":format!("{:?}", b.instructions.instruction_list)})
+        }).collect();
         Ok(json!({"version":1,"branches":result}).to_string())
     })
 }

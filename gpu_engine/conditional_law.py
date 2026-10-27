@@ -20,8 +20,8 @@ from .finite_law import Axis, Case, COORDINATES, Observation, Plan
 KERNEL_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
 KERNEL_SHA256 = "81b43f80a616f5102d0f07b5bc980328004e3911785e2d28d1d8285e585b8e3b"
 MAPPING_PINS = {
-    "future_state.py": "126e95801fdf2714ac29f1df343b01ca39bd789a135b657ec142553fb4a678d2",
-    "conditioned_future.py": "274d8c20aa93eca9228b65e9d9b0eec172b302daaa91d9e969b93b67f2fe65a7",
+    "future_state.py": "eff07ded2d5be1905922e59ddb82b9684efaad2f27dfc41e8b90074d893b8280",
+    "conditioned_future.py": "b3d8c647f0aca36204e1dcd521a1ce17fee7463f683217f3d0830eb9e44c2e11",
     "finite_law.py": "d999cdbaddebc33cf3f84583e584e2110d7ee79f37bf365f715d0eb7f424ae8c",
     "fidelity_panel.py": "e131f3658f2499d182afa25f50c0034b013b7c0526906af5ff6dabb124079936",
 }
@@ -62,8 +62,8 @@ def _law():
 
 @dataclass(frozen=True)
 class ConditionalActions:
-    replacement: int
-    replacing: int
+    replacement: int | tuple
+    replacing: int | tuple
     raw_actions: tuple
     raw_jax: tuple
     raw_native: str
@@ -174,13 +174,16 @@ def plan_for_suspension(state, index, actions, table, metadata, *, certificate,
         mask = action_mask(state, table)
         legal = mask.tolist() if index is None else mask[index].tolist()
         forced = tuple(bool(data["forced_switch"][s]) or data["hp"][s][data["active"][s]] <= 0 for s in range(2))
-        if sum(forced) != 1:
-            return refuse("UNSUPPORTED_REPLACEMENT_REQUEST", "Exactly one requested replacement required")
-        replacing = forced.index(True)
-        action = original[replacing]
-        if action < 4 or not legal[replacing][action]:
-            return refuse("ILLEGAL_REPLACEMENT_REQUEST", repr(original))
-        replacement = [p for p in range(6) if p != data["active"][replacing]][action-4]
+        if sum(forced) not in (1, 2):
+            return refuse("UNSUPPORTED_REPLACEMENT_REQUEST", "One or two requested replacements required")
+        replacements = []
+        for side, requested in enumerate(forced):
+            action = original[side]
+            if requested and (action < 4 or not legal[side][action]):
+                return refuse("ILLEGAL_REPLACEMENT_REQUEST", repr(original))
+            replacements.append([p for p in range(6) if p != data["active"][side]][action-4] if requested else None)
+        replacing = forced.index(True) if sum(forced) == 1 else forced
+        replacement = replacements[replacing] if sum(forced) == 1 else tuple(replacements)
         native = conditioned.suspended_input_from_jax(state, index, metadata,
             certificate=certificate, module=native_module)
         if isinstance(native, mapping.Refused):
