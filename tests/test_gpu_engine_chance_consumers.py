@@ -171,6 +171,37 @@ class ChanceConsumerTests(unittest.TestCase):
         cells = self.cells(plan, "secondary.0")
         self.assertEqual([cell.mass for cell in cells], [Fraction(1, 10), Fraction(1, 10), Fraction(4, 5)])
 
+    def test_optional_legacy_trace_table_none_or_absent_stays_inactive(self):
+        data,meta=fixture()
+        for entry in ({'weather_ability':[0,0],'trace':None},{'weather_ability':[0,0]}):
+            t=table(meta);t['entry']=entry
+            plan=self.plan(data,meta,actions=(0,1),kernel_table=t)
+            self.assertIsInstance(plan,c.ConsumerPlan,plan)
+            self.assertEqual(len(self.cells(plan,'phazing.0')),1)
+
+    def test_trace_recipient_copying_static_keeps_contact_axis_both_seats(self):
+        for actor in (0,1):
+            data,meta=fixture();meta['vocabulary']['abilities']+=['static','trace']
+            meta['vocabulary']['moves'].append('bodyslam')
+            body=meta['vocabulary']['moves'].index('bodyslam')
+            data['moves'][actor][0][0]=body
+            data['ability'][actor][0]=2;data['base_ability'][actor][0]=2
+            data['ability'][1-actor][1]=3;data['base_ability'][1-actor][1]=3
+            t=table(meta);t['entry']={'trace':[False,False,False,True],'weather_ability':[0,0,0,0]}
+            t['secondary']['static'][2]=True
+            t['power'][body]=85
+            t['secondary']['contact'][body]=True
+            t['secondary']['chance'][body]=30
+            t['secondary']['status'][body]=1
+            actions=(0,4) if actor==0 else (4,0)
+            plan=self.plan(data,meta,actions=actions,kernel_table=t)
+            self.assertIsInstance(plan,c.ConsumerPlan,plan)
+            self.assertEqual([x.mass for x in self.cells(plan,f'phazing.{actor}')],
+                [Fraction(1,3),Fraction(2,3)])
+            t['entry']['trace'][3]=False
+            without_copy=self.plan(data,meta,actions=actions,kernel_table=t)
+            self.assertEqual(len(self.cells(without_copy,f'phazing.{actor}')),1)
+
     def test_static_has_exact_thirds_on_one_existing_auxiliary_axis(self):
         data, meta = fixture(); meta['vocabulary']['abilities'].append('static')
         data['ability'][1][0] = 2

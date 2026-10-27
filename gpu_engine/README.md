@@ -608,8 +608,8 @@ and cleanup checks remain in force.
 
 This opt-in implements collection plumbing; it supplies no launch admission or
 historical coverage credit. A new reviewed frozen entry and the standing saved-
-root cost check are still required before any future scientific attempt. Trace
-entry execution, Sleep Talk and broader suspension contexts remain unfinished.
+root cost check are still required before any future scientific attempt. Broader
+Trace effects, Sleep Talk and suspension contexts remain unfinished.
 The native continuation validator now applies its existing None/Static ability
 and None/Leftovers item whitelist to the entrant and remaining active. Untouched
 bench fields and outgoing-carrier abilities/items are retained; departure runs
@@ -624,6 +624,13 @@ evidence. Departure evaluates current Natural Cure before restoring the original
 ability, including phazing and suspended replacements. Both JAX and native
 correspondence reject changed originals; legacy state without that field refuses
 instead of inferring it from a copied ability. The former isolated Trace
-departure mismatch now agrees in both seats. Trace entry execution remains
-unimplemented, and Stick remains a named construction refusal. These are
-implementation controls, not historical coverage or fresh scientific credit.
+departure mismatch now agrees in both seats. Entry now copies a living foe’s
+current ability after hazards without activating the copied Gen3 Start event.
+Selected passive major-status cures and Own Tempo cleanup run on the gained
+ability; Truant uses the pre-copy current ability and startup context. A failed
+Trace does not retry on Update. The ordinary chance proof closes possible copied
+abilities before declaring Static/contact chance inactive. Complete authored
+ordinary laws cover both seats; this does not widen the native conditional
+entrant/remaining-active whitelist. Broader ability events, Forecast/Color Change
+representation, infatuation and Stick remain unfinished. These are implementation
+controls, not historical coverage or fresh scientific credit.
