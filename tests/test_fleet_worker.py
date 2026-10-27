@@ -507,6 +507,187 @@ class ClaimTests(unittest.TestCase):
         self.assertTrue(route_directory.exists())
 
 
+class PendingPreviewGenerationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        self.queue = _make_queue(self.root)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _manifest(self, queue=None):
+        return _manifest(queue or self.queue, "i7-s0.env",
+            out=self.root.resolve() / "cache" / "slice", policy="policy-a")
+
+    def _ctime_only(self, path):
+        before = fleet_worker._fanin_stat_snapshot(path.stat())
+        link = path.with_name(path.name + ".temporary-link")
+        os.link(path, link)
+        link.unlink()
+        after = fleet_worker._fanin_stat_snapshot(path.stat())
+        self.assertEqual(before[:-1], after[:-1])
+        self.assertNotEqual(before[-1], after[-1])
+
+    def _after_parse(self, pending, mutation):
+        original = fleet_worker._parse_manifest_text
+        changed = False
+
+        def parse(text, path, base, *, fanin=False):
+            nonlocal changed
+            task = original(text, path, base, fanin=fanin)
+            if path == pending and not changed:
+                changed = True
+                mutation(path)
+            return task
+        return parse
+
+    def test_stable_ctime_only_preview_binds_the_claimed_generation(self):
+        from unittest.mock import patch
+        pending = self._manifest()
+        with patch.object(fleet_worker, "_parse_manifest_text",
+                new=self._after_parse(pending, self._ctime_only)):
+            task = claim_next_task(self.queue, "w1", fanin=True)
+        self.assertIsNotNone(task)
+        self.assertEqual(task.claim_identity,
+            fleet_worker._claim_manifest_snapshot(task.claim_path))
+        self.assertTrue(fleet_worker._fanin_claim_manifest_is_current(task))
+
+    def test_competitor_removal_during_preview_reread_loses_without_lease(self):
+        from unittest.mock import patch
+        pending = self._manifest()
+        original = fleet_worker._read_fanin_file_with_parent_snapshot
+        reads = 0
+        competitor = self.queue / "claimed" / "competitor"
+
+        def read(path, label, **kwargs):
+            nonlocal reads
+            if path == pending:
+                reads += 1
+                if reads == 3:
+                    pending.rename(competitor)
+            return original(path, label, **kwargs)
+
+        with patch.object(fleet_worker, "_parse_manifest_text",
+                new=self._after_parse(pending, self._ctime_only)), \
+                patch.object(fleet_worker, "_read_fanin_file_with_parent_snapshot", new=read):
+            self.assertIsNone(claim_next_task(self.queue, "w1", fanin=True))
+        self.assertEqual(reads, 3)
+        self.assertTrue(competitor.exists())
+        self.assertFalse(list((self.queue / "claimed").glob("*.lease.*.json")))
+
+    def test_same_size_rewrite_with_restored_mtime_is_terminal(self):
+        from unittest.mock import patch
+        pending = self._manifest()
+
+        def rewrite(path):
+            before = path.stat()
+            path.write_bytes(path.read_bytes().replace(b"policy-a", b"policy-b"))
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+        with patch.object(fleet_worker, "_parse_manifest_text",
+                new=self._after_parse(pending, rewrite)):
+            with self.assertRaises(FanInValidationError):
+                claim_next_task(self.queue, "w1", fanin=True)
+        self.assertTrue(pending.exists())
+        self.assertFalse(list((self.queue / "claimed").iterdir()))
+
+    def test_reread_rejects_replacement_or_other_metadata_changes(self):
+        from unittest.mock import patch
+        import shutil
+        for kind in ("inode", "mode", "size", "mtime", "parent", "symlink"):
+            with self.subTest(kind=kind):
+                queue = _make_queue(self.root / kind)
+                pending = self._manifest(queue)
+                original = fleet_worker._read_fanin_file_with_parent_snapshot
+                reads = 0
+
+                def read(path, label, **kwargs):
+                    nonlocal reads
+                    if path == pending:
+                        reads += 1
+                        if reads == 3:
+                            before = path.stat()
+                            if kind == "inode":
+                                replacement = path.with_name("replacement")
+                                shutil.copy2(path, replacement)
+                                replacement.replace(path)
+                            elif kind == "mode":
+                                os.chmod(path, before.st_mode ^ 0o100)
+                            elif kind == "size":
+                                with path.open("ab") as stream:
+                                    stream.write(b"\n")
+                            elif kind == "mtime":
+                                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns + 1_000_000))
+                            elif kind == "parent":
+                                saved = path.parent.with_name("saved-pending")
+                                replacement = path.parent.with_name("replacement-pending")
+                                shutil.copytree(path.parent, replacement)
+                                path.parent.rename(saved)
+                                replacement.rename(path.parent)
+                            else:
+                                backing = path.with_name("backing")
+                                path.rename(backing)
+                                path.symlink_to(backing)
+                    return original(path, label, **kwargs)
+
+                with patch.object(fleet_worker, "_parse_manifest_text",
+                        new=self._after_parse(pending, self._ctime_only)), \
+                        patch.object(fleet_worker, "_read_fanin_file_with_parent_snapshot", new=read):
+                    with self.assertRaises(FanInValidationError):
+                        claim_next_task(queue, "w1", fanin=True)
+                self.assertEqual(reads, 3)
+                self.assertFalse(list((queue / "claimed").iterdir()))
+
+    def test_mutation_during_one_reread_is_terminal_without_retry(self):
+        from unittest.mock import patch
+        pending = self._manifest()
+        original_reader = fleet_worker._read_fanin_file_with_parent_snapshot
+        original_read = os.read
+        reads = 0
+        mutated = False
+
+        def reader(path, label, **kwargs):
+            nonlocal reads
+            if path == pending:
+                reads += 1
+            return original_reader(path, label, **kwargs)
+
+        def read(descriptor, size):
+            nonlocal mutated
+            payload = original_read(descriptor, size)
+            if reads == 3 and payload and not mutated:
+                mutated = True
+                pending.write_bytes(pending.read_bytes().replace(b"policy-a", b"policy-b"))
+            return payload
+
+        with patch.object(fleet_worker, "_parse_manifest_text",
+                new=self._after_parse(pending, self._ctime_only)), \
+                patch.object(fleet_worker, "_read_fanin_file_with_parent_snapshot", new=reader), \
+                patch.object(fleet_worker.os, "read", new=read):
+            with self.assertRaises(FanInValidationError):
+                claim_next_task(self.queue, "w1", fanin=True)
+        self.assertTrue(mutated)
+        self.assertEqual(reads, 3)
+        self.assertFalse(list((self.queue / "claimed").iterdir()))
+
+    def test_ctime_change_after_claim_still_invalidates_lease(self):
+        from unittest.mock import patch
+        self._manifest()
+        original = fleet_worker._write_claim_token
+
+        def token(claim, **kwargs):
+            self._ctime_only(claim)
+            return original(claim, **kwargs)
+
+        with patch.object(fleet_worker, "_write_claim_token", new=token):
+            with self.assertRaises(FanInValidationError):
+                claim_next_task(self.queue, "w1", fanin=True)
+        self.assertFalse(list((self.queue / "pending").iterdir()))
+        self.assertEqual(len(list((self.queue / "claimed").glob("i7-s0.env.w1.*"))), 1)
+
+
 class WorkerLoopTests(unittest.TestCase):
     def setUp(self) -> None:
         import tempfile
