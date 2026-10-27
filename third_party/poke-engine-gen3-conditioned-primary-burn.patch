@@ -1,0 +1,241 @@
+--- a/src/gen3/conditioned_step.rs
++++ b/src/gen3/conditioned_step.rs
+@@ -36,24 +36,29 @@
+     chance: StepChance,
+ }
+-
++
+ fn seat(side: &SideReference) -> usize {
+     match side { SideReference::SideOne => 0, SideReference::SideTwo => 1 }
+ }
+-
++
+ impl ValidatedStep {
+     pub(crate) fn damage_roll(&self, side: &SideReference) -> (bool, u8) {
+         let s = seat(side);
+         (self.chance.draws[s][4] == 0, self.chance.draws[s][5])
+     }
++    pub(crate) fn accuracy_probability(&self, side: &SideReference, probability: f32) -> f32 {
++        // Read the same original coordinate as JAX. The admitted native move
++        // definition owns the cut; Protect/type suppression may reduce it to0.
++        if (self.chance.draws[seat(side)][6] as f32) < probability * 100.0 {1.0} else {0.0}
++    }
+     pub(crate) fn paralysis_probability(&self, side: &SideReference) -> f32 {
+         if self.chance.draws[seat(side)][2] < 25 { 1.0 } else { 0.0 }
+     }
+     pub(crate) fn stall_probability(&self, side: &SideReference, counter: i8) -> f32 {
+         let cut = 8 >> counter.min(3).max(0);
+         if self.chance.draws[seat(side)][8] < cut { 1.0 } else { 0.0 }
+     }
+     pub(crate) fn secondary_hits(&self, side: &SideReference, secondary: &Secondary) -> bool {
+         match (&secondary.target, &secondary.effect) {
+             (MoveTarget::User, Effect::Status(PokemonStatus::PARALYZE))
+                 if secondary.chance == 100.0 / 3.0 => self.chance.phazing[seat(side)] < 20,
+             (MoveTarget::Opponent, Effect::Status(PokemonStatus::PARALYZE))
+@@ -102,47 +107,53 @@
+         if side.shed_tailing || side.slow_uturn_move || side.force_trapped
+             || side.wish != (0, 0) || side.future_sight.0 != 0
+             || !side.volatile_statuses.is_empty() || side.substitute_health != 0
+             || side.volatile_status_durations.serialize() != VolatileStatusDurations::default().serialize()
+             || conditions.serialize() != SideConditions::default().serialize()
+             || [side.attack_boost, side.defense_boost, side.special_attack_boost,
+                 side.special_defense_boost, side.speed_boost, side.accuracy_boost, side.evasion_boost]
+                 .iter().any(|stage| *stage != 0)
+             || side.switch_out_move_second_saved_move != Choices::NONE
+         { return Err("STEP_UNSUPPORTED_SIDE_CONTEXT"); }
+         let active = side.get_active_immutable();
+         if !matches!(active.ability, Abilities::NONE | Abilities::STATIC | Abilities::PRESSURE | Abilities::LEVITATE)
+-            || !matches!(active.item, Items::NONE | Items::LEFTOVERS)
+-            || !matches!(active.status, PokemonStatus::NONE | PokemonStatus::POISON | PokemonStatus::PARALYZE)
++            || !matches!(active.item, Items::NONE | Items::LEFTOVERS | Items::LIGHTBALL)
++            || !matches!(active.status, PokemonStatus::NONE | PokemonStatus::POISON | PokemonStatus::PARALYZE | PokemonStatus::BURN)
+             || active.pre_transform.is_some() || active.rest_sleep_pending_refund != 0
+             || active.rest_turns != 0 || active.sleep_turns != 0 || active.terastallized
+         { return Err("STEP_UNSUPPORTED_ACTIVE_CONTEXT"); }
+         let mv = &active.moves[&move_index(slots[s])?];
+         if !matches!(mv.id, Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION
+-                | Choices::BATONPASS | Choices::PROTECT | Choices::ENDURE | Choices::SPLASH)
++                | Choices::BATONPASS | Choices::PROTECT | Choices::ENDURE | Choices::SPLASH | Choices::WILLOWISP)
+             || mv.disabled || mv.pp <= 0
+             || format!("{:?}", mv.choice) != format!("{:?}", MOVES.get(&mv.id).unwrap())
+         { return Err("STEP_UNSUPPORTED_SELECTED_MOVE"); }
+         ids[s] = mv.id;
+     }
+     let a = sides[0].get_active_immutable().speed;
+     let b = sides[1].get_active_immutable().speed;
+     // JAX has separate residual event ties. This domain admits no potentially
+     // tied ordering, even after a newly applied paralysis changes speed.
+     if [a, a / 4].iter().any(|x| [b, b / 4].iter().any(|y| x == y)) {
+         return Err("STEP_UNSUPPORTED_RESIDUAL_SPEED_TIE");
+     }
+     let mut result = Vec::new();
+     let mut add = |coordinate: String, kind, argument| result.push(Requirement {coordinate, kind, argument});
+     for s in 0..2 {
++        let accuracy=sides[s].get_active_immutable().moves[&move_index(slots[s])?].choice.accuracy;
++        if accuracy < 100.0 {
++            // All selected moves equal their canonical native definitions;
++            // Will-O-Wisp is75 in Gen3. No runtime JAX table supplies this cut.
++            add(format!("draws.{}.6",s),"less_than",accuracy as u8);
++        }
+         if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION) {
+             add(format!("draws.{}.4", s), "less_than", 1);
+             add(format!("draws.{}.5", s), "identity", 0);
+         }
+         if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM) {
+             add(format!("secondary.{}", s), "less_than", if ids[s] == Choices::THUNDERBOLT {10} else {30});
+         }
+         if ids[s] == Choices::BODYSLAM && sides[1-s].get_active_immutable().ability == Abilities::STATIC {
+             add(format!("phazing.{}", s), "less_than", 20);
+         }
+         // The first hit can paralyze the waiting actor before BeforeMove.
+         if sides[s].get_active_immutable().status == PokemonStatus::PARALYZE
+@@ -374,73 +385,104 @@
+                 if double {PokemonType::DRAGON} else {PokemonType::TYPELESS});
+             let hp=state.side_two.get_active_immutable().hp;
+             let b=step(&state,[2,2],&chance,&address).unwrap().remove(0);
+             assert_eq!(b.state.side_two.get_active_immutable().hp,hp-1);
+             state.side_two.get_active().types=(PokemonType::GROUND,PokemonType::TYPELESS);
+             let hp=state.side_two.get_active_immutable().hp;
+             let b=step(&state,[2,2],&chance,&address).unwrap().remove(0);
+             assert_eq!(b.state.side_two.get_active_immutable().hp,hp);
+         }
+     }
+-
++
+     #[test]
++    fn fixed_primary_burn_accuracy_is_native_75_percent_in_both_seats() {
++        for burner in 0..2 {
++            let mut moves=[Choices::SPLASH;2];moves[burner]=Choices::WILLOWISP;
++            let (state,mut chance,address)=fixture(moves);
++            let coordinate=format!("draws.{}.6",burner);
++            assert!(requirements(&state,[2,2]).unwrap().iter().any(|r|
++                r.coordinate==coordinate && r.kind=="less_than" && r.argument==75));
++            for roll in [0,74,75,99] {
++                chance.draws[burner][6]=roll;
++                let branches=step(&state,[2,2],&chance,&address).unwrap();
++                assert_eq!(branches.len(),1,"fixed accuracy forked");
++                assert_eq!(branches[0].percentage,100.0);
++                let target=if burner==0 {&branches[0].state.side_two} else {&branches[0].state.side_one};
++                assert_eq!(target.get_active_immutable().status,
++                    if roll<75 {PokemonStatus::BURN} else {PokemonStatus::NONE});
++            }
++        }
++    }
++
++    #[test]
+     fn fixed_chance_physical_marginal_matches_complete_ordinary_native_law() {
+         use std::collections::BTreeMap;
+         assert!(super::super::generate_instructions::enumerate_damage_rolls(),
+             "run this control with POKEZERO_ENUMERATE_ROLLS=1 before process startup");
+         fn recurse(state: &State,address: &StepAddress,chance: &mut StepChance,
+             axes: &[(String,Vec<(u8,f64)>)],index:usize,mass:f64,out:&mut BTreeMap<String,f64>) {
+             if index==axes.len() {
+-                for branch in step(state,[2,2],chance,address).unwrap() {
++                for branch in step(state,[2,2],chance,address).unwrap_or_else(|e| panic!("{} moves={:?}/{:?} chance={:?}",e,state.side_one.get_active_immutable().moves[&PokemonMoveIndex::M2].id,state.side_two.get_active_immutable().moves[&PokemonMoveIndex::M2].id,chance)) {
+                     *out.entry(branch.state.serialize()).or_default()+=mass*branch.percentage as f64/100.0;
+                 }
+                 return;
+             }
+             let (name,cells)=&axes[index];let parts:Vec<_>=name.split('.').collect();
+             let seat:usize=parts[1].parse().unwrap();
+             for (value,weight) in cells {
+                 match parts[0] {
+                     "draws" => chance.draws[seat][parts[2].parse::<usize>().unwrap()]=*value,
+                     "phazing" => chance.phazing[seat]=*value,
+                     "secondary" => chance.secondary[seat]=*value,
+                     _ => panic!("unexpected native active coordinate"),
+                 }
+                 recurse(state,address,chance,axes,index+1,mass*weight,out);
+             }
+         }
+-        for variant in 0..12 {
++        for variant in 0..22 {
+             let selected=match variant {
+                 0|1 => [Choices::THUNDERBOLT,Choices::SPLASH],
+                 2|3 => [Choices::BODYSLAM,Choices::SPLASH],
+                 4|5 => [Choices::PROTECT,Choices::SPLASH],
+                 6|7 => [Choices::BATONPASS,Choices::SPLASH],
+                 8|9 => [Choices::EXPLOSION,Choices::SPLASH],
++                10|11 => [Choices::THUNDERBOLT,Choices::SPLASH],
++                12|13 => [Choices::WILLOWISP,Choices::SPLASH],
++                14|15 => [Choices::WILLOWISP,Choices::BODYSLAM],
++                16|17 => [Choices::WILLOWISP,Choices::THUNDERBOLT],
++                18|19 => [Choices::WILLOWISP,Choices::BATONPASS],
+                 _ => [Choices::THUNDERBOLT,Choices::SPLASH],
+             };
+             let (mut state,mut chance,address)=fixture(selected);
+             if variant%2==1 {
+                 state.side_one.get_active().speed=101;
+                 state.side_two.get_active().speed=301;
+             }
+             if variant==1 || variant==5 {state.side_one.get_active().status=PokemonStatus::PARALYZE;}
+             if variant==3 {state.side_two.get_active().ability=Abilities::STATIC;}
+             if variant==4 || variant==5 {state.side_one.side_conditions.protect=3;}
+             if variant==9 {state.side_two.get_active().hp=1;}
+-            if variant>=10 {
++            if variant==10 || variant==11 {
+                 use crate::state::PokemonType;
+                 state.side_one.get_active().special_attack=1;
+                 state.side_two.get_active().special_defense=30000;
+                 state.side_two.get_active().types=(PokemonType::GRASS,
+                     if variant==11 {PokemonType::DRAGON} else {PokemonType::TYPELESS});
+             }
++            if variant==16 || variant==17 {
++                use crate::pokemon::PokemonName;
++                state.side_two.get_active().item=Items::LIGHTBALL;
++                state.side_two.get_active().id=if variant==16 {PokemonName::PIKACHU} else {PokemonName::DITTO};
++            }
++            if variant==20 || variant==21 {state.side_one.get_active().status=PokemonStatus::BURN;}
+             let mut uses:BTreeMap<String,Vec<Requirement>>=BTreeMap::new();
+             for req in requirements(&state,[2,2]).unwrap() {uses.entry(req.coordinate.clone()).or_default().push(req);}
+             let axes:Vec<_>=uses.into_iter().map(|(name,cuts)| {
+                 let parts:Vec<_>=name.split('.').collect();
+                 let bound=match parts[0] {
+                     "draws" => [2,100,100,100,16,16,100,4,8,2,2,2][parts[2].parse::<usize>().unwrap()],
+                     "phazing" => 60,"secondary"=>100,_=>panic!("unexpected coordinate"),
+                 };
+                 let mut groups:BTreeMap<Vec<u8>,(u8,usize)>=BTreeMap::new();
+                 for value in 0..bound {
+                     let key=cuts.iter().map(|cut| if cut.kind=="identity" {value} else {u8::from(value<cut.argument)}).collect();
+                     groups.entry(key).or_insert((value,0)).1+=1;
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1617,26 +1617,33 @@
+     If the move can miss - adds it to `frozen_instructions`, signifying that the rest of the
+     half-turn will not run.
+-
++
+     Otherwise, update the incoming instructions' percent_hit to reflect the chance of the move hitting
+     */
+     let attacking_side = state.get_side_immutable(attacking_side_ref);
+     let attacking_pokemon = attacking_side.get_active_immutable();
+-
++
+     let mut percent_hit = (choice.accuracy / 100.0).min(1.0);
+     if Some((0, 0)) == damage {
+         percent_hit = 0.0;
+     }
+-
+-    if percent_hit < 1.0 {
++    #[cfg(feature = "conditioned-oracle")]
++    if let Some(context) = state.oracle_step.as_ref() {
++        percent_hit = context.accuracy_probability(attacking_side_ref, percent_hit);
++    }
++
++    // A fully blocked BeforeMove prefix has no accuracy event. In a fixed
++    // chance context it can carry exactlyzero mass; do not mint a zero-mass
++    // miss branch which the strict complete-law API correctly refuses.
++    if percent_hit < 1.0 && incoming_instructions.percentage > 0.0 {
+         let mut move_missed_instruction = incoming_instructions.clone();
+         move_missed_instruction.update_percentage(1.0 - percent_hit);
+         if let Some(crash_fraction) = choice.crash {
+             let crash_amount = (attacking_pokemon.maxhp as f32 * crash_fraction) as i16;
+             let crash_instruction = Instruction::Damage(DamageInstruction {
+                 side_ref: *attacking_side_ref,
+                 damage_amount: cmp::min(crash_amount, attacking_pokemon.hp),
+             });
+-
++
+             move_missed_instruction
+                 .instruction_list
+                 .push(crash_instruction);

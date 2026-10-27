@@ -101,6 +101,6 @@ jobs:
               'tests.test_gpu_engine_panel_owner',
               'tests.test_native_gpu_panel_execution'])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 131 and not result.skipped
+          assert result.testsRun >= 134 and not result.skipped
           assert result.wasSuccessful()
           PY

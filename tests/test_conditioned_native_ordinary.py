@@ -32,16 +32,17 @@ class OrdinaryCarryTests(unittest.TestCase):
         from tests.test_conditioned_native_resume import ConditionedResumeTests
         ConditionedResumeTests.setUpClass.__func__(cls)
         from gpu_engine import baton,critical,effects,entry,items,pressure,secondary,self_destruct
-        cls.names=cls.meta['vocabulary']['moves']+['explosion','protect','endure']
-        cls.meta={**cls.meta,'vocabulary':{**cls.meta['vocabulary'],'moves':cls.names},
-            'moves':[None]+[dict(id=name,source_type='Electric' if name=='thunderbolt' else 'Normal',
+        cls.names=cls.meta['vocabulary']['moves']+['explosion','protect','endure','willowisp']
+        cls.meta={**cls.meta,'vocabulary':{**cls.meta['vocabulary'],'moves':cls.names,
+                'species':['_none','ditto','pikachu'],'items':['_none','leftovers','lightball']},
+            'moves':[None]+[dict(id=name,source_type='Electric' if name=='thunderbolt' else 'Fire' if name=='willowisp' else 'Normal',
                 category='Special' if name=='thunderbolt' else 'Physical' if name in ('bodyslam','explosion','struggle') else 'Status',
                 flags={'protect':1,'contact':int(name=='bodyslam')}) for name in cls.names[1:]]}
         j=cls.j
-        cls.table=cls.t.MoveTable(j.array([0,0,95,0,50,85,250,0,0]),
-            j.array([0,1,13,1,0,1,1,1,1]),j.array([False,False,False,False,True,True,True,False,False]),
-            j.full(9,100),j.array([True,True,False,True,False,False,False,True,True]),
-            j.array([0,0,0,0,0,0,0,3,3]),cls.table.type_num,cls.table.type_den,j.array(4),
+        cls.table=cls.t.MoveTable(j.array([0,0,95,0,50,85,250,0,0,0]),
+            j.array([0,1,13,1,0,1,1,1,1,10]),j.array([False,False,False,False,True,True,True,False,False,False]),
+            j.full(10,100).at[9].set(75),j.array([True,True,False,True,False,False,False,True,True,False]),
+            j.array([0,0,0,0,0,0,0,3,3,0]),cls.table.type_num,cls.table.type_den,j.array(4),
             baton=baton.from_metadata(cls.meta),critical=critical.from_metadata(cls.meta),
             effects=effects.from_metadata(cls.meta),entry=entry.from_metadata(cls.meta),items=items.from_metadata(cls.meta),
             pressure=pressure.from_metadata(cls.meta),secondary=secondary.from_metadata(cls.meta),
@@ -176,6 +177,36 @@ class OrdinaryCarryTests(unittest.TestCase):
                             types=s.types.at[:,1-side,0,0].set((5 if electric else 8) if kind=='immune' else (12 if electric else 6))
                                 .at[:,1-side,0,1].set((16 if electric else 9) if kind=='double' else 0))
                         self.compare(s,a,table)
+
+    def test_primary_burn_and_light_ball_complete_laws_both_seats_and_orders(self):
+        for burner in (0,1):
+            for fast_burner in (False,True):
+                for move,species in (('thunderbolt',1),('thunderbolt',2),('bodyslam',2)):
+                    with self.subTest(burner=burner,fast=fast_burner,move=move,species=species):
+                        names=[move,move];names[burner]='willowisp'
+                        s,a=self.fixture(names,fast=burner if fast_burner else 1-burner)
+                        s=s._replace(item=s.item.at[:,1-burner,0].set(2),
+                            species=s.species.at[:,1-burner,0].set(species))
+                        self.compare(s,a)
+
+    def test_primary_burn_status_and_fire_immunity_and_baton_outputs(self):
+        for burner in (0,1):
+            for kind in ('fire','paralyzed','burned','protect','first_baton','second_baton'):
+                with self.subTest(burner=burner,kind=kind):
+                    names=['splash','splash'];names[burner]='willowisp'
+                    if 'baton' in kind:names[1-burner]='batonpass'
+                    if kind=='protect':names[1-burner]='protect'
+                    s,a=self.fixture(names,fast=1-burner if kind=='first_baton' else burner)
+                    if kind=='fire':s=s._replace(types=s.types.at[:,1-burner,0,0].set(10))
+                    if kind in ('paralyzed','burned'):
+                        s=s._replace(status=s.status.at[:,1-burner,0].set(1 if kind=='paralyzed' else 2))
+                    self.compare(s,a)
+
+    def test_wrong_actual_jax_primary_accuracy_keeps_native_cut_and_diverges(self):
+        s,a=self.fixture(('willowisp','splash'))
+        changed=self.table._replace(accuracy=self.table.accuracy.at[9].set(65))
+        result,_=self.compare(s,a,changed,expected='DIVERGE')
+        self.assertGreater(result['comparison']['half_l1'],0)
 
 
 if __name__=='__main__':unittest.main()

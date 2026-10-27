@@ -737,7 +737,7 @@ does not change JAX's already matching stall behavior.
 including positive pending-residual successors. Supply the already validated
 current-root `NativeInput` with retained original constructor provenance,
 explicit move slots, case/batch/node bounds, and an owning operation deadline.
-Both installed native consumers must match the registered Native96 build.
+Both installed native consumers must match the registered Native97 build.
 This API does not change the scientific collector or old panel admission.
 
 The native API has a distinct ordinary context. It independently declares its
@@ -751,15 +751,18 @@ unsupported positive output, incomplete law or cap refuses the whole slot;
 there is no prefix acceptance or normalization.
 
 The initial native domain is live ordinary requests selecting Thunderbolt,
-Body Slam, Explosion, Baton Pass, Protect, Endure or Splash, with the guarded
+Body Slam, Explosion, Baton Pass, Protect, Endure, Splash or Will-O-Wisp, with the guarded
 active abilities/items/statuses and no potentially tied residual ordering.
-Untouched bench fields remain retained. A representable pending output does
+Native97 binds Will-O-Wisp to its native Gen3 75% accuracy cut on the original
+accuracy coordinate, admits existing deterministic burn effects and the
+species-gated Light Ball special-stat modifier, and preserves Fire immunity,
+existing-status failure and Protect. Untouched bench fields remain retained. A representable pending output does
 not promise that the next continuation is executable by the narrower resume
 API. Native96 applies Gen3's final minimum one to successful nonimmune ordinary
 hits, including maximum-zero/one resistance cases, with shared type/volatile
 suppression and fixed-callback exclusions. The complete-law comparator admits
 those repaired low-damage states and retains true immunity. Existing nonzero
 Protect-streak storage at a Baton suspension remains a measured
-authored DIVERGE, with equal capsules and differing physical counters. Neither
-gap is erased by the mapper. These authored controls provide no new scientific
+authored DIVERGE, with equal capsules and differing physical counters. This
+difference is retained by the mapper. These authored controls provide no new scientific
 panel counts, strength evidence or full-engine qualification.
