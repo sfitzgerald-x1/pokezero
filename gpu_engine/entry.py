@@ -27,17 +27,24 @@ class EntryTable(NamedTuple):
     spikes_move: jax.Array
     speed_boost: jax.Array
     truant: jax.Array | None = None
+    trace: jax.Array | None = None
+    status_cure: jax.Array | None = None
+    own_tempo: jax.Array | None = None
 
 
 def from_metadata(metadata):
     vocab = metadata["vocabulary"]
     flag = lambda names: jnp.asarray([name in names for name in vocab["abilities"]])
     climates = {"drizzle":weather.RAIN,"drought":weather.SUN,"sandstream":weather.SAND}
+    cures={"waterveil":{m.BRN},"magmaarmor":{m.FRZ},"limber":{m.PAR},
+        "immunity":{m.PSN,m.TOX},"insomnia":{m.SLP},"vitalspirit":{m.SLP}}
     return EntryTable(jnp.asarray([climates.get(name,weather.NONE) for name in vocab["abilities"]]),
         flag({"intimidate"}),flag({"naturalcure"}),flag({"levitate"}),
         flag({"clearbody","whitesmoke","hypercutter"}),flag({"swiftswim"}),flag({"chlorophyll"}),
         jnp.asarray(vocab["types"].index("flying")),jnp.asarray(vocab["types"].index("ground")),
-        jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}),flag({"truant"}))
+        jnp.asarray([name == "spikes" for name in vocab["moves"]]),flag({"speedboost"}),flag({"truant"}),
+        flag({"trace"}),jnp.asarray([[status in cures.get(name,set()) for status in range(7)]
+            for name in vocab["abilities"]]),flag({"owntempo"}))
 
 
 def speed_modifier(table,ability,effective_weather,speed):
@@ -114,12 +121,31 @@ def enter(state,side,table,*,eligible,hazards=True,startup=False):
         clock=table.truant[ability] & ~jnp.asarray(startup)
         state=state._replace(truant_loaf=state.truant_loaf.at[rows,side,active].set(
             jnp.where(eligible,starts & clock,old_clock)))
+    # Gen3 Trace attempts only at Ability Start, after hazards/SwitchIn. Keep
+    # the pre-Trace current ability for Start handlers below: gaining weather,
+    # Intimidate or Truant through Trace does not run their Start/SwitchIn.
+    foe_hp = state.hp[rows,foe,foe_active]
+    if table.trace is not None:
+        copied=starts & table.trace[ability] & (foe_hp>0)
+        state=state._replace(ability=state.ability.at[rows,side,active].set(jnp.where(
+            copied,state.ability[rows,foe,foe_active],ability)))
+    current=state.ability[rows,side,active]
+    status=state.status[rows,side,active]
+    if table.status_cure is not None:
+        cure=starts & table.status_cure[current,status]
+        state=state._replace(status=state.status.at[rows,side,active].set(jnp.where(cure,m.NONE,status)),
+            status_counter=state.status_counter.at[rows,side,active].set(jnp.where(
+                cure,0,state.status_counter[rows,side,active])),
+            sleep_skipped=state.sleep_skipped.at[rows,side,active].set(jnp.where(
+                cure,0,state.sleep_skipped[rows,side,active])))
+    if table.own_tempo is not None:
+        state=state._replace(confusion_counter=state.confusion_counter.at[rows,side,active].set(jnp.where(
+            starts & table.own_tempo[current],0,state.confusion_counter[rows,side,active])))
     requested = table.weather_ability[ability]
     change = (starts & (requested != weather.NONE)
         & ((state.weather != requested) | (state.weather_counter > 0)))
     state = state._replace(weather=jnp.where(change,requested,state.weather),
         weather_counter=jnp.where(change,0,state.weather_counter))
-    foe_hp = state.hp[rows,foe,foe_active]
     blocked = ((state.substitute_hp[rows,foe,foe_active] > 0)
         | table.attack_drop_immune[state.ability[rows,foe,foe_active]])
     drops = starts & table.intimidate[ability] & (foe_hp > 0) & ~blocked

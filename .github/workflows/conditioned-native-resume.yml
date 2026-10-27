@@ -9,6 +9,8 @@ on:
       - 'gpu_engine/**'
       - 'tests/test_conditioned_native_resume.py'
       - 'tests/test_conditioned_native_roles.py'
+      - 'tests/test_native_gen3_trace_entry.py'
+      - 'tests/test_gpu_engine_trace_entry.py'
       - 'tests/test_constructor_provenance.py'
       - 'tests/test_prospective_fidelity_panel.py'
       - 'tests/test_gpu_engine_panel_owner.py'
@@ -58,10 +60,10 @@ jobs:
           assert pokezero_search.CONDITIONED_ORACLE_ENABLED
           suite = unittest.defaultTestLoader.loadTestsFromNames([
               'tests.test_conditioned_native_resume', 'tests.test_constructor_provenance',
-              'tests.test_conditioned_native_roles',
+              'tests.test_conditioned_native_roles', 'tests.test_native_gen3_trace_entry',
               'tests.test_prospective_fidelity_panel', 'tests.test_gpu_engine_panel_owner',
               'tests.test_native_gpu_panel_execution'])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 54 and not result.skipped
+          assert result.testsRun >= 56 and not result.skipped
           assert result.wasSuccessful()
           PY

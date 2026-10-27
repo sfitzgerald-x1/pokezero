@@ -57,10 +57,10 @@ SOURCE_PINS = {
     "phazing.py": "53ebef4c2202c0dda8227befc959c609e1d8c4ab7a9ede9e8ed8abeadbd0a402",
     "weather.py": "a5014e990f08bfb0cf04ac4aba5bc4cbc44717071601f80d3c340bfac79cade5",
     "state.py": "745dd4a5515bb8e201e216b81cf285498156620f5d141ba7d4efa128975f4a37",
-    "entry.py": "f407f40d8647d4bd771cb1221502e8dfa25ffb98563506abc4cf1e5dbd65f0aa",
+    "entry.py": "806aff3adfe67f64c8bc4719c94f0a6158d81eb53c7840df28ff5c12fa3cd626",
 }
 DOMAIN_MODULES = tuple("absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "2bb90563e06a858ba9a6cba991ad5bdc9ef06dcdb1af4c112da341503c6b2bfe"
+DOMAIN_SHA256 = "8d7a2762de9886fed9a6c21aeca51dfcb2a4da75746eaae915c23846dff85cff"
 
 
 def _host(value):
@@ -196,11 +196,23 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                     participants[s].update(p for p in range(6) if data["hp"][s][p] > 0)
             changed = before != tuple(tuple(sorted(x)) for x in selected)
 
+        # A reachable Trace entrant may gain the opposing current ability.
+        # Close both seats together before declaring an existing chance axis
+        # inactive. This is a conservative source closure, not a sampled path.
+        abilities=[{data["ability"][s][p] for p in participants[s]} for s in range(2)]
+        trace_table=(t.get('entry') or {}).get('trace')
+        changed=True
+        while changed:
+            before=tuple(frozenset(values) for values in abilities)
+            for s in range(2):
+                if trace_table is not None and any(trace_table[ability] for ability in abilities[s]):
+                    abilities[s].update(abilities[1-s])
+            changed=before!=tuple(frozenset(values) for values in abilities)
         statuses = [{data["status"][s][p] for p in participants[s]} for s in range(2)]
         for s in range(2):
             if (any(_at(t, 'secondary', 'contact', move) for move in selected[s])
-                    and any(_at(t, 'secondary', 'static', data['ability'][1-s][p])
-                            for p in participants[1-s])):
+                    and any(_at(t, 'secondary', 'static', ability)
+                            for ability in abilities[1-s])):
                 statuses[s].add(1)  # conservative own-contact paralysis closure
             for move in selected[1-s]:
                 statuses[s].add(_at(t, "effects", "status", move))
@@ -208,7 +220,7 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
         weather = {data["weather"], 0}  # suppression may disappear after a KO
         for s in range(2):
             weather.update(_at(t, "weather", "move_weather", move) for move in selected[s])
-            weather.update(_at(t, "entry", "weather_ability", data["ability"][s][p]) for p in participants[s])
+            weather.update(_at(t, "entry", "weather_ability", ability) for ability in abilities[s])
         haze = any(_at(t, "effects", "haze", move) for choices in selected for move in choices)
         stages = [[{data["boosts"][s][p][field] for p in participants[s]} for field in (5, 6)] for s in range(2)]
         for s in range(2):
@@ -272,8 +284,8 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             if any(_at(t, "phazing", "move", move) for move in selected[s]):
                 use(f"phazing.{s}", *(Observation("modulo", count) for count in range(1, 6)))
             if (any(_at(t, 'secondary', 'contact', move) for move in selected[s])
-                    and any(_at(t, 'secondary', 'static', data['ability'][1-s][p])
-                            for p in participants[1-s])):
+                    and any(_at(t, 'secondary', 'static', ability)
+                            for ability in abilities[1-s])):
                 use(f'phazing.{s}', Observation('less_than', 20))
             for move in selected[s]:
                 chance = _at(t, "secondary", "chance", move)
