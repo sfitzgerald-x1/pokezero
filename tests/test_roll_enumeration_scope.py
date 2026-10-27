@@ -1089,6 +1089,7 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # control assertion as context; no process-wide flag behavior changes.
         "third_party/poke-engine-gen3-ordinary-minimum-damage.patch",
         "third_party/poke-engine-gen3-conditioned-primary-burn.patch",
+        "third_party/poke-engine-gen3-conditioned-ordinary-ties.patch",
         # Forces the flag OFF so the standing mass gate always measures the
         # collapsed cascade, whatever the ambient environment says.
         "tests/test_branch_mass_reconstruction.py",

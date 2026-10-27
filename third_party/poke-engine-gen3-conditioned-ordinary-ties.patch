@@ -1,0 +1,521 @@
+--- a/src/gen3/conditioned_step.rs
++++ b/src/gen3/conditioned_step.rs
+@@ -32,24 +32,36 @@
+-
++
+ /// Private fields prevent ordinary callers from bypassing the admitted domain.
+ #[derive(Debug, Clone)]
+ pub struct ValidatedStep {
+     chance: StepChance,
+ }
+-
++
+ fn seat(side: &SideReference) -> usize {
+     match side { SideReference::SideOne => 0, SideReference::SideTwo => 1 }
+ }
+-
++
+ impl ValidatedStep {
++    pub(crate) fn move_tie_first(&self) -> SideReference {
++        if self.chance.draws[0][0] == 0 {SideReference::SideOne} else {SideReference::SideTwo}
++    }
++    pub(crate) fn residual_tie_first(&self, suborder: u8) -> SideReference {
++        // Only 10.6 can distinguish the two tied orders in this validated
++        // domain. Admitted abilities have no residual effect, Leftovers heals
++        // only its own holder before any status handler, and no seed/duration
++        // event is active. Its physical coin is independent of move ordering.
++        if suborder == 6 && self.chance.draws[1][9] == 1 {
++            SideReference::SideTwo
++        } else {SideReference::SideOne}
++    }
+     pub(crate) fn damage_roll(&self, side: &SideReference) -> (bool, u8) {
+         let s = seat(side);
+         (self.chance.draws[s][4] == 0, self.chance.draws[s][5])
+     }
+     pub(crate) fn accuracy_probability(&self, side: &SideReference, probability: f32) -> f32 {
+         // Read the same original coordinate as JAX. The admitted native move
+         // definition owns the cut; Protect/type suppression may reduce it to0.
+         if (self.chance.draws[seat(side)][6] as f32) < probability * 100.0 {1.0} else {0.0}
+     }
+     pub(crate) fn paralysis_probability(&self, side: &SideReference) -> f32 {
+         if self.chance.draws[seat(side)][2] < 25 { 1.0 } else { 0.0 }
+     }
+@@ -122,31 +134,33 @@
+             || active.rest_turns != 0 || active.sleep_turns != 0 || active.terastallized
+         { return Err("STEP_UNSUPPORTED_ACTIVE_CONTEXT"); }
+         let mv = &active.moves[&move_index(slots[s])?];
+         if !matches!(mv.id, Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION
+                 | Choices::BATONPASS | Choices::PROTECT | Choices::ENDURE | Choices::SPLASH | Choices::WILLOWISP)
+             || mv.disabled || mv.pp <= 0
+             || format!("{:?}", mv.choice) != format!("{:?}", MOVES.get(&mv.id).unwrap())
+         { return Err("STEP_UNSUPPORTED_SELECTED_MOVE"); }
+         ids[s] = mv.id;
+     }
+     let a = sides[0].get_active_immutable().speed;
+     let b = sides[1].get_active_immutable().speed;
+-    // JAX has separate residual event ties. This domain admits no potentially
+-    // tied ordering, even after a newly applied paralysis changes speed.
+-    if [a, a / 4].iter().any(|x| [b, b / 4].iter().any(|y| x == y)) {
+-        return Err("STEP_UNSUPPORTED_RESIDUAL_SPEED_TIE");
+-    }
++    // Conservative closure includes initial and newly applied paralysis.
++    // No admitted ability/item/move changes speed by another mechanism.
++    let possible_tie = [a, a / 4].iter().any(|x| [b, b / 4].iter().any(|y| x == y));
+     let mut result = Vec::new();
+     let mut add = |coordinate: String, kind, argument| result.push(Requirement {coordinate, kind, argument});
++    if possible_tie {
++        add("draws.0.0".into(),"identity",0);
++        add("draws.1.9".into(),"identity",0);
++    }
+     for s in 0..2 {
+         let accuracy=sides[s].get_active_immutable().moves[&move_index(slots[s])?].choice.accuracy;
+         if accuracy < 100.0 {
+             // All selected moves equal their canonical native definitions;
+             // Will-O-Wisp is75 in Gen3. No runtime JAX table supplies this cut.
+             add(format!("draws.{}.6",s),"less_than",accuracy as u8);
+         }
+         if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION) {
+             add(format!("draws.{}.4", s), "less_than", 1);
+             add(format!("draws.{}.5", s), "identity", 0);
+         }
+         if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM) {
+@@ -405,24 +419,71 @@
+                 chance.draws[burner][6]=roll;
+                 let branches=step(&state,[2,2],&chance,&address).unwrap();
+                 assert_eq!(branches.len(),1,"fixed accuracy forked");
+                 assert_eq!(branches[0].percentage,100.0);
+                 let target=if burner==0 {&branches[0].state.side_two} else {&branches[0].state.side_one};
+                 assert_eq!(target.get_active_immutable().status,
+                     if roll<75 {PokemonStatus::BURN} else {PokemonStatus::NONE});
+             }
+         }
+     }
+-
++
+     #[test]
++    fn fixed_tied_move_uses_original_move_coin_and_preserves_baton_commitment() {
++        let (mut state,mut chance,address)=fixture([Choices::THUNDERBOLT,Choices::BATONPASS]);
++        state.side_one.get_active().speed=200;
++        state.side_two.get_active().speed=200;
++        state.side_two.get_active().hp=1;
++        for coin in 0..2 {
++            chance.draws[0][0]=coin;
++            let branches=step(&state,[2,2],&chance,&address).unwrap();
++            assert_eq!(branches.len(),1);
++            let b=&branches[0];assert_eq!(b.percentage,100.0);
++            assert!(b.capsule.pending_residual);
++            assert_eq!(b.state.side_two.get_active_immutable().hp,if coin==0 {0} else {1});
++            assert_eq!(b.capsule.queued_actor,if coin==0 {-1} else {0});
++            assert_eq!(b.state.side_two.baton_passing,coin==1);
++        }
++    }
++
++    #[test]
++    fn fixed_tied_residual_status_coin_is_independent_and_items_precede_status() {
++        for items in [false,true] {
++            let (mut state,mut chance,address)=fixture([Choices::SPLASH;2]);
++            for side in [&mut state.side_one,&mut state.side_two] {
++                side.get_active().speed=200;
++                side.get_active().maxhp=1000;
++                side.get_active().hp=1;
++                side.get_active().status=if items {PokemonStatus::BURN} else {PokemonStatus::POISON};
++                side.get_active().item=if items {Items::LEFTOVERS} else {Items::NONE};
++                for p in [PokemonIndex::P1,PokemonIndex::P2,PokemonIndex::P3,PokemonIndex::P4,PokemonIndex::P5] {
++                    side.pokemon[p].hp=0;
++                }
++            }
++            if items {state.side_two.get_active().hp=100;}
++            for move_coin in 0..2 { for status_coin in 0..2 {
++                chance.draws[0][0]=move_coin;chance.draws[1][9]=status_coin;
++                let branches=step(&state,[2,2],&chance,&address).unwrap();
++                assert_eq!(branches.len(),1);let b=&branches[0];assert_eq!(b.percentage,100.0);
++                let hp=[b.state.side_one.get_active_immutable().hp,b.state.side_two.get_active_immutable().hp];
++                let wanted=if items {[0,if status_coin==0 {162} else {37}]}
++                    else if status_coin==0 {[0,1]} else {[1,0]};
++                assert_eq!(hp,wanted,"move={}, status={}, items={}",move_coin,status_coin,items);
++                assert!(!b.capsule.pending_residual);
++                assert_eq!(state.side_one.get_active_immutable().hp,1);
++            }}
++        }
++    }
++
++    #[test]
+     fn fixed_chance_physical_marginal_matches_complete_ordinary_native_law() {
+         use std::collections::BTreeMap;
+         assert!(super::super::generate_instructions::enumerate_damage_rolls(),
+             "run this control with POKEZERO_ENUMERATE_ROLLS=1 before process startup");
+         fn recurse(state: &State,address: &StepAddress,chance: &mut StepChance,
+             axes: &[(String,Vec<(u8,f64)>)],index:usize,mass:f64,out:&mut BTreeMap<String,f64>) {
+             if index==axes.len() {
+                 for branch in step(state,[2,2],chance,address).unwrap_or_else(|e| panic!("{} moves={:?}/{:?} chance={:?}",e,state.side_one.get_active_immutable().moves[&PokemonMoveIndex::M2].id,state.side_two.get_active_immutable().moves[&PokemonMoveIndex::M2].id,chance)) {
+                     *out.entry(branch.state.serialize()).or_default()+=mass*branch.percentage as f64/100.0;
+                 }
+                 return;
+             }
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -4860,24 +4860,31 @@
+             SideMovesFirst::SideTwo
+         };
+     } else if side_two_choice.category == MoveCategory::Switch {
+         return if side_one_choice.move_id == Choices::PURSUIT {
+             SideMovesFirst::SideOne
+         } else {
+             SideMovesFirst::SideTwo
+         };
+     }
+-
++
+     if side_one_choice.priority == side_two_choice.priority {
+         if side_one_effective_speed == side_two_effective_speed {
++            #[cfg(feature = "conditioned-oracle")]
++            if let Some(context) = state.oracle_step.as_ref() {
++                return match context.move_tie_first() {
++                    SideReference::SideOne => SideMovesFirst::SideOne,
++                    SideReference::SideTwo => SideMovesFirst::SideTwo,
++                };
++            }
+             return SideMovesFirst::SpeedTie;
+         }
+         if side_one_effective_speed > side_two_effective_speed {
+             SideMovesFirst::SideOne
+         } else {
+             SideMovesFirst::SideTwo
+         }
+     } else {
+         if side_one_choice.priority > side_two_choice.priority {
+             SideMovesFirst::SideOne
+         } else {
+             SideMovesFirst::SideTwo
+@@ -5042,24 +5049,25 @@
+ ///
+ /// # Speed ties
+ ///
+ /// `speedSort` finishes an exact tie with `this.prng.shuffle`
+ /// (`sim/battle.ts:455-457`), so a tie is RANDOM, not a fixed side preference —
+ /// two 146-speed Blisseys swap residual order between seeds and between turns of
+ /// a single battle. The tie is therefore a 50/50 BRANCH, taken in
+ /// `add_end_of_turn_branches`; this function is handed the side that goes first.
+ fn add_end_of_turn_instructions(
+     state: &mut State,
+     mut incoming_instructions: &mut StateInstructions,
+     residual_first_side: &SideReference,
++    residual_tied: bool,
+     shed_skin_activations: [bool; 2],
+ ) {
+     state.apply_instructions(&incoming_instructions.instruction_list);
+     if end_of_turn_is_deferred(state) {
+         mark_pending_replacements(state, &mut incoming_instructions);
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         return;
+     }
+-
++
+     // A battle already decided by the move phase runs no residual block at all —
+     // Showdown's `case 'residual'` is never reached once `this.ended` is set.
+     //
+@@ -5250,58 +5258,80 @@
+                 .instruction_list
+                 .push(sand_damage_instruction);
+         }
+     }
+-
++
+     // ----------------------------------------------------------------- order 10
+     // THE speed-major class. One Pokemon at a time, fastest first, each running
+     // its whole 10.x set in subOrder before the other side runs any of its own.
+     // `stop_residuals_if_battle_ended!` guards every sub-step because Showdown
+     // runs `this.faintMessages(); if (this.ended) return;` after EVERY handler,
+     // not after every section — which is exactly what makes the loser's last
+     // residual truncate the winner's (ledger appendix O).
+-    for side_ref in sides {
++    let suborders = [3,4,5,6,9,14,15,19];
++    let mut events = [(*sides[0],0u8);16];
++    for (side_index,side) in sides.iter().enumerate() {
++        for (index,suborder) in suborders.iter().enumerate() {
++            events[side_index*8+index] = (**side,*suborder);
++        }
++    }
++    // Non-tied and ordinary/default callers retain the same side-major body
++    // sequence. The validated fixed-chance ordinary context instead sorts an
++    // actual speed tie by suborder, then each active event's original coin.
++    // Post-move speeds were frozen by the caller before any residual handler.
++    if residual_tied {
++        #[cfg(feature = "conditioned-oracle")]
++        if let Some(context) = state.oracle_step.as_ref() {
++            for (index,suborder) in suborders.iter().enumerate() {
++                let first=context.residual_tie_first(*suborder);
++                events[index*2] = (first,*suborder);
++                events[index*2+1] = (first.get_other_side(),*suborder);
++            }
++        }
++    }
++    for (event_side,suborder) in events {
++        let side_ref = &event_side;
+         // 10.3 — abilities (Shed Skin, Speed Boost, Rain Dish)
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        {
++        if suborder == 3 {
++            stop_residuals_if_battle_ended!(state, incoming_instructions);
+             let side = state.get_side(side_ref);
+             if side.get_active_immutable().hp != 0 {
+                 let shed_skin_activates = match side_ref {
+                     SideReference::SideOne => shed_skin_activations[0],
+                     SideReference::SideTwo => shed_skin_activations[1],
+                 };
+                 ability_end_of_turn(
+                     state,
+                     side_ref,
+                     &mut incoming_instructions,
+                     shed_skin_activates,
+                 );
+             }
+         }
+-
++
+         // 10.4 — items (Leftovers, threshold berries)
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        {
++        if suborder == 4 {
++            stop_residuals_if_battle_ended!(state, incoming_instructions);
+             let side = state.get_side(side_ref);
+             if side.get_active_immutable().hp != 0 {
+                 item_end_of_turn(state, side_ref, &mut incoming_instructions);
+             }
+         }
+-
++
+         // 10.5 — Leech Seed. The sap DAMAGES this side and HEALS the other, so
+         // the seeder's drain heal is emitted at the victim's slot, not at the
+         // seeder's own. That is a real cross-side emission and it is why
+         // `ResidualPlan` has to know the speed order to label heals.
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        {
++        if suborder == 5 {
++            stop_residuals_if_battle_ended!(state, incoming_instructions);
+             let (leechseed_side, other_side) = state.get_both_sides(side_ref);
+             if leechseed_side
+                 .volatile_statuses
+                 .contains(&PokemonVolatileStatus::LEECHSEED)
+             {
+                 let active_pkmn = leechseed_side.get_active();
+                 let other_active_pkmn = other_side.get_active();
+                 if active_pkmn.hp != 0 && other_active_pkmn.hp != 0 {
+                     let health_sapped =
+                         cmp::min((active_pkmn.maxhp as f32 * 0.125) as i16, active_pkmn.hp);
+                     let damage_ins = Instruction::Damage(DamageInstruction {
+                         side_ref: *side_ref,
+@@ -5330,26 +5360,26 @@
+                                 side_ref: side_ref.get_other_side(),
+                                 heal_amount: health_recovered,
+                             });
+                             other_active_pkmn.hp += health_recovered;
+                             incoming_instructions.instruction_list.push(heal_ins);
+                         }
+                     }
+                 }
+             }
+         }
+-
++
+         // 10.6 — status damage
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        {
++        if suborder == 6 {
++            stop_residuals_if_battle_ended!(state, incoming_instructions);
+             let side = state.get_side(side_ref);
+             let toxic_count = side.side_conditions.toxic_count as i16;
+             let active_pkmn = side.get_active();
+             if active_pkmn.hp != 0 {
+                 match active_pkmn.status {
+                     PokemonStatus::BURN => {
+                         let damage_factor = 0.125;
+-
++
+                         let damage_amount = cmp::max(
+                             cmp::min(
+                                 (active_pkmn.maxhp as f32 * damage_factor) as i16,
+                                 active_pkmn.hp,
+@@ -5437,49 +5467,49 @@
+                                     amount,
+                                 }));
+                             side.side_conditions.toxic_count += amount;
+                             toxic_increment -= amount as i16;
+                         }
+                     }
+                     _ => {}
+                 }
+             }
+         }
+-
++
+         // 10.9 — partial trap
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        {
++        if suborder == 9 {
++            stop_residuals_if_battle_ended!(state, incoming_instructions);
+             let side = state.get_side(side_ref);
+             if side.get_active_immutable().hp != 0
+                 && side
+                     .volatile_statuses
+                     .contains(&PokemonVolatileStatus::PARTIALLYTRAPPED)
+             {
+                 let active_pkmn = side.get_active();
+                 let damage_amount =
+                     cmp::min((active_pkmn.maxhp as f32 / 16.0) as i16, active_pkmn.hp);
+-
++
+                 incoming_instructions
+                     .instruction_list
+                     .push(Instruction::Damage(DamageInstruction {
+                         side_ref: *side_ref,
+                         damage_amount,
+                     }));
+                 active_pkmn.hp -= damage_amount;
+             }
+         }
+-
++
+         // 10.14 — Encore
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        {
++        if suborder == 14 {
++            stop_residuals_if_battle_ended!(state, incoming_instructions);
+             let side = state.get_side(side_ref);
+             if side.get_active_immutable().hp != 0
+                 && side
+                     .volatile_statuses
+                     .contains(&PokemonVolatileStatus::ENCORE)
+             {
+                 // pokezero gen3 fidelity fix: burn one ENCORE residual tick. Showdown
+                 // decrements `duration` for every effect with an `end` callback once per
+                 // turn in the residual phase (sim/battle.ts), which is exactly here — so
+                 // unlike the confusion ladder there is no timing approximation, and the
+                 // tick lands whether or not the encored Pokemon actually moved.
+                 //
+@@ -5519,26 +5549,26 @@
+                             ChangeVolatileStatusDurationInstruction {
+                                 side_ref: *side_ref,
+                                 volatile_status: PokemonVolatileStatus::ENCORE,
+                                 amount: 1,
+                             },
+                         ));
+                     side.volatile_status_durations.encore += 1;
+                 }
+             }
+         }
+-
++
+         // 10.15 — Taunt
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        {
++        if suborder == 15 {
++            stop_residuals_if_battle_ended!(state, incoming_instructions);
+             let side = state.get_side(side_ref);
+             if side.get_active_immutable().hp != 0
+                 && side
+                     .volatile_statuses
+                     .contains(&PokemonVolatileStatus::TAUNT)
+             {
+                 match side.volatile_status_durations.taunt {
+                     0 => {
+                         incoming_instructions.instruction_list.push(
+                             Instruction::ChangeVolatileStatusDuration(
+                                 ChangeVolatileStatusDurationInstruction {
+                                     side_ref: *side_ref,
+@@ -5574,26 +5604,26 @@
+                             &mut incoming_instructions.instruction_list,
+                         );
+                     }
+                     _ => panic!(
+                         "Taunt duration cannot be {} when taunt volatile is active",
+                         side.volatile_status_durations.taunt
+                     ),
+                 }
+             }
+         }
+-
++
+         // 10.19 — Yawn
+-        stop_residuals_if_battle_ended!(state, incoming_instructions);
+-        {
++        if suborder == 19 {
++            stop_residuals_if_battle_ended!(state, incoming_instructions);
+             let side = state.get_side(side_ref);
+             if side.get_active_immutable().hp != 0
+                 && side.volatile_statuses.contains(&PokemonVolatileStatus::YAWN)
+             {
+                 match side.volatile_status_durations.yawn {
+                     0 => {
+                         incoming_instructions.instruction_list.push(
+                             Instruction::ChangeVolatileStatusDuration(
+                                 ChangeVolatileStatusDurationInstruction {
+                                     side_ref: *side_ref,
+                                     volatile_status: PokemonVolatileStatus::YAWN,
+                                     amount: 1,
+@@ -6086,31 +6116,31 @@
+                     mon.hp > 0
+                         && mon.ability == Abilities::SHEDSKIN
+                         && mon.status != PokemonStatus::NONE
+                 },
+             ]
+         };
+         // Which side's residuals resolve first. `speedSort` shuffles an exact tie
+         // (`sim/battle.ts:455-457`), so a tie is a genuine 50/50 fork rather than
+         // a side preference — verified on the sim with two 146-speed Blisseys,
+         // which swap residual order both between seeds and between turns of one
+         // battle. A deferred ply emits nothing, so it needs no fork and the value
+         // is irrelevant there.
+-        let residual_orders: Vec<SideReference> = if deferred {
+-            vec![SideReference::SideOne]
+-        } else {
+-            match residual_speed_order(state) {
+-                Some(first) => vec![first],
+-                None => vec![SideReference::SideOne, SideReference::SideTwo],
+-            }
++        let residual_speed = if deferred {Some(SideReference::SideOne)} else {residual_speed_order(state)};
++        let residual_tied = residual_speed.is_none();
++        let residual_orders: Vec<SideReference> = match residual_speed {
++            Some(first) => vec![first],
++            #[cfg(feature = "conditioned-oracle")]
++            None if state.oracle_step.is_some() => vec![SideReference::SideOne],
++            None => vec![SideReference::SideOne, SideReference::SideTwo],
+         };
+         state.reverse_instructions(&base.instruction_list);
+-
++
+         let combinations = 1 << eligible.iter().filter(|flag| **flag).count();
+         for mask in 0..combinations {
+             let mut activation = [false; 2];
+             let mut probability = 1.0;
+             let mut bit = 0;
+             for side in 0..2 {
+                 if !eligible[side] {
+                     continue;
+                 }
+@@ -6123,24 +6153,25 @@
+             // differ. Most ties are between Pokemon whose residuals commute (two
+             // independent Leftovers heals, say), and forking those would hand
+             // search two identical children carrying half the mass each — the
+             // same defect the deferral guard above exists to avoid.
+             let mut candidates: Vec<StateInstructions> = Vec::with_capacity(2);
+             for residual_first_side in &residual_orders {
+                 let mut candidate = base.clone();
+                 candidate.update_percentage(probability);
+                 add_end_of_turn_instructions(
+                     state,
+                     &mut candidate,
+                     residual_first_side,
++                    residual_tied,
+                     activation,
+                 );
+                 candidates.push(candidate);
+             }
+             if candidates.len() == 2
+                 && same_residual_outcome(
+                     &candidates[0].instruction_list,
+                     &candidates[1].instruction_list,
+                 )
+             {
+                 candidates.truncate(1);
+             }
