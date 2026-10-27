@@ -1,0 +1,357 @@
+--- a/src/gen3/conditioned_resume.rs
++++ b/src/gen3/conditioned_resume.rs
+@@ -7,7 +7,7 @@
+ //! particular Sleep Talk, non-Spikes entry effects and tied residual ordering are not
+ //! silently integrated out. Ordinary search never constructs this context.
+ use super::abilities::Abilities;
+-use super::generate_instructions::generate_instructions_from_move_pair;
++use super::generate_instructions::{generate_instructions_from_move_pair, generate_conditioned_joint_replacement};
+ use super::items::Items;
+ use super::state::{MoveChoice, Weather};
+ use crate::choices::{Choices, Effect, MoveTarget, Secondary, MOVES};
+@@ -39,8 +39,12 @@
+ #[derive(Debug, Clone)]
+ pub struct ValidatedResume {
+     capsule: ResumeCapsule,
++    joint_entry: bool,
+ }
+ impl ValidatedResume {
++    pub(crate) fn defers_switch_entry(&self) -> bool {
++        self.joint_entry
++    }
+     pub(crate) fn damage_roll(&self, side: &SideReference) -> (bool, u8) {
+         let s = seat(side);
+         (
+@@ -94,7 +98,7 @@
+ fn validate(
+     state: &State,
+     capsule: &ResumeCapsule,
+-    replacement: PokemonIndex,
++    replacements: [Option<PokemonIndex>; 2],
+     entry_ties: [u8; 2],
+ ) -> Result<usize, &'static str> {
+     const BOUNDS: [u8; 12] = [2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2];
+@@ -126,26 +130,33 @@
+     let replacing = match capsule.forced_switch {
+         [true, false] => 0,
+         [false, true] => 1,
++        [true, true] => 0,
+         _ => return Err("UNSUPPORTED_SUSPENSION_CAUSE"),
+     };
+-    let direct_baton = capsule.baton_pass == capsule.forced_switch
++    let direct_baton = capsule.forced_switch != [true; 2]
++        && capsule.baton_pass == capsule.forced_switch
+         && capsule.replacement_count == 0
+         && sides[replacing].get_active_immutable().hp > 0;
+     // Each unfinished replacement consumes a distinct living party member.
+     // With six party slots and no revival in this domain, at most five KOs
+     // can leave another replacement owed; a sixth closes the battle.
+-    let hazard_chain = capsule.baton_pass == [false; 2]
+-        && (1..=5).contains(&capsule.replacement_count)
+-        && sides[replacing].get_active_immutable().hp == 0
+-        && capsule.queued_actor == -1;
+-    if (!direct_baton && !hazard_chain)
++    let faint_request = capsule.baton_pass == [false; 2]
++        && capsule.replacement_count <= 5
++        && capsule.queued_actor == -1
++        && (0..2).all(|side| !capsule.forced_switch[side]
++            || sides[side].get_active_immutable().hp == 0);
++    if (!direct_baton && !faint_request)
+         || ![-1, (1 - replacing) as i8].contains(&capsule.queued_actor)
+     {
+         return Err("UNSUPPORTED_SUSPENSION_QUEUE");
+     }
+-    if replacement == sides[replacing].active_index || sides[replacing].pokemon[replacement].hp <= 0
+-    {
+-        return Err("INVALID_REPLACEMENT");
++    for side in 0..2 {
++        match (capsule.forced_switch[side], replacements[side]) {
++            (true, Some(replacement)) if replacement != sides[side].active_index
++                && sides[side].pokemon[replacement].hp > 0 => {},
++            (false, None) => {},
++            _ => return Err("INVALID_REPLACEMENT"),
++        }
+     }
+     if state.weather.weather_type != Weather::NONE || state.trick_room.active || state.team_preview
+     {
+@@ -186,11 +197,7 @@
+             // grounding for these two queued moves. The immutable original
+             // ability is inert until departure; retain it without restricting
+             // it as though it were the current ability.
+-            let reached = if side_id == replacing {
+-                party_index == replacement as usize
+-            } else {
+-                party_index == side.active_index as usize
+-            };
++            let reached = party_index == replacements[side_id].unwrap_or(side.active_index) as usize;
+             if reached
+                 && (!matches!(
+                     p.ability,
+@@ -209,19 +216,22 @@
+                 return Err("UNSUPPORTED_PARTY_CONTEXT");
+             }
+         }
+-        if side.get_active_immutable().hp <= 0 && !(hazard_chain && side_id == replacing) {
++        if side.visible_alive_pkmn() == 0 || (side.get_active_immutable().hp <= 0
++            && !(faint_request && capsule.forced_switch[side_id])) {
+             return Err("UNSUPPORTED_FAINT_SUSPENSION");
+         }
+     }
+     let queued = sides[1 - replacing];
+     if capsule.queued_actor == -1 {
+         if capsule.queued_actions != [0, 0]
+-            || queued.switch_out_move_second_saved_move != Choices::NONE
+-            || sides[replacing].switch_out_move_second_saved_move != Choices::NONE
++            || sides.iter().any(|side| side.switch_out_move_second_saved_move != Choices::NONE)
+         {
+             return Err("UNSUPPORTED_EMPTY_QUEUE_CONTEXT");
+         }
+     } else {
++        if capsule.forced_switch == [true; 2] {
++            return Err("UNSUPPORTED_SUSPENSION_QUEUE");
++        }
+         let index = move_index(capsule.queued_actions[1 - replacing])?;
+         let mv = &queued.get_active_immutable().moves[&index];
+         if queued.switch_out_move_second_saved_move != mv.id
+@@ -237,8 +247,8 @@
+     // The admitted domain has no tie-dependent ability/item interactions.
+     // Refuse a tie anyway, so future consumers cannot inherit a false proof
+     // that fresh entry_ties and saved residual ordering are interchangeable.
+-    let entrant = &sides[replacing].pokemon[replacement];
+-    let opponent = queued.get_active_immutable();
++    let entrant = &sides[0].pokemon[replacements[0].unwrap_or(sides[0].active_index)];
++    let opponent = &sides[1].pokemon[replacements[1].unwrap_or(sides[1].active_index)];
+     if [entrant.speed, entrant.speed / 4]
+         .iter()
+         .any(|a| [opponent.speed, opponent.speed / 4].iter().any(|b| a == b))
+@@ -257,20 +267,48 @@
+     replacement: PokemonIndex,
+     entry_ties: [u8; 2],
+ ) -> Result<Vec<ResumeBranch>, &'static str> {
+-    let replacing = validate(state, capsule, replacement, entry_ties)?;
++    let mut replacements = [None; 2];
++    let replacing = match capsule.forced_switch {
++        [true, false] => 0,
++        [false, true] => 1,
++        _ => return Err("UNSUPPORTED_SUSPENSION_CAUSE"),
++    };
++    replacements[replacing] = Some(replacement);
++    resume_joint(state, capsule, replacements, entry_ties)
++}
++
++/// Every requested side supplies its explicit party index. Nonrequested sides
++/// supply None; no default, redraw or replacement action is selected here.
++pub fn resume_joint(
++    state: &State,
++    capsule: &ResumeCapsule,
++    replacements: [Option<PokemonIndex>; 2],
++    entry_ties: [u8; 2],
++) -> Result<Vec<ResumeBranch>, &'static str> {
++    let replacing = validate(state, capsule, replacements, entry_ties)?;
++    let joint = capsule.forced_switch == [true; 2];
+     let mut native = state.clone();
+     native.oracle_resume = Some(Box::new(ValidatedResume {
+         capsule: capsule.clone(),
++        joint_entry: joint,
+     }));
+     let mut actions = [MoveChoice::None; 2];
+-    actions[replacing] = MoveChoice::Switch(replacement);
++    for side in 0..2 {
++        if let Some(replacement) = replacements[side] {
++            actions[side] = MoveChoice::Switch(replacement);
++        }
++    }
+     if capsule.queued_actor >= 0 {
+         actions[1 - replacing] =
+             MoveChoice::Move(move_index(capsule.queued_actions[1 - replacing])?);
+     }
+     let before = native.serialize();
+-    let branches =
+-        generate_instructions_from_move_pair(&mut native, &actions[0], &actions[1], true);
++    let branches = if joint {
++        generate_conditioned_joint_replacement(&mut native,
++            [replacements[0].unwrap(), replacements[1].unwrap()], entry_ties)
++    } else {
++        generate_instructions_from_move_pair(&mut native, &actions[0], &actions[1], true)
++    };
+     if native.serialize() != before {
+         return Err("NATIVE_PARENT_MUTATED");
+     }
+@@ -288,11 +326,9 @@
+         let successor_sides = [&successor.side_one, &successor.side_two];
+         if successor.side_one.baton_passing
+             || successor.side_two.baton_passing
+-            || (pending
+-                && (successor_sides[1 - replacing].force_switch
+-                    || !successor_sides[replacing].force_switch
+-                    || successor_sides[replacing].get_active_immutable().hp != 0
+-                    || successor_sides[replacing].visible_alive_pkmn() == 0))
++            || (pending && successor_sides.iter().enumerate().any(|(side, value)|
++                value.force_switch && (!capsule.forced_switch[side]
++                    || value.get_active_immutable().hp != 0 || value.visible_alive_pkmn() == 0)))
+         {
+             return Err("UNSUPPORTED_SUCCESSOR_SUSPENSION");
+         }
+@@ -365,6 +401,80 @@
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    fn joint_fixture() -> (State, ResumeCapsule) {
++        let (mut state, mut capsule) = fixture(0);
++        state.side_one.baton_passing = false;
++        state.side_one.get_active().hp = 0;
++        state.side_two.get_active().hp = 0;
++        state.side_one.force_switch = true;
++        state.side_two.force_switch = true;
++        state.side_one.switch_out_move_second_saved_move = Choices::NONE;
++        state.side_two.switch_out_move_second_saved_move = Choices::NONE;
++        capsule.forced_switch = [true; 2];
++        capsule.baton_pass = [false; 2];
++        capsule.queued_actor = -1;
++        capsule.queued_actions = [0; 2];
++        for (index, side) in [&mut state.side_one, &mut state.side_two].iter_mut().enumerate() {
++            side.pokemon[PokemonIndex::P1].hp = 200;
++            side.pokemon[PokemonIndex::P1].maxhp = 300;
++            side.pokemon[PokemonIndex::P1].speed = if index == 0 { 401 } else { 201 };
++            side.pokemon[PokemonIndex::P1].item = Items::NONE;
++        }
++        (state, capsule)
++    }
++
++    #[test]
++    fn initial_joint_faints_resume_explicit_choices_without_parent_or_carry_mutation() {
++        let (state, capsule) = joint_fixture();
++        let before = state.serialize();
++        let saved = capsule.clone();
++        let branches = resume_joint(&state, &capsule,
++            [Some(PokemonIndex::P1); 2], [0, 1]).unwrap();
++        assert_eq!(branches.len(), 1);
++        let branch = &branches[0];
++        assert_eq!(branch.percentage, 100.0);
++        assert_eq!(branch.state.side_one.active_index, PokemonIndex::P1);
++        assert_eq!(branch.state.side_two.active_index, PokemonIndex::P1);
++        assert!(!branch.capsule.pending_residual);
++        assert_eq!(branch.capsule.residual_draws, [[0; 12]; 2]);
++        assert_eq!(branch.capsule.keys, capsule.keys);
++        assert_eq!(state.serialize(), before);
++        assert_eq!(capsule, saved);
++    }
++
++    #[test]
++    fn joint_hazard_ko_cancels_later_callback_after_both_installs_and_retains_saved_draws() {
++        for fast in 0..2 {
++            let (mut state, capsule) = joint_fixture();
++            for (index, side) in [&mut state.side_one, &mut state.side_two].iter_mut().enumerate() {
++                side.pokemon[PokemonIndex::P1].speed = if index == fast { 401 } else { 201 };
++                side.side_conditions.spikes = 1;
++                if index == fast { side.pokemon[PokemonIndex::P1].hp = 37; }
++            }
++            let branches = resume_joint(&state, &capsule,
++                [Some(PokemonIndex::P1); 2], [0, 1]).unwrap();
++            assert_eq!(branches.len(), 1);
++            let branch = &branches[0];
++            let sides = [&branch.state.side_one, &branch.state.side_two];
++            assert_eq!(sides[fast].get_active_immutable().hp, 0);
++            assert_eq!(sides[1-fast].active_index, PokemonIndex::P1);
++            assert_eq!(sides[1-fast].get_active_immutable().hp, 200);
++            assert!(branch.capsule.pending_residual);
++            assert_eq!(branch.capsule.forced_switch[fast], true);
++            assert_eq!(branch.capsule.forced_switch[1-fast], false);
++            assert_eq!(branch.capsule.replacement_count, 1);
++            assert_eq!(branch.capsule.residual_draws, capsule.residual_draws);
++        }
++    }
++
++    #[test]
++    fn joint_choices_must_cover_exactly_live_requested_party_members() {
++        let (state, capsule) = joint_fixture();
++        for choices in [[None; 2], [Some(PokemonIndex::P1), None], [Some(PokemonIndex::P0); 2]] {
++            assert_eq!(resume_joint(&state, &capsule, choices, [0, 1]).unwrap_err(), "INVALID_REPLACEMENT");
++        }
++    }
++
+     fn fixture(replacing: usize) -> (State, ResumeCapsule) {
+         fixture_with_move(replacing, Choices::THUNDERBOLT)
+     }
+@@ -936,7 +1046,7 @@
+     #[should_panic(expected = "CONDITIONED_UNSUPPORTED_SECONDARY_SHAPE")]
+     fn an_unknown_secondary_shape_cannot_be_silently_conditioned() {
+         let (_, capsule) = fixture(0);
+-        ValidatedResume { capsule }.secondary_hits(
++        ValidatedResume { capsule, joint_entry: false }.secondary_hits(
+             &SideReference::SideTwo,
+             &Secondary {
+                 chance: 50.0,
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -615,6 +615,26 @@
+         );
+     }
+-
++
++    #[cfg(feature = "conditioned-oracle")]
++    let defer_entry = state.oracle_resume.as_ref().is_some_and(|c| c.defers_switch_entry());
++    #[cfg(not(feature = "conditioned-oracle"))]
++    let defer_entry = false;
++    if !defer_entry {
++        apply_switch_entry(state, new_pokemon_index, switching_side_ref, incoming_instructions);
++    }
++
++    state.reverse_instructions(&incoming_instructions.instruction_list);
++}
++
++// Entry callback separated from installation so conditional simultaneous faint
++// replacements can install both actives before either callback, as Gen3 does.
++// The ordinary switch path still executes these same statements immediately.
++fn apply_switch_entry(
++    state: &mut State,
++    new_pokemon_index: PokemonIndex,
++    switching_side_ref: SideReference,
++    incoming_instructions: &mut StateInstructions,
++) {
+     // pokezero gen3 fidelity fix (Rest skippedTime): gen 3 credits a Rest
+     // sleeper's turns skipped by Sleep Talk/Snore back on switch-in --
+     // Showdown's `slp.onSwitchIn` does `time += skippedTime`. The refund rides
+@@ -720,7 +740,39 @@
+         );
+     }
+-
++
+-    state.reverse_instructions(&incoming_instructions.instruction_list);
++}
++
++#[cfg(feature = "conditioned-oracle")]
++pub(crate) fn generate_conditioned_joint_replacement(
++    state: &mut State,
++    replacements: [PokemonIndex; 2],
++    entry_ties: [u8; 2],
++) -> Vec<StateInstructions> {
++    let sides = [SideReference::SideOne, SideReference::SideTwo];
++    let speeds = [get_effective_speed(state, &sides[0]), get_effective_speed(state, &sides[1])];
++    let first = if speeds[0] == speeds[1] { entry_ties[0] as usize }
++        else { usize::from(speeds[1] > speeds[0]) };
++    let mut instructions = StateInstructions::default();
++    for side in [first, 1-first] {
++        generate_instructions_from_switch(state, replacements[side], sides[side], &mut instructions);
++    }
++    state.apply_instructions(&instructions.instruction_list);
++    let speeds = [get_effective_speed(state, &sides[0]), get_effective_speed(state, &sides[1])];
++    let first = if speeds[0] == speeds[1] { entry_ties[1] as usize }
++        else { usize::from(speeds[1] > speeds[0]) };
++    for side in [first, 1-first] {
++        if state.side_one.visible_alive_pkmn() == 0 || state.side_two.visible_alive_pkmn() == 0 {
++            break;
++        }
++        apply_switch_entry(state, replacements[side], sides[side], &mut instructions);
++        if state.get_side_immutable(&sides[side]).get_active_immutable().hp == 0 {
++            break;
++        }
++    }
++    state.reverse_instructions(&instructions.instruction_list);
++    let mut result = vec![instructions];
++    add_end_of_turn_branches(state, &mut result);
++    result
+ }
+-
++
+ fn generate_instructions_from_increment_side_condition(

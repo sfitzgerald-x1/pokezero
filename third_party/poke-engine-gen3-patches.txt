@@ -1813,3 +1813,4 @@ poke-engine-gen3-stall-pp-after-gates.patch
 # Choice Band restricts the accepted caller after BeforeMove and PP/history.
 # Fresh blocked attempts do not lock; external Sleep Talk callees cannot relock.
 poke-engine-gen3-choice-lock-after-beforemove.patch
+poke-engine-gen3-conditioned-joint-replacement.patch

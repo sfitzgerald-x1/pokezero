@@ -178,13 +178,14 @@ def _pending_context(physical, capsule):
     sides = [physical[side] for side in mapping.SIDE_NAMES]
     forced = tuple(side["force_switch"] for side in sides)
     baton = tuple(side["baton_passing"] for side in sides)
-    if not c["pending_residual"] or forced != c["forced_switch"] or baton != c["baton_pass"] or sum(forced) != 1:
+    if not c["pending_residual"] or forced != c["forced_switch"] or baton != c["baton_pass"] or sum(forced) not in (1, 2):
         raise ValueError("SUSPENSION_FLAGS_MISMATCH")
     replacing = forced.index(True)
     active = sides[replacing]["pokemon"][int(sides[replacing]["active_index"])]
-    direct = baton == forced and c["replacement_count"] == 0 and active["hp"] > 0
-    chain = (not any(baton) and 1 <= c["replacement_count"] <= 5 and active["hp"] == 0
-        and c["queued_actor"] == -1 and any(p["hp"] > 0 for p in sides[replacing]["pokemon"]))
+    direct = sum(forced) == 1 and baton == forced and c["replacement_count"] == 0 and active["hp"] > 0
+    chain = (not any(baton) and 0 <= c["replacement_count"] <= 5 and c["queued_actor"] == -1
+        and all(not requested or (side["pokemon"][int(side["active_index"])]["hp"] == 0
+            and any(p["hp"] > 0 for p in side["pokemon"])) for side, requested in zip(sides, forced)))
     if not (direct or chain):
         raise ValueError("UNSUPPORTED_SUSPENSION_QUEUE")
     if c["queued_actor"] == -1:
@@ -192,7 +193,7 @@ def _pending_context(physical, capsule):
             raise ValueError("UNSUPPORTED_EMPTY_QUEUE_CONTEXT")
     else:
         actor = c["queued_actor"]
-        if actor != 1-replacing or sides[replacing]["switch_out_move_second_saved_move"] != "none":
+        if sum(forced) != 1 or actor != 1-replacing or sides[replacing]["switch_out_move_second_saved_move"] != "none":
             raise ValueError("UNSUPPORTED_SUSPENSION_QUEUE")
         waiter = sides[actor]
         move = waiter["pokemon"][int(waiter["active_index"])]["moves"][c["queued_actions"][actor]]["id"]
@@ -252,8 +253,15 @@ def native_successors(native_input, replacement, entry_ties, *, module=None):
         return mapping.Refused((mapping.Gap("suspension", code, detail),),
             native_input.raw_jax, native_input.raw_native, raw_actions=request)
     try:
-        if type(replacement) is not int or not 0 <= replacement < 6:
-            raise ValueError("INVALID_REPLACEMENT_INDEX")
+        if type(replacement) is int:
+            if not 0 <= replacement < 6:
+                raise ValueError("INVALID_REPLACEMENT_INDEX")
+            choices = None
+        else:
+            choices = mapping._freeze(replacement)
+            if (not isinstance(choices, tuple) or len(choices) != 2
+                    or any(v is not None and (type(v) is not int or not 0 <= v < 6) for v in choices)):
+                raise ValueError("INVALID_REPLACEMENT_INDICES")
         ties = mapping._freeze(entry_ties)
         if not isinstance(ties, tuple) or len(ties) != 2 or any(type(v) is not int or v not in (0, 1) for v in ties):
             raise ValueError("INVALID_ENTRY_TIES")
@@ -262,7 +270,10 @@ def native_successors(native_input, replacement, entry_ties, *, module=None):
         if getattr(module, "CONDITIONED_ORACLE_ENABLED", False) is not True:
             raise ValueError("CONDITIONED_ORACLE_REQUIRED")
         capsule = dict(native_input.capsule, version=1, schema="pokezero.suspended-turn")
-        report = json.loads(module.conditioned_resume(native_input.raw_native, json.dumps(capsule), replacement, ties))
+        if choices is None:
+            report = json.loads(module.conditioned_resume(native_input.raw_native, json.dumps(capsule), replacement, ties))
+        else:
+            report = json.loads(module.conditioned_resume_joint(native_input.raw_native, json.dumps(capsule), choices, ties))
         if set(report) != {"version", "branches"} or report["version"] != 1 or not isinstance(report["branches"], list):
             raise ValueError("INVALID_CONDITIONED_REPORT")
         results = []
