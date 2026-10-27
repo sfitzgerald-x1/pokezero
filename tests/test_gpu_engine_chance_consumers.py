@@ -44,6 +44,68 @@ def table(meta):
 
 
 class ChanceConsumerTests(unittest.TestCase):
+    def hustle_table(self,data,meta,*,hidden=False):
+        meta['vocabulary']['abilities']+=['hustle','trace']
+        data['ability'][0][0]=2;data['base_ability'][0][0]=2
+        t=table(meta);t['type']=[1]*len(meta['vocabulary']['moves'])
+        t['combat']={'hustle':[False,False,True,False],
+            'physical_type':[n in {'normal','ground'} for n in meta['vocabulary']['types']]}
+        t['entry']={'trace':[False,False,False,True],'weather_ability':[0]*4}
+        if hidden:
+            self.choose(data,meta,0,'hiddenpowerice')
+            move=meta['vocabulary']['moves'].index('hiddenpowerice')
+            t['variable_moves']['hidden_power'][move]=True
+            t['variable_moves']['dark_type']=meta['vocabulary']['types'].index('dark')
+        return t
+
+    def test_hustle_accuracy_partition_uses_actor_hidden_power_type(self):
+        data,meta=fixture()
+        meta['vocabulary']['types']+=['ground','dark']
+        if 'hiddenpowerice' not in meta['vocabulary']['moves']:meta['vocabulary']['moves'].append('hiddenpowerice')
+        t=self.hustle_table(data,meta,hidden=True)
+        data['hidden_power_type'][0][0]=meta['vocabulary']['types'].index('ground')
+        p=self.plan(data,meta,kernel_table=t)
+        self.assertIsInstance(p,c.ConsumerPlan,p)
+        self.assertEqual([len(cell.members) for cell in self.cells(p,'draws.0.6')],[80,20])
+        data['hidden_power_type'][0][0]=meta['vocabulary']['types'].index('ice')
+        p=self.plan(data,meta,kernel_table=t)
+        self.assertEqual([len(cell.members) for cell in self.cells(p,'draws.0.6')],[100])
+
+    def test_hustle_type_status_fractional_and_always_hit_cuts(self):
+        data,meta=fixture();t=self.hustle_table(data,meta)
+        self.choose(data,meta,0,'return')
+        data['boosts'][0][0][5]=-4
+        p=self.plan(data,meta,kernel_table=t)
+        self.assertIsInstance(p,c.ConsumerPlan,p)
+        self.assertEqual([len(cell.members) for cell in self.cells(p,'draws.0.6')],[43,57])
+        data['boosts'][0][0][5]=0
+        move=meta['vocabulary']['moves'].index('return');t['power'][move]=0
+        p=self.plan(data,meta,kernel_table=t)
+        self.assertEqual([len(cell.members) for cell in self.cells(p,'draws.0.6')],[80,20])
+        t['always_hit'][move]=True
+        p=self.plan(data,meta,kernel_table=t)
+        self.assertEqual([len(cell.members) for cell in self.cells(p,'draws.0.6')],[100])
+
+    def test_trace_hustle_closure_preserves_other_seats_accuracy_cut(self):
+        data,meta=fixture();t=self.hustle_table(data,meta)
+        self.choose(data,meta,0,'return')
+        # Opponent's Trace entrant copies Hustle. Both possible ability states
+        # remain in the conservative closure; no sampled execution is needed.
+        data['ability'][0][0]=3;data['base_ability'][0][0]=3
+        data['ability'][1][1]=2;data['base_ability'][1][1]=2
+        p=self.plan(data,meta,actions=(0,4),kernel_table=t)
+        self.assertIsInstance(p,c.ConsumerPlan,p)
+        self.assertEqual([len(cell.members) for cell in self.cells(p,'draws.0.6')],[80,20])
+
+    def test_hustle_actual_table_accuracy_outside_finite_domain_refuses_before_engines(self):
+        for value in (-1,101,85.5,100.0,False):
+            data,meta=fixture();t=self.hustle_table(data,meta);self.choose(data,meta,0,'return')
+            t['accuracy'][meta['vocabulary']['moves'].index('return')]=value
+            plan=self.plan(data,meta,kernel_table=t)
+            with self.subTest(value=value):
+                self.assertIsInstance(plan,mapping.Refused)
+                self.assertEqual(plan.gaps[0].code,'HUSTLE_ACCURACY_DOMAIN')
+
     def plan(self, data=None, meta=None, actions=(0, 0), *, cap=100_000_000, kernel_table=None):
         if data is None:
             data, meta = fixture()

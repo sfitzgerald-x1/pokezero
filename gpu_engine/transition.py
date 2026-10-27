@@ -88,6 +88,8 @@ def tables_from_metadata(metadata: dict) -> MoveTable:
         raise ValueError("invalid Gen 3 type chart")
     field = lambda key, default: [default if row is None else row[key] for row in moves]
     accuracy = field("accuracy", 100)
+    if any(x is not True and (type(x) is not int or not 0 <= x <= 100) for x in accuracy):
+        raise ValueError('ACCURACY_DOMAIN: integer accuracy0..100 or always-hit True required')
     return MoveTable(
         jnp.asarray(field("base_power", 0), jnp.int32),
         jnp.asarray(field("type", 0), jnp.int32),
@@ -448,16 +450,18 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             confusion_num,confusion_den = held.attack_modifier(table.items,
                 _active(work.item,work,side),_active(work.species,work,side),jnp.ones_like(eligible))
         guts = jnp.zeros_like(eligible)
+        hustle = jnp.zeros_like(eligible)
         if table.combat is not None:
             ability = _active(work.ability,work,side)
             guts = table.combat.guts[ability]
+            hustle = table.combat.hustle[ability]
             confusion_num,confusion_den = traits.attack_modifier(table.combat,ability,
                 _active(work.status,work,side),True,item_num=confusion_num,item_den=confusion_den)
         confusion_damage = m.gen3_damage(level=_active(work.level, work, side), power=40,
             attack=own_stats[:, 1], defense=own_stats[:, 2],
             attack_stage=own_boosts[:, 0], defense_stage=own_boosts[:, 1],
             typeless=True, burned=_active(work.status, work, side) == m.BRN,
-            guts=guts,
+            guts=guts,hustle=hustle,
             attack_num=confusion_num,attack_den=confusion_den,
             roll=85 + chance[:, 5])
         hp = _active(work.hp, work, side)
@@ -528,6 +532,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             defense_num,defense_den = held.defense_modifier(table.items,
                 _active(work.item,work,foe),_active(work.species,work,foe),physical)
         if table.combat is not None:
+            hustle = table.combat.hustle[_active(work.ability,work,side)]
             attack_num,attack_den = traits.attack_modifier(table.combat,_active(work.ability,work,side),
                 _active(work.status,work,side),physical,item_num=attack_num,item_den=attack_den)
         is_struggle = move == table.struggle
@@ -560,7 +565,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             defense=jnp.where(physical, defense_stats[:, 2], defense_stats[:, 4]),
             attack_stage=jnp.where(physical, attack_boosts[:, 0], attack_boosts[:, 2]),
             defense_stage=jnp.where(physical, defense_boosts[:, 1], defense_boosts[:, 3]),
-            physical=physical, critical=critical,halve_defense=explodes & physical,
+            physical=physical, critical=critical,halve_defense=explodes & physical,hustle=hustle,
             attack_num=attack_num,attack_den=attack_den,
             defense_num=defense_num,defense_den=defense_den,
             weather_num=weather_num,weather_den=weather_den,
@@ -573,8 +578,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         if table.damage_moves is not None:
             damage=special_hits.resolve_fixed(table.damage_moves,move,_active(work.level,work,side),
                 damage,immune=immune)
+        # Gen3's Hustle accuracy handler checks TYPE, including Status moves.
+        # Hidden Power's actor-owned type has already been resolved above.
+        hustle_accuracy = (hustle & table.combat.physical_type[typ]
+            if table.combat is not None else jnp.zeros_like(acts))
         hit = m.accuracy_hit(accuracy, attack_boosts[:, 5], defense_boosts[:, 6],
-                             chance[:, 6], always_hit=always_hit)
+                             chance[:, 6], always_hit=always_hit,hustle=hustle_accuracy)
         # TryMove (including Damp) succeeds before self-KO, which occurs even
         # if the subsequent target hit misses, is protected, immune or a sub.
         # Damage inputs were resolved while the user's ability was still active.

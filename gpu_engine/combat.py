@@ -23,6 +23,8 @@ class CombatTable(NamedTuple):
     fire_type: jax.Array
     ice_type: jax.Array
     doubled_attack: jax.Array
+    hustle: jax.Array
+    physical_type: jax.Array
 
 
 def from_metadata(metadata):
@@ -31,7 +33,9 @@ def from_metadata(metadata):
     typ = lambda name:jnp.asarray(vocab["types"].index(name))
     return CombatTable(flag("guts"),flag("thickfat"),flag("arenatrap"),flag("magnetpull"),
         flag("shadowtag"),flag("levitate"),typ("flying"),typ("steel"),typ("fire"),typ("ice"),
-        jnp.asarray([name in {"hugepower","purepower"} for name in vocab["abilities"]]))
+        jnp.asarray([name in {"hugepower","purepower"} for name in vocab["abilities"]]),
+        flag("hustle"),jnp.asarray([name in {"normal","fighting","flying","poison",
+            "ground","rock","bug","ghost","steel"} for name in vocab["types"]]))
 
 
 def attack_modifier(table,ability,status,physical,*,item_num=1,item_den=1):
