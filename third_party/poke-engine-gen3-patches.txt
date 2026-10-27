@@ -1806,3 +1806,6 @@ poke-engine-gen3-conditioned-deterministic-abilities.patch
 # Natural Cure ends the complete sleep stint before base-ability restoration;
 # retained Rest/refund/natural-sleep clocks must not contaminate a later sleep.
 poke-engine-gen3-natural-cure-sleep-cleanup.patch
+
+# StallMove failures occur after accepted BeforeMove, PP and last-used history.
+poke-engine-gen3-stall-pp-after-gates.patch

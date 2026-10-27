@@ -186,5 +186,17 @@ class DefenseTests(unittest.TestCase):
         self.assertEqual(result["priorities"],{"protect":3,"detect":3,"endure":4})
 
 
+    @unittest.skipUnless(NODE and SHOWDOWN,"requires pinned Gen3 stall source")
+    def test_stall_failures_pay_pp_and_called_moves_only_charge_caller(self):
+        helper=Path(__file__).with_name('gpu_stall_pp_oracle.cjs')
+        result=json.loads(subprocess.run([NODE,str(helper),SHOWDOWN],text=True,
+            capture_output=True,check=True).stdout)
+        self.assertEqual(result['cases'],28)
+        for row in result['rows']:
+            if row.get('called_protect'):
+                self.assertEqual(row['pp_after'],[row['pp_before'][0],row['pp_before'][1]-1])
+            else:self.assertEqual(row['pp_after'],row['pp_before']-1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -23,7 +23,7 @@ MAPPING_PINS = {
     "future_state.py": "e29ff9874a9f48f3dc66eac0a5252a3a1209921ac5985718f8258854ee0a62aa",
     "conditioned_future.py": "274d8c20aa93eca9228b65e9d9b0eec172b302daaa91d9e969b93b67f2fe65a7",
     "finite_law.py": "d999cdbaddebc33cf3f84583e584e2110d7ee79f37bf365f715d0eb7f424ae8c",
-    "fidelity_panel.py": "8bb00fde83082211c013e44ffe89865642d7b2d1d2e318649e39a41991901611",
+    "fidelity_panel.py": "b44f98bc68bb29f883a5ffac84ec881b09e924bbde7e7c07af3a6f7999342092",
 }
 
 

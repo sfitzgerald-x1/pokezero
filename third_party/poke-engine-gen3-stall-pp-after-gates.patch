@@ -1,0 +1,95 @@
+diff --git a/src/gen3/generate_instructions.rs b/src/gen3/generate_instructions.rs
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -3324,36 +3324,7 @@
+         incoming_instructions.update_percentage(0.75);
+     }
+ 
+-    if attacking_side.side_conditions.protect > 0 {
+-        if let Some(vs) = &attacker_choice.volatile_status {
+-            if PROTECT_VOLATILES.contains(&vs.volatile_status) {
+-                // pokezero gen3 fidelity fix: the success chance FLOORS at 1/8.
+-                //
+-                // gen3 resolves `stall` through gen4's
+-                // `{ inherit: true, counterMax: 8 }`, and that `inherit: true`
+-                // resolves to GEN5's full definition (not base): the counter
+-                // starts at 2 and doubles, gated test-before-multiply by
+-                // `if (counter < counterMax) counter *= 2`. So the counter walks
+-                // 2 -> 4 -> 8 and then STOPS, because `8 < 8` is false, and the
+-                // chance is 1/counter:
+-                //
+-                //   attempt   1     2     3     4     5     6 ...
+-                //   gen3      1    1/2   1/4   1/8   1/8   1/8
+-                //   upstream  1    1/2   1/4   1/8  1/16  1/32
+-                //
+-                // The ladder first REACHES 1/8 at the 4th attempt, which upstream
+-                // already priced correctly; upstream first DIVERGES at the 5th,
+-                // where it keeps halving past the cap. Clamping the exponent at 3
+-                // reproduces the cap exactly, since 0.5^3 == 1/8.
+-                let protect_success_chance = CONSECUTIVE_PROTECT_CHANCE
+-                    .powi(cmp::min(attacking_side.side_conditions.protect as i32, 3));
+-                let mut protect_fail_instruction = incoming_instructions.clone();
+-                protect_fail_instruction.update_percentage(1.0 - protect_success_chance);
+-                final_instructions.push(protect_fail_instruction);
+-                incoming_instructions.update_percentage(protect_success_chance);
+-            }
+-        }
+-    }
++
+ }
+ 
+ /// pokezero gen3 fidelity fix: is this turn a CONTINUATION of a lock, i.e. one
+@@ -3969,6 +3940,40 @@
+             attacking_side,
+             &mut incoming_instructions,
+             );
++        }
++    }
++
++    // StallMove is a useMove/OnTry gate, after accepted BeforeMove, PP and
++    // last-used history. Even a failed Protect/Detect/Endure pays PP; an
++    // external Sleep Talk callee still rolls stall without paying called PP.
++    if state.get_side_immutable(&attacking_side).side_conditions.protect > 0 {
++        if let Some(vs) = &choice.volatile_status {
++            if PROTECT_VOLATILES.contains(&vs.volatile_status) {
++                // pokezero gen3 fidelity fix: the success chance FLOORS at 1/8.
++                //
++                // gen3 resolves `stall` through gen4's
++                // `{ inherit: true, counterMax: 8 }`, and that `inherit: true`
++                // resolves to GEN5's full definition (not base): the counter
++                // starts at 2 and doubles, gated test-before-multiply by
++                // `if (counter < counterMax) counter *= 2`. So the counter walks
++                // 2 -> 4 -> 8 and then STOPS, because `8 < 8` is false, and the
++                // chance is 1/counter:
++                //
++                //   attempt   1     2     3     4     5     6 ...
++                //   gen3      1    1/2   1/4   1/8   1/8   1/8
++                //   upstream  1    1/2   1/4   1/8  1/16  1/32
++                //
++                // The ladder first REACHES 1/8 at the 4th attempt, which upstream
++                // already priced correctly; upstream first DIVERGES at the 5th,
++                // where it keeps halving past the cap. Clamping the exponent at 3
++                // reproduces the cap exactly, since 0.5^3 == 1/8.
++                let protect_success_chance = CONSECUTIVE_PROTECT_CHANCE
++                    .powi(cmp::min(state.get_side_immutable(&attacking_side).side_conditions.protect as i32, 3));
++                let mut protect_fail_instruction = incoming_instructions.clone();
++                protect_fail_instruction.update_percentage(1.0 - protect_success_chance);
++                final_instructions.push(protect_fail_instruction);
++                incoming_instructions.update_percentage(protect_success_chance);
++            }
+         }
+     }
+ 
+diff --git a/src/gen3/state.rs b/src/gen3/state.rs
+--- a/src/gen3/state.rs
++++ b/src/gen3/state.rs
+@@ -367,7 +367,8 @@
+                 }
+                 true
+             }
+-            PokemonVolatileStatus::PROTECT => first_move,
++            // Both stall families fail when there is no queued foe action.
++            PokemonVolatileStatus::PROTECT | PokemonVolatileStatus::ENDURE => first_move,
+             _ => true,
+         }
+     }

@@ -713,3 +713,19 @@ Native91 also retains an overbroad Sleep Talk callee pool (charge moves are
 not excluded). Its positive charge branch is preserved as a separate mismatch
 control; the exact Rest carry cycles isolate the shared Rest/Sleep Talk/Splash
 callee domain and do not qualify all called-move sets.
+
+The ordinary comparator memoizes canonical successors within one root, using
+every physical state field, dtype, shape and exact bytes plus the bound mapping
+context. It keeps all chance cases and their original masses, including late
+whole-slot refusals. At most1,024 distinct physical successors are retained;
+eviction recomputes the mapping. Each engine records its first actual raw
+representative once per canonical successor. These changes reduce repeated
+serialization without narrowing the chance partition or supplying new cost
+qualification.
+
+Native92 charges accepted Protect/Detect/Endure attempts before their stall
+success draw while retaining free BeforeMove failures. Sleep Talk pays only
+the caller's PP and records the caller in move history. Protect and Endure
+fail when no opposing queued move remains, including after a switch. Both-seat
+full-law controls bind PP, history, saved Rest state and stall counters; this
+does not change JAX's already matching stall behavior.

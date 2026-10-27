@@ -32,7 +32,8 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # unchanged and remains a drift control. The full target-tree digest below also
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
-    "src/gen3/generate_instructions.rs": "d304bdb2024e2ea0a9d0259dc538408fc49781a52fea5e296b2af4a1918ca3e3",
+    "src/gen3/state.rs": "0565d1a673aa577988b136782878ea3633d3c01bff23b76b7652a415d6f9fbfd",
+    "src/gen3/generate_instructions.rs": "4e5a6e7b8fe54da9f79bf0e66b536007519465ae60cad40e7a0435448c5d6772",
     "src/instruction.rs": "c9c7f69819dc77171a54918e32cfb064329144f6d3b8991c2068adcbeceb0a57",
     "src/state.rs": "d3a381f4854ad4755844bcbc32f456ae4e26557d78a313eec1532c0a507023eb",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
@@ -116,7 +117,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-34:]],
+                [entry.name for entry in applied[-35:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -162,6 +163,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-conditioned-roles.patch",
                     "poke-engine-gen3-conditioned-deterministic-abilities.patch",
                     "poke-engine-gen3-natural-cure-sleep-cleanup.patch",
+                    "poke-engine-gen3-stall-pp-after-gates.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
