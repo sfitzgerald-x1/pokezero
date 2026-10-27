@@ -637,3 +637,43 @@ ordinary laws cover both seats; this does not widen the native conditional
 entrant/remaining-active whitelist. Broader ability events, Forecast/Color Change
 representation, infatuation and Stick remain unfinished. These are implementation
 controls, not historical coverage or fresh scientific credit.
+
+### Explicit saved-root cost attempts
+
+The collector and owner accept `--cost-admission` only with a separately frozen
+cost entry. Ordinary scientific panels retain their minimum of1,000 slots and
+reject a cost entry on the ordinary path. Cost preparation generates exactly the
+registered roster of at least20 roots through the same source/constructor logic;
+it does not generate a larger roster and choose a subset. All complete originals,
+post-entry records, actions and source hashes close before the first comparison.
+No source generation or attempt is authorized merely by these APIs existing.
+
+A cost entry references an explicit `operation_budget` by its canonical SHA256.
+The future panel must bind that identical operation budget and intended comparator
+runtime/configuration. A cohort calendar cap is not a per-slot decision limit.
+Timing begins before root transfers and binding, includes cached conditional
+native evaluation, synchronized JAX work, canonicalization/compression and full
+result/progress file and directory fsync. Source generation/setup precedes the
+clock; no comparison warmup is performed by this mode. Timing-witness publication
+is excluded and its overhead retained separately, excluding publication of the
+overhead receipt itself to avoid self-reference.
+
+An owned nonblocking pipe announces each attempt-bound START before in-scope
+filesystem I/O. Immutable witnesses publish complete fsynced bytes atomically,
+without overwriting prior evidence. The owner uses absolute deadlines and records
+whether a stop concerns an operation, missing DONE/publication evidence or the
+separate completion-liveness phase. That excluded phase is bounded by one further
+operation-limit interval after DONE.end; it supplies no operation-latency inference.
+Actual exits, reaping and process-group absence are retained. A proven overrun
+stops the worker before another slot, and terminal reconstruction also rejects
+late overruns that escaped live polling, even when the child exited0.
+
+Numeric nearest-rank p95 bounds, at least20 timed roots, exercised comparison
+paths/case counts and attempt integrity are separate facts. Missing DONE has
+unknown bounds rather than an assumed60-second lower bound. A slow twentieth
+observation does not turn rank19/20 into a maximum-latency gate. Fast refusals
+remain refusal-path timings; unexercised comparison paths remain unmeasured.
+Every fixed slot is retained without refill, normalization or an all-AGREE rule.
+The accounting reports no automatic comparison-cost, fidelity or strength
+qualification. Independently reviewed frozen source ranges, runtime, resources
+and entries are still required before any scientific collection.

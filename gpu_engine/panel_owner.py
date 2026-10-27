@@ -11,6 +11,7 @@ import math
 import os
 from pathlib import Path
 import signal
+import secrets
 import subprocess
 import sys
 import time
@@ -173,10 +174,32 @@ def drain_owned(worker, *, grace_seconds=10, kill_seconds=5):
 
 
 def own(command, *, out, panel, entry, calendar_seconds):
+    if 'cost_admission' in entry:
+        raise ValueError('cost entry requires the explicit cost owner')
+    return _own(command,out=out,panel=panel,entry=entry,calendar_seconds=calendar_seconds)
+
+
+def own_cost(command, *, out, panel, entry, calendar_seconds):
+    from .panel_cost import contract
+    contract(entry)
+    return _own(command,out=out,panel=panel,entry=entry,calendar_seconds=calendar_seconds)
+
+
+def _own(command, *, out, panel, entry, calendar_seconds):
     if type(calendar_seconds) is not int or calendar_seconds <= 0:
         raise ValueError("positive prospective calendar bound required")
     out.mkdir()  # exclusive; no reuse/resume
     start, timed_out, received = time.monotonic(), False, []
+    watch=None;slot_watchdog=False;watchdog_receipt=None;attempt=None;environment=None;notify_read=None;notify_write=None
+    if 'operation_budget' in entry:
+        from .panel_cost import operation_budget
+        from .panel_cost_runtime import ENV_ATTEMPT,ENV_NOTIFY
+        operation_budget(entry)
+        attempt=secrets.token_hex(32);environment=dict(os.environ)
+        environment[ENV_ATTEMPT]=attempt
+        notify_read,notify_write=os.pipe()
+        os.set_blocking(notify_read,False);os.set_blocking(notify_write,False)
+        environment[ENV_NOTIFY]=str(notify_write)
     worker, owner_error = None, None
     cleanup = dict(actual_exit=None,reaped=False,owned_group_absent=False,cleanup_errors=[])
     # Defer ordinary termination BEFORE spawn. A signal between Popen and its
@@ -187,17 +210,37 @@ def own(command, *, out, panel, entry, calendar_seconds):
     try:
         with (out / "worker.stdout").open("xb") as stdout, (out / "worker.stderr").open("xb") as stderr:
             try:
-                worker = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True)
+                worker = subprocess.Popen(command, stdout=stdout, stderr=stderr, start_new_session=True,
+                    **({'env':environment,'pass_fds':(notify_write,)} if environment is not None else {}))
+                if notify_write is not None:
+                    os.close(notify_write);notify_write=None
+                if attempt is not None:
+                    from .panel_cost_runtime import Watch
+                    watch=Watch(entry,panel,attempt,worker.pid,start,notify_fd=notify_read)
                 atomic_json(out / "launch.json", dict(owner_pid=os.getpid(), worker_pid=worker.pid,
                     worker_pgid=worker.pid, start_unix=time.time(), calendar_seconds=calendar_seconds,
-                    command=command))
+                    command=command,launch_monotonic=start,
+                    timing_binding=None if watch is None else watch.bound))
                 while worker.poll() is None and not received:
+                    slot_deadline=None
+                    if watch is not None:
+                        observed=watch.observe();slot_deadline=observed['deadline']
+                        if observed['expired']:
+                            slot_watchdog=True;watchdog_receipt=dict(observed,observed_monotonic=time.monotonic());break
                     remaining = calendar_seconds - (time.monotonic()-start)
                     if remaining <= 0:
                         timed_out = True
                         break
                     try:
-                        worker.wait(timeout=min(1., remaining))
+                        wait_seconds=min(1.,remaining)
+                        if slot_deadline is not None:
+                            slot_remaining=slot_deadline-time.monotonic()
+                            if slot_remaining<=0:
+                                slot_watchdog=True;watchdog_receipt=dict(observed,expired=True,
+                                    observed_monotonic=time.monotonic());break
+                            wait_seconds=min(wait_seconds,slot_remaining)
+                        if watch is None:worker.wait(timeout=wait_seconds)
+                        else:watch.wait(wait_seconds)
                     except subprocess.TimeoutExpired:
                         pass
                 # Observe completion against the collection deadline BEFORE
@@ -222,17 +265,40 @@ def own(command, *, out, panel, entry, calendar_seconds):
     actual = cleanup["actual_exit"]
     complete = (actual == 0 and cleanup["reaped"] and cleanup["owned_group_absent"]
         and not cleanup["cleanup_errors"] and not owner_error and not received
-        and not timed_out and tally["valid_completed_slots"] == entry["slots"])
+        and not timed_out and not slot_watchdog and tally["valid_completed_slots"] == entry["slots"])
+    timing_result=None
+    if watch is not None:
+        try:timing_result=watch.reconstruct(tally['input_freeze_valid'])
+        except Exception as error:
+            timing_result=dict(timing_evidence_valid=False,operation_overruns=[],
+                reconstruction_error=f'{type(error).__name__}: {error}')
+    for fd in (notify_read,notify_write):
+        if fd is not None:os.close(fd)
+    if timing_result is not None and tally['input_freeze_valid']:
+        # The in-scope START fsync may be the interrupted operation itself. A
+        # received authenticated live START still proves that slot was attempted.
+        for frame in timing_result.get('live_starts',[]):
+            key=str(frame['slot'])
+            if tally.get('incomplete_slots',{}).get(key)=='UNATTEMPTED':
+                tally['incomplete_slots'][key]='INTERRUPTED_AFTER_LIVE_TIMING_START'
+                tally['attempted_slots']+=1;tally['unattempted_slots']-=1
+    overruns=bool(timing_result and timing_result['operation_overruns'])
+    if timing_result is not None and (not timing_result['timing_evidence_valid'] or overruns):
+        complete=False
     terminal = dict(status="ATTEMPT_COMPLETE" if complete else "FAILED_OR_INTERRUPTED",
         actual_worker_exit=actual, worker_reaped=cleanup["reaped"], timed_out=timed_out,
         owned_group_absent=cleanup["owned_group_absent"], cleanup_errors=cleanup["cleanup_errors"],
         owner_error=owner_error, owner_signals=received, elapsed_seconds=time.monotonic()-start,
         **tally, fidelity_qualified=False, production_go=False)
+    terminal['slot_watchdog_stopped_worker']=slot_watchdog
+    terminal['slot_watchdog_receipt']=watchdog_receipt
+    if watch is not None:
+        terminal['slot_timing']=timing_result
     # Preserve actual/unknown exit in the owner log even if disk publication
     # itself fails. That failure is never an experiment success.
     print(json.dumps(terminal, sort_keys=True), flush=True)
     atomic_json(out / "owner-terminal.json", terminal)
-    return 0 if complete else 124 if timed_out else actual if actual is not None and actual > 0 else 1
+    return 0 if complete else 124 if timed_out or slot_watchdog or overruns else actual if actual is not None and actual > 0 else 1
 
 
 def main():
@@ -241,6 +307,7 @@ def main():
     p.add_argument("--expected-entry-sha", required=True)
     p.add_argument("--team-pool", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
+    p.add_argument('--cost-admission',action='store_true')
     args = p.parse_args()
     blob = args.entry.read_bytes()
     if hashlib.sha256(blob).hexdigest() != args.expected_entry_sha:
@@ -249,7 +316,8 @@ def main():
     panel = args.out / "panel"
     command = [sys.executable, "-m", "gpu_engine.collect_fidelity_panel", "--entry", str(args.entry),
         "--expected-entry-sha", args.expected_entry_sha, "--team-pool", str(args.team_pool), "--out", str(panel)]
-    raise SystemExit(own(command, out=args.out, panel=panel, entry=entry,
+    if args.cost_admission:command.append('--cost-admission')
+    raise SystemExit((own_cost if args.cost_admission else own)(command, out=args.out, panel=panel, entry=entry,
                          calendar_seconds=entry["calendar_seconds"]))
 
 
