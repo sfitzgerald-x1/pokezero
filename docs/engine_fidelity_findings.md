@@ -885,3 +885,33 @@ untouched.
 `rust/pokezero-search/tests/gen3_solarbeam_weather.rs` (6 tests, including the
 2x/4x crit ratio in both directions and Air Lock suppression) and the
 `solarbeamclear` / `solarbeamsand` / `solarbeamsun` differential scenarios.
+
+
+## Natural Cure must end the complete sleep stint
+
+A Gen3 Natural Cure user can Rest, leave the field, then return into a new
+primary sleep. The old departure handler changed only major status: it left
+Rest turns and the pending Sleep Talk refund on the Pokemon. A later Spore
+therefore followed the Rest branch instead of the natural-sleep law. The same
+callback also left an elapsed natural-sleep counter after curing that status.
+
+The Natural Cure branch now uses the existing reversible status-removal funnel
+before restoring the original ability. Current copied Natural Cure cures and
+clears its clocks; original Natural Cure currently replaced by another ability
+does not cure. Toxic's ordinary switch reset remains single and reversible.
+
+Pinned simulator controls enumerate natural durations2,3,4,5 in both seats.
+Cumulative awake mass after attempts1..5 is0,1/4,1/2,3/4,1. Native regression
+tests propagate every weighted branch, check source nonmutation and exact
+apply/reverse, and exercise Rest/refund, ordinary sleep and other major cures.
+These are authored mechanics controls; native/simulator fixture bench details
+are inert but differ, so this is not full-state fixture parity or coverage.
+
+The fix is appended as
+`third_party/poke-engine-gen3-natural-cure-sleep-cleanup.patch`. Its Rust
+regression lives in
+`rust/pokezero-search/tests/gen3_natural_cure_cleanup.rs`; installed-native
+and pinned-source controls are
+`tests/test_native_gen3_natural_cure_cleanup.py` and
+`tests/gpu_natural_cure_sleep_oracle.cjs`. JAX's unresolved sampled-duration
+versus elapsed-hazard natural-sleep correspondence remains separate.

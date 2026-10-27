@@ -1,0 +1,29 @@
+--- a/src/gen3/abilities.rs
++++ b/src/gen3/abilities.rs
+@@ -298,16 +298,16 @@
+     match active_pkmn.ability {
+         Abilities::NATURALCURE => {
+             if active_pkmn.status != PokemonStatus::NONE {
+-                let status = active_pkmn.status.clone();
+-                active_pkmn.status = PokemonStatus::NONE;
+-                instructions
+-                    .instruction_list
+-                    .push(Instruction::ChangeStatus(ChangeStatusInstruction {
+-                        side_ref: *side_ref,
+-                        pokemon_index: attacking_side.active_index,
+-                        old_status: status,
+-                        new_status: PokemonStatus::NONE,
+-                    }));
++                // A cure ends the complete sleep stint, not just its status.
++                // Retained Rest counters would misclassify a later primary
++                // sleep; the shared funnel clears them with reversible edits.
++                let active_index = attacking_side.active_index;
++                add_remove_status_instructions(
++                    instructions,
++                    active_index,
++                    *side_ref,
++                    attacking_side,
++                );
+             }
+         }
+         _ => {}
