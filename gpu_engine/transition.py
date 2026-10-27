@@ -743,7 +743,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 effective_weather=climate.effective(table.weather,work.weather,
                     work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
             work=secondaries.apply(work,side,move,secondary_draws[rows,side],table.secondary,
-                eligible=acts & hit & (dealt>0) & ~hits_sub,effective_weather=effective_weather)
+                eligible=acts & hit & ~immune,effective_weather=effective_weather,
+                substitute_hit=hits_sub)
         if table.absorption is not None:
             # Gen 3 onDamagingHit follows secondaries: a frozen target cannot
             # receive this Fire hit's burn, then thaws. Original-catalog Fire
