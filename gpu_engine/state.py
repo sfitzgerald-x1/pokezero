@@ -31,6 +31,7 @@ class BattleState(NamedTuple):
     status: jax.Array              # [B,2,6]
     status_counter: jax.Array      # [B,2,6]
     sleep_skipped: jax.Array       # [B,2,6], Gen3 Sleep Talk turns restored on entry
+    rest_origin: jax.Array         # [B,2,6] bool, current sleep stint was created by Rest
     moves: jax.Array               # [B,2,6,4]
     pp: jax.Array                  # [B,2,6,4]
     disabled: jax.Array            # [B,2,6,4]
@@ -96,7 +97,8 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         happiness=jnp.full((b,2,6),255,jnp.int32),
         gender=jnp.full((b,2,6),-1,jnp.int32), types=jnp.zeros((b, 2, 6, 2), jnp.int32),
         stats=jnp.zeros((b, 2, 6, 6), jnp.int32), hp=mon(), max_hp=mon(),
-        status=mon(), status_counter=mon(), sleep_skipped=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
+        status=mon(), status_counter=mon(), sleep_skipped=mon(),
+        rest_origin=jnp.zeros((b,2,6),jnp.bool_), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
         pp=jnp.zeros((b, 2, 6, 4), jnp.int32), disabled=jnp.zeros((b, 2, 6, 4), jnp.bool_),
         choice_move=mon(),last_move=mon(),last_action_kind=side(),
         last_action_index=jnp.full((b,2),-1,jnp.int32),
