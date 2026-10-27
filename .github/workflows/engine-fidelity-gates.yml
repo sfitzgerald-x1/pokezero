@@ -437,9 +437,9 @@ jobs:
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
             --no-default-features --features gen3 --test test_gen3 2>&1 \
             | tee /tmp/gen3suite.log
-          if ! grep -qE '^test result: ok\. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+          if ! grep -qE '^test result: ok\. 37 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
               /tmp/gen3suite.log; then
-            echo "::error::expected 36 gen3 engine tests to pass; the suite shrank, grew, or failed"
+            echo "::error::expected 37 gen3 engine tests to pass; the suite shrank, grew, or failed"
             exit 1
           fi
           for pin in \
@@ -461,6 +461,7 @@ jobs:
             immobilization_marker_apply_then_reverse_is_bit_identical \
             immobilization_marker_apply_alone_does_not_change_the_state \
             immobilization_markers_are_distinguishable_from_each_other_and_from_nothing \
+            gen3_tackle_uses_pinned_legacy_power_and_accuracy \
             both_gen3_immobilizers_mark_their_branch_with_their_own_reason; do
             grep -qxE "test $pin \.\.\. ok" /tmp/gen3suite.log || {
               echo "::error::gen3 pin did not run: $pin"

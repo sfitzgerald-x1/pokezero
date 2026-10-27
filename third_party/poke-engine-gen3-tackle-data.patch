@@ -1,0 +1,137 @@
+diff --git a/src/choices.rs b/src/choices.rs
+--- a/src/choices.rs
++++ b/src/choices.rs
+@@ -17039,7 +17039,10 @@
+         Choices::TACKLE,
+         Choice {
+             move_id: Choices::TACKLE,
+-            base_power: 40.0,
++            // Gen3 inherits the legacy Tackle entry from the pinned simulator's
++            // data/mods/gen4/moves.ts; later-generation defaults differ.
++            base_power: if cfg!(feature = "gen3") { 35.0 } else { 40.0 },
++            accuracy: if cfg!(feature = "gen3") { 95.0 } else { 100.0 },
+             category: MoveCategory::Physical,
+             move_type: PokemonType::NORMAL,
+             flags: Flags {
+diff --git a/tests/test_gen3.rs b/tests/test_gen3.rs
+--- a/tests/test_gen3.rs
++++ b/tests/test_gen3.rs
+@@ -238,13 +238,16 @@
+ 
+ #[test]
+ fn test_regular_move_with_protect_side_condition() {
++    // Use source-correct Pound40/100 for this generic control. Gen3 Tackle
++    // is35/95 and has its own data/full-law regressions.
++
+     let mut state = State::default();
+     state.side_one.side_conditions.protect = 1;
+ 
+     let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+         &mut state,
+-        Choices::TACKLE,
+-        Choices::TACKLE,
++        Choices::POUND,
++        Choices::POUND,
+     );
+ 
+     let expected_instructions = vec![StateInstructions {
+@@ -292,13 +295,16 @@
+ 
+ #[test]
+ fn test_chestoberry_activates_when_using_rest() {
++    // Use source-correct Pound40/100 for this generic control. Gen3 Tackle
++    // is35/95 and has its own data/full-law regressions.
++
+     let mut state = State::default();
+     state.side_one.get_active().item = Items::CHESTOBERRY;
+ 
+     let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+         &mut state,
+         Choices::REST,
+-        Choices::TACKLE,
++        Choices::POUND,
+     );
+ 
+     let expected_instructions = vec![StateInstructions {
+@@ -529,6 +535,9 @@
+ 
+ #[test]
+ fn test_rest_does_not_activate_when_fainted() {
++    // Use source-correct Pound40/100 for this generic control. Gen3 Tackle
++    // is35/95 and has its own data/full-law regressions.
++
+     let mut state = State::default();
+     state.side_one.get_active().item = Items::CHESTOBERRY;
+     state.side_one.get_active().hp = 1;
+@@ -536,7 +545,7 @@
+     let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+         &mut state,
+         Choices::REST,
+-        Choices::TACKLE,
++        Choices::POUND,
+     );
+ 
+     let expected_instructions = vec![StateInstructions {
+@@ -557,10 +566,13 @@
+ 
+ #[test]
+ fn test_branch_when_a_roll_can_kill() {
++    // Use source-correct Pound40/100 for this generic control. Gen3 Tackle
++    // is35/95 and has its own data/full-law regressions.
++
+     let mut state = State::default();
+     state.side_two.get_active().hp = 50;
+ 
+-    let move_one = Choices::TACKLE;
++    let move_one = Choices::POUND;
+     let move_two = Choices::SPLASH;
+     state
+         .side_one
+@@ -705,6 +717,9 @@
+ 
+ #[test]
+ fn test_same_speed_branch() {
++    // Use source-correct Pound40/100 for this generic control. Gen3 Tackle
++    // is35/95 and has its own data/full-law regressions.
++
+     let mut state = State::default();
+     state.side_one.get_active().speed = 100;
+     state.side_one.get_active().hp = 1;
+@@ -713,8 +728,8 @@
+ 
+     let vec_of_instructions = set_moves_on_pkmn_and_call_generate_instructions(
+         &mut state,
+-        Choices::TACKLE,
+-        Choices::TACKLE,
++        Choices::POUND,
++        Choices::POUND,
+     );
+ 
+     let expected_instructions = vec![
+@@ -747,10 +762,13 @@
+ 
+ #[test]
+ fn test_gen3_branch_when_a_roll_can_kill() {
++    // Use source-correct Pound40/100 for this generic control. Gen3 Tackle
++    // is35/95 and has its own data/full-law regressions.
++
+     let mut state = State::default();
+     state.side_two.get_active().hp = 50;
+ 
+-    let move_one = Choices::TACKLE;
++    let move_one = Choices::POUND;
+     let move_two = Choices::SPLASH;
+     state
+         .side_one
+@@ -1411,3 +1429,11 @@
+         }
+     }
+ }
++
++#[test]
++fn gen3_tackle_uses_pinned_legacy_power_and_accuracy() {
++    // Gen3 inherits data/mods/gen4/moves.ts: tackle power35/accuracy95.
++    let tackle = MOVES.get(&Choices::TACKLE).unwrap();
++    assert_eq!(tackle.base_power, 35.0);
++    assert_eq!(tackle.accuracy, 95.0);
++}
