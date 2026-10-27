@@ -1,0 +1,207 @@
+--- a/src/gen3/conditioned_resume.rs
++++ b/src/gen3/conditioned_resume.rs
+@@ -182,15 +182,20 @@
+             // entry/attack/residual consumers. Untouched bench fields are
+             // retained verbatim. The outgoing carrier already spent its move;
+             // departure handles Natural Cure and base restoration explicitly.
++            // Pressure adds deterministic PP cost and Levitate deterministic
++            // grounding for these two queued moves. The immutable original
++            // ability is inert until departure; retain it without restricting
++            // it as though it were the current ability.
+             let reached = if side_id == replacing {
+                 party_index == replacement as usize
+             } else {
+                 party_index == side.active_index as usize
+             };
+             if reached
+-                && (!matches!(p.ability, Abilities::NONE | Abilities::STATIC)
+-                    || !matches!(p.base_ability, Abilities::NONE | Abilities::STATIC)
+-                    || !matches!(p.item, Items::NONE | Items::LEFTOVERS))
++                && (!matches!(
++                    p.ability,
++                    Abilities::NONE | Abilities::STATIC | Abilities::PRESSURE | Abilities::LEVITATE
++                ) || !matches!(p.item, Items::NONE | Items::LEFTOVERS))
+             {
+                 return Err("UNSUPPORTED_PARTY_CONTEXT");
+             }
+@@ -422,6 +427,180 @@
+         capsule.baton_pass[replacing] = true;
+         capsule.residual_draws[1 - replacing][4] = 15; // noncritical
+         (state, capsule)
++    }
++    #[test]
++    fn deterministic_pressure_and_inert_originals_preserve_full_pp() {
++        for replacing in 0..2 {
++            let pivot = if replacing == 0 {
++                SideReference::SideOne
++            } else {
++                SideReference::SideTwo
++            };
++            let waiter = pivot.get_other_side();
++            for move_id in [Choices::THUNDERBOLT, Choices::BODYSLAM] {
++                for pp in [1, 2, 10] {
++                    for (entrant, original, queued, queued_original, outgoing, cost) in [
++                        (
++                            Abilities::STATIC,
++                            Abilities::PRESSURE,
++                            Abilities::NONE,
++                            Abilities::LEVITATE,
++                            Abilities::NONE,
++                            1,
++                        ),
++                        (
++                            Abilities::PRESSURE,
++                            Abilities::HUSTLE,
++                            Abilities::LEVITATE,
++                            Abilities::TRACE,
++                            Abilities::NONE,
++                            2,
++                        ),
++                        (
++                            Abilities::LEVITATE,
++                            Abilities::PRESSURE,
++                            Abilities::PRESSURE,
++                            Abilities::HUSTLE,
++                            Abilities::NONE,
++                            1,
++                        ),
++                        (
++                            Abilities::NONE,
++                            Abilities::LEVITATE,
++                            Abilities::STATIC,
++                            Abilities::PRESSURE,
++                            Abilities::PRESSURE,
++                            1,
++                        ),
++                        (
++                            Abilities::PRESSURE,
++                            Abilities::LEVITATE,
++                            Abilities::PRESSURE,
++                            Abilities::PRESSURE,
++                            Abilities::NONE,
++                            2,
++                        ),
++                    ] {
++                        let (mut state, capsule) = fixture_with_move(replacing, move_id);
++                        let recipient = &mut state.get_side(&pivot).pokemon[PokemonIndex::P1];
++                        recipient.ability = entrant;
++                        recipient.base_ability = original;
++                        state.get_side(&pivot).get_active().ability = outgoing;
++                        state.get_side(&pivot).get_active().base_ability = outgoing;
++                        let actor = state.get_side(&waiter).get_active();
++                        actor.ability = queued;
++                        actor.base_ability = queued_original;
++                        actor.moves[&PokemonMoveIndex::M0].pp = pp;
++                        let before = state.serialize();
++                        let out = resume(&state, &capsule, PokemonIndex::P1, [0, 1]).unwrap();
++                        for branch in out {
++                            let recipient = branch
++                                .state
++                                .get_side_immutable(&pivot)
++                                .get_active_immutable();
++                            let actor = branch
++                                .state
++                                .get_side_immutable(&waiter)
++                                .get_active_immutable();
++                            assert_eq!(recipient.ability, entrant);
++                            assert_eq!(recipient.base_ability, original);
++                            assert_eq!(actor.ability, queued);
++                            assert_eq!(actor.base_ability, queued_original);
++                            assert_eq!(actor.moves[&PokemonMoveIndex::M0].pp, (pp - cost).max(0));
++                            assert!(!branch.capsule.pending_residual);
++                            assert_eq!(branch.capsule.keys, capsule.keys);
++                            let mut reverse = branch.state.clone();
++                            reverse.reverse_instructions(&branch.instructions.instruction_list);
++                            assert_eq!(reverse.serialize(), before);
++                        }
++                        assert_eq!(state.serialize(), before);
++                    }
++                }
++            }
++        }
++    }
++    #[test]
++    fn current_levitate_controls_spikes_and_hazard_ko_cancels_pressure_cost() {
++        for replacing in 0..2 {
++            let pivot = if replacing == 0 {
++                SideReference::SideOne
++            } else {
++                SideReference::SideTwo
++            };
++            let waiter = pivot.get_other_side();
++            for layers in 0..=3 {
++                for (current, original) in [
++                    (Abilities::LEVITATE, Abilities::HUSTLE),
++                    (Abilities::STATIC, Abilities::LEVITATE),
++                    (Abilities::PRESSURE, Abilities::TRACE),
++                ] {
++                    for hp in [1, 300] {
++                        let (mut state, capsule) = fixture(replacing);
++                        state.get_side(&pivot).side_conditions.spikes = layers;
++                        let recipient = &mut state.get_side(&pivot).pokemon[PokemonIndex::P1];
++                        recipient.ability = current;
++                        recipient.base_ability = original;
++                        recipient.hp = hp;
++                        recipient.maxhp = 300;
++                        let before = state.serialize();
++                        let out = resume(&state, &capsule, PokemonIndex::P1, [0, 1]).unwrap();
++                        let ko = hp == 1 && layers > 0 && current != Abilities::LEVITATE;
++                        for branch in out {
++                            let recipient = branch
++                                .state
++                                .get_side_immutable(&pivot)
++                                .get_active_immutable();
++                            let actor = branch
++                                .state
++                                .get_side_immutable(&waiter)
++                                .get_active_immutable();
++                            if ko {
++                                assert_eq!(recipient.hp, 0);
++                            }
++                            if hp == 300 {
++                                assert!(recipient.hp > 0);
++                            }
++                            // An attack KO also leaves a replacement owed;
++                            // only a hazard KO cancels the queued PP charge.
++                            assert_eq!(branch.capsule.pending_residual, recipient.hp == 0);
++                            assert_eq!(
++                                actor.moves[&PokemonMoveIndex::M0].pp,
++                                if ko {
++                                    10
++                                } else if current == Abilities::PRESSURE {
++                                    8
++                                } else {
++                                    9
++                                }
++                            );
++                            if current == Abilities::LEVITATE {
++                                let mut no_spikes = state.clone();
++                                no_spikes.get_side(&pivot).side_conditions.spikes = 0;
++                                let reference =
++                                    resume(&no_spikes, &capsule, PokemonIndex::P1, [0, 1]).unwrap();
++                                assert_eq!(
++                                    recipient.hp,
++                                    reference[0]
++                                        .state
++                                        .get_side_immutable(&pivot)
++                                        .get_active_immutable()
++                                        .hp
++                                );
++                                assert_eq!(
++                                    actor.hp,
++                                    reference[0]
++                                        .state
++                                        .get_side_immutable(&waiter)
++                                        .get_active_immutable()
++                                        .hp
++                                );
++                            }
++                        }
++                        assert_eq!(state.serialize(), before);
++                    }
++                }
++            }
++        }
+     }
+     #[test]
+     fn untouched_bench_context_is_retained_without_changing_the_law() {
