@@ -30,6 +30,10 @@ on:
       - 'tests/test_native_gpu_synchronize.py'
       - 'tests/test_gpu_engine_synchronize.py'
       - 'tests/data/gpu_synchronize_catalog.json'
+      - 'tests/test_native_gpu_hustle.py'
+      - 'tests/test_gpu_engine_hustle.py'
+      - 'tests/gpu_hustle_oracle.cjs'
+      - 'tests/data/gpu_hustle_catalog.json'
       - 'tests/test_gpu_engine_secondary_move_effects.py'
       - 'tests/test_gpu_engine_successor_cache.py'
       - 'tests/test_gpu_engine_panel_owner.py'
@@ -110,6 +114,7 @@ jobs:
               'tests.test_native_gen3_choice_band_before_move',
               'tests.test_native_gpu_secondary_move_effects',
               'tests.test_native_gpu_synchronize',
+              'tests.test_native_gpu_hustle',
               'tests.test_gpu_engine_panel_owner',
               'tests.test_native_gpu_panel_execution']
           first = {
@@ -123,10 +128,10 @@ jobs:
                     [name for name in names if name not in first]]
           assert set(groups[0]).isdisjoint(groups[1])
           assert set(groups[0]) | set(groups[1]) == set(names)
-          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 152
+          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 156
           shard = int(os.environ['NATIVE_SHARD'])
           assert shard in (0, 1)
-          expected = (48, 104)[shard]
+          expected = (48, 108)[shard]
           suite = unittest.defaultTestLoader.loadTestsFromNames(groups[shard])
           assert suite.countTestCases() == expected
           result = unittest.TextTestRunner(verbosity=2).run(suite)
