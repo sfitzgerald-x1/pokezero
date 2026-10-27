@@ -42,6 +42,8 @@ class EncoreTests(unittest.TestCase):
         return s._replace(stats=j.full_like(s.stats,200).at[:,0,:,5].set(50 if slow else 300),
             level=j.full_like(s.level,100),hp=j.full_like(s.hp,10000),max_hp=j.full_like(s.hp,10000),
             moves=moves,pp=j.full_like(s.pp,10),last_move=s.last_move.at[:,1,0].set(2),
+            last_action_kind=s.last_action_kind.at[:,1].set(2),
+            last_action_index=s.last_action_index.at[:,1].set(0),
             done=j.zeros_like(s.done))
 
     def play(self,s,actions=None):
@@ -77,10 +79,14 @@ class EncoreTests(unittest.TestCase):
                 s._replace(types=s.types.at[0,1,0,0].set(8))):
             self.assertEqual(int(self.play(target).state.encore_move[0,1,0]),2)
 
-    def test_absent_excluded_missing_and_zero_pp_last_moves_fail(self):
+    def test_none_switch_struggle_invalid_excluded_and_zero_pp_history_fail(self):
         s=self.live()
-        for move in (0,1,5,7): # Solar Beam exists in vocab, not this target's slots.
-            a=s._replace(last_move=s.last_move.at[0,1,0].set(move))
+        for kind,index in ((0,-1),(1,0),(3,-1),(2,4)):
+            a=s._replace(last_action_kind=s.last_action_kind.at[0,1].set(kind),
+                last_action_index=s.last_action_index.at[0,1].set(index))
+            self.assertEqual(int(self.play(a).state.encore_counter[0,1,0]),0)
+        for move in (0,1,5):
+            a=s._replace(moves=s.moves.at[0,1,0,0].set(move))
             self.assertEqual(int(self.play(a).state.encore_counter[0,1,0]),0)
         a=s._replace(pp=s.pp.at[0,1,0,0].set(0))
         self.assertEqual(int(self.play(a).state.encore_counter[0,1,0]),0)
@@ -104,7 +110,8 @@ class EncoreTests(unittest.TestCase):
         self.assertEqual(self.tr.action_mask(s,self.table)[0,1,:4].tolist(),[True,False,False,False])
 
     def test_forced_protect_retains_original_splash_queue_priority(self):
-        s=self.live();s=s._replace(last_move=s.last_move.at[0,1,0].set(4))
+        s=self.live();s=s._replace(last_move=s.last_move.at[0,1,0].set(4),
+            last_action_index=s.last_action_index.at[0,1].set(2))
         a=self.play(s).state
         self.assertEqual(int(a.encore_move[0,1,0]),4)
         self.assertEqual(int(a.pp[0,1,0,2]),9)
@@ -125,6 +132,7 @@ class EncoreTests(unittest.TestCase):
 
     def test_sleep_talk_records_and_forces_caller_not_called_move(self):
         s=self.live();s=s._replace(last_move=s.last_move.at[0,1,0].set(6),
+            last_action_index=s.last_action_index.at[0,1].set(3),
             status=s.status.at[0,1,0].set(self.m.SLP),status_counter=s.status_counter.at[0,1,0].set(5))
         a=self.play(s).state
         self.assertEqual((int(a.encore_move[0,1,0]),int(a.last_move[0,1,0])),(6,6))
@@ -161,6 +169,8 @@ class EncoreTests(unittest.TestCase):
 
     def test_pursuit_ko_installs_chosen_switch_and_ticks_encore(self):
         s=self.live();s=s._replace(moves=s.moves.at[0,0,0,0].set(10),
+            last_action_kind=s.last_action_kind.at[0,0].set(2),
+            last_action_index=s.last_action_index.at[0,0].set(0),
             encore_move=s.encore_move.at[0,0,0].set(10),encore_counter=s.encore_counter.at[0,0,0].set(3),
             hp=s.hp.at[0,1,0].set(1))
         a=self.play(s,self.j.array([[0,4]])).state
@@ -170,6 +180,8 @@ class EncoreTests(unittest.TestCase):
 
     def test_ordinary_ko_pause_retains_clock_until_replacement(self):
         s=self.live();s=s._replace(moves=s.moves.at[0,0,0,0].set(2),
+            last_action_kind=s.last_action_kind.at[0,0].set(2),
+            last_action_index=s.last_action_index.at[0,0].set(0),
             encore_move=s.encore_move.at[0,0,0].set(2),encore_counter=s.encore_counter.at[0,0,0].set(3),
             hp=s.hp.at[0,1,0].set(1))
         a=self.play(s,self.j.array([[0,1]])).state

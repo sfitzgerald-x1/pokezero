@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from . import entry
+from . import action_history as history
 from .state import ROOTED
 
 
@@ -52,6 +53,7 @@ def drag(state,side,move,roll,table,entry_table,*,eligible):
         active_turns=state.active_turns.at[rows,side].set(jnp.where(changed,0,state.active_turns[rows,side])),
         trapped=state.trapped.at[rows,side].set(state.trapped[rows,side] & ~changed),
         baton_pass=state.baton_pass.at[rows,side].set(state.baton_pass[rows,side] & ~changed))
+    state=history.record_switch(state,side,target,eligible=changed)
     knocked_out=jnp.zeros_like(changed)
     if entry_table is not None:
         state,knocked_out=entry.enter(state,side,entry_table,eligible=changed)

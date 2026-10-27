@@ -35,7 +35,9 @@ class BattleState(NamedTuple):
     pp: jax.Array                  # [B,2,6,4]
     disabled: jax.Array            # [B,2,6,4]
     choice_move: jax.Array         # [B,2,6], locked move ID; zero means unlocked
-    last_move: jax.Array           # [B,2,6], last PP-spending normal caller
+    last_move: jax.Array           # [B,2,6], diagnostic caller identity; not action-slot history
+    last_action_kind: jax.Array    # [B,2], NONE/SWITCH/MOVE/STRUGGLE; side-owned
+    last_action_index: jax.Array   # [B,2], party/dispatch slot, or -1 for NONE/STRUGGLE
     encore_move: jax.Array         # [B,2,6], noCopy forced caller; zero inactive
     encore_counter: jax.Array      # [B,2,6], remaining residual ticks
     charge_move: jax.Array         # [B,2,6], selected Solar Beam hard lock
@@ -95,7 +97,9 @@ def empty_state(batch_size: int, *, seed: int = 0) -> BattleState:
         stats=jnp.zeros((b, 2, 6, 6), jnp.int32), hp=mon(), max_hp=mon(),
         status=mon(), status_counter=mon(), sleep_skipped=mon(), moves=jnp.zeros((b, 2, 6, 4), jnp.int32),
         pp=jnp.zeros((b, 2, 6, 4), jnp.int32), disabled=jnp.zeros((b, 2, 6, 4), jnp.bool_),
-        choice_move=mon(),last_move=mon(),encore_move=mon(),encore_counter=mon(),charge_move=mon(),charge_counter=mon(),
+        choice_move=mon(),last_move=mon(),last_action_kind=side(),
+        last_action_index=jnp.full((b,2),-1,jnp.int32),
+        encore_move=mon(),encore_counter=mon(),charge_move=mon(),charge_counter=mon(),
         item=mon(), ability=mon(), base_ability=mon(), boosts=jnp.zeros((b, 2, 6, 7), jnp.int32),
         volatile=jnp.zeros((b, 2, 6), jnp.uint32), confusion_counter=mon(),
         protect_counter=mon(), substitute_hp=mon(), active=side(),
@@ -132,7 +136,10 @@ def usable_moves(state: BattleState) -> jax.Array:
     moves = (pp > 0) & ~disabled & ((choice[...,None] == 0) | (move_ids == choice[...,None]))
     encore=jnp.take_along_axis(state.encore_move,state.active[...,None],axis=2)[...,0]
     duration=jnp.take_along_axis(state.encore_counter,state.active[...,None],axis=2)[...,0]
-    moves &= (duration[...,None]==0) | (move_ids==encore[...,None])
+    # Encore tracks the executed slot, including duplicate move identities.
+    exact = (state.last_action_kind == 2) & (state.last_action_index >= 0) & (state.last_action_index < 4)
+    encored = (jnp.arange(4) == state.last_action_index[...,None]) & exact[...,None]
+    moves &= (duration[...,None]==0) | (encored & (move_ids==encore[...,None]))
     charge=jnp.take_along_axis(state.charge_move,state.active[...,None],axis=2)[...,0]
     # A hard-locked release ignores PP/Disable/Choice/Encore request filtering.
     charge_slots=move_ids==charge[...,None]

@@ -23,6 +23,7 @@ def fixture():
             data["types"][side][p] = [1, 0]
             data["stats"][side][p] = [1000, 200, 200, 200, 200, 301 if side == 0 else 199]
     data.update(queued_actor=-1, done=False, winner=-1)
+    data['last_action_index'] = [-1, -1]
     metadata = {"vocabulary": {
         "species": ["_none", "ditto"], "types": ["_none", "normal", "fire", "ice"],
         "abilities": ["_none", "truant"], "items": ["_none", "choiceband"],
@@ -88,6 +89,51 @@ FAKE = SimpleNamespace(State=FakeState, Side=SimpleNamespace, Pokemon=SimpleName
 
 
 class FutureStateTests(unittest.TestCase):
+    def test_explicit_last_action_distinguishes_none_switch_slot_and_struggle(self):
+        for kind, index, expected in ((0, -1, 'move:none'), (1, 0, 'switch:0'),
+                                      (2, 2, 'move:2'), (3, -1, 'move:struggle')):
+            data, meta = fixture()
+            data['moves'][1][5][0] = 2  # Bench Encore enables native tracking.
+            data['last_action_kind'] = [kind, 0]
+            data['last_action_index'] = [index, -1]
+            data['active_turns'] = [7, 0]  # Never infer Switch from elapsed age.
+            native = self.construct(data, meta)
+            self.assertEqual(native.state.side_one.last_used_move, expected)
+            self.assertEqual(native.state.side_two.last_used_move, 'move:none')
+            left = f.canonical_jax_future(data, None, meta, certificate=native.certificate)
+            right = f.canonical_native_future(native.state, native.certificate)
+            self.assertEqual(left.key, right.key)
+
+    def test_missing_or_invalid_last_action_history_is_never_guessed(self):
+        for missing in ('last_action_kind', 'last_action_index'):
+            data, meta = fixture()
+            data.pop(missing, None)
+            refused = f.native_input_from_jax(data, None, meta, module=FAKE)
+            self.assertIsInstance(refused, f.Refused)
+            self.assertIn('LAST_ACTION_HISTORY_REQUIRED', {g.code for g in refused.gaps})
+        for kind, index in ((-1,-1), (4,0), (True,0), (0,0), (1,-1), (1,6),
+                            (2,-1), (2,4), (3,0), (2,True)):
+            data, meta = fixture()
+            data['last_action_kind'] = [kind, 0]
+            data['last_action_index'] = [index, -1]
+            refused = f.native_input_from_jax(data, None, meta, module=FAKE)
+            self.assertIsInstance(refused, f.Refused)
+            self.assertIn('INVALID_LAST_ACTION_HISTORY', {g.code for g in refused.gaps})
+
+    def test_diagnostic_identity_is_inactive_and_bench_fakeout_enables_history(self):
+        data,meta=fixture()
+        meta['vocabulary']['moves'].append('fakeout')
+        data['moves'][1][5][0]=len(meta['vocabulary']['moves'])-1
+        data['last_action_kind']=[2,0];data['last_action_index']=[3,-1]
+        keys=[]
+        for identity in (0,1,2):
+            data['last_move'][0][0]=identity
+            native=self.construct(data,meta)
+            self.assertTrue(native.certificate.conditional_last)
+            self.assertEqual(native.state.side_one.last_used_move,'move:3')
+            keys.append(f.canonical_jax_future(data,None,meta,certificate=native.certificate).key)
+        self.assertEqual(keys[0],keys[1]);self.assertEqual(keys[1],keys[2])
+
     def construct(self, data=None, meta=None):
         original, metadata = fixture()
         out = f.native_input_from_jax(original if data is None else data, None,
@@ -201,7 +247,7 @@ class FutureStateTests(unittest.TestCase):
         data["moves"][0][4][0] = 2
         native = self.construct(data, meta)
         self.assertTrue(native.certificate.conditional_last)
-        self.assertEqual(native.state.side_one.last_used_move, "switch:0")
+        self.assertEqual(native.state.side_one.last_used_move, "move:none")
 
     def test_hidden_power_uses_actual_type_and_supported_power_not_alias_text(self):
         data, meta = fixture()

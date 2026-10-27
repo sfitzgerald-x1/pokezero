@@ -37,7 +37,9 @@ FIELD_POLICY = {
     "status_counter": "active Toxic quotient min(count,14); natural sleep latent convention unresolved",
     "sleep_skipped": "Rest provenance/refund unresolved when sleeping; otherwise stale",
     "choice_move": "Choice Band disabled-slot representation; ambiguous locks refuse",
-    "last_move": "native selected slot only when conditional tracking is enabled",
+    "last_move": "inactive caller-identity observation; all Encore/history consumers use side-owned kind/index",
+    "last_action_kind": "explicit side-owned NONE/SWITCH/MOVE/STRUGGLE; native tracking follows inventory flag",
+    "last_action_index": "exact dispatch move slot or committed switch party index; -1 for NONE/STRUGGLE",
     "encore_move": "elapsed-hazard versus sampled duration unresolved while active",
     "encore_counter": "elapsed-hazard versus sampled duration unresolved while active",
     "charge_move": "single Solar Beam charge volatile only",
@@ -88,7 +90,9 @@ NATIVE_PATHS = {
     "moves": ("side[].pokemon[].moves[].id",), "pp": ("side[].pokemon[].moves[].pp",),
     "disabled": ("side[].pokemon[].moves[].disabled",),
     "choice_move": ("side[].pokemon[].moves[].disabled: Choice Band lock mask",),
-    "last_move": ("side[].last_used_move", "State.use_last_used_move: recomputed from all12 inventories"),
+    "last_move": ("INACTIVE: diagnostic caller identity; native history uses last_action_kind/index",),
+    "last_action_kind": ("side[].last_used_move: variant",),
+    "last_action_index": ("side[].last_used_move: exact move/party index",),
     "encore_move": ("UNRESOLVED: side[].last_used_move + ENCORE",),
     "encore_counter": ("UNRESOLVED: side[].volatile_status_durations.encore",),
     "charge_move": ("side[].volatile_statuses.SOLARBEAM",),
@@ -143,6 +147,7 @@ SHAPES = {name: (2, 6) for name in ("species", "level", "hidden_power_type", "hi
     "encore_move", "encore_counter", "charge_move", "charge_counter", "item", "ability", "base_ability", "volatile",
     "confusion_counter", "protect_counter", "substitute_hp", "trap_source", "truant_loaf")}
 SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns", "trapped", "forced_switch",
+    "last_action_kind", "last_action_index",
     "baton_pass", "queued_actions", "queued_stall", "phazing_draws", "secondary_draws", "sleep_talk_draws",
     "spikes", "wish_counter", "keys")})
 SHAPES.update({name: () for name in ("queued_actor", "pending_residual", "replacement_count", "weather",
@@ -289,6 +294,9 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
     if "base_ability" not in data:
         add("base_ability", "ORIGINAL_BASE_ABILITY_REQUIRED", "Do not infer an original ability from a possibly copied current ability")
         return None, gaps, (), False, False
+    if not {"last_action_kind", "last_action_index"} <= data.keys():
+        add("last_action", "LAST_ACTION_HISTORY_REQUIRED", "Retain explicit side-owned kind/index; never infer history from identity or active age")
+        return None, gaps, (), False, False
     if original_static is not None:
         required = {f"{side}.pokemon[{p}]" for side in SIDE_NAMES for p in range(6)}
         if set(dict(original_static)) != required or original_genders is None:
@@ -301,6 +309,14 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
     for name, value in data.items():
         if _shape(value) != SHAPES[name]:
             add(name, "INVALID_FIELD_SHAPE", f"Expected {SHAPES[name]}, received {_shape(value)}")
+    if gaps:
+        return None, gaps, (), False, False
+    for side, (kind, index) in enumerate(zip(data["last_action_kind"], data["last_action_index"])):
+        valid = type(kind) is int and type(index) is int and (
+            (kind in (0, 3) and index == -1) or (kind == 1 and 0 <= index < 6)
+            or (kind == 2 and 0 <= index < 4))
+        if not valid:
+            add(f"side[{side}].last_action", "INVALID_LAST_ACTION_HISTORY", "Expected NONE/STRUGGLE(-1), SWITCH(0..5), or MOVE(0..3)")
     if gaps:
         return None, gaps, (), False, False
     if not 0 <= data["weather"] < len(WEATHER_NAMES) or not 0 <= data["weather_counter"] <= 127:
@@ -472,19 +488,13 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
             toxic_count=min(toxic, 14))
         last = "move:none"
         if use_last:
-            used = data["last_move"][side][active]
-            if used and _vocab(metadata, "moves", used) == "struggle":
+            kind, index = data["last_action_kind"][side], data["last_action_index"][side]
+            if kind == 3:
                 last = "move:struggle"
-            elif used:
-                matches = [i for i, move in enumerate(data["moves"][side][active]) if move == used]
-                if len(matches) != 1:
-                    add(side_name+".last_move", "AMBIGUOUS_LAST_SLOT", "Native history needs a unique slot, not only move identity")
-                else:
-                    last = f"move:{matches[0]}"
-            elif data["active_turns"][side] == 0:
-                last = f"switch:{active}"
-            else:
-                add(side_name+".last_move", "LAST_ACTION_HISTORY_NOT_RETAINED", "No PP-spending move plus elapsed active turns cannot distinguish native Switch/None history")
+            elif kind == 2:
+                last = f"move:{index}"
+            elif kind == 1:
+                last = f"switch:{index}"
         expected_request = data["hp"][side][active] <= 0 and alive[side]
         if bool(data["forced_switch"][side]) != expected_request and not data["pending_residual"]:
             add(side_name+".forced_switch", "INCONSISTENT_REQUEST", "Replacement request disagrees with active HP")

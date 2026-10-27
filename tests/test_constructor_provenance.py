@@ -117,6 +117,15 @@ class ConstructorProvenanceTests(unittest.TestCase):
         with self.assertRaises(ValueError):pool.arrays['nature'].setflags(write=True)
         with self.assertRaises(TypeError):pool.arrays['nature']=None
 
+    def test_pre_entry_history_cannot_be_fabricated_from_a_later_action(self):
+        state,pool,context,_,assignment=self.fixture()
+        for kind,index in ((1,0),(2,0),(3,-1),(0,0)):
+            changed=state._replace(last_action_kind=state.last_action_kind.at[0,0].set(kind),
+                last_action_index=state.last_action_index.at[0,0].set(index))
+            refused=self.capture(changed,pool,context,assignment)
+            self.assertIsInstance(refused,self.f.Refused)
+            self.assertIn('PRE_ENTRY_ACTION_HISTORY_MUST_BE_NONE',repr(refused.gaps))
+
     def native_reference(self,state,pool,replacing):
         data=self.f._sample(state,0);meta=pool.metadata();sides=[]
         for side in range(2):

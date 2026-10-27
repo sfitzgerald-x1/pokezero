@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from . import mechanics as m
+from . import action_history as history
 from . import items as held
 from . import weather as climate
 from . import absorption as absorb
@@ -365,6 +366,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             baton_pass=work.baton_pass.at[rows,side].set(work.baton_pass[rows,side] & ~do_switch),
             forced_switch=work.forced_switch.at[rows,side].set(jnp.where(do_switch,False,work.forced_switch[rows,side])),
             active_turns=work.active_turns.at[rows,side].set(jnp.where(do_switch,0,work.active_turns[rows,side])))
+        work=history.record_switch(work,side,target[rows,side],eligible=do_switch)
         # insertChoice snapshots each incoming callback's Speed now; a later
         # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
         callback_speed = callback_speed.at[rows,side].set(_speeds(work,table)[rows,side])
@@ -476,6 +478,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             jnp.where(acts & ~charge_locked & ~struggle[rows, side], jnp.maximum(0, old_pp - used_pp), old_pp)))
         work=work._replace(last_move=_set_active(work.last_move,work,side,
             jnp.where(acts,caller_move,_active(work.last_move,work,side))))
+        work=history.record_move(work,side,chosen_slot,eligible=acts,struggle=struggle[rows,side])
         placeholders += acts.astype(jnp.int32)
         caller_acts=acts
         if table.sleep_talk is not None:
