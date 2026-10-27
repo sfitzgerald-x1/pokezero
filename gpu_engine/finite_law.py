@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from fractions import Fraction
+from functools import lru_cache
 import itertools
 import math
 from typing import Callable, Hashable, Iterator, Mapping
@@ -91,6 +92,8 @@ class Axis:
     def __post_init__(self):
         if self.coordinate not in dict(COORDINATES):
             raise ValueError(f"unknown coordinate: {self.coordinate}")
+        if self.inactive_reason is not None and type(self.inactive_reason) is not str:
+            raise ValueError("inactive reason must be an immutable string or None")
         if self.observations:
             if not self.source_uses or self.inactive_reason is not None:
                 raise ValueError("active coordinates require source uses, not inactivity")
@@ -124,7 +127,10 @@ class Plan:
         if [axis.coordinate for axis in self.axes] != expected:
             raise ValueError("all physical coordinates required once in canonical order")
 
+    @lru_cache(maxsize=128)
     def cells(self):
+        # Plans and all partition members are immutable. Reuse this pure
+        # expansion when validating every output of the same large law.
         return tuple(partition(bound, axis.observations)
                      for axis, (_, bound) in zip(self.axes, COORDINATES, strict=True))
 

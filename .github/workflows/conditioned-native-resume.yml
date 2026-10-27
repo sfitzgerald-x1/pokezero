@@ -123,10 +123,10 @@ jobs:
                     [name for name in names if name not in first]]
           assert set(groups[0]).isdisjoint(groups[1])
           assert set(groups[0]) | set(groups[1]) == set(names)
-          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 151
+          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 152
           shard = int(os.environ['NATIVE_SHARD'])
           assert shard in (0, 1)
-          expected = (47, 104)[shard]
+          expected = (48, 104)[shard]
           suite = unittest.defaultTestLoader.loadTestsFromNames(groups[shard])
           assert suite.countTestCases() == expected
           result = unittest.TextTestRunner(verbosity=2).run(suite)

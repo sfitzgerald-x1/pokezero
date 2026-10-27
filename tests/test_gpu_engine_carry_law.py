@@ -124,6 +124,14 @@ class CarryLawTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'POSITIVE_COPY_DOMAIN'):
             c.output_term(p,cell,(),(('x',c.Copy('secondary.0')),),space)
         with self.assertRaises(CardinalityRefusal):c.execution_cells(plan((A,B)),cap=3)
+        # Numeric equality must not erase the serialized int/Fraction identity.
+        for order,thresholds in enumerate(((1,F(1)),(F(1),1))):
+            typed=[Plan(tuple(replace(axis,observations=(Observation('less_than',threshold),),
+                    source_uses=(f'authored typed identity order {order}',)) if axis.coordinate==A
+                    else axis for axis in plan((A,)).axes)) for threshold in thresholds]
+            self.assertEqual(typed[0],typed[1])
+            cell=next(c.execution_cells(typed[0],cap=2))
+            with self.assertRaisesRegex(ValueError,'PARTITION'):cell.validate(typed[1])
 
     def test_symbolic_node_cap_returns_no_partial_comparison(self):
         a=law(lambda a,b:0,(),(c.Copy(A),c.Copy(B)))

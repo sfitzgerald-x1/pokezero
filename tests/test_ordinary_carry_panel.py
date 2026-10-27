@@ -175,6 +175,33 @@ class OrdinaryPanelTests(unittest.TestCase):
         self.assertEqual(result['detail'],dict(offending='kept'))
         self.assertNotIn('ordinary_output_laws',result)
 
+    def test_cells_are_precounted_but_not_materialized_before_executor_creation(self):
+        from gpu_engine import ordinary_law as law
+        f,state,sources,entry,table,record,planned=self.planned()
+        cells=law.algebra.execution_cells;executor=law.JaxCaseExecutor;produced=[]
+        def tracked(*args,**kwargs):
+            admitted=cells(*args,**kwargs)  # The cap must reject before yielding.
+            def iterate():
+                for cell in admitted:
+                    produced.append(cell)
+                    yield cell
+            return iterate()
+        def create_executor(*args,**kwargs):
+            self.assertEqual(produced,[])
+            return executor(*args,**kwargs)
+        with mock.patch.object(law.algebra,'execution_cells',side_effect=tracked), \
+             mock.patch.object(law,'JaxCaseExecutor',side_effect=create_executor) as execute:
+            refused=law.compare_plan(planned.plan,state,(0,0),table,
+                cap=planned.plan.law.cardinality-1,batch_size=1,max_nodes=100000)
+            self.assertEqual(refused['status'],'UNKNOWN')
+            self.assertFalse(produced)
+            execute.assert_not_called()
+            result=law.compare_plan(planned.plan,state,(0,0),table,
+                cap=planned.plan.law.cardinality,batch_size=1,max_nodes=100000,retain_evidence=True)
+        self.assertEqual(result['status'],'AGREE',result)
+        self.assertEqual(len(produced),planned.plan.law.cardinality)
+        self.assertEqual(len(result['ordinary_output_laws']['emissions']),len(produced))
+
     def test_collector_freezes_and_persists_both_full_laws_before_terminal_audit(self):
         from gpu_engine import ordinary_panel as p,prospective_panel,panel_owner as owner
         f,state,sources,original,entry,table,record=self.fixture()

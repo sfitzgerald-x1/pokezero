@@ -23,7 +23,7 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, CardinalityRefusal, Obse
 # in transition.step_with_chance. A numeric representative alone is not proof.
 DOMAIN_SHA256 = '6fe611254ad0a7034c4514f55589e91f1bc035c726b175a7130361db8d33b20c'
 # Filled only after reviewed implementation stabilizes; drift must refuse.
-MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'c3809244bf9ee44f6cab495850904848472b42adaab9dfe970434ee4b87d8942', 'conditioned_future.py': 'b3d8c647f0aca36204e1dcd521a1ce17fee7463f683217f3d0830eb9e44c2e11', 'future_state.py': '77fe87f3af696dcc8e3785dcf6481e83075b781c464fa3c736c305745628b0a8', 'fidelity_panel.py': 'ce67f0d036d0daf8b6d72e1727a7fc5aa22e73dacb2e4dbd4d496a94a8c1973e', 'finite_law.py': 'd999cdbaddebc33cf3f84583e584e2110d7ee79f37bf365f715d0eb7f424ae8c'}
+MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'c3809244bf9ee44f6cab495850904848472b42adaab9dfe970434ee4b87d8942', 'conditioned_future.py': 'b3d8c647f0aca36204e1dcd521a1ce17fee7463f683217f3d0830eb9e44c2e11', 'future_state.py': '77fe87f3af696dcc8e3785dcf6481e83075b781c464fa3c736c305745628b0a8', 'fidelity_panel.py': 'ce67f0d036d0daf8b6d72e1727a7fc5aa22e73dacb2e4dbd4d496a94a8c1973e', 'finite_law.py': '34317244b8430387ab46c148c578828f4d94da6ebb80d3556b197613f92703f0'}
 BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
     + [(f'{field}_draws.{s}', f'{field}.{s}', bound)
@@ -266,7 +266,9 @@ def compare_plan(plan,state,actions,table,*,cap,batch_size,max_nodes,retain_evid
     try:
         if not isinstance(plan,OrdinaryPlan) or _source_certificate()!=plan.source_certificate:
             raise ValueError('CURRENT_BOUND_ORDINARY_PLAN_REQUIRED')
-        cells=tuple(algebra.execution_cells(plan.law,cap=cap))
+        # execution_cells checks the complete cardinality before returning.
+        # Keep only the current batch instead of materializing the full grid.
+        cells=algebra.execution_cells(plan.law,cap=cap)
         execute=JaxCaseExecutor(state,actions,table,plan,batch_size=batch_size)
         reference=[];native=[];emissions=[];module=import_module('pokezero_search')
         for batch in chunks(iter(cells),batch_size):
