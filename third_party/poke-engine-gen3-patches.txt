@@ -1814,3 +1814,7 @@ poke-engine-gen3-stall-pp-after-gates.patch
 # Fresh blocked attempts do not lock; external Sleep Talk callees cannot relock.
 poke-engine-gen3-choice-lock-after-beforemove.patch
 poke-engine-gen3-conditioned-joint-replacement.patch
+
+# Separate opt-in ordinary fixed-chance context; native cuts and independent
+# full queue/chance carry outputs. No collector or historical panel changes.
+poke-engine-gen3-conditioned-ordinary-step.patch

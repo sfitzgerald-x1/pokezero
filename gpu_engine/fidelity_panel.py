@@ -211,6 +211,8 @@ class JaxCaseExecutor:
 
 def native_executor(plan):
     """No normalization, parent mutation or silent unsupported branch filtering."""
+    if type(plan.native_actions) is not mapping.NativeActions:
+        raise ValueError("PUBLIC_STRING_EXECUTOR_CANNOT_EXECUTE_SLOT_API_ACTIONS")
     if os.environ.get("POKEZERO_ENUMERATE_ROLLS") != "1":
         raise ValueError("isolated worker must enable exact rolls before native import")
     import poke_engine

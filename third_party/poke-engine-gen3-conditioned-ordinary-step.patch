@@ -1,0 +1,832 @@
+--- a/src/gen3/mod.rs
++++ b/src/gen3/mod.rs
+@@ -1,11 +1,14 @@
+ pub mod abilities;
+ pub mod base_stats;
+ pub mod choice_effects;
+ pub mod damage_calc;
+ pub mod evaluate;
+ pub mod generate_instructions;
+ pub mod items;
+ pub mod state;
+-
++
+ #[cfg(feature = "conditioned-oracle")]
+ pub mod conditioned_resume;
++
++#[cfg(feature = "conditioned-oracle")]
++pub mod conditioned_step;
+--- a/src/gen3/conditioned_resume.rs
++++ b/src/gen3/conditioned_resume.rs
+@@ -93,25 +93,25 @@
+         3 => Ok(PokemonMoveIndex::M3),
+         _ => Err("INVALID_QUEUED_SLOT"),
+     }
+ }
+-
++
+ fn validate(
+     state: &State,
+     capsule: &ResumeCapsule,
+     replacements: [Option<PokemonIndex>; 2],
+     entry_ties: [u8; 2],
+ ) -> Result<usize, &'static str> {
+     const BOUNDS: [u8; 12] = [2, 100, 100, 100, 16, 16, 100, 4, 8, 2, 2, 2];
+-    if state.oracle_resume.is_some() {
++    if state.oracle_resume.is_some() || state.oracle_step.is_some() {
+         return Err("NESTED_CONDITIONED_RESUME");
+     }
+     if !capsule.pending_residual {
+         return Err("NO_PENDING_RESIDUAL");
+     }
+     if entry_ties.iter().any(|x| *x >= 2)
+         || capsule
+             .residual_draws
+             .iter()
+             .any(|row| row.iter().zip(BOUNDS).any(|(v, b)| *v >= b))
+         || capsule.phazing_draws.iter().any(|x| *x >= 60)
+         || capsule.secondary_draws.iter().any(|x| *x >= 100)
+--- /dev/null
++++ b/src/gen3/conditioned_step.rs
+@@ -0,0 +1,474 @@
++//! Fixed-chance ordinary move requests, distinct from suspended continuation.
++//!
++//! Domain admission and chance observations come from native consumers. The
++//! parent is immutable, the address is supplied before execution, and native
++//! control flow owns the output queue and every forwarded bank expression.
++use super::abilities::Abilities;
++use super::conditioned_resume::ResumeCapsule;
++use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
++use super::generate_instructions::generate_instructions_from_move_pair;
++use super::items::Items;
++use super::state::{MoveChoice, Weather};
++use crate::choices::{Choices, Effect, MoveTarget, Secondary, MOVES};
++use crate::instruction::{Instruction, StateInstructions};
++use crate::state::{PokemonMoveIndex, PokemonStatus, SideConditions, SideReference, State,
++    VolatileStatusDurations};
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct StepChance {
++    pub draws: [[u8; 12]; 2],
++    pub phazing: [u8; 2],
++    pub secondary: [u8; 2],
++    pub sleep_talk: [u8; 2],
++    pub entry_ties: [u8; 2],
++    pub initial_tie: u8,
++}
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct StepAddress {
++    pub turn: u32,
++    pub keys: [u32; 2],
++    pub next_keys: [u32; 2],
++}
++
++/// Private fields prevent ordinary callers from bypassing the admitted domain.
++#[derive(Debug, Clone)]
++pub struct ValidatedStep {
++    chance: StepChance,
++}
++
++fn seat(side: &SideReference) -> usize {
++    match side { SideReference::SideOne => 0, SideReference::SideTwo => 1 }
++}
++
++impl ValidatedStep {
++    pub(crate) fn damage_roll(&self, side: &SideReference) -> (bool, u8) {
++        let s = seat(side);
++        (self.chance.draws[s][4] == 0, self.chance.draws[s][5])
++    }
++    pub(crate) fn paralysis_probability(&self, side: &SideReference) -> f32 {
++        if self.chance.draws[seat(side)][2] < 25 { 1.0 } else { 0.0 }
++    }
++    pub(crate) fn stall_probability(&self, side: &SideReference, counter: i8) -> f32 {
++        let cut = 8 >> counter.min(3).max(0);
++        if self.chance.draws[seat(side)][8] < cut { 1.0 } else { 0.0 }
++    }
++    pub(crate) fn secondary_hits(&self, side: &SideReference, secondary: &Secondary) -> bool {
++        match (&secondary.target, &secondary.effect) {
++            (MoveTarget::User, Effect::Status(PokemonStatus::PARALYZE))
++                if secondary.chance == 100.0 / 3.0 => self.chance.phazing[seat(side)] < 20,
++            (MoveTarget::Opponent, Effect::Status(PokemonStatus::PARALYZE))
++                if secondary.chance == 10.0 || secondary.chance == 30.0 =>
++                    (self.chance.secondary[seat(side)] as f32) < secondary.chance,
++            _ => panic!("CONDITIONED_STEP_UNSUPPORTED_SECONDARY_SHAPE"),
++        }
++    }
++}
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct Requirement {
++    pub coordinate: String,
++    pub kind: &'static str,
++    pub argument: u8,
++}
++
++fn move_index(slot: u8) -> Result<PokemonMoveIndex, &'static str> {
++    match slot { 0 => Ok(PokemonMoveIndex::M0), 1 => Ok(PokemonMoveIndex::M1),
++        2 => Ok(PokemonMoveIndex::M2), 3 => Ok(PokemonMoveIndex::M3),
++        _ => Err("ORDINARY_MOVE_SLOT_REQUIRED") }
++}
++
++/// Positive-domain rejection is before generation. Untouched party members are
++/// retained without imposing the narrower *next-request execution* whitelist.
++pub fn requirements(state: &State, slots: [u8; 2]) -> Result<Vec<Requirement>, &'static str> {
++    if state.oracle_resume.is_some() || state.oracle_step.is_some() {
++        return Err("NESTED_CONDITIONED_STEP");
++    }
++    if state.weather.weather_type != Weather::NONE || state.trick_room.active || state.team_preview {
++        return Err("STEP_UNSUPPORTED_FIELD_CONTEXT");
++    }
++    let sides = [&state.side_one, &state.side_two];
++    let mut ids = [Choices::NONE; 2];
++    for s in 0..2 {
++        let side = sides[s];
++        if side.force_switch || side.baton_passing || side.get_active_immutable().hp <= 0 {
++            return Err("ORDINARY_LIVE_REQUEST_REQUIRED");
++        }
++        let mut conditions = side.side_conditions.clone();
++        if !(0..=3).contains(&conditions.spikes) || conditions.protect < 0 {
++            return Err("STEP_UNSUPPORTED_SIDE_CONTEXT");
++        }
++        conditions.spikes = 0;
++        conditions.protect = 0;
++        if side.shed_tailing || side.slow_uturn_move || side.force_trapped
++            || side.wish != (0, 0) || side.future_sight.0 != 0
++            || !side.volatile_statuses.is_empty() || side.substitute_health != 0
++            || side.volatile_status_durations.serialize() != VolatileStatusDurations::default().serialize()
++            || conditions.serialize() != SideConditions::default().serialize()
++            || [side.attack_boost, side.defense_boost, side.special_attack_boost,
++                side.special_defense_boost, side.speed_boost, side.accuracy_boost, side.evasion_boost]
++                .iter().any(|stage| *stage != 0)
++            || side.switch_out_move_second_saved_move != Choices::NONE
++        { return Err("STEP_UNSUPPORTED_SIDE_CONTEXT"); }
++        let active = side.get_active_immutable();
++        if !matches!(active.ability, Abilities::NONE | Abilities::STATIC | Abilities::PRESSURE | Abilities::LEVITATE)
++            || !matches!(active.item, Items::NONE | Items::LEFTOVERS)
++            || !matches!(active.status, PokemonStatus::NONE | PokemonStatus::POISON | PokemonStatus::PARALYZE)
++            || active.pre_transform.is_some() || active.rest_sleep_pending_refund != 0
++            || active.rest_turns != 0 || active.sleep_turns != 0 || active.terastallized
++        { return Err("STEP_UNSUPPORTED_ACTIVE_CONTEXT"); }
++        let mv = &active.moves[&move_index(slots[s])?];
++        if !matches!(mv.id, Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION
++                | Choices::BATONPASS | Choices::PROTECT | Choices::ENDURE | Choices::SPLASH)
++            || mv.disabled || mv.pp <= 0
++            || format!("{:?}", mv.choice) != format!("{:?}", MOVES.get(&mv.id).unwrap())
++        { return Err("STEP_UNSUPPORTED_SELECTED_MOVE"); }
++        ids[s] = mv.id;
++        // The old ordinary oracle can round a nonimmune max0/max1 hit to
++        // zero; the suspended fixed-roll path already applies minimum one.
++        // Do not silently repair that old oracle while claiming conditioning
++        // preserves its marginal. All supported modifiers are unchanged by
++        // these seven moves before this actor executes (new paralysis changes
++        // speed only). Preserve true immunity as an admitted zero-damage case.
++        let other = sides[1-s].get_active_immutable();
++        if type_effectiveness_modifier(&mv.choice.move_type, other) > 0.0 {
++            if let Some((regular,critical)) = calculate_damage(state,
++                &if s==0 {SideReference::SideOne} else {SideReference::SideTwo},
++                &mv.choice, DamageRolls::Max) {
++                if regular <= 1 || critical <= 1 {
++                    return Err("STEP_ORDINARY_MINIMUM_DAMAGE_REPAIR_PENDING");
++                }
++            }
++        }
++    }
++    let a = sides[0].get_active_immutable().speed;
++    let b = sides[1].get_active_immutable().speed;
++    // JAX has separate residual event ties. This domain admits no potentially
++    // tied ordering, even after a newly applied paralysis changes speed.
++    if [a, a / 4].iter().any(|x| [b, b / 4].iter().any(|y| x == y)) {
++        return Err("STEP_UNSUPPORTED_RESIDUAL_SPEED_TIE");
++    }
++    let mut result = Vec::new();
++    let mut add = |coordinate: String, kind, argument| result.push(Requirement {coordinate, kind, argument});
++    for s in 0..2 {
++        if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION) {
++            add(format!("draws.{}.4", s), "less_than", 1);
++            add(format!("draws.{}.5", s), "identity", 0);
++        }
++        if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM) {
++            add(format!("secondary.{}", s), "less_than", if ids[s] == Choices::THUNDERBOLT {10} else {30});
++        }
++        if ids[s] == Choices::BODYSLAM && sides[1-s].get_active_immutable().ability == Abilities::STATIC {
++            add(format!("phazing.{}", s), "less_than", 20);
++        }
++        // The first hit can paralyze the waiting actor before BeforeMove.
++        if sides[s].get_active_immutable().status == PokemonStatus::PARALYZE
++            || matches!(ids[1-s], Choices::THUNDERBOLT | Choices::BODYSLAM)
++            || (ids[s] == Choices::BODYSLAM && sides[1-s].get_active_immutable().ability == Abilities::STATIC)
++        { add(format!("draws.{}.2", s), "less_than", 25); }
++        if matches!(ids[s], Choices::PROTECT | Choices::ENDURE) && sides[s].side_conditions.protect > 0 {
++            add(format!("draws.{}.8", s), "less_than", 8 >> sides[s].side_conditions.protect.min(3));
++        }
++    }
++    Ok(result)
++}
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub enum BankOrigin { Copy(String), Constant(u8) }
++
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct BankCell {
++    pub value: u8,
++    pub origin: BankOrigin,
++}
++
++#[derive(Debug)]
++pub struct StepBranch {
++    pub percentage: f32,
++    pub instructions: StateInstructions,
++    pub state: State,
++    pub capsule: ResumeCapsule,
++    /// Canonical 24 draws, two phazing, two secondary, two sleep-talk cells.
++    pub bank: Vec<BankCell>,
++}
++
++fn bank(chance: &StepChance, pending: bool) -> Vec<BankCell> {
++    let mut out = Vec::with_capacity(30);
++    let mut add = |name: String, value| out.push(if pending {
++        BankCell { value, origin: BankOrigin::Copy(name) }
++    } else { BankCell { value: 0, origin: BankOrigin::Constant(0) } });
++    for s in 0..2 { for i in 0..12 { add(format!("draws.{}.{}", s, i), chance.draws[s][i]); } }
++    for (name, values) in [("phazing", chance.phazing), ("secondary", chance.secondary), ("sleep_talk", chance.sleep_talk)] {
++        for s in 0..2 { add(format!("{}.{}", name, s), values[s]); }
++    }
++    out
++}
++
++pub fn step(state: &State, slots: [u8; 2], chance: &StepChance, address: &StepAddress)
++    -> Result<Vec<StepBranch>, &'static str>
++{
++    requirements(state, slots)?;
++    const BOUNDS: [u8; 12] = [2,100,100,100,16,16,100,4,8,2,2,2];
++    if chance.draws.iter().any(|row| row.iter().zip(BOUNDS).any(|(v,b)| *v >= b))
++        || chance.phazing.iter().any(|v| *v >= 60) || chance.secondary.iter().any(|v| *v >= 100)
++        || chance.sleep_talk.iter().any(|v| *v >= 60) || chance.entry_ties.iter().any(|v| *v >= 2)
++        || chance.initial_tie >= 2 { return Err("INVALID_STEP_CHANCE"); }
++    let turn = address.turn.checked_add(1).ok_or("STEP_TURN_OVERFLOW")?;
++    let mut native = state.clone();
++    native.oracle_step = Some(Box::new(ValidatedStep { chance: chance.clone() }));
++    let before = native.serialize();
++    let choices = [MoveChoice::Move(move_index(slots[0])?), MoveChoice::Move(move_index(slots[1])?)];
++    let branches = generate_instructions_from_move_pair(&mut native, &choices[0], &choices[1], true);
++    if before != native.serialize() { return Err("STEP_PARENT_MUTATED"); }
++    let mut result = Vec::with_capacity(branches.len());
++    let mut mass = 0.0;
++    for instructions in branches {
++        if !instructions.percentage.is_finite() || instructions.percentage <= 0.0 {
++            return Err("STEP_INVALID_POSITIVE_MASS");
++        }
++        mass += instructions.percentage;
++        let mut successor = native.clone();
++        successor.apply_instructions(&instructions.instruction_list);
++        successor.oracle_step = None;
++        let sides = [&successor.side_one, &successor.side_two];
++        let alive = [sides[0].visible_alive_pkmn() > 0, sides[1].visible_alive_pkmn() > 0];
++        let pending = alive == [true; 2] && (sides[0].force_switch || sides[1].force_switch);
++        let mut queued_actor = -1;
++        for s in 0..2 {
++            // Exact reversible commitment, rather than a guess from final HP.
++            let marker = instructions.instruction_list.iter().rev().find_map(|i| match (s, i) {
++                (0, Instruction::SetSideOneMoveSecondSwitchOutMove(v)) => Some(v.new_choice),
++                (1, Instruction::SetSideTwoMoveSecondSwitchOutMove(v)) => Some(v.new_choice),
++                _ => None,
++            });
++            if pending && marker.is_some_and(|m| m != Choices::NONE) {
++                if queued_actor != -1 || marker != Some(state.get_side_immutable(
++                    &if s==0 {SideReference::SideOne} else {SideReference::SideTwo})
++                    .get_active_immutable().moves[&move_index(slots[s])?].id) {
++                    return Err("STEP_UNSUPPORTED_QUEUE_COMMITMENT");
++                }
++                queued_actor = s as i8;
++            }
++        }
++        let queued = pending && queued_actor >= 0;
++        let capsule = ResumeCapsule {
++            pending_residual: pending,
++            forced_switch: [sides[0].get_active_immutable().hp <= 0 && alive[0] || sides[0].baton_passing,
++                            sides[1].get_active_immutable().hp <= 0 && alive[1] || sides[1].baton_passing],
++            baton_pass: [sides[0].baton_passing && alive==[true;2], sides[1].baton_passing && alive==[true;2]],
++            queued_actor,
++            queued_actions: if queued {slots} else {[0;2]},
++            // Native stores an exponent; the suspended wire stores the next
++            // attempt's denominator (0,2,4,8), exactly as the JAX producer does.
++            queued_stall: if queued {[
++                if state.side_one.side_conditions.protect==0 {0} else {1 << state.side_one.side_conditions.protect.min(3)},
++                if state.side_two.side_conditions.protect==0 {0} else {1 << state.side_two.side_conditions.protect.min(3)},
++            ]} else {[0;2]},
++            residual_draws: if pending {chance.draws} else {[[0;12];2]},
++            phazing_draws: if pending {chance.phazing} else {[0;2]},
++            secondary_draws: if pending {chance.secondary} else {[0;2]},
++            sleep_talk_draws: if pending {chance.sleep_talk} else {[0;2]},
++            replacement_count: 0, turn, keys: address.next_keys,
++        };
++        let mut reverse = successor.clone();
++        reverse.reverse_instructions(&instructions.instruction_list);
++        if reverse.serialize() != before { return Err("STEP_REVERSE_MISMATCH"); }
++        result.push(StepBranch {percentage: instructions.percentage, instructions,
++            state: successor, capsule, bank: bank(chance,pending)});
++    }
++    if (mass-100.0).abs() > 0.0001 { return Err("STEP_MASS_NOT_ONE"); }
++    Ok(result)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::state::PokemonIndex;
++
++    fn fixture(moves: [Choices;2]) -> (State, StepChance, StepAddress) {
++        let mut state=State::default();
++        for (s, side) in [&mut state.side_one, &mut state.side_two].iter_mut().enumerate() {
++            side.get_active().speed=if s==0 {301} else {101};
++            side.get_active().replace_move(PokemonMoveIndex::M2,moves[s]);
++            side.get_active().moves[&PokemonMoveIndex::M2].pp=10;
++            side.pokemon[PokemonIndex::P1].hp=200;
++            side.pokemon[PokemonIndex::P1].maxhp=300;
++        }
++        let mut chance=StepChance {draws:[[0;12];2],phazing:[13,47],secondary:[99;2],
++            sleep_talk:[3,59],entry_ties:[0,1],initial_tie:1};
++        for row in &mut chance.draws {row[4]=15;row[5]=7;row[2]=99;}
++        (state,chance,StepAddress {turn:7,keys:[123,456],next_keys:[789,1024]})
++    }
++
++    #[test]
++    fn ordinary_pending_bank_and_exact_queue_slots_are_independent_native_outputs() {
++        for first in 0..2 {
++            let mut moves=[Choices::THUNDERBOLT;2];moves[first]=Choices::BATONPASS;
++            let (mut state,chance,address)=fixture(moves);
++            state.side_one.get_active().speed=if first==0 {301} else {101};
++            state.side_two.get_active().speed=if first==1 {301} else {101};
++            state.side_one.side_conditions.protect=2;
++            state.side_two.side_conditions.protect=1;
++            let before=state.serialize();
++            let branches=step(&state,[2,2],&chance,&address).unwrap();
++            assert_eq!(branches.len(),1);
++            let b=&branches[0];
++            assert!(b.capsule.pending_residual);
++            assert_eq!(b.capsule.queued_actor,(1-first) as i8);
++            assert_eq!(b.capsule.queued_actions,[2,2]);
++            assert_eq!(b.capsule.queued_stall,[4,2]);
++            assert_eq!(b.capsule.residual_draws,chance.draws);
++            assert_eq!(b.capsule.keys,address.next_keys);
++            assert_eq!(b.capsule.turn,8);
++            assert_eq!(b.bank.len(),30);
++            assert!(b.bank.iter().all(|cell| matches!(cell.origin,BankOrigin::Copy(_))));
++            assert_eq!(state.serialize(),before);
++            assert!(state.oracle_step.is_none());
++        }
++    }
++
++    #[test]
++    fn ordinary_closed_output_clears_bank_and_never_reuses_old_address() {
++        let (state,chance,address)=fixture([Choices::SPLASH;2]);
++        let b=step(&state,[2,2],&chance,&address).unwrap().remove(0);
++        assert!(!b.capsule.pending_residual);
++        assert_eq!(b.capsule.residual_draws,[[0;12];2]);
++        assert_eq!(b.capsule.queued_actor,-1);
++        assert_eq!(b.capsule.queued_actions,[0;2]);
++        assert!(b.bank.iter().all(|c| c.value==0 && c.origin==BankOrigin::Constant(0)));
++        assert_eq!(b.capsule.keys,address.next_keys);
++        assert_eq!(b.capsule.turn,address.turn+1);
++    }
++
++    #[test]
++    fn fixed_paralysis_and_stall_use_distinct_native_coordinates() {
++        let (mut state,mut chance,address)=fixture([Choices::PROTECT,Choices::SPLASH]);
++        state.side_one.get_active().status=PokemonStatus::PARALYZE;
++        state.side_one.side_conditions.protect=2;
++        for par in [0,99] { for stall in [0,7] {
++            chance.draws[0][2]=par;chance.draws[0][8]=stall;
++            let branches=step(&state,[2,2],&chance,&address).unwrap();
++            assert_eq!(branches.len(),1,"fixed chance must not fork: par={} stall={}",par,stall);
++            assert_eq!(branches[0].percentage,100.0);
++            assert_eq!(branches[0].state.side_one.get_active_immutable().moves[&PokemonMoveIndex::M2].pp,
++                if par==0 {10} else {9});
++        }}
++    }
++
++    #[test]
++    fn native_requirements_are_not_derived_from_a_jax_table() {
++        let (mut state,_,_)=fixture([Choices::BODYSLAM,Choices::THUNDERBOLT]);
++        state.side_two.get_active().ability=Abilities::STATIC;
++        let cuts=requirements(&state,[2,2]).unwrap();
++        assert!(cuts.contains(&Requirement {coordinate:"phazing.0".into(),kind:"less_than",argument:20}));
++        assert!(cuts.contains(&Requirement {coordinate:"secondary.0".into(),kind:"less_than",argument:30}));
++        assert!(cuts.contains(&Requirement {coordinate:"secondary.1".into(),kind:"less_than",argument:10}));
++        assert!(cuts.contains(&Requirement {coordinate:"draws.1.2".into(),kind:"less_than",argument:25}));
++    }
++
++    #[test]
++    fn unsupported_requests_chance_and_overflow_refuse_before_execution() {
++        let (mut state,mut chance,mut address)=fixture([Choices::SPLASH;2]);
++        chance.draws[0][4]=16;
++        assert_eq!(step(&state,[2,2],&chance,&address).unwrap_err(),"INVALID_STEP_CHANCE");
++        chance.draws[0][4]=0;address.turn=u32::MAX;
++        assert_eq!(step(&state,[2,2],&chance,&address).unwrap_err(),"STEP_TURN_OVERFLOW");
++        state.side_one.force_switch=true;
++        assert_eq!(requirements(&state,[2,2]).unwrap_err(),"ORDINARY_LIVE_REQUEST_REQUIRED");
++        state.side_one.force_switch=false;
++        state.side_one.get_active().replace_move(PokemonMoveIndex::M2,Choices::SLEEPTALK);
++        assert_eq!(requirements(&state,[2,2]).unwrap_err(),"STEP_UNSUPPORTED_SELECTED_MOVE");
++    }
++
++    #[test]
++    fn low_nonimmune_damage_refuses_but_true_immunity_keeps_zero_damage() {
++        use crate::state::PokemonType;
++        for double in [false,true] {
++            let (mut state,chance,address)=fixture([Choices::THUNDERBOLT,Choices::SPLASH]);
++            state.side_one.get_active().special_attack=1;
++            state.side_two.get_active().special_defense=30000;
++            state.side_two.get_active().types=(PokemonType::GRASS,
++                if double {PokemonType::DRAGON} else {PokemonType::TYPELESS});
++            assert_eq!(requirements(&state,[2,2]).unwrap_err(),"STEP_ORDINARY_MINIMUM_DAMAGE_REPAIR_PENDING");
++            state.side_two.get_active().types=(PokemonType::GROUND,PokemonType::TYPELESS);
++            let hp=state.side_two.get_active_immutable().hp;
++            let b=step(&state,[2,2],&chance,&address).unwrap().remove(0);
++            assert_eq!(b.state.side_two.get_active_immutable().hp,hp);
++        }
++    }
++
++    #[test]
++    fn fixed_chance_physical_marginal_matches_complete_ordinary_native_law() {
++        use std::collections::BTreeMap;
++        assert!(super::super::generate_instructions::enumerate_damage_rolls(),
++            "run this control with POKEZERO_ENUMERATE_ROLLS=1 before process startup");
++        fn recurse(state: &State,address: &StepAddress,chance: &mut StepChance,
++            axes: &[(String,Vec<(u8,f64)>)],index:usize,mass:f64,out:&mut BTreeMap<String,f64>) {
++            if index==axes.len() {
++                for branch in step(state,[2,2],chance,address).unwrap() {
++                    *out.entry(branch.state.serialize()).or_default()+=mass*branch.percentage as f64/100.0;
++                }
++                return;
++            }
++            let (name,cells)=&axes[index];let parts:Vec<_>=name.split('.').collect();
++            let seat:usize=parts[1].parse().unwrap();
++            for (value,weight) in cells {
++                match parts[0] {
++                    "draws" => chance.draws[seat][parts[2].parse::<usize>().unwrap()]=*value,
++                    "phazing" => chance.phazing[seat]=*value,
++                    "secondary" => chance.secondary[seat]=*value,
++                    _ => panic!("unexpected native active coordinate"),
++                }
++                recurse(state,address,chance,axes,index+1,mass*weight,out);
++            }
++        }
++        for variant in 0..10 {
++            let selected=match variant {
++                0|1 => [Choices::THUNDERBOLT,Choices::SPLASH],
++                2|3 => [Choices::BODYSLAM,Choices::SPLASH],
++                4|5 => [Choices::PROTECT,Choices::SPLASH],
++                6|7 => [Choices::BATONPASS,Choices::SPLASH],
++                _ => [Choices::EXPLOSION,Choices::SPLASH],
++            };
++            let (mut state,mut chance,address)=fixture(selected);
++            if variant%2==1 {
++                state.side_one.get_active().speed=101;
++                state.side_two.get_active().speed=301;
++            }
++            if variant==1 || variant==5 {state.side_one.get_active().status=PokemonStatus::PARALYZE;}
++            if variant==3 {state.side_two.get_active().ability=Abilities::STATIC;}
++            if variant==4 || variant==5 {state.side_one.side_conditions.protect=3;}
++            if variant==9 {state.side_two.get_active().hp=1;}
++            let mut uses:BTreeMap<String,Vec<Requirement>>=BTreeMap::new();
++            for req in requirements(&state,[2,2]).unwrap() {uses.entry(req.coordinate.clone()).or_default().push(req);}
++            let axes:Vec<_>=uses.into_iter().map(|(name,cuts)| {
++                let parts:Vec<_>=name.split('.').collect();
++                let bound=match parts[0] {
++                    "draws" => [2,100,100,100,16,16,100,4,8,2,2,2][parts[2].parse::<usize>().unwrap()],
++                    "phazing" => 60,"secondary"=>100,_=>panic!("unexpected coordinate"),
++                };
++                let mut groups:BTreeMap<Vec<u8>,(u8,usize)>=BTreeMap::new();
++                for value in 0..bound {
++                    let key=cuts.iter().map(|cut| if cut.kind=="identity" {value} else {u8::from(value<cut.argument)}).collect();
++                    groups.entry(key).or_insert((value,0)).1+=1;
++                }
++                (name,groups.into_values().map(|(v,n)| (v,n as f64/bound as f64)).collect())
++            }).collect();
++            let mut fixed=BTreeMap::new();
++            recurse(&state,&address,&mut chance,&axes,0,1.0,&mut fixed);
++            let mut expected=BTreeMap::new();let mut base=state.clone();
++            let choices=MoveChoice::Move(PokemonMoveIndex::M2);
++            for branch in generate_instructions_from_move_pair(&mut base,&choices,&choices,true) {
++                if branch.percentage==0.0 {continue;}
++                let mut successor=state.clone();successor.apply_instructions(&branch.instruction_list);
++                *expected.entry(successor.serialize()).or_insert(0.0)+=branch.percentage as f64/100.0;
++            }
++            assert_eq!(fixed.len(),expected.len(),"physical support variant {}",variant);
++            for (key,probability) in expected {
++                let actual=*fixed.get(&key).expect("missing ordinary physical outcome");
++                assert!((probability-actual).abs()<1e-6,"physical mass variant {}: {} != {}",variant,probability,actual);
++            }
++            assert!((fixed.values().sum::<f64>()-1.0).abs()<1e-9);
++        }
++    }
++}
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -1362,25 +1362,28 @@
+ ) -> Vec<StateInstructions> {
+     let mut return_instruction_list = Vec::with_capacity(4);
+     return_instruction_list.push(incoming_instructions);
+-
++
+     for secondary in secondaries {
+         if secondary.target == MoveTarget::Opponent && hit_sub {
+             continue;
+         }
+         let secondary_percent_hit = (secondary.chance / 100.0).min(1.0);
+         #[cfg(feature = "conditioned-oracle")]
+         let secondary_percent_hit = match &state.oracle_resume {
+             Some(context) => if context.secondary_hits(side_reference, secondary) { 1.0 } else { 0.0 },
+-            None => secondary_percent_hit,
++            None => match &state.oracle_step {
++                Some(context) => if context.secondary_hits(side_reference, secondary) { 1.0 } else { 0.0 },
++                None => secondary_percent_hit,
++            },
+         };
+-
++
+         let mut i = 0;
+         while i < return_instruction_list.len() {
+             let mut secondary_hit_instructions = return_instruction_list.remove(i);
+-
++
+             if secondary_percent_hit < 1.0 {
+                 let mut secondary_miss_instructions = secondary_hit_instructions.clone();
+                 secondary_miss_instructions.update_percentage(1.0 - secondary_percent_hit);
+                 return_instruction_list.insert(i, secondary_miss_instructions);
+                 i += 1;
+             }
+@@ -2800,24 +2803,29 @@
+     }
+     blocked_by_protect
+ }
+-
++
+ fn generate_instructions_from_existing_status_conditions(
+     state: &mut State,
+     attacking_side_ref: &SideReference,
+     attacker_choice: &Choice,
+     incoming_instructions: &mut StateInstructions,
+     final_instructions: &mut Vec<StateInstructions>,
+     wake_continuations: &mut Vec<StateInstructions>,
+ ) {
++    #[cfg(feature = "conditioned-oracle")]
++    let paralysis_probability = state.oracle_step.as_ref()
++        .map_or(0.25, |context| context.paralysis_probability(attacking_side_ref));
++    #[cfg(not(feature = "conditioned-oracle"))]
++    let paralysis_probability = 0.25;
+     let (attacking_side, _defending_side) = state.get_both_sides(attacking_side_ref);
+     let current_active_index = attacking_side.active_index;
+     let attacker_ability = attacking_side.get_active_immutable().ability;
+     let truant_loaf = attacker_ability == Abilities::TRUANT
+         && attacking_side.volatile_statuses.contains(&PokemonVolatileStatus::TRUANT);
+     let attacker_active = attacking_side.get_active();
+     // pokezero gen3 fidelity fix (confusion snap-out timing): does this action
+     // actually reach `confusion.onBeforeMove`?
+     //
+     // Showdown resolves sleep at onBeforeMove priority 10 and confusion at 3, and
+     // a sleeping mon's handler returns false, which short-circuits the whole
+     // BeforeMove event -- so confusion's handler never runs, `time` is untouched
+@@ -3335,53 +3343,55 @@
+     // distribution (both immobilized branches carry an empty delta and the net
+     // "move executes" probability is order-independent), which is why the Attract
+     // patch documented it as benign. It stops being benign once confusion carries
+     // a bounded counter: rolling paralysis first means a fully-paralyzed turn
+     // never reaches the confusion block, so the counter advances on only 75% of a
+     // paralyzed Pokemon's turns and its confusion outlasts Showdown's. Rolling it
+     // last also fixes the self-hit mass for a paralyzed + confused Pokemon
+     // (Showdown 1/2, engine-before 3/8), since a confusion self-hit aborts the
+     // move in Showdown before paralysis is ever rolled.
+     if attacking_side.get_active_immutable().status == PokemonStatus::PARALYZE {
+         // Fully-Paralyzed Branch
+         let mut fully_paralyzed_instruction = incoming_instructions.clone();
+-        fully_paralyzed_instruction.update_percentage(0.25);
++        fully_paralyzed_instruction.update_percentage(paralysis_probability);
+         // MARKER, for the same reason the Attract branch above carries one, and it
+         // has to land in the SAME change: `reject_attribution_unsafe` aborts the
+         // whole WORLD rather than the branch, so marking only Attract leaves this
+         // sibling an anonymous empty delta, the renderer keeps refusing it, and the
+         // world keeps falling back. Two refusing branches become one and the
+         // fallback rate does not move.
+         //
+         // Unlike Attract this replaces a GUESS, not a refusal. `events.rs` inferred
+         // `|cant|..|par|` from an empty tail because full paralysis carries more mass
+         // than a miss, with its own comment admitting "a real miss renders
+         // identically". Marked, the line is a fact -- and, the part that actually
+         // reclaims worlds, an UNMARKED empty tail is now provably NOT an
+         // immobilization, so the miss/no-op renders below become reachable.
+         //
+         // NO SLEEP-GATE HAZARD HERE, unlike Attract: `status` is one field, so a
+         // paralyzed Pokemon is never also asleep or frozen, and this roll can
+         // therefore never sit on a branch whose BeforeMove chain was short-circuited
+         // by `slp.onBeforeMove`. Attract can, and `consume_move_prelude` handles it.
+         fully_paralyzed_instruction
+             .instruction_list
+             .push(Instruction::MoveImmobilized(MoveImmobilizedInstruction {
+                 side_ref: *attacking_side_ref,
+                 reason: ImmobilizeReason::Paralysis,
+             }));
+-        final_instructions.push(fully_paralyzed_instruction);
++        if paralysis_probability > 0.0 {
++            final_instructions.push(fully_paralyzed_instruction);
++        }
+-
++
+         // Non-Paralyzed Branch
+-        incoming_instructions.update_percentage(0.75);
++        incoming_instructions.update_percentage(1.0 - paralysis_probability);
+     }
+-
++
+-
++
+ }
+-
++
+ /// pokezero gen3 fidelity fix: is this turn a CONTINUATION of a lock, i.e. one
+ /// on which Showdown's `getLockedMove()` returns a move and the PP deduction is
+ /// skipped entirely?
+ ///
+ /// Two sources, because the engine represents them differently.
+ /// `charge_continuation` is passed in for the second half of a two-turn move:
+ /// the charge volatile is cleared earlier in `generate_instructions_from_move`,
+@@ -4024,27 +4034,33 @@
+                 // chance is 1/counter:
+                 //
+                 //   attempt   1     2     3     4     5     6 ...
+                 //   gen3      1    1/2   1/4   1/8   1/8   1/8
+                 //   upstream  1    1/2   1/4   1/8  1/16  1/32
+                 //
+                 // The ladder first REACHES 1/8 at the 4th attempt, which upstream
+                 // already priced correctly; upstream first DIVERGES at the 5th,
+                 // where it keeps halving past the cap. Clamping the exponent at 3
+                 // reproduces the cap exactly, since 0.5^3 == 1/8.
+                 let protect_success_chance = CONSECUTIVE_PROTECT_CHANCE
+                     .powi(cmp::min(state.get_side_immutable(&attacking_side).side_conditions.protect as i32, 3));
+-                let mut protect_fail_instruction = incoming_instructions.clone();
+-                protect_fail_instruction.update_percentage(1.0 - protect_success_chance);
+-                final_instructions.push(protect_fail_instruction);
++                #[cfg(feature = "conditioned-oracle")]
++                let protect_success_chance = state.oracle_step.as_ref().map_or(protect_success_chance,
++                    |c| c.stall_probability(&attacking_side,
++                        state.get_side_immutable(&attacking_side).side_conditions.protect));
++                if protect_success_chance < 1.0 {
++                    let mut protect_fail_instruction = incoming_instructions.clone();
++                    protect_fail_instruction.update_percentage(1.0 - protect_success_chance);
++                    final_instructions.push(protect_fail_instruction);
++                }
+                 incoming_instructions.update_percentage(protect_success_chance);
+             }
+         }
+     }
+-
++
+     if move_has_no_effect(state, &choice, &attacking_side) {
+         state.reverse_instructions(&incoming_instructions.instruction_list);
+         final_instructions.push(incoming_instructions);
+         return;
+     }
+     choice_special_effect(
+         state,
+@@ -4180,25 +4196,26 @@
+     // because `defender_active` holds a mutable borrow. That is false and was
+     // disproved by compiling it at this position; the real earlier failure was a
+     // placement next to `crit_chance`, in a SIBLING block whose scope closed
+     // before the use. reports/c109, reports/c111 cause A3.
+     //
+     // `choice` is passed in so the mirror can see the move's OWN secondaries.
+     // Without it the threshold is read from the defender's pre-move state, the
+     // burn a Fire move is about to apply is invisible, and the split never fires
+     // on the boundary it exists for. reports/c135 sections 2-3, cause A8.
+     let residual_thresholds = residual_lethality_thresholds(state, &attacking_side, choice);
+-
++
+     #[cfg(feature = "conditioned-oracle")]
+-    let conditioned_roll = state.oracle_resume.as_ref().map(|context| context.damage_roll(&attacking_side));
++    let conditioned_roll = state.oracle_resume.as_ref().map(|context| context.damage_roll(&attacking_side))
++        .or_else(|| state.oracle_step.as_ref().map(|context| context.damage_roll(&attacking_side)));
+     #[cfg(not(feature = "conditioned-oracle"))]
+     let conditioned_roll: Option<(bool, u8)> = None;
+     let (_attacker_side, defender_side) = state.get_both_sides(&attacking_side);
+     // pokezero gen3 fidelity fix (G8, roll-dependent Leech Seed drain). Read
+     // BEFORE `get_active()`: `get_both_sides` hands back `&mut Side`, so the
+     // active borrow below is exclusive and the volatile set is unreadable for
+     // the rest of the function. A `bool` copied out first has no such problem.
+     //
+     // Leech Seed is the ONLY gen 3 residual that transfers the amount it removes
+     // to the other side (Nightmare and Ghost-Curse are damage-only), so it is the
+     // only one whose capped-lethal magnitude is checked EXACTLY, as a bare
+     // `heal`, on a slot the roll-scaling rules do not reach. reports/c140
+--- a/src/state.rs
++++ b/src/state.rs
+@@ -1486,45 +1486,49 @@
+ #[derive(Debug, Clone)]
+ pub struct State {
+     pub side_one: Side,
+     pub side_two: Side,
+     pub weather: StateWeather,
+     pub terrain: StateTerrain,
+     pub trick_room: StateTrickRoom,
+     pub team_preview: bool,
+     pub use_last_used_move: bool,
+     pub use_damage_dealt: bool,
+     #[cfg(feature = "conditioned-oracle")]
+     pub oracle_resume: Option<Box<crate::engine::conditioned_resume::ValidatedResume>>,
++    #[cfg(feature = "conditioned-oracle")]
++    pub oracle_step: Option<Box<crate::engine::conditioned_step::ValidatedStep>>,
+ }
+ impl Default for State {
+     fn default() -> State {
+         let mut s = State {
+             side_one: Side::default(),
+             side_two: Side::default(),
+             weather: StateWeather {
+                 weather_type: Weather::NONE,
+                 turns_remaining: -1,
+             },
+             terrain: StateTerrain {
+                 terrain_type: Terrain::NONE,
+                 turns_remaining: 0,
+             },
+             trick_room: StateTrickRoom {
+                 active: false,
+                 turns_remaining: 0,
+             },
+             team_preview: false,
+             #[cfg(feature = "conditioned-oracle")]
+             oracle_resume: None,
++            #[cfg(feature = "conditioned-oracle")]
++            oracle_step: None,
+             use_damage_dealt: false,
+             use_last_used_move: false,
+         };
+-
++
+         // many tests rely on the speed of side 2's active pokemon being greater than side_one's
+         s.side_two.get_active().speed += 1;
+         s
+     }
+ }
+ impl State {
+     pub fn battle_is_over(&self) -> f32 {
+         //  0 if battle is not over
+@@ -2638,24 +2642,26 @@
+     /// ```
+     pub fn deserialize(serialized: &str) -> State {
+         let split: Vec<&str> = serialized.split("/").collect();
+         let mut state = State {
+             side_one: Side::deserialize(split[0]),
+             side_two: Side::deserialize(split[1]),
+             weather: StateWeather::deserialize(split[2]),
+             terrain: StateTerrain::deserialize(split[3]),
+             trick_room: StateTrickRoom::deserialize(split[4]),
+             team_preview: split[5].parse::<bool>().unwrap(),
+             #[cfg(feature = "conditioned-oracle")]
+             oracle_resume: None,
++            #[cfg(feature = "conditioned-oracle")]
++            oracle_step: None,
+             use_damage_dealt: false,
+             use_last_used_move: false,
+         };
+         state.set_conditional_mechanics();
+         state
+     }
+ }
+-
++
+ #[cfg(test)]
+ mod rest_sleep_pending_refund_tests {
+     use super::*;
+     use crate::instruction::{Instruction, SetSleepTurnsInstruction};
+--- a/poke-engine-py/src/lib.rs
++++ b/poke-engine-py/src/lib.rs
+@@ -74,24 +74,26 @@
+             terrain: StateTerrain {
+                 terrain_type: Terrain::from_str(&self.terrain).unwrap(),
+                 turns_remaining: self.terrain_turns_remaining,
+             },
+             trick_room: StateTrickRoom {
+                 active: self.trick_room,
+                 turns_remaining: self.trick_room_turns_remaining,
+             },
+             team_preview: self.team_preview,
+             use_last_used_move: false,
+             #[cfg(feature = "conditioned-oracle")]
+             oracle_resume: None,
++            #[cfg(feature = "conditioned-oracle")]
++            oracle_step: None,
+             use_damage_dealt: false,
+         };
+         state.set_conditional_mechanics();
+         state
+     }
+ }
+-
++
+ #[pymethods]
+ impl PyState {
+     #[new]
+     #[pyo3(signature = (
+         side_one=PySide::from(Side::default()),

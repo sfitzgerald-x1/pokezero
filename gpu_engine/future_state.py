@@ -204,6 +204,10 @@ class NativeActions:
     raw_native: str
 
 
+class NativeMoveSlotActions(NativeActions):
+    """Typed exact-slot API binding; a public-string executor must refuse it."""
+
+
 @dataclass(frozen=True)
 class CanonicalFuture:
     key: tuple[tuple[str, Any], ...]
@@ -293,10 +297,15 @@ def _move(metadata, data, side, slot, move):
 def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
              original_static=None, original_genders=None):
     """Make complete expected native fields, or enumerate named mapping gaps."""
-    if boundary not in ("ordinary", "suspended"):
+    # coupled-output is only for independently executed complete ordinary
+    # outputs. It is not a constructor or a promise that the next requested
+    # continuation is executable. Its caller binds the full external capsule.
+    if boundary not in ("ordinary", "suspended", "coupled-output"):
         raise ValueError("unknown correspondence boundary policy")
     gaps = []
     add = lambda field, code, detail: gaps.append(Gap(field, code, detail))
+    if boundary == "coupled-output" and certificate is None:
+        raise ValueError("COUPLED_OUTPUT_REQUIRES_ORIGINAL_CERTIFICATE")
     if certificate is not None and (original_static is not None or original_genders is not None):
         raise ValueError("ambiguous original static provenance")
     if "base_ability" not in data:
@@ -527,7 +536,7 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
         if bool(data["forced_switch"][side]) != expected_request and not data["pending_residual"]:
             add(side_name+".forced_switch", "INCONSISTENT_REQUEST", "Replacement request disagrees with active HP")
         saved_move = "none"
-        if boundary == "suspended" and data["queued_actor"] == side:
+        if boundary in ("suspended", "coupled-output") and data["pending_residual"] and data["queued_actor"] == side:
             slot = data["queued_actions"][side]
             if type(slot) is not int or not 0 <= slot < 4:
                 add(side_name+".queued_actions", "INVALID_QUEUED_SLOT", "Saved action must identify an exact move slot")
@@ -538,9 +547,9 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
             volatile_statuses=tuple(sorted(volatiles)), substitute_health=data["substitute_hp"][side][active],
             **{name+"_boost": data["boosts"][side][active][i] for i, name in enumerate(BOOST_NAMES)},
             wish=(data["wish_counter"][side], data["wish_amount"][side]), future_sight=(0, "0"),
-            force_switch=bool(data["forced_switch"][side]) if boundary == "suspended" else False,
+            force_switch=bool(data["forced_switch"][side]) if boundary == "suspended" or (boundary == "coupled-output" and data["pending_residual"]) else False,
             switch_out_move_second_saved_move=saved_move,
-            baton_passing=bool(data["baton_pass"][side]) if boundary == "suspended" else False, shed_tailing=False,
+            baton_passing=bool(data["baton_pass"][side]) if boundary in ("suspended", "coupled-output") else False, shed_tailing=False,
             force_trapped=bool(data["trapped"][side]), last_used_move=last, slow_uturn_move=False)
     return result, gaps, tuple(sorted(static.items())), use_last, use_damage
 
@@ -685,7 +694,7 @@ def canonical_native_future(native_state, certificate):
 
 
 def _canonical_native_future(native_state, certificate, *, boundary="ordinary"):
-    if boundary not in ("ordinary", "suspended"):
+    if boundary not in ("ordinary", "suspended", "coupled-output"):
         raise ValueError("unknown correspondence boundary policy")
     raw = native_state if isinstance(native_state, str) else native_state.to_string()
     gaps = []
@@ -730,7 +739,7 @@ def _canonical_native_future(native_state, certificate, *, boundary="ordinary"):
                 gaps.append(Gap(name+".wish", "INVALID_NATIVE_WISH_HISTORY",
                                 "Expected nonnegative native i8 counter and i16 stored amount"))
             for field in ("future_sight", "force_switch", "baton_passing", "shed_tailing", "slow_uturn_move"):
-                if boundary == "suspended" and field in ("force_switch", "baton_passing"):
+                if boundary in ("suspended", "coupled-output") and field in ("force_switch", "baton_passing"):
                     continue  # explicit capsule policy validates these live fields
                 value = side[field]
                 if value not in (False, (0, 0), (0, "0")):
@@ -778,7 +787,7 @@ def field_differences(left, right):
                  for path in sorted(a.keys() | b.keys()) if a.get(path, "<MISSING>") != b.get(path, "<MISSING>"))
 
 
-def native_actions_from_jax(state, index, actions, native_input):
+def native_actions_from_jax(state, index, actions, native_input, *, exact_move_slots=False):
     """Exact nine-slot action identities, never public-string first-match coercion.
 
     Mirrors state.usable_moves/legal_actions and the selected ability traps in
@@ -795,6 +804,8 @@ def native_actions_from_jax(state, index, actions, native_input):
             native_input.raw_native if isinstance(native_input, NativeInput) else None,
             raw_actions=original)
     try:
+        if type(exact_move_slots) is not bool:
+            raise ValueError("EXPLICIT_SLOT_API_POLICY_REQUIRED")
         if not isinstance(native_input, NativeInput):
             return refuse("INPUT_NOT_ADMITTED", "A bound NativeInput certificate is required")
         data = _sample(state, index)
@@ -839,9 +850,9 @@ def native_actions_from_jax(state, index, actions, native_input):
                 name = own["moves"][action]["id"]
                 if name in {"none", "struggle"}:
                     return refuse("RESERVED_MOVE_ID", "Real move slot must not turn into a public wait/synthetic action")
-                if sum(move["id"] == name for move in own["moves"]) != 1:
+                if not exact_move_slots and sum(move["id"] == name for move in own["moves"]) != 1:
                     return refuse("DUPLICATE_MOVE_ID", "Public native string cannot bind one selected move slot")
-                if any(native[SIDE_NAMES[side]]["pokemon"][b]["id"] == name for b in bench):
+                if not exact_move_slots and any(native[SIDE_NAMES[side]]["pokemon"][b]["id"] == name for b in bench):
                     return refuse("MOVE_SWITCH_STRING_COLLISION", "Native parser scans all inactive species before move slots")
                 result.append(name)
             else:
@@ -859,6 +870,7 @@ def native_actions_from_jax(state, index, actions, native_input):
                 if name in {"none", "struggle"} or sum(native[SIDE_NAMES[side]]["pokemon"][b]["id"] == name for b in bench) != 1:
                     return refuse("DUPLICATE_OR_RESERVED_SWITCH_ID", "Public parser must identify exactly this inactive party slot, including fainted duplicates")
                 result.append(name)
-        return NativeActions(tuple(result), original, raw, native_input.raw_native)
+        action_type = NativeMoveSlotActions if exact_move_slots else NativeActions
+        return action_type(tuple(result), original, raw, native_input.raw_native)
     except (ValueError, IndexError, TypeError, KeyError, AttributeError) as error:
         return refuse("INVALID_ACTION_BINDING", str(error))

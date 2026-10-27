@@ -11,6 +11,8 @@
 pub mod abort_telemetry;
 #[cfg(feature = "conditioned-oracle")]
 mod conditioned_resume;
+#[cfg(feature = "conditioned-oracle")]
+mod conditioned_step;
 pub mod encoder;
 pub mod envstep;
 pub mod events;
@@ -510,6 +512,10 @@ fn pokezero_search(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(conditioned_resume::conditioned_resume, m)?)?;
     #[cfg(feature = "conditioned-oracle")]
     m.add_function(wrap_pyfunction!(conditioned_resume::conditioned_resume_joint, m)?)?;
+    #[cfg(feature = "conditioned-oracle")]
+    m.add_function(wrap_pyfunction!(conditioned_step::conditioned_step_requirements, m)?)?;
+    #[cfg(feature = "conditioned-oracle")]
+    m.add_function(wrap_pyfunction!(conditioned_step::conditioned_step, m)?)?;
     #[cfg(feature = "model")]
     m.add_class::<model::NativeLeafModel>()?;
     Ok(())

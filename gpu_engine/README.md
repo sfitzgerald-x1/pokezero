@@ -709,6 +709,7 @@ sampled remaining duration is not the native elapsed-hazard convention.
 Native91 Lum's stale cured Rest fields remain a named refusal. This state
 correspondence does not qualify Sleep Clause, all sleep consumers, or full-game
 fidelity; the conditional native execution guards are unchanged.
+
 Native91 also retains an overbroad Sleep Talk callee pool (charge moves are
 not excluded). Its positive charge branch is preserved as a separate mismatch
 control; the exact Rest carry cycles isolate the shared Rest/Sleep Talk/Splash
@@ -729,3 +730,34 @@ the caller's PP and records the caller in move history. Protect and Endure
 fail when no opposing queued move remains, including after a switch. Both-seat
 full-law controls bind PP, history, saved Rest state and stall counters; this
 does not change JAX's already matching stall behavior.
+
+### Complete ordinary carry comparison (opt-in)
+
+`ordinary_law.compare_slot` compares complete ordinary move-request outputs,
+including positive pending-residual successors. Supply the already validated
+current-root `NativeInput` with retained original constructor provenance,
+explicit move slots, case/batch/node bounds, and an owning operation deadline.
+Both installed native consumers must match the registered Native95 build.
+This API does not change the scientific collector or old panel admission.
+
+The native API has a distinct ordinary context. It independently declares its
+chance consumers and emits physical state, queue commitments, prebound address
+advancement, and copy/constant expressions for the complete saved bank. The
+common partition unions native cuts with the actual supplied JAX-table cuts.
+`carry_law` retains each cell's primitive domains and compares complete output
+laws without expanding their Cartesian bank; aliases and physical/carry
+correlations remain observable. Closed outputs aggregate across cells. An
+unsupported positive output, incomplete law or cap refuses the whole slot;
+there is no prefix acceptance or normalization.
+
+The initial native domain is live ordinary requests selecting Thunderbolt,
+Body Slam, Explosion, Baton Pass, Protect, Endure or Splash, with the guarded
+active abilities/items/statuses and no potentially tied residual ordering.
+Untouched bench fields remain retained. A representable pending output does
+not promise that the next continuation is executable by the narrower resume
+API. Existing nonimmune maximum-zero/one native ordinary damage remains an
+explicit refusal pending its own repair; true immunity is admitted. Existing
+nonzero Protect-streak storage at a Baton suspension remains a measured
+authored DIVERGE, with equal capsules and differing physical counters. Neither
+gap is erased by the mapper. These authored controls provide no new scientific
+panel counts, strength evidence or full-engine qualification.

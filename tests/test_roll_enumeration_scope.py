@@ -1077,9 +1077,14 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # The dedicated native boundary test STEP supplies exact rolls at
         # child process creation; other CI steps and imports keep the default.
         ".github/workflows/engine-fidelity-gates.yml",
-        # Opt-in continuation CI enables exact rolls only for its isolated
-        # Python successor comparisons, after the default-roll Rust tests.
+        # Opt-in continuation CI enables exact rolls for its isolated Rust
+        # marginal control and Python comparisons, after default-roll tests.
         ".github/workflows/conditioned-native-resume.yml",
+        # The opt-in ordinary API's cfg(test) marginal control names the flag
+        # in its assertion message. The caller must start that isolated Rust
+        # test process with exact rolls enabled; the new native context does
+        # not set/read/clear the process environment or enable default search.
+        "third_party/poke-engine-gen3-conditioned-ordinary-step.patch",
         # Forces the flag OFF so the standing mass gate always measures the
         # collapsed cascade, whatever the ambient environment says.
         "tests/test_branch_mass_reconstruction.py",

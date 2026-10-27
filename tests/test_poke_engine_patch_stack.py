@@ -33,9 +33,9 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
     "src/gen3/state.rs": "0565d1a673aa577988b136782878ea3633d3c01bff23b76b7652a415d6f9fbfd",
-    "src/gen3/generate_instructions.rs": "c8c878737a9d2655c36fc134accb848d9d764ba7e039508f5af71ecdcc9c02c6",
+    "src/gen3/generate_instructions.rs": "17f54af9ecb1bfbde88dc4288d31d81a4dc8c0cb45f9cb0ea9c056c1974cb6f3",
     "src/instruction.rs": "c9c7f69819dc77171a54918e32cfb064329144f6d3b8991c2068adcbeceb0a57",
-    "src/state.rs": "d3a381f4854ad4755844bcbc32f456ae4e26557d78a313eec1532c0a507023eb",
+    "src/state.rs": "a42ff14639802a208094c54247de4898426d1e2a132f47870aef515ff0ca6f81",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
     "src/gen3/abilities.rs": "909e7af36186f1b7a19c7cb4185ef3021f89981721e46446de86ad4010452f17",
     "src/gen3/choice_effects.rs": "a29d431464619c45d603d835ca6663bd7d2f573112c255d5cb9353862f62b161",
@@ -117,7 +117,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-37:]],
+                [entry.name for entry in applied[-38:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -166,6 +166,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-stall-pp-after-gates.patch",
                     "poke-engine-gen3-choice-lock-after-beforemove.patch",
                     "poke-engine-gen3-conditioned-joint-replacement.patch",
+                    "poke-engine-gen3-conditioned-ordinary-step.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
@@ -253,6 +254,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "src/gen3/abilities.rs",
                     "src/gen3/choice_effects.rs",
                     "src/gen3/conditioned_resume.rs",
+                    "src/gen3/conditioned_step.rs",
                     "src/gen3/damage_calc.rs",
                     "src/gen3/generate_instructions.rs",
                     "src/gen3/items.rs",
