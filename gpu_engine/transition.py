@@ -710,6 +710,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(apply_status,0,_active(work.sleep_skipped,work,foe))),
                 rest_origin=_set_active(work.rest_origin,work,foe,
                     jnp.where(apply_status,False,_active(work.rest_origin,work,foe))))
+            if table.secondary is not None:
+                work=secondaries.after_status_event(work,side,foe,status,table.secondary,
+                    applied=apply_status,item_table=table.items)
         if table.sustain is not None:
             seeded = recovery.seed_target(table.sustain,move,_active(work.types,work,foe),
                 _active(work.hp,work,foe),_active(work.substitute_hp,work,foe),
@@ -744,7 +747,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
             work=secondaries.apply(work,side,move,secondary_draws[rows,side],table.secondary,
                 eligible=acts & hit & ~immune,effective_weather=effective_weather,
-                substitute_hit=hits_sub)
+                substitute_hit=hits_sub,item_table=table.items)
         if table.absorption is not None:
             # Gen 3 onDamagingHit follows secondaries: a frozen target cannot
             # receive this Fire hit's burn, then thaws. Original-catalog Fire
@@ -757,7 +760,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     jnp.where(thawed,0,_active(work.status_counter,work,foe))))
         if table.secondary is not None:
             work = secondaries.apply_contact(work,side,move,phazing_draws[rows,side],table.secondary,
-                eligible=acts & hit & (dealt>0) & ~hits_sub)
+                eligible=acts & hit & (dealt>0) & ~hits_sub,item_table=table.items)
         work = _lum_update(work,table,live & move_context)
         # Gen3 applies contact DamagingHit (and immediate Lum cure) before
         # recoil. A source about to faint can still consume its berry first.

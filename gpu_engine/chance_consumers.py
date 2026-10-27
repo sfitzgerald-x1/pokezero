@@ -46,12 +46,12 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {
-    "transition.py": "e9ab1044c51f05dbf7c5a92a6269487a6bf548962eb368646004cd0dca01fc89",
+    "transition.py": "f5ede3d4c4ce00299d04c5a16a6f32833095ff0caa52fac5dfd224999113206f",
     "mechanics.py": "704b951ef2df15004e49601a90b934def7bbf63d2f884d73702316eea7e0ea31",
     "pursuit.py": "2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309",
     "effects.py": "0138f0e90811c4829666960a106d80ed2d59f6cd06a8ff83324d189465f73104",
     "critical.py": "b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e",
-    "secondary.py": "bb2ff0234a2ddfd192cdaf02deece1415c58c0c5bfeaea9be8207ca95ca13cec",
+    "secondary.py": "c370eb80c2bda13babea3f5166f79a5b851c58d4e4b278afc9141e5ef2a216da",
     "sleep_talk.py": "968a78ddde87158b13f68dfcacc2158f07336d82c1be472d2283421e8583c154",
     "encore.py": "63da39bbd181a8c6371b3bca853322291a03674c60f535ad0eacdbe1a440e0dd",
     "phazing.py": "8f82d4894f03b39936de0e79b17f0b7715fdfe2f0edb6a7a42d44f1840671bee",
@@ -61,7 +61,7 @@ SOURCE_PINS = {
     "action_history.py": "a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407",
 }
 DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "81b43f80a616f5102d0f07b5bc980328004e3911785e2d28d1d8285e585b8e3b"
+DOMAIN_SHA256 = "6fe611254ad0a7034c4514f55589e91f1bc035c726b175a7130361db8d33b20c"
 
 
 def _host(value):
@@ -222,6 +222,17 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             for move in selected[1-s]:
                 statuses[s].add(_at(t, "effects", "status", move))
                 statuses[s].add(_at(t, "secondary", "status", move))
+        # Fresh status from either a move or a contact ability may reflect onto
+        # the other seat before its queued action or residual ordering. Use the
+        # actual table and Trace-closed current abilities, never base ability.
+        changed=True
+        while changed:
+            before=tuple(frozenset(values) for values in statuses)
+            for s in range(2):
+                if any(_at(t,'secondary','synchronize',a) for a in abilities[s]):
+                    statuses[1-s].update(3 if value==4 else value
+                        for value in tuple(statuses[s]) if value in (1,2,3,4))
+            changed=before!=tuple(frozenset(values) for values in statuses)
         weather = {data["weather"], 0}  # suppression may disappear after a KO
         for s in range(2):
             weather.update(_at(t, "weather", "move_weather", move) for move in selected[s])

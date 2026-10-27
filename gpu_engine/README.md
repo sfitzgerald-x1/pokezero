@@ -193,6 +193,20 @@ the next action. One dedicated fixed secondary roll per seat is saved through
 Baton pauses; the original twelve chance columns are unchanged. Other target,
 self, multi-effect and contact-ability secondaries remain placeholders.
 
+Synchronize reflects newly inflicted burn, paralysis and poison from the
+implemented primary, target-secondary and Static-contact status writers.
+Gen3 Toxic reflects as ordinary poison; sleep, freeze and self-infliction do
+not reflect. It uses the current ability and active recipient after switching,
+retains source type/ability immunities and existing status, and bypasses the
+source's Substitute. Reflection precedes each event's Lum cure, so a later
+Static event can inflict status again after an earlier berry was consumed.
+The chance proof closes reflected statuses over reachable Trace abilities
+before dropping paralysis gates or the residual status-order coin. No new
+random coordinate is introduced. Pinned simulator controls and complete
+authored Rust/JAX laws cover the represented paths; native continuation
+admission, Safeguard representation and broader contact abilities remain
+separate gaps. Scientific rosters retain their original source and results.
+
 `transition.py` initializes real teams from the pool and connects fixed-shape
 action ordering, switches, PP, status action gates, static single-hit damage,
 major-status residuals, forced-replacement pseudo-turns and party exhaustion.
