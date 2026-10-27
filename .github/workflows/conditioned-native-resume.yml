@@ -10,6 +10,7 @@ on:
       - 'tests/test_conditioned_native_resume.py'
       - 'tests/test_conditioned_native_faint_replacements.py'
       - 'tests/test_conditioned_native_ordinary.py'
+      - 'tests/test_ordinary_carry_panel.py'
       - 'tests/test_gpu_engine_carry_law.py'
       - 'tests/test_conditioned_native_roles.py'
       - 'tests/test_conditioned_native_deterministic_abilities.py'
@@ -87,6 +88,7 @@ jobs:
           suite = unittest.defaultTestLoader.loadTestsFromNames([
               'tests.test_conditioned_native_resume', 'tests.test_conditioned_native_faint_replacements',
               'tests.test_conditioned_native_ordinary', 'tests.test_gpu_engine_carry_law',
+              'tests.test_ordinary_carry_panel',
               'tests.test_constructor_provenance',
               'tests.test_conditioned_native_roles', 'tests.test_native_gen3_trace_entry',
               'tests.test_conditioned_native_deterministic_abilities',
@@ -101,6 +103,6 @@ jobs:
               'tests.test_gpu_engine_panel_owner',
               'tests.test_native_gpu_panel_execution'])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 138 and not result.skipped
+          assert result.testsRun >= 147 and not result.skipped
           assert result.wasSuccessful()
           PY

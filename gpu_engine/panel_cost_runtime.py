@@ -157,7 +157,7 @@ def validate_publication(pub,done,bound,slot,now):
     return pub
 
 
-def validate_done(done,start,result_path,entry,now):
+def validate_done(done,start,result_path,entry,now,*,root_record=None,constructor_context=None):
     from .panel_owner import validate_slot
     import gzip
     validate_done_header(done,start,entry,now)
@@ -165,9 +165,11 @@ def validate_done(done,start,result_path,entry,now):
         raise ValueError('full result differs from timing DONE digest')
     with gzip.open(result_path,'rt') as stream:result=json.load(stream)
     frozen=json.loads((result_path.parent/'inputs-frozen.json').read_bytes())
-    validate_slot(result,entry,frozen['input_jsonl_sha256'],start['slot'])
+    validate_slot(result,entry,frozen['input_jsonl_sha256'],start['slot'],
+        root_record=root_record,constructor_context=constructor_context)
     certificate=result.get('consumer_certificate')
-    expected=('conditional' if 'native_cases' in certificate else 'ordinary') if certificate else (
+    expected=('ordinary_carry' if certificate.get('kind')=='ordinary_carry' else
+        'conditional' if 'native_cases' in certificate else 'ordinary') if certificate else (
         'source_failure' if result.get('category') in {'SOURCE_CONSTRUCTOR_FAILURE','SOURCE_REQUEST_FAILURE',
             'TERMINAL_SOURCE_ROOT'} else 'refused')
     if (done.get('path')!=expected or done.get('result_status')!=result['status']
@@ -275,6 +277,24 @@ class Watch:
             if not source_freeze_valid:raise ValueError('input freeze invalid')
         except (OSError,ValueError):
             frozen=None
+        root_records=None;constructor_context=None
+        if frozen is not None and 'ordinary_carry' in self.entry:
+            import gzip
+            try:
+                digest=hashlib.sha256();root_records=[]
+                with gzip.open(self.panel/'inputs.jsonl.gz','rb') as stream:
+                    for line in stream:
+                        digest.update(line);root_records.append(json.loads(line))
+                context_payload=(self.panel/'constructor-context.json').read_bytes()
+                if (digest.hexdigest()!=frozen['input_jsonl_sha256']
+                        or hashlib.sha256((self.panel/'inputs.jsonl.gz').read_bytes()).hexdigest()!=frozen['compressed_sha256']
+                        or hashlib.sha256(context_payload).hexdigest()!=frozen['constructor_context_file_sha256']
+                        or len(root_records)!=self.entry['slots']
+                        or any(r['slot']!=i for i,r in enumerate(root_records))):
+                    raise ValueError('TIMING_FROZEN_ROOTS_CHANGED')
+                constructor_context=json.loads(context_payload)
+            except (OSError,ValueError,KeyError,EOFError,zlib.error) as error:
+                issues['root_dispatch_source']=str(error);frozen=None
         for slot in range(self.entry['slots']):
             start_path=self.panel/f'slot-{slot:04d}-timing-start.json'
             done_path=self.panel/f'slot-{slot:04d}-timing-done.json'
@@ -287,7 +307,9 @@ class Watch:
                     self.entry['slots'],self.launch,now)
                 if frame['slot']!=slot or frame['start_monotonic']<last_end:
                     raise ValueError('timing order or slot changed')
-                done=validate_done(json.loads(done_path.read_bytes()),frame,result_path,self.entry,now)
+                done=validate_done(json.loads(done_path.read_bytes()),frame,result_path,self.entry,now,
+                    root_record=None if root_records is None else root_records[slot],
+                    constructor_context=constructor_context)
                 last_end=done['end_monotonic']
                 observations.append(dict(slot=slot,status='COMPLETE',seconds=done['seconds'],path=done['path']))
                 execution[str(slot)]={k:done[k] for k in ('path','planned_cases','completed_cases','result_status')}

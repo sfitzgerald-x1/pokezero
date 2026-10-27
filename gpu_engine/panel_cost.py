@@ -83,8 +83,9 @@ def summarize(entry, observations):
             if set(obs)!={'slot','status'}:
                 raise ValueError('untimed slots cannot carry timing or execution claims')
         else:
-            if set(obs)!={'slot','status','seconds','path'} or obs['path'] not in {
-                    'ordinary','conditional','refused','source_failure','unknown_inflight'}:
+            allowed={'ordinary','conditional','refused','source_failure','unknown_inflight'}
+            if 'ordinary_carry' in entry:allowed.add('ordinary_carry')
+            if set(obs)!={'slot','status','seconds','path'} or obs['path'] not in allowed:
                 raise ValueError('timed duration and actual exercised path required')
             duration=obs['seconds']
             if type(duration) not in (int,float) or not math.isfinite(duration) or duration<0:
@@ -100,6 +101,7 @@ def summarize(entry, observations):
         p95_upper_seconds=hi if math.isfinite(hi) else 'unbounded',
         threshold_seconds=cfg.threshold_seconds,latency_threshold=verdict,
         statuses=states,exercised_paths=paths,
-        unexercised_comparison_paths=[p for p in ('ordinary','conditional') if paths.get(p,0)==0],
+        unexercised_comparison_paths=[p for p in (('ordinary','ordinary_carry','conditional')
+            if 'ordinary_carry' in entry else ('ordinary','conditional')) if paths.get(p,0)==0],
         attempt_integrity='NOT_ASSESSED_BY_LATENCY_ACCOUNTING',
         comparison_cost_qualified=False,scientific_fidelity_qualified=False)

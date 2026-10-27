@@ -772,3 +772,40 @@ Protect-streak storage at a Baton suspension remains a measured
 authored DIVERGE, with equal capsules and differing physical counters. This
 difference is retained by the mapper. These authored controls provide no new scientific
 panel counts, strength evidence or full-engine qualification.
+
+
+### Prospective complete ordinary-carry collector
+
+A new entry can opt into the versioned method with retained constructor
+provenance and an explicit exact-rational comparison criterion:
+
+```json
+"ordinary_carry": {
+  "schema": "pokezero.complete-ordinary-carry-panel.v1",
+  "criterion": "exact-rational-full-output-law",
+  "max_output_nodes": 100000
+}
+```
+
+The full input/context artifact closes before native root-domain preflight.
+Supported roots select the complete ordinary path; the closed set of explicit
+unsupported-root codes selects the existing legacy comparator. Pending roots
+retain the conditional comparator. Once selected, caps, source drift or any
+positive-output refusal cannot select another method. They preserve a whole
+unknown slot or stop the owned attempt. Missing configuration preserves the
+previous collector behavior.
+
+Each ordinary result retains ordered paired emissions for every cell of the
+common partition: domain binding, exact cell mass and both complete physical,
+capsule and copy/constant outputs. Terminal audit reconstructs the partition
+from the frozen root and retained originals, checks the full consumer
+certificate and physical layout, binds the predetermined address advancement,
+and recomputes both exact output laws. Removed, duplicated or projected cells
+cannot become an accepted prefix. Exact rational equality is this versioned
+route's declared criterion; the existing per-key tolerances apply to legacy
+and conditional routes.
+
+The operation clock includes binding, preflight, planning, both engines, symbolic
+serialization and result/progress persistence. Cost receipts report
+`ordinary_carry` separately and retain every refusal. This changed configuration
+requires a new frozen cost cohort; existing cost/readout artifacts are unchanged.

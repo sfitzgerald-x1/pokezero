@@ -22,16 +22,59 @@ from . import future_state as mapping
 from .finite_law import compare_laws
 
 
-def validate_slot(record, entry, input_sha, slot):
+def validate_slot(record, entry, input_sha, slot, *, root_record=None, constructor_context=None):
     if record["slot"] != slot or record["input_jsonl_sha256"] != input_sha:
         raise ValueError("slot/input identity mismatch")
     status = record["status"]
+    cfg=None;admitted=None
+    if 'ordinary_carry' in entry:
+        from .ordinary_panel import contract,audit_dispatch
+        cfg=contract(entry)
+        if root_record is None or constructor_context is None:raise ValueError('FROZEN_ROOT_AUDIT_REQUIRED')
+        expected,admitted=audit_dispatch(root_record,constructor_context,entry)
+        if record.get('root_dispatch')!=expected:raise ValueError('ROOT_DISPATCH_CHANGED')
+    certificate=record.get('consumer_certificate')
+    if certificate is not None and type(certificate) is not dict:
+        raise ValueError('INVALID_CONSUMER_CERTIFICATE_TYPE')
+    if cfg is not None and record['root_dispatch']['route']=='ordinary_carry':
+        from .ordinary_law import OrdinaryPlan
+        from .ordinary_panel import consumer_certificate
+        from .collect_fidelity_panel import encoded
+        if isinstance(admitted,OrdinaryPlan):
+            if certificate is None or encoded(certificate)!=encoded(consumer_certificate(admitted)):
+                raise ValueError('COMPLETE_BOUND_ORDINARY_CERTIFICATE_REQUIRED')
+        elif certificate is not None or status!='UNKNOWN':
+            raise ValueError('REFUSED_ORDINARY_PLAN_CANNOT_PROVIDE_LAW')
+    if cfg is None and (any(name in record for name in ('root_dispatch','comparison_schema','ordinary_output_laws'))
+            or certificate is not None and certificate.get('kind')=='ordinary_carry'):
+        raise ValueError('UNREGISTERED_ORDINARY_OUTPUT_METHOD')
+    if cfg is not None and certificate is not None:
+        kind=('ordinary_carry' if certificate.get('kind')=='ordinary_carry' else
+            'conditional' if 'native_cases' in certificate else 'legacy')
+        if kind!=record['root_dispatch']['route']:raise ValueError('CONSUMER_CERTIFICATE_ROUTE_CHANGED')
     if status == "UNKNOWN":
+        if cfg is not None and 'ordinary_output_laws' in record:raise ValueError('UNKNOWN_CANNOT_ACCEPT_PARTIAL_LAW')
         if (record["identified_mass"], record["unknown_mass"]) != ("0", "1") or not record["category"]:
             raise ValueError("invalid whole-slot unknown")
         return status
     if status not in {"AGREE", "DIVERGE"} or (record["identified_mass"], record["unknown_mass"]) != ("1", "0"):
         raise ValueError("invalid complete law status")
+    if cfg is not None and record['root_dispatch']['route']=='ordinary_carry':
+        from dataclasses import asdict
+        from .ordinary_law import OrdinaryPlan
+        from .ordinary_panel import audit_evidence,EVIDENCE
+        from .collect_fidelity_panel import encoded
+        if (not isinstance(admitted,OrdinaryPlan) or record.get('comparison_schema')!=EVIDENCE
+                or 'outcomes' in record):raise ValueError('REGISTERED_COMPLETE_ORDINARY_METHOD_REQUIRED')
+        compared=audit_evidence(record['ordinary_output_laws'],admitted,entry)
+        if (record.get('comparison')!=json.loads(encoded(asdict(compared)))
+                or record.get('exact_cases')!=admitted.law.cardinality
+                or record.get('execution_cells')!=admitted.law.cardinality
+                or (compared.half_l1==0)!=(status=='AGREE')):
+            raise ValueError('STORED_ORDINARY_CONCLUSION_DISAGREES_WITH_FULL_LAWS')
+        return status
+    if 'comparison_schema' in record or 'ordinary_output_laws' in record:
+        raise ValueError('OUTPUT_METHOD_DOES_NOT_MATCH_ROOT_ROUTE')
     exact, native, seen = {}, {}, set()
     for outcome in record["outcomes"]:
         key = mapping._freeze(outcome["key"])
@@ -58,7 +101,12 @@ def reconstruct(panel, entry):
     """Inspect valid CLOSED files once at terminal; progress is not authority."""
     fixed = entry["slots"]
     counts, issues = Counter(), {}
+    frozen_records=[] if 'ordinary_carry' in entry else None
     try:
+        if frozen_records is not None:
+            from .ordinary_panel import contract
+            from .collect_fidelity_panel import runtime_admission
+            contract(entry);runtime_admission(entry)
         frozen = json.loads((panel / "inputs-frozen.json").read_bytes())
         prospective=entry.get("constructor_provenance") is not None
         if prospective and "constructor_context_file_sha256" not in frozen:
@@ -79,6 +127,7 @@ def reconstruct(panel, entry):
                         or set(item["post_entry_state"])!=set(mapping.FIELD_POLICY)
                         or item["constructor_context_sha256"]!=context["context"]["sha256"]):
                     raise ValueError("opt-in source record has missing constructor evidence")
+                if frozen_records is not None:frozen_records.append(item)
                 digest.update(line)
                 number += 1
         if (number != fixed or frozen["slots"] != fixed
@@ -112,7 +161,9 @@ def reconstruct(panel, entry):
         try:
             with gzip.open(path, "rb") as stream:
                 record = json.load(stream)
-            counts[validate_slot(record, entry, frozen["input_jsonl_sha256"], slot)] += 1
+            counts[validate_slot(record, entry, frozen["input_jsonl_sha256"], slot,
+                root_record=None if frozen_records is None else frozen_records[slot],
+                constructor_context=None if frozen_records is None else context)] += 1
             valid += 1
         except (OSError, ValueError, KeyError, TypeError, EOFError, ZeroDivisionError, zlib.error) as error:
             counts["UNKNOWN"] += 1
