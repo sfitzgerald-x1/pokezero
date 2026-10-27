@@ -454,6 +454,7 @@ def _parse_claimed_fanin_manifest(
     base: str,
     *,
     expected_parent: tuple[int, int] | None = None,
+    pending_preview: bool = False,
 ) -> TaskManifest:
     """Parse a claimed manifest only if its file and parent stay stable."""
     contents, observed, parent_identity = _read_fanin_file_with_parent_snapshot(
@@ -466,10 +467,26 @@ def _parse_claimed_fanin_manifest(
         task = _parse_manifest_text(contents.decode("utf-8"), path, base, fanin=True)
     except UnicodeDecodeError as exc:
         raise ValueError(f"task manifest {base} is not UTF-8") from exc
-    if _claim_manifest_snapshot(path, expected_parent=parent_identity) != expected:
-        raise FanInInventoryValidationError(
-            f"fan-in claimed manifest changed while parsing: {path}"
+    final = _claim_manifest_snapshot(path, expected_parent=parent_identity)
+    if final != expected:
+        # A pending preview may observe a ctime-only change while the task
+        # bytes remain identical. No lease exists yet. Revalidate once, without
+        # relaxing the generic reader or any post-claim generation checks.
+        if not pending_preview or final[:-1] != expected[:-1]:
+            raise FanInInventoryValidationError(
+                f"fan-in claimed manifest changed while parsing: {path}"
+            )
+        reread, observed, _ = _read_fanin_file_with_parent_snapshot(
+            path, "claimed manifest", expected_parent=parent_identity,
         )
+        if reread is None or observed is None:
+            raise FileNotFoundError(path)
+        latest = _fanin_stat_snapshot(observed)
+        if reread != contents or latest[:-1] != expected[:-1]:
+            raise FanInInventoryValidationError(
+                f"fan-in claimed manifest changed while parsing: {path}"
+            )
+        expected = latest
     return TaskManifest(
         **{
             **task.__dict__,
@@ -595,7 +612,7 @@ def claim_next_task(
     for candidate in candidates:
         try:
             preview = (
-                _parse_claimed_fanin_manifest(candidate, candidate.name)
+                _parse_claimed_fanin_manifest(candidate, candidate.name, pending_preview=True)
                 if fanin else _parse_manifest(candidate, candidate.name)
             )
         except FileNotFoundError:
