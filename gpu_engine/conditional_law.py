@@ -22,7 +22,7 @@ KERNEL_SHA256 = "6fe611254ad0a7034c4514f55589e91f1bc035c726b175a7130361db8d33b20
 MAPPING_PINS = {
     "future_state.py": "77fe87f3af696dcc8e3785dcf6481e83075b781c464fa3c736c305745628b0a8",
     "conditioned_future.py": "b3d8c647f0aca36204e1dcd521a1ce17fee7463f683217f3d0830eb9e44c2e11",
-    "finite_law.py": "d999cdbaddebc33cf3f84583e584e2110d7ee79f37bf365f715d0eb7f424ae8c",
+    "finite_law.py": "ba07cf100a8317d97665eeb887c47de04b7556c94b3cf7a7887e9a362551e487",
     "fidelity_panel.py": "ce67f0d036d0daf8b6d72e1727a7fc5aa22e73dacb2e4dbd4d496a94a8c1973e",
 }
 
