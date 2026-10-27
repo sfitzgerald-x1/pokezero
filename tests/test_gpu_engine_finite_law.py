@@ -47,6 +47,8 @@ class FiniteLawTests(unittest.TestCase):
     def test_inactive_coordinate_requires_explicit_domain_reason(self):
         with self.assertRaises(ValueError): Axis('draws.0.0', ())
         with self.assertRaises(ValueError): Axis('draws.0.0', (Observation('identity'),))
+        for reason in (['mutable reason'],{'mutable':'reason'},1,True):
+            with self.assertRaises(ValueError):Axis('draws.0.0',(),inactive_reason=reason)
 
     def test_cardinality_refuses_before_any_case_or_callback(self):
         p = plan({'draws.0.5': (Observation('identity'),), 'draws.1.5': (Observation('identity'),)})

@@ -20,7 +20,6 @@ import math
 from .finite_law import COORDINATES, Case, CardinalityRefusal, Plan
 
 
-@lru_cache(maxsize=128)
 def _partition_identity(plan):
     def argument(value):
         return [value.numerator, value.denominator] if isinstance(value, Fraction) else value

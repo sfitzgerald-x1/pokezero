@@ -92,6 +92,8 @@ class Axis:
     def __post_init__(self):
         if self.coordinate not in dict(COORDINATES):
             raise ValueError(f"unknown coordinate: {self.coordinate}")
+        if self.inactive_reason is not None and type(self.inactive_reason) is not str:
+            raise ValueError("inactive reason must be an immutable string or None")
         if self.observations:
             if not self.source_uses or self.inactive_reason is not None:
                 raise ValueError("active coordinates require source uses, not inactivity")
