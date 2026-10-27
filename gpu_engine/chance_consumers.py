@@ -108,7 +108,8 @@ class ConsumerPlan:
             certificate=self.native_input.certificate)
 
 
-def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=None):
+def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=None,
+                   exact_move_slots=False):
     """Precount an exact conservative source partition; emit no sampled prefix.
 
     ``cap`` is mandatory and must be prospectively bound by the panel entry.
@@ -148,7 +149,8 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
             if isinstance(physical,mapping.Refused):return physical
             if expected.key!=physical.key:
                 return refuse("PROVIDED_NATIVE_INPUT_MISMATCH", "Provided original-static correspondence differs from current physical state")
-        bound_actions = mapping.native_actions_from_jax(state, index, actions, native)
+        bound_actions = mapping.native_actions_from_jax(state, index, actions, native,
+            exact_move_slots=exact_move_slots)
         if isinstance(bound_actions, mapping.Refused):
             return bound_actions
         data = mapping._sample(state, index)

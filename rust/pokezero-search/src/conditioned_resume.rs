@@ -57,7 +57,7 @@ fn capsule_from_json(text: &str) -> Result<ResumeCapsule, String> {
     })
 }
 
-fn capsule_json(c: &ResumeCapsule) -> Value {
+pub(super) fn capsule_json(c: &ResumeCapsule) -> Value {
     json!({"version":1,"schema":"pokezero.suspended-turn",
         "pending_residual":c.pending_residual,"forced_switch":c.forced_switch,
         "baton_pass":c.baton_pass,"queued_actor":c.queued_actor,

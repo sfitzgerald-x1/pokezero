@@ -20,10 +20,10 @@ from .finite_law import Axis, Case, COORDINATES, Observation, Plan
 KERNEL_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
 KERNEL_SHA256 = "81b43f80a616f5102d0f07b5bc980328004e3911785e2d28d1d8285e585b8e3b"
 MAPPING_PINS = {
-    "future_state.py": "eff07ded2d5be1905922e59ddb82b9684efaad2f27dfc41e8b90074d893b8280",
+    "future_state.py": "77fe87f3af696dcc8e3785dcf6481e83075b781c464fa3c736c305745628b0a8",
     "conditioned_future.py": "b3d8c647f0aca36204e1dcd521a1ce17fee7463f683217f3d0830eb9e44c2e11",
     "finite_law.py": "d999cdbaddebc33cf3f84583e584e2110d7ee79f37bf365f715d0eb7f424ae8c",
-    "fidelity_panel.py": "e131f3658f2499d182afa25f50c0034b013b7c0526906af5ff6dabb124079936",
+    "fidelity_panel.py": "ce67f0d036d0daf8b6d72e1727a7fc5aa22e73dacb2e4dbd4d496a94a8c1973e",
 }
 
 

@@ -9,6 +9,8 @@ on:
       - 'gpu_engine/**'
       - 'tests/test_conditioned_native_resume.py'
       - 'tests/test_conditioned_native_faint_replacements.py'
+      - 'tests/test_conditioned_native_ordinary.py'
+      - 'tests/test_gpu_engine_carry_law.py'
       - 'tests/test_conditioned_native_roles.py'
       - 'tests/test_conditioned_native_deterministic_abilities.py'
       - 'tests/test_native_gen3_trace_entry.py'
@@ -59,7 +61,9 @@ jobs:
           scripts/vendor_poke_engine_src.sh "$(command -v python)"
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features gen3 --test test_gen3
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features conditioned-oracle --lib conditioned_resume
+          POKEZERO_ENUMERATE_ROLLS=1 cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features conditioned-oracle --lib conditioned_step::tests -- --test-threads=1
           PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --lib conditioned_resume::tests
+          PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --lib conditioned_step::tests
           PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --test gen3_natural_cure_cleanup
           PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --test gen3_stall_pp_after_gates
           PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --test gen3_choice_band_before_move
@@ -67,6 +71,8 @@ jobs:
           python -m maturin build --manifest-path third_party/poke-engine-src/poke-engine-py/Cargo.toml --release --no-default-features --features conditioned-oracle --out /tmp/conditioned-wheels
           python -m maturin build --manifest-path rust/pokezero-search/Cargo.toml --release --no-default-features --features conditioned-oracle --out /tmp/conditioned-wheels
           python -m pip install /tmp/conditioned-wheels/*.whl
+          python scripts/engine_build_fingerprint.py --write --after-two-consumer-rebuild
+          python scripts/engine_build_fingerprint.py --check
       - name: Compare complete authored successors without skips
         env:
           POKEZERO_ENUMERATE_ROLLS: '1'
@@ -76,6 +82,7 @@ jobs:
           assert pokezero_search.CONDITIONED_ORACLE_ENABLED
           suite = unittest.defaultTestLoader.loadTestsFromNames([
               'tests.test_conditioned_native_resume', 'tests.test_conditioned_native_faint_replacements',
+              'tests.test_conditioned_native_ordinary', 'tests.test_gpu_engine_carry_law',
               'tests.test_constructor_provenance',
               'tests.test_conditioned_native_roles', 'tests.test_native_gen3_trace_entry',
               'tests.test_conditioned_native_deterministic_abilities',
@@ -90,6 +97,6 @@ jobs:
               'tests.test_gpu_engine_panel_owner',
               'tests.test_native_gpu_panel_execution'])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 113 and not result.skipped
+          assert result.testsRun >= 131 and not result.skipped
           assert result.wasSuccessful()
           PY
