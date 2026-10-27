@@ -80,9 +80,13 @@ def admit(entry,pool_path):
 
 def plan_for_record(root,post_entry,record,original,sources,table,entry,*,record_sha256):
     """After source freeze, bind original statics to the exact current root."""
+    from .ordinary_panel import contract,Dispatch,dispatch,route_current
+    cfg=contract(entry)
     raw=mapping._freeze(mapping._sample(root,0))
+    def retained(value,route='refused'):
+        return value if cfg is None else Dispatch(dispatch(route),value)
     def refuse(code,detail):
-        return mapping.Refused((mapping.Gap("prospective_source",code,detail),),raw)
+        return retained(mapping.Refused((mapping.Gap("prospective_source",code,detail),),raw))
     if not isinstance(original,(source.ConstructorProvenance,mapping.Refused)):
         return refuse("MISSING_CONSTRUCTOR_PROVENANCE","Complete original record or explicit source refusal required")
     try:
@@ -94,7 +98,7 @@ def plan_for_record(root,post_entry,record,original,sources,table,entry,*,record
                 or mapping._freeze(record["post_entry_state"])!=mapping._freeze(mapping._sample(post_entry,0))
                 or record["constructor_context_sha256"]!=sources.context.sha256):
             return refuse("FROZEN_CONSTRUCTOR_SOURCE_CHANGED","Complete root/original/post-entry/context binding required")
-        if isinstance(original,mapping.Refused):return original
+        if isinstance(original,mapping.Refused):return retained(original)
         root_id=sources.root_id(record["slot"])
         if tuple(record["teams"])!=original.team_indices or original.root_id!=root_id:
             return refuse("FROZEN_ROOT_OCCURRENCE_CHANGED","Exact original team pair/root occurrence required")
@@ -110,10 +114,11 @@ def plan_for_record(root,post_entry,record,original,sources,table,entry,*,record
     if dict(raw)["pending_residual"]:
         from .conditional_law import plan_for_suspension
         initial=source.native_input_with_provenance(post_entry,0,metadata,**args)
-        if isinstance(initial,mapping.Refused):return initial
-        return plan_for_suspension(root,0,actions,table,metadata,
-            certificate=initial.certificate,cap=entry["max_cases"])
+        if isinstance(initial,mapping.Refused):return retained(initial,'conditional')
+        return retained(plan_for_suspension(root,0,actions,table,metadata,
+            certificate=initial.certificate,cap=entry["max_cases"]),'conditional')
     from .chance_consumers import plan_for_state
     current=source.native_input_with_provenance(root,0,metadata,**args)
-    if isinstance(current,mapping.Refused):return current
+    if isinstance(current,mapping.Refused):return retained(current)
+    if cfg is not None:return route_current(root,actions,table,metadata,current,entry)
     return plan_for_state(root,0,actions,table,metadata,cap=entry["max_cases"],native_input=current)

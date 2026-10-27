@@ -243,6 +243,8 @@ def run_cost(entry,pool_path,out):
 
 
 def _run(entry, pool_path, out, *, cost_mode):
+    from .ordinary_panel import contract,Dispatch,dispatch
+    ordinary_cfg=contract(entry)
     timing=None
     if cost_mode or 'operation_budget' in entry:
         from .panel_cost_runtime import Session
@@ -332,7 +334,7 @@ def _run(entry, pool_path, out, *, cost_mode):
         # Begin before START persistence, device transfers and constructor
         # binding, including cached conditional native evaluation in planning.
         frame=timing.begin(index,frozen) if timing is not None else None
-        exercised_path='source_failure';planned_cases=0
+        exercised_path='source_failure';planned_cases=0;root_dispatch=None
         # Durable START identifies an interrupted slot to the owned supervisor.
         atomic_json(out / "current-slot.json", dict(slot=index, status="STARTED", inputs=frozen))
         # Preserve exact source dtypes, notably uint32 PRNG addresses.
@@ -350,6 +352,9 @@ def _run(entry, pool_path, out, *, cost_mode):
                 initial=jax.tree.map(lambda x:jnp.asarray(x[index:index+1]),post_entry)
                 plan=plan_for_record(root,initial,record,originals[index],constructors,table,entry,
                     record_sha256=record_hashes[index])
+            if ordinary_cfg is not None:
+                if not isinstance(plan,Dispatch):raise RuntimeError('REGISTERED_DISPATCH_REQUIRED')
+                root_dispatch=plan.admission;plan=plan.plan
             if isinstance(plan, mapping.Refused):
                 exercised_path='refused'
                 codes = sorted({gap.code for gap in plan.gaps})
@@ -357,22 +362,34 @@ def _run(entry, pool_path, out, *, cost_mode):
                               else "INPUT_OR_PLAN_REFUSED", gap_codes=codes, detail=asdict(plan),
                               identified_mass="0", unknown_mass="1")
             else:
-                exercised_path=('conditional' if constructors is not None and record['state']['pending_residual']
-                    else 'ordinary')
-                planned_cases=plan.cardinality
-                executor = JaxCaseExecutor(root, tuple(record["actions"]), table, plan,
-                                          batch_size=entry["case_batch"])
-                execute_native=(plan.native_results if constructors is not None and record["state"]["pending_residual"]
-                                else lambda:native_executor(plan))
-                result = compare_slot(plan, executor, execute_native,
-                    batch_size=entry["case_batch"], mass_tolerance=entry["mass_tolerance"],
-                    probability_tolerance=entry["probability_tolerance"])
-                result["consumer_certificate"] = dict(source=plan.source_certificate,
-                    table=plan.table_certificate, axes=[asdict(axis) for axis in plan.axes],
-                    cardinality=plan.cardinality, native_input=plan.native_input.raw_native,
-                    native_actions=(asdict(plan.native_actions) if constructors is not None else plan.native_actions.choices))
-                if constructors is not None and record["state"]["pending_residual"]:
-                    result["consumer_certificate"]["native_cases"]=plan.native_evidence()
+                from .ordinary_law import OrdinaryPlan,compare_plan
+                if isinstance(plan,OrdinaryPlan):
+                    if ordinary_cfg is None or root_dispatch!=dispatch('ordinary_carry'):
+                        raise RuntimeError('UNREGISTERED_ORDINARY_CARRY_PLAN')
+                    exercised_path='ordinary_carry';planned_cases=plan.law.cardinality
+                    result=compare_plan(plan,root,tuple(record['actions']),table,cap=entry['max_cases'],
+                        batch_size=entry['case_batch'],max_nodes=ordinary_cfg['max_output_nodes'],retain_evidence=True)
+                    from .ordinary_panel import consumer_certificate
+                    result['consumer_certificate']=consumer_certificate(plan)
+                else:
+                    exercised_path=('conditional' if constructors is not None and record['state']['pending_residual']
+                        else 'ordinary')
+                    planned_cases=plan.cardinality
+                    executor = JaxCaseExecutor(root, tuple(record["actions"]), table, plan,
+                                              batch_size=entry["case_batch"])
+                    execute_native=(plan.native_results if constructors is not None and record["state"]["pending_residual"]
+                                    else lambda:native_executor(plan))
+                    result = compare_slot(plan, executor, execute_native,
+                        batch_size=entry["case_batch"], mass_tolerance=entry["mass_tolerance"],
+                        probability_tolerance=entry["probability_tolerance"])
+                    result["consumer_certificate"] = dict(source=plan.source_certificate,
+                        table=plan.table_certificate, axes=[asdict(axis) for axis in plan.axes],
+                        cardinality=plan.cardinality, native_input=plan.native_input.raw_native,
+                        native_actions=(asdict(plan.native_actions) if constructors is not None else plan.native_actions.choices))
+                    if constructors is not None and record["state"]["pending_residual"]:
+                        result["consumer_certificate"]["native_cases"]=plan.native_evidence()
+        if ordinary_cfg is not None:
+            result['root_dispatch']=root_dispatch if root_dispatch is not None else dispatch('source_failure')
         result.update(slot=index, input_jsonl_sha256=frozen["input_jsonl_sha256"])
         # Exclusive per-slot compressed full law; no accepted-prefix rewriting.
         result_path=out/f'slot-{index:04d}.json.gz'

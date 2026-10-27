@@ -10,6 +10,7 @@ on:
       - 'tests/test_conditioned_native_resume.py'
       - 'tests/test_conditioned_native_faint_replacements.py'
       - 'tests/test_conditioned_native_ordinary.py'
+      - 'tests/test_ordinary_carry_panel.py'
       - 'tests/test_gpu_engine_carry_law.py'
       - 'tests/test_conditioned_native_roles.py'
       - 'tests/test_conditioned_native_deterministic_abilities.py'
@@ -37,10 +38,16 @@ concurrency:
   group: conditioned-native-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 jobs:
-  conditional-successors:
+  native-authored:
+    name: Native authored shard ${{ matrix.shard }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1]
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
+      NATIVE_SHARD: ${{ matrix.shard }}
       JAX_PLATFORMS: cpu
       OMP_NUM_THREADS: '2'
       OPENBLAS_NUM_THREADS: '2'
@@ -82,11 +89,12 @@ jobs:
           POKEZERO_ENUMERATE_ROLLS: '1'
         run: |
           python - <<'PY'
-          import unittest, pokezero_search
+          import os, unittest, pokezero_search
           assert pokezero_search.CONDITIONED_ORACLE_ENABLED
-          suite = unittest.defaultTestLoader.loadTestsFromNames([
+          names = [
               'tests.test_conditioned_native_resume', 'tests.test_conditioned_native_faint_replacements',
               'tests.test_conditioned_native_ordinary', 'tests.test_gpu_engine_carry_law',
+              'tests.test_ordinary_carry_panel',
               'tests.test_constructor_provenance',
               'tests.test_conditioned_native_roles', 'tests.test_native_gen3_trace_entry',
               'tests.test_conditioned_native_deterministic_abilities',
@@ -99,8 +107,37 @@ jobs:
               'tests.test_native_gen3_choice_band_before_move',
               'tests.test_native_gpu_secondary_move_effects',
               'tests.test_gpu_engine_panel_owner',
-              'tests.test_native_gpu_panel_execution'])
+              'tests.test_native_gpu_panel_execution']
+          first = {
+              'tests.test_conditioned_native_faint_replacements',
+              'tests.test_ordinary_carry_panel', 'tests.test_constructor_provenance',
+              'tests.test_conditioned_native_deterministic_abilities',
+              'tests.test_action_history_native', 'tests.test_rest_origin_native',
+              'tests.test_native_gen3_choice_band_before_move'}
+          assert len(names) == len(set(names)) and first <= set(names)
+          groups = [[name for name in names if name in first],
+                    [name for name in names if name not in first]]
+          assert set(groups[0]).isdisjoint(groups[1])
+          assert set(groups[0]) | set(groups[1]) == set(names)
+          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 147
+          shard = int(os.environ['NATIVE_SHARD'])
+          assert shard in (0, 1)
+          expected = (47, 100)[shard]
+          suite = unittest.defaultTestLoader.loadTestsFromNames(groups[shard])
+          assert suite.countTestCases() == expected
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 138 and not result.skipped
+          assert result.testsRun == expected and not result.skipped
           assert result.wasSuccessful()
           PY
+  conditional-successors:
+    name: conditional-successors
+    if: ${{ always() }}
+    needs: [native-authored]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every native authored shard
+        env:
+          RESULT: ${{ needs.native-authored.result }}
+        run: |
+          test "$RESULT" = success

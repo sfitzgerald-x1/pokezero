@@ -187,6 +187,33 @@ class OrdinaryPlan:
         return _jax_output(state,index,self.metadata,self.native_input.certificate)
 
 
+ROOT_DOMAIN_REFUSALS = frozenset({'STEP_UNSUPPORTED_FIELD_CONTEXT','STEP_UNSUPPORTED_SIDE_CONTEXT',
+    'STEP_UNSUPPORTED_ACTIVE_CONTEXT','STEP_UNSUPPORTED_SELECTED_MOVE','ORDINARY_MOVE_SLOT_REQUIRED',
+    'ORDINARY_LIVE_REQUEST_REQUIRED'})
+
+
+def _native_requirements(native_input,actions):
+    module=import_module('pokezero_search')
+    report=json.loads(module.conditioned_step_requirements(native_input.raw_native,json.dumps(actions)))
+    if set(report)!={'version','schema','requirements'} or report['version']!=1 or report['schema']!='pokezero.native-step-consumers':
+        raise ValueError('NATIVE_REQUIREMENTS_SCHEMA')
+    return report['requirements']
+
+
+def root_domain(native_input,actions):
+    _source_certificate()
+    if not isinstance(native_input,mapping.NativeInput):raise ValueError('RETAINED_CURRENT_ROOT_NATIVE_INPUT_REQUIRED')
+    actions=mapping._freeze(actions)
+    if len(actions)!=2 or any(type(v) is not int for v in actions):raise ValueError('EXACT_ROOT_ACTIONS_REQUIRED')
+    try:_native_requirements(native_input,actions)
+    except ValueError as error:
+        # Exact root-only refusal codes, never fuzzy exception matching. Caps,
+        # drift and execution failures cannot select the legacy comparator.
+        if str(error) not in ROOT_DOMAIN_REFUSALS:raise
+        return dict(supported=False,reason=str(error))
+    return dict(supported=True)
+
+
 def plan_for_state(state,actions,table,metadata,*,cap,native_input):
     source=_source_certificate()
     if not isinstance(native_input,mapping.NativeInput):
@@ -202,11 +229,7 @@ def plan_for_state(state,actions,table,metadata,*,cap,native_input):
     jax_plan=chance_consumers.plan_for_state(state,0,slots,table,metadata,cap=cap,native_input=native,
         exact_move_slots=True)
     if isinstance(jax_plan,mapping.Refused):return jax_plan
-    module=import_module('pokezero_search')
-    report=json.loads(module.conditioned_step_requirements(native.raw_native,json.dumps(slots)))
-    if set(report)!={'version','schema','requirements'} or report['version']!=1 or report['schema']!='pokezero.native-step-consumers':
-        raise ValueError('NATIVE_REQUIREMENTS_SCHEMA')
-    law=refine(jax_plan.law,report['requirements'],cap=cap)
+    law=refine(jax_plan.law,_native_requirements(native,slots),cap=cap)
     import jax
     # Bind advancement before any transition is executed. Never read it from
     # a JAX successor to label a native one.
@@ -215,18 +238,41 @@ def plan_for_state(state,actions,table,metadata,*,cap,native_input):
     return OrdinaryPlan(law,jax_plan,address,source)
 
 
+def validate_output_address(output,address):
+    expected=dict(address);capsule=dict(output.capsule)
+    if (capsule['turn']!=expected['turn']+1 or capsule['keys']!=expected['next_keys']
+            or capsule['replacement_count']!=0):
+        raise ValueError('ORDINARY_OUTPUT_ADDRESS_CHANGED')
+
+
+def _unknown(error,completed=0):
+    return dict(status='UNKNOWN',identified_mass='0',unknown_mass='1',partial_laws_accepted=False,
+        category='CASE_CAP' if isinstance(error,CardinalityRefusal) else getattr(error,'category',type(error).__name__),
+        detail=error.detail if isinstance(error,WholeSlotUnknown) else str(error),
+        completed_cases=completed,scientific_qualification=False)
+
+
 def compare_slot(state,actions,table,metadata,*,cap,batch_size,max_nodes,native_input):
-    """No partial or normalized laws; an UNKNOWN has zero identified mass."""
+    """Standalone opt-in API; the collector supplies an already bound plan."""
+    try:plan=plan_for_state(state,actions,table,metadata,cap=cap,native_input=native_input)
+    except (ValueError,WholeSlotUnknown,CardinalityRefusal) as error:return _unknown(error)
+    if isinstance(plan,mapping.Refused):return _unknown(WholeSlotUnknown('INPUT_OR_PLAN_REFUSED',asdict(plan)))
+    return compare_plan(plan,state,actions,table,cap=cap,batch_size=batch_size,max_nodes=max_nodes)
+
+
+def compare_plan(plan,state,actions,table,*,cap,batch_size,max_nodes,retain_evidence=False):
+    """Complete laws only; persistence retains ordered paired cell emissions."""
+    completed=0
     try:
-        plan=plan_for_state(state,actions,table,metadata,cap=cap,native_input=native_input)
-        if isinstance(plan,mapping.Refused):
-            raise WholeSlotUnknown('INPUT_OR_PLAN_REFUSED',asdict(plan))
+        if not isinstance(plan,OrdinaryPlan) or _source_certificate()!=plan.source_certificate:
+            raise ValueError('CURRENT_BOUND_ORDINARY_PLAN_REQUIRED')
         cells=tuple(algebra.execution_cells(plan.law,cap=cap))
         execute=JaxCaseExecutor(state,actions,table,plan,batch_size=batch_size)
-        reference=[];native=[];module=import_module('pokezero_search')
+        reference=[];native=[];emissions=[];module=import_module('pokezero_search')
         for batch in chunks(iter(cells),batch_size):
             outputs=execute(tuple(cell.case for cell in batch))
             for cell,output in zip(batch,outputs,strict=True):
+                validate_output_address(output,plan.address)
                 reference.append(output.term(plan.law,cell))
                 v=dict(cell.case.values)
                 chance={'draws':[[v[f'draws.{s}.{i}'] for i in range(12)] for s in range(2)],
@@ -239,12 +285,20 @@ def compare_slot(state,actions,table,metadata,*,cap,batch_size,max_nodes,native_
                     raise ValueError('ORDINARY_NATIVE_REPORT_SCHEMA')
                 if type(report['branches']) is not list or len(report['branches'])!=1:
                     raise ValueError('FIXED_NATIVE_CASE_MUST_BE_DETERMINISTIC')
-                native.append(_native_output(report['branches'][0],plan.native_input.certificate).term(plan.law,cell))
+                native_output=_native_output(report['branches'][0],plan.native_input.certificate)
+                validate_output_address(native_output,plan.address)
+                native.append(native_output.term(plan.law,cell))
+                if retain_evidence:
+                    from .ordinary_panel import emission
+                    emissions.append(emission(completed,cell,output,native_output))
+                completed+=1
         if _source_certificate()!=plan.source_certificate:raise ValueError('ORDINARY_SOURCES_CHANGED_DURING_EXECUTION')
         result=algebra.compare(algebra.OutputLaw(SPACE,tuple(reference)),algebra.OutputLaw(SPACE,tuple(native)),
             mass_tolerance=Fraction(),max_nodes=max_nodes)
-        return dict(status='AGREE' if result.half_l1==0 else 'DIVERGE',identified_mass='1',unknown_mass='0',
-            execution_cells=len(cells),comparison=asdict(result),scientific_qualification=False)
-    except (ValueError,WholeSlotUnknown,CardinalityRefusal) as error:
-        return dict(status='UNKNOWN',identified_mass='0',unknown_mass='1',partial_laws_accepted=False,
-            category=getattr(error,'category',type(error).__name__),detail=str(error),scientific_qualification=False)
+        value=dict(status='AGREE' if result.half_l1==0 else 'DIVERGE',identified_mass='1',unknown_mass='0',
+            execution_cells=completed,exact_cases=completed,comparison=asdict(result),scientific_qualification=False)
+        if retain_evidence:
+            from .ordinary_panel import evidence,EVIDENCE
+            value.update(comparison_schema=EVIDENCE,ordinary_output_laws=evidence(plan.law,emissions))
+        return value
+    except (ValueError,WholeSlotUnknown,CardinalityRefusal) as error:return _unknown(error,completed)
