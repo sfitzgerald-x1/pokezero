@@ -140,7 +140,7 @@ class ConstructorProvenanceTests(unittest.TestCase):
         self.assertEqual(len(branches),1)
         return native.apply_instructions(branches[0])
 
-    def test_native_trace_copy_preserves_original_base_and_does_not_expand_conditional_domain(self):
+    def test_native_trace_copy_preserves_original_base_and_exposes_departure_difference(self):
         from gpu_engine import baton,entry,items,secondary,conditioned_future as c
         for replacing in (0,1):
             state,pool,context,_,assignment=self.fixture(replacing)
@@ -168,9 +168,15 @@ class ConstructorProvenanceTests(unittest.TestCase):
             paused=self.jax.jit(self.t.step_with_chance)(post,j.zeros((1,2),j.int32),table,chance).state
             bound=c.suspended_input_from_jax(paused,0,meta,certificate=mapped.certificate,module=self.engine)
             self.assertIsInstance(bound,c.SuspendedNativeInput,bound)
-            refused=c.native_successors(bound,1,[0,1])
-            self.assertIsInstance(refused,self.f.Refused,refused)
-            self.assertIn('UNSUPPORTED_PARTY_CONTEXT',repr(refused.gaps))
+            branches=c.native_successors(bound,1,[0,1])
+            self.assertNotIsInstance(branches,self.f.Refused,branches)
+            self.assertEqual(len(branches),1)
+            actions=j.array([[4,0] if replacing==0 else [0,4]])
+            resumed=self.jax.jit(self.t.step_with_chance)(paused,actions,table,chance).state
+            actual=c.canonical_resumed_jax(resumed,0,meta,native_input=bound)
+            self.assertNotIsInstance(actual,self.f.Refused,actual)
+            self.assertEqual(self.f.field_differences(actual,branches[0][1]),
+                ((f'{self.f.SIDE_NAMES[replacing]}.pokemon[0].ability','static','trace'),))
 
     def test_missing_tampered_and_wrong_root_provenance_never_make_a_certificate(self):
         state,pool,context,_,assignment=self.fixture();source=self.capture(state,pool,context,assignment)

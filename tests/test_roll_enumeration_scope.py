@@ -1077,6 +1077,9 @@ class RollEnumerationMentionLedger(unittest.TestCase):
         # The dedicated native boundary test STEP supplies exact rolls at
         # child process creation; other CI steps and imports keep the default.
         ".github/workflows/engine-fidelity-gates.yml",
+        # Opt-in continuation CI enables exact rolls only for its isolated
+        # Python successor comparisons, after the default-roll Rust tests.
+        ".github/workflows/conditioned-native-resume.yml",
         # Forces the flag OFF so the standing mass gate always measures the
         # collapsed cascade, whatever the ambient environment says.
         "tests/test_branch_mass_reconstruction.py",
