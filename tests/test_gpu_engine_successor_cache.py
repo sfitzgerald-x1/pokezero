@@ -60,6 +60,19 @@ class SuccessorCacheTests(unittest.TestCase):
             cache.canonicalize(Raw(**changed),1,self.plan)
         self.assertEqual(len(self.calls),1+len(fields))
 
+    def test_dense_full_root_revisits_reuse_default_bounded_cache(self):
+        # The saved failed root has 3,872 distinct physical successors. A
+        # 1,024-entry LRU evicted them before later chance axes revisited them.
+        count=3872
+        cache=panel._PhysicalSuccessorCache(self.Raw._fields,count)
+        host=self.host(list(range(count)))
+        first=cache.canonicalize(host,count,self.plan)
+        second=cache.canonicalize(host,count,self.plan)
+        self.assertEqual(len(self.calls),count)
+        self.assertEqual(first,second)
+        self.assertEqual(len(second),count)
+        self.assertEqual(len(cache.values),count)
+
     def test_dtype_and_shape_are_part_of_equal_byte_layouts(self):
         np=self.np;Raw=namedtuple('OneField','hp');cache=panel._PhysicalSuccessorCache(Raw._fields,2)
         a=Raw(np.asarray([[1,0],[1,0]],np.int8));b=Raw(np.asarray([[1],[1]],np.int16))

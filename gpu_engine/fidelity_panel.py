@@ -127,7 +127,7 @@ class _PhysicalSuccessorCache:
     bytes. The bound mapping context is checked once per batch; changing it
     clears the memo so existing correspondence/refusal checks run again.
     """
-    def __init__(self, fields, batch_size, *, limit=1024):
+    def __init__(self, fields, batch_size, *, limit=16384):
         if type(limit) is not int or limit <= 0:
             raise ValueError("positive canonical successor cache bound required")
         self.fields, self.size, self.limit = tuple(fields), batch_size, limit
