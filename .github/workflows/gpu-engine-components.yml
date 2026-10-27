@@ -5,7 +5,11 @@ on:
     paths:
       - 'gpu_engine/**'
       - 'tests/test_gpu_engine*.py'
+      - 'tests/**/test_gpu_engine*.py'
+      - 'tests/**/__init__.py'
       - 'tests/gpu_*_oracle.cjs'
+      - 'scripts/run_gpu_component_shard.py'
+      - 'tests/test_gpu_component_shards.py'
       - '.github/workflows/gpu-engine-components.yml'
 
 permissions:
@@ -16,11 +20,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cpu-components:
+  cpu-component-shards:
+    name: CPU component shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     env:
       JAX_PLATFORMS: cpu
+      PYTHONPATH: src:.
       OMP_NUM_THREADS: '2'
       OPENBLAS_NUM_THREADS: '2'
       POKEZERO_SHOWDOWN_ROOT: ${{ github.workspace }}/.ci/pokemon-showdown
@@ -41,6 +51,8 @@ jobs:
           ref: f76228a1354b5d0f307ca2d16101294ad3a2308b
           path: .ci/pokemon-showdown
           persist-credentials: false
+      - name: Verify complete and disjoint shard selection
+        run: python -m unittest tests.test_gpu_component_shards -v
       - name: Install CPU test environment and build pinned source oracle
         run: |
           python -m pip install 'jax==0.12.0' 'numpy==2.5.4'
@@ -51,11 +63,11 @@ jobs:
           python -m gpu_engine.team_pool --showdown-root "$POKEZERO_SHOWDOWN_ROOT" \
             --source-commit-label f76228a1354b5d0f307ca2d16101294ad3a2308b \
             --teams 1024 --seed-start 650200000 --out "$POKEZERO_GPU_TEAM_POOL"
-      - name: Run all component tests without optional skips
+      - name: Run component shard without optional skips
         run: |
           set -o pipefail
           python -c 'import jax; print("Component test devices:", jax.devices())'
-          python -m unittest discover -s tests -p 'test_gpu_engine*.py' -v 2>&1 \
+          python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 4 2>&1 \
             | tee /tmp/gpu-components.log
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then
             echo '::error::component tests skipped required JAX, source oracle or real-team fixture'
@@ -63,3 +75,13 @@ jobs:
           fi
           # These are CPU correctness checks, not GPU timing, full-game fidelity,
           # move-coverage qualification, strength evidence or a go/no-go result.
+
+  cpu-components:
+    if: ${{ always() }}
+    needs: cpu-component-shards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every component shard to pass
+        env:
+          SHARD_RESULT: ${{ needs.cpu-component-shards.result }}
+        run: test "$SHARD_RESULT" = success
