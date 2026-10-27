@@ -73,6 +73,17 @@ def source_rows(count, team_start, prefix_cycle):
                       prefix_requests=i % prefix_cycle) for i in range(count))
 
 
+def cost_source_rows(entry):
+    """Exactly the prospectively fixed saved-root cost roster, never a subset."""
+    from .panel_cost import contract
+    cfg=contract(entry)
+    start,cycle=entry.get('team_start'),entry.get('prefix_cycle')
+    if type(start) is not int or start<0 or type(cycle) is not int or cycle<1:
+        raise ValueError('fixed cost team range and request-step cycle required')
+    return tuple(dict(slot=i,teams=[start+2*i,start+2*i+1],prefix_requests=i%cycle)
+        for i in range(cfg.slots))
+
+
 def requested_actions(state, table, *, salt):
     import jax
     import jax.numpy as jnp
@@ -92,11 +103,32 @@ def requested_actions(state, table, *, salt):
 
 def generate_inputs(pool, table, entry, *, choose=requested_actions, species_vocabulary=None,
                     constructors=None):
+    if 'cost_admission' in entry:
+        raise ValueError('cost entry requires the separate cost preparation API')
+    return _generate_inputs(pool,table,entry,
+        rows=source_rows(entry['slots'],entry['team_start'],entry['prefix_cycle']),
+        choose=choose,species_vocabulary=species_vocabulary,constructors=constructors)
+
+
+def generate_cost_inputs(pool, table, entry, *, choose=requested_actions, species_vocabulary=None,
+                         constructors=None):
+    """Separate explicit cost entry; ordinary panel minimum stays unchanged.
+
+    This API only prepares inputs. The cost worker/owner must still bind all
+    originals, freeze the entire source and enforce the reviewed timer contract.
+    It supplies no launch or scientific admission by itself.
+    """
+    if constructors is None:
+        raise ValueError('cost preparation requires explicit original constructor sources')
+    return _generate_inputs(pool,table,entry,rows=cost_source_rows(entry),
+        choose=choose,species_vocabulary=species_vocabulary,constructors=constructors)
+
+
+def _generate_inputs(pool, table, entry, *, rows, choose, species_vocabulary, constructors):
     import jax
     import jax.numpy as jnp
     import numpy as np
     from . import transition
-    rows = source_rows(entry["slots"], entry["team_start"], entry["prefix_cycle"])
     indices = np.asarray([r["teams"] for r in rows], np.int32)
     if int(indices.max()) >= len(pool["species"]):
         raise ValueError("fixed roster exceeds immutable pool; never wrap indices")
@@ -197,6 +229,26 @@ def runtime_admission(entry):
 
 
 def run(entry, pool_path, out):
+    if 'cost_admission' in entry:
+        raise ValueError('cost entry requires the explicit cost worker')
+    return _run(entry,pool_path,out,cost_mode=False)
+
+
+def run_cost(entry,pool_path,out):
+    from .panel_cost import contract
+    contract(entry)
+    if entry.get('constructor_provenance') is None:
+        raise ValueError('cost collection requires complete prospective constructor sources')
+    return _run(entry,pool_path,out,cost_mode=True)
+
+
+def _run(entry, pool_path, out, *, cost_mode):
+    timing=None
+    if cost_mode or 'operation_budget' in entry:
+        from .panel_cost_runtime import Session
+        # Establish exact owner/entry/budget identity before device admission or
+        # source generation. The panel directory is created only after admission.
+        timing=Session(entry,out)
     import jax
     import jax.numpy as jnp
     from . import future_state as mapping
@@ -229,7 +281,7 @@ def run(entry, pool_path, out):
     started = time.monotonic()
     with (out / "admission.json").open("xb") as stream:
         stream.write(encoded(dict(**admission, device=device.device_kind, entry=entry)))
-    generated = generate_inputs(pool, table, entry,
+    generated = (generate_cost_inputs if cost_mode else generate_inputs)(pool, table, entry,
         species_vocabulary=metadata["vocabulary"]["species"],constructors=constructors)
     state, actions, roster, traces, source_errors, requested, usable = generated[:7]
     if constructors is not None:
@@ -266,11 +318,21 @@ def run(entry, pool_path, out):
         frozen["constructor_context_file_sha256"]=hashlib.sha256((out/"constructor-context.json").read_bytes()).hexdigest()
     with (out / "inputs-frozen.json").open("xb") as stream:
         stream.write(encoded(frozen))
+    if timing is not None:
+        from .panel_cost_runtime import sync_file,sync_directory
+        for name in ('admission.json','inputs.jsonl.gz','inputs-frozen.json','constructor-context.json'):
+            path=out/name
+            if path.exists():sync_file(path)
+        sync_directory(out)
     print(json.dumps(dict(event="INPUTS_FROZEN", **frozen)), flush=True)
 
     counts, categories, by_move = Counter(), Counter(), {}
     for record in records:
         index = record["slot"]
+        # Begin before START persistence, device transfers and constructor
+        # binding, including cached conditional native evaluation in planning.
+        frame=timing.begin(index,frozen) if timing is not None else None
+        exercised_path='source_failure';planned_cases=0
         # Durable START identifies an interrupted slot to the owned supervisor.
         atomic_json(out / "current-slot.json", dict(slot=index, status="STARTED", inputs=frozen))
         # Preserve exact source dtypes, notably uint32 PRNG addresses.
@@ -289,11 +351,15 @@ def run(entry, pool_path, out):
                 plan=plan_for_record(root,initial,record,originals[index],constructors,table,entry,
                     record_sha256=record_hashes[index])
             if isinstance(plan, mapping.Refused):
+                exercised_path='refused'
                 codes = sorted({gap.code for gap in plan.gaps})
                 result = dict(status="UNKNOWN", category="CASE_CAP" if "CHANCE_CARDINALITY_CAP" in codes
                               else "INPUT_OR_PLAN_REFUSED", gap_codes=codes, detail=asdict(plan),
                               identified_mass="0", unknown_mass="1")
             else:
+                exercised_path=('conditional' if constructors is not None and record['state']['pending_residual']
+                    else 'ordinary')
+                planned_cases=plan.cardinality
                 executor = JaxCaseExecutor(root, tuple(record["actions"]), table, plan,
                                           batch_size=entry["case_batch"])
                 execute_native=(plan.native_results if constructors is not None and record["state"]["pending_residual"]
@@ -309,8 +375,15 @@ def run(entry, pool_path, out):
                     result["consumer_certificate"]["native_cases"]=plan.native_evidence()
         result.update(slot=index, input_jsonl_sha256=frozen["input_jsonl_sha256"])
         # Exclusive per-slot compressed full law; no accepted-prefix rewriting.
-        with gzip.open(out / f"slot-{index:04d}.json.gz", "xb") as stream:
-            stream.write(encoded(result))
+        result_path=out/f'slot-{index:04d}.json.gz'
+        if timing is None:
+            with gzip.open(result_path,'xb') as stream:stream.write(encoded(result))
+        else:
+            # Close the complete gzip trailer before syncing the backing file.
+            jax.block_until_ready(root);jax.effects_barrier()
+            with result_path.open('xb') as raw_stream:
+                with gzip.GzipFile(fileobj=raw_stream,mode='wb') as stream:stream.write(encoded(result))
+                raw_stream.flush();os.fsync(raw_stream.fileno())
         counts[result["status"]] += 1
         if result["status"] == "UNKNOWN":
             categories[result["category"]] += 1
@@ -325,6 +398,9 @@ def run(entry, pool_path, out):
             elapsed_seconds=time.monotonic()-started,
             correct_effect_credit="NOT_ASSESSED; selected presence/no-op agreement is not execution credit")
         atomic_json(out / "progress.json", progress)
+        if timing is not None:
+            sync_directory(out)
+            timing.finish(frame,result,exercised_path,planned_cases)
         print(json.dumps(dict(event="SLOT_COMPLETE", slot=index, status=result["status"], **progress)), flush=True)
     with (out / "terminal.json").open("xb") as stream:
         stream.write(encoded(dict(status="FIXED_PANEL_ATTEMPT_COMPLETE", **progress,
@@ -337,11 +413,16 @@ def main():
     p.add_argument("--expected-entry-sha", required=True)
     p.add_argument("--team-pool", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
+    p.add_argument('--cost-admission',action='store_true')
     args = p.parse_args()
     blob = args.entry.read_bytes()
     if hashlib.sha256(blob).hexdigest() != args.expected_entry_sha:
         raise ValueError("prospective entry hash mismatch")
-    run(json.loads(blob), args.team_pool, args.out)
+    from .panel_cost_runtime import OperationBudgetExceeded
+    try:(run_cost if args.cost_admission else run)(json.loads(blob), args.team_pool, args.out)
+    except OperationBudgetExceeded as error:
+        print(json.dumps(dict(event='OPERATION_BUDGET_EXCEEDED',reason=str(error))),flush=True)
+        raise SystemExit(124)
 
 
 if __name__ == "__main__":
