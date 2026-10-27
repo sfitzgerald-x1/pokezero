@@ -737,7 +737,7 @@ does not change JAX's already matching stall behavior.
 including positive pending-residual successors. Supply the already validated
 current-root `NativeInput` with retained original constructor provenance,
 explicit move slots, case/batch/node bounds, and an owning operation deadline.
-Both installed native consumers must match the registered Native97 build.
+Both installed native consumers must match the registered Native98 build.
 This API does not change the scientific collector or old panel admission.
 
 The native API has a distinct ordinary context. It independently declares its
@@ -752,7 +752,13 @@ there is no prefix acceptance or normalization.
 
 The initial native domain is live ordinary requests selecting Thunderbolt,
 Body Slam, Explosion, Baton Pass, Protect, Endure, Splash or Will-O-Wisp, with the guarded
-active abilities/items/statuses and no potentially tied residual ordering.
+active abilities/items/statuses. Native98 admits move-order and residual-status
+ties using distinct original physical coordinates (`draws.0.0` and
+`draws.1.9`). The native residual scheduler freezes post-move speeds; actual
+equal-speed 10.x handlers interleave by suborder. In this guarded domain,
+Leftovers handlers commute and precede status damage; other tied callbacks
+are inactive. Terminal checks remain between handlers. This is an opt-in
+domain extension; the general default native tied scheduler is unchanged.
 Native97 binds Will-O-Wisp to its native Gen3 75% accuracy cut on the original
 accuracy coordinate, admits existing deterministic burn effects and the
 species-gated Light Ball special-stat modifier, and preserves Fire immunity,

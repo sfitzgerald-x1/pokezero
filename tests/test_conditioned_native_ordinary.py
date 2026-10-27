@@ -208,5 +208,76 @@ class OrdinaryCarryTests(unittest.TestCase):
         result,_=self.compare(s,a,changed,expected='DIVERGE')
         self.assertGreater(result['comparison']['half_l1'],0)
 
+    def tie(self,state):
+        return state._replace(stats=state.stats.at[:,:,0,5].set(200))
+
+    def test_tied_action_order_retains_both_seat_baton_and_ko_carry(self):
+        for pivot in (0,1):
+            for lethal in (False,True):
+                with self.subTest(pivot=pivot,lethal=lethal):
+                    names=['thunderbolt','thunderbolt'];names[pivot]='batonpass'
+                    s,a=self.fixture(names);s=self.tie(s)
+                    if lethal:s=s._replace(hp=s.hp.at[:,pivot,0].set(1))
+                    self.compare(s,a)
+
+    def test_tied_residuals_use_independent_status_coin_and_items_before_status(self):
+        for loser in (0,1):
+            for kind in ('poison','items','nonterminal'):
+                with self.subTest(loser=loser,kind=kind):
+                    s,a=self.fixture();s=self.tie(s)
+                    s=s._replace(status=s.status.at[:,:,0].set(2 if kind=='items' else 3),
+                        hp=s.hp.at[:,:,0].set(1))
+                    if kind!='nonterminal':s=s._replace(hp=s.hp.at[:,:,1:].set(0))
+                    if kind=='items':s=s._replace(item=s.item.at[:,:,0].set(1),
+                        hp=s.hp.at[:,1-loser,0].set(100))
+                    self.compare(s,a)
+
+    def test_initial_paralysis_and_new_paralysis_created_and_broken_ties(self):
+        for actor in (0,1):
+            for kind in ('initial','created','broken','priority'):
+                with self.subTest(actor=actor,kind=kind):
+                    names=['splash','splash'];names[actor]='protect' if kind=='priority' else 'thunderbolt'
+                    s,a=self.fixture(names);s=self.tie(s)
+                    if kind=='initial':s=s._replace(stats=s.stats.at[:,actor,0,5].set(800),
+                        status=s.status.at[:,actor,0].set(1))
+                    if kind=='created':s=s._replace(stats=s.stats.at[:,1-actor,0,5].set(800),
+                        status=s.status.at[:,actor,0].set(3))
+                    if kind=='broken':s=s._replace(status=s.status.at[:,actor,0].set(3))
+                    self.compare(s,a)
+                    if kind in ('created','broken'):
+                        # A pre-move speed snapshot would wrongly heal the
+                        # slower paralyzed holder after terminal poison. The
+                        # created-tie side is the source-proven limiting case:
+                        # its item still precedes status at equal speed.
+                        terminal=s._replace(hp=s.hp.at[:,:,1:].set(0)
+                            .at[:,actor,0].set(1).at[:,1-actor,0].set(700),
+                            item=s.item.at[:,1-actor,0].set(1))
+                        _,native=self.compare(terminal,a)
+                        from gpu_engine import ordinary_law as law
+                        plan=law.plan_for_state(terminal,a,self.table,self.meta,cap=16384,native_input=native)
+                        hp=[]
+                        for secondary_roll in (0,99):
+                            chance=dict(draws=[[0,99,99,99,15,7,0,0,0,0,0,0] for _ in range(2)],
+                                phazing=[59,59],secondary=[99,99],sleep_talk=[59,59],entry_ties=[0,1],initial_tie=0)
+                            chance['secondary'][actor]=secondary_roll
+                            raw=json.loads(pokezero_search.conditioned_step(native.raw_native,json.dumps(dict(
+                                version=1,schema='pokezero.ordinary-step',actions=a,chance=chance,address=dict(plan.address)))))
+                            self.assertEqual(len(raw['branches']),1)
+                            wire=self.f._native_wire(raw['branches'][0]['state'])
+                            holder=wire['side_two' if actor==0 else 'side_one']['pokemon'][0]
+                            self.assertEqual(holder['status'],'paralyze' if secondary_roll==0 else 'none')
+                            hp.append(holder['hp'])
+                        self.assertEqual(hp[1]-hp[0],62 if kind=='broken' else 0)
+
+    def test_unequal_residual_speed_still_precedes_suborder(self):
+        for loser in (0,1):
+            for loser_first in (False,True):
+                with self.subTest(loser=loser,loser_first=loser_first):
+                    s,a=self.fixture(fast=loser if loser_first else 1-loser)
+                    s=s._replace(status=s.status.at[:,:,0].set(2),
+                        item=s.item.at[:,:,0].set(1),hp=s.hp.at[:,:,1:].set(0)
+                            .at[:,loser,0].set(1).at[:,1-loser,0].set(100))
+                    self.compare(s,a)
+
 
 if __name__=='__main__':unittest.main()
