@@ -3,7 +3,7 @@ const path=require('node:path');
 const {Battle}=require(path.join(process.argv[2],'dist/sim/battle.js'));
 const {Dex}=require(path.join(process.argv[2],'dist/sim/dex.js'));
 const names=['rockslide','icebeam','icepunch','thunderbolt','thunderpunch','thunder',
-  'bodyslam','sludgebomb','fireblast','flamethrower','firepunch','shadowball','crunch','psychic'];
+  'bodyslam','sludgebomb','fireblast','flamethrower','firepunch','shadowball','crunch','psychic','sacredfire'];
 const dex=Dex.mod('gen3');
 const catalog=names.map(id=>{
   const s=dex.moves.get(id).secondaries[0];

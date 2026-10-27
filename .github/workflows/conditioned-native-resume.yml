@@ -21,6 +21,8 @@ on:
       - 'tests/test_native_gen3_natural_cure_cleanup.py'
       - 'tests/test_native_gen3_stall_pp.py'
       - 'tests/test_native_gen3_choice_band_before_move.py'
+      - 'tests/test_native_gpu_secondary_move_effects.py'
+      - 'tests/test_gpu_engine_secondary_move_effects.py'
       - 'tests/test_gpu_engine_successor_cache.py'
       - 'tests/test_gpu_engine_panel_owner.py'
       - 'tests/test_native_gpu_panel_execution.py'
@@ -82,9 +84,10 @@ jobs:
               'tests.test_native_gen3_natural_cure_cleanup',
               'tests.test_native_gen3_stall_pp', 'tests.test_gpu_engine_successor_cache',
               'tests.test_native_gen3_choice_band_before_move',
+              'tests.test_native_gpu_secondary_move_effects',
               'tests.test_gpu_engine_panel_owner',
               'tests.test_native_gpu_panel_execution'])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 102 and not result.skipped
+          assert result.testsRun >= 106 and not result.skipped
           assert result.wasSuccessful()
           PY

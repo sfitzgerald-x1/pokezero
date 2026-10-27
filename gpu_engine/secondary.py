@@ -1,7 +1,8 @@
-"""Selected Gen 3 target secondaries and Static, not full event coverage.
+"""Selected Gen 3 self/target secondaries and Static, not full event coverage.
 
-The caller supplies one fixed [0,100) roll and excludes Substitute damage even
-when that hit broke the substitute. No chance is drawn conditionally here.
+The caller supplies one fixed [0,100) roll and the original Substitute-hit
+flag. Self effects survive Substitute damage and a target KO; target effects
+do not. No chance is drawn conditionally here.
 """
 from typing import NamedTuple
 
@@ -31,7 +32,10 @@ EFFECTS = {
     "shadowball": (20, m.NONE, True, False),
     "crunch": (20, m.NONE, True, False),
     "psychic": (10, m.NONE, True, False),
+    "sacredfire": (50, m.BRN, False, False),
 }
+
+EXTRA_CHANCES = {"silverwind": 10, "ancientpower": 10, "mudshot": 100}
 
 
 class SecondaryTable(NamedTuple):
@@ -47,11 +51,13 @@ class SecondaryTable(NamedTuple):
     type_immunity: jax.Array
     contact: jax.Array           # [M], pinned catalog flag, not damage category
     static: jax.Array            # [A], Gen3 one-third contact paralysis
+    speed_drop: jax.Array        # [M], selected target Speed secondary
+    self_omni: jax.Array         # [M], five user stages; not target Dust/Sub gated
 
 
 def from_metadata(metadata):
     vocab = metadata["vocabulary"]
-    rows = [EFFECTS.get(name, (0, m.NONE, False, False)) for name in vocab["moves"]]
+    rows = [EFFECTS.get(name, (EXTRA_CHANCES.get(name, 0), m.NONE, False, False)) for name in vocab["moves"]]
     flags = lambda names: jnp.asarray([name in names for name in vocab["abilities"]])
     immunity = np.zeros((len(vocab["abilities"]), 7), bool)
     blocked = {"limber": (m.PAR,), "magmaarmor": (m.FRZ,),
@@ -68,7 +74,9 @@ def from_metadata(metadata):
         jnp.asarray([row[2] for row in rows]), jnp.asarray([row[3] for row in rows]),
         flags({"serenegrace"}), flags({"shielddust"}), flags({"clearbody", "whitesmoke"}),
         flags({"innerfocus"}), jnp.asarray(immunity), effects_from_metadata(metadata).status_immunity,
-        jnp.asarray(contact), flags({'static'}))
+        jnp.asarray(contact), flags({'static'}),
+        jnp.asarray([name == 'mudshot' for name in vocab['moves']]),
+        jnp.asarray([name in {'silverwind', 'ancientpower'} for name in vocab['moves']]))
 
 
 def apply_contact(state, side, move, roll, table, *, eligible):
@@ -105,26 +113,33 @@ def status_allowed(table, status, types, ability, *, effective_weather=0):
     return ~immune
 
 
-def apply(state, side, move, roll, table, *, eligible, effective_weather=0):
+def apply(state, side, move, roll, table, *, eligible, effective_weather=0, substitute_hit=False):
     rows = jnp.arange(state.hp.shape[0]); foe = 1 - side
     own, target = state.active[rows, side], state.active[rows, foe]
     get = lambda value: value[rows, foe, target]
     ability = get(state.ability)
     chance = table.chance[move] * jnp.where(table.grace[state.ability[rows, side, own]], 2, 1)
-    proc = (jnp.asarray(eligible) & (get(state.hp) > 0) & ~table.dust[ability]
-        & (jnp.asarray(roll) < chance))
+    trigger = jnp.asarray(eligible) & (jnp.asarray(roll) < chance)
+    proc = (trigger & (get(state.hp) > 0) & ~table.dust[ability]
+        & ~jnp.asarray(substitute_hit))
     status = table.status[move]
     changes = (proc & (status != m.NONE) & (get(state.status) == m.NONE)
         & status_allowed(table, status, get(state.types), ability, effective_weather=effective_weather))
     boosts = get(state.boosts)
     drops = proc & table.spd_drop[move] & ~table.clear_body[ability]
     boosts = boosts.at[:, 3].set(jnp.where(drops, jnp.maximum(-6, boosts[:, 3] - 1), boosts[:, 3]))
+    speed = proc & table.speed_drop[move] & ~table.clear_body[ability]
+    boosts = boosts.at[:, 4].set(jnp.where(speed, jnp.maximum(-6, boosts[:, 4] - 1), boosts[:, 4]))
+    self_proc = trigger & table.self_omni[move] & (state.hp[rows, side, own] > 0)
+    own_boosts = state.boosts[rows, side, own]
+    own_boosts = own_boosts.at[:, :5].set(jnp.where(self_proc[:, None],
+        jnp.clip(own_boosts[:, :5] + 1, -6, 6), own_boosts[:, :5]))
     flinch = (proc & table.flinch[move] & ~table.inner_focus[ability]
         & ((get(state.volatile) & FOCUS_PUNCH)==0))
     return state._replace(
         status=state.status.at[rows, foe, target].set(jnp.where(changes, status, get(state.status))),
         status_counter=state.status_counter.at[rows, foe, target].set(
             jnp.where(changes, 0, get(state.status_counter))),
-        boosts=state.boosts.at[rows, foe, target].set(boosts),
+        boosts=state.boosts.at[rows, foe, target].set(boosts).at[rows, side, own].set(own_boosts),
         volatile=state.volatile.at[rows, foe, target].set(
             get(state.volatile) | jnp.where(flinch, jnp.uint32(FLINCH), jnp.uint32(0))))
