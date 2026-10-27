@@ -1,0 +1,266 @@
+--- a/src/gen3/damage_calc.rs
++++ b/src/gen3/damage_calc.rs
+@@ -146,24 +146,35 @@
+     }
+-
++
+     let def = &defending_side.volatile_statuses;
+     if def.contains(&PokemonVolatileStatus::BOUNCE)
+         || def.contains(&PokemonVolatileStatus::DIG)
+         || def.contains(&PokemonVolatileStatus::DIVE)
+         || def.contains(&PokemonVolatileStatus::FLY)
+     {
+         return 0.0;
+     }
+-
++
+     modifier
++}
++
++/// A zero from an intentionally suppressed hit is different from a legal
++/// damage value floored to zero. Reuse the same volatile/type predicates as
++/// the damage calculation rather than duplicating its suppression inventory.
++pub(crate) fn permits_minimum_damage(state: &State, side: &SideReference, choice: &Choice) -> bool {
++    let (attacking,defending)=state.get_both_sides_immutable(side);
++    matches!(choice.category, MoveCategory::Physical | MoveCategory::Special)
++        && choice.base_power > 0.0
++        && type_effectiveness_modifier(&choice.move_type,defending.get_active_immutable()) > 0.0
++        && volatile_status_modifier(choice,attacking,defending) > 0.0
+ }
+-
++
+ // pokezero gen3 fidelity fix (stat-modifier flooring): RSE applies the
+ // item/ability stat modifiers to the (already boost-floored) STAT via
+ // `battle.modify`'s 4096-based fixed point BEFORE the base formula's /Defense
+ // and /50 truncations. `getDamage` (sim/battle-actions.ts) computes
+ // `attack = attacker.calculateStat(...)` and then fires the
+ // ModifyAtk/ModifySpA/ModifyDef/ModifySpD events; every gen3 handler
+ // (data/mods/gen3/items.ts for Choice Band / Light Ball / Thick Club /
+ // Soul Dew / the 1.1x type items, data/abilities.ts for Guts / Huge Power /
+ // Pure Power / Hustle / Marvel Scale, base data/items.ts for Metal Powder)
+ // calls `chainModify`; the event tail applies ONE `modify()` with the
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -17,25 +17,25 @@
+     ChangeDamageDealtMoveCategoryInstruction, ChangeItemInstruction,
+     ChangeSideConditionInstruction, ChangeVolatileStatusDurationInstruction, ChangeWeather,
+     DecrementRestTurnsInstruction, DecrementWishInstruction, HealInstruction,
+     RemoveVolatileStatusInstruction, SetSecondMoveSwitchOutMoveInstruction,
+     SetSleepTurnsInstruction, ToggleBatonPassingInstruction,
+     ToggleDamageDealtHitSubstituteInstruction,
+ };
+ use crate::instruction::{DecrementPPInstruction, SetLastUsedMoveInstruction};
+ // pokezero gen3 fidelity fix (Attract immobilization attribution).
+ use crate::instruction::{ImmobilizeReason, MoveImmobilizedInstruction, SleepTalkCalledInstruction};
+-
++
+ use super::damage_calc::calculate_futuresight_damage;
+-use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
++use super::damage_calc::{calculate_damage, permits_minimum_damage, type_effectiveness_modifier, DamageRolls};
+ use super::items::{
+     item_before_move, item_end_of_turn, item_modify_attack_against, item_modify_attack_being_used,
+     item_white_herb_check, Items,
+ };
+ use super::state::{MoveChoice, PokemonVolatileStatus, Weather};
+ use crate::choices::{Choice, MoveCategory};
+ use crate::instruction::{
+     ChangeStatusInstruction, DamageInstruction, Instruction, StateInstructions, SwitchInstruction,
+ };
+ use crate::state::{
+     LastUsedMove, Pokemon, PokemonBoostableStat, PokemonIndex, PokemonMoveIndex,
+     PokemonSideCondition, PokemonStatus, PokemonType, Side, SideMovesFirst, SideReference, State,
+@@ -2397,24 +2397,36 @@
+     mut state: &mut State,
+     choice: &mut Choice,
+     calculated_damage: i16,
+     attacking_side_ref: &SideReference,
+     mut incoming_instructions: &mut StateInstructions,
+ ) -> bool {
+     /*
+     TODO:
+         - arbitrary other after_move as well from the old engine (triggers on hit OR miss)
+             - dig/dive/bounce/fly volatilestatus
+     */
+     let mut hit_sub = false;
++    // Gen3 modifyDamage applies minimum one AFTER the randomizer. A normal
++    // nonimmune hit can have a pre-random maximum of zero or one after type
++    // resistance; flooring its roll must not turn that successful hit into a
++    // no-op. Apply this at the shared per-hit boundary, so both collapsed and
++    // enumerated fans, and all ordinary damaging moves, obey the same rule.
++    // Protect/absorbers clear power/category before this point, real type
++    // immunity stays zero, and failed fixed-damage callbacks remain failures.
++    // Leave negative values on the existing invalid/no-damage path.
++    let calculated_damage = if calculated_damage == 0
++        && permits_minimum_damage(state,attacking_side_ref,choice)
++        && gen3_fixed_damage_amount(state, choice, attacking_side_ref).is_none()
++    { 1 } else { calculated_damage };
+     let attacking_side = state.get_side(attacking_side_ref);
+     let attacking_pokemon = attacking_side.get_active();
+-
++
+     if calculated_damage <= 0 {
+         if let Some(crash_fraction) = choice.crash {
+             let crash_amount = (attacking_pokemon.maxhp as f32 * crash_fraction) as i16;
+             let damage_taken = cmp::min(crash_amount, attacking_pokemon.hp);
+             let crash_instruction = Instruction::Damage(DamageInstruction {
+                 side_ref: *attacking_side_ref,
+                 damage_amount: damage_taken,
+             });
+             attacking_pokemon.hp -= damage_taken;
+--- a/src/gen3/conditioned_step.rs
++++ b/src/gen3/conditioned_step.rs
+@@ -1,20 +1,19 @@
+ //! Fixed-chance ordinary move requests, distinct from suspended continuation.
+ //!
+ //! Domain admission and chance observations come from native consumers. The
+ //! parent is immutable, the address is supplied before execution, and native
+ //! control flow owns the output queue and every forwarded bank expression.
+ use super::abilities::Abilities;
+ use super::conditioned_resume::ResumeCapsule;
+-use super::damage_calc::{calculate_damage, type_effectiveness_modifier, DamageRolls};
+ use super::generate_instructions::generate_instructions_from_move_pair;
+ use super::items::Items;
+ use super::state::{MoveChoice, Weather};
+ use crate::choices::{Choices, Effect, MoveTarget, Secondary, MOVES};
+ use crate::instruction::{Instruction, StateInstructions};
+ use crate::state::{PokemonMoveIndex, PokemonStatus, SideConditions, SideReference, State,
+     VolatileStatusDurations};
+-
++
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ pub struct StepChance {
+     pub draws: [[u8; 12]; 2],
+     pub phazing: [u8; 2],
+@@ -115,40 +114,24 @@
+             || !matches!(active.item, Items::NONE | Items::LEFTOVERS)
+             || !matches!(active.status, PokemonStatus::NONE | PokemonStatus::POISON | PokemonStatus::PARALYZE)
+             || active.pre_transform.is_some() || active.rest_sleep_pending_refund != 0
+             || active.rest_turns != 0 || active.sleep_turns != 0 || active.terastallized
+         { return Err("STEP_UNSUPPORTED_ACTIVE_CONTEXT"); }
+         let mv = &active.moves[&move_index(slots[s])?];
+         if !matches!(mv.id, Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION
+                 | Choices::BATONPASS | Choices::PROTECT | Choices::ENDURE | Choices::SPLASH)
+             || mv.disabled || mv.pp <= 0
+             || format!("{:?}", mv.choice) != format!("{:?}", MOVES.get(&mv.id).unwrap())
+         { return Err("STEP_UNSUPPORTED_SELECTED_MOVE"); }
+         ids[s] = mv.id;
+-        // The old ordinary oracle can round a nonimmune max0/max1 hit to
+-        // zero; the suspended fixed-roll path already applies minimum one.
+-        // Do not silently repair that old oracle while claiming conditioning
+-        // preserves its marginal. All supported modifiers are unchanged by
+-        // these seven moves before this actor executes (new paralysis changes
+-        // speed only). Preserve true immunity as an admitted zero-damage case.
+-        let other = sides[1-s].get_active_immutable();
+-        if type_effectiveness_modifier(&mv.choice.move_type, other) > 0.0 {
+-            if let Some((regular,critical)) = calculate_damage(state,
+-                &if s==0 {SideReference::SideOne} else {SideReference::SideTwo},
+-                &mv.choice, DamageRolls::Max) {
+-                if regular <= 1 || critical <= 1 {
+-                    return Err("STEP_ORDINARY_MINIMUM_DAMAGE_REPAIR_PENDING");
+-                }
+-            }
+-        }
+     }
+     let a = sides[0].get_active_immutable().speed;
+     let b = sides[1].get_active_immutable().speed;
+     // JAX has separate residual event ties. This domain admits no potentially
+     // tied ordering, even after a newly applied paralysis changes speed.
+     if [a, a / 4].iter().any(|x| [b, b / 4].iter().any(|y| x == y)) {
+         return Err("STEP_UNSUPPORTED_RESIDUAL_SPEED_TIE");
+     }
+     let mut result = Vec::new();
+     let mut add = |coordinate: String, kind, argument| result.push(Requirement {coordinate, kind, argument});
+     for s in 0..2 {
+         if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION) {
+@@ -372,33 +355,35 @@
+         chance.draws[0][4]=16;
+         assert_eq!(step(&state,[2,2],&chance,&address).unwrap_err(),"INVALID_STEP_CHANCE");
+         chance.draws[0][4]=0;address.turn=u32::MAX;
+         assert_eq!(step(&state,[2,2],&chance,&address).unwrap_err(),"STEP_TURN_OVERFLOW");
+         state.side_one.force_switch=true;
+         assert_eq!(requirements(&state,[2,2]).unwrap_err(),"ORDINARY_LIVE_REQUEST_REQUIRED");
+         state.side_one.force_switch=false;
+         state.side_one.get_active().replace_move(PokemonMoveIndex::M2,Choices::SLEEPTALK);
+         assert_eq!(requirements(&state,[2,2]).unwrap_err(),"STEP_UNSUPPORTED_SELECTED_MOVE");
+     }
+-
++
+     #[test]
+-    fn low_nonimmune_damage_refuses_but_true_immunity_keeps_zero_damage() {
++    fn low_nonimmune_damage_has_minimum_one_but_true_immunity_keeps_zero_damage() {
+         use crate::state::PokemonType;
+         for double in [false,true] {
+             let (mut state,chance,address)=fixture([Choices::THUNDERBOLT,Choices::SPLASH]);
+             state.side_one.get_active().special_attack=1;
+             state.side_two.get_active().special_defense=30000;
+             state.side_two.get_active().types=(PokemonType::GRASS,
+                 if double {PokemonType::DRAGON} else {PokemonType::TYPELESS});
+-            assert_eq!(requirements(&state,[2,2]).unwrap_err(),"STEP_ORDINARY_MINIMUM_DAMAGE_REPAIR_PENDING");
++            let hp=state.side_two.get_active_immutable().hp;
++            let b=step(&state,[2,2],&chance,&address).unwrap().remove(0);
++            assert_eq!(b.state.side_two.get_active_immutable().hp,hp-1);
+             state.side_two.get_active().types=(PokemonType::GROUND,PokemonType::TYPELESS);
+             let hp=state.side_two.get_active_immutable().hp;
+             let b=step(&state,[2,2],&chance,&address).unwrap().remove(0);
+             assert_eq!(b.state.side_two.get_active_immutable().hp,hp);
+         }
+     }
+-
++
+     #[test]
+     fn fixed_chance_physical_marginal_matches_complete_ordinary_native_law() {
+         use std::collections::BTreeMap;
+         assert!(super::super::generate_instructions::enumerate_damage_rolls(),
+             "run this control with POKEZERO_ENUMERATE_ROLLS=1 before process startup");
+@@ -413,41 +398,49 @@
+             let (name,cells)=&axes[index];let parts:Vec<_>=name.split('.').collect();
+             let seat:usize=parts[1].parse().unwrap();
+             for (value,weight) in cells {
+                 match parts[0] {
+                     "draws" => chance.draws[seat][parts[2].parse::<usize>().unwrap()]=*value,
+                     "phazing" => chance.phazing[seat]=*value,
+                     "secondary" => chance.secondary[seat]=*value,
+                     _ => panic!("unexpected native active coordinate"),
+                 }
+                 recurse(state,address,chance,axes,index+1,mass*weight,out);
+             }
+         }
+-        for variant in 0..10 {
++        for variant in 0..12 {
+             let selected=match variant {
+                 0|1 => [Choices::THUNDERBOLT,Choices::SPLASH],
+                 2|3 => [Choices::BODYSLAM,Choices::SPLASH],
+                 4|5 => [Choices::PROTECT,Choices::SPLASH],
+                 6|7 => [Choices::BATONPASS,Choices::SPLASH],
+-                _ => [Choices::EXPLOSION,Choices::SPLASH],
++                8|9 => [Choices::EXPLOSION,Choices::SPLASH],
++                _ => [Choices::THUNDERBOLT,Choices::SPLASH],
+             };
+             let (mut state,mut chance,address)=fixture(selected);
+             if variant%2==1 {
+                 state.side_one.get_active().speed=101;
+                 state.side_two.get_active().speed=301;
+             }
+             if variant==1 || variant==5 {state.side_one.get_active().status=PokemonStatus::PARALYZE;}
+             if variant==3 {state.side_two.get_active().ability=Abilities::STATIC;}
+             if variant==4 || variant==5 {state.side_one.side_conditions.protect=3;}
+             if variant==9 {state.side_two.get_active().hp=1;}
++            if variant>=10 {
++                use crate::state::PokemonType;
++                state.side_one.get_active().special_attack=1;
++                state.side_two.get_active().special_defense=30000;
++                state.side_two.get_active().types=(PokemonType::GRASS,
++                    if variant==11 {PokemonType::DRAGON} else {PokemonType::TYPELESS});
++            }
+             let mut uses:BTreeMap<String,Vec<Requirement>>=BTreeMap::new();
+             for req in requirements(&state,[2,2]).unwrap() {uses.entry(req.coordinate.clone()).or_default().push(req);}
+             let axes:Vec<_>=uses.into_iter().map(|(name,cuts)| {
+                 let parts:Vec<_>=name.split('.').collect();
+                 let bound=match parts[0] {
+                     "draws" => [2,100,100,100,16,16,100,4,8,2,2,2][parts[2].parse::<usize>().unwrap()],
+                     "phazing" => 60,"secondary"=>100,_=>panic!("unexpected coordinate"),
+                 };
+                 let mut groups:BTreeMap<Vec<u8>,(u8,usize)>=BTreeMap::new();
+                 for value in 0..bound {
+                     let key=cuts.iter().map(|cut| if cut.kind=="identity" {value} else {u8::from(value<cut.argument)}).collect();
+                     groups.entry(key).or_insert((value,0)).1+=1;

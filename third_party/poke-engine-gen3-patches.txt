@@ -1818,3 +1818,8 @@ poke-engine-gen3-conditioned-joint-replacement.patch
 # Separate opt-in ordinary fixed-chance context; native cuts and independent
 # full queue/chance carry outputs. No collector or historical panel changes.
 poke-engine-gen3-conditioned-ordinary-step.patch
+
+# Gen3 final minimum one for successful ordinary nonimmune standard hits.
+# Shared native type/volatile suppression and fixed-callback exclusions retain
+# misses, Protect, immunity and crash behavior; low fixed-chance domain admitted.
+poke-engine-gen3-ordinary-minimum-damage.patch

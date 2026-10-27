@@ -737,7 +737,7 @@ does not change JAX's already matching stall behavior.
 including positive pending-residual successors. Supply the already validated
 current-root `NativeInput` with retained original constructor provenance,
 explicit move slots, case/batch/node bounds, and an owning operation deadline.
-Both installed native consumers must match the registered Native95 build.
+Both installed native consumers must match the registered Native96 build.
 This API does not change the scientific collector or old panel admission.
 
 The native API has a distinct ordinary context. It independently declares its
@@ -755,9 +755,11 @@ Body Slam, Explosion, Baton Pass, Protect, Endure or Splash, with the guarded
 active abilities/items/statuses and no potentially tied residual ordering.
 Untouched bench fields remain retained. A representable pending output does
 not promise that the next continuation is executable by the narrower resume
-API. Existing nonimmune maximum-zero/one native ordinary damage remains an
-explicit refusal pending its own repair; true immunity is admitted. Existing
-nonzero Protect-streak storage at a Baton suspension remains a measured
+API. Native96 applies Gen3's final minimum one to successful nonimmune ordinary
+hits, including maximum-zero/one resistance cases, with shared type/volatile
+suppression and fixed-callback exclusions. The complete-law comparator admits
+those repaired low-damage states and retains true immunity. Existing nonzero
+Protect-streak storage at a Baton suspension remains a measured
 authored DIVERGE, with equal capsules and differing physical counters. Neither
 gap is erased by the mapper. These authored controls provide no new scientific
 panel counts, strength evidence or full-engine qualification.

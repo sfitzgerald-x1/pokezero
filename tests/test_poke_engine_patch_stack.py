@@ -33,7 +33,7 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
     "src/gen3/state.rs": "0565d1a673aa577988b136782878ea3633d3c01bff23b76b7652a415d6f9fbfd",
-    "src/gen3/generate_instructions.rs": "17f54af9ecb1bfbde88dc4288d31d81a4dc8c0cb45f9cb0ea9c056c1974cb6f3",
+    "src/gen3/generate_instructions.rs": "669150325176a3f17fe01624782ba1a68a41039ad0cc27acfd5ae4ea81ba2b6e",
     "src/instruction.rs": "c9c7f69819dc77171a54918e32cfb064329144f6d3b8991c2068adcbeceb0a57",
     "src/state.rs": "a42ff14639802a208094c54247de4898426d1e2a132f47870aef515ff0ca6f81",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
@@ -117,7 +117,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-38:]],
+                [entry.name for entry in applied[-39:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -167,6 +167,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-choice-lock-after-beforemove.patch",
                     "poke-engine-gen3-conditioned-joint-replacement.patch",
                     "poke-engine-gen3-conditioned-ordinary-step.patch",
+                    "poke-engine-gen3-ordinary-minimum-damage.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
