@@ -709,9 +709,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _active(work.hp,work,foe),_active(work.substitute_hp,work,foe),
                 _active(work.volatile,work,foe),eligible=acts & hit)
             pending = work.wish_counter[rows,side]
+            starts_wish = acts & table.sustain.wish[move] & (pending == 0)
             work = work._replace(volatile=_set_active(work.volatile,work,foe,seeded),
                 wish_counter=work.wish_counter.at[rows,side].set(jnp.where(
-                    acts & table.sustain.wish[move] & (pending == 0),2,pending)))
+                    starts_wish,2,pending)),
+                wish_amount=work.wish_amount.at[rows,side].set(jnp.where(
+                    starts_wish,_active(work.max_hp,work,side)//2,work.wish_amount[rows,side])))
             # Gen3 clears even through an unbroken Substitute or zero actual
             # Endure damage, but not on a miss, Protect or type immunity.
             work=recovery.spin_cleanup(work,side,

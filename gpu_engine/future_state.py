@@ -66,7 +66,8 @@ FIELD_POLICY = {
     "sleep_talk_draws": "future-reused while suspended; otherwise consumed inactive draws",
     "replacement_count": "future tie address while suspended; otherwise inactive address",
     "spikes": "native side condition",
-    "wish_counter": "nonzero Wish needs missing caster/recipient heal-amount correspondence",
+    "wish_counter": "native side Wish counter, independent of retained amount and current recipient",
+    "wish_amount": "native stored caster half-max-HP, retained through expiry and switches; healing uses recipient",
     "weather": "native field weather",
     "weather_counter": "native duration; non-NONE JAX0 permanent maps to native-1, positive clocks unchanged",
     "turn": "external ordinary-turn address; startup must already be resolved",
@@ -118,7 +119,8 @@ NATIVE_PATHS = {
        for name in ("residual_draws", "phazing_draws", "secondary_draws", "sleep_talk_draws")},
     "replacement_count": ("EXTERNAL_CHANCE: conditional tie-stream address",),
     "spikes": ("side[].side_conditions.spikes",),
-    "wish_counter": ("UNRESOLVED: side[].wish=(counter,stored_heal_amount)",),
+    "wish_counter": ("side[].wish[0]",),
+    "wish_amount": ("side[].wish[1]",),
     "weather": ("State.weather.weather_type",), "weather_counter": ("State.weather.turns_remaining: active JAX0 -> native-1",),
     "turn": ("EXTERNAL_CHANCE: turn address; startup already resolved",),
     "keys": ("EXTERNAL_CHANCE: PRNG address, not exact semantic outcome state",),
@@ -149,7 +151,7 @@ SHAPES = {name: (2, 6) for name in ("species", "level", "hidden_power_type", "hi
 SHAPES.update({name: (2,) for name in ("active", "entry_pending", "active_turns", "trapped", "forced_switch",
     "last_action_kind", "last_action_index",
     "baton_pass", "queued_actions", "queued_stall", "phazing_draws", "secondary_draws", "sleep_talk_draws",
-    "spikes", "wish_counter", "keys")})
+    "spikes", "wish_counter", "wish_amount", "keys")})
 SHAPES.update({name: () for name in ("queued_actor", "pending_residual", "replacement_count", "weather",
     "weather_counter", "turn", "done", "winner")})
 SHAPES.update(types=(2, 6, 2), stats=(2, 6, 6), moves=(2, 6, 4), pp=(2, 6, 4), disabled=(2, 6, 4),
@@ -297,6 +299,9 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
     if not {"last_action_kind", "last_action_index"} <= data.keys():
         add("last_action", "LAST_ACTION_HISTORY_REQUIRED", "Retain explicit side-owned kind/index; never infer history from identity or active age")
         return None, gaps, (), False, False
+    if "wish_amount" not in data:
+        add("wish_amount", "WISH_HISTORY_REQUIRED", "Retain the actual stored Wish history, including after counter expiry; never infer it from current HP")
+        return None, gaps, (), False, False
     if original_static is not None:
         required = {f"{side}.pokemon[{p}]" for side in SIDE_NAMES for p in range(6)}
         if set(dict(original_static)) != required or original_genders is None:
@@ -317,6 +322,10 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
             or (kind == 2 and 0 <= index < 4))
         if not valid:
             add(f"side[{side}].last_action", "INVALID_LAST_ACTION_HISTORY", "Expected NONE/STRUGGLE(-1), SWITCH(0..5), or MOVE(0..3)")
+    for side,(counter,amount) in enumerate(zip(data["wish_counter"],data["wish_amount"])):
+        if (type(counter) is not int or type(amount) is not int
+                or not 0 <= counter <= 127 or not 0 <= amount <= 32767):
+            add(f"side[{side}].wish", "INVALID_WISH_HISTORY", "Expected nonnegative native i8 counter and i16 stored amount")
     if gaps:
         return None, gaps, (), False, False
     if not 0 <= data["weather"] < len(WEATHER_NAMES) or not 0 <= data["weather_counter"] <= 127:
@@ -470,8 +479,6 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
             if source != data["active"][1-side] or data["hp"][1-side][source] <= 0:
                 add(side_name+".trap_source", "UNMAPPED_TRAP_SOURCE", "Move trap source must be the live opposing active")
             volatiles.add("trapped")
-        if data["wish_counter"][side]:
-            add(side_name+".wish_counter", "WISH_HEAL_AMOUNT_NOT_RETAINED", "JAX recipient-dependent healing cannot manufacture native stored heal amount/history")
         conditions = {k: 0 for k in CONDITIONS}
         # These are documented future-law quotients, NOT raw-state equality.
         # Native Protect uses min(streak,3) as a success exponent; JAX stores
@@ -509,7 +516,7 @@ def _prepare(data, metadata, certificate=None, *, boundary="ordinary",
             side_conditions=conditions, volatile_status_durations={k: 0 for k in DURATIONS},
             volatile_statuses=tuple(sorted(volatiles)), substitute_health=data["substitute_hp"][side][active],
             **{name+"_boost": data["boosts"][side][active][i] for i, name in enumerate(BOOST_NAMES)},
-            wish=(0, 0), future_sight=(0, "0"),
+            wish=(data["wish_counter"][side], data["wish_amount"][side]), future_sight=(0, "0"),
             force_switch=bool(data["forced_switch"][side]) if boundary == "suspended" else False,
             switch_out_move_second_saved_move=saved_move,
             baton_passing=bool(data["baton_pass"][side]) if boundary == "suspended" else False, shed_tailing=False,
@@ -695,7 +702,11 @@ def _canonical_native_future(native_state, certificate, *, boundary="ordinary"):
             for field, value in side["volatile_status_durations"].items():
                 if value:
                     gaps.append(Gap(name+".volatile_status_durations."+field, "LATENT_DURATION_CONVENTION", repr(value)))
-            for field in ("wish", "future_sight", "force_switch", "baton_passing", "shed_tailing", "slow_uturn_move"):
+            counter,amount = side["wish"]
+            if not 0 <= counter <= 127 or not 0 <= amount <= 32767:
+                gaps.append(Gap(name+".wish", "INVALID_NATIVE_WISH_HISTORY",
+                                "Expected nonnegative native i8 counter and i16 stored amount"))
+            for field in ("future_sight", "force_switch", "baton_passing", "shed_tailing", "slow_uturn_move"):
                 if boundary == "suspended" and field in ("force_switch", "baton_passing"):
                     continue  # explicit capsule policy validates these live fields
                 value = side[field]

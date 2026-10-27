@@ -310,7 +310,7 @@ class ConditionedResumeTests(unittest.TestCase):
             value=c.suspended_input_from_jax(paused,0,self.meta,certificate=cert,module=self.engine)
             self.assertIsInstance(value,self.f.Refused,value)
         for state in (paused._replace(secondary_draws=paused.secondary_draws.at[:,1].set(100)),
-                      paused._replace(wish_counter=paused.wish_counter.at[:,0].set(1))):
+                      paused._replace(wish_counter=paused.wish_counter.at[:,0].set(128))):
             value=c.suspended_input_from_jax(state,0,self.meta,certificate=certificate,module=self.engine)
             self.assertIsInstance(value,self.f.Refused,value)
         # Full construction preserves weather, but the native continuation
@@ -321,6 +321,17 @@ class ConditionedResumeTests(unittest.TestCase):
         value=c.native_successors(bound,1,[0,1])
         self.assertIsInstance(value,self.f.Refused,value)
         self.assertIn("UNSUPPORTED_FIELD_CONTEXT",repr(value.gaps))
+        # Explicit Wish history can now be represented without guessing, just
+        # like weather above. Native execution still refuses this context.
+        for counter,amount in ((1,0),(0,150)):
+            unsupported=paused._replace(wish_counter=paused.wish_counter.at[:,0].set(counter),
+                wish_amount=paused.wish_amount.at[:,0].set(amount))
+            wish_bound=c.suspended_input_from_jax(unsupported,0,self.meta,
+                certificate=certificate,module=self.engine)
+            self.assertIsInstance(wish_bound,c.SuspendedNativeInput,wish_bound)
+            value=c.native_successors(wish_bound,1,[0,1])
+            self.assertIsInstance(value,self.f.Refused,value)
+            self.assertIn("UNSUPPORTED_SIDE_CONTEXT",repr(value.gaps))
         # The general mapper still refuses, and no capsule can be rebound to
         # another JAX root by retaining its old correspondence certificate.
         bound=c.suspended_input_from_jax(paused,0,self.meta,certificate=certificate,module=self.engine)
