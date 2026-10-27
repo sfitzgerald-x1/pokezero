@@ -127,13 +127,13 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`3d07f9dc49b1c89e…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`b9c6e16bfa0bfb6c…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
-the fingerprint's inputs — the 92 gen3 patches, `poke-engine-gen3-patches.txt`,
+the fingerprint's inputs — the 93 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 22 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
@@ -370,6 +370,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Conditional deterministic active abilities | The opt-in continuation adds current Pressure and Levitate for deterministic PP and grounding in the existing queued-move context. Reached original base abilities are retained as inert until departure, without relaxing current-ability, item, status, field, queue or chance guards. Inventory grows to90 patches and118 hashed inputs;22 crate sources are unchanged. Authored successor/carry comparisons do not grant real-pool acceptance, new scientific coverage or strength qualification. Historical rows and OPEN gates remain unchanged | `cf8ef70aefd5640a…` |
 | Natural Cure sleep-stint cleanup | One appended Gen3 patch routes current Natural Cure through the existing reversible status-removal funnel before original-ability restoration, clearing Rest, pending-refund and elapsed natural-sleep state. Inventory grows to91 patches and119 hashed inputs;22 crate sources are unchanged. Both-seat authored source-law and installed-native regressions propagate all weighted branches and preserve exact apply/reverse. Historical sweeps, stopped rosters, source qualification and OPEN gates remain unchanged | `73aa65ba5ca45fc1…` |
 | Stall-move PP/history ordering | One appended Gen3 patch moves Protect/Detect/Endure's stall draw after accepted BeforeMove, PP and last-used history, including external Sleep Talk callees, and applies the last-queued-action failure rule to Endure. Inventory grows to92 patches and120 hashed inputs;22 crate sources are unchanged. Both-seat authored full-law and apply/reverse controls retain free BeforeMove failures and legacy high-PP abstraction. The root-local JAX canonical memo preserves every chance case, physical state field and refusal. Historical cost attempts, sweeps, stopped rosters and OPEN qualification remain unchanged | `3d07f9dc49b1c89e…` |
+| Choice Band accepted-caller restriction | One appended Gen3 patch moves the reversible Choice Band restriction after accepted BeforeMove and PP/history, including the separate Sleep Talk caller prefix; external callees cannot relock it. Both-seat fresh blocked, retained-lock, accepted-failure and Sleep Talk controls cover stable held-item states. Item-changing/self-switching AfterMove parity remains outside this repair. Inventory grows to93 patches and121 hashed inputs;22 crate sources are unchanged. Historical rosters, cost evidence and OPEN qualification remain unchanged | `b9c6e16bfa0bfb6c…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -997,7 +998,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 427 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 92 |
+| `base.patch_stack` | 93 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -1018,8 +1019,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 22 |
-| `t1.hashed_input_files` | 120 |
-| `t1.head_fingerprint` | 3d07f9dc49b1c89e |
+| `t1.hashed_input_files` | 121 |
+| `t1.head_fingerprint` | b9c6e16bfa0bfb6c |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |

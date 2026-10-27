@@ -20,6 +20,7 @@ on:
       - 'tests/test_rest_origin_native.py'
       - 'tests/test_native_gen3_natural_cure_cleanup.py'
       - 'tests/test_native_gen3_stall_pp.py'
+      - 'tests/test_native_gen3_choice_band_before_move.py'
       - 'tests/test_gpu_engine_successor_cache.py'
       - 'tests/test_gpu_engine_panel_owner.py'
       - 'tests/test_native_gpu_panel_execution.py'
@@ -58,6 +59,8 @@ jobs:
           PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --lib conditioned_resume::tests
           PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --test gen3_natural_cure_cleanup
           PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --test gen3_stall_pp_after_gates
+          PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --test gen3_choice_band_before_move
+          PYO3_PYTHON="$(command -v python)" cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --test gen3_choice_band_before_move
           python -m maturin build --manifest-path third_party/poke-engine-src/poke-engine-py/Cargo.toml --release --no-default-features --features conditioned-oracle --out /tmp/conditioned-wheels
           python -m maturin build --manifest-path rust/pokezero-search/Cargo.toml --release --no-default-features --features conditioned-oracle --out /tmp/conditioned-wheels
           python -m pip install /tmp/conditioned-wheels/*.whl
@@ -78,9 +81,10 @@ jobs:
               'tests.test_rest_origin_native',
               'tests.test_native_gen3_natural_cure_cleanup',
               'tests.test_native_gen3_stall_pp', 'tests.test_gpu_engine_successor_cache',
+              'tests.test_native_gen3_choice_band_before_move',
               'tests.test_gpu_engine_panel_owner',
               'tests.test_native_gpu_panel_execution'])
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          assert result.testsRun >= 97 and not result.skipped
+          assert result.testsRun >= 101 and not result.skipped
           assert result.wasSuccessful()
           PY
