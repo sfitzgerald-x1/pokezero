@@ -1823,3 +1823,7 @@ poke-engine-gen3-conditioned-ordinary-step.patch
 # Shared native type/volatile suppression and fixed-callback exclusions retain
 # misses, Protect, immunity and crash behavior; low fixed-chance domain admitted.
 poke-engine-gen3-ordinary-minimum-damage.patch
+
+# Original-coordinate Gen3 Will-O-Wisp accuracy/primary burn, existing Light Ball
+# stat item admission; no zero-mass misses after a fully blocked BeforeMove.
+poke-engine-gen3-conditioned-primary-burn.patch

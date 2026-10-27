@@ -127,13 +127,13 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`73ab5ad777a4ec08…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`5fdc396dc7973028…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
 legitimate, and it has now happened **once per row of the table below** — DE-NUMBERED on purpose,
 see the warning under it. Restricting `git log 7fcd9e19..HEAD` to **all** of
-the fingerprint's inputs — the 96 gen3 patches, `poke-engine-gen3-patches.txt`,
+the fingerprint's inputs — the 97 gen3 patches, `poke-engine-gen3-patches.txt`,
 `poke-engine-base-source.json`, the 23 crate sources, and the `Cargo.toml` / `Cargo.lock` /
 `build.rs` / `pyproject.toml` that `cargo_inputs` and `build_metadata_inputs` contribute — returns
 a SUPERSET of those rows, for the reason recorded below. ⚠ **The `input` column is DERIVED, and the third row was wrong on
@@ -374,6 +374,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Conditional initial and joint faint replacements | One appended opt-in Gen3 patch admits initial single/joint faint requests and bounded hazard chains through explicit party choices. Both entrants install before callbacks; early or late hazard KOs retain completed callbacks and defer residuals until a survivor enters. Exact integer binding checks and authored full successor/carry plus pinned-source controls retain whole-slot refusals. Inventory grows to94 patches and122 hashed inputs;22 crate sources are unchanged. Ordinary positive-successor carry, historical panel counts and OPEN qualification remain unchanged | `a1b55b0d3a7b0cf2…` |
 | Ordinary fixed-chance carry API | A separate opt-in native ordinary context declares independent consumers and produces complete physical/queue/copy/constant carry. Both-engine common refinement and bounded exact output-law comparison retain aliases, correlations and closed aggregation. Inventory grows to95 patches,23 crate sources and124 hashed inputs. Nonimmune max0/max1 remains explicitly refused pending ordinary-native minimum-damage repair; pending nonzero stall-storage differences remain DIVERGE rather than quotiented. No panel admission, historical classifications, default search behavior, or OPEN qualification changes | `481094fe7d3b6efc…` |
 | Ordinary native final minimum damage | One appended Gen3 patch applies final minimum one to zero-valued successful normal hits at the shared per-hit boundary, using the native type/volatile suppression predicates and fixed-callback exclusion. Exact and collapsed ordinary profiles retain immunity, Protect, misses, absorbers, crash and fixed-damage failures. The low-damage fixed-chance refusal is removed with full-law controls; the pending-stall storage DIVERGE remains. Inventory grows to96 patches and125 inputs;23 crate sources unchanged. Historical results and OPEN qualification remain unchanged | `73ab5ad777a4ec08…` |
+| Ordinary primary burn and stat-item domain | One appended opt-in patch binds Gen3 Will-O-Wisp to the original accuracy coordinate using its canonical native75 cut, admits deterministic burn and species-gated Light Ball, and prevents a zero-mass miss after a fully blocked BeforeMove prefix. Both-engine cuts retain wrong-table divergence, immunity, existing status, Protect and pending outputs. Inventory grows to97 patches and126 inputs;23 crate sources unchanged. No collector admission, historical result or OPEN qualification changes | `5fdc396dc7973028…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -1001,7 +1002,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.support_gated_holdout` | 9.185 % |
 | `base.expected_counter_artifacts` | 427 |
 | `base.expected_sweep_artifacts` | 115 |
-| `base.patch_stack` | 96 |
+| `base.patch_stack` | 97 |
 | `base.section3_rows` | 82 |
 | `base.section4_candidates` | 27 |
 | `base.section4_drops` | 26 |
@@ -1022,8 +1023,8 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.committed_json_carrying_head_fingerprint` | 0 |
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 23 |
-| `t1.hashed_input_files` | 125 |
-| `t1.head_fingerprint` | 73ab5ad777a4ec08 |
+| `t1.hashed_input_files` | 126 |
+| `t1.head_fingerprint` | 5fdc396dc7973028 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
