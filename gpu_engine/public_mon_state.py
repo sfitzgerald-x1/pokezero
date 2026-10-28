@@ -194,3 +194,26 @@ def copy_boosts(state: MonState, *, source_side, target_side, valid=True):
         state.active[row, source_safe] >= 0) & (state.active[row, target_safe] >= 0) & jnp.asarray(valid)
     return state._replace(boosts=_write(state.boosts, (row, source_safe),
         state.boosts[row, target_safe], admitted)), admitted
+
+
+def clear_all_boosts(state: MonState, *, valid=True):
+    """Haze's public clear applies to both sides, including empty active slots."""
+    valid=jnp.asarray(valid)
+    if valid.dtype!=jnp.bool_:raise ValueError("global boost validity must be boolean")
+    admitted=jnp.broadcast_to(valid,(state.active.shape[0],))
+    return state._replace(boosts=jnp.where(admitted[:,None,None],0,state.boosts)),admitted
+
+
+def cure_team(state: MonState, *, side, valid=True):
+    """Clear named nonvolatile status on known living members of one side.
+
+    Fainted conditions remain fainted. This is the status-field consumer only;
+    sleep/Rest clocks, sleep-clause ownership and cure inference remain separate.
+    """
+    side=_int32(side);valid=jnp.asarray(valid)
+    if valid.dtype!=jnp.bool_:raise ValueError("team cure validity must be boolean")
+    batch=state.active.shape[0];side=jnp.broadcast_to(side,(batch,));row=jnp.arange(batch)
+    seat=jnp.clip(side,0,1);admitted=(side>=0)&(side<2)&valid
+    known_living=(state.encounter[row,seat]>0)&~state.fainted[row,seat]
+    updated=jnp.where(known_living,0,state.status[row,seat])
+    return state._replace(status=_write(state.status,(row,seat),updated,admitted)),admitted
