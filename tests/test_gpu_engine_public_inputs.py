@@ -7,6 +7,7 @@ import unittest
 class PublicInputsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        from dataclasses import replace
         import jax
         import jax.numpy as j
         import numpy as np
@@ -17,7 +18,9 @@ class PublicInputsTests(unittest.TestCase):
         rows = tuple(Gen3RandbatVariant(str(k), "fixture", "Pikachu", "Fast", 80,
             ("Thunderbolt", "Surf" if k else "Toxic"), "Static", "Light Ball") for k in range(2))
         source = Gen3RandbatSource(RandbatSourceMetadata("gen3randombattle", 3, None, None, None,
-            "transport-fixture"), {"pikachu": Gen3RandbatSpeciesUniverse("Pikachu", 80, rows)})
+            "transport-fixture"), {"pikachu": Gen3RandbatSpeciesUniverse("Pikachu", 80, rows),
+            "mrmime": Gen3RandbatSpeciesUniverse("Mr. Mime", 80,
+                tuple(replace(v, species="Mr. Mime", ability="Soundproof") for v in rows))})
         cls.host = belief.compile_source(source)
         cls.tables = cls.host.device
 
@@ -153,6 +156,71 @@ class PublicInputsTests(unittest.TestCase):
             list(self.i.pack_chunks(self.np.array([1, 1], self.np.int32), [[], []], source_binding=self.tables.binding))
         with self.assertRaises(ValueError):
             list(self.i.pack_chunks(self.np.array([1], self.np.int32), [[]], source_binding=self.np.zeros(7, self.np.uint32)))
+
+    def mon_event(self, kind, sequence, payload, *, side=1, slot=0):
+        return self.i.PublicEvent(kind, sequence, 0, self.i.Phase.ACTION,
+            target_side=side, target_slot=slot, payload=tuple(payload) + (0,) * (8 - len(payload)))
+
+    def test_public_arrival_condition_boost_baton_and_set_evidence_share_ordered_fold(self):
+        from gpu_engine import public_mon_state as p
+        from pokezero import showdown as s
+        cursor, _ = self.initial()
+        beliefs = self.b.initialize(self.j.zeros((1, 2, 6), self.j.int32), self.tables)
+        events = [self.mon_event(self.i.Kind.SWITCH, 1, [1, 10, 1, 80, 1, 100, 100, p.PARALYSIS]),
+                  self.mon_event(self.i.Kind.BOOST, 2, [1, 0, 2, p.DELTA]),
+                  self.fact(3, slot=0),
+                  self.mon_event(self.i.Kind.BATON_PASS, 4, [2, 11, 2, 80, 2, 50, 100, p.NONE], slot=1),
+                  self.mon_event(self.i.Kind.CONDITION, 5, [2, 25, 100, p.TOXIC, 0], slot=1),
+                  self.mon_event(self.i.Kind.STATUS, 6, [1, p.NONE], slot=0),
+                  self.mon_event(self.i.Kind.FAINT, 7, [2], slot=1)]
+        chunk = self.chunks([events])[0]
+        fn = self.jax.jit(lambda c, b, t, ch, m: self.i.fold_chunk(c, b, t, ch, mon_state=m))
+        result = fn(cursor, beliefs, self.tables, chunk, p.initialize(1))
+        self.assertEqual(result.error.tolist(), [0])
+        self.assertEqual(result.cursor.sequence.tolist(), [7])
+        self.assertEqual(result.mon_state.active.tolist(), [[-1, 1]])
+        self.assertEqual(result.beliefs.species[0, 0, :2].tolist(), [1, 2])
+        _, summary = self.b.materialize(result.beliefs, self.tables)
+        self.assertEqual(summary.count[0, 0, :2].tolist(), [1, 2])
+        self.assertEqual(result.mon_state.status[0, 1, :2].tolist(), [p.NONE, p.NONE])
+        ref = s.parse_showdown_replay(["|switch|p2a: Pikachu|Pikachu, L80, M|100/100 par",
+            "|-boost|p2a: Pikachu|atk|2", "|move|p2a: Pikachu|Baton Pass|p2a: Pikachu",
+            "|switch|p2a: Mr. Mime|Mr. Mime, L80, F|50/100|[from] Baton Pass",
+            "|-damage|p2a: Mr. Mime|25/100 tox", "|-curestatus|p2: Pikachu|par|[silent]",
+            "|faint|p2a: Mr. Mime"], battle_id="fixture")
+        self.assertEqual(ref.public_active["p2"].condition, "0 fnt")
+        self.assertEqual(result.mon_state.boosts[0, 1].tolist(), [ref.boosts["p2"].get(k, 0) for k in p.STATS])
+        self.assertTrue(bool(result.mon_state.fainted[0, 1, 1]))
+        self.assertEqual(int(result.mon_state.hp_denominator[0, 1, 1]), 0)
+
+    def test_mon_suffix_failure_rolls_back_cursor_beliefs_and_entire_public_ledger(self):
+        from gpu_engine import public_mon_state as p
+        cursor, beliefs = self.initial()
+        before = p.initialize(1)
+        events = [self.mon_event(self.i.Kind.SWITCH, 1, [1, 10, 1, 80, 1, 100, 100, p.NONE]),
+                  self.mon_event(self.i.Kind.CONDITION, 2, [99, 50, 100, p.NONE, 0])]
+        chunk = self.chunks([events])[0]
+        result = self.i.fold_chunk(cursor, beliefs, self.tables, chunk, mon_state=before)
+        self.assertEqual(result.error.tolist(), [self.i.Error.IDENTITY])
+        self.same_tree(result.cursor, cursor)
+        self.same_tree(result.beliefs, beliefs)
+        self.same_tree(result.mon_state, before)
+        unsupported = self.i.fold_chunk(cursor, beliefs, self.tables, chunk)
+        self.assertEqual(unsupported.error.tolist(), [self.i.Error.UNSUPPORTED_KIND])
+
+    def test_arrival_cannot_erase_prior_evidence_or_bind_out_of_source_namespace(self):
+        from gpu_engine import public_mon_state as p
+        cursor, _ = self.initial()
+        beliefs = self.b.initialize(self.j.zeros((1, 2, 6), self.j.int32), self.tables)
+        events = [self.fact(1, slot=0), self.mon_event(self.i.Kind.SWITCH, 2,
+            [1, 10, 1, 80, 1, 100, 100, p.NONE])]
+        result = self.i.fold_chunk(cursor, beliefs, self.tables, self.chunks([events])[0], mon_state=p.initialize(1))
+        self.assertEqual(result.error.tolist(), [self.i.Error.SOURCE])
+        self.same_tree(result.beliefs, beliefs)
+        bad = self.chunks([[self.mon_event(self.i.Kind.SWITCH, 1,
+            [1, 10, 999, 80, 1, 100, 100, p.NONE])]])[0]
+        result = self.i.fold_chunk(cursor, beliefs, self.tables, bad, mon_state=p.initialize(1))
+        self.assertEqual(result.error.tolist(), [self.i.Error.SOURCE])
 
 
 if __name__ == "__main__":

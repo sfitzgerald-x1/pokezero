@@ -1,7 +1,9 @@
 """Typed, ordered transport for the public device encoder (incremental B2).
 
-The first fold handles boundaries and source-bound set evidence. Other semantic
-events are refused explicitly until their public-state consumers are ported.
+The fold handles boundaries, source-bound set evidence, and the public encounter,
+HP/status/boost ledger. Other semantic events are refused explicitly until their
+consumers are ported. Accepted mon updates cover only those named fields; they
+are not evidence that all consumers of the corresponding raw line are ported.
 It cannot encode a production observation yet. In particular a move declaration
 is not automatically a set reveal: called/copied moves require the Python
 belief engine's attribution rules before emitting SET_REVEAL.
@@ -14,7 +16,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from . import public_belief
+from . import public_belief, public_mon_state
 
 
 SCHEMA = "pokezero.public_events.v1"
@@ -27,6 +29,15 @@ class Kind(IntEnum):
     UPKEEP = 3
     SET_REVEAL = 4
     SET_EXCLUDE = 5
+    SWITCH = 6
+    DRAG = 7
+    REPLACE = 8
+    BATON_PASS = 9
+    CONDITION = 10
+    STATUS = 11
+    FAINT = 12
+    BOOST = 13
+    COPY_BOOST = 14
 
 
 class Phase(IntEnum):
@@ -43,6 +54,7 @@ class Error(IntEnum):
     HEADER = 5
     PAYLOAD = 6
     SOURCE = 7
+    IDENTITY = 8
 
 
 @dataclass(frozen=True)
@@ -75,13 +87,36 @@ class PublicEvent:
         if boundary:
             if any(x != -1 for x in row[4:8]) or any(self.payload):
                 raise ValueError("boundary event cannot carry a party identity or payload")
+        elif self.kind == Kind.COPY_BOOST:
+            if self.actor_side not in (0, 1) or not 0 <= self.actor_slot < 6 or self.target_side not in (0, 1) or not 0 <= self.target_slot < 6:
+                raise ValueError("boost copy requires two resolved encounter addresses")
+            if self.payload[0] <= 0 or self.payload[1] <= 0 or any(self.payload[2:]):
+                raise ValueError("boost copy payload requires both encounter identities")
         else:
             if (self.actor_side, self.actor_slot) != (-1, -1):
-                raise ValueError("set evidence uses target identity only")
+                raise ValueError("public mon updates use target identity only")
             if self.target_side not in (0, 1) or not 0 <= self.target_slot < 6:
-                raise ValueError("set evidence requires a resolved public encounter identity")
+                raise ValueError("public mon update requires a resolved encounter address")
+        if self.kind in (Kind.SET_REVEAL, Kind.SET_EXCLUDE):
             if self.payload[0] < 0 or any(self.payload[1:]):
                 raise ValueError("set evidence payload is one nonnegative predicate ID")
+        if self.kind in (Kind.SWITCH, Kind.DRAG, Kind.REPLACE, Kind.BATON_PASS):
+            encounter, species, source_species, level, gender, hp, maximum, status = self.payload
+            if not (encounter > 0 and species >= 0 and source_species >= 0 and 0 <= level <= 100 and 0 <= gender <= 2 and 0 <= hp <= maximum and maximum > 0 and 0 <= status <= public_mon_state.TOXIC):
+                raise ValueError("invalid public arrival payload")
+        if self.kind == Kind.CONDITION:
+            encounter, hp, maximum, status, fainted, *reserved = self.payload
+            hp_ok = maximum > 0 and 0 <= hp <= maximum or fainted == 1 and hp == maximum == 0
+            if not (encounter > 0 and hp_ok and 0 <= status <= public_mon_state.TOXIC and fainted in (0, 1) and not any(reserved)):
+                raise ValueError("invalid public condition payload")
+        if self.kind == Kind.STATUS:
+            if not (self.payload[0] > 0 and 0 <= self.payload[1] <= public_mon_state.TOXIC and not any(self.payload[2:])):
+                raise ValueError("invalid public status payload")
+        if self.kind == Kind.FAINT and not (self.payload[0] > 0 and not any(self.payload[1:])):
+            raise ValueError("invalid public faint payload")
+        if self.kind == Kind.BOOST:
+            if not (self.payload[0] > 0 and 0 <= self.payload[1] < 7 and 0 <= self.payload[3] <= public_mon_state.CLEAR_NEGATIVE and not any(self.payload[4:])):
+                raise ValueError("invalid public boost payload")
         expected_phase = Phase.RESIDUAL if self.kind == Kind.UPKEEP else Phase.ACTION
         # Set evidence and blank separators can occur in either phase.
         if self.kind in (Kind.TURN, Kind.UPKEEP) and self.phase != expected_phase:
@@ -112,6 +147,7 @@ class FoldResult(NamedTuple):
     cursor: StreamCursor
     beliefs: public_belief.BeliefState
     error: jax.Array                # [B], nonzero rejects the entire row's chunk
+    mon_state: public_mon_state.MonState | None = None
 
 
 def initialize(stream_ids, *, source_binding) -> StreamCursor:
@@ -173,10 +209,65 @@ def protocol_boundary(line: str, *, sequence: int, turn: int, phase=Phase.ACTION
     raise ValueError(f"unsupported protocol input: {line.split('|')[1:2]}")
 
 
+def _fold_mon_event(mons, beliefs, tables, row, valid):
+    """Consume one typed mon event per battle, including candidate-slot binding."""
+    p = public_mon_state
+    batch = row.shape[0]
+    rows = jnp.arange(batch)
+    kind, side, slot = row[:, 0], row[:, 6], row[:, 7]
+    side_safe, slot_safe = jnp.clip(side, 0, 1), jnp.clip(slot, 0, 5)
+    data = row[:, 8:]
+    arrival = (kind >= Kind.SWITCH) & (kind <= Kind.BATON_PASS)
+    old_identity = mons.encounter[rows, side_safe, slot_safe]
+    identity_ok = jnp.where(arrival, (old_identity == 0) | (old_identity == data[:, 0]),
+                            old_identity == data[:, 0])
+    identity_ok &= data[:, 0] > 0
+    active_target = mons.active[rows, side_safe] == slot
+    identity_ok &= jnp.where(kind == Kind.BOOST, active_target, True)
+    actor_side, actor_slot = jnp.clip(row[:, 4], 0, 1), jnp.clip(row[:, 5], 0, 5)
+    copy_identity = (mons.encounter[rows, actor_side, actor_slot] == data[:, 0]) & (
+        old_identity == data[:, 1]) & (data[:, 0] > 0) & (data[:, 1] > 0) & (
+        mons.active[rows, actor_side] == row[:, 5]) & active_target
+    identity_ok = jnp.where(kind == Kind.COPY_BOOST, copy_identity, identity_ok)
+    observer = 1 - side_safe
+    belief_address = rows, observer, slot_safe
+    new_source = data[:, 2]
+    initialize_source = (old_identity == 0) | (beliefs.species[belief_address] != new_source)
+    clean = ~beliefs.has_evidence[belief_address] & ~beliefs.pin_active[belief_address]
+    source_ok = (~arrival) | ((new_source >= 0) & (new_source < tables.pool.shape[0]) & (
+        ~initialize_source | clean))
+    use = valid & identity_ok & source_ok
+    mons, a = p.arrive(mons, side=side, slot=slot, encounter=data[:, 0], species=data[:, 1],
+        source_species=new_source, level=data[:, 3], gender=data[:, 4], hp_numerator=data[:, 5],
+        hp_denominator=data[:, 6], status=data[:, 7], kind=kind - Kind.SWITCH, valid=use & arrival)
+    fresh = public_belief.initialize(new_source, tables,
+        source_available=beliefs.source_available[belief_address])
+    beliefs = beliefs._replace(**{name: p._write(getattr(beliefs, name), belief_address,
+        getattr(fresh, name), a & initialize_source) for name in beliefs._fields})
+    condition_payload = ((data[:, 4] == 0) | (data[:, 4] == 1)) & jnp.all(data[:, 5:] == 0, axis=1)
+    mons, c = p.condition_update(mons, side=side, slot=slot, encounter=data[:, 0],
+        numerator=data[:, 1], denominator=data[:, 2], status=data[:, 3], fainted=data[:, 4] == 1,
+        valid=use & (kind == Kind.CONDITION) & condition_payload)
+    mons, s = p.status_update(mons, side=side, slot=slot, encounter=data[:, 0], status=data[:, 1],
+        valid=use & (kind == Kind.STATUS) & jnp.all(data[:, 2:] == 0, axis=1))
+    mons, f = p.faint(mons, side=side, slot=slot, encounter=data[:, 0],
+        valid=use & (kind == Kind.FAINT) & jnp.all(data[:, 1:] == 0, axis=1))
+    mons, b = p.boost_update(mons, side=side, stat=data[:, 1], amount=data[:, 2], operation=data[:, 3],
+        valid=use & (kind == Kind.BOOST) & jnp.all(data[:, 4:] == 0, axis=1))
+    mons, cp = p.copy_boosts(mons, source_side=row[:, 4], target_side=side,
+        valid=use & (kind == Kind.COPY_BOOST) & jnp.all(data[:, 2:] == 0, axis=1))
+    accepted = a | c | s | f | b | cp
+    error = jnp.where(~source_ok, Error.SOURCE, jnp.where(~identity_ok, Error.IDENTITY,
+        jnp.where(~accepted, Error.PAYLOAD, Error.NONE)))
+    return mons, beliefs, jnp.where(valid, error, Error.NONE).astype(jnp.int32)
+
+
 def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
-               tables: public_belief.DeviceTables, chunk: EventChunk) -> FoldResult:
+               tables: public_belief.DeviceTables, chunk: EventChunk, *, mon_state=None) -> FoldResult:
     """Device-only ordered fold, with atomic rejection for each batch row.
 
+    Supply mon_state to enable the incremental public mon consumers. The raw
+    protocol adapter and remaining consumers are still required for production.
     A repeated, malformed, unimplemented, or wrong-battle chunk cannot leave a
     valid-looking partial prefix applied. The caller retains raw protocol and
     must handle the error before encoding or advancing the source cursor.
@@ -194,6 +285,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         raise ValueError("expected eight uint32 source-table binding words")
     if beliefs.species.shape != (batch, 2, 6):
         raise ValueError("public beliefs must have B×2 observers×6 encounter slots")
+    if mon_state is not None and mon_state.encounter.shape != (batch, 2, 6):
+        raise ValueError("public mon state must have B×2 sides×6 encounters")
     error = jnp.where((chunk.stream_id == cursor.stream_id) & (cursor.stream_id > 0),
                       Error.NONE, Error.STREAM).astype(jnp.int32)
     source_ok = jnp.all(chunk.source_binding == tables.binding) & jnp.all(
@@ -205,13 +298,14 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
     error = jnp.where((error == 0) & ~prefix, Error.MASK, error)
 
     def step(carry, event_and_valid):
-        current, state, error = carry
+        current, state, error, mons = carry
         row, valid = event_and_valid
         kind, sequence, turn, phase = (row[:, i] for i in range(4))
         boundary = (kind == Kind.TURN) | (kind == Kind.ACTION_CHUNK_END) | (kind == Kind.UPKEEP)
         fact = (kind == Kind.SET_REVEAL) | (kind == Kind.SET_EXCLUDE)
         sequence_ok = (sequence == current.sequence + 1) & (current.sequence < 2**31 - 1)
-        kind_ok = boundary | fact
+        mon_kind = (kind >= Kind.SWITCH) & (kind <= Kind.COPY_BOOST)
+        kind_ok = boundary | fact | (mon_kind if mons is not None else False)
         phase_ok = (phase == Phase.ACTION) | (phase == Phase.RESIDUAL)
         # Only TURN can advance turn or leave residual phase. Other events keep
         # the committed phase, except UPKEEP which enters the residual phase.
@@ -221,15 +315,22 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                               jnp.where(kind == Kind.UPKEEP, phase == Phase.RESIDUAL, phase == current.phase))
         boundary_identity = jnp.all(row[:, 4:8] == -1, axis=1)
         fact_identity = jnp.all(row[:, 4:6] == -1, axis=1) & (row[:, 6] >= 0) & (row[:, 6] <= 1) & (row[:, 7] >= 0) & (row[:, 7] < 6)
-        header_ok = turn_ok & phase_ok & jnp.where(boundary, boundary_identity, fact_identity)
+        copy_identity = (row[:, 4] >= 0) & (row[:, 4] <= 1) & (row[:, 5] >= 0) & (row[:, 5] < 6) & (
+            row[:, 6] >= 0) & (row[:, 6] <= 1) & (row[:, 7] >= 0) & (row[:, 7] < 6)
+        header_ok = turn_ok & phase_ok & jnp.where(boundary, boundary_identity,
+            jnp.where(kind == Kind.COPY_BOOST, copy_identity, fact_identity))
         predicate = row[:, 8]
         payload_ok = jnp.where(boundary, jnp.all(row[:, 8:] == 0, axis=1),
-            (predicate >= 0) & (predicate < tables.predicates.shape[0]) & jnp.all(row[:, 9:] == 0, axis=1))
+            jnp.where(fact, (predicate >= 0) & (predicate < tables.predicates.shape[0]) & jnp.all(row[:, 9:] == 0, axis=1), True))
         event_error = jnp.where(~sequence_ok, Error.SEQUENCE,
             jnp.where(~kind_ok, Error.UNSUPPORTED_KIND,
             jnp.where(~header_ok, Error.HEADER, jnp.where(~payload_ok, Error.PAYLOAD, Error.NONE))))
         error = jnp.where(valid & (error == 0), event_error, error)
         apply = valid & (error == 0)
+        if mons is not None:
+            mons, state, mon_error = _fold_mon_event(mons, state, tables, row, apply & mon_kind)
+            error = jnp.where(apply & mon_kind & (mon_error != 0), mon_error, error)
+            apply = valid & (error == 0)
         # A public fact about side s narrows the other observer's belief about s.
         observer = jnp.clip(1 - row[:, 6], 0, 1)
         slot = jnp.clip(row[:, 7], 0, 5)
@@ -244,13 +345,14 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             phase=jnp.where(apply, phase, current.phase),
             action_chunks=current.action_chunks + (apply & ((kind == Kind.ACTION_CHUNK_END) | (kind == Kind.UPKEEP))).astype(jnp.int32),
             upkeeps=current.upkeeps + (apply & (kind == Kind.UPKEEP)).astype(jnp.int32))
-        return (current, state, error), None
+        return (current, state, error, mons), None
 
-    (candidate, state, error), _ = jax.lax.scan(step, (cursor, beliefs, error),
+    (candidate, state, error, mons), _ = jax.lax.scan(step, (cursor, beliefs, error, mon_state),
                                               (jnp.swapaxes(chunk.words, 0, 1), chunk.valid.T))
     candidate = candidate._replace(needs_more=chunk.more)
     def commit(before, after):
         shape = (batch,) + (1,) * (before.ndim - 1)
         return jnp.where((error == 0).reshape(shape), after, before)
     return FoldResult(jax.tree.map(commit, cursor, candidate),
-                      jax.tree.map(commit, beliefs, state), error)
+                      jax.tree.map(commit, beliefs, state), error,
+                      jax.tree.map(commit, mon_state, mons) if mon_state is not None else None)

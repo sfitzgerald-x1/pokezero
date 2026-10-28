@@ -844,10 +844,15 @@ uniform sampler, not generator frequencies.
 The typed stream uses sixteen int32 words per event and drains chunks of 64
 without truncation. Stream cursors bind the source table contents, battle ID,
 sequence and phase. A malformed or repeated chunk is rejected atomically for
-its battle. The initial fold supports exact turn, blank action-chunk and upkeep
-boundaries, plus already-attributed set evidence. Other semantic events are
-explicitly unsupported. A move declaration cannot be treated directly as a set
-reveal, since called/copied moves need the Python belief attribution rules.
+its battle. The fold supports exact turn, blank action-chunk and upkeep
+boundaries, plus already-attributed set evidence. With a `public_mon_state`
+ledger it also retains public encounter identities, arrival HP/status, condition
+changes, bench cures, fainting and active boost operations. Arrival binds the
+other observer's set-source slot without erasing prior evidence. These are
+field consumers; the raw protocol adapter and remaining consumers, including
+volatiles, clocks, item/ability attribution and tendencies, are incomplete.
+A move declaration cannot be treated directly as a set reveal, since
+called/copied moves need the Python belief attribution rules.
 
 These components accept public encounter slots, never infer a slot from species
 or the opponent's private team order, and do not read physical engine state.
