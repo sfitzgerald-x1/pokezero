@@ -174,7 +174,7 @@ def preconsume(context,mons,tables,row,valid,*,condition_kind):
 
 def consume(context, base, mons, source_tables, tables, row, valid, *,
             move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind,
-            active_kind, baton_kind, damage_kind, type_kind):
+            active_kind, baton_kind, upkeep_kind, damage_kind, type_kind):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
@@ -222,12 +222,13 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
     active=context.active
     if active is not None:
         is_turn=k==turn_kind;is_active=k==active_kind
-        relevant=arrival|faint|is_turn|is_active
+        is_upkeep=(k==upkeep_kind) if tables.active.native_truant is not None else jnp.zeros_like(is_turn)
+        relevant=arrival|faint|is_turn|is_active|is_upkeep
         op=jnp.where(arrival,active_api.ARRIVE,jnp.where(faint,active_api.FAINT,
-            jnp.where(is_turn,active_api.TURN,data[:,1])))
+            jnp.where(is_turn,active_api.TURN,jnp.where(is_upkeep,active_api.UPKEEP,data[:,1]))))
         active_identity=(side>=0)&(side<2)&(slot==mons.active[jnp.arange(side.shape[0]),jnp.clip(side,0,1)])
         active,ac=active_api.apply(active,tables.active,mons,operation=op,
-            side=jnp.where(is_turn,-1,side),encounter=jnp.where(is_turn,0,data[:,0]),
+            side=jnp.where(is_turn|is_upkeep,-1,side),encounter=jnp.where(is_turn|is_upkeep,0,data[:,0]),
             value=jnp.where(is_turn,row[:,2],jnp.where(is_active,data[:,2],0)),baton_pass=k==baton_kind,
             producer_binding=tables.active.binding,valid=valid&relevant&(~is_active|active_identity))
         accepted &= jnp.where(relevant,ac,True)
