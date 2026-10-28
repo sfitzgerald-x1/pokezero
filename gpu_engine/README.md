@@ -823,3 +823,33 @@ The operation clock includes binding, preflight, planning, both engines, symboli
 serialization and result/progress persistence. Cost receipts report
 `ordinary_carry` separately and retain every refusal. This changed configuration
 requires a new frozen cost cohort; existing cost/readout artifacts are unchanged.
+
+### Public encoder input refactor
+
+`public_belief.py` and `public_inputs.py` begin the device implementation in
+[`gpu_observation_v4_design.md`](../docs/gpu_observation_v4_design.md). They do
+not yet replace the omniscient `observation.py` timing placeholder or provide a
+production observation. The complete protocol adapter, private requests, public
+state columns, decision parity, champion forward and full-game gates remain.
+
+The source compiler retains variant order and builds reveal/exclusion predicates
+with the Python source's own matching rules. Hard evidence, standing damage pins
+and effective candidates are separate. Off-source reveals recover the full
+species pool with maximum uncertainty; conflicting pins retain the standing
+evidence. Unavailable source and unknown species have distinct diagnostics.
+Nonempty pins containing identities outside the frozen source fail admission
+instead of silently losing identities. Candidate weights represent the current
+uniform sampler, not generator frequencies.
+
+The typed stream uses sixteen int32 words per event and drains chunks of 64
+without truncation. Stream cursors bind the source table contents, battle ID,
+sequence and phase. A malformed or repeated chunk is rejected atomically for
+its battle. The initial fold supports exact turn, blank action-chunk and upkeep
+boundaries, plus already-attributed set evidence. Other semantic events are
+explicitly unsupported. A move declaration cannot be treated directly as a set
+reveal, since called/copied moves need the Python belief attribution rules.
+
+These components accept public encounter slots, never infer a slot from species
+or the opponent's private team order, and do not read physical engine state.
+The future full adapter must supply identity and evidence from public protocol
+semantics before this path can pass the production encoder gates.
