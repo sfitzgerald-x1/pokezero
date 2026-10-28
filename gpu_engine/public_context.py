@@ -13,7 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from . import public_abilities as ability, public_moves as move, public_mon_state as mon, public_items as item
+from . import public_abilities as ability, public_moves as move, public_mon_state as mon, public_items as item, public_field as field_api
 
 
 class ContextTables(NamedTuple):
@@ -24,6 +24,7 @@ class ContextTables(NamedTuple):
     item_predicate: jax.Array | None = None
     item_narrowing: jax.Array | None = None
     binding: jax.Array | None = None
+    field: field_api.FieldTables | None = None
 
 
 class ContextState(NamedTuple):
@@ -33,11 +34,14 @@ class ContextState(NamedTuple):
     base_has_evidence: jax.Array
     items: item.ItemState | None = None
     binding: jax.Array | None = None
+    field: field_api.FieldState | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None):
     if type(item_belief_narrowing) is not bool:
         raise ValueError("item narrowing must be a frozen boolean")
+    if items is None and field_catalog is not None:
+        raise ValueError("field composition requires the raw item-enabled context")
     if items is None and item_belief_narrowing:
         raise ValueError("item narrowing requires item tables")
     for binding in (abilities.device.source_binding, moves.device.source_binding):
@@ -57,10 +61,13 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
         ability=np.asarray(abilities.device.binding).tolist(), move=np.asarray(moves.device.binding).tolist(),
         item=np.asarray(items.device.binding).tolist(), narrowing=item_belief_narrowing,
         ability_predicate=flags.tolist(), item_predicate=item_flags.tolist())
+    if field_catalog is not None:
+        payload.update(schema="pokezero.public_item_field_context.v1",field=np.asarray(field_catalog.device.binding).tolist())
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
-        jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding)
+        jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
+        field_catalog.device if field_catalog is not None else None)
 
 
 def initialize(beliefs, tables, *, species_binding=None):
@@ -69,11 +76,14 @@ def initialize(beliefs, tables, *, species_binding=None):
         raise ValueError("context requires B by two observers by six encounters")
     if np.asarray(beliefs.has_evidence).any() or np.asarray(beliefs.pin_active).any():
         raise ValueError("initialize public context before evidence ingestion")
+    if tables.field is not None and tables.items is None:
+        raise ValueError("field context requires item tables")
     batch = beliefs.species.shape[0]
     return ContextState(ability.initialize(batch, tables.abilities,species_binding=species_binding), move.initialize(batch, tables.moves),
         beliefs.hard, beliefs.has_evidence,
         item.initialize(batch,tables.items,species_binding=species_binding) if tables.items is not None else None,
-        jnp.broadcast_to(tables.binding,(batch,8)) if tables.binding is not None else None)
+        jnp.broadcast_to(tables.binding,(batch,8)) if tables.binding is not None else None,
+        field_api.initialize(batch,tables.field) if tables.field is not None else None)
 
 
 def basis(context, beliefs):
@@ -105,11 +115,13 @@ def rebuild(context, base, source_tables, tables):
         evidence |= ids>0
         ok &= jnp.all(valid,axis=(1,2)) & jnp.all(context.items.binding==tables.items.binding,axis=-1)
         ok &= jnp.all(context.binding==tables.binding,axis=-1) & jnp.all(tables.items.source_binding==source_tables.binding)
+    if context.field is not None:
+        ok &= jnp.all(context.field.binding==tables.field.binding,axis=-1)
     return base._replace(hard=hard,has_evidence=evidence),ok
 
 
 def consume(context, base, mons, source_tables, tables, row, valid, *,
-            move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind):
+            move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
@@ -146,4 +158,12 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         items,ia=item.record(items,mons,tables.items,side=side,slot=slot,encounter=data[:,0],
             item_id=data[:,1],operation=data[:,2],item_binding=tables.items.binding,valid=valid&(k==item_kind))
         accepted &= jnp.where(raw,ra,jnp.where(k==item_kind,ia,True))
-    return context._replace(abilities=a,moves=m,items=items),base,accepted | ~valid
+    fields=context.field
+    if fields is not None:
+        is_turn=k==turn_kind
+        fields,ff=field_api.apply(fields,tables.field,operation=jnp.where(is_turn,field_api.TURN,data[:,0]),
+            side=jnp.where(is_turn,-1,side),value=jnp.where(is_turn,row[:,2],data[:,1]),
+            upkeep=(k==field_kind)&(data[:,2]==1),from_ability=(k==field_kind)&(data[:,3]==1),
+            producer_binding=tables.field.binding,valid=valid&((k==field_kind)|is_turn))
+        accepted &= ff
+    return context._replace(abilities=a,moves=m,items=items,field=fields),base,accepted | ~valid

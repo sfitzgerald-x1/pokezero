@@ -14,7 +14,7 @@ from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_publ
     _public_event_from_line)
 from pokezero.belief import _confirmed_ability_from_event
 
-from . import public_mon_protocol, public_context_protocol, public_items
+from . import public_mon_protocol, public_context_protocol, public_items, public_field
 from .public_context_protocol import PublicAddress, PublicAddresses, ContextProjection
 from .public_inputs import Kind, Phase, PublicEvent
 
@@ -39,6 +39,7 @@ class WireState:
     move_binding: tuple[int, ...] | None = None
     item_binding: tuple[int, ...] | None = None
     context_binding: tuple[int, ...] | None = None
+    field_binding: tuple[int, ...] | None = None
 
     def addresses(self):
         active = {side: rows[self.active[side]].address for side, rows in enumerate(self.encounters)
@@ -112,9 +113,10 @@ class WireProjection(ContextProjection):
     move_binding: tuple[int, ...] = ()
     item_binding: tuple[int, ...] | None = None
     context_binding: tuple[int, ...] | None = None
+    field_binding: tuple[int, ...] | None = None
 
 
-def project_line(state, line, *, species_catalog, source, moves, abilities, items=None, context_tables=None):
+def project_line(state, line, *, species_catalog, source, moves, abilities, items=None, context_tables=None, field_catalog=None):
     """Return a new registry and ordered named-field events, or refuse atomically.
 
     Callers commit this candidate state only with successful device fold of all
@@ -133,7 +135,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             or not np.array_equal(np.asarray(moves.device.source_binding),np.asarray(source.device.binding))
             or not np.array_equal(np.asarray(species_catalog.device.source_binding),np.asarray(source.device.binding))):
         raise ValueError('public wire requires the frozen species/ability/move namespaces')
-    item_binding=context_binding=None
+    item_binding=context_binding=field_binding=None
     if items is not None:
         if context_tables is None or context_tables.items is None or context_tables.binding is None:
             raise ValueError("item wire requires a frozen composed context")
@@ -146,14 +148,22 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         context_binding=tuple(int(x) for x in np.asarray(context_tables.binding))
     elif context_tables is not None and context_tables.items is not None:
         raise ValueError("item-enabled context cannot drop its public item producer")
-    if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding):
+    if field_catalog is not None:
+        if (context_tables is None or context_tables.field is None or items is None
+                or not np.array_equal(np.asarray(context_tables.field.binding),np.asarray(field_catalog.device.binding))
+                or not np.array_equal(np.asarray(field_catalog.device.vocabulary_binding),np.asarray(species_catalog.device.vocabulary_binding))):
+            raise ValueError("field wire requires the same frozen field/context/vocabulary namespaces")
+        field_binding=tuple(int(x) for x in np.asarray(field_catalog.device.binding))
+    elif context_tables is not None and context_tables.field is not None:
+        raise ValueError("field-enabled context cannot drop its public field producer")
+    if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding):
         raise ValueError("item context cannot change or be dropped across continuation")
     parts = line.split('|')
     kind = parts[1] if len(parts) > 1 else ''
     if kind == 'request':
         raise ValueError('private requests cannot enter the public event producer')
     candidate = replace(state,species_binding=binding,move_binding=move_binding,
-        item_binding=item_binding,context_binding=context_binding)
+        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding)
     side = None
     if kind in ('switch', 'drag', 'replace'):
         candidate, side = _arrive(candidate, line, parts)
@@ -195,6 +205,13 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
                 target_side=holder.side,target_slot=holder.slot,
                 payload=(holder.encounter,item_id,operation,0,0,0,0,0))
             event.words();events.append(event)
+    if field_catalog is not None:
+        for operation,field_side,value,upkeep,ability_source in public_field.project_line(line,catalog=field_catalog).facts:
+            if operation==public_field.TURN:
+                continue  # The same TURN event advances both cursor and field clock.
+            event=PublicEvent(Kind.FIELD,state.next_sequence+len(events),state.turn,state.phase,
+                target_side=field_side,payload=(operation,value,int(upkeep),int(ability_source),0,0,0,0))
+            event.words();events.append(event)
     if kind in MON_KINDS or line == '|':
         projected = public_mon_protocol.project_line(line, sequence=state.next_sequence + len(events), turn=state.turn,
             addresses=addresses, active_idents=candidate.active_idents(), species_ids=species_catalog.ids,
@@ -221,7 +238,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         turn=last.turn, phase=last.phase, pending_baton=tuple(f'p{s+1}' in pending for s in (0, 1)))
     return candidate, WireProjection(line, tuple(events), species_binding=binding,
         ability_binding=tuple(int(x) for x in np.asarray(abilities.device.binding)),move_binding=move_binding,
-        item_binding=item_binding,context_binding=context_binding)
+        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding)
 
 
 def project_lines(state, lines, **tables):
