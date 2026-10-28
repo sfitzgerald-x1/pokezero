@@ -854,6 +854,30 @@ volatiles, clocks, item/ability attribution and tendencies, are incomplete.
 A move declaration cannot be treated directly as a set reveal, since
 called/copied moves need the Python belief attribution rules.
 
+The optional `public_context` fold composes the move ledger with public ability
+and Transform state. Original-set reveals, borrowed running abilities and the
+parser's Trace feature remain separate. Trace can redirect an original reveal
+to its public donor; Transform copies the donor's current public ability.
+Pressure charges follow that context and the source's move-target rule, not a
+sampled world or the wire target. Authoritative ability corrections rebuild the
+current ability mask on retained non-ability evidence; stale ability masks do
+not erase recovered candidates. Generic `SET_REVEAL` ability predicates refuse
+when context is enabled, requiring the explicitly attributed ability event.
+Malformed suffixes roll back the cursor, beliefs, mon ledger and both context
+ledgers together. Secondary inference, raw attribution and full encoder gates
+remain incomplete.
+
+For the added event kinds, actor/target addresses occupy the same header words.
+`MOVE` payload is actor encounter, move ID, caller code and last-move from-tag
+flag. `ABILITY` uses the target address and payload encounter, ability ID and
+authoritative flag. `TRACE` uses actor and optional donor addresses, with actor
+encounter, copied ability ID, donor encounter and parser-feature flag; an absent
+donor is address `(-1,-1)` and encounter zero. `TRANSFORM` requires both public
+addresses and actor/donor encounter IDs. Remaining payload words are zero, and
+all boolean flags are integer zero or one. Each static namespace is separately
+bound across continuation. These typed events cover named consumers only and
+are not a claim that every consumer of a corresponding raw line is implemented.
+
 These components accept public encounter slots, never infer a slot from species
 or the opponent's private team order, and do not read physical engine state.
 The future full adapter must supply identity and evidence from public protocol
