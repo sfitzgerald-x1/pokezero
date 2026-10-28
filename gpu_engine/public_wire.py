@@ -164,6 +164,10 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
                 or not np.array_equal(np.asarray(active_catalog.device.vocabulary_binding),np.asarray(species_catalog.device.vocabulary_binding))):
             raise ValueError("active wire requires the same frozen active/context/vocabulary namespaces")
         active_binding=tuple(int(x) for x in np.asarray(active_catalog.device.binding))
+        if active_catalog.device.native_truant is not None:
+            if (active_catalog.device.native_truant.shape!=(len(species_catalog.names),)
+                    or not np.array_equal(np.asarray(active_catalog.device.public_species_binding),np.asarray(species_catalog.device.binding))):
+                raise ValueError('Truant wire requires its exact compiled public species namespace')
     elif context_tables is not None and context_tables.active is not None:
         raise ValueError("active-enabled context cannot drop its public active producer")
     if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding):
