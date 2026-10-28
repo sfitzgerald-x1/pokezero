@@ -122,11 +122,12 @@ class PublicEvent:
         elif self.kind==Kind.ACTIVE:
             d=self.payload
             if ((self.actor_side,self.actor_slot)!=(-1,-1) or self.target_side not in (0,1)
-                    or not 0<=self.target_slot<6 or d[0]<=0 or not public_active.EXPIRE_ACTION<=d[1]<=public_active.CHOICE_MOVE
+                    or not 0<=self.target_slot<6 or d[0]<=0 or not public_active.EXPIRE_ACTION<=d[1]<=public_active.MAX_OPERATION
+                    or d[1]==public_active.UPKEEP
                     or any(d[3:])):
                 raise ValueError("active fact requires a resolved encounter and named operation")
             named=d[1] in (public_active.ADD,public_active.REMOVE,public_active.PERISH_START)
-            if not (d[2]>0 if named else d[2] in (0,1) if d[1] in (public_active.STALL_ATTEMPT,public_active.CHOICE_MOVE)
+            if not (d[2]>0 if named else d[2] in (0,1) if d[1] in (public_active.STALL_ATTEMPT,public_active.CHOICE_MOVE,public_active.TRUANT_TRACE)
                     else 0<=d[2]<=3 if d[1]==public_active.ITEM_SET else d[2]==0):
                 raise ValueError("invalid active fact value")
         elif self.kind==Kind.DAMAGE_CONTROL:
@@ -467,6 +468,12 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         source_ok &= False
     if active_enabled:
         source_ok &= (context.active.turn==cursor.turn)&jnp.all(context.active.species_binding==mon_state.species_binding,axis=-1)
+    truant_enabled=active_enabled and context_tables.active.native_truant is not None
+    if active_enabled and (context_tables.active.native_truant is None)!=(context_tables.active.public_species_binding is None):
+        raise ValueError('Truant tables require their frozen public species namespace')
+    if truant_enabled:
+        source_ok &= jnp.all(context.active.species_binding==context_tables.active.public_species_binding,axis=-1)
+        source_ok &= context.active.post_upkeep==(cursor.phase==Phase.RESIDUAL)
     damage_enabled=context is not None and context.damage is not None
     if damage_enabled and not field_enabled:
         raise ValueError("damage context requires ordered field composition")
@@ -482,6 +489,7 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         source_ok &= False
     if damage_enabled:
         source_ok &= (context.damage.turn==cursor.turn)&jnp.all(context.damage.species_binding==mon_state.species_binding,axis=-1)
+
     error = jnp.where((error == 0) & ~source_ok, Error.SOURCE, error)
     prefix = ~jnp.any(chunk.valid[:, 1:] & ~chunk.valid[:, :-1], axis=1)
     # An empty chunk cannot promise more forever, nor complete an undrained stream.
@@ -561,9 +569,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                     ((d[:,1]==0)|(d[:,1]==1))&jnp.all(d[:,2:]==0,axis=1))
                 payload_ok &= ~field_kind|field_payload
             if active_enabled:
-                active_payload=(d[:,0]>0)&(d[:,1]>=public_active.EXPIRE_ACTION)&(d[:,1]<=public_active.CHOICE_MOVE)&jnp.all(d[:,3:]==0,axis=1)
+                active_payload=(d[:,0]>0)&(d[:,1]>=public_active.EXPIRE_ACTION)&(d[:,1]<=public_active.MAX_OPERATION)&(d[:,1]!=public_active.UPKEEP)&jnp.all(d[:,3:]==0,axis=1)
                 named=(d[:,1]==public_active.ADD)|(d[:,1]==public_active.REMOVE)|(d[:,1]==public_active.PERISH_START)
-                active_payload &= jnp.where(named,d[:,2]>0,jnp.where((d[:,1]==public_active.STALL_ATTEMPT)|(d[:,1]==public_active.CHOICE_MOVE),
+                active_payload &= jnp.where(named,d[:,2]>0,jnp.where((d[:,1]==public_active.STALL_ATTEMPT)|(d[:,1]==public_active.CHOICE_MOVE)|(d[:,1]==public_active.TRUANT_TRACE),
                     (d[:,2]==0)|(d[:,2]==1),jnp.where(d[:,1]==public_active.ITEM_SET,(d[:,2]>=0)&(d[:,2]<=3),d[:,2]==0)))
                 payload_ok &= ~active_kind|active_payload
             if damage_enabled:
@@ -598,11 +606,12 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             apply=valid&(error==0)
         if ctx is not None:
             ctx, basis, accepted = public_context.consume(ctx, basis, mons, tables, context_tables, row,
-                apply & (context_kind | mon_kind | item_kind | field_kind | active_kind | damage_kind | ((kind==Kind.TURN)&field_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
+                apply & (context_kind | mon_kind | item_kind | field_kind | active_kind | damage_kind | ((kind==Kind.TURN)&field_enabled) | ((kind==Kind.UPKEEP)&truant_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
                 trace_kind=Kind.TRACE, transform_kind=Kind.TRANSFORM,
                 arrival=(kind >= Kind.SWITCH) & (kind <= Kind.BATON_PASS), faint=kind == Kind.FAINT,
                 raw_kind=Kind.RAW_BEGIN,item_kind=Kind.ITEM,field_kind=Kind.FIELD,turn_kind=Kind.TURN,
-                active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,damage_kind=Kind.DAMAGE_CONTROL)
+                active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,upkeep_kind=Kind.UPKEEP,damage_kind=Kind.DAMAGE_CONTROL)
+
             error = jnp.where(apply & ~accepted, Error.PAYLOAD, error)
             apply = valid & (error == 0)
         # A public fact about side s narrows the other observer's belief about s.
