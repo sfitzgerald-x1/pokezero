@@ -14,7 +14,7 @@ from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_publ
     _public_event_from_line)
 from pokezero.belief import _confirmed_ability_from_event
 
-from . import public_mon_protocol, public_context_protocol
+from . import public_mon_protocol, public_context_protocol, public_items
 from .public_context_protocol import PublicAddress, PublicAddresses, ContextProjection
 from .public_inputs import Kind, Phase, PublicEvent
 
@@ -37,6 +37,8 @@ class WireState:
     phase: Phase = Phase.ACTION
     species_binding: tuple[int, ...] | None = None
     move_binding: tuple[int, ...] | None = None
+    item_binding: tuple[int, ...] | None = None
+    context_binding: tuple[int, ...] | None = None
 
     def addresses(self):
         active = {side: rows[self.active[side]].address for side, rows in enumerate(self.encounters)
@@ -108,9 +110,11 @@ class WireProjection(ContextProjection):
     species_binding: tuple[int, ...] = ()
     ability_binding: tuple[int, ...] = ()
     move_binding: tuple[int, ...] = ()
+    item_binding: tuple[int, ...] | None = None
+    context_binding: tuple[int, ...] | None = None
 
 
-def project_line(state, line, *, species_catalog, source, moves, abilities):
+def project_line(state, line, *, species_catalog, source, moves, abilities, items=None, context_tables=None):
     """Return a new registry and ordered named-field events, or refuse atomically.
 
     Callers commit this candidate state only with successful device fold of all
@@ -129,11 +133,27 @@ def project_line(state, line, *, species_catalog, source, moves, abilities):
             or not np.array_equal(np.asarray(moves.device.source_binding),np.asarray(source.device.binding))
             or not np.array_equal(np.asarray(species_catalog.device.source_binding),np.asarray(source.device.binding))):
         raise ValueError('public wire requires the frozen species/ability/move namespaces')
+    item_binding=context_binding=None
+    if items is not None:
+        if context_tables is None or context_tables.items is None or context_tables.binding is None:
+            raise ValueError("item wire requires a frozen composed context")
+        for actual,expected in ((context_tables.items.binding,items.device.binding),
+                (context_tables.abilities.binding,abilities.device.binding),(context_tables.moves.binding,moves.device.binding),
+                (items.device.source_binding,source.device.binding)):
+            if not np.array_equal(np.asarray(actual),np.asarray(expected)):
+                raise ValueError("item wire context namespace mismatch")
+        item_binding=tuple(int(x) for x in np.asarray(items.device.binding))
+        context_binding=tuple(int(x) for x in np.asarray(context_tables.binding))
+    elif context_tables is not None and context_tables.items is not None:
+        raise ValueError("item-enabled context cannot drop its public item producer")
+    if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding):
+        raise ValueError("item context cannot change or be dropped across continuation")
     parts = line.split('|')
     kind = parts[1] if len(parts) > 1 else ''
     if kind == 'request':
         raise ValueError('private requests cannot enter the public event producer')
-    candidate = replace(state,species_binding=binding,move_binding=move_binding)
+    candidate = replace(state,species_binding=binding,move_binding=move_binding,
+        item_binding=item_binding,context_binding=context_binding)
     side = None
     if kind in ('switch', 'drag', 'replace'):
         candidate, side = _arrive(candidate, line, parts)
@@ -142,6 +162,19 @@ def project_line(state, line, *, species_catalog, source, moves, abilities):
         species_catalog.species_id(candidate.encounters[side][candidate.active[side]].species)
     addresses = _bench_alias(candidate.addresses(), parts)
     events = []
+    item_projection=public_items.project_line(line,items=items) if items is not None else None
+    if item_projection is not None:
+        kwargs={}
+        family=1 if item_projection.item_event else 0
+        payload=(family,0,0,0,0,0,0,0)
+        if item_projection.trick_idents:
+            actor,target=(addresses.resolve(x) for x in item_projection.trick_idents)
+            if addresses.active.get(actor.side)!=actor or addresses.active.get(target.side)!=target:
+                raise ValueError("Trick requires two live public encounters")
+            kwargs=dict(actor_side=actor.side,actor_slot=actor.slot,target_side=target.side,target_slot=target.slot)
+            payload=(2,actor.encounter,target.encounter,0,0,0,0,0)
+        event=PublicEvent(Kind.RAW_BEGIN,state.next_sequence,state.turn,state.phase,payload=payload,**kwargs)
+        event.words();events.append(event)
     # The belief engine records a raw proc BEFORE dispatching the line's main
     # consumer. A proc on a move can reveal Pressure before that move's PP
     # charge; a proc on Transform can establish the donor's current ability.
@@ -150,11 +183,18 @@ def project_line(state, line, *, species_catalog, source, moves, abilities):
     if kind not in ('-ability', 'ability') and all(confirmed):
         ident, name = confirmed
         holder = addresses.resolve(ident)
-        proc = PublicEvent(Kind.ABILITY, state.next_sequence, state.turn, state.phase,
+        proc = PublicEvent(Kind.ABILITY, state.next_sequence + len(events), state.turn, state.phase,
             target_side=holder.side, target_slot=holder.slot,
             payload=(holder.encounter, abilities.ability_id(name), 0, 0, 0, 0, 0, 0))
         proc.words()
         events.append(proc)
+    if item_projection is not None:
+        for ident,operation,item_id in item_projection.facts:
+            holder=addresses.resolve(ident)
+            event=PublicEvent(Kind.ITEM,state.next_sequence+len(events),state.turn,state.phase,
+                target_side=holder.side,target_slot=holder.slot,
+                payload=(holder.encounter,item_id,operation,0,0,0,0,0))
+            event.words();events.append(event)
     if kind in MON_KINDS or line == '|':
         projected = public_mon_protocol.project_line(line, sequence=state.next_sequence + len(events), turn=state.turn,
             addresses=addresses, active_idents=candidate.active_idents(), species_ids=species_catalog.ids,
@@ -164,7 +204,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities):
         projected = public_context_protocol.project_line(line, sequence=state.next_sequence + len(events),
             turn=state.turn, phase=state.phase, addresses=addresses, moves=moves, abilities=abilities)
         events.extend(projected.events)
-    if not events:
+    if not events or item_projection is not None and len(events)==1 and not item_projection.trick_idents:
         raise ValueError("raw line has no implemented consumer; it must not be silently dropped")
     pending = {f'p{s+1}' for s in (0, 1) if state.pending_baton[s]}
     _flag_baton_pass(parts, pending)
@@ -180,7 +220,8 @@ def project_line(state, line, *, species_catalog, source, moves, abilities):
     candidate = replace(candidate, next_sequence=state.next_sequence + len(events),
         turn=last.turn, phase=last.phase, pending_baton=tuple(f'p{s+1}' in pending for s in (0, 1)))
     return candidate, WireProjection(line, tuple(events), species_binding=binding,
-        ability_binding=tuple(int(x) for x in np.asarray(abilities.device.binding)),move_binding=move_binding)
+        ability_binding=tuple(int(x) for x in np.asarray(abilities.device.binding)),move_binding=move_binding,
+        item_binding=item_binding,context_binding=context_binding)
 
 
 def project_lines(state, lines, **tables):

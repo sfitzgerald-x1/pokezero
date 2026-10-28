@@ -1,23 +1,29 @@
-"""Compose public move and ability consumers without losing replaceable facts.
+"""Compose public move, ability and optional item evidence.
 
-The non-ability hard mask is retained separately. Authoritative original ability
-replacements reapply the *current* ability to that basis, allowing a corrected
-claim to recover variants while preserving moves, exclusions and standing pins.
+A separate hard mask retains nonreplaceable facts. Current original-ability and
+assignment-only item constraints are rebuilt on that basis, allowing corrections
+and item mutations to recover variants while preserving moves, exclusions and pins.
 This is incremental consumer composition, not complete raw protocol coverage.
 """
 from typing import NamedTuple
+import hashlib
+import json
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from . import public_abilities as ability, public_moves as move, public_mon_state as mon
+from . import public_abilities as ability, public_moves as move, public_mon_state as mon, public_items as item
 
 
 class ContextTables(NamedTuple):
     abilities: ability.AbilityTables
     moves: move.MoveTables
     ability_predicate: jax.Array
+    items: item.ItemTables | None = None
+    item_predicate: jax.Array | None = None
+    item_narrowing: jax.Array | None = None
+    binding: jax.Array | None = None
 
 
 class ContextState(NamedTuple):
@@ -25,16 +31,36 @@ class ContextState(NamedTuple):
     moves: move.MoveState
     base_hard: jax.Array
     base_has_evidence: jax.Array
+    items: item.ItemState | None = None
+    binding: jax.Array | None = None
 
 
-def compile_context(source, abilities, moves):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False):
+    if type(item_belief_narrowing) is not bool:
+        raise ValueError("item narrowing must be a frozen boolean")
+    if items is None and item_belief_narrowing:
+        raise ValueError("item narrowing requires item tables")
     for binding in (abilities.device.source_binding, moves.device.source_binding):
         if not np.array_equal(np.asarray(binding), np.asarray(source.device.binding)):
             raise ValueError("public context requires the same frozen source")
     flags = np.zeros(source.device.predicates.shape[0], bool)
     for (kind, _), index in source.predicate_ids.items():
         if kind == "ability": flags[index] = True
-    return ContextTables(abilities.device, moves.device, jnp.asarray(flags))
+    if items is None:
+        return ContextTables(abilities.device, moves.device, jnp.asarray(flags))
+    if not np.array_equal(np.asarray(items.device.source_binding), np.asarray(source.device.binding)):
+        raise ValueError("public items require the same frozen source")
+    item_flags = np.zeros_like(flags)
+    for (kind, _), index in source.predicate_ids.items():
+        if kind == "item": item_flags[index] = True
+    payload = dict(schema="pokezero.public_item_context.v1", source=np.asarray(source.device.binding).tolist(),
+        ability=np.asarray(abilities.device.binding).tolist(), move=np.asarray(moves.device.binding).tolist(),
+        item=np.asarray(items.device.binding).tolist(), narrowing=item_belief_narrowing,
+        ability_predicate=flags.tolist(), item_predicate=item_flags.tolist())
+    digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
+    binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
+    return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
+        jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding)
 
 
 def initialize(beliefs, tables, *, species_binding=None):
@@ -45,12 +71,14 @@ def initialize(beliefs, tables, *, species_binding=None):
         raise ValueError("initialize public context before evidence ingestion")
     batch = beliefs.species.shape[0]
     return ContextState(ability.initialize(batch, tables.abilities,species_binding=species_binding), move.initialize(batch, tables.moves),
-        beliefs.hard, beliefs.has_evidence)
+        beliefs.hard, beliefs.has_evidence,
+        item.initialize(batch,tables.items,species_binding=species_binding) if tables.items is not None else None,
+        jnp.broadcast_to(tables.binding,(batch,8)) if tables.binding is not None else None)
 
 
 def basis(context, beliefs):
     # Pin state and conflict receipts may have advanced during materialization;
-    # only hard reveal/exclusion facts need a separate replaceable-ability basis.
+    # only nonreplaceable reveal/exclusion facts need a separate basis.
     return beliefs._replace(hard=context.base_hard, has_evidence=context.base_has_evidence)
 
 
@@ -67,12 +95,21 @@ def rebuild(context, base, source_tables, tables):
         context.moves.binding == tables.moves.binding, axis=-1) & jnp.all(
         tables.abilities.source_binding == source_tables.binding) & jnp.all(
         tables.moves.source_binding == source_tables.binding)
-    return base._replace(hard=base.hard & jnp.where(known[..., None], matched, jnp.uint32(0xffffffff)),
-        has_evidence=base.has_evidence | known), ok
+    hard=base.hard & jnp.where(known[...,None],matched,jnp.uint32(0xffffffff))
+    evidence=base.has_evidence | known
+    if context.items is not None:
+        ids=item.matching_item(context.items,item_belief_narrowing=tables.item_narrowing)[:,::-1,:]
+        valid=(ids>=0)&(ids<tables.items.predicate.shape[0])
+        predicate=tables.items.predicate[jnp.clip(ids,0,tables.items.predicate.shape[0]-1)]
+        hard &= jnp.where((ids>0)[...,None],source_tables.predicates[predicate,species],jnp.uint32(0xffffffff))
+        evidence |= ids>0
+        ok &= jnp.all(valid,axis=(1,2)) & jnp.all(context.items.binding==tables.items.binding,axis=-1)
+        ok &= jnp.all(context.binding==tables.binding,axis=-1) & jnp.all(tables.items.source_binding==source_tables.binding)
+    return base._replace(hard=hard,has_evidence=evidence),ok
 
 
 def consume(context, base, mons, source_tables, tables, row, valid, *,
-            move_kind, ability_kind, trace_kind, transform_kind, arrival, faint):
+            move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
@@ -100,4 +137,13 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         donor_encounter=data[:, 1], valid=valid & is_transform)
     accepted = jnp.where(arrival, aa & ma, jnp.where(faint, fa, jnp.where(is_move, update.admitted,
         jnp.where(is_ability, rev.admitted, jnp.where(is_trace, ta, jnp.where(is_transform, tr, True))))))
-    return context._replace(abilities=a, moves=m), base, accepted | ~valid
+    items=context.items
+    if items is not None:
+        raw=k==raw_kind
+        items,ra=item.begin_event(items,mons,tables.items,item_event=data[:,0]==1,trick=data[:,0]==2,
+            actor_side=actor_side,actor_slot=actor_slot,actor_encounter=data[:,1],
+            target_side=side,target_slot=slot,target_encounter=data[:,2],valid=valid&raw)
+        items,ia=item.record(items,mons,tables.items,side=side,slot=slot,encounter=data[:,0],
+            item_id=data[:,1],operation=data[:,2],item_binding=tables.items.binding,valid=valid&(k==item_kind))
+        accepted &= jnp.where(raw,ra,jnp.where(k==item_kind,ia,True))
+    return context._replace(abilities=a,moves=m,items=items),base,accepted | ~valid
