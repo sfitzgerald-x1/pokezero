@@ -2,7 +2,7 @@
 
 This observes the champion parser's rules, including its documented Mean Look
 Baton Pass clearing and the different `-end Wrap`/`-end partiallytrapped` clocks.
-Toxic, sleep, Truant, damage, choice and live types have separate consumers.
+Toxic, sleep, Truant, damage and live types have separate consumers.
 Lifecycle facts require the canonical, resolved encounter from the caller; the
 raw adapter below deliberately cannot declare a whole protocol line consumed.
 """
@@ -22,10 +22,11 @@ from .public_abilities import _bool
 from .public_mon_state import _int32
 from .public_moves import _static_category
 
-SCHEMA = 'pokezero.public_active.v1'
-ARRIVE, FAINT, TURN, EXPIRE_ACTION, ANIMATION, ADD, REMOVE, WRAP_END, STALL_ATTEMPT, STALL_SUCCESS, STALL_FAIL, STALL_BREAK, RECHARGE, CLEAR_RECHARGE, TRAPPED, PERISH_START = range(16)
+SCHEMA = 'pokezero.public_active.v2'
+ARRIVE, FAINT, TURN, EXPIRE_ACTION, ANIMATION, ADD, REMOVE, WRAP_END, STALL_ATTEMPT, STALL_SUCCESS, STALL_FAIL, STALL_BREAK, RECHARGE, CLEAR_RECHARGE, TRAPPED, PERISH_START, ITEM_SET, ITEM_END, CHOICE_MOVE = range(19)
 CLOCK_NAMES = ('confusion', 'encore', 'partiallytrapped')
-CORE = ('STALL_COUNTER', 'CONFUSION_TURNS', 'ENCORE_TURNS', 'WRAP_TRAP_TURNS', 'MEANLOOK_TRAP')
+CORE = ('STALL_COUNTER', 'CONFUSION_TURNS', 'ENCORE_TURNS', 'WRAP_TRAP_TURNS', 'MEANLOOK_TRAP',
+        'CHOICE_LOCKED', 'ITEM_SWAPPED')
 NUMERIC_COLUMNS = tuple(reference.v4_numeric_index(getattr(reference, 'NUMERIC_'+n)) for n in CORE)
 CATEGORY_COLUMNS = tuple(range(reference.CATEGORY_VOLATILE_OFFSET,
     reference.CATEGORY_VOLATILE_OFFSET+reference.VOLATILE_BUCKET_COUNT))
@@ -62,7 +63,8 @@ def compile_active(vocabulary):
     clocks = [ids[n] for n in CLOCK_NAMES]
     vb = vocabulary_binding(vocabulary)
     payload = dict(schema=SCHEMA,names=names,category=category,masks=masks,clocks=clocks,
-        vocabulary=np.asarray(vb).tolist(),stall_cap=reference._STALL_COUNTER_CAP)
+        vocabulary=np.asarray(vb).tolist(),stall_cap=reference._STALL_COUNTER_CAP,
+        choice_items=sorted(reference._CHOICE_ITEMS))
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(',',':')).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype='>u4').astype(np.uint32))
     return ActiveCatalog(names,MappingProxyType(ids),ActiveTables(jnp.asarray(category,jnp.int32),
@@ -80,6 +82,9 @@ class ActiveState(NamedTuple):
     stall_pending: jax.Array
     recharge: jax.Array
     meanlook: jax.Array
+    choice_public: jax.Array    # active slot's publicly announced Choice Band
+    choice_locked: jax.Array
+    item_swapped: jax.Array     # parser's public Trick provenance, not inferred mutation
 
 
 def _binding(value):
@@ -94,7 +99,7 @@ def initialize(batch, tables, *, species_binding):
     z = jnp.zeros((batch,2),jnp.int32);b = jnp.zeros((batch,2),bool)
     return ActiveState(jnp.broadcast_to(tables.binding,(batch,8)),jnp.broadcast_to(sb,(batch,8)),
         z,jnp.zeros(batch,jnp.int32),jnp.zeros((batch,2,tables.category.shape[0]),bool),
-        jnp.zeros((batch,2,3),jnp.int32),z,b,b,b)
+        jnp.zeros((batch,2,3),jnp.int32),z,b,b,b,b,b,b)
 
 
 def _shape(state, tables, mons):
@@ -105,7 +110,7 @@ def _shape(state, tables, mons):
         shape=(batch,8) if name in ('binding','species_binding') else (batch,) if name=='turn' else (
             (batch,2,tables.category.shape[0]) if name=='volatiles' else (batch,2,3) if name=='elapsed' else (batch,2))
         dtype=jnp.uint32 if name in ('binding','species_binding') else jnp.bool_ if name in (
-            'volatiles','stall_pending','recharge','meanlook') else jnp.int32
+            'volatiles','stall_pending','recharge','meanlook','choice_public','choice_locked','item_swapped') else jnp.int32
         if arr.shape!=shape or arr.dtype!=dtype: raise ValueError('active state shape or dtype: '+name)
     for name,shape,dtype in (('species_binding',(batch,8),jnp.uint32),
         ('active',(batch,2),jnp.int32),('encounter',(batch,2,6),jnp.int32)):
@@ -134,6 +139,7 @@ def _coherent(state,tables,mons):
     ok &= jnp.all((state.stall>=0)&(state.stall<=reference._STALL_COUNTER_CAP),axis=-1)
     ok &= jnp.all(state.elapsed>=0,axis=(-1,-2))&~jnp.any(state.volatiles[...,0],axis=-1)
     ok &= ~jnp.any(state.volatiles[...,RECHARGE_ID],axis=-1)
+    ok &= ~jnp.any(state.choice_locked&~state.choice_public,axis=-1)
     return current,ok
 
 
@@ -152,7 +158,7 @@ def apply(state,tables,mons,*,operation,side=-1,encounter=0,value=0,baton_pass=F
     row=jnp.arange(batch);seat=jnp.clip(side,0,1);address=(row,seat)
     turn=op==TURN;arrive=op==ARRIVE;faint=op==FAINT
     vcount=tables.category.shape[0]
-    ok &= jnp.all(producer_binding==tables.binding)&(op>=ARRIVE)&(op<=PERISH_START)
+    ok &= jnp.all(producer_binding==tables.binding)&(op>=ARRIVE)&(op<=CHOICE_MOVE)
     ok &= jnp.where(turn,(side==-1)&(enc==0)&(state.turn<2**31-1)&(value==state.turn+1),
         (side>=0)&(side<2)&(enc>0)&(current[address]==enc))
     # Only the targeted arrival may account for an encounter-ledger change.
@@ -160,8 +166,8 @@ def apply(state,tables,mons,*,operation,side=-1,encounter=0,value=0,baton_pass=F
     same=jnp.where(arrive[:,None]&(jnp.arange(2)==seat[:,None]),True,same)
     ok &= jnp.all(same,axis=-1)&(~bp|arrive)
     named=(op==ADD)|(op==REMOVE)|(op==PERISH_START)
-    ok &= jnp.where(named,(value>0)&(value<vcount),jnp.where((op==STALL_ATTEMPT),
-        (value==0)|(value==1),jnp.where(turn,True,value==0)))
+    ok &= jnp.where(named,(value>0)&(value<vcount),jnp.where((op==STALL_ATTEMPT)|(op==CHOICE_MOVE),
+        (value==0)|(value==1),jnp.where(op==ITEM_SET,(value>=0)&(value<=3),jnp.where(turn,True,value==0))))
     # Recharge enters only through its own public producer, not a generic bag write.
     ok &= ~named|(value!=RECHARGE_ID)
     ok &= (op!=PERISH_START)|tables.perish[jnp.clip(value,0,vcount-1)]
@@ -189,10 +195,17 @@ def apply(state,tables,mons,*,operation,side=-1,encounter=0,value=0,baton_pass=F
     recharge=jnp.where(arrive|faint|(op==CLEAR_RECHARGE),False,jnp.where(op==RECHARGE,True,state.recharge[address]))
     mean=jnp.where((arrive|faint)[:,None],False,state.meanlook)
     mean=mean.at[address].set(jnp.where(op==TRAPPED,True,mean[address]))
+    reset_item=arrive|faint|(op==ITEM_END)
+    choice=jnp.where(reset_item,False,jnp.where(op==ITEM_SET,(value&1)==1,state.choice_public[address]))
+    locked=jnp.where(reset_item|(op==ITEM_SET),False,
+        state.choice_locked[address]|((op==CHOICE_MOVE)&(value==1)&state.choice_public[address]))
+    swapped=jnp.where(reset_item,False,jnp.where(op==ITEM_SET,(value&2)==2,state.item_swapped[address]))
     candidate=state._replace(encounter=state.encounter.at[address].set(jnp.where(arrive,enc,state.encounter[address])),
         turn=jnp.where(turn,value,state.turn),volatiles=state.volatiles.at[address].set(bag),elapsed=elapsed_all,
         stall=state.stall.at[address].set(stall),stall_pending=state.stall_pending.at[address].set(pending),
-        recharge=state.recharge.at[address].set(recharge),meanlook=mean)
+        recharge=state.recharge.at[address].set(recharge),meanlook=mean,
+        choice_public=state.choice_public.at[address].set(choice),
+        choice_locked=state.choice_locked.at[address].set(locked),item_swapped=state.item_swapped.at[address].set(swapped))
     return jax.tree.map(lambda before,after:jnp.where(use.reshape((batch,)+(1,)*(before.ndim-1)),after,before),state,candidate),use
 
 
@@ -226,7 +239,9 @@ def project_line(line,*,catalog):
             facts.append((op,side,val))
         if (kind=='move' and len(p)>=4) or kind=='cant' or reference._is_confusion_self_hit(p):
             add(EXPIRE_ACTION)
-        if kind=='move' and len(p)>=4: add(STALL_ATTEMPT,int(reference._normalize_identifier(p[3]) in reference._STALL_MOVE_IDS))
+        if kind=='move' and len(p)>=4:
+            add(STALL_ATTEMPT,int(reference._normalize_identifier(p[3]) in reference._STALL_MOVE_IDS))
+            add(CHOICE_MOVE,int(not any(part.startswith('[from]') for part in p[4:])))
         elif kind=='cant':
             add(STALL_BREAK)
             if name=='recharge': add(CLEAR_RECHARGE)
@@ -234,6 +249,9 @@ def project_line(line,*,catalog):
         elif kind=='-mustrecharge': add(RECHARGE)
         elif kind=='-singleturn' and len(p)>=4 and reference._is_stall_singleturn(p[3]): add(STALL_SUCCESS)
         elif kind=='-fail': add(STALL_FAIL)
+        elif kind=='-item' and len(p)>=4:
+            add(ITEM_SET,int(reference._normalize_identifier(p[3]) in reference._CHOICE_ITEMS)+2*int('[from] move: Trick' in line))
+        elif kind=='-enditem':add(ITEM_END)
         if kind=='-activate' and name=='trapped': add(TRAPPED)
         if kind=='-activate' and name in reference._PARTIAL_TRAP_MOVES: add(ADD,catalog.ids['partiallytrapped'])
         elif kind=='-end' and name in reference._PARTIAL_TRAP_MOVES:
@@ -260,7 +278,8 @@ def project(state,tables,mons,*,expected_vocabulary):
     ok &= jnp.all(state.encounter==current,axis=-1)&jnp.all(expected_vocabulary==tables.vocabulary_binding)
     present=current>0
     numbers=jnp.concatenate((jnp.minimum(1.,state.stall[...,None]/8.),
-        jnp.minimum(1.,state.elapsed/jnp.asarray([5.,6.,5.])),state.meanlook[...,None].astype(jnp.float32)),axis=-1)
+        jnp.minimum(1.,state.elapsed/jnp.asarray([5.,6.,5.])),state.meanlook[...,None].astype(jnp.float32),
+        state.choice_locked[...,None].astype(jnp.float32),state.item_swapped[...,None].astype(jnp.float32)),axis=-1)
     numeric=jnp.zeros((batch,2,132),jnp.float32).at[...,jnp.asarray(NUMERIC_COLUMNS)].set(jnp.where(present[...,None],numbers,0.))
     bag=state.volatiles.at[...,RECHARGE_ID].set(state.recharge)
     order=jnp.sort(jnp.where(bag,jnp.arange(tables.category.shape[0]),tables.category.shape[0]),axis=-1)[...,:reference.VOLATILE_BUCKET_COUNT]

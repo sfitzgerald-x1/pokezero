@@ -78,7 +78,7 @@ class PublicActiveContextTests(unittest.TestCase):
         self.assertGreater(len(self.chunks(p)),1);self.compare_active(result,lines)
         move=next(x for x in p if x.raw_line.startswith('|move|'))
         self.assertEqual([e.kind for e in move.events],
-            [self.i.Kind.RAW_BEGIN,self.i.Kind.ACTIVE,self.i.Kind.ACTIVE,self.i.Kind.MOVE])
+            [self.i.Kind.RAW_BEGIN,self.i.Kind.ACTIVE,self.i.Kind.ACTIVE,self.i.Kind.ACTIVE,self.i.Kind.MOVE])
 
     def test_malformed_payload_namespace_or_clock_roll_back_the_whole_chunk(self):
         _,p=self.project([*self.prefix,'|turn|1','|-start|p1a: Snorlax|confusion','|-mustrecharge|p2a: Absol'])
@@ -117,6 +117,23 @@ class PublicActiveContextTests(unittest.TestCase):
         state,_=self.project(['|faint|p1a: Gardevoir'],state=state)
         with self.assertRaises(ValueError):self.project(['|-start|p1a: Gardevoir|confusion'],state=state)
         with self.assertRaises(ValueError):self.project(['|-unknown|p1a: Gardevoir|unimplemented'],state=state)
+
+    def test_choice_item_raw_events_share_the_current_encounter_and_boundaries(self):
+        lines=[*self.prefix,'|turn|1','|-item|p1a: Snorlax|Choice Band|[from] move: Trick',
+            '|move|p1a: Snorlax|Body Slam|p2a: Absol|[from] move: Sleep Talk',
+            '|move|p1a: Snorlax|Body Slam|p2a: Absol','|',
+            '|-item|p2a: Absol|Leftovers|[from] move: Trick','|turn|2',
+            '|-enditem|p1a: Snorlax|Choice Band|[from] move: Knock Off']
+        result,projections=self.run_lines(lines);self.compare_active(result,lines)
+        first=next(p for p in projections if p.raw_line.startswith('|-item|p1'))
+        self.assertEqual([e.kind for e in first.events],[self.i.Kind.RAW_BEGIN,self.i.Kind.ITEM,self.i.Kind.ACTIVE])
+        self.assertTrue(bool(result.context.active.item_swapped[0,1]))
+        _,projections=self.project([*self.prefix,'|-item|p1a: Snorlax|Choice Band'])
+        initial=self.initial();chunk=self.chunks(projections)[0]
+        index=next(n for n in range(64) if int(chunk.words[0,n,0])==self.i.Kind.ACTIVE)
+        for value in (-1,4,2**31-1):
+            result=self.fold(initial,chunk._replace(words=chunk.words.at[0,index,10].set(value)))
+            self.assertNotEqual(int(result.error[0]),0);self.same(initial,self.carry(result))
 
 
 if __name__=='__main__':unittest.main()

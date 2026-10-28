@@ -122,11 +122,12 @@ class PublicEvent:
         elif self.kind==Kind.ACTIVE:
             d=self.payload
             if ((self.actor_side,self.actor_slot)!=(-1,-1) or self.target_side not in (0,1)
-                    or not 0<=self.target_slot<6 or d[0]<=0 or not public_active.EXPIRE_ACTION<=d[1]<=public_active.PERISH_START
+                    or not 0<=self.target_slot<6 or d[0]<=0 or not public_active.EXPIRE_ACTION<=d[1]<=public_active.CHOICE_MOVE
                     or any(d[3:])):
                 raise ValueError("active fact requires a resolved encounter and named operation")
             named=d[1] in (public_active.ADD,public_active.REMOVE,public_active.PERISH_START)
-            if not (d[2]>0 if named else d[2] in (0,1) if d[1]==public_active.STALL_ATTEMPT else d[2]==0):
+            if not (d[2]>0 if named else d[2] in (0,1) if d[1] in (public_active.STALL_ATTEMPT,public_active.CHOICE_MOVE)
+                    else 0<=d[2]<=3 if d[1]==public_active.ITEM_SET else d[2]==0):
                 raise ValueError("invalid active fact value")
         elif self.kind==Kind.DAMAGE_CONTROL:
             op=self.payload[0]
@@ -560,10 +561,10 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                     ((d[:,1]==0)|(d[:,1]==1))&jnp.all(d[:,2:]==0,axis=1))
                 payload_ok &= ~field_kind|field_payload
             if active_enabled:
-                active_payload=(d[:,0]>0)&(d[:,1]>=public_active.EXPIRE_ACTION)&(d[:,1]<=public_active.PERISH_START)&jnp.all(d[:,3:]==0,axis=1)
+                active_payload=(d[:,0]>0)&(d[:,1]>=public_active.EXPIRE_ACTION)&(d[:,1]<=public_active.CHOICE_MOVE)&jnp.all(d[:,3:]==0,axis=1)
                 named=(d[:,1]==public_active.ADD)|(d[:,1]==public_active.REMOVE)|(d[:,1]==public_active.PERISH_START)
-                active_payload &= jnp.where(named,d[:,2]>0,jnp.where(d[:,1]==public_active.STALL_ATTEMPT,
-                    (d[:,2]==0)|(d[:,2]==1),d[:,2]==0))
+                active_payload &= jnp.where(named,d[:,2]>0,jnp.where((d[:,1]==public_active.STALL_ATTEMPT)|(d[:,1]==public_active.CHOICE_MOVE),
+                    (d[:,2]==0)|(d[:,2]==1),jnp.where(d[:,1]==public_active.ITEM_SET,(d[:,2]>=0)&(d[:,2]<=3),d[:,2]==0)))
                 payload_ok &= ~active_kind|active_payload
             if damage_enabled:
                 damage_payload=((d[:,0]==public_damage.CLOSE)|(d[:,0]==public_damage.REMOVED))&jnp.all(d[:,1:]==0,axis=1)

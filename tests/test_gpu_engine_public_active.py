@@ -65,6 +65,9 @@ class PublicActiveTests(unittest.TestCase):
                 'confusion_elapsed','encore_elapsed','wrap_trap_elapsed')])
             self.assertEqual(bool(state.recharge[0,side]),replay.must_recharge[slot])
             self.assertEqual(bool(state.meanlook[0,side]),replay.meanlook_trap[slot])
+            self.assertEqual(bool(state.choice_public[0,side]),replay.choice_item_public[slot])
+            self.assertEqual(bool(state.choice_locked[0,side]),replay.choice_locked[slot])
+            self.assertEqual(bool(state.item_swapped[0,side]),replay.item_from_trick[slot])
             cats=[[None]*51];nums=[[0.]*self.s.V4_PRIVATE_WRITER_NUMERIC_FEATURE_COUNT]
             candidate=self.s.ShowdownPokemon(ident=slot+'a: fixture',showdown_slot=slot,species='Snorlax',
                 condition='100/100',active=True,details='Snorlax, L80')
@@ -74,13 +77,14 @@ class PublicActiveTests(unittest.TestCase):
                     active_volatiles=bag,active_stall_counter=replay.stall_counter[slot],
                     active_confusion_elapsed=replay.confusion_elapsed[slot],active_encore_elapsed=replay.encore_elapsed[slot],
                     active_wrap_trap_elapsed=replay.wrap_trap_elapsed[slot],active_meanlook_trap=replay.meanlook_trap[slot],
-                    active_must_recharge=replay.must_recharge[slot],schema_v3=True,schema_v4=True)
+                    active_must_recharge=replay.must_recharge[slot],active_choice_locked=replay.choice_locked[slot],
+                    active_item_swapped=replay.item_from_trick[slot],schema_v3=True,schema_v4=True)
             for name,col in zip(self.a.CORE,self.a.NUMERIC_COLUMNS):
                 self.assertAlmostEqual(float(got.numeric[0,side,col]),nums[0][getattr(self.s,'NUMERIC_'+name)],places=6,msg=name)
             for col in self.a.CATEGORY_COLUMNS:self.assertEqual(int(got.categorical[0,side,col]),self.vocab.encode(cats[0][col]))
             visible=len(set(bag)|({'mustrecharge'} if replay.must_recharge[slot] else set()))
             self.assertEqual(bool(got.overflow[0,side]),visible>self.s.VOLATILE_BUCKET_COUNT)
-        self.assertEqual(int(got.numeric_columns.sum()),5)
+        self.assertEqual(int(got.numeric_columns.sum()),7)
         self.assertEqual(int(got.categorical_columns.sum()),6)
 
     def prefixes(self,events):
@@ -170,6 +174,37 @@ class PublicActiveTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.a.project_line('|turn|1.0',catalog=self.catalog)
         self.assertEqual(self.a.project_line('|faint|p1a: Snorlax',catalog=self.catalog).facts,())
         self.assertEqual(self.a.project_line('|switch|p1a: Snorlax|Snorlax|100/100',catalog=self.catalog).facts,())
+
+    def test_public_choice_acquisition_called_moves_reacquisition_removal_and_cant(self):
+        self.prefixes(['|-item|p1a: Snorlax|Choice Band|[from] move: Trick',
+            '|move|p1a: Snorlax|Tackle|p2a: Absol|[from] move: Sleep Talk',
+            '|move|p1a: Snorlax|Protect|p1a: Snorlax','|cant|p1a: Snorlax|par',
+            '|-item|p1a: Snorlax|Choice Band','|move|p1a: Snorlax|Tackle|p2a: Absol',
+            '|-enditem|p1a: Snorlax|Choice Band|[from] move: Knock Off',
+            '|-item|p1a: Snorlax|Leftovers|[from] move: Trick',
+            '|move|p1a: Snorlax|Tackle|p2a: Absol','|-enditem|p1a: Snorlax|Leftovers',
+            '|-item|p2a: Absol|item: Choice Band|[from] move: trick',
+            '|move|p2a: Absol|Tackle|p1a: Snorlax'])
+
+    def test_choice_flags_stay_per_side_and_reset_on_baton_faint_and_ordinary_arrival(self):
+        self.prefixes(['|-item|p1a: Snorlax|Choice Band|[from] move: Trick',
+            '|-item|p2a: Absol|Choice Band','|move|p2a: Absol|Tackle|p1a: Snorlax',
+            '|move|p1a: Snorlax|Baton Pass|p1a: Snorlax','|switch|p1a: Blissey|Blissey, L80|100/100',
+            '|-item|p1a: Blissey|Choice Band|[from] move: Trick',
+            '|move|p1a: Blissey|Tackle|p2a: Absol','|faint|p1a: Blissey',
+            '|switch|p1a: Snorlax|Snorlax, L80|100/100','|drag|p2a: Snorlax|Snorlax, L80|100/100'])
+
+    def test_choice_lock_without_public_item_refuses_only_the_malformed_battle(self):
+        state,mons,_=self.prefixes(['|turn|1'])
+        state=self.jax.tree.map(lambda x:self.j.repeat(x,2,axis=0),state)
+        mons=self.jax.tree.map(lambda x:self.j.repeat(x,2,axis=0),mons)
+        state=state._replace(choice_locked=state.choice_locked.at[0,0].set(True))
+        patch=self.a.project(state,self.tables,mons,expected_vocabulary=self.tables.vocabulary_binding)
+        self.assertEqual(patch.admitted.tolist(),[False,True]);self.assertFalse(bool(patch.numeric[0].any()))
+        out,ok=self.jax.jit(lambda x:self.a.apply(x,self.tables,mons,operation=self.a.TURN,value=2,
+            producer_binding=self.tables.binding))(state)
+        self.assertEqual(ok.tolist(),[False,True]);self.assertEqual(out.turn.tolist(),[1,2])
+        for x,y in zip(out,state):self.assertTrue(bool(self.j.array_equal(x[0],y[0])))
 
 
 if __name__=='__main__':unittest.main()
