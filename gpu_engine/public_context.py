@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from . import public_abilities as ability, public_moves as move, public_mon_state as mon, public_items as item, public_field as field_api
+from . import public_active as active_api
 
 
 class ContextTables(NamedTuple):
@@ -25,6 +26,7 @@ class ContextTables(NamedTuple):
     item_narrowing: jax.Array | None = None
     binding: jax.Array | None = None
     field: field_api.FieldTables | None = None
+    active: active_api.ActiveTables | None = None
 
 
 class ContextState(NamedTuple):
@@ -35,13 +37,16 @@ class ContextState(NamedTuple):
     items: item.ItemState | None = None
     binding: jax.Array | None = None
     field: field_api.FieldState | None = None
+    active: active_api.ActiveState | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None):
     if type(item_belief_narrowing) is not bool:
         raise ValueError("item narrowing must be a frozen boolean")
     if items is None and field_catalog is not None:
         raise ValueError("field composition requires the raw item-enabled context")
+    if active_catalog is not None and field_catalog is None:
+        raise ValueError("active composition requires the ordered field context")
     if items is None and item_belief_narrowing:
         raise ValueError("item narrowing requires item tables")
     for binding in (abilities.device.source_binding, moves.device.source_binding):
@@ -63,11 +68,16 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
         ability_predicate=flags.tolist(), item_predicate=item_flags.tolist())
     if field_catalog is not None:
         payload.update(schema="pokezero.public_item_field_context.v1",field=np.asarray(field_catalog.device.binding).tolist())
+    if active_catalog is not None:
+        if not np.array_equal(np.asarray(active_catalog.device.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding)):
+            raise ValueError("active and field columns require the same frozen vocabulary")
+        payload.update(schema="pokezero.public_item_field_active_context.v1",active=np.asarray(active_catalog.device.binding).tolist())
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
         jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
-        field_catalog.device if field_catalog is not None else None)
+        field_catalog.device if field_catalog is not None else None,
+        active_catalog.device if active_catalog is not None else None)
 
 
 def initialize(beliefs, tables, *, species_binding=None):
@@ -78,12 +88,15 @@ def initialize(beliefs, tables, *, species_binding=None):
         raise ValueError("initialize public context before evidence ingestion")
     if tables.field is not None and tables.items is None:
         raise ValueError("field context requires item tables")
+    if tables.active is not None and tables.field is None:
+        raise ValueError("active context requires field tables")
     batch = beliefs.species.shape[0]
     return ContextState(ability.initialize(batch, tables.abilities,species_binding=species_binding), move.initialize(batch, tables.moves),
         beliefs.hard, beliefs.has_evidence,
         item.initialize(batch,tables.items,species_binding=species_binding) if tables.items is not None else None,
         jnp.broadcast_to(tables.binding,(batch,8)) if tables.binding is not None else None,
-        field_api.initialize(batch,tables.field) if tables.field is not None else None)
+        field_api.initialize(batch,tables.field) if tables.field is not None else None,
+        active_api.initialize(batch,tables.active,species_binding=species_binding) if tables.active is not None else None)
 
 
 def basis(context, beliefs):
@@ -117,11 +130,14 @@ def rebuild(context, base, source_tables, tables):
         ok &= jnp.all(context.binding==tables.binding,axis=-1) & jnp.all(tables.items.source_binding==source_tables.binding)
     if context.field is not None:
         ok &= jnp.all(context.field.binding==tables.field.binding,axis=-1)
+    if context.active is not None:
+        ok &= jnp.all(context.active.binding==tables.active.binding,axis=-1)
     return base._replace(hard=hard,has_evidence=evidence),ok
 
 
 def consume(context, base, mons, source_tables, tables, row, valid, *,
-            move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind):
+            move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind,
+            active_kind, baton_kind):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
@@ -166,4 +182,16 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             upkeep=(k==field_kind)&(data[:,2]==1),from_ability=(k==field_kind)&(data[:,3]==1),
             producer_binding=tables.field.binding,valid=valid&((k==field_kind)|is_turn))
         accepted &= ff
-    return context._replace(abilities=a,moves=m,items=items,field=fields),base,accepted | ~valid
+    active=context.active
+    if active is not None:
+        is_turn=k==turn_kind;is_active=k==active_kind
+        relevant=arrival|faint|is_turn|is_active
+        op=jnp.where(arrival,active_api.ARRIVE,jnp.where(faint,active_api.FAINT,
+            jnp.where(is_turn,active_api.TURN,data[:,1])))
+        active_identity=(side>=0)&(side<2)&(slot==mons.active[jnp.arange(side.shape[0]),jnp.clip(side,0,1)])
+        active,ac=active_api.apply(active,tables.active,mons,operation=op,
+            side=jnp.where(is_turn,-1,side),encounter=jnp.where(is_turn,0,data[:,0]),
+            value=jnp.where(is_turn,row[:,2],jnp.where(is_active,data[:,2],0)),baton_pass=k==baton_kind,
+            producer_binding=tables.active.binding,valid=valid&relevant&(~is_active|active_identity))
+        accepted &= jnp.where(relevant,ac,True)
+    return context._replace(abilities=a,moves=m,items=items,field=fields,active=active),base,accepted | ~valid
