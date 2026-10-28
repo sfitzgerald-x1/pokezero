@@ -1,8 +1,4 @@
-"""Complete authored Hustle laws in Native98's matching accuracy domain.
-
-Pinned Showdown, rather than Native98, adjudicates the Status/staged-accuracy
-boundaries in test_gpu_engine_hustle. These are independent authored states.
-"""
+"""Complete authored Hustle laws; pinned-source boundary controls are separate."""
 import importlib.util
 import unittest
 
@@ -10,7 +6,7 @@ import unittest
 @unittest.skipUnless(all(importlib.util.find_spec(n) for n in ('jax','poke_engine')),
     'requires isolated JAX and native oracle')
 class NativeHustleTests(unittest.TestCase):
-    def compare(self,side,move,*,band=False,switching=False,wrong_table=False,reference_gap=False):
+    def compare(self,side,move,*,band=False,switching=False,wrong_table=False):
         from tests.test_gpu_engine_hustle import HustleTests
         f=HustleTests();f.setUpClass();j=f.j;s=f.live(side,move,batch=1)
         spare=[n for n in ('splash','toxic','doubleedge','aerialace') if n!=move][:3]
@@ -27,7 +23,7 @@ class NativeHustleTests(unittest.TestCase):
         self.assertIsInstance(plan,c.ConsumerPlan,str(getattr(plan,'gaps',None)))
         out=compare_slot(plan,JaxCaseExecutor(s,tuple(actions),table,plan,batch_size=64),
             lambda:native_executor(plan),batch_size=64,mass_tolerance=1e-5,probability_tolerance=1e-5)
-        self.assertEqual(out['status'],'DIVERGE' if wrong_table or reference_gap else 'AGREE',
+        self.assertEqual(out['status'],'DIVERGE' if wrong_table else 'AGREE',
             {k:v for k,v in out.items() if k not in ('outcomes','consumer_certificate')})
         return out
 
@@ -40,13 +36,9 @@ class NativeHustleTests(unittest.TestCase):
         for side in (0,1):
             with self.subTest(side=side):self.compare(side,'hiddenpowerice',band=True)
 
-    def test_native98_always_hit_discrepancy_is_reported_not_ported(self):
-        # Native98 still multiplies Aerial Ace's encoded100 accuracy by.8.
-        # The pinned full-move Showdown control requires always-hit behavior.
-        # Keep this reference defect visible until a separate native repair.
+    def test_always_hit_full_law_bypasses_numeric_events_both_seats(self):
         for side in (0,1):
-            out=self.compare(side,'aerialace',band=True,reference_gap=True)
-            self.assertAlmostEqual(float(out['half_l1']),.2,places=6)
+            self.compare(side,'aerialace',band=True)
 
     def test_switched_target_and_wrong_hustle_table(self):
         for side in (0,1):self.compare(side,'hiddenpowerground',band=True,switching=True)

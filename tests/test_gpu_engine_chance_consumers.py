@@ -44,6 +44,40 @@ def table(meta):
 
 
 class ChanceConsumerTests(unittest.TestCase):
+    def test_plain_binary64_threshold_refines_actual_integer_rolls(self):
+        data,meta=fixture();self.choose(data,meta,0,'return');move=meta['vocabulary']['moves'].index('return')
+        t=table(meta);t['accuracy'][move]=80
+        data['boosts'][0][0][5]=2;data['boosts'][1][0][6]=5
+        plan=self.plan(data,meta,kernel_table=t)
+        self.assertIsInstance(plan,c.ConsumerPlan,plan)
+        self.assertEqual([len(cell.members) for cell in self.cells(plan,'draws.0.6')],[51,49])
+
+    def test_plain_actual_table_outside_accuracy_domain_also_refuses(self):
+        data,meta=fixture();self.choose(data,meta,0,'return');t=table(meta)
+        t['accuracy'][meta['vocabulary']['moves'].index('return')]=101
+        plan=self.plan(data,meta,kernel_table=t)
+        self.assertIsInstance(plan,mapping.Refused)
+        self.assertEqual(plan.gaps[0].code,'ACCURACY_DOMAIN')
+
+    def test_trace_compound_eyes_and_weather_sand_veil_cuts_are_retained(self):
+        data,meta=fixture();t=self.hustle_table(data,meta)
+        meta['vocabulary']['abilities']+=['compoundeyes','sandveil']
+        t['combat']['hustle']+=[False,False]
+        t['combat']['compound_eyes']=[False]*4+[True,False]
+        t['entry']['trace']+=[False,False];t['entry']['weather_ability']+=[0,0]
+        t['secondary']['static']+=[False,False];t['secondary']['synchronize']+=[False,False]
+        t['weather']['sand_veil']=[False]*5+[True]
+        self.choose(data,meta,0,'return');t['accuracy'][meta['vocabulary']['moves'].index('return')]=85
+        data['ability'][0][0]=3;data['base_ability'][0][0]=3
+        data['ability'][1][0]=5;data['base_ability'][1][0]=5
+        data['ability'][1][1]=4;data['base_ability'][1][1]=4
+        data['weather']=3;data['weather_counter']=5
+        plan=self.plan(data,meta,actions=(0,4),kernel_table=t)
+        self.assertIsInstance(plan,c.ConsumerPlan,plan)
+        axis=next(a for a in plan.axes if a.coordinate=='draws.0.6')
+        self.assertIn(Fraction(88),{o.argument for o in axis.observations})
+        self.assertIn(Fraction(68),{o.argument for o in axis.observations})
+
     def hustle_table(self,data,meta,*,hidden=False):
         meta['vocabulary']['abilities']+=['hustle','trace']
         data['ability'][0][0]=2;data['base_ability'][0][0]=2
@@ -104,7 +138,7 @@ class ChanceConsumerTests(unittest.TestCase):
             plan=self.plan(data,meta,kernel_table=t)
             with self.subTest(value=value):
                 self.assertIsInstance(plan,mapping.Refused)
-                self.assertEqual(plan.gaps[0].code,'HUSTLE_ACCURACY_DOMAIN')
+                self.assertEqual(plan.gaps[0].code,'ACCURACY_DOMAIN')
 
     def plan(self, data=None, meta=None, actions=(0, 0), *, cap=100_000_000, kernel_table=None):
         if data is None:
@@ -249,11 +283,11 @@ class ChanceConsumerTests(unittest.TestCase):
         self.choose(data, meta, 1, "haze")
         plan = self.plan(data, meta)
         axis = next(a for a in plan.axes if a.coordinate == "draws.0.6")
-        self.assertEqual({o.argument for o in axis.observations}, {Fraction(105, 2), Fraction(70)})
+        self.assertEqual({o.argument for o in axis.observations}, {Fraction(53), Fraction(70)})
         self.choose(data, meta, 1, "sunnyday")
         plan = self.plan(data, meta)
         axis = next(a for a in plan.axes if a.coordinate == "draws.0.6")
-        self.assertIn(Fraction(75, 2), {o.argument for o in axis.observations})
+        self.assertIn(Fraction(38), {o.argument for o in axis.observations})
         self.choose(data, meta, 1, "doubleteam")
         plan = self.plan(data, meta)
         self.assertGreater(len(self.cells(plan, "draws.0.6")), 1)

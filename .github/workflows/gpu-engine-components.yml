@@ -10,6 +10,7 @@ on:
       - 'tests/gpu_*_oracle.cjs'
       - 'tests/data/gpu_synchronize_catalog.json'
       - 'tests/data/gpu_hustle_catalog.json'
+      - 'tests/data/gpu_accuracy_events_catalog.json'
       - 'scripts/run_gpu_component_shard.py'
       - 'tests/test_gpu_component_shards.py'
       - '.github/workflows/gpu-engine-components.yml'

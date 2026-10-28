@@ -1831,3 +1831,7 @@ poke-engine-gen3-conditioned-primary-burn.patch
 # Opt-in ordinary move/residual ties use distinct original physical coins.
 # Actual tied10.x handlers sort by suborder; default/non-tied sequence retained.
 poke-engine-gen3-conditioned-ordinary-ties.patch
+
+# Pinned Gen3 staged binary64 accuracy, boolean always-hit/rain bypass and
+# integer-only Q12 Hustle/Compound Eyes/Sand Veil event composition.
+poke-engine-gen3-accuracy-events.patch

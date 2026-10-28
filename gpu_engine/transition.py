@@ -582,8 +582,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # Hidden Power's actor-owned type has already been resolved above.
         hustle_accuracy = (hustle & table.combat.physical_type[typ]
             if table.combat is not None else jnp.zeros_like(acts))
+        compound_eyes = (table.combat.compound_eyes[_active(work.ability,work,side)]
+            if table.combat is not None else jnp.zeros_like(acts))
+        sand_veil = (table.weather.sand_veil[_active(work.ability,work,foe)]
+            & (effective_weather == climate.SAND) if table.weather is not None else jnp.zeros_like(acts))
         hit = m.accuracy_hit(accuracy, attack_boosts[:, 5], defense_boosts[:, 6],
-                             chance[:, 6], always_hit=always_hit,hustle=hustle_accuracy)
+            chance[:,6],always_hit=always_hit,hustle=hustle_accuracy,
+            compound_eyes=compound_eyes,sand_veil=sand_veil)
         # TryMove (including Damp) succeeds before self-KO, which occurs even
         # if the subsequent target hit misses, is protected, immune or a sub.
         # Damage inputs were resolved while the user's ability was still active.
