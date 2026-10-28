@@ -43,6 +43,8 @@ class Kind(IntEnum):
     ABILITY = 16
     TRACE = 17
     TRANSFORM = 18
+    CLEAR_ALL_BOOSTS = 19
+    CURE_TEAM = 20
 
 
 class Phase(IntEnum):
@@ -89,9 +91,12 @@ class PublicEvent:
         if self.phase not in set(Phase) or self.sequence < 1 or self.turn < 0:
             raise ValueError("invalid public event header")
         boundary = self.kind in (Kind.TURN, Kind.ACTION_CHUNK_END, Kind.UPKEEP)
-        if boundary:
+        if boundary or self.kind==Kind.CLEAR_ALL_BOOSTS:
             if any(x != -1 for x in row[4:8]) or any(self.payload):
                 raise ValueError("boundary event cannot carry a party identity or payload")
+        elif self.kind==Kind.CURE_TEAM:
+            if (self.actor_side,self.actor_slot,self.target_slot)!=(-1,-1,-1) or self.target_side not in (0,1) or any(self.payload):
+                raise ValueError("team cure requires only one public side and zero payload")
         elif self.kind in (Kind.MOVE, Kind.TRACE, Kind.TRANSFORM):
             if self.actor_side not in (0, 1) or not 0 <= self.actor_slot < 6:
                 raise ValueError("context event requires a resolved actor address")
@@ -341,7 +346,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         boundary = (kind == Kind.TURN) | (kind == Kind.ACTION_CHUNK_END) | (kind == Kind.UPKEEP)
         fact = (kind == Kind.SET_REVEAL) | (kind == Kind.SET_EXCLUDE)
         sequence_ok = (sequence == current.sequence + 1) & (current.sequence < 2**31 - 1)
-        mon_kind = (kind >= Kind.SWITCH) & (kind <= Kind.COPY_BOOST)
+        regular_mon_kind = (kind >= Kind.SWITCH) & (kind <= Kind.COPY_BOOST)
+        global_mon_kind = (kind==Kind.CLEAR_ALL_BOOSTS)|(kind==Kind.CURE_TEAM)
+        mon_kind = regular_mon_kind|global_mon_kind
         context_kind = (kind >= Kind.MOVE) & (kind <= Kind.TRANSFORM)
         kind_ok = boundary | fact | (mon_kind if mons is not None else False) | (context_kind if ctx is not None else False)
         phase_ok = (phase == Phase.ACTION) | (phase == Phase.RESIDUAL)
@@ -360,17 +367,22 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         target_identity = (row[:, 6] >= 0) & (row[:, 6] <= 1) & (row[:, 7] >= 0) & (row[:, 7] < 6)
         double_context = (kind == Kind.MOVE) | (kind == Kind.TRACE) | (kind == Kind.TRANSFORM)
         context_identity = actor_identity & (target_identity | (absent_target & (kind != Kind.TRANSFORM)))
+        cure_identity=jnp.all(row[:,4:6]==-1,axis=1)&(row[:,6]>=0)&(row[:,6]<=1)&(row[:,7]==-1)
         header_ok = turn_ok & phase_ok & jnp.where(boundary, boundary_identity,
-            jnp.where(kind == Kind.COPY_BOOST, copy_identity, jnp.where(double_context, context_identity, fact_identity)))
+            jnp.where(kind==Kind.CLEAR_ALL_BOOSTS,boundary_identity,jnp.where(kind==Kind.CURE_TEAM,cure_identity,
+            jnp.where(kind == Kind.COPY_BOOST, copy_identity, jnp.where(double_context, context_identity, fact_identity)))))
         predicate = row[:, 8]
-        payload_ok = jnp.where(boundary, jnp.all(row[:, 8:] == 0, axis=1),
+        payload_ok = jnp.where(boundary|global_mon_kind, jnp.all(row[:, 8:] == 0, axis=1),
             jnp.where(fact, (predicate >= 0) & (predicate < tables.predicates.shape[0]) & jnp.all(row[:, 9:] == 0, axis=1), True))
         if ctx is not None:
             d = row[:, 8:]
             # Ability reveals have their own replaceable ledger. Generic set
             # events cannot smuggle one into the monotone non-ability basis.
             ability_fact = context_tables.ability_predicate[jnp.clip(predicate, 0, tables.predicates.shape[0] - 1)]
-            payload_ok &= ~((kind == Kind.SET_REVEAL) & ability_fact)
+            # Predicate zero has no fact namespace. It cannot be admitted to
+            # this monotone basis as a generic reveal: it could be a later-
+            # replaceable ability. Typed MOVE/ABILITY keep off-source fallback.
+            payload_ok &= ~((kind == Kind.SET_REVEAL) & (ability_fact | (predicate==0)))
             move_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & (d[:, 2] >= 0) & (d[:, 2] <= 4) & ((d[:, 3] == 0) | (d[:, 3] == 1)) & jnp.all(d[:, 4:] == 0, axis=1)
             ability_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & ((d[:, 2] == 0) | (d[:, 2] == 1)) & jnp.all(d[:, 3:] == 0, axis=1)
             trace_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & jnp.where(absent_target, d[:, 2] == 0, d[:, 2] > 0) & ((d[:, 3] == 0) | (d[:, 3] == 1)) & jnp.all(d[:, 4:] == 0, axis=1)
@@ -384,11 +396,15 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         apply = valid & (error == 0)
         if mons is not None:
             old_mons = mons
-            mons, state, mon_error = _fold_mon_event(mons, state, tables, row, apply & mon_kind)
-            error = jnp.where(apply & mon_kind & (mon_error != 0), mon_error, error)
+            mons, state, mon_error = _fold_mon_event(mons, state, tables, row, apply & regular_mon_kind)
+            error = jnp.where(apply & regular_mon_kind & (mon_error != 0), mon_error, error)
             apply = valid & (error == 0)
             if ctx is not None:
-                _, basis, _ = _fold_mon_event(old_mons, basis, tables, row, apply & mon_kind)
+                _, basis, _ = _fold_mon_event(old_mons, basis, tables, row, apply & regular_mon_kind)
+            mons, clear_ok=public_mon_state.clear_all_boosts(mons,valid=apply&(kind==Kind.CLEAR_ALL_BOOSTS))
+            mons, cure_ok=public_mon_state.cure_team(mons,side=row[:,6],valid=apply&(kind==Kind.CURE_TEAM))
+            error=jnp.where(apply&global_mon_kind&~(clear_ok|cure_ok),Error.PAYLOAD,error)
+            apply=valid&(error==0)
         if ctx is not None:
             ctx, basis, accepted = public_context.consume(ctx, basis, mons, tables, context_tables, row,
                 apply & (context_kind | mon_kind), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
