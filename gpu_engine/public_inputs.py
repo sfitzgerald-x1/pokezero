@@ -18,7 +18,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from . import public_belief, public_mon_state, public_context, public_field, public_active
+from . import public_belief, public_mon_state, public_context, public_field, public_active, public_damage
 
 
 SCHEMA = "pokezero.public_events.v1"
@@ -50,6 +50,7 @@ class Kind(IntEnum):
     ITEM = 22
     FIELD = 23
     ACTIVE = 24
+    DAMAGE_CONTROL = 25
 
 
 class Phase(IntEnum):
@@ -127,6 +128,12 @@ class PublicEvent:
             named=d[1] in (public_active.ADD,public_active.REMOVE,public_active.PERISH_START)
             if not (d[2]>0 if named else d[2] in (0,1) if d[1]==public_active.STALL_ATTEMPT else d[2]==0):
                 raise ValueError("invalid active fact value")
+        elif self.kind==Kind.DAMAGE_CONTROL:
+            op=self.payload[0]
+            if op not in (public_damage.CLOSE,public_damage.REMOVED) or any(self.payload[1:]):
+                raise ValueError("damage control requires its named operation and zero reserved words")
+            if (self.actor_side,self.actor_slot,self.target_slot)!=(-1,-1,-1) or self.target_side not in ((-1,) if op==public_damage.CLOSE else (0,1)):
+                raise ValueError("damage control requires global closure or a public victim side")
         elif self.kind==Kind.CURE_TEAM:
             if (self.actor_side,self.actor_slot,self.target_slot)!=(-1,-1,-1) or self.target_side not in (0,1) or any(self.payload):
                 raise ValueError("team cure requires only one public side and zero payload")
@@ -162,9 +169,10 @@ class PublicEvent:
             if not (encounter > 0 and species >= 0 and source_species >= 0 and 0 <= level <= 100 and 0 <= gender <= 2 and 0 <= hp <= maximum and maximum > 0 and 0 <= status <= public_mon_state.TOXIC):
                 raise ValueError("invalid public arrival payload")
         if self.kind == Kind.CONDITION:
-            encounter, hp, maximum, status, fainted, *reserved = self.payload
+            encounter, hp, maximum, status, fainted, damage, tagged, spikes = self.payload
             hp_ok = maximum > 0 and 0 <= hp <= maximum or fainted == 1 and hp == maximum == 0
-            if not (encounter > 0 and hp_ok and 0 <= status <= public_mon_state.TOXIC and fainted in (0, 1) and not any(reserved)):
+            metadata_ok=damage in (0,1) and tagged in (0,1) and spikes in (0,1) and tagged<=damage and spikes<=tagged
+            if not (encounter > 0 and hp_ok and 0 <= status <= public_mon_state.TOXIC and fainted in (0, 1) and metadata_ok):
                 raise ValueError("invalid public condition payload")
         if self.kind == Kind.STATUS:
             if not (self.payload[0] > 0 and 0 <= self.payload[1] <= public_mon_state.TOXIC and not any(self.payload[2:])):
@@ -198,6 +206,7 @@ class EventChunk(NamedTuple):
     context_binding: jax.Array | None = None
     field_binding: jax.Array | None = None
     active_binding: jax.Array | None = None
+    damage_binding: jax.Array | None = None
 
 
 class StreamCursor(NamedTuple):
@@ -231,7 +240,7 @@ def initialize(stream_ids, *, source_binding) -> StreamCursor:
                         zeros, zeros, zeros, zeros, zeros, jnp.zeros(ids.shape, bool))
 
 
-def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, ability_binding=None, move_binding=None, item_binding=None, context_binding=None, field_binding=None, active_binding=None):
+def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, ability_binding=None, move_binding=None, item_binding=None, context_binding=None, field_binding=None, active_binding=None, damage_binding=None):
     """Yield every event without truncation, in fixed chunks for a batch.
 
     The host registry must bind each positive stream ID to one full battle ID
@@ -250,7 +259,7 @@ def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, abi
         species_binding=np.asarray(species_binding)
         if species_binding.shape!=(8,) or species_binding.dtype!=np.uint32:
             raise ValueError('public events require eight uint32 species namespace words')
-    for namespace in (ability_binding,move_binding,item_binding,context_binding,field_binding,active_binding):
+    for namespace in (ability_binding,move_binding,item_binding,context_binding,field_binding,active_binding,damage_binding):
         if namespace is not None and (getattr(namespace,'shape',None)!=(8,) or getattr(namespace,'dtype',None)!=np.dtype(np.uint32)):
             raise ValueError('public context namespace requires eight uint32 words')
     rows = [[event.words() for event in stream] for stream in events]
@@ -272,7 +281,8 @@ def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, abi
                          jnp.asarray(item_binding) if item_binding is not None else None,
                          jnp.asarray(context_binding) if context_binding is not None else None,
                          jnp.asarray(field_binding) if field_binding is not None else None,
-                         jnp.asarray(active_binding) if active_binding is not None else None)
+                         jnp.asarray(active_binding) if active_binding is not None else None,
+                         jnp.asarray(damage_binding) if damage_binding is not None else None)
 
 
 def protocol_boundary(line: str, *, sequence: int, turn: int, phase=Phase.ACTION) -> PublicEvent:
@@ -292,7 +302,7 @@ def protocol_boundary(line: str, *, sequence: int, turn: int, phase=Phase.ACTION
     raise ValueError(f"unsupported protocol input: {line.split('|')[1:2]}")
 
 
-def _fold_mon_event(mons, beliefs, tables, row, valid):
+def _fold_mon_event(mons, beliefs, tables, row, valid, *, damage_metadata=False):
     """Consume one typed mon event per battle, including candidate-slot binding."""
     p = public_mon_state
     batch = row.shape[0]
@@ -327,7 +337,8 @@ def _fold_mon_event(mons, beliefs, tables, row, valid):
         source_available=beliefs.source_available[belief_address])
     beliefs = beliefs._replace(**{name: p._write(getattr(beliefs, name), belief_address,
         getattr(fresh, name), a & initialize_source) for name in beliefs._fields})
-    condition_payload = ((data[:, 4] == 0) | (data[:, 4] == 1)) & jnp.all(data[:, 5:] == 0, axis=1)
+    metadata=jnp.all((data[:,5:]>=0)&(data[:,5:]<=1),axis=1)&(data[:,6]<=data[:,5])&(data[:,7]<=data[:,6])
+    condition_payload = ((data[:, 4] == 0) | (data[:, 4] == 1)) & (metadata if damage_metadata else jnp.all(data[:,5:]==0,axis=1))
     mons, c = p.condition_update(mons, side=side, slot=slot, encounter=data[:, 0],
         numerator=data[:, 1], denominator=data[:, 2], status=data[:, 3], fainted=data[:, 4] == 1,
         valid=use & (kind == Kind.CONDITION) & condition_payload)
@@ -455,6 +466,21 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         source_ok &= False
     if active_enabled:
         source_ok &= (context.active.turn==cursor.turn)&jnp.all(context.active.species_binding==mon_state.species_binding,axis=-1)
+    damage_enabled=context is not None and context.damage is not None
+    if damage_enabled and not field_enabled:
+        raise ValueError("damage context requires ordered field composition")
+    if context is not None and (context.damage is None)!=(context_tables.damage is None):
+        raise ValueError("damage context requires its frozen tables")
+    if chunk.damage_binding is not None:
+        if chunk.damage_binding.shape!=(8,) or chunk.damage_binding.dtype!=jnp.uint32:
+            raise ValueError("expected eight uint32 damage namespace words")
+        source_ok &= damage_enabled
+        if damage_enabled:
+            source_ok &= jnp.all(context.damage.binding==chunk.damage_binding,axis=-1)&jnp.all(context_tables.damage.binding==chunk.damage_binding)
+    elif damage_enabled:
+        source_ok &= False
+    if damage_enabled:
+        source_ok &= (context.damage.turn==cursor.turn)&jnp.all(context.damage.species_binding==mon_state.species_binding,axis=-1)
     error = jnp.where((error == 0) & ~source_ok, Error.SOURCE, error)
     prefix = ~jnp.any(chunk.valid[:, 1:] & ~chunk.valid[:, :-1], axis=1)
     # An empty chunk cannot promise more forever, nor complete an undrained stream.
@@ -482,7 +508,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         item_kind = (kind==Kind.RAW_BEGIN)|(kind==Kind.ITEM)
         field_kind = kind==Kind.FIELD
         active_kind = kind==Kind.ACTIVE
-        kind_ok = (active_kind if active_enabled else False) | (field_kind if field_enabled else False) | (item_kind if item_enabled else False) | boundary | fact | (mon_kind if mons is not None else False) | (context_kind if ctx is not None else False)
+        damage_kind = kind==Kind.DAMAGE_CONTROL
+        kind_ok = (damage_kind if damage_enabled else False) | (active_kind if active_enabled else False) | (field_kind if field_enabled else False) | (item_kind if item_enabled else False) | boundary | fact | (mon_kind if mons is not None else False) | (context_kind if ctx is not None else False)
         phase_ok = (phase == Phase.ACTION) | (phase == Phase.RESIDUAL)
         # Only TURN can advance turn or leave residual phase. Other events keep
         # the committed phase, except UPKEEP which enters the residual phase.
@@ -503,9 +530,11 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         raw_identity=jnp.where(row[:,8]==2,copy_identity&(row[:,4]!=row[:,6]),boundary_identity)
         field_identity=jnp.all(row[:,4:6]==-1,axis=1)&(row[:,7]==-1)&jnp.where(
             row[:,8]==public_field.WEATHER,row[:,6]==-1,(row[:,6]>=0)&(row[:,6]<=1))
-        header_ok = turn_ok & phase_ok & jnp.where(kind==Kind.FIELD,field_identity,jnp.where(kind==Kind.RAW_BEGIN,raw_identity,jnp.where(boundary, boundary_identity,
+        damage_identity=jnp.all(row[:,4:6]==-1,axis=1)&(row[:,7]==-1)&jnp.where(
+            row[:,8]==public_damage.CLOSE,row[:,6]==-1,(row[:,6]>=0)&(row[:,6]<=1))
+        header_ok = turn_ok & phase_ok & jnp.where(damage_kind,damage_identity,jnp.where(kind==Kind.FIELD,field_identity,jnp.where(kind==Kind.RAW_BEGIN,raw_identity,jnp.where(boundary, boundary_identity,
             jnp.where(kind==Kind.CLEAR_ALL_BOOSTS,boundary_identity,jnp.where(kind==Kind.CURE_TEAM,cure_identity,
-            jnp.where(kind == Kind.COPY_BOOST, copy_identity, jnp.where(double_context, context_identity, fact_identity)))))))
+            jnp.where(kind == Kind.COPY_BOOST, copy_identity, jnp.where(double_context, context_identity, fact_identity))))))))
         predicate = row[:, 8]
         payload_ok = jnp.where(boundary|global_mon_kind, jnp.all(row[:, 8:] == 0, axis=1),
             jnp.where(fact, (predicate >= 0) & (predicate < tables.predicates.shape[0]) & jnp.all(row[:, 9:] == 0, axis=1), True))
@@ -536,6 +565,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                 active_payload &= jnp.where(named,d[:,2]>0,jnp.where(d[:,1]==public_active.STALL_ATTEMPT,
                     (d[:,2]==0)|(d[:,2]==1),d[:,2]==0))
                 payload_ok &= ~active_kind|active_payload
+            if damage_enabled:
+                damage_payload=((d[:,0]==public_damage.CLOSE)|(d[:,0]==public_damage.REMOVED))&jnp.all(d[:,1:]==0,axis=1)
+                payload_ok &= ~damage_kind|damage_payload
             payload_ok &= ~((kind==Kind.SET_REVEAL)&replaceable)
             move_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & (d[:, 2] >= 0) & (d[:, 2] <= 4) & ((d[:, 3] == 0) | (d[:, 3] == 1)) & jnp.all(d[:, 4:] == 0, axis=1)
             ability_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & ((d[:, 2] == 0) | (d[:, 2] == 1)) & jnp.all(d[:, 3:] == 0, axis=1)
@@ -548,24 +580,28 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             jnp.where(~header_ok, Error.HEADER, jnp.where(~payload_ok, Error.PAYLOAD, Error.NONE))))
         error = jnp.where(valid & (error == 0), event_error, error)
         apply = valid & (error == 0)
+        if damage_enabled:
+            ctx,damage_ok=public_context.preconsume(ctx,mons,context_tables,row,apply,condition_kind=Kind.CONDITION)
+            error=jnp.where(apply&~damage_ok,Error.PAYLOAD,error)
+            apply=valid&(error==0)
         if mons is not None:
             old_mons = mons
-            mons, state, mon_error = _fold_mon_event(mons, state, tables, row, apply & regular_mon_kind)
+            mons, state, mon_error = _fold_mon_event(mons, state, tables, row, apply & regular_mon_kind,damage_metadata=damage_enabled)
             error = jnp.where(apply & regular_mon_kind & (mon_error != 0), mon_error, error)
             apply = valid & (error == 0)
             if ctx is not None:
-                _, basis, _ = _fold_mon_event(old_mons, basis, tables, row, apply & regular_mon_kind)
+                _, basis, _ = _fold_mon_event(old_mons, basis, tables, row, apply & regular_mon_kind,damage_metadata=damage_enabled)
             mons, clear_ok=public_mon_state.clear_all_boosts(mons,valid=apply&(kind==Kind.CLEAR_ALL_BOOSTS))
             mons, cure_ok=public_mon_state.cure_team(mons,side=row[:,6],valid=apply&(kind==Kind.CURE_TEAM))
             error=jnp.where(apply&global_mon_kind&~(clear_ok|cure_ok),Error.PAYLOAD,error)
             apply=valid&(error==0)
         if ctx is not None:
             ctx, basis, accepted = public_context.consume(ctx, basis, mons, tables, context_tables, row,
-                apply & (context_kind | mon_kind | item_kind | field_kind | active_kind | ((kind==Kind.TURN)&field_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
+                apply & (context_kind | mon_kind | item_kind | field_kind | active_kind | damage_kind | ((kind==Kind.TURN)&field_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
                 trace_kind=Kind.TRACE, transform_kind=Kind.TRANSFORM,
                 arrival=(kind >= Kind.SWITCH) & (kind <= Kind.BATON_PASS), faint=kind == Kind.FAINT,
                 raw_kind=Kind.RAW_BEGIN,item_kind=Kind.ITEM,field_kind=Kind.FIELD,turn_kind=Kind.TURN,
-                active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS)
+                active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,damage_kind=Kind.DAMAGE_CONTROL)
             error = jnp.where(apply & ~accepted, Error.PAYLOAD, error)
             apply = valid & (error == 0)
         # A public fact about side s narrows the other observer's belief about s.

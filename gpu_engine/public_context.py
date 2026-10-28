@@ -15,6 +15,7 @@ import numpy as np
 
 from . import public_abilities as ability, public_moves as move, public_mon_state as mon, public_items as item, public_field as field_api
 from . import public_active as active_api
+from . import public_damage as damage_api
 
 
 class ContextTables(NamedTuple):
@@ -27,6 +28,7 @@ class ContextTables(NamedTuple):
     binding: jax.Array | None = None
     field: field_api.FieldTables | None = None
     active: active_api.ActiveTables | None = None
+    damage: damage_api.DamageTables | None = None
 
 
 class ContextState(NamedTuple):
@@ -38,15 +40,18 @@ class ContextState(NamedTuple):
     binding: jax.Array | None = None
     field: field_api.FieldState | None = None
     active: active_api.ActiveState | None = None
+    damage: damage_api.DamageState | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None):
     if type(item_belief_narrowing) is not bool:
         raise ValueError("item narrowing must be a frozen boolean")
     if items is None and field_catalog is not None:
         raise ValueError("field composition requires the raw item-enabled context")
     if active_catalog is not None and field_catalog is None:
         raise ValueError("active composition requires the ordered field context")
+    if damage_tables is not None and field_catalog is None:
+        raise ValueError("damage composition requires the ordered field context")
     if items is None and item_belief_narrowing:
         raise ValueError("item narrowing requires item tables")
     for binding in (abilities.device.source_binding, moves.device.source_binding):
@@ -72,12 +77,16 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
         if not np.array_equal(np.asarray(active_catalog.device.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding)):
             raise ValueError("active and field columns require the same frozen vocabulary")
         payload.update(schema="pokezero.public_item_field_active_context.v1",active=np.asarray(active_catalog.device.binding).tolist())
+    if damage_tables is not None:
+        if not np.array_equal(np.asarray(damage_tables.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding)):
+            raise ValueError("damage and field columns require the same frozen vocabulary")
+        payload.update(schema=payload['schema']+'.damage.v1',damage=np.asarray(damage_tables.binding).tolist())
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
         jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
         field_catalog.device if field_catalog is not None else None,
-        active_catalog.device if active_catalog is not None else None)
+        active_catalog.device if active_catalog is not None else None,damage_tables)
 
 
 def initialize(beliefs, tables, *, species_binding=None):
@@ -90,13 +99,16 @@ def initialize(beliefs, tables, *, species_binding=None):
         raise ValueError("field context requires item tables")
     if tables.active is not None and tables.field is None:
         raise ValueError("active context requires field tables")
+    if tables.damage is not None and tables.field is None:
+        raise ValueError("damage context requires field tables")
     batch = beliefs.species.shape[0]
     return ContextState(ability.initialize(batch, tables.abilities,species_binding=species_binding), move.initialize(batch, tables.moves),
         beliefs.hard, beliefs.has_evidence,
         item.initialize(batch,tables.items,species_binding=species_binding) if tables.items is not None else None,
         jnp.broadcast_to(tables.binding,(batch,8)) if tables.binding is not None else None,
         field_api.initialize(batch,tables.field) if tables.field is not None else None,
-        active_api.initialize(batch,tables.active,species_binding=species_binding) if tables.active is not None else None)
+        active_api.initialize(batch,tables.active,species_binding=species_binding) if tables.active is not None else None,
+        damage_api.initialize(batch,tables.damage,species_binding=species_binding) if tables.damage is not None else None)
 
 
 def basis(context, beliefs):
@@ -132,12 +144,24 @@ def rebuild(context, base, source_tables, tables):
         ok &= jnp.all(context.field.binding==tables.field.binding,axis=-1)
     if context.active is not None:
         ok &= jnp.all(context.active.binding==tables.active.binding,axis=-1)
+    if context.damage is not None:
+        ok &= jnp.all(context.damage.binding==tables.damage.binding,axis=-1)
     return base._replace(hard=hard,has_evidence=evidence),ok
+
+
+def preconsume(context,mons,tables,row,valid,*,condition_kind):
+    """Read damage's precondition HP in the same transaction as the HP update."""
+    if context.damage is None:return context,jnp.ones(row.shape[0],bool)
+    data=row[:,8:];use=(row[:,0]==condition_kind)&(data[:,5]==1)
+    damage,ok=damage_api.apply(context.damage,tables.damage,mons,operation=damage_api.DAMAGE,
+        side=row[:,6],slot=row[:,7],encounter=data[:,0],new_hp=data[:,1],
+        tagged=data[:,6]==1,spikes=data[:,7]==1,producer_binding=tables.damage.binding,valid=valid&use)
+    return context._replace(damage=damage),jnp.where(use,ok,True)
 
 
 def consume(context, base, mons, source_tables, tables, row, valid, *,
             move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind,
-            active_kind, baton_kind):
+            active_kind, baton_kind, damage_kind):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
@@ -194,4 +218,17 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             value=jnp.where(is_turn,row[:,2],jnp.where(is_active,data[:,2],0)),baton_pass=k==baton_kind,
             producer_binding=tables.active.binding,valid=valid&relevant&(~is_active|active_identity))
         accepted &= jnp.where(relevant,ac,True)
-    return context._replace(abilities=a,moves=m,items=items,field=fields,active=active),base,accepted | ~valid
+    damage=context.damage
+    if damage is not None:
+        is_turn=k==turn_kind;control=k==damage_kind
+        relevant=arrival|is_move|is_turn|control
+        op=jnp.where(arrival,damage_api.ARRIVE,jnp.where(is_move,damage_api.MOVE,
+            jnp.where(is_turn,damage_api.TURN,data[:,0])))
+        targeted=arrival|is_move
+        damage,da=damage_api.apply(damage,tables.damage,mons,operation=op,
+            side=jnp.where(is_turn,-1,jnp.where(is_move,actor_side,side)),
+            slot=jnp.where(targeted,jnp.where(is_move,actor_slot,slot),-1),
+            encounter=jnp.where(targeted,data[:,0],0),value=jnp.where(is_turn,row[:,2],0),
+            producer_binding=tables.damage.binding,valid=valid&relevant)
+        accepted &= jnp.where(relevant,da,True)
+    return context._replace(abilities=a,moves=m,items=items,field=fields,active=active,damage=damage),base,accepted | ~valid

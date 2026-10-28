@@ -46,7 +46,7 @@ def _exact_active(addresses,active_idents,ident):
     return value
 
 
-def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents,phase=Phase.ACTION,baton_pass=False):
+def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents,phase=Phase.ACTION,baton_pass=False,damage_metadata=False):
     """Decode a named mon field event or refuse it; never filter a full replay.
 
     Species IDs come from a frozen public dex namespace, separate from source
@@ -56,7 +56,7 @@ def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents
     entry; unresolved aliases refuse instead of erasing the active mon's status.
     """
     if not isinstance(line,str) or not line.startswith("|"):raise ValueError("public protocol line required")
-    if type(sequence) is not int or type(turn) is not int or type(baton_pass) is not bool:
+    if type(sequence) is not int or type(turn) is not int or type(baton_pass) is not bool or type(damage_metadata) is not bool:
         raise ValueError("exact sequence/turn integers and public Baton Pass flag required")
     parts=line.split("|");kind=parts[1] if len(parts)>1 else ""
     if line=="|-clearallboost":
@@ -94,7 +94,11 @@ def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents
         if kind=="-sethp" and len(parts)>4 and _slot_from_ident(parts[4]):
             raise ValueError("paired sethp requires its complete source consumer")
         target=_exact_active(addresses,active_idents,parts[2]);hp,maximum,status,fainted=condition_words(parts[3])
-        return emit(Kind.CONDITION,[target.encounter,hp,maximum,status,fainted],target)
+        metadata=(0,0,0)
+        if damage_metadata:
+            from .public_damage import condition_tags
+            metadata=condition_tags(line)
+        return emit(Kind.CONDITION,[target.encounter,hp,maximum,status,fainted,*metadata],target)
     if kind in ("-status","-curestatus") and len(parts)>=4:
         if kind=="-curestatus" and not _ident_has_position(parts[2]):
             target=addresses.known_idents.get(parts[2]);side=_slot_from_ident(parts[2])
