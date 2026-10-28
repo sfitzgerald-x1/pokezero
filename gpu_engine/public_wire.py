@@ -1,0 +1,192 @@
+"""Public encounter registration and composition of the implemented wire consumers.
+
+Slots follow first public encounter order, never either player's private party
+order. This is an incremental input producer, not full replay admission: every
+projection keeps the original line and the incomplete-consumer flag. Unknown
+lines and ambiguous identity changes refuse without advancing host state.
+"""
+from dataclasses import dataclass, replace
+from types import MappingProxyType
+import numpy as np
+
+from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_public_line,
+    _flag_baton_pass, _slot_from_ident, _species_from_ident, _normalize_name,
+    _public_event_from_line)
+from pokezero.belief import _confirmed_ability_from_event
+
+from . import public_mon_protocol, public_context_protocol
+from .public_context_protocol import PublicAddress, PublicAddresses, ContextProjection
+from .public_inputs import Kind, Phase, PublicEvent
+
+
+@dataclass(frozen=True)
+class Encounter:
+    ident: str
+    species: str
+    address: PublicAddress
+
+
+@dataclass(frozen=True)
+class WireState:
+    encounters: tuple[tuple[Encounter, ...], tuple[Encounter, ...]] = ((), ())
+    active: tuple[int, int] = (-1, -1)
+    live: tuple[bool, bool] = (False, False)
+    pending_baton: tuple[bool, bool] = (False, False)
+    next_sequence: int = 1
+    turn: int = 0
+    phase: Phase = Phase.ACTION
+    species_binding: tuple[int, ...] | None = None
+    move_binding: tuple[int, ...] | None = None
+
+    def addresses(self):
+        active = {side: rows[self.active[side]].address for side, rows in enumerate(self.encounters)
+                  if self.active[side] >= 0 and self.live[side]}
+        known = {entry.ident: entry.address for rows in self.encounters for entry in rows}
+        species = {entry.address: entry.species for rows in self.encounters for entry in rows}
+        return PublicAddresses(MappingProxyType(active), MappingProxyType(known), MappingProxyType(species))
+
+    def active_idents(self):
+        return MappingProxyType({side: rows[self.active[side]].ident for side, rows in enumerate(self.encounters)
+                                 if self.active[side] >= 0})
+
+
+def _arrive(state, line, parts):
+    if not _canonical_replacement_marker(line, parts[1], line.strip().split('|')):
+        raise ValueError("canonical singles public arrival required")
+    pokemon = _pokemon_from_public_line(parts)
+    if pokemon is None or not pokemon.species:
+        raise ValueError("arrival requires a public species and side")
+    side = int(pokemon.showdown_slot[1]) - 1
+    entries = state.encounters[side]
+    matches = [entry for entry in entries if entry.ident == pokemon.ident]
+    if matches:
+        entry = matches[0]
+        if entry.species != pokemon.species:
+            # A forme/replacement identity needs its own proven source consumer.
+            # It must not silently inherit a different species' set evidence.
+            raise ValueError("changed species on an existing public ident requires explicit replacement reconciliation")
+    else:
+        if len(entries) == 6:
+            raise ValueError("public encounter capacity exceeded; no truncation or private-order refill")
+        entry = Encounter(pokemon.ident, pokemon.species, PublicAddress(side, len(entries), len(entries) + 1))
+        entries = entries + (entry,)
+    encounters = tuple(entries if s == side else state.encounters[s] for s in (0, 1))
+    active = tuple(entry.address.slot if s == side else state.active[s] for s in (0, 1))
+    live = tuple(True if s == side else state.live[s] for s in (0, 1))
+    return replace(state, encounters=encounters, active=active, live=live), side
+
+
+def _bench_alias(addresses, parts):
+    """Resolve only the source's unique public species/base-forme bench cure."""
+    if len(parts) < 3 or parts[1] != '-curestatus':
+        return addresses
+    ident = parts[2]
+    side = _slot_from_ident(ident)
+    if side not in ('p1', 'p2') or ident.startswith(side + 'a:'):
+        return addresses
+    named = _normalize_name(_species_from_ident(ident))
+    matches = {a for a, species in addresses.public_species.items() if a.side == int(side[1]) - 1
+               and (_normalize_name(species) == named or _normalize_name(species.split('-', 1)[0]) == named)}
+    if len(matches) != 1:
+        raise ValueError("bench cure requires one publicly encountered species, not a private roster")
+    target = next(iter(matches))
+    if addresses.active.get(target.side) == target:
+        raise ValueError("bench cure cannot alias the active encounter")
+    return PublicAddresses(addresses.active, MappingProxyType(dict(addresses.known_idents, **{ident: target})),
+                           addresses.public_species)
+
+
+MON_KINDS = frozenset(('switch', 'drag', 'replace', '-damage', '-heal', '-sethp', '-status',
+    '-curestatus', 'faint', '-copyboost', '-transform', '-clearboost', '-restoreboost',
+    '-clearpositiveboost', '-clearnegativeboost', '-boost', '-unboost', '-setboost',
+    '-clearallboost', '-cureteam', 'turn', 'upkeep'))
+CONTEXT_KINDS = frozenset(('move', '-transform', '-ability', 'ability'))
+
+
+@dataclass(frozen=True)
+class WireProjection(ContextProjection):
+    species_binding: tuple[int, ...] = ()
+    ability_binding: tuple[int, ...] = ()
+    move_binding: tuple[int, ...] = ()
+
+
+def project_line(state, line, *, species_catalog, source, moves, abilities):
+    """Return a new registry and ordered named-field events, or refuse atomically.
+
+    Callers commit this candidate state only with successful device fold of all
+    emitted events. Reusing a public ident preserves its encounter; two distinct
+    idents with the same species remain distinct. Nickname changes and species
+    changes are not joined by species. Unknown kinds cannot be skipped through
+    this API. Other raw-line consumers remain unimplemented and visibly flagged.
+    """
+    if not isinstance(state, WireState) or not isinstance(line, str) or not line.startswith('|'):
+        raise ValueError("public WireState and raw protocol line required")
+    binding = tuple(int(x) for x in np.asarray(species_catalog.device.binding))
+    move_binding = tuple(int(x) for x in np.asarray(moves.device.binding))
+    if (len(binding)!=8 or state.species_binding not in (None,binding)
+            or state.move_binding not in (None,move_binding)
+            or not np.array_equal(np.asarray(abilities.device.binding),np.asarray(species_catalog.device.ability_binding))
+            or not np.array_equal(np.asarray(moves.device.source_binding),np.asarray(source.device.binding))
+            or not np.array_equal(np.asarray(species_catalog.device.source_binding),np.asarray(source.device.binding))):
+        raise ValueError('public wire requires the frozen species/ability/move namespaces')
+    parts = line.split('|')
+    kind = parts[1] if len(parts) > 1 else ''
+    if kind == 'request':
+        raise ValueError('private requests cannot enter the public event producer')
+    candidate = replace(state,species_binding=binding,move_binding=move_binding)
+    side = None
+    if kind in ('switch', 'drag', 'replace'):
+        candidate, side = _arrive(candidate, line, parts)
+        # Enforce the bound catalog's lookup rather than accepting arbitrary
+        # ID maps at the producer boundary.
+        species_catalog.species_id(candidate.encounters[side][candidate.active[side]].species)
+    addresses = _bench_alias(candidate.addresses(), parts)
+    events = []
+    # The belief engine records a raw proc BEFORE dispatching the line's main
+    # consumer. A proc on a move can reveal Pressure before that move's PP
+    # charge; a proc on Transform can establish the donor's current ability.
+    # Direct/Trace declarations have their own authoritative attribution path.
+    confirmed = _confirmed_ability_from_event(_public_event_from_line(line))
+    if kind not in ('-ability', 'ability') and all(confirmed):
+        ident, name = confirmed
+        holder = addresses.resolve(ident)
+        proc = PublicEvent(Kind.ABILITY, state.next_sequence, state.turn, state.phase,
+            target_side=holder.side, target_slot=holder.slot,
+            payload=(holder.encounter, abilities.ability_id(name), 0, 0, 0, 0, 0, 0))
+        proc.words()
+        events.append(proc)
+    if kind in MON_KINDS or line == '|':
+        projected = public_mon_protocol.project_line(line, sequence=state.next_sequence + len(events), turn=state.turn,
+            addresses=addresses, active_idents=candidate.active_idents(), species_ids=species_catalog.ids,
+            source=source, phase=state.phase, baton_pass=side is not None and state.pending_baton[side])
+        events.extend(projected.events)
+    if kind in CONTEXT_KINDS:
+        projected = public_context_protocol.project_line(line, sequence=state.next_sequence + len(events),
+            turn=state.turn, phase=state.phase, addresses=addresses, moves=moves, abilities=abilities)
+        events.extend(projected.events)
+    if not events:
+        raise ValueError("raw line has no implemented consumer; it must not be silently dropped")
+    pending = {f'p{s+1}' for s in (0, 1) if state.pending_baton[s]}
+    _flag_baton_pass(parts, pending)
+    if side is not None:
+        pending.discard(f'p{side+1}')
+    if kind == 'turn':
+        pending.clear()
+    if kind == 'faint':
+        faint_side = _slot_from_ident(parts[2])
+        candidate = replace(candidate, live=tuple(False if faint_side == f'p{s+1}' else candidate.live[s]
+                                                for s in (0, 1)))
+    last = events[-1]
+    candidate = replace(candidate, next_sequence=state.next_sequence + len(events),
+        turn=last.turn, phase=last.phase, pending_baton=tuple(f'p{s+1}' in pending for s in (0, 1)))
+    return candidate, WireProjection(line, tuple(events), species_binding=binding,
+        ability_binding=tuple(int(x) for x in np.asarray(abilities.device.binding)),move_binding=move_binding)
+
+
+def project_lines(state, lines, **tables):
+    """Prepare a whole public chunk transaction without mutating its input."""
+    candidate, projections = state, []
+    for line in lines:
+        candidate, projection = project_line(candidate, line, **tables)
+        projections.append(projection)
+    return candidate, tuple(projections)
