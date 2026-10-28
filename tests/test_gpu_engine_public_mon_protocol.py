@@ -86,7 +86,11 @@ class PublicMonProtocolTests(unittest.TestCase):
             parser=self.reference.parse_showdown_replay([prefix,line],battle_id='fixture')
             self.assertEqual(parser.public_active['p1'].condition,'100/100')
             with self.assertRaises(ValueError):self.project(line,2,registry=registry)
-        with self.assertRaises(ValueError):self.project('|-curestatus|p1: Snorlax|par',1,registry=registry)
+        # The source's positionless-cure species lookup also accepts the
+        # current active mon; it is an exception to active-ident matching.
+        cure=self.project('|-curestatus|p1: Snorlax|par',1,registry=registry).events[0]
+        self.assertEqual(cure.kind,self.i.Kind.STATUS)
+        self.assertEqual((cure.target_side,cure.target_slot,cure.payload[:2]),(0,0,(1,0)))
 
     def test_arrival_suffix_validation_and_drag_ignore_stale_pending_baton(self):
         for kind in ('drag','replace'):
