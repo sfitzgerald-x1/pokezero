@@ -172,8 +172,9 @@ def project_line(line,*,items):
     if kind=='request':raise ValueError('private requests cannot enter public item inputs')
     event=reference._public_event_from_line(line);facts=[];trick=None
     if kind=='-activate' and _TRICK_EFFECT.search(line):
-        actor=parts[2].strip() if len(parts)>2 else '';match=re.search(r'\[of\] ([^|\]]+)',line)
-        target=match.group(1).strip() if match else ''
+        actor=parts[2].strip() if len(parts)>2 else ''
+        of_match=re.search(r'\[of\] ([^|\]]+)',line)
+        target=of_match.group(1).strip() if of_match else ''
         if reference._slot_from_ident(actor) in ('p1','p2') and reference._slot_from_ident(target) in ('p1','p2') and reference._slot_from_ident(actor)!=reference._slot_from_ident(target):
             trick=(actor,target)
     raw_item=event.primary if kind=='-enditem' and event.primary else line.split('[from] item:',1)[1].split('|')[0].strip() if '[from] item:' in line else None
