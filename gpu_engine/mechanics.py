@@ -90,10 +90,11 @@ def gen3_damage(*, level, power, attack, defense, attack_stage=0, defense_stage=
     return jnp.where(immune | (jnp.asarray(power) <= 0), 0, damage)
 
 
-def hustle_accuracy_count(accuracy, accuracy_stage, evasion_stage):
+def accuracy_count(accuracy, accuracy_stage, evasion_stage, *, hustle=False,
+                   compound_eyes=False, sand_veil=False):
     """Pinned numeric ModifyAccuracy event, projected onto rolls 0..99.
 
-    Gen3 applies stages using JavaScript binary64 arithmetic BEFORE Hustle.
+    Gen3 applies stages using JavaScript binary64 arithmetic BEFORE modifiers.
     runEvent applies its Q12 chain only to integer relay values. Even exact
     rational integers can be fractional in binary64 (50 at stages +1/+1).
     Evaluate this small finite domain on the host, without device float64 or
@@ -102,39 +103,49 @@ def hustle_accuracy_count(accuracy, accuracy_stage, evasion_stage):
     if (type(accuracy) is not int or not 0 <= accuracy <= 100
             or any(type(v) is not int or not -6 <= v <= 6
                    for v in (accuracy_stage, evasion_stage))):
-        raise ValueError('HUSTLE_ACCURACY_DOMAIN: integer accuracy0..100 and stages-6..6 required')
+        raise ValueError('ACCURACY_DOMAIN: integer accuracy0..100 and stages-6..6 required')
     boosts = (1, 4/3, 5/3, 2, 7/3, 8/3, 3)
     value = float(accuracy)
     a, e = accuracy_stage, evasion_stage
     value = value * boosts[a] if a > 0 else value / boosts[-a]
     value = value / boosts[e] if e > 0 else value * boosts[-e]
+    # Compound Eyes and Sand Veil inherit gen4 scalar chainModify(1.3/.8),
+    # truncating to5324/3276. Hustle explicitly supplies3277/4096 instead.
+    factor = 5324 if compound_eyes else 3277 if hustle else 4096
+    factor = (factor * (3276 if sand_veil else 4096) + 2048) >> 12
     if value.is_integer():
-        value = (int(value) * 3277 + 2047) // 4096
+        value = (int(value) * factor + 2047) // 4096
     return max(0, min(100, math.ceil(value)))
 
 
-_HUSTLE_ACCURACY_COUNTS = tuple(tuple(tuple(hustle_accuracy_count(base, a, e)
-    for e in range(-6, 7)) for a in range(-6, 7)) for base in range(101))
+def hustle_accuracy_count(accuracy, accuracy_stage, evasion_stage):
+    return accuracy_count(accuracy, accuracy_stage, evasion_stage, hustle=True)
+
+
+_ACCURACY_MODIFIERS = ((False,False,False),(True,False,False),(True,False,True),
+    (False,True,False),(False,True,True),(False,False,True))
+_ACCURACY_COUNTS = tuple(tuple(tuple(tuple(accuracy_count(base, a, e,
+    hustle=h,compound_eyes=c,sand_veil=s) for e in range(-6,7))
+    for a in range(-6,7)) for base in range(101)) for h,c,s in _ACCURACY_MODIFIERS)
 
 
 def accuracy_hit(accuracy, accuracy_stage, evasion_stage, roll, *, always_hit=False,
-                 hustle=False):
+                 hustle=False,compound_eyes=False,sand_veil=False):
     """Ordinary Gen 3 accuracy: supplied integer roll 0..99, no OHKO rules.
 
     Stages are applied independently, not netted and clamped as a single stage.
-    Rational comparison avoids float32 threshold drift. Hustle's finite event
+    Binary64 event counts avoid device float32 threshold drift. The finite event
     table requires integer base accuracy0..100, validated by metadata loading
     and complete-law admission. Other ability/item and semi-invulnerability
     rules are resolved by the caller.
     """
     a = jnp.clip(jnp.asarray(accuracy_stage, jnp.int32), -6, 6)
     e = jnp.clip(jnp.asarray(evasion_stage, jnp.int32), -6, 6)
-    numerator = jnp.where(a >= 0, 3 + a, 3) * jnp.where(e >= 0, 3, 3 - e)
-    denominator = jnp.where(a >= 0, 3, 3 - a) * jnp.where(e >= 0, 3 + e, 3)
-    ordinary = jnp.asarray(roll) * denominator < accuracy * numerator
-    count = jnp.asarray(_HUSTLE_ACCURACY_COUNTS, jnp.int32)[
-        jnp.clip(jnp.asarray(accuracy, jnp.int32), 0, 100), a+6, e+6]
-    return jnp.asarray(always_hit) | jnp.where(hustle, jnp.asarray(roll) < count, ordinary)
+    modifier = jnp.where(compound_eyes,3+jnp.asarray(sand_veil,jnp.int32),
+        jnp.where(hustle,jnp.where(sand_veil,2,1),jnp.where(sand_veil,5,0)))
+    count = jnp.asarray(_ACCURACY_COUNTS, jnp.int32)[modifier,
+        jnp.clip(jnp.asarray(accuracy,jnp.int32),0,100),a+6,e+6]
+    return jnp.asarray(always_hit) | (jnp.asarray(roll) < count)
 
 
 def paralyzed_speed(speed, paralyzed):

@@ -26,7 +26,7 @@ CONSUMERS = {
         (3, "mechanics.before_move: confusion>=50"),
         (4, "transition/pursuit: critical<1 or<2"),
         (5, "transition/pursuit: damage85+draw; confusion damage reuses draw"),
-        (6, "mechanics.accuracy_hit: joint rational predicates"),
+        (6, "mechanics.accuracy_hit: pinned binary64/Q12 integer-roll predicates"),
         (7, "transition primary sleep; encore.apply duration"),
         (8, "effects.stall_success: draw<8//denominator"))},
     "draws.0.0": ("transition first move ordering",),
@@ -47,8 +47,8 @@ CONSUMERS = {
 
 # Changing any source that supplies the consumer/domain proof requires review.
 SOURCE_PINS = {
-    "transition.py": "c16cbe4bceda1681875d75a0af5dce127c747394938dbae54f8e43eeb477c1d7",
-    "mechanics.py": "46b7459eb5f2c5d9ac24aa4c49dee15afb61d23a1574eb6079c21bb22e6f959a",
+    "transition.py": "19ac849ddb96be1fc24dde844dfbf4172538c23aeaa36cba4a535d78c0ad1a01",
+    "mechanics.py": "e8476cc3e0029f3ed0bf82276312440e6dd8b340ffeb0c68cdd5611754eef661",
     "pursuit.py": "2b01102bb3819791fc1edea0ba0fe0a0b913e8dfa5a8f6501f48f3fe260a8309",
     "effects.py": "0138f0e90811c4829666960a106d80ed2d59f6cd06a8ff83324d189465f73104",
     "critical.py": "b66e6cf10c0d4df625b1c4f5e5db238af42052e556d7649a10f911745181401e",
@@ -62,7 +62,7 @@ SOURCE_PINS = {
     "action_history.py": "a47bdb2712f7eadaed12d91ede70be2ebe9f1c1ae3f70fe56495437997212407",
 }
 DOMAIN_MODULES = tuple("action_history absorption baton combat critical damage_moves effects encore entry focus_punch items linked_traps mechanics phazing pressure pursuit secondary self_destruct sleep_talk solar_beam state sustain transition variable_moves weather".split())
-DOMAIN_SHA256 = "284bf48f1083a37847d0f93caa6805fd95d21a0afb8ea8d1ef806d385b061fff"
+DOMAIN_SHA256 = "6790b07b51096737bc51198d0491797d38583fa28e7c1ca0d746f815cc73232e"
 
 
 def _host(value):
@@ -277,10 +277,12 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                 use(prefix+"5", Observation("identity"))
             accuracy = set()
             reachable_hustle = any(_at(t, "combat", "hustle", ability) for ability in abilities[s])
+            compound=(t.get('combat') or {}).get('compound_eyes')
+            sand=(t.get('weather') or {}).get('sand_veil')
             for move in selected[s]:
-                if (reachable_hustle and not t['always_hit'][move]
+                if (not t['always_hit'][move]
                         and (type(t['accuracy'][move]) is not int or not 0 <= t['accuracy'][move] <= 100)):
-                    return refuse('HUSTLE_ACCURACY_DOMAIN',
+                    return refuse('ACCURACY_DOMAIN',
                         'Actual numeric kernel accuracy must be an integer in0..100 before partitioning')
                 for climate in weather:
                     always = t["always_hit"][move]
@@ -292,16 +294,23 @@ def plan_for_state(state, index, actions, table, metadata, *, cap, native_input=
                         continue
                     for a in stages[s][0]:
                         for e in stages[1-s][1]:
-                            numerator = (3+a if a >= 0 else 3) * (3 if e >= 0 else 3-e)
-                            denominator = (3 if a >= 0 else 3-a) * (3+e if e >= 0 else 3)
-                            accuracy.add(Fraction(value*numerator, denominator))
+                            types = {None}
                             if reachable_hustle:
                                 types = {t["type"][move]}
                                 if _at(t, "variable_moves", "hidden_power", move):
                                     types = {data["hidden_power_type"][s][p]
                                         or t["variable_moves"]["dark_type"] for p in participants[s]}
-                                if any(_at(t, "combat", "physical_type", typ) for typ in types):
-                                    accuracy.add(Fraction(mechanics.hustle_accuracy_count(value, a, e)))
+                            # Union only reachable ability/type/climate handlers.
+                            # Trace entrants and weather suppression are already
+                            # conservatively closed above, without a rollout.
+                            for ability in abilities[s]:
+                                for target in abilities[1-s]:
+                                    for typ in types:
+                                        hustle=bool(typ is not None and _at(t,'combat','hustle',ability)
+                                            and _at(t,'combat','physical_type',typ))
+                                        accuracy.add(Fraction(mechanics.accuracy_count(value,a,e,
+                                            hustle=hustle,compound_eyes=bool(compound is not None and compound[ability]),
+                                            sand_veil=bool(climate==3 and sand is not None and sand[target]))))
             use(prefix+"6", *(Observation("less_than", value) for value in sorted(accuracy)))
             if any(_at(t, "effects", "status", move) == 5 or _at(t, "encore", "move", move) for move in selected[s]):
                 use(prefix+"7", Observation("identity"))

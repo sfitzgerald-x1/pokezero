@@ -21,9 +21,9 @@ from .finite_law import Axis, COORDINATES, DRAW_BOUNDS, CardinalityRefusal, Obse
 
 # Complete transition-domain proof, including the four copy/zero assignments
 # in transition.step_with_chance. A numeric representative alone is not proof.
-DOMAIN_SHA256 = "284bf48f1083a37847d0f93caa6805fd95d21a0afb8ea8d1ef806d385b061fff"
+DOMAIN_SHA256 = "6790b07b51096737bc51198d0491797d38583fa28e7c1ca0d746f815cc73232e"
 # Filled only after reviewed implementation stabilizes; drift must refuse.
-MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'bf068e739ad5952603ef979c85fcca180b48ffc27973a5384f12eefa8e2b7d0a', 'conditioned_future.py': 'b3d8c647f0aca36204e1dcd521a1ce17fee7463f683217f3d0830eb9e44c2e11', 'future_state.py': '77fe87f3af696dcc8e3785dcf6481e83075b781c464fa3c736c305745628b0a8', 'fidelity_panel.py': 'ce67f0d036d0daf8b6d72e1727a7fc5aa22e73dacb2e4dbd4d496a94a8c1973e', 'finite_law.py': '34317244b8430387ab46c148c578828f4d94da6ebb80d3556b197613f92703f0'}
+MAPPING_PINS = {'carry_law.py': '19bb86991bc09212a46d849bdd3d7629044512c1d8b78f0e79487ddeae45237e', 'chance_consumers.py': 'e6c1c812713d80e0f53157743362b45a84d958f2743ea2907ef094bfc89d22f3', 'conditioned_future.py': 'b3d8c647f0aca36204e1dcd521a1ce17fee7463f683217f3d0830eb9e44c2e11', 'future_state.py': '77fe87f3af696dcc8e3785dcf6481e83075b781c464fa3c736c305745628b0a8', 'fidelity_panel.py': 'ce67f0d036d0daf8b6d72e1727a7fc5aa22e73dacb2e4dbd4d496a94a8c1973e', 'finite_law.py': '34317244b8430387ab46c148c578828f4d94da6ebb80d3556b197613f92703f0'}
 BANK = tuple([(f'residual_draws.{s}.{i}', f'draws.{s}.{i}', bound)
     for s in range(2) for i,bound in enumerate(DRAW_BOUNDS)]
     + [(f'{field}_draws.{s}', f'{field}.{s}', bound)
@@ -45,7 +45,7 @@ def _source_certificate():
     issues=fingerprint.check()
     if issues:raise ValueError('ORDINARY_NATIVE_BUILD_NOT_CURRENT: '+repr(issues))
     native_fingerprint=fingerprint.compute_fingerprint()['fingerprint']
-    if native_fingerprint!='7cf722c79b21f3326d40254fc9a9c097b12516839c86172402bcfdfc10b2fcad':
+    if native_fingerprint!='f6daf23e951ff21f4ed37c90de9b84fd28a9f7473120848c623b8b5d493d0324':
         raise ValueError('ORDINARY_NATIVE_CONSUMER_DOMAIN_DRIFT')
     return (digest,tuple(MAPPING_PINS.items()),native_fingerprint,
         hashlib.sha256(Path(__file__).read_bytes()).hexdigest())

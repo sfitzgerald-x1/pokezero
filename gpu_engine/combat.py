@@ -25,6 +25,7 @@ class CombatTable(NamedTuple):
     doubled_attack: jax.Array
     hustle: jax.Array
     physical_type: jax.Array
+    compound_eyes: jax.Array
 
 
 def from_metadata(metadata):
@@ -35,7 +36,7 @@ def from_metadata(metadata):
         flag("shadowtag"),flag("levitate"),typ("flying"),typ("steel"),typ("fire"),typ("ice"),
         jnp.asarray([name in {"hugepower","purepower"} for name in vocab["abilities"]]),
         flag("hustle"),jnp.asarray([name in {"normal","fighting","flying","poison",
-            "ground","rock","bug","ghost","steel"} for name in vocab["types"]]))
+            "ground","rock","bug","ghost","steel"} for name in vocab["types"]]),flag("compoundeyes"))
 
 
 def attack_modifier(table,ability,status,physical,*,item_num=1,item_den=1):

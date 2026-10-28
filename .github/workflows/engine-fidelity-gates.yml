@@ -474,12 +474,15 @@ jobs:
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml \
             --no-default-features --features gen3 --lib 2>&1 \
             | tee /tmp/gen3lib.log
-          if ! grep -qE '^test result: ok\. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
+          if ! grep -qE '^test result: ok\. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out' \
               /tmp/gen3lib.log; then
-            echo "::error::expected 5 engine lib tests to pass; the suite shrank, grew, or failed"
+            echo "::error::expected 8 engine lib tests to pass; the suite shrank, grew, or failed"
             exit 1
           fi
           for pin in \
+            engine::accuracy::tests::pinned_all_102414_numeric_event_cells \
+            engine::accuracy::tests::source_integer_fractional_and_ieee_boundaries \
+            engine::accuracy::tests::type_status_always_hit_weather_and_current_abilities \
             instruction::test::test_instruction_size \
             state::rest_sleep_pending_refund_tests::apply_then_reverse_is_bit_identical \
             state::rest_sleep_pending_refund_tests::refund_round_trips_without_a_pre_transform \

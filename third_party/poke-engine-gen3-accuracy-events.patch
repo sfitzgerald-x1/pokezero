@@ -1,0 +1,330 @@
+--- /dev/null
++++ b/src/gen3/accuracy.rs
+@@ -0,0 +1,251 @@
++//! Pinned Gen3 accuracy: staged binary64 then one integer-only Q12 event.
++use super::abilities::Abilities;
++use super::state::Weather;
++use crate::choices::{Choice, Choices};
++use crate::state::{PokemonType, SideReference, State};
++
++/// Source-derived boolean accuracy; do not confuse a numeric100 with true.
++/// Catalog checked against pinned Showdown by gpu_accuracy_events_oracle.cjs.
++pub fn always_hit(id: Choices) -> bool {
++    matches!(
++        id,
++        Choices::ACIDARMOR
++            | Choices::AERIALACE
++            | Choices::AGILITY
++            | Choices::AMNESIA
++            | Choices::AROMATHERAPY
++            | Choices::ASSIST
++            | Choices::BARRIER
++            | Choices::BATONPASS
++            | Choices::BELLYDRUM
++            | Choices::BLOCK
++            | Choices::BULKUP
++            | Choices::CALMMIND
++            | Choices::CAMOUFLAGE
++            | Choices::CHARGE
++            | Choices::CONVERSION
++            | Choices::CONVERSION2
++            | Choices::COSMICPOWER
++            | Choices::CURSE
++            | Choices::DEFENSECURL
++            | Choices::DESTINYBOND
++            | Choices::DETECT
++            | Choices::DOUBLETEAM
++            | Choices::DRAGONDANCE
++            | Choices::ENDURE
++            | Choices::FEINTATTACK
++            | Choices::FOCUSENERGY
++            | Choices::FOLLOWME
++            | Choices::GROWTH
++            | Choices::GRUDGE
++            | Choices::HAIL
++            | Choices::HARDEN
++            | Choices::HAZE
++            | Choices::HEALBELL
++            | Choices::HELPINGHAND
++            | Choices::HOWL
++            | Choices::IMPRISON
++            | Choices::INGRAIN
++            | Choices::IRONDEFENSE
++            | Choices::LIGHTSCREEN
++            | Choices::MAGICALLEAF
++            | Choices::MAGICCOAT
++            | Choices::MEANLOOK
++            | Choices::MEDITATE
++            | Choices::MEMENTO
++            | Choices::METRONOME
++            | Choices::MILKDRINK
++            | Choices::MIMIC
++            | Choices::MINIMIZE
++            | Choices::MIRRORMOVE
++            | Choices::MIST
++            | Choices::MOONLIGHT
++            | Choices::MORNINGSUN
++            | Choices::MUDSPORT
++            | Choices::NIGHTMARE
++            | Choices::PAINSPLIT
++            | Choices::PERISHSONG
++            | Choices::PROTECT
++            | Choices::PSYCHUP
++            | Choices::RAINDANCE
++            | Choices::RECOVER
++            | Choices::RECYCLE
++            | Choices::REFLECT
++            | Choices::REFRESH
++            | Choices::REST
++            | Choices::ROLEPLAY
++            | Choices::SAFEGUARD
++            | Choices::SANDSTORM
++            | Choices::SHADOWPUNCH
++            | Choices::SHARPEN
++            | Choices::SHOCKWAVE
++            | Choices::SKETCH
++            | Choices::SKILLSWAP
++            | Choices::SLACKOFF
++            | Choices::SLEEPTALK
++            | Choices::SNATCH
++            | Choices::SOFTBOILED
++            | Choices::SPIDERWEB
++            | Choices::SPIKES
++            | Choices::SPLASH
++            | Choices::STOCKPILE
++            | Choices::SUBSTITUTE
++            | Choices::SUNNYDAY
++            | Choices::SWALLOW
++            | Choices::SWIFT
++            | Choices::SWORDSDANCE
++            | Choices::SYNTHESIS
++            | Choices::TAILGLOW
++            | Choices::TELEPORT
++            | Choices::TRANSFORM
++            | Choices::VITALTHROW
++            | Choices::WATERSPORT
++            | Choices::WISH
++            | Choices::WITHDRAW
++            | Choices::YAWN
++    )
++}
++
++/// Push the exact numeric event onto the engine's integer0..99 accuracy draw.
++pub fn numeric_hit_count(base: f64, accuracy: i8, evasion: i8, factor: u32) -> u8 {
++    const BOOSTS: [f64; 7] = [1.0, 4.0 / 3.0, 5.0 / 3.0, 2.0, 7.0 / 3.0, 8.0 / 3.0, 3.0];
++    let a = accuracy.clamp(-6, 6);
++    let e = evasion.clamp(-6, 6);
++    let mut value = if a > 0 {
++        base * BOOSTS[a as usize]
++    } else {
++        base / BOOSTS[(-a) as usize]
++    };
++    value = if e > 0 {
++        value / BOOSTS[e as usize]
++    } else {
++        value * BOOSTS[(-e) as usize]
++    };
++    // Battle.runEvent applies its accumulated modifier only to integer relays.
++    // Keep the two staged operations in order, including their binary64 error.
++    if value >= 0.0 && value.fract() == 0.0 {
++        let product = (value as u32).wrapping_mul(factor);
++        value = ((product >> 12) + (((product & 4095) + 2047) >> 12)) as f64;
++    }
++    value.ceil().clamp(0.0, 100.0) as u8
++}
++
++/// Called once after move/weather/ability resolution, before charge/Protect
++/// rewrites that intentionally replace or preserve the resolved accuracy.
++pub fn resolve(state: &State, choice: &Choice, side: &SideReference) -> f32 {
++    // Existing immunity/crash failure rewrites own their explicit zero.
++    if choice.accuracy <= 0.0 {
++        return 0.0;
++    }
++    if always_hit(choice.move_id)
++        || (choice.move_id == Choices::THUNDER && state.weather_is_active(&Weather::RAIN))
++    {
++        return 100.0;
++    }
++    let (own, foe) = state.get_both_sides_immutable(side);
++    let p = own.get_active_immutable();
++    let q = foe.get_active_immutable();
++    let physical_type = matches!(
++        choice.move_type,
++        PokemonType::NORMAL
++            | PokemonType::FIGHTING
++            | PokemonType::FLYING
++            | PokemonType::POISON
++            | PokemonType::GROUND
++            | PokemonType::ROCK
++            | PokemonType::BUG
++            | PokemonType::GHOST
++            | PokemonType::STEEL
++    );
++    // Gen3 inherits gen4 scalar chainModify(1.3/0.8): trunc5324/3276,
++    // unlike Hustle's explicit3277/4096 fraction.
++    let attack = if p.ability == Abilities::COMPOUNDEYES {
++        5324
++    } else if p.ability == Abilities::HUSTLE && physical_type {
++        3277
++    } else {
++        4096
++    };
++    let defend = if q.ability == Abilities::SANDVEIL && state.weather_is_active(&Weather::SAND) {
++        3276
++    } else {
++        4096
++    };
++    let factor = (attack * defend + 2048) >> 12;
++    numeric_hit_count(
++        choice.accuracy as f64,
++        own.accuracy_boost,
++        foe.evasion_boost,
++        factor,
++    ) as f32
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::choices::MOVES;
++    #[test]
++    fn pinned_all_102414_numeric_event_cells() {
++        // Golden produced by real pinned Showdown events, not Rust arithmetic.
++        let mut h = 14695981039346656037u64;
++        for factor in [4096, 3277, 2621, 5324, 4258, 3276] {
++            for base in 0..=100 {
++                for a in -6..=6 {
++                    for e in -6..=6 {
++                        h = (h ^ numeric_hit_count(base as f64, a, e, factor) as u64)
++                            .wrapping_mul(1099511628211);
++                    }
++                }
++            }
++        }
++        assert_eq!(h, 2167418599060954774u64);
++    }
++    #[test]
++    fn source_integer_fractional_and_ieee_boundaries() {
++        assert_eq!(numeric_hit_count(100.0, 0, 0, 3277), 80);
++        assert_eq!(numeric_hit_count(100.0, -4, 0, 3277), 43);
++        assert_eq!(numeric_hit_count(50.0, 1, 1, 3277), 50);
++        assert_eq!(numeric_hit_count(85.0, 1, 2, 3277), 54);
++        assert_eq!(numeric_hit_count(80.0, 2, 5, 4096), 51);
++        assert_eq!(numeric_hit_count(75.0, 0, 0, 5324), 97);
++    }
++    #[test]
++    fn type_status_always_hit_weather_and_current_abilities() {
++        let mut s = State::default();
++        s.side_one.get_active().ability = Abilities::HUSTLE;
++        let side = SideReference::SideOne;
++        assert_eq!(
++            resolve(&s, MOVES.get(&Choices::AERIALACE).unwrap(), &side),
++            100.0
++        );
++        assert_eq!(
++            resolve(&s, MOVES.get(&Choices::TOXIC).unwrap(), &side),
++            68.0
++        );
++        s.side_one.accuracy_boost = -4;
++        assert_eq!(
++            resolve(&s, MOVES.get(&Choices::HIDDENPOWERICE70).unwrap(), &side),
++            43.0
++        );
++        s.weather.weather_type = Weather::RAIN;
++        s.side_two.evasion_boost = 6;
++        assert_eq!(
++            resolve(&s, MOVES.get(&Choices::THUNDER).unwrap(), &side),
++            100.0
++        );
++        s.side_two.get_active().ability = Abilities::CLOUDNINE;
++        assert_ne!(
++            resolve(&s, MOVES.get(&Choices::THUNDER).unwrap(), &side),
++            100.0
++        );
++        s.side_one.accuracy_boost = 0;
++        s.side_two.evasion_boost = 0;
++        s.side_one.get_active().ability = Abilities::COMPOUNDEYES;
++        s.side_two.get_active().ability = Abilities::SANDVEIL;
++        s.weather.weather_type = Weather::SAND;
++        assert_eq!(
++            resolve(&s, MOVES.get(&Choices::TOXIC).unwrap(), &side),
++            88.0
++        );
++    }
++}
+--- a/src/gen3/mod.rs
++++ b/src/gen3/mod.rs
+@@ -1,4 +1,5 @@
+ pub mod abilities;
++pub mod accuracy;
+ pub mod base_stats;
+ pub mod choice_effects;
+ pub mod damage_calc;
+--- a/src/gen3/abilities.rs
++++ b/src/gen3/abilities.rs
+@@ -648,9 +648,8 @@
+         }
+         // (Huge Power: ModifyAtk x2 — applied as a stat modifier in
+         // gen3/damage_calc.rs `gen3_offensive_stat_modifiers`.)
+-        Abilities::COMPOUNDEYES => {
+-            attacker_choice.accuracy *= 1.3;
+-        }
++        // Gen3 accuracy events are resolved together after stages.
++        Abilities::COMPOUNDEYES => {}
+         Abilities::STENCH => {
+             let mut already_flinches = false;
+             if let Some(secondaries) = &mut attacker_choice.secondaries {
+@@ -689,15 +688,9 @@
+                 attacker_choice.base_power = (attacker_choice.base_power * 3.0 / 2.0).floor();
+             }
+         }
+-        Abilities::HUSTLE => {
+-            // The 1.5x attack half is a DIRECT stat modify (data/abilities.ts:
+-            // "applied directly to the stat as opposed to chaining"), handled in
+-            // gen3/damage_calc.rs `gen3_offensive_stat_modifiers`; only the
+-            // accuracy drop stays on the choice.
+-            if attacker_choice.category == MoveCategory::Physical {
+-                attacker_choice.accuracy *= 0.80
+-            }
+-        }
++        // Direct Hustle Attack stays in damage_calc; accuracy is resolved
++        // after stages by gen3::accuracy, including physical-type Status moves.
++        Abilities::HUSTLE => {}
+         // (Guts: ModifyAtk x1.5 while statused — applied as a stat modifier in
+         // gen3/damage_calc.rs `gen3_offensive_stat_modifiers`, which reads the
+         // status at damage time: the engine's wake/thaw branch has already set
+@@ -891,11 +884,8 @@
+                 attacker_choice.base_power = (attacker_choice.base_power / 2.0).floor();
+             }
+         }
+-        Abilities::SANDVEIL => {
+-            if state.weather_is_active(&Weather::SAND) {
+-                attacker_choice.accuracy *= 0.8;
+-            }
+-        }
++        // Composed Q12 accuracy handler, not a pre-stage floating multiply.
++        Abilities::SANDVEIL => {}
+         Abilities::FLASHFIRE => {
+             if attacker_choice.move_type == PokemonType::FIRE {
+                 // A damaging Fire hit thaws a frozen target instead of activating
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -2775,6 +2775,18 @@
+ 
+     item_modify_attack_being_used(state, choice, attacking_side);
+     item_modify_attack_against(state, choice, attacking_side);
++
++    // Pinned Gen3 Pursuit sets accuracy=true against the departing target.
++    // Keep existing explicit immunity/crash zero rewrites, then bypass numeric
++    // stages/modifiers on the same Switch path that doubled Pursuit's power.
++    choice.accuracy = if choice.accuracy > 0.0
++        && choice.move_id == Choices::PURSUIT
++        && defender_choice.category == MoveCategory::Switch
++    {
++        100.0
++    } else {
++        super::accuracy::resolve(state, choice, attacking_side)
++    };
+ 
+     /*
+         TODO: this needs to be here because from_drag is called after the substitute volatilestatus

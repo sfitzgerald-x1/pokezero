@@ -33,11 +33,13 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
     "src/gen3/state.rs": "0565d1a673aa577988b136782878ea3633d3c01bff23b76b7652a415d6f9fbfd",
-    "src/gen3/generate_instructions.rs": "c9ed90cff23a6af2ca4446a52b80370ac85650e34c197352d411969faa2b757d",
+    "src/gen3/generate_instructions.rs": "d4b93fc8c7393e9d4ec747552763df11b8b971dc8f761ab4655cb9e6db103a5e",
     "src/instruction.rs": "c9c7f69819dc77171a54918e32cfb064329144f6d3b8991c2068adcbeceb0a57",
     "src/state.rs": "a42ff14639802a208094c54247de4898426d1e2a132f47870aef515ff0ca6f81",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
-    "src/gen3/abilities.rs": "909e7af36186f1b7a19c7cb4185ef3021f89981721e46446de86ad4010452f17",
+    "src/gen3/abilities.rs": "562f67d78d392dea5fc32ec12cd75f779ce83a8aed0b613eaefefaed4b569efa",
+    "src/gen3/accuracy.rs": "1d40c7563ca0990e994304cb51e869d2be5bf4c5347b55cebf5e639f408545a2",
+    "src/gen3/mod.rs": "c052d8ede754f014e012d14b7d955f93457e405adf569ed90f0e1cf08c379c71",
     "src/gen3/choice_effects.rs": "a29d431464619c45d603d835ca6663bd7d2f573112c255d5cb9353862f62b161",
 }
 
@@ -117,7 +119,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-41:]],
+                [entry.name for entry in applied[-42:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -170,6 +172,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-ordinary-minimum-damage.patch",
                     "poke-engine-gen3-conditioned-primary-burn.patch",
                     "poke-engine-gen3-conditioned-ordinary-ties.patch",
+                    "poke-engine-gen3-accuracy-events.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
@@ -255,6 +258,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "python/poke_engine/__init__.py",
                     "src/choices.rs",
                     "src/gen3/abilities.rs",
+                    "src/gen3/accuracy.rs",
                     "src/gen3/choice_effects.rs",
                     "src/gen3/conditioned_resume.rs",
                     "src/gen3/conditioned_step.rs",
