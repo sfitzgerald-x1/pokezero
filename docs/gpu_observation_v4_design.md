@@ -16,7 +16,7 @@ The packed device representation uses sixteen int32 words per event: kind, seque
 
 | Event family | Required payload and semantics | Python source |
 | --- | --- | --- |
-| Battle and decision boundaries | Start, turn, blank `|` action-chunk end (`ACTION_CHUNK_END`), exact `|upkeep`/residual boundary, decision phase, completed round, terminal outcome; preserve order within the turn. Outcome is a label, never an input feature. | `parse_showdown_replay`, `normalize_for_player`; `transitions` extraction |
+| Battle and decision boundaries | Start, turn, blank `\|` action-chunk end (`ACTION_CHUNK_END`), exact `\|upkeep`/residual boundary, decision phase, completed round, terminal outcome; preserve order within the turn. Outcome is a label, never an input feature. | `parse_showdown_replay`, `normalize_for_player`; `transitions` extraction |
 | Arrival and identity | switch, drag, replace; public species/form, level, gender, public HP condition, arrival reason including Baton Pass | `_pokemon_from_public_line`, `_same_public_pokemon`, public state fold |
 | Action and prevention | move, target, called-move source, miss, fail, immunity, cant reason, recharge and preparation; distinguish declarations from executed/called moves | `_public_event_from_line`, public state fold, belief move/PP ledger |
 | HP and status | damage, heal, sethp, faint, status, curestatus, cureteam; preserve numerator, denominator and effect source, including counterpart for drain/recoil | `_updated_public_condition`, belief HP snapshots and residual phase |
