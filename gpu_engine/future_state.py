@@ -793,7 +793,8 @@ def native_actions_from_jax(state, index, actions, native_input, *, exact_move_s
     Mirrors state.usable_moves/legal_actions and the selected ability traps in
     transition.action_mask. Native MoveChoice::from_string scans EVERY inactive
     Pokemon before moves and scans move slots in order, even disabled/0PP slots.
-    Duplicate strings therefore refuse rather than silently choosing a slot.
+    Duplicate strings refuse on the public parser path. The explicit slot API
+    addresses move and inactive party slots directly, so it needs no uniqueness.
     Public generate_instructions takes bare switch species IDs, not the
     human-facing `switch <species>` strings exported by search option displays.
     """
@@ -867,7 +868,7 @@ def native_actions_from_jax(state, index, actions, native_input, *, exact_move_s
                 if target_mon["hp"] <= 0 or (trapped and not forced[side]):
                     return refuse("ILLEGAL_SWITCH", repr(original))
                 name = target_mon["id"]
-                if name in {"none", "struggle"} or sum(native[SIDE_NAMES[side]]["pokemon"][b]["id"] == name for b in bench) != 1:
+                if not exact_move_slots and (name in {"none", "struggle"} or sum(native[SIDE_NAMES[side]]["pokemon"][b]["id"] == name for b in bench) != 1):
                     return refuse("DUPLICATE_OR_RESERVED_SWITCH_ID", "Public parser must identify exactly this inactive party slot, including fainted duplicates")
                 result.append(name)
         action_type = NativeMoveSlotActions if exact_move_slots else NativeActions

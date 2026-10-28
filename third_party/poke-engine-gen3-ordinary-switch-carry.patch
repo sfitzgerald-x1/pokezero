@@ -1,0 +1,278 @@
+--- a/src/gen3/conditioned_step.rs
++++ b/src/gen3/conditioned_step.rs
+@@ -1,4 +1,4 @@
+-//! Fixed-chance ordinary move requests, distinct from suspended continuation.
++//! Fixed-chance ordinary nine-slot requests, distinct from suspended continuation.
+ //!
+ //! Domain admission and chance observations come from native consumers. The
+ //! parent is immutable, the address is supplied before execution, and native
+@@ -10,7 +10,7 @@
+ use super::state::{MoveChoice, Weather};
+ use crate::choices::{Choices, Effect, MoveTarget, Secondary, MOVES};
+ use crate::instruction::{Instruction, StateInstructions};
+-use crate::state::{PokemonMoveIndex, PokemonStatus, SideConditions, SideReference, State,
++use crate::state::{pokemon_index_iter, Pokemon, PokemonMoveIndex, Side, PokemonStatus, SideConditions, SideReference, State,
+     VolatileStatusDurations};
+ 
+ #[derive(Debug, Clone, PartialEq, Eq)]
+@@ -44,6 +44,10 @@
+     pub(crate) fn move_tie_first(&self) -> SideReference {
+         if self.chance.draws[0][0] == 0 {SideReference::SideOne} else {SideReference::SideTwo}
+     }
++    pub(crate) fn switch_tie_first(&self) -> SideReference {
++        // Voluntary switches use a separate physical coin from move ordering.
++        if self.chance.draws[0][11] == 0 {SideReference::SideOne} else {SideReference::SideTwo}
++    }
+     pub(crate) fn residual_tie_first(&self, suborder: u8) -> SideReference {
+         // Only 10.6 can distinguish the two tied orders in this validated
+         // domain. Admitted abilities have no residual effect, Leftovers heals
+@@ -94,6 +98,26 @@
+         _ => Err("ORDINARY_MOVE_SLOT_REQUIRED") }
+ }
+ 
++/// Raw actions0..3 are move slots;4..8 enumerate inactive party slots.
++/// This API never invokes the public species/move string parser.
++fn action(side: &Side, slot: u8) -> Result<MoveChoice, &'static str> {
++    if slot < 4 {return Ok(MoveChoice::Move(move_index(slot)?));}
++    if slot > 8 {return Err("ORDINARY_EXACT_SLOT_REQUIRED");}
++    let target=pokemon_index_iter().filter(|p| *p != side.active_index)
++        .nth((slot-4) as usize).ok_or("ORDINARY_EXACT_SLOT_REQUIRED")?;
++    if side.pokemon[target].hp <= 0 {return Err("STEP_ILLEGAL_SWITCH");}
++    Ok(MoveChoice::Switch(target))
++}
++
++fn admitted_participant(mon: &Pokemon) -> bool {
++    matches!(mon.ability, Abilities::NONE | Abilities::STATIC | Abilities::PRESSURE
++        | Abilities::LEVITATE | Abilities::CLOUDNINE | Abilities::FLASHFIRE | Abilities::MAGMAARMOR)
++        && matches!(mon.item, Items::NONE | Items::LEFTOVERS | Items::LIGHTBALL | Items::CHOICEBAND)
++        && matches!(mon.status, PokemonStatus::NONE | PokemonStatus::POISON | PokemonStatus::PARALYZE | PokemonStatus::BURN)
++        && mon.pre_transform.is_none() && mon.rest_sleep_pending_refund == 0
++        && mon.rest_turns == 0 && mon.sleep_turns == 0 && !mon.terastallized
++}
++
+ /// Positive-domain rejection is before generation. Untouched party members are
+ /// retained without imposing the narrower *next-request execution* whitelist.
+ pub fn requirements(state: &State, slots: [u8; 2]) -> Result<Vec<Requirement>, &'static str> {
+@@ -105,6 +129,7 @@
+     }
+     let sides = [&state.side_one, &state.side_two];
+     let mut ids = [Choices::NONE; 2];
++    let mut participants = [vec![sides[0].get_active_immutable()], vec![sides[1].get_active_immutable()]];
+     for s in 0..2 {
+         let side = sides[s];
+         if side.force_switch || side.baton_passing || side.get_active_immutable().hp <= 0 {
+@@ -127,52 +152,55 @@
+             || side.switch_out_move_second_saved_move != Choices::NONE
+         { return Err("STEP_UNSUPPORTED_SIDE_CONTEXT"); }
+         let active = side.get_active_immutable();
+-        if !matches!(active.ability, Abilities::NONE | Abilities::STATIC | Abilities::PRESSURE | Abilities::LEVITATE)
+-            || !matches!(active.item, Items::NONE | Items::LEFTOVERS | Items::LIGHTBALL)
+-            || !matches!(active.status, PokemonStatus::NONE | PokemonStatus::POISON | PokemonStatus::PARALYZE | PokemonStatus::BURN)
+-            || active.pre_transform.is_some() || active.rest_sleep_pending_refund != 0
+-            || active.rest_turns != 0 || active.sleep_turns != 0 || active.terastallized
+-        { return Err("STEP_UNSUPPORTED_ACTIVE_CONTEXT"); }
++        if !admitted_participant(active) {return Err("STEP_UNSUPPORTED_ACTIVE_CONTEXT");}
++        if let MoveChoice::Switch(target) = action(side, slots[s])? {
++            if side.trapped(sides[1-s].get_active_immutable()) {return Err("STEP_ILLEGAL_SWITCH");}
++            let incoming=&side.pokemon[target];
++            if !admitted_participant(incoming) {return Err("STEP_UNSUPPORTED_INCOMING_CONTEXT");}
++            participants[s].push(incoming);
++            continue;
++        }
+         let mv = &active.moves[&move_index(slots[s])?];
+-        if !matches!(mv.id, Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION
++        if !matches!(mv.id, Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION | Choices::EARTHQUAKE
+                 | Choices::BATONPASS | Choices::PROTECT | Choices::ENDURE | Choices::SPLASH | Choices::WILLOWISP)
+             || mv.disabled || mv.pp <= 0
+             || format!("{:?}", mv.choice) != format!("{:?}", MOVES.get(&mv.id).unwrap())
+         { return Err("STEP_UNSUPPORTED_SELECTED_MOVE"); }
+         ids[s] = mv.id;
+     }
+-    let a = sides[0].get_active_immutable().speed;
+-    let b = sides[1].get_active_immutable().speed;
+-    // Conservative closure includes initial and newly applied paralysis.
+-    // No admitted ability/item/move changes speed by another mechanism.
+-    let possible_tie = [a, a / 4].iter().any(|x| [b, b / 4].iter().any(|y| x == y));
++    // Both root order and post-switch residual order may tie, including
++    // initially paralyzed entrants and status applied by the opposing action.
++    let possible_tie = participants[0].iter().any(|a| participants[1].iter().any(|b|
++        [a.speed, a.speed/4].iter().any(|x| [b.speed, b.speed/4].iter().any(|y| x==y))));
+     let mut result = Vec::new();
+     let mut add = |coordinate: String, kind, argument| result.push(Requirement {coordinate, kind, argument});
+     if possible_tie {
+         add("draws.0.0".into(),"identity",0);
+         add("draws.1.9".into(),"identity",0);
+     }
++    if slots.iter().all(|a| *a >= 4) {add("draws.0.11".into(),"identity",0);}
+     for s in 0..2 {
++        if slots[s] >= 4 {continue;}
+         let accuracy=sides[s].get_active_immutable().moves[&move_index(slots[s])?].choice.accuracy;
+         if accuracy < 100.0 {
+             // All selected moves equal their canonical native definitions;
+             // Will-O-Wisp is75 in Gen3. No runtime JAX table supplies this cut.
+             add(format!("draws.{}.6",s),"less_than",accuracy as u8);
+         }
+-        if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION) {
++        if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM | Choices::EXPLOSION | Choices::EARTHQUAKE) {
+             add(format!("draws.{}.4", s), "less_than", 1);
+             add(format!("draws.{}.5", s), "identity", 0);
+         }
+         if matches!(ids[s], Choices::THUNDERBOLT | Choices::BODYSLAM) {
+             add(format!("secondary.{}", s), "less_than", if ids[s] == Choices::THUNDERBOLT {10} else {30});
+         }
+-        if ids[s] == Choices::BODYSLAM && sides[1-s].get_active_immutable().ability == Abilities::STATIC {
++        if ids[s] == Choices::BODYSLAM && participants[1-s].iter().any(|p| p.ability == Abilities::STATIC) {
+             add(format!("phazing.{}", s), "less_than", 20);
+         }
+         // The first hit can paralyze the waiting actor before BeforeMove.
+         if sides[s].get_active_immutable().status == PokemonStatus::PARALYZE
+             || matches!(ids[1-s], Choices::THUNDERBOLT | Choices::BODYSLAM)
+-            || (ids[s] == Choices::BODYSLAM && sides[1-s].get_active_immutable().ability == Abilities::STATIC)
++            || (ids[s] == Choices::BODYSLAM && participants[1-s].iter().any(|p| p.ability == Abilities::STATIC))
+         { add(format!("draws.{}.2", s), "less_than", 25); }
+         if matches!(ids[s], Choices::PROTECT | Choices::ENDURE) && sides[s].side_conditions.protect > 0 {
+             add(format!("draws.{}.8", s), "less_than", 8 >> sides[s].side_conditions.protect.min(3));
+@@ -225,7 +253,7 @@
+     let mut native = state.clone();
+     native.oracle_step = Some(Box::new(ValidatedStep { chance: chance.clone() }));
+     let before = native.serialize();
+-    let choices = [MoveChoice::Move(move_index(slots[0])?), MoveChoice::Move(move_index(slots[1])?)];
++    let choices = [action(&native.side_one, slots[0])?, action(&native.side_two, slots[1])?];
+     let branches = generate_instructions_from_move_pair(&mut native, &choices[0], &choices[1], true);
+     if before != native.serialize() { return Err("STEP_PARENT_MUTATED"); }
+     let mut result = Vec::with_capacity(branches.len());
+@@ -250,7 +278,7 @@
+                 _ => None,
+             });
+             if pending && marker.is_some_and(|m| m != Choices::NONE) {
+-                if queued_actor != -1 || marker != Some(state.get_side_immutable(
++                if slots[s] >= 4 || queued_actor != -1 || marker != Some(state.get_side_immutable(
+                     &if s==0 {SideReference::SideOne} else {SideReference::SideTwo})
+                     .get_active_immutable().moves[&move_index(slots[s])?].id) {
+                     return Err("STEP_UNSUPPORTED_QUEUE_COMMITMENT");
+@@ -567,4 +595,78 @@
+             assert!((fixed.values().sum::<f64>()-1.0).abs()<1e-9);
+         }
+     }
+-}
++    #[test]
++    fn exact_nine_slots_bind_inactive_indices_without_species_parser() {
++        for active in pokemon_index_iter() {
++            let mut state=State::default();state.side_one.active_index=active;
++            for p in pokemon_index_iter() {state.side_one.pokemon[p].hp=100;}
++            for (slot,target) in pokemon_index_iter().filter(|p| *p!=active).enumerate() {
++                assert_eq!(action(&state.side_one,slot as u8+4),Ok(MoveChoice::Switch(target)));
++            }
++            assert!(action(&state.side_one,9).is_err());
++            state.side_one.pokemon[pokemon_index_iter().find(|p| *p!=active).unwrap()].hp=0;
++            assert_eq!(action(&state.side_one,4),Err("STEP_ILLEGAL_SWITCH"));
++        }
++    }
++
++    #[test]
++    fn ordinary_switch_earthquake_saves_full_pending_bank_without_queued_switch() {
++        for switching in 0..2 {
++            let (mut state,chance,address)=fixture([Choices::EARTHQUAKE;2]);
++            let side=state.get_side(&if switching==0 {SideReference::SideOne} else {SideReference::SideTwo});
++            side.get_active().ability=Abilities::CLOUDNINE;
++            side.get_active().item=Items::LEFTOVERS;
++            side.pokemon[PokemonIndex::P1].ability=Abilities::FLASHFIRE;
++            side.pokemon[PokemonIndex::P1].item=Items::CHOICEBAND;
++            side.pokemon[PokemonIndex::P1].hp=1;
++            side.pokemon[PokemonIndex::P1].types=(crate::state::PokemonType::FIRE,crate::state::PokemonType::TYPELESS);
++            let foe=state.get_side(&if switching==0 {SideReference::SideTwo} else {SideReference::SideOne});
++            foe.get_active().ability=Abilities::MAGMAARMOR;foe.get_active().item=Items::CHOICEBAND;
++            let mut slots=[2,2];slots[switching]=4;
++            let before=state.serialize();let branches=step(&state,slots,&chance,&address).unwrap();
++            assert_eq!(branches.len(),1);let b=&branches[0];
++            assert_eq!(b.percentage,100.0);assert!(b.capsule.pending_residual);
++            assert!(b.capsule.forced_switch[switching]);assert_eq!(b.capsule.queued_actor,-1);
++            assert_eq!(b.capsule.queued_actions,[0;2]);assert_eq!(b.capsule.queued_stall,[0;2]);
++            assert_eq!(b.capsule.residual_draws,chance.draws);assert_eq!(b.capsule.keys,address.next_keys);
++            assert!(b.bank.iter().all(|c| matches!(c.origin,BankOrigin::Copy(_))));
++            assert_eq!(state.serialize(),before);
++        }
++    }
++
++    #[test]
++    fn tied_voluntary_switches_use_separate_coin_and_validate_incoming_context() {
++        let (mut state,mut chance,address)=fixture([Choices::SPLASH;2]);
++        state.side_one.get_active().speed=200;state.side_two.get_active().speed=200;
++        let cuts=requirements(&state,[4,4]).unwrap();
++        assert!(cuts.iter().any(|r| r.coordinate=="draws.0.11" && r.kind=="identity"));
++        for coin in 0..2 {
++            chance.draws[0][11]=coin;chance.draws[0][0]=1-coin;chance.draws[1][9]=1-coin;
++            let branches=step(&state,[4,4],&chance,&address).unwrap();assert_eq!(branches.len(),1);
++            let switches:Vec<_>=branches[0].instructions.instruction_list.iter().filter_map(|i|
++                if let Instruction::Switch(v)=i {Some(v.side_ref)} else {None}).collect();
++            assert_eq!(switches.len(),2);assert_eq!(switches[0],if coin==0 {SideReference::SideOne} else {SideReference::SideTwo});
++        }
++        state.side_one.pokemon[PokemonIndex::P1].ability=Abilities::SHEDSKIN;
++        assert_eq!(requirements(&state,[4,4]),Err("STEP_UNSUPPORTED_INCOMING_CONTEXT"));
++    }
++
++    #[test]
++    fn flash_fire_keeps_original_wisp_accuracy_and_protect_gates() {
++        use crate::state::PokemonType;
++        use super::super::state::PokemonVolatileStatus;
++        for target in 0..2 { for protect in [false,true] { for roll in [74,75] {
++            let mut moves=[Choices::WILLOWISP;2];moves[target]=if protect {Choices::PROTECT} else {Choices::SPLASH};
++            let (mut state,mut chance,address)=fixture(moves);
++            let holder=state.get_side(&if target==0 {SideReference::SideOne} else {SideReference::SideTwo});
++            holder.get_active().ability=Abilities::FLASHFIRE;
++            holder.get_active().types=(PokemonType::NORMAL,PokemonType::TYPELESS);
++            chance.draws[1-target][6]=roll;
++            let b=step(&state,[2,2],&chance,&address).unwrap().remove(0);
++            let holder=b.state.get_side_immutable(&if target==0 {SideReference::SideOne} else {SideReference::SideTwo});
++            assert_eq!(holder.volatile_statuses.contains(&PokemonVolatileStatus::FLASHFIRE),!protect && roll<75,
++                "target={} protect={} roll={}",target,protect,roll);
++        }}}
++    }
++
++}
+--- a/src/gen3/generate_instructions.rs
++++ b/src/gen3/generate_instructions.rs
+@@ -4861,6 +4861,13 @@
+         return if side_one_effective_speed > side_two_effective_speed {
+             SideMovesFirst::SideOne
+         } else if side_one_effective_speed == side_two_effective_speed {
++            #[cfg(feature = "conditioned-oracle")]
++            if let Some(context) = state.oracle_step.as_ref() {
++                return match context.switch_tie_first() {
++                    SideReference::SideOne => SideMovesFirst::SideOne,
++                    SideReference::SideTwo => SideMovesFirst::SideTwo,
++                };
++            }
+             SideMovesFirst::SpeedTie
+         } else {
+             SideMovesFirst::SideTwo
+@@ -4938,6 +4945,12 @@
+ /// setting the flag would make `get_all_options` offer a switch that cannot
+ /// exist.
+ fn mark_pending_replacements(state: &mut State, instructions: &mut StateInstructions) {
++    // Showdown ends the battle before issuing any replacement request. A
++    // surviving party may have a fainted active (e.g. a voluntary switch into
++    // the last foe's Explosion), but the winner owes no further switch.
++    if state.side_one.visible_alive_pkmn() == 0 || state.side_two.visible_alive_pkmn() == 0 {
++        return;
++    }
+     for side_ref in [SideReference::SideOne, SideReference::SideTwo] {
+         let side = state.get_side(&side_ref);
+         if side.force_switch
+--- a/src/gen3/abilities.rs
++++ b/src/gen3/abilities.rs
+@@ -902,7 +902,14 @@
+                 {
+                     return;
+                 }
++                // Absorption is after the original accuracy and Protect gates.
++                // Converting to an activation-only status choice must not erase
++                // those gates (notably copied Flash Fire versus Will-O-Wisp).
++                let accuracy = attacker_choice.accuracy;
++                let protect = attacker_choice.flags.protect;
+                 attacker_choice.remove_all_effects();
++                attacker_choice.accuracy = accuracy;
++                attacker_choice.flags.protect = protect;
+                 attacker_choice.volatile_status = Some(VolatileStatus {
+                     target: MoveTarget::Opponent,
+                     volatile_status: PokemonVolatileStatus::FLASHFIRE,

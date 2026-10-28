@@ -1835,3 +1835,6 @@ poke-engine-gen3-conditioned-ordinary-ties.patch
 # Pinned Gen3 staged binary64 accuracy, boolean always-hit/rain bypass and
 # integer-only Q12 Hustle/Compound Eyes/Sand Veil event composition.
 poke-engine-gen3-accuracy-events.patch
+
+# Opt-in exact ordinary switches: native action slots, participant domain and independent switch tie.
+poke-engine-gen3-ordinary-switch-carry.patch

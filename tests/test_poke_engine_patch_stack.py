@@ -33,11 +33,11 @@ import verify_poke_engine_source as source_verifier  # noqa: E402
 # binds the state and Python-wrapper files that are outside this four-file pin.
 EXPECTED_FINAL_SHA256 = {
     "src/gen3/state.rs": "0565d1a673aa577988b136782878ea3633d3c01bff23b76b7652a415d6f9fbfd",
-    "src/gen3/generate_instructions.rs": "d4b93fc8c7393e9d4ec747552763df11b8b971dc8f761ab4655cb9e6db103a5e",
+    "src/gen3/generate_instructions.rs": "5ed2c41461a125e8c4224a1eaea386e5d294e174f3e40d49289d7b3d39feafbe",
     "src/instruction.rs": "c9c7f69819dc77171a54918e32cfb064329144f6d3b8991c2068adcbeceb0a57",
     "src/state.rs": "a42ff14639802a208094c54247de4898426d1e2a132f47870aef515ff0ca6f81",
     "src/gen3/items.rs": "bd8dde7fed51b3af2e48dc17cfd7857e4aa549da1cd31e5821f0d02813fddb9a",
-    "src/gen3/abilities.rs": "562f67d78d392dea5fc32ec12cd75f779ce83a8aed0b613eaefefaed4b569efa",
+    "src/gen3/abilities.rs": "5d152b864be9dec0aae834f1f4bf36ec1c995d1f5736f4128b2004ca6a6addd3",
     "src/gen3/accuracy.rs": "1d40c7563ca0990e994304cb51e869d2be5bf4c5347b55cebf5e639f408545a2",
     "src/gen3/mod.rs": "c052d8ede754f014e012d14b7d955f93457e405adf569ed90f0e1cf08c379c71",
     "src/gen3/choice_effects.rs": "a29d431464619c45d603d835ca6663bd7d2f573112c255d5cb9353862f62b161",
@@ -119,7 +119,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
             # and the order matters, so a new patch has to be recorded here
             # deliberately rather than sliding in under a length-agnostic check.
             self.assertEqual(
-                [entry.name for entry in applied[-42:]],
+                [entry.name for entry in applied[-43:]],
                 [
                     "poke-engine-gen3-contact-flags.patch",
                     "poke-engine-gen3-a5-wake-before-contact.patch",
@@ -173,6 +173,7 @@ class PokeEnginePatchStackTests(unittest.TestCase):
                     "poke-engine-gen3-conditioned-primary-burn.patch",
                     "poke-engine-gen3-conditioned-ordinary-ties.patch",
                     "poke-engine-gen3-accuracy-events.patch",
+                    "poke-engine-gen3-ordinary-switch-carry.patch",
                 ],
             )
             # The dropped Trick patch must stay gone: no file, no registration.
