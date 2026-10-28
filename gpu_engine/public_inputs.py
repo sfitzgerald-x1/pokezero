@@ -18,7 +18,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from . import public_belief, public_mon_state, public_context, public_field
+from . import public_belief, public_mon_state, public_context, public_field, public_active
 
 
 SCHEMA = "pokezero.public_events.v1"
@@ -49,6 +49,7 @@ class Kind(IntEnum):
     RAW_BEGIN = 21
     ITEM = 22
     FIELD = 23
+    ACTIVE = 24
 
 
 class Phase(IntEnum):
@@ -117,6 +118,15 @@ class PublicEvent:
             if (any(d[4:]) or d[1]<0 or d[2] not in (0,1) or d[3] not in (0,1)
                     or d[0]!=public_field.WEATHER and (d[1] not in (0,1) or any(d[2:]))):
                 raise ValueError("invalid field fact payload")
+        elif self.kind==Kind.ACTIVE:
+            d=self.payload
+            if ((self.actor_side,self.actor_slot)!=(-1,-1) or self.target_side not in (0,1)
+                    or not 0<=self.target_slot<6 or d[0]<=0 or not public_active.EXPIRE_ACTION<=d[1]<=public_active.PERISH_START
+                    or any(d[3:])):
+                raise ValueError("active fact requires a resolved encounter and named operation")
+            named=d[1] in (public_active.ADD,public_active.REMOVE,public_active.PERISH_START)
+            if not (d[2]>0 if named else d[2] in (0,1) if d[1]==public_active.STALL_ATTEMPT else d[2]==0):
+                raise ValueError("invalid active fact value")
         elif self.kind==Kind.CURE_TEAM:
             if (self.actor_side,self.actor_slot,self.target_slot)!=(-1,-1,-1) or self.target_side not in (0,1) or any(self.payload):
                 raise ValueError("team cure requires only one public side and zero payload")
@@ -187,6 +197,7 @@ class EventChunk(NamedTuple):
     item_binding: jax.Array | None = None
     context_binding: jax.Array | None = None
     field_binding: jax.Array | None = None
+    active_binding: jax.Array | None = None
 
 
 class StreamCursor(NamedTuple):
@@ -220,7 +231,7 @@ def initialize(stream_ids, *, source_binding) -> StreamCursor:
                         zeros, zeros, zeros, zeros, zeros, jnp.zeros(ids.shape, bool))
 
 
-def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, ability_binding=None, move_binding=None, item_binding=None, context_binding=None, field_binding=None):
+def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, ability_binding=None, move_binding=None, item_binding=None, context_binding=None, field_binding=None, active_binding=None):
     """Yield every event without truncation, in fixed chunks for a batch.
 
     The host registry must bind each positive stream ID to one full battle ID
@@ -239,7 +250,7 @@ def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, abi
         species_binding=np.asarray(species_binding)
         if species_binding.shape!=(8,) or species_binding.dtype!=np.uint32:
             raise ValueError('public events require eight uint32 species namespace words')
-    for namespace in (ability_binding,move_binding,item_binding,context_binding,field_binding):
+    for namespace in (ability_binding,move_binding,item_binding,context_binding,field_binding,active_binding):
         if namespace is not None and (getattr(namespace,'shape',None)!=(8,) or getattr(namespace,'dtype',None)!=np.dtype(np.uint32)):
             raise ValueError('public context namespace requires eight uint32 words')
     rows = [[event.words() for event in stream] for stream in events]
@@ -260,7 +271,8 @@ def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, abi
                          jnp.asarray(move_binding) if move_binding is not None else None,
                          jnp.asarray(item_binding) if item_binding is not None else None,
                          jnp.asarray(context_binding) if context_binding is not None else None,
-                         jnp.asarray(field_binding) if field_binding is not None else None)
+                         jnp.asarray(field_binding) if field_binding is not None else None,
+                         jnp.asarray(active_binding) if active_binding is not None else None)
 
 
 def protocol_boundary(line: str, *, sequence: int, turn: int, phase=Phase.ACTION) -> PublicEvent:
@@ -428,6 +440,21 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         source_ok &= False
     if field_enabled:
         source_ok &= context.field.turn==cursor.turn
+    active_enabled=context is not None and context.active is not None
+    if active_enabled and not field_enabled:
+        raise ValueError("active context requires ordered field composition")
+    if context is not None and (context.active is None)!=(context_tables.active is None):
+        raise ValueError("active context requires its frozen tables")
+    if chunk.active_binding is not None:
+        if chunk.active_binding.shape!=(8,) or chunk.active_binding.dtype!=jnp.uint32:
+            raise ValueError("expected eight uint32 active namespace words")
+        source_ok &= active_enabled
+        if active_enabled:
+            source_ok &= jnp.all(context.active.binding==chunk.active_binding,axis=-1)&jnp.all(context_tables.active.binding==chunk.active_binding)
+    elif active_enabled:
+        source_ok &= False
+    if active_enabled:
+        source_ok &= (context.active.turn==cursor.turn)&jnp.all(context.active.species_binding==mon_state.species_binding,axis=-1)
     error = jnp.where((error == 0) & ~source_ok, Error.SOURCE, error)
     prefix = ~jnp.any(chunk.valid[:, 1:] & ~chunk.valid[:, :-1], axis=1)
     # An empty chunk cannot promise more forever, nor complete an undrained stream.
@@ -454,7 +481,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         context_kind = (kind >= Kind.MOVE) & (kind <= Kind.TRANSFORM)
         item_kind = (kind==Kind.RAW_BEGIN)|(kind==Kind.ITEM)
         field_kind = kind==Kind.FIELD
-        kind_ok = (field_kind if field_enabled else False) | (item_kind if item_enabled else False) | boundary | fact | (mon_kind if mons is not None else False) | (context_kind if ctx is not None else False)
+        active_kind = kind==Kind.ACTIVE
+        kind_ok = (active_kind if active_enabled else False) | (field_kind if field_enabled else False) | (item_kind if item_enabled else False) | boundary | fact | (mon_kind if mons is not None else False) | (context_kind if ctx is not None else False)
         phase_ok = (phase == Phase.ACTION) | (phase == Phase.RESIDUAL)
         # Only TURN can advance turn or leave residual phase. Other events keep
         # the committed phase, except UPKEEP which enters the residual phase.
@@ -502,6 +530,12 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                 field_payload &= jnp.where(d[:,0]==public_field.WEATHER,True,
                     ((d[:,1]==0)|(d[:,1]==1))&jnp.all(d[:,2:]==0,axis=1))
                 payload_ok &= ~field_kind|field_payload
+            if active_enabled:
+                active_payload=(d[:,0]>0)&(d[:,1]>=public_active.EXPIRE_ACTION)&(d[:,1]<=public_active.PERISH_START)&jnp.all(d[:,3:]==0,axis=1)
+                named=(d[:,1]==public_active.ADD)|(d[:,1]==public_active.REMOVE)|(d[:,1]==public_active.PERISH_START)
+                active_payload &= jnp.where(named,d[:,2]>0,jnp.where(d[:,1]==public_active.STALL_ATTEMPT,
+                    (d[:,2]==0)|(d[:,2]==1),d[:,2]==0))
+                payload_ok &= ~active_kind|active_payload
             payload_ok &= ~((kind==Kind.SET_REVEAL)&replaceable)
             move_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & (d[:, 2] >= 0) & (d[:, 2] <= 4) & ((d[:, 3] == 0) | (d[:, 3] == 1)) & jnp.all(d[:, 4:] == 0, axis=1)
             ability_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & ((d[:, 2] == 0) | (d[:, 2] == 1)) & jnp.all(d[:, 3:] == 0, axis=1)
@@ -527,10 +561,11 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             apply=valid&(error==0)
         if ctx is not None:
             ctx, basis, accepted = public_context.consume(ctx, basis, mons, tables, context_tables, row,
-                apply & (context_kind | mon_kind | item_kind | field_kind | ((kind==Kind.TURN)&field_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
+                apply & (context_kind | mon_kind | item_kind | field_kind | active_kind | ((kind==Kind.TURN)&field_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
                 trace_kind=Kind.TRACE, transform_kind=Kind.TRANSFORM,
                 arrival=(kind >= Kind.SWITCH) & (kind <= Kind.BATON_PASS), faint=kind == Kind.FAINT,
-                raw_kind=Kind.RAW_BEGIN,item_kind=Kind.ITEM,field_kind=Kind.FIELD,turn_kind=Kind.TURN)
+                raw_kind=Kind.RAW_BEGIN,item_kind=Kind.ITEM,field_kind=Kind.FIELD,turn_kind=Kind.TURN,
+                active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS)
             error = jnp.where(apply & ~accepted, Error.PAYLOAD, error)
             apply = valid & (error == 0)
         # A public fact about side s narrows the other observer's belief about s.
