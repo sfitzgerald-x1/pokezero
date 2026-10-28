@@ -13,8 +13,14 @@ on:
       - "src/pokezero/selfplay.py"
       - "src/pokezero/rollout_cli.py"
       - "src/pokezero/search_label*.py"
+      - "src/pokezero/value_precision_probe.py"
+      - "scripts/freeze_value_probe_cohort.py"
+      - "scripts/extract_value_probe_features.py"
+      - "scripts/fit_value_probe_heads.py"
       - "tests/test_neural_policy.py"
       - "tests/test_search_label*.py"
+      - "tests/test_value_precision_probe.py"
+      - "tests/test_value_probe_*.py"
 
 # Superseded PR heads do not need a second dependency install and smoke run.
 concurrency:
@@ -50,3 +56,5 @@ jobs:
           python -m unittest tests.test_neural_policy
           tests.test_search_labels tests.test_search_label_dataset
           tests.test_search_label_loss tests.test_search_label_collection
+          tests.test_value_precision_probe tests.test_value_probe_feature_extraction
+          tests.test_value_probe_head_fitting
