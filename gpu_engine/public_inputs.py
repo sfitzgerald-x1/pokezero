@@ -156,6 +156,9 @@ class EventChunk(NamedTuple):
     valid: jax.Array                # [B,64] bool, a contiguous prefix
     more: jax.Array                 # [B] bool, drain before decision encoding
     source_binding: jax.Array       # [8] uint32, compiled source/variant table
+    species_binding: jax.Array | None = None  # [8] uint32 public dex namespace; legacy only when unbound
+    ability_binding: jax.Array | None = None
+    move_binding: jax.Array | None = None
 
 
 class StreamCursor(NamedTuple):
@@ -189,7 +192,7 @@ def initialize(stream_ids, *, source_binding) -> StreamCursor:
                         zeros, zeros, zeros, zeros, zeros, jnp.zeros(ids.shape, bool))
 
 
-def pack_chunks(stream_ids, events, *, source_binding):
+def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, ability_binding=None, move_binding=None):
     """Yield every event without truncation, in fixed chunks for a batch.
 
     The host registry must bind each positive stream ID to one full battle ID
@@ -204,6 +207,13 @@ def pack_chunks(stream_ids, events, *, source_binding):
     binding = np.asarray(source_binding)
     if binding.shape != (8,) or binding.dtype != np.uint32:
         raise ValueError("public events require a uint32 SHA256 source-table binding")
+    if species_binding is not None:
+        species_binding=np.asarray(species_binding)
+        if species_binding.shape!=(8,) or species_binding.dtype!=np.uint32:
+            raise ValueError('public events require eight uint32 species namespace words')
+    for namespace in (ability_binding,move_binding):
+        if namespace is not None and (getattr(namespace,'shape',None)!=(8,) or getattr(namespace,'dtype',None)!=np.dtype(np.uint32)):
+            raise ValueError('public context namespace requires eight uint32 words')
     rows = [[event.words() for event in stream] for stream in events]
     count = max((len(stream) for stream in rows), default=0)
     for start in range(0, max(count, 1), CHUNK_SIZE):
@@ -216,7 +226,10 @@ def pack_chunks(stream_ids, events, *, source_binding):
                 words[battle, :len(part)] = part
                 valid[battle, :len(part)] = True
             more[battle] = len(stream) > start + CHUNK_SIZE
-        yield EventChunk(jnp.asarray(ids), jnp.asarray(words), jnp.asarray(valid), jnp.asarray(more), jnp.asarray(binding))
+        yield EventChunk(jnp.asarray(ids), jnp.asarray(words), jnp.asarray(valid), jnp.asarray(more), jnp.asarray(binding),
+                         jnp.asarray(species_binding) if species_binding is not None else None,
+                         jnp.asarray(ability_binding) if ability_binding is not None else None,
+                         jnp.asarray(move_binding) if move_binding is not None else None)
 
 
 def protocol_boundary(line: str, *, sequence: int, turn: int, phase=Phase.ACTION) -> PublicEvent:
@@ -326,6 +339,31 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                       Error.NONE, Error.STREAM).astype(jnp.int32)
     source_ok = jnp.all(chunk.source_binding == tables.binding) & jnp.all(
         cursor.source_binding == tables.binding, axis=-1)
+    if chunk.species_binding is not None:
+        if chunk.species_binding.shape!=(8,) or chunk.species_binding.dtype!=jnp.uint32:
+            raise ValueError('expected eight uint32 public species namespace words')
+        source_ok &= mon_state is not None
+        if mon_state is not None:
+            source_ok &= jnp.all(mon_state.species_binding==chunk.species_binding,axis=-1)
+    elif mon_state is not None:
+        # Legacy opaque-ID component fixtures remain usable; a bound production
+        # namespace cannot be downgraded by dropping its transport binding.
+        source_ok &= jnp.all(mon_state.species_binding==0,axis=-1)
+    if context is not None:
+        source_ok &= jnp.all(context.abilities.species_binding==mon_state.species_binding,axis=-1)
+    for namespace,state_binding,table_binding in (
+        (chunk.ability_binding,context.abilities.binding if context is not None else None,
+         context_tables.abilities.binding if context_tables is not None else None),
+        (chunk.move_binding,context.moves.binding if context is not None else None,
+         context_tables.moves.binding if context_tables is not None else None)):
+        if namespace is not None:
+            if namespace.shape!=(8,) or namespace.dtype!=jnp.uint32:
+                raise ValueError('expected eight uint32 public context namespace words')
+            source_ok &= context is not None
+            if context is not None:
+                source_ok &= jnp.all(state_binding==namespace,axis=-1) & jnp.all(table_binding==namespace)
+        elif context is not None:
+            source_ok &= jnp.all(mon_state.species_binding==0,axis=-1)
     error = jnp.where((error == 0) & ~source_ok, Error.SOURCE, error)
     prefix = ~jnp.any(chunk.valid[:, 1:] & ~chunk.valid[:, :-1], axis=1)
     # An empty chunk cannot promise more forever, nor complete an undrained stream.

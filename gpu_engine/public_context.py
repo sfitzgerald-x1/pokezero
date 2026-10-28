@@ -37,14 +37,14 @@ def compile_context(source, abilities, moves):
     return ContextTables(abilities.device, moves.device, jnp.asarray(flags))
 
 
-def initialize(beliefs, tables):
+def initialize(beliefs, tables, *, species_binding=None):
     """Start before evidence ingestion; importing an ambiguous old mask refuses."""
     if beliefs.species.ndim != 3 or beliefs.species.shape[1:] != (2, 6):
         raise ValueError("context requires B by two observers by six encounters")
     if np.asarray(beliefs.has_evidence).any() or np.asarray(beliefs.pin_active).any():
         raise ValueError("initialize public context before evidence ingestion")
     batch = beliefs.species.shape[0]
-    return ContextState(ability.initialize(batch, tables.abilities), move.initialize(batch, tables.moves),
+    return ContextState(ability.initialize(batch, tables.abilities,species_binding=species_binding), move.initialize(batch, tables.moves),
         beliefs.hard, beliefs.has_evidence)
 
 

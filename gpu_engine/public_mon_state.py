@@ -20,6 +20,7 @@ STATS = ("atk", "def", "spa", "spd", "spe", "accuracy", "evasion")
 
 
 class MonState(NamedTuple):
+    species_binding: jax.Array      # [B,8], frozen public dex namespace, zero = legacy unbound
     encounter: jax.Array            # [B,2,6] stable public encounter identity
     species: jax.Array              # opaque public dex namespace; zero unknown
     source_species: jax.Array       # set-source namespace; zero unavailable
@@ -35,12 +36,20 @@ class MonState(NamedTuple):
     arrived_by_baton: jax.Array     # [B,2]
 
 
-def initialize(batch: int) -> MonState:
+def namespace_binding(batch, binding=None):
+    if binding is None:
+        return jnp.zeros((batch,8),jnp.uint32)
+    if getattr(binding,'shape',None)!=(8,) or getattr(binding,'dtype',None)!=jnp.dtype(jnp.uint32):
+        raise ValueError('public species namespace requires eight uint32 words')
+    return jnp.broadcast_to(binding,(batch,8))
+
+
+def initialize(batch: int, *, species_binding=None) -> MonState:
     if type(batch) is not int or batch <= 0:
         raise ValueError("positive public-state batch required")
     mons = (batch, 2, 6)
     z = lambda: jnp.zeros(mons, jnp.int32)
-    return MonState(z(), z(), z(), z(), z(), z(), z(), jnp.zeros(mons, bool),
+    return MonState(namespace_binding(batch,species_binding), z(), z(), z(), z(), z(), z(), z(), jnp.zeros(mons, bool),
         z(), jnp.zeros(mons, bool), jnp.full((batch, 2), -1, jnp.int32),
         jnp.zeros((batch, 2, len(STATS)), jnp.int32), jnp.zeros((batch, 2), bool))
 

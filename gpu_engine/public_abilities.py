@@ -70,6 +70,7 @@ def compile_abilities(source, vocabulary, *, ability_names=()):
 
 class AbilityState(NamedTuple):
     binding: jax.Array             # [B,8]
+    species_binding: jax.Array     # [B,8], binds copied public Transform donor IDs
     original: jax.Array            # [B,2,6], original-set public reveal only
     running: jax.Array             # [B,2,6], borrowed override, 0 absent
     transformed: jax.Array         # [B,2,6]
@@ -84,12 +85,12 @@ class RevealUpdate(NamedTuple):
     conflict: jax.Array
 
 
-def initialize(batch, tables):
+def initialize(batch, tables, *, species_binding=None):
     if type(batch) is not int or batch <= 0:
         raise ValueError("positive public ability batch required")
     shape = (batch, 2, 6)
     z = lambda: jnp.zeros(shape, jnp.int32)
-    return AbilityState(jnp.broadcast_to(tables.binding, (batch, 8)), z(), z(),
+    return AbilityState(jnp.broadcast_to(tables.binding, (batch, 8)), mon.namespace_binding(batch,species_binding), z(), z(),
         jnp.zeros(shape, jnp.bool_), z(), jnp.zeros((batch, 2), jnp.int32))
 
 
@@ -98,6 +99,7 @@ def _address(state, mons, tables, side, slot, encounter, valid):
     encounter = mon._int32(encounter)
     ok &= (encounter > 0) & (mons.encounter[row, seat, target] == encounter)
     ok &= jnp.all(state.binding == tables.binding, axis=-1) & _bool(valid)
+    ok &= jnp.all(state.species_binding == mons.species_binding,axis=-1)
     return (row, seat, target), ok
 
 
