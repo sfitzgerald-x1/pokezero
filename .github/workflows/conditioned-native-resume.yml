@@ -35,6 +35,9 @@ on:
       - 'tests/gpu_hustle_oracle.cjs'
       - 'tests/data/gpu_hustle_catalog.json'
       - 'tests/test_native_gpu_accuracy_events.py'
+      - 'tests/test_native_gpu_ordinary_switch.py'
+      - 'tests/data/gpu_ordinary_switch_catalog.json'
+      - 'rust/pokezero-search/tests/gen3_terminal_absorption_gates.rs'
       - 'tests/test_gpu_engine_accuracy_events.py'
       - 'tests/gpu_accuracy_events_oracle.cjs'
       - 'tests/data/gpu_accuracy_events_catalog.json'
@@ -80,6 +83,8 @@ jobs:
           scripts/vendor_poke_engine_src.sh "$(command -v python)"
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features gen3 --test test_gen3
           cargo test --manifest-path third_party/poke-engine-src/Cargo.toml --no-default-features --features gen3 --lib accuracy::tests
+          PYO3_PYTHON="$(command -v python)" POKEZERO_ENUMERATE_ROLLS=1 cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --test gen3_terminal_absorption_gates
+          PYO3_PYTHON="$(command -v python)" POKEZERO_ENUMERATE_ROLLS=1 cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --test gen3_terminal_absorption_gates
           PYO3_PYTHON="$(command -v python)" POKEZERO_ENUMERATE_ROLLS=1 cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --test gen3_accuracy_events
           PYO3_PYTHON="$(command -v python)" POKEZERO_ENUMERATE_ROLLS=1 cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --features conditioned-oracle --test gen3_accuracy_events
           POKEZERO_ENUMERATE_ROLLS=0 cargo test --manifest-path rust/pokezero-search/Cargo.toml --no-default-features --test gen3_minimum_damage
@@ -123,6 +128,7 @@ jobs:
               'tests.test_native_gpu_synchronize',
               'tests.test_native_gpu_hustle',
               'tests.test_native_gpu_accuracy_events',
+              'tests.test_native_gpu_ordinary_switch',
               'tests.test_gpu_engine_panel_owner',
               'tests.test_native_gpu_panel_execution']
           first = {
@@ -136,10 +142,10 @@ jobs:
                     [name for name in names if name not in first]]
           assert set(groups[0]).isdisjoint(groups[1])
           assert set(groups[0]) | set(groups[1]) == set(names)
-          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 160
+          assert unittest.defaultTestLoader.loadTestsFromNames(names).countTestCases() == 168
           shard = int(os.environ['NATIVE_SHARD'])
           assert shard in (0, 1)
-          expected = (48, 112)[shard]
+          expected = (48, 120)[shard]
           suite = unittest.defaultTestLoader.loadTestsFromNames(groups[shard])
           assert suite.countTestCases() == expected
           result = unittest.TextTestRunner(verbosity=2).run(suite)
