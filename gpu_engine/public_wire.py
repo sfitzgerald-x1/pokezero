@@ -257,6 +257,9 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
     addresses = _bench_alias(candidate.addresses(), parts)
     if annotation=='target':
         public_mon_protocol._exact_active(addresses,candidate.active_idents(),parts[2])
+    if annotation=='miss':
+        for ident in parts[2:4]:
+            public_mon_protocol._exact_active(addresses,candidate.active_idents(),ident)
     events = []
     item_projection=public_items.project_line(line,items=items) if items is not None else None
     if item_projection is not None:
