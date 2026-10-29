@@ -177,6 +177,30 @@ class CostContentionTests(unittest.TestCase):
             elif mutation=='counter':calls[1]['id']='1:3'
             else:calls[1]['started_ns']=calls[0]['finished_ns']-1
             with self.subTest(mutation=mutation),self.assertRaises(ValueError):readout(plan,rows)
+    def test_fast_raw_query_can_overlap_other_workers_actual_native_activity(self):
+        plan,rows=fixture()
+        for row in rows:
+            if row['arm']==ARMS[0]:row['our_finished_ns']=row['our_started_ns']+50000000
+            elif row['fp_requested']:
+                base=row['fp_request_sent_ns']
+                for j,c in enumerate(row['foulplay_native_evidence']['native_calls']):c.update(started_ns=base+110000000+j*30000000,finished_ns=base+130000000+j*30000000,cpu_ns=10000000)
+        # Raw own native calls start200ms after dispatch, after the raw query ends
+        # at150ms. Real other-worker native calls at110..160ms supply contention.
+        result=readout(plan,rows)
+        self.assertTrue(result['decision_time_gate_pass'])
+        self.assertEqual(result['actual_busy_native_FP_overlap_rows'],120)
+        self.assertEqual(result['rows'],240)
+    def test_unrequested_peer_windows_cannot_invent_missing_own_multichoice_work(self):
+        plan,rows=fixture()
+        for row in rows:
+            if row['arm']==ARMS[0] and row['fp_requested']:
+                row.update(foulplay_process_cpu_seconds=0,foulplay_realized_visits=0)
+                row['foulplay_native_evidence']['visits_by_sample']=[0,0]
+                for c in row['foulplay_native_evidence']['native_calls']:c.update(cpu_ns=0,visits=0)
+        result=readout(plan,rows)
+        self.assertFalse(result['decision_time_gate_pass'])
+        self.assertTrue(result['arithmetic_decision_time_bound_pass'])
+        self.assertEqual(result['rows'],240)
     def test_union_coverage_does_not_count_overlapping_windows_twice(self):
         self.assertEqual(overlap_seconds(10**9,4*10**9,[(0,3*10**9),(2*10**9,5*10**9)]),(3,4))
 

@@ -112,3 +112,12 @@ The plan binds one fixed opponent code/source SHA across all twenty root
 contracts. This is separate from each boundary and player-wire digest. Native
 sample receipts must show one actual child PID, sequential call counters and
 non-overlapping call intervals; declaring parallelism one alone is insufficient.
+
+The prospective shared-contention definition uses positive-CPU/visit native
+intervals from any of the twelve measured workers. Each row still needs its
+complete own-opponent source, sample, work and result receipts. A fast raw
+decision can finish before its newly dispatched opponent child begins while a
+different worker's real native search supplies contention. The earlier source
+version required own-child overlap and was too strict for that production
+schedule; no actual timing or scientific result was used to choose this fix.
+All-precompleted, serialized or absent-work controls still fail eligibility.

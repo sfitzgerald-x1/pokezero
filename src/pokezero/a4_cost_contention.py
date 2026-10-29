@@ -130,7 +130,7 @@ def readout(plan,rows):
   require(integer(c['sample_count']) and integer(c['sample_budget_ms']),'predeclared production sample geometry required')
   require((c['sample_count'],c['sample_budget_ms']) in ((1,1000),(2,1000),(2,500),(4,500)) if c['requested'] else (c['sample_count'],c['sample_budget_ms'])==(0,0),'pinned random-battle sample geometry required')
  require(len(rows)==240,'all fixed twenty-root sequences required; no drop/refill')
- mapping={w['id']:w['arm'] for w in workers};by_worker={w:[] for w in mapping};fp=[];cycles=[];eligible_work=[];defects=[]
+ mapping={w['id']:w['arm'] for w in workers};by_worker={w:[] for w in mapping};fp=[];cycles=[];eligible_work=[];defects=[];native_intervals=[];requested_work=[]
  for row in rows:
   require(row['worker'] in mapping and row['arm']==mapping[row['worker']],'worker/arm identity mismatch')
   require(integer(row['ordinal']) and 0<=row['ordinal']<20,'fixed root ordinal type/range')
@@ -165,19 +165,25 @@ def readout(plan,rows):
    require_serial_native_calls(calls)
    require(sorted(c['visits'] for c in calls)==sorted(visits),'actual native/result visit ledger drift')
    require(sum(c['cpu_ns'] for c in calls)/1e9<=row['foulplay_process_cpu_seconds']+1e-6,'native CPU exceeds measured endpoint and reaped children CPU')
-   witnessed=any(c['cpu_ns']>0 and c['visits']>0 and max(c['started_ns'],row['our_started_ns'])<min(c['finished_ns'],row['our_finished_ns']) for c in calls)
-   overlap=witnessed
-   busy=witnessed
-   # Forced/single-choice and native early-return observations stay in every p95.
-   # Their windows are not promoted into evidence of genuinely busy contention.
-   if busy and overlap:eligible_work.append(row)
-   if contract['legal_choice_count']>1 and not (busy and overlap):
-    defects.append({'worker':row['worker'],'ordinal':row['ordinal'],'reason':'multi_choice_without_real_native_work_and_overlap'})
+   own_work=any(c['cpu_ns']>0 and c['visits']>0 for c in calls)
+   requested_work.append((row,own_work))
+   native_intervals.extend((c['started_ns'],c['finished_ns']) for c in calls if c['cpu_ns']>0 and c['visits']>0)
+   # Complete own results remain mandatory even when a fast raw query finishes
+   # before its newly dispatched child starts. Other workers can contend then.
+   if contract['legal_choice_count']>1 and not own_work:
+    defects.append({'worker':row['worker'],'ordinal':row['ordinal'],'reason':'multi_choice_without_real_own_native_work'})
   else:
    require(evidence is None,'nonrequested root cannot carry a native search receipt')
    cycles.append((row['worker'],row['our_started_ns'],row['our_finished_ns']))
   by_worker[row['worker']].append(row)
   if row['fp_requested']:fp.append((row['fp_request_sent_ns'],row['fp_choice_received_ns']))
+ # Source-scheduling definition fixed before actual timing: shared CPU
+ # contention can come from any of the twelve workers, never an invented delay.
+ for row,own_work in requested_work:
+  overlap=any(max(begin,row['our_started_ns'])<min(end,row['our_finished_ns']) for begin,end in native_intervals)
+  if own_work and overlap:eligible_work.append(row)
+  if row['fp_root_contract']['legal_choice_count']>1 and not overlap:
+   defects.append({'worker':row['worker'],'ordinal':row['ordinal'],'reason':'multi_choice_without_shared_native_FP_overlap'})
  for root in roots:
   require(len({r['fp_requested'] for r in rows if r['root_id']==root})==1,'recorded counterpart role changed across replicas/arms')
  for worker,items in by_worker.items():
@@ -200,5 +206,6 @@ def readout(plan,rows):
  result['peak_concurrent_worker_cycles']=peak
  result['full_twelve_worker_witnesses']=sorted(witnesses)
  result['actual_busy_native_FP_overlap_rows']=len(eligible_work)
+ result['native_overlap_scope']='actual positiveCPU/visits native intervals across the twelve shared workers; own completion/work retained separately'
  result['decision_time_gate_pass']=result['arithmetic_decision_time_bound_pass'] and result['contention_evidence_eligible']
  return result
