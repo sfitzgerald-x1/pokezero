@@ -115,6 +115,13 @@ class SleepClauseContextTests(unittest.TestCase):
         # refresh controller, so an empty chunk cannot bypass this admission.
         legacy=replace(self.catalog,context=self.catalog.context._replace(sleep_clause=None,refresh=None,lifecycle=None))
         orphan=state._replace(context=state.context._replace(refresh=None,lifecycle=None))
+        with self.assertRaisesRegex(ValueError,'pending switch evidence requires ordered source and sleep context'):
+            public_inputs.fold_chunk(orphan.cursor,orphan.beliefs,self.catalog.source.device,empty,
+                mon_state=orphan.mons,context=orphan.context,context_tables=legacy.context)
+        # Legacy core has neither the raw controller nor its switch consumer.
+        # Remove both sides of that optional pair to exercise Clause symmetry.
+        legacy=replace(legacy,context=legacy.context._replace(switches=None))
+        orphan=orphan._replace(context=orphan.context._replace(switches=None))
         direct=self.jax.jit(lambda s,c:public_inputs.fold_chunk(s.cursor,s.beliefs,self.catalog.source.device,c,
             mon_state=s.mons,context=s.context,context_tables=legacy.context))(orphan,empty)
         self.assertEqual(direct.error.tolist(),[int(public_inputs.Error.SOURCE)]*8)

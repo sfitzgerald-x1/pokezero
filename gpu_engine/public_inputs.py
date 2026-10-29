@@ -57,6 +57,7 @@ class Kind(IntEnum):
     SLEEP = 27
     TOXIC = 28
     TENDENCY = 29
+    SWITCH_PRELUDE = 30
 
 
 class Phase(IntEnum):
@@ -106,6 +107,14 @@ class PublicEvent:
         if boundary or self.kind==Kind.CLEAR_ALL_BOOSTS:
             if any(x != -1 for x in row[4:8]) or any(self.payload):
                 raise ValueError("boundary event cannot carry a party identity or payload")
+        elif self.kind==Kind.SWITCH_PRELUDE:
+            d=self.payload
+            if ((self.target_side,self.target_slot)!=(-1,-1) or self.actor_side not in (-1,0,1)
+                    or d[0] not in (0,1) or d[1] not in (0,1) or d[2]<0 or d[3]<0 or d[4] not in (0,1)
+                    or d[5]<0 or any(d[6:]) or (d[4]==1 and not (d[2]>0 and self.actor_side in (0,1) and 0<=self.actor_slot<6 and d[3]>0))
+                    or (d[4]==0 and (self.actor_slot!=-1 or d[3]!=0))
+                    or (d[2]==0 and (self.actor_side!=-1 or any(d[3:])))):
+                raise ValueError('pending-switch prelude requires typed public lexical facts')
         elif self.kind==Kind.RAW_BEGIN:
             d=self.payload
             if d[0] not in (0,1,2) or (d[3]==0 and any(d[4:])) or (d[3]!=0 and not public_refresh_stream.metadata_words_ok(d[3],d[4:])):
@@ -618,6 +627,15 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         ms=jnp.take_along_axis(mon_state.species,jnp.clip(mon_state.active,0,5)[:,:,None],axis=2)[:,:,0]
         ts=jnp.where(context.tendency.active>=0,ts,0);ms=jnp.where(mon_state.active>=0,ms,0)
         source_ok &= pending|jnp.all(ts==ms,axis=-1)
+    switch_enabled=context is not None and context.switches is not None and context_tables.switches is not None
+    if context is not None and (context.switches is None)!=(context_tables.switches is None):
+        source_ok &= False
+    if switch_enabled:
+        if context.refresh is None or context.sleep is None:
+            raise ValueError('pending switch evidence requires ordered source and sleep context')
+        cached,cache_ok=public_context.snapshot_api.read(context.refresh.controller.visible,beliefs,tables)
+        source_ok &= public_context.switch_api.validate(context.switches,context_tables.switches,mon_state,
+            context.abilities,tables,cached.effective,context.sleep.live)&jnp.all(cache_ok,axis=(1,2))
     error = jnp.where((error == 0) & ~source_ok, Error.SOURCE, error)
     prefix = ~jnp.any(chunk.valid[:, 1:] & ~chunk.valid[:, :-1], axis=1)
     # An empty chunk cannot promise more forever, nor complete an undrained stream.
@@ -635,6 +653,7 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             coherent=public_refresh_stream.validate(context.refresh,beliefs,tables,context_tables.refresh,context_tables.moves,
                 lifecycle=context_tables.lifecycle is not None,clause=context_tables.sleep_clause is not None)
             coherent &= (context.refresh.family!=0)==context.tendency_raw_pending
+            if not switch_enabled:coherent &= context.refresh.switch_seen==0
             if context.lifecycle is not None:
                 # A pure admission probe validates all lifecycle fields even on
                 # a NOOP. Its candidate state is discarded; no upkeep is run.
@@ -669,7 +688,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         type_kind = kind==Kind.TYPES
         toxic_kind = kind==Kind.TOXIC
         tendency_kind = kind==Kind.TENDENCY
+        switch_kind=kind==Kind.SWITCH_PRELUDE
         kind_ok = (tendency_kind if tendency_enabled else False) | (sleep_kind if sleep_enabled else False) | (toxic_kind if toxic_enabled else False) | (type_kind if type_enabled else False) | (damage_kind if damage_enabled else False) | (active_kind if active_enabled else False) | (field_kind if field_enabled else False) | (item_kind if item_enabled else False) | boundary | fact | (mon_kind if mons is not None else False) | (context_kind if ctx is not None else False)
+        kind_ok |= switch_kind if switch_enabled else False
         phase_ok = (phase == Phase.ACTION) | (phase == Phase.RESIDUAL)
         # Only TURN can advance turn or leave residual phase. Other events keep
         # the committed phase, except UPKEEP which enters the residual phase.
@@ -696,11 +717,20 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         header_ok = turn_ok & phase_ok & jnp.where(tendency_kind|toxic_kind,tendency_identity,jnp.where(damage_kind,damage_identity,jnp.where(kind==Kind.FIELD,field_identity,jnp.where(kind==Kind.RAW_BEGIN,raw_identity,jnp.where(boundary, boundary_identity,
             jnp.where(kind==Kind.CLEAR_ALL_BOOSTS,boundary_identity,jnp.where(kind==Kind.CURE_TEAM,cure_identity,
             jnp.where(kind == Kind.COPY_BOOST, copy_identity, jnp.where(double_context, context_identity, fact_identity)))))))))
+        switch_identity=(row[:,6]==-1)&(row[:,7]==-1)&(row[:,4]>=-1)&(row[:,4]<=1)
+        switch_identity &= jnp.where(row[:,12]==1,(row[:,4]>=0)&(row[:,5]>=0)&(row[:,5]<6),row[:,5]==-1)
+        header_ok=jnp.where(switch_kind,turn_ok&phase_ok&switch_identity,header_ok)
         predicate = row[:, 8]
         payload_ok = jnp.where(boundary|global_mon_kind, jnp.all(row[:, 8:] == 0, axis=1),
             jnp.where(fact, (predicate >= 0) & (predicate < tables.predicates.shape[0]) & jnp.all(row[:, 9:] == 0, axis=1), True))
         if ctx is not None:
             d = row[:, 8:]
+            if switch_enabled:
+                switch_payload=((d[:,0]==0)|(d[:,0]==1))&((d[:,1]==0)|(d[:,1]==1))&(d[:,2]>=0)&(d[:,3]>=0)
+                switch_payload &= ((d[:,4]==0)|(d[:,4]==1))&(d[:,5]>=0)&jnp.all(d[:,6:]==0,axis=-1)
+                switch_payload &= jnp.where(d[:,4]==1,(d[:,2]>0)&(d[:,3]>0),d[:,3]==0)
+                switch_payload &= (d[:,2]!=0)|((row[:,4]==-1)&jnp.all(d[:,3:]==0,axis=-1))
+                payload_ok &= ~switch_kind|switch_payload
             # Ability reveals have their own replaceable ledger. Generic set
             # events cannot smuggle one into the monotone non-ability basis.
             ability_fact = context_tables.ability_predicate[jnp.clip(predicate, 0, tables.predicates.shape[0] - 1)]
@@ -781,13 +811,13 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             apply=valid&(error==0)
         if ctx is not None:
             ctx, basis, accepted = public_context.consume(ctx, basis, mons, tables, context_tables, row,
-                apply & (context_kind | mon_kind | item_kind | field_kind | active_kind | damage_kind | type_kind | sleep_kind | toxic_kind | tendency_kind | (boundary&tendency_enabled) | ((kind==Kind.TURN)&field_enabled) | ((kind==Kind.UPKEEP)&(truant_enabled|sleep_enabled|toxic_enabled)) | ((kind==Kind.ACTION_CHUNK_END)&toxic_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
+                apply & (context_kind | switch_kind | mon_kind | item_kind | field_kind | active_kind | damage_kind | type_kind | sleep_kind | toxic_kind | tendency_kind | (boundary&tendency_enabled) | ((kind==Kind.TURN)&field_enabled) | ((kind==Kind.UPKEEP)&(truant_enabled|sleep_enabled|toxic_enabled)) | ((kind==Kind.ACTION_CHUNK_END)&toxic_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
                 trace_kind=Kind.TRACE, transform_kind=Kind.TRANSFORM,
                 arrival=(kind >= Kind.SWITCH) & (kind <= Kind.BATON_PASS), faint=kind == Kind.FAINT,
                 raw_kind=Kind.RAW_BEGIN,item_kind=Kind.ITEM,field_kind=Kind.FIELD,turn_kind=Kind.TURN,
                 active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,upkeep_kind=Kind.UPKEEP,damage_kind=Kind.DAMAGE_CONTROL,type_kind=Kind.TYPES,sleep_kind=Kind.SLEEP,toxic_kind=Kind.TOXIC,action_end_kind=Kind.ACTION_CHUNK_END,cure_kind=Kind.CURE_TEAM,tendency_kind=Kind.TENDENCY,
                 boost_kind=Kind.BOOST,copy_boost_kind=Kind.COPY_BOOST,clear_all_kind=Kind.CLEAR_ALL_BOOSTS,
-                status_kind=Kind.STATUS,condition_kind=Kind.CONDITION)
+                status_kind=Kind.STATUS,condition_kind=Kind.CONDITION,switch_kind=Kind.SWITCH_PRELUDE)
 
             error = jnp.where(apply & ~accepted, Error.PAYLOAD, error)
             apply = valid & (error == 0)
