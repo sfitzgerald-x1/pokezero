@@ -314,3 +314,93 @@ fn fresh_transformed_sleep_talk_uses_current_copied_moves() {
         assert_eq!(before, s.serialize());
     }
 }
+
+fn awake_probe(caller: SideReference) {
+    let mut s = toy();
+    match caller {
+        SideReference::SideOne => s.side_one.get_active(),
+        SideReference::SideTwo => s.side_two.get_active(),
+    }
+    .replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+    let action = MoveChoice::Move(PokemonMoveIndex::M0);
+    let before = s.serialize();
+    let branches = generate_instructions_from_move_pair(&mut s, &action, &action, false);
+    assert!(!branches.is_empty());
+    for b in branches {
+        assert!(!b
+            .instruction_list
+            .iter()
+            .any(|i| matches!(i, Instruction::SleepTalkCalled(_))));
+        let base =
+            render_branch_events(&mut s, &action, &action, &b.instruction_list, false, &ctx());
+        assert!(
+            !base.is_attribution_unsafe(),
+            "awake fresh control rejected {base:?}"
+        );
+        let mut corrupted = b.instruction_list;
+        corrupted.push(Instruction::SleepTalkCalled(SleepTalkCalledInstruction {
+            side_ref: caller,
+            move_id: Choices::SPLASH,
+        }));
+        let bad = render_branch_events(&mut s, &action, &action, &corrupted, false, &ctx());
+        assert_eq!(before, s.serialize());
+        assert!(
+            bad.is_attribution_unsafe(),
+            "awake Sleep Talk never calls Splash; spurious marker accepted {caller:?}: {bad:?}"
+        );
+    }
+}
+#[test]
+fn fresh_awake_side_one_rejects_spurious_marker() {
+    awake_probe(SideReference::SideOne);
+}
+#[test]
+fn fresh_awake_side_two_rejects_spurious_marker() {
+    awake_probe(SideReference::SideTwo);
+}
+#[test]
+fn fresh_immobilized_sleep_talk_rejects_spurious_marker() {
+    for caller in [SideReference::SideOne, SideReference::SideTwo] {
+        let mut s = toy();
+        let side = match caller {
+            SideReference::SideOne => &mut s.side_one,
+            SideReference::SideTwo => &mut s.side_two,
+        };
+        side.volatile_statuses
+            .insert(PokemonVolatileStatus::ATTRACT);
+        let p = side.get_active();
+        p.status = PokemonStatus::SLEEP;
+        p.rest_turns = 2;
+        p.replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+        p.replace_move(PokemonMoveIndex::M1, Choices::SPLASH);
+        let action = MoveChoice::Move(PokemonMoveIndex::M0);
+        let before = s.serialize();
+        let branches = generate_instructions_from_move_pair(&mut s, &action, &action, false);
+        let b = branches
+            .iter()
+            .find(|b| {
+                b.instruction_list
+                    .iter()
+                    .any(|i| matches!(i,Instruction::MoveImmobilized(m) if m.side_ref==caller))
+            })
+            .expect("fresh Attract toy must have immobilized branch");
+        assert!(!b
+            .instruction_list
+            .iter()
+            .any(|i| matches!(i, Instruction::SleepTalkCalled(_))));
+        let base =
+            render_branch_events(&mut s, &action, &action, &b.instruction_list, false, &ctx());
+        assert!(
+            !base.is_attribution_unsafe(),
+            "fresh immobilized control rejected {base:?}"
+        );
+        let mut corrupted = b.instruction_list.clone();
+        corrupted.push(Instruction::SleepTalkCalled(SleepTalkCalledInstruction {
+            side_ref: caller,
+            move_id: Choices::SPLASH,
+        }));
+        let bad = render_branch_events(&mut s, &action, &action, &corrupted, false, &ctx());
+        assert_eq!(before, s.serialize());
+        assert!(bad.is_attribution_unsafe(),"immobilized Sleep Talk never calls Splash; spurious marker accepted {caller:?}: {bad:?}");
+    }
+}

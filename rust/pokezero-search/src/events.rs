@@ -1257,6 +1257,21 @@ pub fn render_branch_events(
         out.mark_attribution_unsafe("sleeptalk_marker_missing_or_conflicting");
         return out;
     }
+    for (index, instruction) in instructions.iter().enumerate() {
+        if let Instruction::SleepTalkCalled(marker) = instruction {
+            let phase_owner = if index < seg.p1_end {
+                Some(seg.first)
+            } else if index < seg.p2_end {
+                Some(other_side(seg.first))
+            } else {
+                None
+            };
+            if phase_owner != Some(marker.side_ref) {
+                out.mark_attribution_unsafe("sleeptalk_marker_missing_or_conflicting");
+                return out;
+            }
+        }
+    }
 
     let second_ref = other_side(seg.first);
     let (first_mc, second_mc) = match seg.first {
