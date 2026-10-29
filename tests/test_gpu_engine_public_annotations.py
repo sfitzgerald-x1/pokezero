@@ -4,7 +4,7 @@ import unittest
 
 SETUP=('|player|p1|One|1','|player|p2|Two|2|1000','|teamsize|p1|6','|teamsize|p2|6',
        '|gametype|singles','|gen|3','|tier|[Gen 3] Random Battle','|rule|Species Clause: Limit one of each species','|start')
-ANNOTATIONS=('|-crit|p2a: Absol','|-supereffective|p2a: Absol','|-resisted|p2a: Absol',
+ANNOTATIONS=('|-miss|p1a: Nick|p2a: Absol','|-crit|p2a: Absol','|-supereffective|p2a: Absol','|-resisted|p2a: Absol',
              '|-hitcount|p2a: Absol|1','|-hitcount|p2a: Absol|5','|-hint|Sleep Clause Mod activated.',
              '|-message|A public announcement.','|-fieldactivate|move: Perish Song')
 
@@ -15,6 +15,9 @@ class AnnotationLexicalTests(unittest.TestCase):
         for line in (*SETUP,*ANNOTATIONS):self.assertIsNotNone(classify(line),line)
         for line in ('|gen|4','|gametype|doubles','|tier|gen9randombattle','|start|extra',
                 '|teamsize|p1|7','|teamsize|p3|6','|player|p3|Three','|player|p1|',
+                '|-miss','|-miss|p1a: Nick','|-miss|p1: Nick|p2a: Absol',
+                '|-miss|p1a: Nick|p2: Absol','|-miss|p1a: Nick|p2a: Absol|extra',
+                '|-miss|p1a: Nick|p2a: Absol|[from] ability: Pressure',
                 '|-crit','|-crit|p2: Absol','|-crit|p2a: Absol|extra','|-hitcount|p2a: Absol|0',
                 '|-hitcount|p2a: Absol|6','|-hitcount|p2a: Absol|01','|-hint|','|-message|x|extra',
                 '|-fieldactivate|move: Mud Sport','|-fieldactivate|move: Perish Song|extra',
@@ -81,7 +84,8 @@ class AnnotationStreamTests(unittest.TestCase):
     def test_unsupported_or_wrong_target_does_not_advance_host(self):
         from gpu_engine import public_wire
         host,_=public_wire.project_lines(public_wire.WireState(),self.f.public.prefix,**self.f.e.wire_kwargs(self.f.catalog))
-        for line in ('|-crit|p2a: Unknown','|-hitcount|p2: Absol|2','|-fieldactivate|move: Mud Sport',
+        for line in ('|-miss|p1a: Unknown|p2a: Absol','|-miss|p1a: Nick|p2a: Unknown',
+                '|-miss|p1a: Nick|p2a: Absol|extra','|-crit|p2a: Unknown','|-hitcount|p2: Absol|2','|-fieldactivate|move: Mud Sport',
                 '|gen|4','|gametype|doubles','|request|{}'):
             with self.assertRaises(ValueError):public_wire.project_line(host,line,**self.f.e.wire_kwargs(self.f.catalog))
         self.assertEqual(host.player_names,(None,None))

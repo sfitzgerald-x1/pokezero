@@ -1,7 +1,7 @@
 """Canonical annotation/setup main payloads for the current V4 consumer.
 
 These never erase raw events: switch boundaries, Trick closure, raw procs and
-all registered bookkeeping must still run. Crit/effectiveness/hit count remain
+all registered bookkeeping must still run. Crit/effectiveness/hit count and accuracy misses remain
 meaningful transition-history facts outside this V4 mask contract. Per-mon
 Tier-2 pins are retired at V4 and investment belief narrowing is not admitted.
 This module does not qualify transition tokens or a complete player wire.
@@ -20,6 +20,11 @@ def classify(line):
     # manufacture a source ability/item reveal under this annotation contract.
     if any(tag in line for tag in ('[from]','[of]')):return None
     ident=len(parts)>2 and re.fullmatch(r'p[12]a: \S(?:[^|]*\S)?',parts[2])
+    if kind=='-miss':
+        # The pinned Gen3 emitter names both the move user and its target.
+        # Both identities must remain explicit; raw bookkeeping still runs.
+        target=len(parts)==4 and re.fullmatch(r'p[12]a: \S(?:[^|]*\S)?',parts[3])
+        return 'miss' if len(parts)==4 and ident and target else None
     if kind in ('-crit','-supereffective','-resisted'):
         return 'target' if len(parts)==3 and ident else None
     if kind=='-hitcount':
