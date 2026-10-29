@@ -21,14 +21,24 @@ from pokezero.mirror_value_probe import (CHAMPION_SHA, cohort, collect_battle, d
     file_sha, load_runtime, paired_battle_interval, write_new)
 
 _RUNTIME = None
+_INITIALIZATION_ERROR = None
 
 
 def initialize(checkpoint, showdown, node, threads):
-    global _RUNTIME
-    _RUNTIME = load_runtime(checkpoint, showdown, node, threads)
+    global _RUNTIME, _INITIALIZATION_ERROR
+    # Pool replaces a process whose initializer raises. Bind failures must be
+    # delivered as ordinary task failures, so the first failure stops the
+    # cohort instead of creating an unbounded worker-restart loop.
+    try:
+        _RUNTIME = load_runtime(checkpoint, showdown, node, threads)
+    except BaseException as error:
+        _INITIALIZATION_ERROR = (type(error).__name__, str(error))
 
 
 def worker(arguments):
+    if _INITIALIZATION_ERROR is not None:
+        kind, message = _INITIALIZATION_ERROR
+        raise RuntimeError(f"mirror runtime initialization failed: {kind}: {message}")
     row, output, max_rounds = arguments
     return collect_battle(row, output, _RUNTIME, max_rounds=max_rounds)
 

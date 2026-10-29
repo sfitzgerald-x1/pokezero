@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 import sys
 import time
+import os
 import unittest
 from unittest.mock import patch
 
@@ -34,6 +35,19 @@ def pool_fixture_worker(arguments):
     return {}
 
 
+def pool_fixture_raising_runtime(checkpoint, *arguments):
+    marker = Path(checkpoint) / ("init-" + str(os.getpid()))
+    with marker.open("x") as stream:
+        stream.write("one failed initialization")
+    raise ValueError("synthetic checkpoint binding failure")
+
+
+def pool_fixture_failed_initialize(*arguments):
+    import run_mirror_value_probe as runner
+    with patch.object(runner, "load_runtime", pool_fixture_raising_runtime):
+        runner.initialize(*arguments)
+
+
 def observation(seat, marker):
     cat = np.zeros((23, 41), np.int64)
     cat[1:7, CATEGORY_ROLE] = 1
@@ -45,6 +59,27 @@ def observation(seat, marker):
 
 
 class MirrorContractTests(unittest.TestCase):
+    def test_failed_initializer_surfaces_once_per_worker_without_pool_restarts(self):
+        scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        import run_mirror_value_probe as runner
+        with tempfile.TemporaryDirectory() as tmp, patch.object(runner, "initialize", pool_fixture_failed_initialize):
+            tmp = Path(tmp)
+            config = dict(root="synthetic-initializer-failure", battles=8, workers=2, threads=1,
+                checkpoint=str(tmp), showdown="fixture", node="fixture", max_rounds=1)
+            dest = tmp / "collection"
+            started = time.monotonic()
+            with self.assertRaisesRegex(RuntimeError, "mirror runtime initialization failed: ValueError: synthetic checkpoint binding failure"):
+                runner.collect(config, dest)
+            self.assertLess(time.monotonic() - started, 8)
+            self.assertGreaterEqual(len(list(tmp.glob("init-*"))), 1)
+            self.assertLessEqual(len(list(tmp.glob("init-*"))), 2)
+            self.assertFalse(list(dest.glob("battle-*")))
+            self.assertFalse((dest / "collection.json").exists())
+            with self.assertRaisesRegex(ValueError, "no resume/refill"):
+                runner.collect(config, dest)
+
     def test_first_pool_failure_terminates_active_and_queued_games_without_refill(self):
         repo = Path(__file__).resolve().parents[1]
         spec = importlib.util.spec_from_file_location("mirror_failure_runner", repo / "scripts/run_mirror_value_probe.py")
