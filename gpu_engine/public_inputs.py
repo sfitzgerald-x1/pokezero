@@ -20,6 +20,7 @@ import numpy as np
 
 from . import public_belief, public_mon_state, public_context, public_field, public_active, public_damage, public_types, public_sleep, public_toxic
 from . import public_tendency, public_tendency_protocol
+from . import public_refresh_stream
 
 
 SCHEMA = "pokezero.public_events.v1"
@@ -107,7 +108,7 @@ class PublicEvent:
                 raise ValueError("boundary event cannot carry a party identity or payload")
         elif self.kind==Kind.RAW_BEGIN:
             d=self.payload
-            if d[0] not in (0,1,2) or d[3] not in range(8) or any(d[4:]):
+            if d[0] not in (0,1,2) or (d[3]==0 and any(d[4:])) or (d[3]!=0 and not public_refresh_stream.metadata_words_ok(d[3],d[4:])):
                 raise ValueError("raw boundary requires a named item family")
             if d[0]==2:
                 if not (self.actor_side in (0,1) and 0<=self.actor_slot<6 and self.target_side in (0,1)
@@ -436,6 +437,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         raise ValueError("public context basis must have B×2×6 encounters")
     if context is not None and (context.refresh is None)!=(context_tables.refresh is None):
         raise ValueError('ordered summary state and tables must be supplied together')
+    if context is not None and (context.lifecycle is None)!=(context_tables.lifecycle is None):
+        raise ValueError('source lifecycle state and tables must be supplied together')
     error = jnp.where((chunk.stream_id == cursor.stream_id) & (cursor.stream_id > 0),
                       Error.NONE, Error.STREAM).astype(jnp.int32)
     source_ok = jnp.all(chunk.source_binding == tables.binding) & jnp.all(
@@ -629,8 +632,16 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         error = jnp.where((error == 0) & ~(bound & consistent), Error.SOURCE, error)
         if context.refresh is not None:
             from . import public_refresh_stream
-            coherent=public_refresh_stream.validate(context.refresh,beliefs,tables,context_tables.refresh,context_tables.moves)
+            coherent=public_refresh_stream.validate(context.refresh,beliefs,tables,context_tables.refresh,context_tables.moves,
+                lifecycle=context_tables.lifecycle is not None)
             coherent &= (context.refresh.family!=0)==context.tendency_raw_pending
+            if context.lifecycle is not None:
+                # A pure admission probe validates all lifecycle fields even on
+                # a NOOP. Its candidate state is discarded; no upkeep is run.
+                probe=public_context.lifecycle_api.apply(context.lifecycle,context.sleep,context.abilities,mon_state,
+                    context_tables.lifecycle,operation=public_context.lifecycle_api.UPKEEP,
+                    producer_binding=context_tables.lifecycle.binding)
+                coherent &= probe.admitted
             error=jnp.where((error==0)&~coherent,Error.SOURCE,error)
 
     def step(carry, event_and_valid):
@@ -694,8 +705,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             if item_enabled:
                 replaceable |= context_tables.item_predicate[jnp.clip(predicate,0,tables.predicates.shape[0]-1)]
                 summary_enabled=context_tables.refresh is not None
-                raw_payload=(d[:,0]>=0)&(d[:,0]<=2)&jnp.all(d[:,4:]==0,axis=1)
-                raw_payload &= jnp.where(summary_enabled,(d[:,3]>=1)&(d[:,3]<=7),d[:,3]==0)
+                raw_payload=(d[:,0]>=0)&(d[:,0]<=2)
+                raw_payload &= public_refresh_stream.metadata_ok(d[:,3],d[:,4:],
+                    lifecycle=context_tables.lifecycle is not None) if summary_enabled else jnp.all(d[:,3:]==0,axis=1)
                 raw_payload &= jnp.where(d[:,0]==2,(d[:,1]>0)&(d[:,2]>0),jnp.all(d[:,1:3]==0,axis=1))
                 item_payload=(d[:,0]>0)&(d[:,1]>0)&(d[:,2]>=0)&(d[:,2]<=6)&jnp.all(d[:,3:]==0,axis=1)
                 payload_ok &= jnp.where(kind==Kind.RAW_BEGIN,raw_payload,jnp.where(kind==Kind.ITEM,item_payload,True))
@@ -768,7 +780,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                 arrival=(kind >= Kind.SWITCH) & (kind <= Kind.BATON_PASS), faint=kind == Kind.FAINT,
                 raw_kind=Kind.RAW_BEGIN,item_kind=Kind.ITEM,field_kind=Kind.FIELD,turn_kind=Kind.TURN,
                 active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,upkeep_kind=Kind.UPKEEP,damage_kind=Kind.DAMAGE_CONTROL,type_kind=Kind.TYPES,sleep_kind=Kind.SLEEP,toxic_kind=Kind.TOXIC,action_end_kind=Kind.ACTION_CHUNK_END,cure_kind=Kind.CURE_TEAM,tendency_kind=Kind.TENDENCY,
-                boost_kind=Kind.BOOST,copy_boost_kind=Kind.COPY_BOOST,clear_all_kind=Kind.CLEAR_ALL_BOOSTS)
+                boost_kind=Kind.BOOST,copy_boost_kind=Kind.COPY_BOOST,clear_all_kind=Kind.CLEAR_ALL_BOOSTS,
+                status_kind=Kind.STATUS,condition_kind=Kind.CONDITION)
 
             error = jnp.where(apply & ~accepted, Error.PAYLOAD, error)
             apply = valid & (error == 0)
