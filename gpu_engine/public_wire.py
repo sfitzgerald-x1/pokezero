@@ -250,8 +250,6 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
     addresses = _bench_alias(candidate.addresses(), parts)
     events = []
     item_projection=public_items.project_line(line,items=items) if items is not None else None
-    if refresh_family and item_projection is not None and (item_projection.facts or item_projection.trick_idents):
-        raise ValueError('item summary callbacks require their intermediate assignment/removal producer')
     if item_projection is not None:
         main_handled |= item_projection.item_event or bool(item_projection.trick_idents)
         kwargs={}
@@ -262,7 +260,12 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             if addresses.active.get(actor.side)!=actor or addresses.active.get(target.side)!=target:
                 raise ValueError("Trick requires two live public encounters")
             kwargs=dict(actor_side=actor.side,actor_slot=actor.slot,target_side=target.side,target_slot=target.slot)
-            payload=(2,actor.encounter,target.encounter,0,0,0,0,0)
+            payload=(2,actor.encounter,target.encounter,refresh_family,0,0,0,0)
+        if refresh_family:
+            count=len(item_projection.facts)
+            if count>2:raise ValueError('raw item fact capacity exceeded')
+            eat=kind=='-enditem' and '[eat]' in line
+            payload=(payload[0]|(count<<2)|(16 if eat else 0),*payload[1:])
         event=PublicEvent(Kind.RAW_BEGIN,state.next_sequence,state.turn,state.phase,payload=payload,**kwargs)
         # Source metadata uses subsequent decoded facts. Validate the complete
         # header below, before returning any projection to its caller.
@@ -302,7 +305,24 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         events.append(proc)
     if item_projection is not None:
         for ident,operation,item_id in item_projection.facts:
-            holder=addresses.resolve(ident)
+            if refresh_family:
+                # The source reads its PRE-LINE active record, ignoring a stale
+                # nickname. Without an active it upserts by the literal name;
+                # a missing/ambiguous name needs a separate introduction proof.
+                public_side=_slot_from_ident(ident)
+                if public_side not in ('p1','p2'):raise ValueError('item lookup requires a public side')
+                owner=int(public_side[1])-1
+                if state.live[owner] and state.active[owner]>=0:
+                    holder=state.encounters[owner][state.active[owner]].address
+                else:
+                    named=_species_from_ident(ident)
+                    from pokezero.dex import normalize_id
+                    matches=[entry.address for entry in state.encounters[owner]
+                        if normalize_id(entry.species)==normalize_id(named)]
+                    if len(matches)!=1:raise ValueError('inactive item lookup requires one literal public species record')
+                    holder=matches[0]
+            else:
+                holder=addresses.resolve(ident)
             event=PublicEvent(Kind.ITEM,state.next_sequence+len(events),state.turn,state.phase,
                 target_side=holder.side,target_slot=holder.slot,
                 payload=(holder.encounter,item_id,operation,0,0,0,0,0))
