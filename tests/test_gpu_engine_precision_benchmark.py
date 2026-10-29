@@ -41,3 +41,22 @@ class PrecisionBenchmarkTests(unittest.TestCase):
             p=Path(directory)/'inputs.npz';p.write_bytes(b'not an npz')
             with self.assertRaisesRegex(ValueError,'hash mismatch'):
                 load_inputs(p,'0'*64,champion.Config())
+
+    def test_gate_checks_each_target_batch_and_does_not_pool_failures(self):
+        import numpy as np
+        from gpu_engine.champion import Output
+        from gpu_engine.precision_benchmark import precision_gate
+        calls=[]
+        def evaluate(dtype,args):
+            rows=len(args[0]);calls.append((rows,dtype))
+            logits=np.zeros((rows,9));logits[:,0]=1
+            # Shape-sensitive kernel regression invisible at the smaller shape.
+            if rows==8 and dtype=='bfloat16':logits[0,1]=2
+            return Output(logits,np.zeros(rows),np.zeros((rows,9)))
+        arrays=(np.zeros((8,23,4)),)*4;legal=np.ones((8,9),bool)
+        result=precision_gate(evaluate,arrays,legal,batches=(2,4))
+        self.assertEqual(calls,[(4,'float32'),(4,'bfloat16'),(8,'float32'),(8,'bfloat16')])
+        self.assertTrue(result['shapes'][0]['pass'])
+        self.assertFalse(result['shapes'][1]['pass'])
+        self.assertFalse(result['pass'])
+        with self.assertRaises(ValueError):precision_gate(evaluate,arrays,legal,batches=(5,))

@@ -87,10 +87,34 @@ def load_inputs(path,expected_sha,c):
     return (n,k,t,a),l
 
 
-def _timing(params,c,args,device,*,dtype,warmup,repeats):
-    params=jax.device_put(params,device)
+def precision_gate(evaluate,arrays,legal,*,batches=(2048,8192)):
+    """Gate each target executable shape separately, without pooling overlaps."""
+    shapes=[]
+    for batch in batches:
+        rows=2*batch
+        if rows>len(legal):raise ValueError('insufficient saved rows for gate shape')
+        args=tuple(x[:rows] for x in arrays)
+        full=evaluate('float32',args);low=evaluate('bfloat16',args)
+        for value in (*full,*low):
+            if not np.isfinite(np.asarray(value)).all():raise RuntimeError('nonfinite precision gate output')
+        policies=policy_comparison(full.policy_logits,low.policy_logits,legal[:rows])
+        shapes.append({'batch':batch,'seat_rows':rows,'policies':policies,
+            'maximum_value_absolute_difference':float(np.max(np.abs(np.asarray(full.value)-np.asarray(low.value)))),
+            'pass':all(x['agreement']>=.995 for x in policies.values())})
+    return {'shapes':shapes,'kl_direction':'FP32 || bf16, natural logarithms','threshold':.995,
+        'pass':all(x['pass'] for x in shapes),'selection':'prefix2*batch of same frozen population per shape; overlaps not pooled'}
+
+
+def _compile(params,c,args,dtype):
     compiled=jax.jit(lambda n,k,t,a:champion.forward(params,n,k,t,a,c,compute_dtype=dtype))
-    start=time.perf_counter();compiled=compiled.lower(*args).compile();compile_seconds=time.perf_counter()-start
+    start=time.perf_counter();compiled=compiled.lower(*args).compile()
+    return compiled,time.perf_counter()-start
+
+
+def _timing(params,c,args,device,*,dtype,warmup,repeats,gated_executable=None):
+    if gated_executable is None:
+        params=jax.device_put(params,device);compiled,compile_seconds=_compile(params,c,args,dtype)
+    else:compiled,compile_seconds=gated_executable
     for _ in range(warmup):out=jax.block_until_ready(compiled(*args))
     if any(x.devices()!={device} for x in out) or not all(np.isfinite(np.asarray(x)).all() for x in out):
         raise RuntimeError('output not finite or not solely on recorded GPU')
@@ -99,6 +123,7 @@ def _timing(params,c,args,device,*,dtype,warmup,repeats):
         start=time.perf_counter_ns();jax.block_until_ready(compiled(*args))
         samples.append((time.perf_counter_ns()-start)/1e6)
     return {'config':asdict(c),'dtype':dtype,'compile_seconds':compile_seconds,
+        'reused_exact_gated_executable':gated_executable is not None,
         'mean_ms':statistics.fmean(samples),'median_ms':statistics.median(samples),
         'p95_ms':float(np.quantile(samples,.95)),'samples_ms':samples}
 
@@ -126,25 +151,12 @@ def measure(weights,inputs,*,weights_sha,inputs_sha,checkpoint_sha,output,warmup
         'scope':'saved Python encoder inputs; random candidate weights; appended29token fields authored zeros; forward only, no B2 parity/games/strength/training',
         'rows':[]}
     parameters=jax.device_put(params,device)
-    funcs={dtype:jax.jit(lambda n,k,t,a,dtype=dtype:champion.forward(parameters,n,k,t,a,c,compute_dtype=dtype))
-        for dtype in ('float32','bfloat16')}
-    totals={kind:{'rows':0,'agreement_count':0,'kl_sum':0.,'kl_max':0.} for kind in ('raw','legal')}
-    value_error=0.
-    for start in range(0,len(legal),512):
-        args=jax.device_put(tuple(x[start:start+512] for x in arrays),device)
-        full=jax.block_until_ready(funcs['float32'](*args));low=jax.block_until_ready(funcs['bfloat16'](*args))
-        for value in (*full,*low):
-            if not np.isfinite(np.asarray(value)).all():raise RuntimeError('nonfinite precision gate output')
-        comparison=policy_comparison(full.policy_logits,low.policy_logits,legal[start:start+512])
-        value_error=max(value_error,float(np.max(np.abs(np.asarray(full.value)-np.asarray(low.value)))))
-        for kind in totals:
-            for key in ('rows','agreement_count','kl_sum'):totals[kind][key]+=comparison[kind][key]
-            totals[kind]['kl_max']=max(totals[kind]['kl_max'],comparison[kind]['kl_max'])
-    for record in totals.values():
-        record.update(agreement=record['agreement_count']/record['rows'],kl_mean=record['kl_sum']/record['rows'])
-    gate={'policies':totals,'kl_direction':'FP32 || bf16, natural logarithms',
-        'maximum_value_absolute_difference':value_error,'threshold':.995,
-        'pass':all(x['agreement']>=.995 for x in totals.values())}
+    gated={}
+    def evaluate(dtype,args):
+        args=jax.device_put(args,device);key=(len(args[0]),dtype)
+        executable=_compile(parameters,c,args,dtype);gated[key]=executable
+        return jax.block_until_ready(executable[0](*args))
+    gate=precision_gate(evaluate,arrays,legal)
     result['champion_gate']=gate
     (out/'champion-gate.json').write_text(json.dumps(gate,indent=2,sort_keys=True)+'\n')
     print(json.dumps({'event':'champion_precision_gate',**gate}),flush=True)
@@ -164,7 +176,8 @@ def measure(weights,inputs,*,weights_sha,inputs_sha,checkpoint_sha,output,warmup
             args=jax.device_put(tuple(x[:batch*2] for x in shaped),device);jax.block_until_ready(args)
             if tokens==23:
                 for dtype in ('float32','bfloat16'):
-                    row=_timing(params,c,args,device,dtype=dtype,warmup=warmup,repeats=repeats)
+                    row=_timing(params,c,args,device,dtype=dtype,warmup=warmup,repeats=repeats,
+                        gated_executable=gated[(2*batch,dtype)])
                     row.update(model='champion',batch=batch,seat_rows=2*batch,tokens=tokens)
                     result['rows'].append(row);print(json.dumps({k:v for k,v in row.items() if k!='samples_ms'}),flush=True)
             for name,width,ff,layers,moe in candidates:
