@@ -16,6 +16,7 @@ import numpy as np
 from . import public_abilities as ability, public_moves as move, public_mon_state as mon, public_items as item, public_field as field_api
 from . import public_active as active_api
 from . import public_damage as damage_api
+from . import public_types as type_api
 from . import public_sleep as sleep_api
 
 
@@ -30,6 +31,7 @@ class ContextTables(NamedTuple):
     field: field_api.FieldTables | None = None
     active: active_api.ActiveTables | None = None
     damage: damage_api.DamageTables | None = None
+    types: type_api.TypeTables | None = None
     sleep: sleep_api.SleepTables | None = None
 
 
@@ -43,10 +45,13 @@ class ContextState(NamedTuple):
     field: field_api.FieldState | None = None
     active: active_api.ActiveState | None = None
     damage: damage_api.DamageState | None = None
+    types: type_api.TypeState | None = None
     sleep: sleep_api.SleepState | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, sleep_tables=None):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None):
+    if type_catalog is not None and field_catalog is None:
+        raise ValueError('live-type composition requires the ordered field context')
     if type(item_belief_narrowing) is not bool:
         raise ValueError("item narrowing must be a frozen boolean")
     if items is None and field_catalog is not None:
@@ -86,6 +91,10 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
         if not np.array_equal(np.asarray(damage_tables.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding)):
             raise ValueError("damage and field columns require the same frozen vocabulary")
         payload.update(schema=payload['schema']+'.damage.v1',damage=np.asarray(damage_tables.binding).tolist())
+    if type_catalog is not None:
+        if not np.array_equal(np.asarray(type_catalog.device.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding)):
+            raise ValueError('live types and field columns require the same frozen vocabulary')
+        payload.update(schema=payload['schema']+'.types.v1',types=np.asarray(type_catalog.device.binding).tolist())
     if sleep_tables is not None:
         if not np.array_equal(np.asarray(sleep_tables.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding)):
             raise ValueError('sleep and field columns require the same frozen vocabulary')
@@ -95,7 +104,8 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
         jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
         field_catalog.device if field_catalog is not None else None,
-        active_catalog.device if active_catalog is not None else None,damage_tables,sleep_tables)
+        active_catalog.device if active_catalog is not None else None,damage_tables,
+        type_catalog.device if type_catalog is not None else None,sleep_tables)
 
 
 def initialize(beliefs, tables, *, species_binding=None):
@@ -110,6 +120,8 @@ def initialize(beliefs, tables, *, species_binding=None):
         raise ValueError("active context requires field tables")
     if tables.damage is not None and tables.field is None:
         raise ValueError("damage context requires field tables")
+    if tables.types is not None and tables.field is None:
+        raise ValueError('live-type context requires field tables')
     if tables.sleep is not None and tables.field is None:
         raise ValueError('sleep context requires field tables')
     batch = beliefs.species.shape[0]
@@ -120,6 +132,7 @@ def initialize(beliefs, tables, *, species_binding=None):
         field_api.initialize(batch,tables.field) if tables.field is not None else None,
         active_api.initialize(batch,tables.active,species_binding=species_binding) if tables.active is not None else None,
         damage_api.initialize(batch,tables.damage,species_binding=species_binding) if tables.damage is not None else None,
+        type_api.initialize(batch,tables.types,species_binding=species_binding) if tables.types is not None else None,
         sleep_api.initialize(batch,tables.sleep,species_binding=species_binding) if tables.sleep is not None else None)
 
 
@@ -175,7 +188,7 @@ def preconsume(context,mons,tables,row,valid,*,condition_kind):
 
 def consume(context, base, mons, source_tables, tables, row, valid, *,
             move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind,
-            active_kind, baton_kind, upkeep_kind, damage_kind, sleep_kind, cure_kind):
+            active_kind, baton_kind, upkeep_kind, damage_kind, type_kind, sleep_kind, cure_kind):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
@@ -246,6 +259,14 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             encounter=jnp.where(targeted,data[:,0],0),value=jnp.where(is_turn,row[:,2],0),
             producer_binding=tables.damage.binding,valid=valid&relevant)
         accepted &= jnp.where(relevant,da,True)
+    types=context.types
+    if types is not None:
+        targeted=k==type_kind;relevant=arrival|targeted
+        identity=slot==mons.active[jnp.arange(side.shape[0]),jnp.clip(side,0,1)]
+        types,ty=type_api.apply(types,tables.types,mons,operation=jnp.where(arrival,type_api.ARRIVE,data[:,1]),
+            side=side,encounter=data[:,0],first=jnp.where(arrival,0,data[:,2]),second=jnp.where(arrival,0,data[:,3]),
+            producer_binding=tables.types.binding,valid=valid&relevant&(~targeted|identity))
+        accepted &= jnp.where(relevant,ty&(~targeted|identity),True)
     sleep=context.sleep
     if sleep is not None:
         is_turn=k==turn_kind;is_upkeep=k==upkeep_kind;is_sleep=k==sleep_kind;team=k==cure_kind
@@ -260,4 +281,4 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             first=jnp.where(is_turn,row[:,2],jnp.where(is_sleep,data[:,2],0)),
             second=jnp.where(is_sleep,data[:,3],0),producer_binding=tables.sleep.binding,valid=valid&relevant)
         accepted &= jnp.where(relevant,sa,True)
-    return context._replace(abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,sleep=sleep),base,accepted | ~valid
+    return context._replace(abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep),base,accepted | ~valid
