@@ -127,7 +127,7 @@ attrition — which is the reason §7 item 7 exists in the ledger at all.
 ### T1 — the engine fingerprint has moved, and nothing can declare it frozen · G2 · OPEN · AGENT-THEN-OWNER
 
 **Derived.** `scripts/engine_build_fingerprint.py::compute_fingerprint` over the tracked inputs at
-this head stamps **`d98714d9bc9cf2bd…`**. The newest sweeps the corpus carries were taken at
+this head stamps **`752baa627f485840…`**. The newest sweeps the corpus carries were taken at
 **`bfdbe1c04876edcd…`** — C152's two head windows and all twelve of C153's shards; earlier
 artifacts carry earlier builds still — and **no committed JSON under `reports/` or `docs/` carries
 the head value at all**. The move is
@@ -378,6 +378,7 @@ is tempted to soften, which is why the derivation is now pinned rather than trus
 | Ordinary fixed-chance ties | One appended opt-in patch binds move-order and residual-status ties to independent original physical coins. Post-move speeds are frozen before residual callbacks; actual tied10.x callbacks use suborder-major descriptors with preserved terminal checks. Existing default and non-tied descriptor order is preserved; this is not a qualification or repair of the general default tied law. Inventory grows to98 patches and127 inputs;23 crate sources unchanged. Historical panels and OPEN qualification remain unchanged | `7cf722c79b21f332…` |
 | Shared Gen3 accuracy events | One appended Gen3 patch resolves staged binary64 accuracy and integer-only Q12 modifiers from current abilities and resolved move types, preserves boolean always-hit and switching Pursuit, and removes duplicate early multipliers. Matching JAX cuts retain integer-roll semantics and finite-domain refusals. Pinned-source controls cover102,414 numeric cells and94 native always-hit IDs; they do not qualify general OHKO, accuracy-item or ignore-evasion behavior. Inventory grows to99 patches and128 inputs;23 crate sources unchanged. Historical measurements and OPEN qualification remain unchanged | `f6daf23e951ff21f…` |
 | Ordinary switch and KO continuation | One appended Gen3 patch extends the opt-in ordinary comparison to exact move and inactive party slots, closes native chance consumers over entrants, and retains the complete physical successor and saved replacement bank. Source-adjudicated shared fixes preserve Flash Fire accuracy/Protect gates and suppress new replacement requests after terminal Explosion. Authored full-law, parent/reverse and both-seat controls preserve named refusals and deliberate wrong-table divergence. Inventory grows to100 patches and129 inputs;23 crate sources unchanged. Historical measurements and OPEN qualification remain unchanged | `d98714d9bc9cf2bd…` |
+| Sleep Talk marker ownership | `events.rs` requires unique per-seat called-move markers to be consumed by their owning effective action segment, preserving Encore redirection and refusing residual/orphan markers. The 100 patches, 23 crate sources and 129 hashed inputs retain their membership. Fresh authored source controls are not a rebuilt native artifact or new qualification; the prior d987 native/full128 evidence, historical sweeps, stopped rosters and OPEN qualification remain bound to their original source | `752baa627f485840…` |
 
 ⚠ **THE #1234 ROW IS RECONSTRUCTED HERE, NOT INHERITED, AND THAT IS THIS ROW'S OWN ARGUMENT
 LANDING ON ITSELF.** #1234 updated Appendix A's machine-checked `t1.head_fingerprint` to
@@ -1027,7 +1028,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t1.freeze_declaration_constants` | 0 |
 | `t1.hashed_crate_sources` | 23 |
 | `t1.hashed_input_files` | 129 |
-| `t1.head_fingerprint` | d98714d9bc9cf2bd |
+| `t1.head_fingerprint` | 752baa627f485840 |
 | `t1.newest_committed_sweep_fingerprint` | bfdbe1c04876edcd |
 | `t2.first_remainder_off_fan_bands` | 16205 of 27655 |
 | `t2.first_remainder_off_fan_fraction` | 58.597 % |
@@ -1045,12 +1046,12 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `t3.speed_ties_order_le_10` | 20 |
 | `t3.speed_ties_perish` | 4 |
 | `t3.speed_ties_with_a_leftovers_winner` | 24 |
-| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6627 |
+| `t3.tie_refusal_line` | rust/pokezero-search/src/events.rs:6674 |
 | `t4.boundary` | 1000513/121 |
 | `t4.branch_miss_pct` | 100.00 |
 | `t4.engine_component` | itemleftovers |
 | `t4.heal_mismatch_rows_in_the_wide_census` | 2 |
-| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6699 |
+| `t4.leftovers_truncated_consumer_line` | rust/pokezero-search/src/events.rs:6746 |
 | `t4.leftovers_truncated_consumers` | 1 |
 | `t4.leftovers_truncated_references` | 2 |
 | `t4.observed_component` | heal |
