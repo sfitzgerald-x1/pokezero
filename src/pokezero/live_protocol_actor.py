@@ -15,8 +15,6 @@ from types import MappingProxyType, MethodType
 from typing import Any, Callable
 import weakref
 
-import numpy as np
-
 from .observation import ObservationPerspective, PokeZeroObservationV0
 from .policy import PolicyDecision
 
@@ -45,6 +43,8 @@ def _release_history(owner):
 
 
 def _mutable_history(root):
+    import numpy as np
+
     pending, seen = [root], set()
     while pending:
         value = pending.pop()
@@ -378,6 +378,8 @@ class PythonBackend(OwnedProvider):
 class JaxBackend(OwnedProvider):
     """Public fold, own requests, and explicit non-feature terminal lifecycle."""
     def __init__(self, contract, *, catalog, battle_id, owner, stream_id):
+        import numpy as np
+
         super().__init__(contract)
         from .recorded_encoder_runner import JaxRecordedAdapter
         _require(catalog.checkpoint_sha256 == contract.checkpoint_sha256
@@ -395,6 +397,8 @@ class JaxBackend(OwnedProvider):
         self.terminal_lifecycle_line = None
 
     def _check_namespace(self):
+        import numpy as np
+
         _require(self.catalog.checkpoint_sha256 == self.contract.checkpoint_sha256
             and self.catalog.source.source_hash == self.contract.belief_set_source_hash
             and _vocab_sha(self.catalog.vocabulary) == self.contract.category_vocab_sha256
@@ -430,6 +434,8 @@ class JaxBackend(OwnedProvider):
             self.adapter.feed(tuple(segment))
 
     def encode(self, snapshot):
+        import numpy as np
+
         self._check_namespace()
         _require(self.terminal_lifecycle_line is None, 'no encoding after JAX terminal lifecycle')
         side = int(self.owner[1])-1
@@ -603,6 +609,8 @@ class LiveProtocolActor:
             self._poison(error); raise
 
     def _observation(self, encoded, snapshot):
+        import numpy as np
+
         arrays = encoded if type(encoded) is dict else {k:getattr(encoded,k) for k in SHAPES}
         _require(set(arrays) == set(SHAPES), 'exact five owning tensors required')
         result = {}
