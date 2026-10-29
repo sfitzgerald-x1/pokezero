@@ -18,6 +18,7 @@ from . import public_active as active_api
 from . import public_damage as damage_api
 from . import public_types as type_api
 from . import public_sleep as sleep_api
+from . import public_tendency as tendency_api, public_tendency_protocol as tendency_protocol
 
 
 class ContextTables(NamedTuple):
@@ -33,6 +34,7 @@ class ContextTables(NamedTuple):
     damage: damage_api.DamageTables | None = None
     types: type_api.TypeTables | None = None
     sleep: sleep_api.SleepTables | None = None
+    tendency: tendency_api.TendencyTables | None = None
 
 
 class ContextState(NamedTuple):
@@ -47,9 +49,13 @@ class ContextState(NamedTuple):
     damage: damage_api.DamageState | None = None
     types: type_api.TypeState | None = None
     sleep: sleep_api.SleepState | None = None
+    tendency: tendency_api.TendencyState | None = None
+    tendency_raw_pending: jax.Array | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, tendency_tables=None):
+    if tendency_tables is not None and field_catalog is None:
+        raise ValueError('tendency composition requires ordered raw/field context')
     if type_catalog is not None and field_catalog is None:
         raise ValueError('live-type composition requires the ordered field context')
     if type(item_belief_narrowing) is not bool:
@@ -99,16 +105,21 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
         if not np.array_equal(np.asarray(sleep_tables.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding)):
             raise ValueError('sleep and field columns require the same frozen vocabulary')
         payload.update(schema=payload['schema']+'.sleep.v1',sleep=np.asarray(sleep_tables.binding).tolist())
+    if tendency_tables is not None:
+        if (not np.array_equal(np.asarray(tendency_tables.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding))
+                or not np.array_equal(np.asarray(tendency_tables.move_binding),np.asarray(moves.device.binding))):
+            raise ValueError('tendency requires the exact frozen vocabulary and move namespace')
+        payload.update(schema=payload['schema']+'.tendency.raw-commit.v1',tendency=np.asarray(tendency_tables.binding).tolist())
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
         jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
         field_catalog.device if field_catalog is not None else None,
         active_catalog.device if active_catalog is not None else None,damage_tables,
-        type_catalog.device if type_catalog is not None else None,sleep_tables)
+        type_catalog.device if type_catalog is not None else None,sleep_tables,tendency_tables)
 
 
-def initialize(beliefs, tables, *, species_binding=None):
+def initialize(beliefs, tables, *, species_binding=None, tendency_complete_prefix=False):
     """Start before evidence ingestion; importing an ambiguous old mask refuses."""
     if beliefs.species.ndim != 3 or beliefs.species.shape[1:] != (2, 6):
         raise ValueError("context requires B by two observers by six encounters")
@@ -124,6 +135,8 @@ def initialize(beliefs, tables, *, species_binding=None):
         raise ValueError('live-type context requires field tables')
     if tables.sleep is not None and tables.field is None:
         raise ValueError('sleep context requires field tables')
+    if tables.tendency is not None and tables.field is None:
+        raise ValueError('tendency context requires ordered field tables')
     batch = beliefs.species.shape[0]
     return ContextState(ability.initialize(batch, tables.abilities,species_binding=species_binding), move.initialize(batch, tables.moves),
         beliefs.hard, beliefs.has_evidence,
@@ -133,7 +146,10 @@ def initialize(beliefs, tables, *, species_binding=None):
         active_api.initialize(batch,tables.active,species_binding=species_binding) if tables.active is not None else None,
         damage_api.initialize(batch,tables.damage,species_binding=species_binding) if tables.damage is not None else None,
         type_api.initialize(batch,tables.types,species_binding=species_binding) if tables.types is not None else None,
-        sleep_api.initialize(batch,tables.sleep,species_binding=species_binding) if tables.sleep is not None else None)
+        sleep_api.initialize(batch,tables.sleep,species_binding=species_binding) if tables.sleep is not None else None,
+        tendency_api.initialize(batch,tables.tendency,species_binding=species_binding,
+            complete_prefix=tendency_complete_prefix) if tables.tendency is not None else None,
+        jnp.zeros(batch,bool) if tables.tendency is not None else None)
 
 
 def basis(context, beliefs):
@@ -173,6 +189,8 @@ def rebuild(context, base, source_tables, tables):
         ok &= jnp.all(context.damage.binding==tables.damage.binding,axis=-1)
     if context.sleep is not None:
         ok &= jnp.all(context.sleep.binding==tables.sleep.binding,axis=-1)
+    if context.tendency is not None:
+        ok &= jnp.all(context.tendency.binding==tables.tendency.binding,axis=-1)
     return base._replace(hard=hard,has_evidence=evidence),ok
 
 
@@ -188,7 +206,7 @@ def preconsume(context,mons,tables,row,valid,*,condition_kind):
 
 def consume(context, base, mons, source_tables, tables, row, valid, *,
             move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind,
-            active_kind, baton_kind, upkeep_kind, damage_kind, type_kind, sleep_kind, cure_kind):
+            active_kind, baton_kind, upkeep_kind, damage_kind, type_kind, sleep_kind, cure_kind, tendency_kind=None):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
@@ -281,4 +299,21 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             first=jnp.where(is_turn,row[:,2],jnp.where(is_sleep,data[:,2],0)),
             second=jnp.where(is_sleep,data[:,3],0),producer_binding=tables.sleep.binding,valid=valid&relevant)
         accepted &= jnp.where(relevant,sa,True)
-    return context._replace(abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep),base,accepted | ~valid
+    tendency=context.tendency;pending=context.tendency_raw_pending
+    if tendency is not None:
+        raw=k==raw_kind;control=k==tendency_kind
+        # Each raw transaction has exactly one final lexical tendency control.
+        # All semantic events require its opener, even if both markers were lost.
+        accepted &= jnp.where(raw,~pending,pending)
+        decoded,codec_ok=tendency_protocol.unpack(data,side)
+        tendency,tc=tendency_api.apply(tendency,tables.tendency,decoded,
+            producer_binding=tables.tendency.binding,valid=valid&control&pending&codec_ok)
+        current_species=jnp.take_along_axis(tendency.species,jnp.clip(tendency.active,0,5)[:,:,None],axis=2)[:,:,0]
+        public_species=jnp.take_along_axis(mons.species,jnp.clip(mons.active,0,5)[:,:,None],axis=2)[:,:,0]
+        current_species=jnp.where(tendency.active>=0,current_species,0)
+        public_species=jnp.where(mons.active>=0,public_species,0)
+        coherent=(tendency.turn==row[:,2])&jnp.all(current_species==public_species,axis=-1)
+        accepted &= ~control|(pending&codec_ok&tc&coherent)
+        pending=jnp.where(valid&raw,True,jnp.where(valid&control,False,pending))
+    return context._replace(abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
+        tendency=tendency,tendency_raw_pending=pending),base,accepted | ~valid

@@ -350,3 +350,40 @@ def project(state,tables,*,observer_side,opponent_species,own_active_species,exp
     smask=jnp.zeros(132,bool).at[jnp.array((*STAT_COLUMNS,reference.v4_numeric_index(reference.NUMERIC_PRESENT)))].set(True)
     return TendencyProjection(numeric,stats,jnp.where(on,tables.stats_category,0),nmask,smask,on,
         admitted)
+
+
+def project_from_request(state,tables,mons,*,observer_side,own_status,expected_vocabulary,enabled=True):
+    """Use an owner-bound private request for the source's first-active lookup.
+
+    Opponent token order comes from public encounters. The own active species
+    comes only from the request packet, including when the public pointer differs.
+    """
+    from .public_sleep import OwnStatusFacts
+    b=_shape(state,tables);_binding(expected_vocabulary)
+    if not isinstance(own_status,OwnStatusFacts):raise ValueError('owner-bound own request facts required')
+    def packet(value,tail,dtype):
+        if getattr(value,'dtype',None)!=jnp.dtype(dtype) or value.shape not in (tail,(b,)+tail):
+            raise ValueError('tendency own request shape/dtype mismatch')
+        return jnp.broadcast_to(value,(b,)+tail)
+    observer=jnp.broadcast_to(_int32(observer_side),(b,));seat=jnp.clip(observer,0,1);rows=jnp.arange(b)
+    owner=packet(own_status.owner_side,(),jnp.int32)
+    vb=packet(own_status.vocabulary_binding,(8,),jnp.uint32)
+    sb=packet(own_status.species_binding,(8,),jnp.uint32)
+    species=packet(own_status.species,(6,),jnp.int32)
+    present=packet(own_status.present,(6,),jnp.bool_)
+    active=packet(own_status.active,(6,),jnp.bool_)
+    if mons.species.shape!=(b,2,6) or mons.species.dtype!=jnp.int32 or mons.encounter.shape!=(b,2,6) or mons.encounter.dtype!=jnp.int32:
+        raise ValueError('tendency public token order requires B by two by six encounters')
+    if mons.species_binding.shape!=(b,8) or mons.species_binding.dtype!=jnp.uint32:
+        raise ValueError('tendency public species namespace shape/dtype')
+    ok=(owner==observer)&(observer>=0)&(observer<=1)&jnp.all(vb==tables.vocabulary_binding,axis=-1)
+    ok &= jnp.all(sb==tables.species_binding,axis=-1)&jnp.all(mons.species_binding==tables.species_binding,axis=-1)
+    ok &= jnp.all(jnp.where(present,(species>0)&(species<tables.species_count),(species==0)&~active),axis=-1)
+    duplicates=(species[:,:,None]==species[:,None,:])&present[:,:,None]&present[:,None,:]&~jnp.eye(6,dtype=bool)
+    ok &= ~jnp.any(duplicates,axis=(-1,-2))
+    first=jnp.argmax(active&present,axis=-1)
+    own=jnp.where(jnp.any(active&present,axis=-1),species[rows,first],0)
+    opponent=jnp.where(mons.encounter[rows,1-seat]>0,mons.species[rows,1-seat],0)
+    out=project(state,tables,observer_side=observer,opponent_species=opponent,own_active_species=own,
+        expected_vocabulary=expected_vocabulary,enabled=jnp.broadcast_to(_bool(enabled),(b,))&ok)
+    return out._replace(admitted=out.admitted&ok)

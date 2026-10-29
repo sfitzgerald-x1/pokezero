@@ -18,6 +18,24 @@ class TendencyProjection:
     full_line_consumers_complete: bool = False
 
 
+def valid_words(d,side):
+    """Host counterpart of unpack's lexical canonicality, without device work."""
+    if len(d)!=8:return False
+    k,species,action,target,turn,flags,weather,outcome=d
+    if not (t.OTHER<=k<=t.UPKEEP and -1<=side<=1 and species>=0 and action>=0
+            and -1<=target<=1 and turn>=0 and 0<=flags<32 and 0<=weather<=3 and outcome in (0,1,2,3,4,5,9)):return False
+    arrive=k in (t.SWITCH,t.DRAG,t.REPLACE)
+    if not (species>0 if arrive else species==0):return False
+    if not (action>0 if k in (t.MOVE,t.PREPARE) else action==0):return False
+    if not (turn>0 if k==t.TURN else turn==0):return False
+    if flags&3 and k!=t.MOVE or flags&3==3 or flags&4 and k!=t.CANT or flags&8 and not arrive or flags&16 and k!=t.WEATHER:return False
+    if weather and k!=t.WEATHER or outcome!=9 and k!=t.OUTCOME or target!=-1 and k not in (t.MOVE,t.OUTCOME):return False
+    if k==t.MOVE and (side<0 or target<0):return False
+    if k==t.OUTCOME and (side<0 or target!=side or outcome==9):return False
+    if (arrive or k in (t.MOVE,t.CANT,t.PREPARE,t.FAINT,t.PURSUIT)) and side<0:return False
+    return True
+
+
 def project_line(line,*,catalog):
     f=t.decode_line(line,catalog=catalog)
     flags=sum(int(np.asarray(getattr(f,name)))<<i for i,name in enumerate(('called','locked','recharge','baton','ability')))

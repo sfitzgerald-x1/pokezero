@@ -26,6 +26,7 @@ class PublicTendencyProtocolTests(unittest.TestCase):
         for line in lines:
             with self.subTest(line=line):
                 p=self.codec.project_line(line,catalog=self.catalog)
+                self.assertTrue(self.codec.valid_words(p.payload,p.side))
                 got,ok=self.jax.jit(self.codec.unpack)(self.j.array([p.payload],self.j.int32),self.j.array([p.side],self.j.int32))
                 self.assertTrue(bool(ok.all()));self.assertFalse(p.full_line_consumers_complete)
                 expected=self.t.decode_line(line,catalog=self.catalog)
@@ -37,6 +38,8 @@ class PublicTendencyProtocolTests(unittest.TestCase):
             payload=self.j.array([p.payload,p.payload],self.j.int32).at[0,col].set(value)
             facts,ok=self.jax.jit(self.codec.unpack)(payload,self.j.array([p.side,p.side],self.j.int32))
             self.assertEqual(ok.tolist(),[False,True],(col,value))
+            import numpy as np
+            self.assertFalse(self.codec.valid_words(np.asarray(payload[0]),p.side))
             state=self.t.initialize(2,self.tables,species_binding=self.tables.species_binding,complete_prefix=True)
             result,accepted=self.t.apply(state,self.tables,facts,producer_binding=self.tables.binding,valid=ok)
             self.assertEqual(accepted.tolist(),[True,True]);self.assertEqual(result.turn.tolist(),[0,1])
@@ -51,6 +54,7 @@ class PublicTendencyProtocolTests(unittest.TestCase):
             if col is not None:payload=payload.at[0,col].set(value)
             _,ok=self.jax.jit(self.codec.unpack)(payload,self.j.array([side],self.j.int32))
             self.assertEqual(ok.tolist(),[False],line)
+            self.assertFalse(self.codec.valid_words(tuple(payload[0].tolist()),side))
 
 
 if __name__=='__main__':unittest.main()
