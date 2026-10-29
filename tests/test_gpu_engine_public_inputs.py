@@ -161,6 +161,18 @@ class PublicInputsTests(unittest.TestCase):
         return self.i.PublicEvent(kind, sequence, 0, self.i.Phase.ACTION,
             target_side=side, target_slot=slot, payload=tuple(payload) + (0,) * (8 - len(payload)))
 
+    def test_unboost_metadata_requires_registered_consumer_and_typed_delta(self):
+        from dataclasses import replace
+        from gpu_engine import public_mon_state as p
+        cursor,beliefs=self.initial();before=p.initialize(1)
+        events=[self.mon_event(self.i.Kind.SWITCH,1,[1,10,1,80,1,100,100,p.NONE]),
+            self.mon_event(self.i.Kind.BOOST,2,[1,0,0,p.DELTA,1])]
+        for payload in ([1,0,0,p.SET,1],[1,0,0,p.DELTA,2],[1,0,0,p.DELTA,1,1]):
+            with self.assertRaises(ValueError):self.mon_event(self.i.Kind.BOOST,2,payload).words()
+        result=self.i.fold_chunk(cursor,beliefs,self.tables,self.chunks([events])[0],mon_state=before)
+        self.assertEqual(result.error.tolist(),[self.i.Error.PAYLOAD])
+        self.same_tree(result.cursor,cursor);self.same_tree(result.mon_state,before)
+
     def test_public_arrival_condition_boost_baton_and_set_evidence_share_ordered_fold(self):
         from gpu_engine import public_mon_state as p
         from pokezero import showdown as s

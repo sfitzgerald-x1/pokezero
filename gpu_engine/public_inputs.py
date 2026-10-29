@@ -21,6 +21,8 @@ import numpy as np
 from . import public_belief, public_mon_state, public_context, public_field, public_active, public_damage, public_types, public_sleep, public_toxic
 from . import public_tendency, public_tendency_protocol
 from . import public_refresh_stream
+from . import public_nonproc_protocol
+from . import public_mudshot_protocol
 
 
 SCHEMA = "pokezero.public_events.v1"
@@ -58,6 +60,8 @@ class Kind(IntEnum):
     TOXIC = 28
     TENDENCY = 29
     SWITCH_PRELUDE = 30
+    NONPROC = 31
+    MUDSHOT = 32
 
 
 class Phase(IntEnum):
@@ -107,6 +111,12 @@ class PublicEvent:
         if boundary or self.kind==Kind.CLEAR_ALL_BOOSTS:
             if any(x != -1 for x in row[4:8]) or any(self.payload):
                 raise ValueError("boundary event cannot carry a party identity or payload")
+        elif self.kind==Kind.MUDSHOT:
+            if any(x!=-1 for x in row[4:8]) or not public_mudshot_protocol.words_ok(self.payload):
+                raise ValueError('Mud Shot fact requires typed lexical words and payload identity')
+        elif self.kind==Kind.NONPROC:
+            if any(x!=-1 for x in row[4:8]):raise ValueError('non-proc fact uses payload identity only')
+            if not public_nonproc_protocol.words_ok(self.payload):raise ValueError('non-proc fact requires typed lexical words')
         elif self.kind==Kind.SWITCH_PRELUDE:
             d=self.payload
             if ((self.target_side,self.target_slot)!=(-1,-1) or self.actor_side not in (-1,0,1)
@@ -231,7 +241,7 @@ class PublicEvent:
         if self.kind == Kind.FAINT and not (self.payload[0] > 0 and not any(self.payload[1:])):
             raise ValueError("invalid public faint payload")
         if self.kind == Kind.BOOST:
-            if not (self.payload[0] > 0 and 0 <= self.payload[1] < 7 and 0 <= self.payload[3] <= public_mon_state.CLEAR_NEGATIVE and not any(self.payload[4:])):
+            if not (self.payload[0] > 0 and 0 <= self.payload[1] < 7 and 0 <= self.payload[3] <= public_mon_state.CLEAR_NEGATIVE and self.payload[4] in (0,1) and (not self.payload[4] or self.payload[3]==public_mon_state.DELTA) and not any(self.payload[5:])):
                 raise ValueError("invalid public boost payload")
         expected_phase = Phase.RESIDUAL if self.kind == Kind.UPKEEP else Phase.ACTION
         # Set evidence and blank separators can occur in either phase.
@@ -357,7 +367,7 @@ def protocol_boundary(line: str, *, sequence: int, turn: int, phase=Phase.ACTION
     raise ValueError(f"unsupported protocol input: {line.split('|')[1:2]}")
 
 
-def _fold_mon_event(mons, beliefs, tables, row, valid, *, damage_metadata=False):
+def _fold_mon_event(mons, beliefs, tables, row, valid, *, damage_metadata=False, boost_metadata=False):
     """Consume one typed mon event per battle, including candidate-slot binding."""
     p = public_mon_state
     batch = row.shape[0]
@@ -402,7 +412,9 @@ def _fold_mon_event(mons, beliefs, tables, row, valid, *, damage_metadata=False)
     mons, f = p.faint(mons, side=side, slot=slot, encounter=data[:, 0],
         valid=use & (kind == Kind.FAINT) & jnp.all(data[:, 1:] == 0, axis=1))
     mons, b = p.boost_update(mons, side=side, stat=data[:, 1], amount=data[:, 2], operation=data[:, 3],
-        valid=use & (kind == Kind.BOOST) & jnp.all(data[:, 4:] == 0, axis=1))
+        valid=use & (kind == Kind.BOOST) & jnp.all(data[:, 5:] == 0, axis=1) & (
+            (((data[:,4]==0)|(data[:,4]==1))&((data[:,4]==0)|(data[:,3]==p.DELTA)))
+            if boost_metadata else data[:,4]==0))
     mons, cp = p.copy_boosts(mons, source_side=row[:, 4], target_side=side,
         valid=use & (kind == Kind.COPY_BOOST) & jnp.all(data[:, 2:] == 0, axis=1))
     accepted = a | c | s | f | b | cp
@@ -628,6 +640,21 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         ts=jnp.where(context.tendency.active>=0,ts,0);ms=jnp.where(mon_state.active>=0,ms,0)
         source_ok &= pending|jnp.all(ts==ms,axis=-1)
     switch_enabled=context is not None and context.switches is not None and context_tables.switches is not None
+    nonproc_enabled=context is not None and context.nonproc is not None and context_tables.nonproc is not None
+    if context is not None:
+        pending=jnp.zeros(batch,bool) if context.refresh is None else cursor.needs_more&(
+            context.refresh.family==public_refresh_stream.ARRIVAL)&(context.refresh.nonproc_seen==0)
+        source_ok &= public_context.validate_nonproc(context,mon_state,context_tables,pending_arrival=pending)
+    if nonproc_enabled:
+        if context.refresh is None or context.sleep is None or context.items is None:
+            raise ValueError('non-proc context requires ordered item/sleep/source consumers')
+    mudshot_enabled=context is not None and context.mudshot is not None and context_tables.mudshot is not None
+    if context is not None:
+        if context.refresh is None:
+            source_ok &= context.mudshot is None and context_tables.mudshot is None
+        else:
+            cached,cache_ok=public_context.snapshot_api.read(context.refresh.controller.visible,beliefs,tables)
+            source_ok &= public_context.validate_mudshot(context,mon_state,tables,context_tables,cached.effective)&jnp.all(cache_ok,axis=(1,2))
     if context is not None and (context.switches is None)!=(context_tables.switches is None):
         source_ok &= False
     if switch_enabled:
@@ -653,6 +680,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                 lifecycle=context_tables.lifecycle is not None,clause=context_tables.sleep_clause is not None,mons=mon_state)
             coherent &= (context.refresh.family!=0)==context.tendency_raw_pending
             if not switch_enabled:coherent &= context.refresh.switch_seen==0
+            if not nonproc_enabled:coherent &= (context.refresh.nonproc_seen==0)&(context.refresh.nonproc_word==0)
+            if not mudshot_enabled:
+                coherent &= (context.refresh.mudshot_seen==0)&(context.refresh.mudshot_effect_seen==0)&(context.refresh.mudshot_word==0)
             if context.lifecycle is not None:
                 # A pure admission probe validates all lifecycle fields even on
                 # a NOOP. Its candidate state is discarded; no upkeep is run.
@@ -688,8 +718,12 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         toxic_kind = kind==Kind.TOXIC
         tendency_kind = kind==Kind.TENDENCY
         switch_kind=kind==Kind.SWITCH_PRELUDE
+        nonproc_kind=kind==Kind.NONPROC
+        mudshot_kind=kind==Kind.MUDSHOT
         kind_ok = (tendency_kind if tendency_enabled else False) | (sleep_kind if sleep_enabled else False) | (toxic_kind if toxic_enabled else False) | (type_kind if type_enabled else False) | (damage_kind if damage_enabled else False) | (active_kind if active_enabled else False) | (field_kind if field_enabled else False) | (item_kind if item_enabled else False) | boundary | fact | (mon_kind if mons is not None else False) | (context_kind if ctx is not None else False)
         kind_ok |= switch_kind if switch_enabled else False
+        kind_ok |= nonproc_kind if nonproc_enabled else False
+        kind_ok |= mudshot_kind if mudshot_enabled else False
         phase_ok = (phase == Phase.ACTION) | (phase == Phase.RESIDUAL)
         # Only TURN can advance turn or leave residual phase. Other events keep
         # the committed phase, except UPKEEP which enters the residual phase.
@@ -719,11 +753,19 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         switch_identity=(row[:,6]==-1)&(row[:,7]==-1)&(row[:,4]>=-1)&(row[:,4]<=1)
         switch_identity &= jnp.where(row[:,12]==1,(row[:,4]>=0)&(row[:,5]>=0)&(row[:,5]<6),row[:,5]==-1)
         header_ok=jnp.where(switch_kind,turn_ok&phase_ok&switch_identity,header_ok)
+        header_ok=jnp.where(nonproc_kind,turn_ok&phase_ok&jnp.all(row[:,4:8]==-1,axis=-1),header_ok)
+        header_ok=jnp.where(mudshot_kind,turn_ok&phase_ok&jnp.all(row[:,4:8]==-1,axis=-1),header_ok)
         predicate = row[:, 8]
         payload_ok = jnp.where(boundary|global_mon_kind, jnp.all(row[:, 8:] == 0, axis=1),
             jnp.where(fact, (predicate >= 0) & (predicate < tables.predicates.shape[0]) & jnp.all(row[:, 9:] == 0, axis=1), True))
         if ctx is not None:
             d = row[:, 8:]
+            if nonproc_enabled:
+                _,nonproc_payload=public_nonproc_protocol.unpack(d)
+                payload_ok &= ~nonproc_kind|nonproc_payload
+            if mudshot_enabled:
+                _,mudshot_payload=public_mudshot_protocol.unpack(d)
+                payload_ok &= ~mudshot_kind|mudshot_payload
             if switch_enabled:
                 switch_payload=((d[:,0]==0)|(d[:,0]==1))&((d[:,1]==0)|(d[:,1]==1))&(d[:,2]>=0)&(d[:,3]>=0)
                 switch_payload &= ((d[:,4]==0)|(d[:,4]==1))&(d[:,5]>=0)&jnp.all(d[:,6:]==0,axis=-1)
@@ -799,24 +841,24 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             apply=valid&(error==0)
         if mons is not None:
             old_mons = mons
-            mons, state, mon_error = _fold_mon_event(mons, state, tables, row, apply & regular_mon_kind,damage_metadata=damage_enabled)
+            mons, state, mon_error = _fold_mon_event(mons, state, tables, row, apply & regular_mon_kind,damage_metadata=damage_enabled,boost_metadata=mudshot_enabled)
             error = jnp.where(apply & regular_mon_kind & (mon_error != 0), mon_error, error)
             apply = valid & (error == 0)
             if ctx is not None:
-                _, basis, _ = _fold_mon_event(old_mons, basis, tables, row, apply & regular_mon_kind,damage_metadata=damage_enabled)
+                _, basis, _ = _fold_mon_event(old_mons, basis, tables, row, apply & regular_mon_kind,damage_metadata=damage_enabled,boost_metadata=mudshot_enabled)
             mons, clear_ok=public_mon_state.clear_all_boosts(mons,valid=apply&(kind==Kind.CLEAR_ALL_BOOSTS))
             mons, cure_ok=public_mon_state.cure_team(mons,side=row[:,6],valid=apply&(kind==Kind.CURE_TEAM))
             error=jnp.where(apply&global_mon_kind&~(clear_ok|cure_ok),Error.PAYLOAD,error)
             apply=valid&(error==0)
         if ctx is not None:
             ctx, basis, accepted = public_context.consume(ctx, basis, mons, tables, context_tables, row,
-                apply & (context_kind | switch_kind | mon_kind | item_kind | field_kind | active_kind | damage_kind | type_kind | sleep_kind | toxic_kind | tendency_kind | (boundary&tendency_enabled) | ((kind==Kind.TURN)&field_enabled) | ((kind==Kind.UPKEEP)&(truant_enabled|sleep_enabled|toxic_enabled)) | ((kind==Kind.ACTION_CHUNK_END)&toxic_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
+                apply & (context_kind | switch_kind | nonproc_kind | mudshot_kind | mon_kind | item_kind | field_kind | active_kind | damage_kind | type_kind | sleep_kind | toxic_kind | tendency_kind | (boundary&tendency_enabled) | ((kind==Kind.TURN)&field_enabled) | ((kind==Kind.UPKEEP)&(truant_enabled|sleep_enabled|toxic_enabled)) | ((kind==Kind.ACTION_CHUNK_END)&toxic_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
                 trace_kind=Kind.TRACE, transform_kind=Kind.TRANSFORM,
                 arrival=(kind >= Kind.SWITCH) & (kind <= Kind.BATON_PASS), faint=kind == Kind.FAINT,
                 raw_kind=Kind.RAW_BEGIN,item_kind=Kind.ITEM,field_kind=Kind.FIELD,turn_kind=Kind.TURN,
                 active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,upkeep_kind=Kind.UPKEEP,damage_kind=Kind.DAMAGE_CONTROL,type_kind=Kind.TYPES,sleep_kind=Kind.SLEEP,toxic_kind=Kind.TOXIC,action_end_kind=Kind.ACTION_CHUNK_END,cure_kind=Kind.CURE_TEAM,tendency_kind=Kind.TENDENCY,
                 boost_kind=Kind.BOOST,copy_boost_kind=Kind.COPY_BOOST,clear_all_kind=Kind.CLEAR_ALL_BOOSTS,
-                status_kind=Kind.STATUS,condition_kind=Kind.CONDITION,switch_kind=Kind.SWITCH_PRELUDE)
+                status_kind=Kind.STATUS,condition_kind=Kind.CONDITION,switch_kind=Kind.SWITCH_PRELUDE,nonproc_kind=Kind.NONPROC,mudshot_kind=Kind.MUDSHOT)
 
             error = jnp.where(apply & ~accepted, Error.PAYLOAD, error)
             apply = valid & (error == 0)

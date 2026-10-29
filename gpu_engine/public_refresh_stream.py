@@ -17,9 +17,10 @@ from . import public_tendency as tendency, public_mon_state as mon
 NOOP, ARRIVAL, MOVE, TURN, ABILITY, TRACE, TRANSFORM=range(1,8)
 STATUS,CANT,CURE,TEAM,FAINT,HP,CANT_OTHER=range(8,15)
 ITEM=15
-LAST_FAMILY=ITEM
-SCHEMA='pokezero.public_refresh_stream.v4'
-FAMILIES=('noop','arrival','move','turn','ability','trace','transform','status','sleep-cant','cure','team','faint','hp','other-cant','item')
+UPKEEP=16
+LAST_FAMILY=UPKEEP
+SCHEMA='pokezero.public_refresh_stream.v6'
+FAMILIES=('noop','arrival','move','turn','ability','trace','transform','status','sleep-cant','cure','team','faint','hp','other-cant','item','upkeep')
 
 
 class StreamState(NamedTuple):
@@ -37,6 +38,12 @@ class StreamState(NamedTuple):
     item_eat: jax.Array
     item_mode: jax.Array
     item_target: jax.Array
+    nonproc_seen: jax.Array
+    nonproc_word: jax.Array
+    mudshot_seen: jax.Array
+    mudshot_effect_seen: jax.Array
+    mudshot_word: jax.Array
+    mudshot_target: jax.Array
 
 
 def validate_source(source,*,pending_switch=False):
@@ -46,9 +53,12 @@ def validate_source(source,*,pending_switch=False):
             raise ValueError('ordered refresh requires the pending Intimidate source consumer for this source')
 
 
-def family(line,*,lifecycle=False):
+def family(line,*,lifecycle=False,nonproc=False,mudshot=False):
     """Lexical source family, never a CPU summary or callback count."""
     parts=line.split('|');kind=parts[1] if len(parts)>1 else ''
+    from . import public_annotations
+    if public_annotations.classify(line) is not None:return NOOP
+    if line=='|upkeep' and nonproc:return UPKEEP
     if lifecycle:
         if kind in ('-item','-enditem'):return ITEM
         if kind=='-status':return STATUS
@@ -62,7 +72,7 @@ def family(line,*,lifecycle=False):
             return CANT if parts[3]=='slp' else CANT_OTHER
     if kind in ('switch','drag','replace'):return ARRIVAL
     if kind=='move':
-        if len(parts)<4 or normalize_id(parts[3])=='mudshot':
+        if len(parts)<4 or (normalize_id(parts[3])=='mudshot' and not mudshot):
             raise ValueError('pending MudShot evidence requires its ordered refresh consumer')
         return MOVE
     if kind=='turn':return TURN
@@ -82,13 +92,15 @@ def initialize(beliefs,source_tables,tables):
         jnp.zeros(batch,jnp.int32),jnp.zeros((batch,6),jnp.int32),
         jnp.zeros((batch,4),jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros((batch,10),jnp.int32),jnp.zeros(batch,jnp.int32),
         jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,bool),
-        jnp.zeros(batch,jnp.int32),jnp.broadcast_to(jnp.array([-1,-1,0],jnp.int32),(batch,3)))
+        jnp.zeros(batch,jnp.int32),jnp.broadcast_to(jnp.array([-1,-1,0],jnp.int32),(batch,3)),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),
+        jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),
+        jnp.broadcast_to(jnp.array([-1,-1,0],jnp.int32),(batch,3)))
 
 
 def item_word_ok(word,*,framed,code=None):
     if not framed:return (word>=0)&(word<=2)
     kind=word&3;count=(word>>2)&3;eat=(word&16)!=0
-    ok=(word>=0)&(word<32)&(kind<=2)&(count<=2)&(((word&16)==0)|((count==1)&(kind==1)))
+    ok=(word>=0)&(word<2**18)&(kind<=2)&(count<=2)&(((word&16)==0)|((count==1)&(kind==1)))
     if code is not None:
         ok &= (kind==1)==(code==ITEM)
         ok &= (kind!=2)|((code==NOOP)&(count==0))
@@ -176,7 +188,7 @@ def common_matches(state,row):
 def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,clause=False,mons=None):
     batch=beliefs.species.shape[0]
     refresh._tables(tables,source_tables,move_tables);refresh._state_shape(state.controller,batch)
-    for value in (state.family,state.main_seen,state.proc_seen,state.common_seen,state.switch_seen,state.item_expected,state.item_seen,state.item_mode):
+    for value in (state.family,state.main_seen,state.proc_seen,state.common_seen,state.switch_seen,state.item_expected,state.item_seen,state.item_mode,state.nonproc_seen,state.nonproc_word,state.mudshot_seen,state.mudshot_effect_seen,state.mudshot_word):
         if value.shape!=(batch,) or value.dtype!=jnp.int32:
             raise ValueError('source refresh frame requires B int32 state words')
     if state.item_eat.shape!=(batch,) or state.item_eat.dtype!=jnp.bool_:
@@ -197,6 +209,24 @@ def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,cl
     ok &= (state.family>=0)&(state.family<=LAST_FAMILY)&(state.main_seen>=0)&(state.main_seen<=1)
     ok &= (state.proc_seen>=0)&(state.proc_seen<=1)&(state.common_seen>=0)&(state.common_seen<=1)
     ok &= (state.switch_seen>=0)&(state.switch_seen<=1)&((state.family!=0)|(state.switch_seen==0))
+    ok &= (state.nonproc_seen>=0)&(state.nonproc_seen<=1)&((state.family!=0)|(state.nonproc_seen==0))
+    ok &= (state.nonproc_word>=0)&(state.nonproc_word<256)&((state.family!=0)|(state.nonproc_word==0))
+    if state.mudshot_target.shape!=(batch,3) or state.mudshot_target.dtype!=jnp.int32:raise ValueError('Mud Shot target requires B by3 int32 words')
+    ok &= (state.mudshot_seen>=0)&(state.mudshot_seen<=1)&(state.mudshot_effect_seen>=0)&(state.mudshot_effect_seen<=1)
+    code=state.mudshot_word&7
+    ok &= (state.mudshot_word>=0)&(state.mudshot_word<32)&((code==0)|((code>=2)&(code<=5)))
+    ok &= ((state.mudshot_word&8)==0)|(code==5)
+    ok &= ((state.mudshot_word&16)==0)|(code==2)
+    ok &= (state.family!=0)|((state.mudshot_seen==0)&(state.mudshot_effect_seen==0)&(state.mudshot_word==0))
+    ok &= (state.mudshot_seen!=0)|jnp.all(state.mudshot_target==jnp.array([-1,-1,0],jnp.int32),axis=-1)
+    address=state.mudshot_target;none=jnp.all(address==jnp.array([-1,-1,0],jnp.int32),axis=-1)
+    target=(address[:,0]>=0)&(address[:,0]<2)&(address[:,1]>=0)&(address[:,1]<6)&(address[:,2]>0)
+    if mons is not None:
+        rows=jnp.arange(batch);seat=jnp.clip(address[:,0],0,1);slot=jnp.clip(address[:,1],0,5)
+        target &= mons.encounter[rows,seat,slot]==address[:,2]
+    targeted=(code==2)|(code==3)|(code==4)
+    queue=(state.mudshot_word&8)!=0
+    ok &= (state.mudshot_seen==0)|jnp.where(targeted,target,jnp.where(queue,target|none,none))
     ok &= jnp.where(state.family==0,jnp.all(state.raw_meta==0,axis=-1),metadata_ok(state.family,state.raw_meta,lifecycle=lifecycle,clause=clause))
     ok &= (state.common_seen!=0)|jnp.all(state.common_proof==0,axis=-1)
     ok &= (state.family!=0)|((state.proc_seen==0)&(state.common_seen==0))
@@ -221,12 +251,17 @@ def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,cl
 def open_frame(state,code,meta,valid,*,lifecycle=False,clause=False,item_word=0):
     ok=(state.family==0)&(state.main_seen==0)&(code>=NOOP)&(code<=LAST_FAMILY)
     ok &= (state.proc_seen==0)&(state.common_seen==0)&(state.switch_seen==0)&metadata_ok(code,meta,lifecycle=lifecycle,clause=clause)
+    ok &= state.nonproc_seen==0
+    ok &= state.nonproc_word==0
+    ok &= (state.mudshot_seen==0)&(state.mudshot_effect_seen==0)&(state.mudshot_word==0)
     count=(item_word>>2)&3;eat=(item_word&16)!=0
     ok &= item_word_ok(item_word,framed=True,code=code)&((code!=ITEM)|(count>0))
     ok &= (state.item_expected==0)&(state.item_seen==0)&~state.item_eat
     use=valid&ok
     return state._replace(family=jnp.where(use,code,state.family),raw_meta=jnp.where(use[:,None],meta,state.raw_meta),
-        item_expected=jnp.where(use,count,state.item_expected),item_eat=jnp.where(use,eat,state.item_eat),item_mode=jnp.where(use,item_word&3,state.item_mode)),ok|~valid
+        item_expected=jnp.where(use,count,state.item_expected),item_eat=jnp.where(use,eat,state.item_eat),item_mode=jnp.where(use,item_word&3,state.item_mode),
+        nonproc_word=jnp.where(use,(item_word>>5)&255,state.nonproc_word),
+        mudshot_word=jnp.where(use,item_word>>13,state.mudshot_word)),ok|~valid
 
 
 def main(state,code,proof,valid):
@@ -240,10 +275,14 @@ def checkpoint(state,beliefs,source_tables,mask):
     return state._replace(controller=state.controller._replace(visible=cache)),beliefs,jnp.all(ok,axis=(1,2))
 
 
-def close_frame(state,beliefs,source_tables,control,control_side,valid,*,pending_switch=False):
+def close_frame(state,beliefs,source_tables,control,control_side,valid,*,pending_switch=False,nonproc=False,mudshot=False):
     _,basis_ok=snapshot.read(state.controller.visible,beliefs,source_tables)
     ok=(state.family>=NOOP)&(state.family<=LAST_FAMILY)
     ok &= state.switch_seen==int(pending_switch)
+    ok &= state.nonproc_seen==int(nonproc)
+    ok &= state.mudshot_seen==int(mudshot)
+    expected_mudshot_effect=((state.mudshot_word&7)!=0)&mudshot
+    ok &= state.mudshot_effect_seen==expected_mudshot_effect.astype(jnp.int32)
     ok &= state.item_seen==state.item_expected
     ok &= state.main_seen==jnp.where((state.family==NOOP)|(state.family==CANT_OTHER)|(state.family==ITEM),0,1)
     control_kind=control[:,0]
@@ -256,8 +295,8 @@ def close_frame(state,beliefs,source_tables,control,control_side,valid,*,pending
     expected=jnp.where(state.family==ARRIVAL,arrival,jnp.where(state.family==MOVE,control_kind==tendency.MOVE,
         jnp.where(state.family==TURN,control_kind==tendency.TURN,
         jnp.where(state.family==NOOP,~callback_main&~unsupported,
-        jnp.where(state.family==FAINT,control_kind==tendency.FAINT,
-        jnp.where((state.family==CANT)|(state.family==CANT_OTHER),control_kind==tendency.CANT,control_kind==tendency.OTHER))))))
+        jnp.where(state.family==UPKEEP,control_kind==tendency.UPKEEP,jnp.where(state.family==FAINT,control_kind==tendency.FAINT,
+        jnp.where((state.family==CANT)|(state.family==CANT_OTHER),control_kind==tendency.CANT,control_kind==tendency.OTHER)))))))
     ok &= expected
     proof=jnp.stack((control_side,control_kind,jnp.where(arrival,control[:,1],control[:,2]),
         control[:,3],control[:,5],control[:,4]),axis=-1)
@@ -270,7 +309,11 @@ def close_frame(state,beliefs,source_tables,control,control_side,valid,*,pending
         common_proof=jnp.where(use[:,None],0,state.common_proof),switch_seen=jnp.where(use,0,state.switch_seen),
         item_expected=jnp.where(use,0,state.item_expected),item_seen=jnp.where(use,0,state.item_seen),
         item_eat=jnp.where(use,False,state.item_eat),item_mode=jnp.where(use,0,state.item_mode),
-        item_target=jnp.where(use[:,None],jnp.array([-1,-1,0],jnp.int32),state.item_target)),ok|~valid
+        item_target=jnp.where(use[:,None],jnp.array([-1,-1,0],jnp.int32),state.item_target),
+        nonproc_seen=jnp.where(use,0,state.nonproc_seen),nonproc_word=jnp.where(use,0,state.nonproc_word),
+        mudshot_seen=jnp.where(use,0,state.mudshot_seen),mudshot_effect_seen=jnp.where(use,0,state.mudshot_effect_seen),
+        mudshot_word=jnp.where(use,0,state.mudshot_word),
+        mudshot_target=jnp.where(use[:,None],jnp.array([-1,-1,0],jnp.int32),state.mudshot_target)),ok|~valid
 
 
 def commit(ok,before,after):
