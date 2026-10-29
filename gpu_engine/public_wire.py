@@ -107,6 +107,11 @@ MON_KINDS = frozenset(('switch', 'drag', 'replace', '-damage', '-heal', '-sethp'
     '-clearpositiveboost', '-clearnegativeboost', '-boost', '-unboost', '-setboost',
     '-clearallboost', '-cureteam', 'turn', 'upkeep'))
 CONTEXT_KINDS = frozenset(('move', '-transform', '-ability', 'ability'))
+# These named protocol families may carry a proc as their only implemented
+# consumer. An arbitrary raw kind cannot become supported by adding a tag.
+PROC_ONLY_KINDS = frozenset(('-activate','-immune','-fail','-block','-miss','-crit','-supereffective','-resisted'))
+ACTIVE_MAIN_KINDS = frozenset(('move','cant','-damage','turn','-anim','-mustrecharge','-singleturn',
+    '-fail','-item','-enditem','-ability','-activate','-end','-start','-singlemove','-prepare'))
 
 
 @dataclass(frozen=True)
@@ -215,6 +220,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         raise ValueError("item context cannot change or be dropped across continuation")
     parts = line.split('|')
     kind = parts[1] if len(parts) > 1 else ''
+    main_handled=kind in MON_KINDS or kind in CONTEXT_KINDS or line=='|'
     if kind == 'request':
         raise ValueError('private requests cannot enter the public event producer')
     candidate = replace(state,species_binding=binding,move_binding=move_binding,
@@ -229,6 +235,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
     events = []
     item_projection=public_items.project_line(line,items=items) if items is not None else None
     if item_projection is not None:
+        main_handled |= item_projection.item_event or bool(item_projection.trick_idents)
         kwargs={}
         family=1 if item_projection.item_event else 0
         payload=(family,0,0,0,0,0,0,0)
@@ -244,7 +251,12 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
     # consumer. A proc on a move can reveal Pressure before that move's PP
     # charge; a proc on Transform can establish the donor's current ability.
     # Direct/Trace declarations have their own authoritative attribution path.
-    confirmed = _confirmed_ability_from_event(_public_event_from_line(line))
+    public_event = _public_event_from_line(line)
+    confirmed = _confirmed_ability_from_event(public_event)
+    # Explicit ability declarations are a supported main consumer of -start.
+    # A volatile with an incidental [from] ability tag is not that declaration.
+    main_handled |= (kind == '-start' and bool(public_event.primary)
+        and public_event.primary.strip().lower().startswith('ability:') and all(confirmed))
     if kind not in ('-ability', 'ability') and all(confirmed):
         ident, name = confirmed
         holder = addresses.resolve(ident)
@@ -261,14 +273,18 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
                 payload=(holder.encounter,item_id,operation,0,0,0,0,0))
             event.words();events.append(event)
     if field_catalog is not None:
-        for operation,field_side,value,upkeep,ability_source in public_field.project_line(line,catalog=field_catalog).facts:
+        field_projection=public_field.project_line(line,catalog=field_catalog)
+        main_handled |= bool(field_projection.facts)
+        for operation,field_side,value,upkeep,ability_source in field_projection.facts:
             if operation==public_field.TURN:
                 continue  # The same TURN event advances both cursor and field clock.
             event=PublicEvent(Kind.FIELD,state.next_sequence+len(events),state.turn,state.phase,
                 target_side=field_side,payload=(operation,value,int(upkeep),int(ability_source),0,0,0,0))
             event.words();events.append(event)
     if active_catalog is not None:
-        for operation,active_side,value in public_active.project_line(line,catalog=active_catalog).facts:
+        active_projection=public_active.project_line(line,catalog=active_catalog)
+        main_handled |= bool(active_projection.facts) and kind in ACTIVE_MAIN_KINDS
+        for operation,active_side,value in active_projection.facts:
             if operation==public_active.TURN:
                 continue  # The one TURN event advances cursor, field and active clocks together.
             holder=addresses.resolve(parts[2])
@@ -278,7 +294,9 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
                 target_side=holder.side,target_slot=holder.slot,payload=(holder.encounter,operation,value,0,0,0,0,0))
             event.words();events.append(event)
     if type_catalog is not None:
-        for operation,type_side,first,second in public_types.project_line(line,catalog=type_catalog).facts:
+        type_projection=public_types.project_line(line,catalog=type_catalog)
+        main_handled |= bool(type_projection.facts)
+        for operation,type_side,first,second in type_projection.facts:
             # The champion parser attributes these facts by public side, even
             # for a positionless/stale nickname. Preserve that source rule.
             ident=candidate.active_idents().get(type_side)
@@ -288,7 +306,9 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
                 target_side=holder.side,target_slot=holder.slot,payload=(holder.encounter,operation,first,second,0,0,0,0))
             event.words();events.append(event)
     if damage_tables is not None:
-        for operation,damage_side in public_damage.control_facts(line):
+        damage_facts=public_damage.control_facts(line)
+        main_handled |= bool(damage_facts) and kind in ('cant','-damage','-enditem')
+        for operation,damage_side in damage_facts:
             event=PublicEvent(Kind.DAMAGE_CONTROL,state.next_sequence+len(events),state.turn,state.phase,
                 target_side=damage_side,payload=(operation,0,0,0,0,0,0,0))
             event.words();events.append(event)
@@ -304,13 +324,15 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         events.extend(projected.events)
     if sleep_tables is not None:
         for operation,first,second in public_sleep_protocol.facts(line):
+            main_handled=True
             holder=(addresses.known_idents.get(parts[2]) if operation==public_sleep.CURE and first==1
                 else addresses.resolve(parts[2]))
             if not isinstance(holder,PublicAddress):raise ValueError('sleep fact requires its registered public encounter')
             event=PublicEvent(Kind.SLEEP,state.next_sequence+len(events),state.turn,state.phase,
                 target_side=holder.side,target_slot=holder.slot,payload=(holder.encounter,operation,first,second,0,0,0,0))
             event.words();events.append(event)
-    implemented_events=len(events)
+    proc_only=kind in PROC_ONLY_KINDS and (all(confirmed) or item_projection is not None and bool(item_projection.facts))
+    main_handled |= proc_only
     if toxic_tables is not None:
         # Poison's raw state must see each accepted line exactly once. Common
         # lifecycle/clock events carry it directly; all other implemented lines
@@ -319,13 +341,13 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         identity_ids={ident:address.encounter for ident,address in addresses.known_idents.items()}
         projection=public_toxic_protocol.project_line(line,identity_ids=identity_ids)
         if not projection.shared_event:
-            known=(implemented_events>1 or item_projection is None and implemented_events>0
-                or item_projection is not None and bool(item_projection.trick_idents))
-            if not known and not projection.timestamp:
+            if not main_handled and not projection.timestamp:
                 raise ValueError('Toxic no-op cannot drop another raw line consumer')
             event=PublicEvent(Kind.TOXIC,state.next_sequence+len(events),state.turn,state.phase,
                 target_side=projection.side,payload=projection.payload)
             event.words();events.append(event)
+    if not main_handled and not (toxic_tables is not None and projection.timestamp):
+        raise ValueError('raw main kind has no implemented consumer; incidental proc tags are insufficient')
     if not events or item_projection is not None and len(events)==1 and not item_projection.trick_idents:
         raise ValueError("raw line has no implemented consumer; it must not be silently dropped")
     pending = {f'p{s+1}' for s in (0, 1) if state.pending_baton[s]}

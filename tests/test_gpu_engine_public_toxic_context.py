@@ -118,8 +118,25 @@ class PublicToxicContextTests(unittest.TestCase):
         for changes in (dict(toxic_tables=None),dict(toxic_tables=None,context_tables=legacy),dict(context_tables=legacy)):
             kwargs=dict(self.kwargs,context_tables=self.contexts[False]);kwargs.update(changes)
             with self.assertRaises(ValueError):self.wire.project_line(wire,'|',**kwargs)
-        for line in ('|unimplemented|p1a: Snorlax','|upkeep\r','|turn','|turn|03'):
+        for line in ('|unimplemented|p1a: Snorlax',
+                     '|unimplemented|p1a: Snorlax|x|[from] ability: Pressure|[of] p2a: Absol',
+                     '|unimplemented|p1a: Snorlax|x|[from] item: Leftovers',
+                     '|-start|p1a: Snorlax|unknown volatile|[from] ability: Immunity',
+                     '|upkeep\r','|turn','|turn|03'):
             with self.assertRaises(ValueError):self.project([line],state=wire)
+        # Recognized proc-only families remain meaningful without inventing
+        # support for an unknown main protocol kind.
+        result,_=self.run_lines([*self.prefix,'|-immune|p1a: Snorlax|[from] ability: Immunity'])
+        self.assertEqual(result.error.tolist(),[0])
+        declaration='|-start|p1a: Snorlax|ability: Immunity'
+        result,_=self.run_lines([*self.prefix,declaration])
+        self.assertEqual(int(result.context.abilities.original[0,0,0]),self.abilities.ability_id('Immunity'))
+        # The same named declaration remains accepted without Toxic enabled.
+        _,projections=self.project([*self.prefix,declaration],toxic_tables=None,context_tables=legacy)
+        self.assertIn(self.i.Kind.ABILITY,[e.kind for e in projections[-1].events])
+        with self.assertRaises(ValueError):
+            self.project([*self.prefix,'|-start|p1a: Snorlax|unknown volatile|[from] ability: Immunity'],
+                toxic_tables=None,context_tables=legacy)
 
 
 if __name__=='__main__':unittest.main()
