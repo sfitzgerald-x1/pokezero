@@ -14,7 +14,7 @@ from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_publ
     _public_event_from_line)
 from pokezero.belief import _confirmed_ability_from_event
 
-from . import public_mon_protocol, public_context_protocol, public_items, public_field, public_active, public_damage, public_types, public_toxic_protocol
+from . import public_mon_protocol, public_context_protocol, public_items, public_field, public_active, public_damage, public_types, public_sleep, public_sleep_protocol, public_toxic_protocol
 from .public_context_protocol import PublicAddress, PublicAddresses, ContextProjection
 from .public_inputs import Kind, Phase, PublicEvent
 
@@ -43,6 +43,7 @@ class WireState:
     active_binding: tuple[int, ...] | None = None
     damage_binding: tuple[int, ...] | None = None
     type_binding: tuple[int, ...] | None = None
+    sleep_binding: tuple[int, ...] | None = None
     toxic_binding: tuple[int, ...] | None = None
 
     def addresses(self):
@@ -97,8 +98,6 @@ def _bench_alias(addresses, parts):
     if len(matches) != 1:
         raise ValueError("bench cure requires one publicly encountered species, not a private roster")
     target = next(iter(matches))
-    if addresses.active.get(target.side) == target:
-        raise ValueError("bench cure cannot alias the active encounter")
     return PublicAddresses(addresses.active, MappingProxyType(dict(addresses.known_idents, **{ident: target})),
                            addresses.public_species)
 
@@ -121,10 +120,11 @@ class WireProjection(ContextProjection):
     active_binding: tuple[int, ...] | None = None
     damage_binding: tuple[int, ...] | None = None
     type_binding: tuple[int, ...] | None = None
+    sleep_binding: tuple[int, ...] | None = None
     toxic_binding: tuple[int, ...] | None = None
 
 
-def project_line(state, line, *, species_catalog, source, moves, abilities, items=None, context_tables=None, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, toxic_tables=None):
+def project_line(state, line, *, species_catalog, source, moves, abilities, items=None, context_tables=None, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None):
     """Return a new registry and ordered named-field events, or refuse atomically.
 
     Callers commit this candidate state only with successful device fold of all
@@ -143,7 +143,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             or not np.array_equal(np.asarray(moves.device.source_binding),np.asarray(source.device.binding))
             or not np.array_equal(np.asarray(species_catalog.device.source_binding),np.asarray(source.device.binding))):
         raise ValueError('public wire requires the frozen species/ability/move namespaces')
-    item_binding=context_binding=field_binding=active_binding=damage_binding=type_binding=toxic_binding=None
+    item_binding=context_binding=field_binding=active_binding=damage_binding=type_binding=sleep_binding=toxic_binding=None
     if items is not None:
         if context_tables is None or context_tables.items is None or context_tables.binding is None:
             raise ValueError("item wire requires a frozen composed context")
@@ -193,6 +193,15 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         type_binding=tuple(int(x) for x in np.asarray(type_catalog.device.binding))
     elif context_tables is not None and context_tables.types is not None:
         raise ValueError('live-type context cannot drop its producer')
+    if sleep_tables is not None:
+        if (context_tables is None or context_tables.sleep is None or field_catalog is None
+                or not np.array_equal(np.asarray(context_tables.sleep.binding),np.asarray(sleep_tables.binding))
+                or not np.array_equal(np.asarray(sleep_tables.vocabulary_binding),np.asarray(species_catalog.device.vocabulary_binding))
+                or not np.array_equal(np.asarray(sleep_tables.species_binding),np.asarray(species_catalog.device.binding))):
+            raise ValueError('sleep wire requires matching sleep/context/species/vocabulary namespaces')
+        sleep_binding=tuple(int(x) for x in np.asarray(sleep_tables.binding))
+    elif context_tables is not None and context_tables.sleep is not None:
+        raise ValueError('sleep context cannot drop its raw producer')
     if toxic_tables is not None:
         if (context_tables is None or context_tables.toxic is None or field_catalog is None
                 or not np.array_equal(np.asarray(context_tables.toxic.binding),np.asarray(toxic_tables.binding))
@@ -202,14 +211,14 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         toxic_binding=tuple(int(x) for x in np.asarray(toxic_tables.binding))
     elif context_tables is not None and context_tables.toxic is not None:
         raise ValueError('Toxic context cannot drop its raw producer')
-    if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding or state.damage_binding!=damage_binding or state.type_binding!=type_binding or state.toxic_binding!=toxic_binding):
+    if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding or state.damage_binding!=damage_binding or state.type_binding!=type_binding or state.sleep_binding!=sleep_binding or state.toxic_binding!=toxic_binding):
         raise ValueError("item context cannot change or be dropped across continuation")
     parts = line.split('|')
     kind = parts[1] if len(parts) > 1 else ''
     if kind == 'request':
         raise ValueError('private requests cannot enter the public event producer')
     candidate = replace(state,species_binding=binding,move_binding=move_binding,
-        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding,toxic_binding=toxic_binding)
+        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding,sleep_binding=sleep_binding,toxic_binding=toxic_binding)
     side = None
     if kind in ('switch', 'drag', 'replace'):
         candidate, side = _arrive(candidate, line, parts)
@@ -293,6 +302,14 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         projected = public_context_protocol.project_line(line, sequence=state.next_sequence + len(events),
             turn=state.turn, phase=state.phase, addresses=addresses, moves=moves, abilities=abilities)
         events.extend(projected.events)
+    if sleep_tables is not None:
+        for operation,first,second in public_sleep_protocol.facts(line):
+            holder=(addresses.known_idents.get(parts[2]) if operation==public_sleep.CURE and first==1
+                else addresses.resolve(parts[2]))
+            if not isinstance(holder,PublicAddress):raise ValueError('sleep fact requires its registered public encounter')
+            event=PublicEvent(Kind.SLEEP,state.next_sequence+len(events),state.turn,state.phase,
+                target_side=holder.side,target_slot=holder.slot,payload=(holder.encounter,operation,first,second,0,0,0,0))
+            event.words();events.append(event)
     implemented_events=len(events)
     if toxic_tables is not None:
         # Poison's raw state must see each accepted line exactly once. Common
@@ -326,7 +343,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         turn=last.turn, phase=last.phase, pending_baton=tuple(f'p{s+1}' in pending for s in (0, 1)))
     return candidate, WireProjection(line, tuple(events), species_binding=binding,
         ability_binding=tuple(int(x) for x in np.asarray(abilities.device.binding)),move_binding=move_binding,
-        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding,toxic_binding=toxic_binding)
+        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding,sleep_binding=sleep_binding,toxic_binding=toxic_binding)
 
 
 def project_lines(state, lines, **tables):
