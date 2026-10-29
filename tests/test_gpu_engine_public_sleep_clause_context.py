@@ -113,7 +113,7 @@ class SleepClauseContextTests(unittest.TestCase):
         np.testing.assert_array_equal(result.cursor.sequence,state.cursor.sequence)
         # State/table symmetry also applies to a legacy context with no raw
         # refresh controller, so an empty chunk cannot bypass this admission.
-        legacy=replace(self.catalog,context=self.catalog.context._replace(sleep_clause=None,refresh=None,lifecycle=None,nonproc=None,nonproc_binding=None,mudshot=None,mudshot_move_id=None))
+        legacy=replace(self.catalog,context=self.catalog.context._replace(sleep_clause=None,refresh=None,lifecycle=None,nonproc=None,mudshot=None,mudshot_move_id=None))
         orphan=state._replace(context=state.context._replace(refresh=None,lifecycle=None,nonproc=None,nonproc_binding=None,mudshot=None))
         with self.assertRaisesRegex(ValueError,'pending switch evidence requires ordered source and sleep context'):
             public_inputs.fold_chunk(orphan.cursor,orphan.beliefs,self.catalog.source.device,empty,
