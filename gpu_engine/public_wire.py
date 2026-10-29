@@ -15,7 +15,7 @@ from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_publ
 from pokezero.belief import _confirmed_ability_from_event
 
 from . import public_mon_protocol, public_context_protocol, public_items, public_field, public_active, public_damage, public_types, public_sleep, public_sleep_protocol, public_toxic_protocol
-from . import public_tendency, public_tendency_protocol
+from . import public_tendency, public_tendency_protocol, public_refresh_stream
 from .public_context_protocol import PublicAddress, PublicAddresses, ContextProjection
 from .public_inputs import Kind, Phase, PublicEvent
 
@@ -233,6 +233,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         raise ValueError('tendency context cannot drop its raw producer')
     if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding or state.damage_binding!=damage_binding or state.type_binding!=type_binding or state.sleep_binding!=sleep_binding or state.toxic_binding!=toxic_binding or state.tendency_binding!=tendency_binding):
         raise ValueError("item context cannot change or be dropped across continuation")
+    refresh_family=public_refresh_stream.family(line) if context_tables is not None and context_tables.refresh is not None else 0
     parts = line.split('|')
     kind = parts[1] if len(parts) > 1 else ''
     main_handled=kind in MON_KINDS or kind in CONTEXT_KINDS or line=='|'
@@ -249,11 +250,13 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
     addresses = _bench_alias(candidate.addresses(), parts)
     events = []
     item_projection=public_items.project_line(line,items=items) if items is not None else None
+    if refresh_family and item_projection is not None and (item_projection.facts or item_projection.trick_idents):
+        raise ValueError('item summary callbacks require their intermediate assignment/removal producer')
     if item_projection is not None:
         main_handled |= item_projection.item_event or bool(item_projection.trick_idents)
         kwargs={}
         family=1 if item_projection.item_event else 0
-        payload=(family,0,0,0,0,0,0,0)
+        payload=(family,0,0,refresh_family,0,0,0,0)
         if item_projection.trick_idents:
             actor,target=(addresses.resolve(x) for x in item_projection.trick_idents)
             if addresses.active.get(actor.side)!=actor or addresses.active.get(target.side)!=target:

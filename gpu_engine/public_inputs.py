@@ -107,13 +107,13 @@ class PublicEvent:
                 raise ValueError("boundary event cannot carry a party identity or payload")
         elif self.kind==Kind.RAW_BEGIN:
             d=self.payload
-            if d[0] not in (0,1,2) or any(d[3:]):
+            if d[0] not in (0,1,2) or d[3] not in range(8) or any(d[4:]):
                 raise ValueError("raw boundary requires a named item family")
             if d[0]==2:
                 if not (self.actor_side in (0,1) and 0<=self.actor_slot<6 and self.target_side in (0,1)
                         and 0<=self.target_slot<6 and self.actor_side!=self.target_side and d[1]>0 and d[2]>0):
                     raise ValueError("Trick boundary requires two public encounters")
-            elif any(x!=-1 for x in row[4:8]) or any(d[1:]):
+            elif any(x!=-1 for x in row[4:8]) or any(d[1:3]):
                 raise ValueError("ordinary raw boundary carries no identity")
         elif self.kind==Kind.FIELD:
             d=self.payload
@@ -434,6 +434,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         raise ValueError("public context requires its tables and mon ledger together")
     if context is not None and context.base_has_evidence.shape != (batch, 2, 6):
         raise ValueError("public context basis must have B×2×6 encounters")
+    if context is not None and (context.refresh is None)!=(context_tables.refresh is None):
+        raise ValueError('ordered summary state and tables must be supplied together')
     error = jnp.where((chunk.stream_id == cursor.stream_id) & (cursor.stream_id > 0),
                       Error.NONE, Error.STREAM).astype(jnp.int32)
     source_ok = jnp.all(chunk.source_binding == tables.binding) & jnp.all(
@@ -625,6 +627,11 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         consistent = jnp.all(rebuilt.hard == beliefs.hard, axis=(1, 2, 3)) & jnp.all(
             rebuilt.has_evidence == beliefs.has_evidence, axis=(1, 2))
         error = jnp.where((error == 0) & ~(bound & consistent), Error.SOURCE, error)
+        if context.refresh is not None:
+            from . import public_refresh_stream
+            coherent=public_refresh_stream.validate(context.refresh,beliefs,tables,context_tables.refresh,context_tables.moves)
+            coherent &= (context.refresh.family!=0)==context.tendency_raw_pending
+            error=jnp.where((error==0)&~coherent,Error.SOURCE,error)
 
     def step(carry, event_and_valid):
         current, state, error, mons, ctx, basis = carry
@@ -686,8 +693,10 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             replaceable=ability_fact | (predicate==0)
             if item_enabled:
                 replaceable |= context_tables.item_predicate[jnp.clip(predicate,0,tables.predicates.shape[0]-1)]
-                raw_payload=(d[:,0]>=0)&(d[:,0]<=2)&jnp.all(d[:,3:]==0,axis=1)
-                raw_payload &= jnp.where(d[:,0]==2,(d[:,1]>0)&(d[:,2]>0),jnp.all(d[:,1:]==0,axis=1))
+                summary_enabled=context_tables.refresh is not None
+                raw_payload=(d[:,0]>=0)&(d[:,0]<=2)&jnp.all(d[:,4:]==0,axis=1)
+                raw_payload &= jnp.where(summary_enabled,(d[:,3]>=1)&(d[:,3]<=7),d[:,3]==0)
+                raw_payload &= jnp.where(d[:,0]==2,(d[:,1]>0)&(d[:,2]>0),jnp.all(d[:,1:3]==0,axis=1))
                 item_payload=(d[:,0]>0)&(d[:,1]>0)&(d[:,2]>=0)&(d[:,2]<=6)&jnp.all(d[:,3:]==0,axis=1)
                 payload_ok &= jnp.where(kind==Kind.RAW_BEGIN,raw_payload,jnp.where(kind==Kind.ITEM,item_payload,True))
             if field_enabled:
@@ -724,6 +733,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                 _,tendency_payload=public_tendency_protocol.unpack(d,row[:,6])
                 payload_ok &= ~tendency_kind|tendency_payload
             payload_ok &= ~((kind==Kind.SET_REVEAL)&replaceable)
+            if context_tables.refresh is not None:
+                payload_ok &= ~fact
             move_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & (d[:, 2] >= 0) & (d[:, 2] <= 4) & ((d[:, 3] == 0) | (d[:, 3] == 1)) & jnp.all(d[:, 4:] == 0, axis=1)
             ability_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & ((d[:, 2] == 0) | (d[:, 2] == 1)) & jnp.all(d[:, 3:] == 0, axis=1)
             trace_payload = (d[:, 0] > 0) & (d[:, 1] > 0) & jnp.where(absent_target, d[:, 2] == 0, d[:, 2] > 0) & ((d[:, 3] == 0) | (d[:, 3] == 1)) & jnp.all(d[:, 4:] == 0, axis=1)
@@ -756,7 +767,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                 trace_kind=Kind.TRACE, transform_kind=Kind.TRANSFORM,
                 arrival=(kind >= Kind.SWITCH) & (kind <= Kind.BATON_PASS), faint=kind == Kind.FAINT,
                 raw_kind=Kind.RAW_BEGIN,item_kind=Kind.ITEM,field_kind=Kind.FIELD,turn_kind=Kind.TURN,
-                active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,upkeep_kind=Kind.UPKEEP,damage_kind=Kind.DAMAGE_CONTROL,type_kind=Kind.TYPES,sleep_kind=Kind.SLEEP,toxic_kind=Kind.TOXIC,action_end_kind=Kind.ACTION_CHUNK_END,cure_kind=Kind.CURE_TEAM,tendency_kind=Kind.TENDENCY)
+                active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,upkeep_kind=Kind.UPKEEP,damage_kind=Kind.DAMAGE_CONTROL,type_kind=Kind.TYPES,sleep_kind=Kind.SLEEP,toxic_kind=Kind.TOXIC,action_end_kind=Kind.ACTION_CHUNK_END,cure_kind=Kind.CURE_TEAM,tendency_kind=Kind.TENDENCY,
+                boost_kind=Kind.BOOST,copy_boost_kind=Kind.COPY_BOOST,clear_all_kind=Kind.CLEAR_ALL_BOOSTS)
 
             error = jnp.where(apply & ~accepted, Error.PAYLOAD, error)
             apply = valid & (error == 0)
@@ -796,7 +808,17 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
     def commit(before, after):
         shape = (batch,) + (1,) * (before.ndim - 1)
         return jnp.where((error == 0).reshape(shape), after, before)
+    committed_context=None
+    if context is not None:
+        # VisibleSummary includes global namespace words, unlike batched context
+        # leaves. Do not broadcast those words into a counterfeit B by8 binding.
+        if context.refresh is not None:
+            from . import public_refresh_stream
+            refreshed=public_refresh_stream.commit(error==0,context.refresh,ctx.refresh)
+            committed_context=jax.tree.map(commit,context._replace(refresh=None),ctx._replace(refresh=None))._replace(refresh=refreshed)
+        else:
+            committed_context=jax.tree.map(commit,context,ctx)
     return FoldResult(jax.tree.map(commit, cursor, candidate),
                       jax.tree.map(commit, beliefs, state), error,
                       jax.tree.map(commit, mon_state, mons) if mon_state is not None else None,
-                      jax.tree.map(commit, context, ctx) if context is not None else None)
+                      committed_context)
