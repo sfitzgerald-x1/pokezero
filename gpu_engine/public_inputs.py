@@ -649,7 +649,6 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             rebuilt.has_evidence == beliefs.has_evidence, axis=(1, 2))
         error = jnp.where((error == 0) & ~(bound & consistent), Error.SOURCE, error)
         if context.refresh is not None:
-            from . import public_refresh_stream
             coherent=public_refresh_stream.validate(context.refresh,beliefs,tables,context_tables.refresh,context_tables.moves,
                 lifecycle=context_tables.lifecycle is not None,clause=context_tables.sleep_clause is not None,mons=mon_state)
             coherent &= (context.refresh.family!=0)==context.tendency_raw_pending
@@ -862,7 +861,6 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         # VisibleSummary includes global namespace words, unlike batched context
         # leaves. Do not broadcast those words into a counterfeit B by8 binding.
         if context.refresh is not None:
-            from . import public_refresh_stream
             refreshed=public_refresh_stream.commit(error==0,context.refresh,ctx.refresh)
             committed_context=jax.tree.map(commit,context._replace(refresh=None),ctx._replace(refresh=None))._replace(refresh=refreshed)
         else:
