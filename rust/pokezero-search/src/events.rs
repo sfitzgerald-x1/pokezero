@@ -1194,6 +1194,27 @@ pub fn render_branch_events(
     let mut out = RenderedEvents::default();
     out.lines.push("|".to_string());
 
+    // Validate producer provenance before segmentation. A no-op marker can
+    // otherwise be assigned to a different segment/residual and disappear
+    // before the per-action guard below sees it. One Gen3 action can call
+    // Sleep Talk at most once; both seats calling it still permits one each.
+    let mut sleep_talk_markers = [false; 2];
+    for instruction in instructions {
+        if let Instruction::SleepTalkCalled(marker) = instruction {
+            let (slot, root_move, pokemon) = match marker.side_ref {
+                SideReference::SideOne => (0, s1_move, state.side_one.get_active_immutable()),
+                SideReference::SideTwo => (1, s2_move, state.side_two.get_active_immutable()),
+            };
+            let correct_caller = matches!(root_move, MoveChoice::Move(index)
+                if pokemon.moves[index].id == Choices::SLEEPTALK);
+            if sleep_talk_markers[slot] || !correct_caller {
+                out.mark_attribution_unsafe("sleeptalk_marker_missing_or_conflicting");
+                return out;
+            }
+            sleep_talk_markers[slot] = true;
+        }
+    }
+
     // Replacement / pivot plies ((switch, none) shapes): no end-of-turn phase.
     let eot_triggered = end_of_turn_triggered(state, s1_move, s2_move);
     // For (switch, none) shapes: was the switching side's active already
