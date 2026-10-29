@@ -21,11 +21,11 @@ from . import private_actions,private_team,public_inputs,public_mon_state,public
 from . import public_belief,public_moves,public_abilities,public_items,public_team,public_field
 from . import public_active,public_damage,public_types,public_sleep,public_toxic,public_tendency
 from . import public_belief_refresh,public_belief_lifecycle,public_belief_features,public_belief_snapshot
-from . import public_refresh_stream
+from . import public_refresh_stream, public_sleep_clause
 from . import public_expected_stats,public_hazard_exposure,v4_assembly
 
 SCHEMA='pokezero.protocol_v4_encoder.v1'
-PENDING_NUMERIC_COLUMNS=(26,28,29,105,106,111,112)
+PENDING_NUMERIC_COLUMNS=(26,28,29)
 
 
 @dataclass(frozen=True)
@@ -70,6 +70,7 @@ class Catalog:
     tendency: object
     refresh: object
     lifecycle: object
+    sleep_clause: object
     context: object
     features: object
     expected: object
@@ -104,10 +105,11 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     tendency=public_tendency.compile_tendency(species,moves,vocabulary)
     refresh=public_belief_refresh.compile_refresh(source,moves)
     lifecycle=public_belief_lifecycle.compile_lifecycle(species,abilities,moves,sleep)
+    clause=public_sleep_clause.compile_clause(sleep)
     context=public_context.compile_context(source,abilities,moves,items=items,
         item_belief_narrowing=masks.item_belief_narrowing,field_catalog=field,active_catalog=active,
         damage_tables=damage,type_catalog=types,sleep_tables=sleep,toxic_tables=toxic,
-        tendency_tables=tendency.device,refresh_tables=refresh,lifecycle_tables=lifecycle)
+        tendency_tables=tendency.device,refresh_tables=refresh,lifecycle_tables=lifecycle,clause_tables=clause)
     features=public_belief_features.compile_features(source,abilities,items,moves,vocabulary,species_catalog=species)
     expected=public_expected_stats.compile_expected(source,dex,species)
     hazard=public_hazard_exposure.compile_hazard(species,dex,vocabulary,feature_tables=features,
@@ -120,7 +122,7 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     digest=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(',',':')).encode()).digest()
     binding=jnp.asarray(np.frombuffer(digest,dtype='>u4').astype(np.uint32))
     return Catalog(source,vocabulary,dex,species,moves,abilities,items,field,active,damage,types,
-        sleep,toxic,tendency,refresh,lifecycle,context,features,expected,hazard,actions,masks,binding,checkpoint_sha256)
+        sleep,toxic,tendency,refresh,lifecycle,clause,context,features,expected,hazard,actions,masks,binding,checkpoint_sha256)
 
 
 class State(NamedTuple):
@@ -155,7 +157,7 @@ def initialize(catalog,*,stream_ids):
     beliefs=public_belief.initialize(jnp.zeros((b,2,6),jnp.int32),catalog.source.device)
     mons=public_mon_state.initialize(b,species_binding=catalog.species.device.binding)
     context=public_context.initialize(beliefs,catalog.context,species_binding=catalog.species.device.binding,
-        toxic_complete_prefix=True,tendency_complete_prefix=True,source_tables=catalog.source.device)
+        toxic_complete_prefix=True,tendency_complete_prefix=True,source_tables=catalog.source.device,clause_complete_prefix=True)
     cursor=public_inputs.initialize(stream_ids,source_binding=catalog.source.device.binding)
     return State(cursor,beliefs,mons,context,jnp.broadcast_to(catalog.binding,(b,8)))
 
@@ -285,6 +287,9 @@ def encode(state,own,catalog,*,observer_sides):
     hazard=public_hazard_exposure.project(own.hazard,mons,context,state.beliefs,visible,catalog.source.device,
         context.field,catalog.hazard.device,catalog.features,observer_side=observer,expected_binding=catalog.hazard.device.binding)
     result=v4_assembly.overlay(result,_numeric_patch(hazard,shape=(b,132)),section='field')
+    clause=public_sleep_clause.project(context.sleep_clause,tables.sleep_clause,observer_side=observer,
+        expected_vocabulary=catalog.species.device.vocabulary_binding,exact_state=catalog.masks.exact_state)
+    result=v4_assembly.overlay(result,clause,section='field')
     admitted=result.admitted&valid
     result=result._replace(admitted=admitted,numeric_features=jnp.where(admitted[:,None,None],result.numeric_features,0),
         categorical_ids=jnp.where(admitted[:,None,None],result.categorical_ids,0),attention_mask=result.attention_mask&admitted[:,None],

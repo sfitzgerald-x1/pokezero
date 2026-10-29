@@ -75,7 +75,7 @@ def initialize(beliefs,source_tables,tables):
         jnp.zeros((batch,4),jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros((batch,10),jnp.int32))
 
 
-def metadata(code,line,events,lifecycle_tables,*,addresses=None):
+def metadata(code,line,events,lifecycle_tables,*,addresses=None,clause=False):
     """Lexical proofs from decoded public facts, never Python summaries."""
     if lifecycle_tables is None:return (0,0,0,0)
     from .public_inputs import Kind
@@ -98,20 +98,27 @@ def metadata(code,line,events,lifecycle_tables,*,addresses=None):
             named=parts[2].split(':',1)[1].strip()
             exact=bench and any(address.side==control.target_side and address.slot==control.target_slot and
                 normalize_id(species)==normalize_id(named) for address,species in addresses.public_species.items())
-            return (int(exact),bench,statuses[parts[3]],0)
+            parser_match=0
+            if clause:
+                from pokezero.showdown import _species_from_ident, _normalize_identifier, _ident_has_position
+                registered={_normalize_identifier(_species_from_ident(ident)) for ident,address in addresses.known_idents.items()
+                    if address.side==control.target_side and address.slot==control.target_slot and _ident_has_position(ident)}
+                if len(registered)!=1:raise ValueError('clause cure requires one registered public nickname key')
+                parser_match=int(_normalize_identifier(_species_from_ident(parts[2])) in registered)
+            return (int(exact),bench,statuses[parts[3]],parser_match)
         common=next(e for e in events if e.kind==Kind.CONDITION)
         return (control.payload[3],*common.payload[1:4])
     return (0,0,0,0)
 
 
-def metadata_ok(code,meta,*,lifecycle):
+def metadata_ok(code,meta,*,lifecycle,clause=False):
     flags,a,b,c=(meta[:,i] for i in range(4))
     zero=jnp.all(meta==0,axis=-1)
     if not lifecycle:return (code>=NOOP)&(code<=TRANSFORM)&zero
     shed=(flags==1)&(a>=0)&(a<2)&(b>=0)&(b<6)&(c>0)
     status=(flags>=0)&(flags<=6)&((flags&1)==0)&(a>=mon.SLEEP)&(a<=mon.TOXIC)&(b==0)&(c==0)
     status &= ((flags&2)==0)|(a==mon.SLEEP)
-    cure=((flags==0)|(flags==1))&((a==0)|(a==1))&((flags==0)|(a==1))&(b>=mon.SLEEP)&(b<=mon.TOXIC)&(c==0)
+    cure=((flags==0)|(flags==1))&((a==0)|(a==1))&((flags==0)|(a==1))&(b>=mon.SLEEP)&(b<=mon.TOXIC)&jnp.where(clause,(c==0)|(c==1),c==0)
     hp=((flags==0)|(flags==2)|(flags==3))&(a>=0)&(b>=0)&(a<=b)&(c>=mon.NONE)&(c<=mon.TOXIC)
     hp &= (b>0)|((a==0)&(c==mon.NONE))
     hp &= (b==0)==(flags!=0)
@@ -124,7 +131,7 @@ def metadata_words_ok(code,meta):
     if not NOOP<=code<=LAST_FAMILY:return False
     if code==NOOP:return zero or flags==1 and 0<=a<2 and 0<=b<6 and c>0
     if code==STATUS:return flags in (0,2,4,6) and mon.SLEEP<=a<=mon.TOXIC and b==c==0 and (not flags&2 or a==mon.SLEEP)
-    if code==CURE:return flags in (0,1) and a in (0,1) and (flags==0 or a==1) and mon.SLEEP<=b<=mon.TOXIC and c==0
+    if code==CURE:return flags in (0,1) and a in (0,1) and (flags==0 or a==1) and mon.SLEEP<=b<=mon.TOXIC and c in (0,1)
     if code==HP:return flags in (0,2,3) and 0<=a<=b and mon.NONE<=c<=mon.TOXIC and (b>0 or a==c==0) and ((b==0)==(flags!=0))
     return zero
 
@@ -145,7 +152,7 @@ def common_matches(state,row):
     return (state.common_seen==1)&jnp.all(state.common_proof[:,:3]==row[:,6:9],axis=-1)
 
 
-def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False):
+def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,clause=False):
     batch=beliefs.species.shape[0]
     refresh._tables(tables,source_tables,move_tables);refresh._state_shape(state.controller,batch)
     for value in (state.family,state.main_seen,state.proc_seen,state.common_seen):
@@ -164,7 +171,7 @@ def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False):
     ok &= jnp.all((selected>=0)&(selected<tables.sleep_usable.shape[0]),axis=(1,2))
     ok &= (state.family>=0)&(state.family<=LAST_FAMILY)&(state.main_seen>=0)&(state.main_seen<=1)
     ok &= (state.proc_seen>=0)&(state.proc_seen<=1)&(state.common_seen>=0)&(state.common_seen<=1)
-    ok &= jnp.where(state.family==0,jnp.all(state.raw_meta==0,axis=-1),metadata_ok(state.family,state.raw_meta,lifecycle=lifecycle))
+    ok &= jnp.where(state.family==0,jnp.all(state.raw_meta==0,axis=-1),metadata_ok(state.family,state.raw_meta,lifecycle=lifecycle,clause=clause))
     ok &= (state.common_seen!=0)|jnp.all(state.common_proof==0,axis=-1)
     ok &= (state.family!=0)|((state.proc_seen==0)&(state.common_seen==0))
     ok &= (state.family!=0)|(state.main_seen==0)
@@ -172,9 +179,9 @@ def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False):
     return ok&jnp.all(visible_ok,axis=(1,2))
 
 
-def open_frame(state,code,meta,valid,*,lifecycle=False):
+def open_frame(state,code,meta,valid,*,lifecycle=False,clause=False):
     ok=(state.family==0)&(state.main_seen==0)&(code>=NOOP)&(code<=LAST_FAMILY)
-    ok &= (state.proc_seen==0)&(state.common_seen==0)&metadata_ok(code,meta,lifecycle=lifecycle)
+    ok &= (state.proc_seen==0)&(state.common_seen==0)&metadata_ok(code,meta,lifecycle=lifecycle,clause=clause)
     use=valid&ok
     return state._replace(family=jnp.where(use,code,state.family),raw_meta=jnp.where(use[:,None],meta,state.raw_meta)),ok|~valid
 

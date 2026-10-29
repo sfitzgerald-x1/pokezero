@@ -22,6 +22,7 @@ from . import public_toxic as toxic_api, public_toxic_protocol as toxic_protocol
 from . import public_tendency as tendency_api, public_tendency_protocol as tendency_protocol
 from . import public_belief_refresh as refresh_api, public_refresh_stream as refresh_stream
 from . import public_belief_lifecycle as lifecycle_api
+from . import public_sleep_clause as clause_api
 
 
 class ContextTables(NamedTuple):
@@ -41,6 +42,7 @@ class ContextTables(NamedTuple):
     tendency: tendency_api.TendencyTables | None = None
     refresh: refresh_api.RefreshTables | None = None
     lifecycle: lifecycle_api.LifecycleTables | None = None
+    sleep_clause: clause_api.Tables | None = None
 
 
 class ContextState(NamedTuple):
@@ -61,9 +63,19 @@ class ContextState(NamedTuple):
     tendency_raw_pending: jax.Array | None = None
     refresh: refresh_stream.StreamState | None = None
     lifecycle: lifecycle_api.LifecycleState | None = None
+    sleep_clause: clause_api.State | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_tables=None, refresh_tables=None, lifecycle_tables=None):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_tables=None, refresh_tables=None, lifecycle_tables=None, clause_tables=None):
+    if clause_tables is not None:
+        if sleep_tables is None or lifecycle_tables is None or refresh_tables is None:
+            raise ValueError('sleep clause requires ordered lifecycle/sleep source consumers')
+        for actual,expected in ((clause_tables.sleep_binding,sleep_tables.binding),
+                (clause_tables.species_binding,sleep_tables.species_binding),
+                (clause_tables.vocabulary_binding,sleep_tables.vocabulary_binding)):
+            sleep_api._binding(actual);sleep_api._binding(expected)
+            if not np.array_equal(np.asarray(actual),np.asarray(expected)):
+                raise ValueError('sleep clause context namespace mismatch')
     if lifecycle_tables is not None:
         if refresh_tables is None or sleep_tables is None:raise ValueError('lifecycle composition requires ordered source refresh and sleep')
         for actual,expected in ((lifecycle_tables.sleep_binding,sleep_tables.binding),
@@ -146,16 +158,18 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
             refresh_stream_schema=refresh_stream.SCHEMA,refresh_families=refresh_stream.FAMILIES)
     if lifecycle_tables is not None:
         payload.update(schema=payload['schema']+'.lifecycle.v1',lifecycle=np.asarray(lifecycle_tables.binding).tolist())
+    if clause_tables is not None:
+        payload.update(schema=payload['schema']+'.sleep-clause-raw.v1',sleep_clause=np.asarray(clause_tables.binding).tolist())
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
         jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
         field_catalog.device if field_catalog is not None else None,
         active_catalog.device if active_catalog is not None else None,damage_tables,
-        type_catalog.device if type_catalog is not None else None,sleep_tables,toxic_tables,tendency_tables,refresh_tables,lifecycle_tables)
+        type_catalog.device if type_catalog is not None else None,sleep_tables,toxic_tables,tendency_tables,refresh_tables,lifecycle_tables,clause_tables)
 
 
-def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=False, toxic_hp_visibility=(0,0), tendency_complete_prefix=False, source_tables=None):
+def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=False, toxic_hp_visibility=(0,0), tendency_complete_prefix=False, source_tables=None, clause_complete_prefix=False):
     """Start before evidence ingestion; importing an ambiguous old mask refuses."""
     if beliefs.species.ndim != 3 or beliefs.species.shape[1:] != (2, 6):
         raise ValueError("context requires B by two observers by six encounters")
@@ -194,7 +208,8 @@ def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=F
             complete_prefix=tendency_complete_prefix) if tables.tendency is not None else None,
         jnp.zeros(batch,bool) if tables.tendency is not None else None,
         refresh_stream.initialize(beliefs,source_tables,tables.refresh) if tables.refresh is not None else None,
-        lifecycle_api.initialize(batch,tables.lifecycle) if tables.lifecycle is not None else None)
+        lifecycle_api.initialize(batch,tables.lifecycle) if tables.lifecycle is not None else None,
+        clause_api.initialize(batch,tables.sleep_clause,complete_prefix=clause_complete_prefix) if tables.sleep_clause is not None else None)
 
 
 def basis(context, beliefs):
@@ -285,7 +300,7 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         if life is not None:
             supported |= (k==status_kind)|(k==condition_kind)|faint|(k==cure_kind)|(k==sleep_kind)
         summary_ok &= ~valid|supported
-        summary,opened=refresh_stream.open_frame(summary,data[:,3],data[:,4:],valid&(k==raw_kind),lifecycle=life is not None)
+        summary,opened=refresh_stream.open_frame(summary,data[:,3],data[:,4:],valid&(k==raw_kind),lifecycle=life is not None,clause=tables.sleep_clause is not None)
         summary_ok &= opened
         # Source marks the outgoing record before the incoming upsert. The
         # public mon consumer has introduced the incoming row already, but its
@@ -508,6 +523,21 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             first=jnp.where(is_turn,row[:,2],jnp.where(is_sleep,data[:,2],0)),
             second=jnp.where(is_sleep,data[:,3],0),producer_binding=tables.sleep.binding,valid=valid&relevant)
         accepted &= jnp.where(relevant,sa,True)
+    clauses=context.sleep_clause
+    if clauses is not None and tables.sleep_clause is not None:
+        status_event=(k==sleep_kind)&(data[:,1]==sleep_api.STATUS)
+        cure_event=(k==sleep_kind)&(data[:,1]==sleep_api.CURE)
+        team_event=k==cure_kind
+        relevant=arrival|faint|status_event|cure_event|team_event
+        op=jnp.where(arrival,clause_api.ARRIVE,jnp.where(faint,clause_api.FAINT,
+            jnp.where(team_event,clause_api.TEAM,jnp.where(status_event,clause_api.STATUS,clause_api.CURE))))
+        code=jnp.where(status_event,data[:,2],jnp.where(cure_event,summary.raw_meta[:,2],0))
+        parser_match=cure_event&(summary.raw_meta[:,3]==1)|faint
+        clauses,ca=clause_api.apply(clauses,tables.sleep_clause,mons,context.sleep,operation=op,
+            side=side,slot=jnp.where(team_event,-1,slot),encounter=jnp.where(team_event,0,data[:,0]),status=code,
+            rest=status_event&(data[:,3]==1),ability_source=status_event&((summary.raw_meta[:,0]&4)!=0),
+            parser_ident_matches=parser_match,producer_binding=tables.sleep_clause.binding,valid=valid&relevant)
+        accepted &= jnp.where(relevant,ca,True)
     toxic=context.toxic
     raw_pending=context.toxic_raw_pending
     if toxic is not None:
@@ -568,5 +598,5 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         full,bound=rebuild(context._replace(abilities=a,items=items),base,source_tables,tables)
         summary,ok=refresh_stream.close_frame(summary,full,source_tables,summary_control,side,valid&(k==tendency_kind))
         accepted &= summary_ok&bound&ok
-    return context._replace(refresh=summary,lifecycle=life,abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
+    return context._replace(refresh=summary,lifecycle=life,sleep_clause=clauses,abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
         toxic=toxic,toxic_raw_pending=raw_pending,tendency=tendency,tendency_raw_pending=pending),base,accepted | ~valid

@@ -388,7 +388,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
     if (not events or item_projection is not None and len(events)==1 and not item_projection.trick_idents) and not tendency_main:
         raise ValueError("raw line has no implemented consumer; it must not be silently dropped")
     if refresh_family:
-        meta=public_refresh_stream.metadata(refresh_family,line,events,context_tables.lifecycle,addresses=addresses)
+        meta=public_refresh_stream.metadata(refresh_family,line,events,context_tables.lifecycle,addresses=addresses,clause=context_tables.sleep_clause is not None)
         opener=events[0]
         events[0]=replace(opener,payload=(*opener.payload[:4],*meta))
         events[0].words()
