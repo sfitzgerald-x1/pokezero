@@ -633,7 +633,7 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         if context.refresh is not None:
             from . import public_refresh_stream
             coherent=public_refresh_stream.validate(context.refresh,beliefs,tables,context_tables.refresh,context_tables.moves,
-                lifecycle=context_tables.lifecycle is not None)
+                lifecycle=context_tables.lifecycle is not None,clause=context_tables.sleep_clause is not None)
             coherent &= (context.refresh.family!=0)==context.tendency_raw_pending
             if context.lifecycle is not None:
                 # A pure admission probe validates all lifecycle fields even on
@@ -643,6 +643,12 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                     producer_binding=context_tables.lifecycle.binding)
                 coherent &= probe.admitted
             error=jnp.where((error==0)&~coherent,Error.SOURCE,error)
+        if (context.sleep_clause is None)!=(context_tables.sleep_clause is None):
+            error=jnp.where(error==0,Error.SOURCE,error)
+        elif context.sleep_clause is not None:
+            clause_ok=public_context.clause_api.validate(context.sleep_clause,context_tables.sleep_clause,
+                mon_state,context.sleep)
+            error=jnp.where((error==0)&~clause_ok,Error.SOURCE,error)
 
     def step(carry, event_and_valid):
         current, state, error, mons, ctx, basis = carry
@@ -707,7 +713,7 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
                 summary_enabled=context_tables.refresh is not None
                 raw_payload=(d[:,0]>=0)&(d[:,0]<=2)
                 raw_payload &= public_refresh_stream.metadata_ok(d[:,3],d[:,4:],
-                    lifecycle=context_tables.lifecycle is not None) if summary_enabled else jnp.all(d[:,3:]==0,axis=1)
+                    lifecycle=context_tables.lifecycle is not None,clause=context_tables.sleep_clause is not None) if summary_enabled else jnp.all(d[:,3:]==0,axis=1)
                 raw_payload &= jnp.where(d[:,0]==2,(d[:,1]>0)&(d[:,2]>0),jnp.all(d[:,1:3]==0,axis=1))
                 item_payload=(d[:,0]>0)&(d[:,1]>0)&(d[:,2]>=0)&(d[:,2]<=6)&jnp.all(d[:,3:]==0,axis=1)
                 payload_ok &= jnp.where(kind==Kind.RAW_BEGIN,raw_payload,jnp.where(kind==Kind.ITEM,item_payload,True))
