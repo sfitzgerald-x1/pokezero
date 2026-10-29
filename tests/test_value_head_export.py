@@ -49,6 +49,26 @@ class ExportTests(unittest.TestCase):
         self.exporter = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.exporter)
 
+    def _save_pair_inputs(self, root):
+        import torch
+        from pokezero.neural_policy import (TransformerTrainingConfig, TransformerTrainingResult,
+                                            save_transformer_checkpoint)
+        from pokezero.value_precision_probe import checkpoint_contract, make_value_head
+        checkpoint, summary_path = root / "champion.pt", root / "head-refit-summary.json"
+        save_transformer_checkpoint(checkpoint, self.model, result=TransformerTrainingResult(
+            model_config=self.config, training_config=TransformerTrainingConfig(), epochs=(),
+            belief_set_source_hash="source"))
+        artifact = root / "attention_hl_gauss.pt"
+        torch.save({"schema": "pokezero.value_probe_head.v1", "kind": "attention_hl_gauss",
+            "width": 16, "selected_epoch": 1, "features_manifest_sha256": "features",
+            "state_dict": make_value_head("attention_hl_gauss", 16).state_dict()}, artifact)
+        summary = SelectionTests().summary()
+        summary.update(checkpoint_contract=checkpoint_contract(checkpoint), features_manifest_sha256="features")
+        summary["heads"]["attention_hl_gauss"]["artifact_sha256"] = sha256_file(artifact)
+        summary_path.write_text(json.dumps(summary))
+        return checkpoint, summary_path, dict(checkpoint_sha256=sha256_file(checkpoint),
+                                             summary_sha256=sha256_file(summary_path))
+
     def test_all_heads_match_independent_oracle_after_trace_reload_and_batch_change(self):
         import torch
         from pokezero.value_precision_probe import make_value_head
@@ -105,31 +125,13 @@ class ExportTests(unittest.TestCase):
 
     def test_complete_export_pair_manifest_and_refuses_resume(self):
         import sys
-        import torch
-        from pokezero.neural_policy import (TransformerTrainingConfig, TransformerTrainingResult,
-                                            save_transformer_checkpoint)
-        from pokezero.value_precision_probe import checkpoint_contract, make_value_head
         scripts = str(Path(__file__).resolve().parents[1] / "scripts")
         sys.path.insert(0, scripts)
         try:
             from export_value_probe_search import export_pair
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                checkpoint, summary_path = root / "champion.pt", root / "head-refit-summary.json"
-                save_transformer_checkpoint(checkpoint, self.model, result=TransformerTrainingResult(
-                    model_config=self.config, training_config=TransformerTrainingConfig(), epochs=(),
-                    belief_set_source_hash="source"))
-                contract = checkpoint_contract(checkpoint)
-                artifact = root / "attention_hl_gauss.pt"
-                torch.save({"schema": "pokezero.value_probe_head.v1", "kind": "attention_hl_gauss",
-                    "width": 16, "selected_epoch": 1, "features_manifest_sha256": "features",
-                    "state_dict": make_value_head("attention_hl_gauss", 16).state_dict()}, artifact)
-                summary = SelectionTests().summary()
-                summary.update(checkpoint_contract=contract, features_manifest_sha256="features")
-                summary["heads"]["attention_hl_gauss"]["artifact_sha256"] = sha256_file(artifact)
-                summary_path.write_text(json.dumps(summary))
-                options = dict(checkpoint_sha256=sha256_file(checkpoint),
-                               summary_sha256=sha256_file(summary_path))
+                checkpoint, summary_path, options = self._save_pair_inputs(root)
                 manifest = export_pair(checkpoint, summary_path, root / "output", **options)
                 self.assertEqual(manifest["selection"]["kind"], "attention_hl_gauss")
                 self.assertEqual(manifest["precision"], "float32")
@@ -139,6 +141,74 @@ class ExportTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "fresh export"):
                     export_pair(checkpoint, summary_path, root / "output", **options)
         finally:
+            sys.path.remove(scripts)
+
+    def test_export_pair_traces_without_fused_attention_and_restores_caller_flag(self):
+        import sys
+        import torch
+        scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+        sys.path.insert(0, scripts)
+        previous = torch.backends.mha.get_fastpath_enabled()
+        try:
+            import export_value_probe_search as exporter
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                checkpoint, summary_path, options = self._save_pair_inputs(root)
+                trace = exporter.export_torchscript
+                for initial in (True, False):
+                    with self.subTest(initial=initial):
+                        torch.backends.mha.set_fastpath_enabled(initial)
+                        seen = []
+                        def observed_trace(*args, **kwargs):
+                            seen.append(torch.backends.mha.get_fastpath_enabled())
+                            return trace(*args, **kwargs)
+                        with patch.object(exporter, "export_torchscript", observed_trace):
+                            manifest = exporter.export_pair(checkpoint, summary_path,
+                                root / str(initial), **options)
+                        self.assertEqual(seen, [False, False])
+                        self.assertEqual(torch.backends.mha.get_fastpath_enabled(), initial)
+                        self.assertIs(manifest["torch_mha_fastpath"], False)
+                        for artifact in manifest["formats"].values():
+                            loaded = torch.jit.load(artifact["path"]).eval()
+                            graph = str(loaded.inlined_graph)
+                            self.assertNotIn("aten::_transformer_encoder_layer_fwd", graph)
+                            self.assertNotIn("aten::_native_multi_head_attention", graph)
+                            self.assertIn("scaled_dot_product_attention", graph)
+                self.assertEqual(sha256_file(checkpoint), options["checkpoint_sha256"])
+                self.assertEqual(sha256_file(summary_path), options["summary_sha256"])
+        finally:
+            torch.backends.mha.set_fastpath_enabled(previous)
+            sys.path.remove(scripts)
+
+    def test_export_pair_restores_fastpath_after_early_and_late_failure(self):
+        import sys
+        import torch
+        scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+        sys.path.insert(0, scripts)
+        previous = torch.backends.mha.get_fastpath_enabled()
+        try:
+            import export_value_probe_search as exporter
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                checkpoint, summary_path, options = self._save_pair_inputs(root)
+                for initial in (True, False):
+                    with self.subTest(initial=initial):
+                        torch.backends.mha.set_fastpath_enabled(initial)
+                        with self.assertRaisesRegex(ValueError, "tolerance"):
+                            exporter.export_pair(checkpoint, summary_path,
+                                root / f"early-{initial}", tolerance=0, **options)
+                        self.assertEqual(torch.backends.mha.get_fastpath_enabled(), initial)
+                        def fail_parity(*args, **kwargs):
+                            self.assertFalse(torch.backends.mha.get_fastpath_enabled())
+                            raise RuntimeError("injected parity failure")
+                        with patch.object(exporter, "validate_export", fail_parity):
+                            with self.assertRaisesRegex(RuntimeError, "injected parity failure"):
+                                exporter.export_pair(checkpoint, summary_path,
+                                    root / f"late-{initial}", **options)
+                        self.assertEqual(torch.backends.mha.get_fastpath_enabled(), initial)
+                        self.assertFalse((root / f"late-{initial}" / "export-manifest.json").exists())
+        finally:
+            torch.backends.mha.set_fastpath_enabled(previous)
             sys.path.remove(scripts)
 
     def test_snapshot_swap_and_missing_value_head_refuse(self):

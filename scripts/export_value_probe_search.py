@@ -26,6 +26,20 @@ from export_model import export_torchscript, make_random_inputs
 
 def export_pair(checkpoint, summary, output, *, checkpoint_sha256, summary_sha256,
                 device="cpu", tolerance=1e-5, real_inputs=None):
+    """Trace and validate without the device-specific fused attention path."""
+    torch = require_torch()
+    previous_fastpath = torch.backends.mha.get_fastpath_enabled()
+    try:
+        torch.backends.mha.set_fastpath_enabled(False)
+        return _export_pair(checkpoint, summary, output,
+            checkpoint_sha256=checkpoint_sha256, summary_sha256=summary_sha256,
+            device=device, tolerance=tolerance, real_inputs=real_inputs)
+    finally:
+        torch.backends.mha.set_fastpath_enabled(previous_fastpath)
+
+
+def _export_pair(checkpoint, summary, output, *, checkpoint_sha256, summary_sha256,
+                 device, tolerance, real_inputs):
     torch = require_torch()
     if device not in {"cpu", "cuda"} or not 0 < tolerance <= 1e-5:
         raise ValueError("FP32 CPU/CUDA and tolerance at most 1e-5 required")
@@ -75,7 +89,8 @@ def export_pair(checkpoint, summary, output, *, checkpoint_sha256, summary_sha25
         batches.append(real)
     manifest = {"schema": "pokezero.value_probe_search_export.v1", "checkpoint_contract": contract,
         "selection": selection, "device": device, "precision": "float32",
-        "tf32": False, "tolerance": tolerance, "formats": {},
+        "tf32": False, "torch_mha_fastpath": torch.backends.mha.get_fastpath_enabled(),
+        "tolerance": tolerance, "formats": {},
         "export_source_sha256": {str(path.name): sha256_file(path) for path in (
             Path(__file__), Path(__file__).with_name("export_model.py"),
             Path(__file__).resolve().parents[1] / "src/pokezero/value_head_export.py")},

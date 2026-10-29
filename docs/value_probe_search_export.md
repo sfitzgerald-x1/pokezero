@@ -42,6 +42,18 @@ CPU and CUDA traces are separate artifacts; use the artifact on its traced
 device. BF16 policy agreement alone does not qualify value precision. TF32 is
 disabled for this matched FP32 export.
 
+The exporter disables `torch.backends.mha` fastpath while tracing and validating
+both heads. This keeps the fused Transformer/MHA operators out of the saved
+graphs, following a bounded CPU/CUDA control that isolated a value discrepancy
+in that path. The manifest records `torch_mha_fastpath: false`. A `try/finally`
+restores the caller's fastpath setting on success or failure. Existing artifacts
+are never overwritten, and eager root/opponent policies need the same
+prospectively admitted numerical mode when used with these leaves.
+
+This is a candidate export repair, not CUDA qualification. Both repaired heads
+still require the original value tolerance and complete native batch-cardinality
+qualification; the earlier failed artifacts and result remain unchanged.
+
 Export completion is preparation only. Actual native/CUDA compatibility, exact
 runtime and encoder tables, failure-capture admission, saved-root decision cost
 under intended contention, complete roster identity and independent prospective
