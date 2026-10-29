@@ -1194,6 +1194,25 @@ pub fn render_branch_events(
     let mut out = RenderedEvents::default();
     out.lines.push("|".to_string());
 
+    // Validate producer provenance before segmentation. A no-op marker can
+    // otherwise be assigned to a different segment/residual and disappear
+    // before the per-action guard below sees it. One Gen3 action can call
+    // Sleep Talk at most once; both seats calling it still permits one each.
+    let mut sleep_talk_markers = [false; 2];
+    for instruction in instructions {
+        if let Instruction::SleepTalkCalled(marker) = instruction {
+            let slot = match marker.side_ref {
+                SideReference::SideOne => 0,
+                SideReference::SideTwo => 1,
+            };
+            if sleep_talk_markers[slot] {
+                out.mark_attribution_unsafe("sleeptalk_marker_missing_or_conflicting");
+                return out;
+            }
+            sleep_talk_markers[slot] = true;
+        }
+    }
+
     // Replacement / pivot plies ((switch, none) shapes): no end-of-turn phase.
     let eot_triggered = end_of_turn_triggered(state, s1_move, s2_move);
     // For (switch, none) shapes: was the switching side's active already
@@ -1225,6 +1244,34 @@ pub fn render_branch_events(
             return out;
         }
     };
+
+    // Encore may redirect the selected slot, so caller identity must use the
+    // engine-mutated effective choices proved by segmentation, not root slots.
+    let (one_choice, two_choice) = match seg.first {
+        SideReference::SideOne => (&seg.first_choice, &seg.second_choice),
+        SideReference::SideTwo => (&seg.second_choice, &seg.first_choice),
+    };
+    if (sleep_talk_markers[0] && one_choice.move_id != Choices::SLEEPTALK)
+        || (sleep_talk_markers[1] && two_choice.move_id != Choices::SLEEPTALK)
+    {
+        out.mark_attribution_unsafe("sleeptalk_marker_missing_or_conflicting");
+        return out;
+    }
+    for (index, instruction) in instructions.iter().enumerate() {
+        if let Instruction::SleepTalkCalled(marker) = instruction {
+            let phase_owner = if index < seg.p1_end {
+                Some(seg.first)
+            } else if index < seg.p2_end {
+                Some(other_side(seg.first))
+            } else {
+                None
+            };
+            if phase_owner != Some(marker.side_ref) {
+                out.mark_attribution_unsafe("sleeptalk_marker_missing_or_conflicting");
+                return out;
+            }
+        }
+    }
 
     let second_ref = other_side(seg.first);
     let (first_mc, second_mc) = match seg.first {
