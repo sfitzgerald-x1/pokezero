@@ -7,13 +7,15 @@ failed root. Native search timing and scientific panels need separate admission.
 from __future__ import annotations
 
 import gzip
+import hashlib
+import io
 import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-from .mirror_value_probe import CHAMPION_SHA, cohort, digest, file_sha
+from .mirror_value_probe import CHAMPION_SHA, cohort, digest
 
 SELECTION_SALT = "a4-cost-quarantine-20261029-v1"
 COLLECTION_SHA = "a71d93f84ef39d399cd2c6cf8ee2b303d9e7435e30f67c0c6c746f7c94501ae6"
@@ -58,17 +60,19 @@ def freeze_cost_roots(collection: str | Path, *, expected_sha256: str = COLLECTI
                       salt: str = SELECTION_SALT) -> dict[str, Any]:
     """Read only fixed source receipts/boundaries; do not open feature arrays."""
     root = Path(collection)
-    if file_sha(root / "collection.json") != expected_sha256:
+    manifest_blob = (root / "collection.json").read_bytes()
+    if hashlib.sha256(manifest_blob).hexdigest() != expected_sha256:
         raise ValueError("collection SHA mismatch")
-    manifest = json.loads((root / "collection.json").read_text())
+    manifest = json.loads(manifest_blob)
     if (manifest.get("schema") != "pokezero.mirror_collection.v1"
             or manifest.get("status") != "COMPLETE_FIXED_COHORT"
             or manifest["config"]["champion_sha256"] != CHAMPION_SHA):
         raise ValueError("completed champion mirror collection required")
-    if file_sha(root / "cohort.json") != manifest["cohort_sha256"]:
+    cohort_blob = (root / "cohort.json").read_bytes()
+    if hashlib.sha256(cohort_blob).hexdigest() != manifest["cohort_sha256"]:
         raise ValueError("cohort SHA mismatch")
     expected = cohort(manifest["config"]["root"], manifest["config"]["battles"])
-    source = json.loads((root / "cohort.json").read_text())
+    source = json.loads(cohort_blob)
     if source["battles"] != expected or source["roster_sha256"] != digest(expected):
         raise ValueError("original preassigned split/roster mismatch")
     rows = select_training_battles(expected, salt=salt)
@@ -76,18 +80,19 @@ def freeze_cost_roots(collection: str | Path, *, expected_sha256: str = COLLECTI
     for battle in rows:
         rel = f"battle-{battle['index']:04d}/battle.json"
         receipt_path = root / rel
-        receipt_sha = file_sha(receipt_path)
+        receipt_blob = receipt_path.read_bytes()
+        receipt_sha = hashlib.sha256(receipt_blob).hexdigest()
         if receipt_sha != manifest["battle_receipt_hashes"][rel]:
             raise ValueError("battle receipt SHA mismatch")
-        receipt = json.loads(receipt_path.read_text())
+        receipt = json.loads(receipt_blob)
         if any(receipt[name] != battle[name] for name in ("index", "battle_id", "seed", "split")):
             raise ValueError("battle split/identity mismatch")
         path = receipt_path.parent / "boundaries.jsonl.gz"
-        boundary_sha = file_sha(path)
+        boundary_blob = path.read_bytes()
+        boundary_sha = hashlib.sha256(boundary_blob).hexdigest()
         if boundary_sha != receipt["files"][path.name]:
             raise ValueError("boundary artifact SHA mismatch")
-        with gzip.open(path, "rt") as stream:
-            boundaries = [json.loads(line) for line in stream]
+        boundaries = [json.loads(line) for line in gzip.decompress(boundary_blob).splitlines()]
         boundary = select_recorded_boundary(boundaries, battle, salt=salt)
         selected.append({name: battle[name] for name in
             ("index", "battle_id", "seed", "split", "cost_ordinal", "cost_seat")})
@@ -129,7 +134,8 @@ def feed_recorded_boundary(env: Any, row: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("offline reconstruction forbids a simulator process/token")
     if row.get("schema") != "pokezero.mirror_boundary.v1" or row.get("event") is not None:
         raise ValueError("recorded nonterminal request boundary required")
-    if row["protocol_start"] != len(env.protocol_lines):
+    if (row["protocol_start"] != len(env.protocol_lines)
+            or row["decision_round_index"] != getattr(env, "_recorded_cost_next_round", 0)):
         raise ValueError("source protocol continuity mismatch")
     for line in row["protocol_delta"]:
         if not isinstance(line, str) or not line:
@@ -160,6 +166,7 @@ def feed_recorded_boundary(env: Any, row: dict[str, Any]) -> dict[str, Any]:
         if observation.metadata.get("turn_number") != reference["turn_number"]:
             raise ValueError("recorded Python turn differs")
         actual[seat] = observation
+    env._recorded_cost_next_round = row["decision_round_index"] + 1
     return actual
 
 
@@ -167,12 +174,16 @@ def reconstruct_cost_root(config: Any, collection: str | Path, root: dict[str, A
     """Reconstruct only the frozen root; failure is terminal, never a skip."""
     if root.get("split") != "train" or root.get("cost_seat") not in ("p1", "p2"):
         raise ValueError("fixed TRAIN cost root required")
-    path = Path(collection) / root["boundaries_relative_path"]
-    if file_sha(path) != root["boundaries_file_sha256"]:
+    collection_root = Path(collection).resolve(strict=True)
+    path = (collection_root / root["boundaries_relative_path"]).resolve(strict=True)
+    if not path.is_relative_to(collection_root):
+        raise ValueError("source boundary must remain inside collection")
+    blob = path.read_bytes()
+    if hashlib.sha256(blob).hexdigest() != root["boundaries_file_sha256"]:
         raise ValueError("frozen source boundary artifact changed")
     env = new_recorded_environment(config, seed=root["seed"])
     try:
-        with gzip.open(path, "rt") as stream:
+        with gzip.GzipFile(fileobj=io.BytesIO(blob), mode="rb") as stream:
             for line in stream:
                 row = json.loads(line)
                 if row.get("event") == "end":
