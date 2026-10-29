@@ -17,6 +17,7 @@ from . import public_abilities as ability, public_moves as move, public_mon_stat
 from . import public_active as active_api
 from . import public_damage as damage_api
 from . import public_types as type_api
+from . import public_toxic as toxic_api, public_toxic_protocol as toxic_protocol
 
 
 class ContextTables(NamedTuple):
@@ -31,6 +32,7 @@ class ContextTables(NamedTuple):
     active: active_api.ActiveTables | None = None
     damage: damage_api.DamageTables | None = None
     types: type_api.TypeTables | None = None
+    toxic: toxic_api.ToxicTables | None = None
 
 
 class ContextState(NamedTuple):
@@ -44,11 +46,15 @@ class ContextState(NamedTuple):
     active: active_api.ActiveState | None = None
     damage: damage_api.DamageState | None = None
     types: type_api.TypeState | None = None
+    toxic: toxic_api.ToxicState | None = None
+    toxic_raw_pending: jax.Array | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, toxic_tables=None):
     if type_catalog is not None and field_catalog is None:
         raise ValueError('live-type composition requires the ordered field context')
+    if toxic_tables is not None and field_catalog is None:
+        raise ValueError('Toxic composition requires ordered raw/field context')
     if type(item_belief_narrowing) is not bool:
         raise ValueError("item narrowing must be a frozen boolean")
     if items is None and field_catalog is not None:
@@ -90,16 +96,20 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
         if not np.array_equal(np.asarray(type_catalog.device.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding)):
             raise ValueError('live types and field columns require the same frozen vocabulary')
         payload.update(schema=payload['schema']+'.types.v1',types=np.asarray(type_catalog.device.binding).tolist())
+    if toxic_tables is not None:
+        if not np.array_equal(np.asarray(toxic_tables.vocabulary_binding),np.asarray(field_catalog.device.vocabulary_binding)):
+            raise ValueError('Toxic and field columns require the same frozen vocabulary')
+        payload.update(schema=payload['schema']+'.toxic.raw-commit.v1',toxic=np.asarray(toxic_tables.binding).tolist())
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
         jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
         field_catalog.device if field_catalog is not None else None,
         active_catalog.device if active_catalog is not None else None,damage_tables,
-        type_catalog.device if type_catalog is not None else None)
+        type_catalog.device if type_catalog is not None else None,toxic_tables)
 
 
-def initialize(beliefs, tables, *, species_binding=None):
+def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=False, toxic_hp_visibility=(0,0)):
     """Start before evidence ingestion; importing an ambiguous old mask refuses."""
     if beliefs.species.ndim != 3 or beliefs.species.shape[1:] != (2, 6):
         raise ValueError("context requires B by two observers by six encounters")
@@ -113,6 +123,8 @@ def initialize(beliefs, tables, *, species_binding=None):
         raise ValueError("damage context requires field tables")
     if tables.types is not None and tables.field is None:
         raise ValueError('live-type context requires field tables')
+    if tables.toxic is not None and tables.field is None:
+        raise ValueError('Toxic context requires ordered field tables')
     batch = beliefs.species.shape[0]
     return ContextState(ability.initialize(batch, tables.abilities,species_binding=species_binding), move.initialize(batch, tables.moves),
         beliefs.hard, beliefs.has_evidence,
@@ -121,7 +133,10 @@ def initialize(beliefs, tables, *, species_binding=None):
         field_api.initialize(batch,tables.field) if tables.field is not None else None,
         active_api.initialize(batch,tables.active,species_binding=species_binding) if tables.active is not None else None,
         damage_api.initialize(batch,tables.damage,species_binding=species_binding) if tables.damage is not None else None,
-        type_api.initialize(batch,tables.types,species_binding=species_binding) if tables.types is not None else None)
+        type_api.initialize(batch,tables.types,species_binding=species_binding) if tables.types is not None else None,
+        toxic_api.initialize(batch,tables.toxic,species_binding=species_binding,complete_prefix=toxic_complete_prefix,
+            hp_visibility=toxic_hp_visibility) if tables.toxic is not None else None,
+        jnp.zeros(batch,bool) if tables.toxic is not None else None)
 
 
 def basis(context, beliefs):
@@ -159,6 +174,8 @@ def rebuild(context, base, source_tables, tables):
         ok &= jnp.all(context.active.binding==tables.active.binding,axis=-1)
     if context.damage is not None:
         ok &= jnp.all(context.damage.binding==tables.damage.binding,axis=-1)
+    if context.toxic is not None:
+        ok &= jnp.all(context.toxic.binding==tables.toxic.binding,axis=-1)
     return base._replace(hard=hard,has_evidence=evidence),ok
 
 
@@ -174,7 +191,7 @@ def preconsume(context,mons,tables,row,valid,*,condition_kind):
 
 def consume(context, base, mons, source_tables, tables, row, valid, *,
             move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind,
-            active_kind, baton_kind, upkeep_kind, damage_kind, type_kind):
+            active_kind, baton_kind, upkeep_kind, damage_kind, type_kind, toxic_kind=None, action_end_kind=None, cure_kind=None):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
@@ -253,4 +270,37 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             side=side,encounter=data[:,0],first=jnp.where(arrival,0,data[:,2]),second=jnp.where(arrival,0,data[:,3]),
             producer_binding=tables.types.binding,valid=valid&relevant&(~targeted|identity))
         accepted &= jnp.where(relevant,ty&(~targeted|identity),True)
-    return context._replace(abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types),base,accepted | ~valid
+    toxic=context.toxic
+    raw_pending=context.toxic_raw_pending
+    if toxic is not None:
+        is_turn=k==turn_kind;is_upkeep=k==upkeep_kind;is_blank=k==action_end_kind;is_team=k==cure_kind
+        control=k==toxic_kind;raw=k==raw_kind
+        relevant=arrival|faint|is_turn|is_upkeep|is_blank|is_team|control
+        # Every raw semantic consumer, not only Toxic's closing control, must
+        # belong to the open transaction. Otherwise dropping BOTH frame
+        # markers could charge PP or mutate HP without visiting Toxic state.
+        accepted &= jnp.where(raw,~raw_pending,raw_pending)
+        # Arrival transport kinds are contiguous SWITCH, DRAG, REPLACE, BP;
+        # derive from the supplied first arrival kind rather than party order.
+        common_kind=jnp.where(arrival,jnp.where(k==baton_kind,toxic_api.SWITCH,k-(baton_kind-3)+toxic_api.SWITCH),
+            jnp.where(faint,toxic_api.FAINT,jnp.where(is_turn,toxic_api.TURN,
+            jnp.where(is_upkeep,toxic_api.UPKEEP,jnp.where(is_team,toxic_api.TEAM,toxic_api.OTHER)))))
+        global_fact=is_turn|is_upkeep|is_blank
+        false=jnp.zeros(k.shape,bool)
+        common=toxic_api.ToxicFact(common_kind,jnp.where(global_fact,-1,side),
+            jnp.where(arrival|faint,data[:,0],0),jnp.ones(k.shape,bool),arrival|faint,
+            jnp.where(is_turn,row[:,2],0),jnp.where(arrival,data[:,5],-1),
+            jnp.where(arrival,data[:,6],0),arrival&(data[:,7]==mon.TOXIC),false,k==baton_kind,
+            is_turn|is_upkeep,arrival|faint)
+        decoded,codec_ok=toxic_protocol.unpack(side,data)
+        named=(decoded.kind==toxic_api.OTHER)|(decoded.kind==toxic_api.TIMESTAMP)|(decoded.kind==toxic_api.STATUS)|(
+            decoded.kind==toxic_api.CURE)|(decoded.kind==toxic_api.CONDITION)|(decoded.kind==toxic_api.MOVE)|(
+            decoded.kind==toxic_api.WIN)|(decoded.kind==toxic_api.TERMINAL)
+        codec_ok=jnp.where(control,codec_ok&named,True)
+        fact=jax.tree.map(lambda a,b:jnp.where(control,a,b),decoded,common)
+        toxic,tx=toxic_api.apply(toxic,tables.toxic,fact,producer_binding=tables.toxic.binding,
+            valid=valid&relevant&codec_ok&raw_pending)
+        accepted &= jnp.where(raw,~raw_pending,jnp.where(relevant,codec_ok&tx&raw_pending,True))
+        raw_pending=jnp.where(valid&raw,True,jnp.where(valid&relevant,False,raw_pending))
+    return context._replace(abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,
+        toxic=toxic,toxic_raw_pending=raw_pending),base,accepted | ~valid
