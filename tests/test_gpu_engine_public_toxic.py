@@ -92,6 +92,12 @@ class PublicToxicTests(unittest.TestCase):
                 '|switch|p2a: Gardevoir|Gardevoir, L80|100/100 tox',
                 '|-damage|p1a: Gardevoir|94/100 tox|[from] psn','|-damage|p2a: Gardevoir|95/100 tox|[from] psn'])
 
+    def test_request_payload_side_does_not_invalidate_pending_faint(self):
+        state,_=self.prefixes([*self.prefix,'|turn|1','|faint|p1a: Snorlax','|upkeep',
+            '|request|'+json.dumps({'side':{'id':'p1'}}),
+            '|switch|p1a: Gardevoir|Gardevoir, L80|100/100 tox','|turn|2'])
+        self.assertTrue(bool(state.zero[0,0]));self.assertFalse(bool(state.invalid[0,0]))
+
     def test_bounded_faint_replacement_zero_and_first_tick(self):
         for middle in ([],['|t:|123'],['|'],['|upkeep'],['|-activate|p1a: Snorlax|test']):
             self.prefixes([*self.prefix,'|turn|1','|faint|p1a: Snorlax',*middle,'|upkeep',

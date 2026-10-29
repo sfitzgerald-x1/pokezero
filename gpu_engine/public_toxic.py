@@ -166,7 +166,9 @@ def apply(state,tables,fact,*,producer_binding,valid=True):
     invalidate_all |= faint&~open_faint
     # A non-boundary same-side transition spends a pending faint latch. A raw
     # timestamp returns before this step; it still passes the sanitizer above.
-    generic=~(turn|upkeep|faint|arrive|(k==WIN)|(k==TIMESTAMP))
+    # REQUEST's side names payload provenance, not a raw protocol ident; its
+    # JSON field cannot invalidate a same-seat pending replacement latch.
+    generic=~(turn|upkeep|faint|arrive|(k==WIN)|(k==TIMESTAMP)|(k==REQUEST))
     invalidate=invalidate_all[:,None]|(generic[:,None]&named[:,None]&target&s.pending)
     zero=s.zero&~invalidate;zi=jnp.where(invalidate,0,s.zero_ident);deadline=jnp.where(invalidate,0,s.deadline)
     pending=s.pending&~invalidate;expected=jnp.where(invalidate,0,s.expected);invalid=s.invalid|invalidate
