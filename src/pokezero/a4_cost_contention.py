@@ -68,6 +68,13 @@ def native_call_timing(module, emit):
  try:yield
  finally:module.monte_carlo_tree_search=original
 
+def require_serial_native_calls(calls):
+ """Observed unmodified ProcessPoolExecutor(max_workers=1) geometry."""
+ require(bool(calls) and all(type(c.get('id')) is str and re.fullmatch(r'[0-9]+:[0-9]+',c['id']) for c in calls),'native child PID/call identities required')
+ ids=[c['id'].split(':') for c in calls]
+ require(len({pid for pid,_ in ids})==1 and [int(n) for _,n in ids]==list(range(1,len(calls)+1)),'one actual child and ordered native calls required')
+ require(all(b['started_ns']>=a['finished_ns'] for a,b in zip(calls,calls[1:])),'single production child cannot overlap native samples')
+
 def native_search_log_evidence(text, sample_count, sample_budget_ms):
  """Parse ONE decision-scoped pinned-production log, never execute FP.
 
@@ -89,6 +96,7 @@ def native_search_log_evidence(text, sample_count, sample_budget_ms):
   require(set(c)==expected_keys and type(c['id']) is str and re.fullmatch(r'[0-9]+:[0-9]+',c['id']) and c['complete'] is True,'native terminal receipt malformed')
   require(all(integer(c[k]) for k in ('started_ns','finished_ns','cpu_ns','budget_ms','threads','visits')) and 0<c['started_ns']<c['finished_ns'] and c['cpu_ns']>=0 and c['visits']>=0,'native timing/work ledger malformed')
   require(c['budget_ms']==sample_budget_ms and c['threads']==1,'native call configuration drift')
+ require_serial_native_calls(calls)
  visits=[int(dict(iterations)[str(i)]) for i in range(sample_count)]
  require(sorted(c['visits'] for c in calls)==sorted(visits),'native/result visit ledger mismatch')
  return {'log_sha256':hashlib.sha256(text.encode()).hexdigest(),'sample_count':sample_count,'sample_budget_ms':sample_budget_ms,'visits_by_sample':visits,'native_calls':calls,'complete':True}
@@ -111,9 +119,11 @@ def readout(plan,rows):
  require(plan['algorithmic_cutoff_seconds'] is None and plan['historical_fixed_work_unchanged'] is True,'no new algorithmic deadline')
  require(plan['offline_reference_limit_seconds']==30 and plan['p95_bound_seconds']==15 and plan['offline_reference_justification'],'explicit offline half-limit reference required')
  require(plan['numeric_mode']=='FP32_MHAfastpathOFF_TF32OFF_highest_overrideabsent','all three arms must hold the predeclared numerical mode')
+ require(type(plan['fp_source_sha256']) is str and re.fullmatch('[0-9a-f]{64}',plan['fp_source_sha256']),'fixed production opponent source identity required')
  contracts=plan['fp_root_contracts']
  require(len(contracts)==20 and [c['root_id'] for c in contracts]==roots,'exact source-derived FP root contracts required before timing')
  for c in contracts:
+  require(c['fp_source_sha256']==plan['fp_source_sha256'],'opponent source differs from fixed plan identity')
   require(type(c['requested']) is bool and integer(c['legal_choice_count']) and c['legal_choice_count']>=0,'source request/actionability evidence required')
   require(c['requested']==(c['legal_choice_count']>0),'source requested/legal coverage mismatch')
   require(all(type(c[k]) is str and re.fullmatch('[0-9a-f]{64}',c[k]) for k in ('boundary_sha256','fp_source_sha256')),'source boundary and FP source identities required')
@@ -152,6 +162,7 @@ def readout(plan,rows):
     require(c.get('complete') is True and all(integer(c.get(k)) for k in ('started_ns','finished_ns','cpu_ns','visits','budget_ms','threads')),'complete native call terminal evidence required')
     require(row['fp_request_sent_ns']<=c['started_ns']<c['finished_ns']<=row['fp_choice_received_ns'] and c['cpu_ns']>=0 and c['visits']>=0,'native calls must belong to the actual request interval')
     require(c['budget_ms']==contract['sample_budget_ms'] and c['threads']==1,'actual native call configuration drift')
+   require_serial_native_calls(calls)
    require(sorted(c['visits'] for c in calls)==sorted(visits),'actual native/result visit ledger drift')
    require(sum(c['cpu_ns'] for c in calls)/1e9<=row['foulplay_process_cpu_seconds']+1e-6,'native CPU exceeds measured endpoint and reaped children CPU')
    witnessed=any(c['cpu_ns']>0 and c['visits']>0 and max(c['started_ns'],row['our_started_ns'])<min(c['finished_ns'],row['our_finished_ns']) for c in calls)

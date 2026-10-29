@@ -4,12 +4,12 @@ from pokezero.a4_cost_contention import ARMS, readout, overlap_seconds, native_s
 
 
 def fixture():
-    arms=ARMS;workers=[{'id':a+str(i),'arm':a} for a in arms for i in range(4)];mode='FP32_MHAfastpathOFF_TF32OFF_highest_overrideabsent';plan={'schema':'pokezero.A4-cost-contention-readout-contract.v2','root_ids':['authored'+str(i) for i in range(20)],'workers':workers,'cpu':12,'memory':'64Gi','gpu':1,'algorithmic_cutoff_seconds':None,'historical_fixed_work_unchanged':True,'offline_reference_limit_seconds':30,'p95_bound_seconds':15,'offline_reference_justification':'explicit prospective half-limit offline reference; never search cutoff','numeric_mode':mode,'input_manifest_sha256':'authored'}
+    arms=ARMS;workers=[{'id':a+str(i),'arm':a} for a in arms for i in range(4)];mode='FP32_MHAfastpathOFF_TF32OFF_highest_overrideabsent';plan={'schema':'pokezero.A4-cost-contention-readout-contract.v2','root_ids':['authored'+str(i) for i in range(20)],'workers':workers,'cpu':12,'memory':'64Gi','gpu':1,'algorithmic_cutoff_seconds':None,'historical_fixed_work_unchanged':True,'offline_reference_limit_seconds':30,'p95_bound_seconds':15,'offline_reference_justification':'explicit prospective half-limit offline reference; never search cutoff','numeric_mode':mode,'input_manifest_sha256':'authored','fp_source_sha256':'f'*64}
     plan['fp_root_contracts']=[{'root_id':root,'requested':i%2==0,'legal_choice_count':2 if i%2==0 else 0,'boundary_sha256':'b'*64,'fp_source_sha256':'f'*64,'sample_count':2 if i%2==0 else 0,'sample_budget_ms':1000 if i%2==0 else 0} for i,root in enumerate(plan['root_ids'])]
     rows=[]
     for worker in workers:
      for i,root in enumerate(plan['root_ids']):
-      base=(i*40+1)*10**9;fp_requested=i%2==0;rows.append({'worker':worker['id'],'arm':worker['arm'],'root_id':root,'ordinal':i,'input_manifest_sha256':'authored','numeric_mode':mode,'worker_error':0,'foulplay_error':0,'capture_failures':0,'foulplay_budget_ms':1000,'foulplay_parallelism':1,'foulplay_threads':1,'our_started_ns':base+10**8,'our_finished_ns':base+2100000000,'fp_requested':fp_requested,'fp_request_sent_ns':base if fp_requested else None,'fp_choice_received_ns':base+10**9 if fp_requested else None,'foulplay_process_cpu_seconds':.9 if fp_requested else 0,'foulplay_realized_visits':100 if fp_requested else 0,'foulplay_work_status':'complete' if fp_requested else 'not_requested','fp_root_contract':deepcopy(plan['fp_root_contracts'][i]),'foulplay_native_evidence':{'complete':True,'sample_count':2,'sample_budget_ms':1000,'log_sha256':'a'*64,'visits_by_sample':[50,50],'native_calls':[{'id':'1:'+str(j),'complete':True,'started_ns':base+j*400000000+200000000,'finished_ns':base+j*400000000+500000000,'cpu_ns':200000000,'visits':50,'budget_ms':1000,'threads':1} for j in range(2)]} if fp_requested else None})
+      base=(i*40+1)*10**9;fp_requested=i%2==0;rows.append({'worker':worker['id'],'arm':worker['arm'],'root_id':root,'ordinal':i,'input_manifest_sha256':'authored','numeric_mode':mode,'worker_error':0,'foulplay_error':0,'capture_failures':0,'foulplay_budget_ms':1000,'foulplay_parallelism':1,'foulplay_threads':1,'our_started_ns':base+10**8,'our_finished_ns':base+2100000000,'fp_requested':fp_requested,'fp_request_sent_ns':base if fp_requested else None,'fp_choice_received_ns':base+10**9 if fp_requested else None,'foulplay_process_cpu_seconds':.9 if fp_requested else 0,'foulplay_realized_visits':100 if fp_requested else 0,'foulplay_work_status':'complete' if fp_requested else 'not_requested','fp_root_contract':deepcopy(plan['fp_root_contracts'][i]),'foulplay_native_evidence':{'complete':True,'sample_count':2,'sample_budget_ms':1000,'log_sha256':'a'*64,'visits_by_sample':[50,50],'native_calls':[{'id':'1:'+str(j+1),'complete':True,'started_ns':base+j*400000000+200000000,'finished_ns':base+j*400000000+500000000,'cpu_ns':200000000,'visits':50,'budget_ms':1000,'threads':1} for j in range(2)]} if fp_requested else None})
     return plan, rows
 
 
@@ -113,7 +113,7 @@ class CostContentionTests(unittest.TestCase):
             with self.subTest(key=key),self.assertRaises((ValueError,KeyError)):readout(plan,rows)
     def test_real_native_log_requires_complete_scoped_sampling_and_results(self):
         import json
-        calls=[{'id':'1:'+str(i),'complete':True,'started_ns':1+i*3,'finished_ns':3+i*3,'cpu_ns':1,'visits':v,'budget_ms':1000,'threads':1} for i,v in enumerate((43,57))]
+        calls=[{'id':'1:'+str(i+1),'complete':True,'started_ns':1+i*3,'finished_ns':3+i*3,'cpu_ns':1,'visits':v,'budget_ms':1000,'threads':1} for i,v in enumerate((43,57))]
         text='INFO Sampling 2 battles at 1000ms each\n'+''.join('INFO A4_NATIVE '+json.dumps(c)+'\n' for c in calls)+'INFO Iterations 1: 43\nINFO Iterations 0: 57\nINFO Choice: splash\n'
         evidence=native_search_log_evidence(text,2,1000)
         self.assertEqual(evidence['visits_by_sample'],[57,43])
@@ -165,6 +165,18 @@ class CostContentionTests(unittest.TestCase):
                 evidence=row['foulplay_native_evidence'];evidence.update(sample_count=1,visits_by_sample=[100])
                 evidence['native_calls']=evidence['native_calls'][:1];evidence['native_calls'][0]['visits']=100
         self.assertTrue(readout(plan,rows)['decision_time_gate_pass'])
+    def test_fixed_opponent_source_identity_is_required_across_roots(self):
+        plan,rows=fixture();plan['fp_root_contracts'][0]['fp_source_sha256']='e'*64
+        for row in rows:
+            if row['ordinal']==0:row['fp_root_contract']=deepcopy(plan['fp_root_contracts'][0])
+        with self.assertRaises(ValueError):readout(plan,rows)
+    def test_observed_single_child_serial_geometry_is_required(self):
+        for mutation in ('pid','counter','overlap'):
+            plan,rows=fixture();calls=rows[0]['foulplay_native_evidence']['native_calls']
+            if mutation=='pid':calls[1]['id']='2:2'
+            elif mutation=='counter':calls[1]['id']='1:3'
+            else:calls[1]['started_ns']=calls[0]['finished_ns']-1
+            with self.subTest(mutation=mutation),self.assertRaises(ValueError):readout(plan,rows)
     def test_union_coverage_does_not_count_overlapping_windows_twice(self):
         self.assertEqual(overlap_seconds(10**9,4*10**9,[(0,3*10**9),(2*10**9,5*10**9)]),(3,4))
 

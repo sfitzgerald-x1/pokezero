@@ -107,3 +107,8 @@ that root. A roster consisting only of zero-work forced cells likewise cannot
 qualify busy-opponent contention. These are source/readout controls only: the
 actual parser, native instrumentation, process geometry and cost packet still
 need separate prospective review before any real root or opponent work.
+
+The plan binds one fixed opponent code/source SHA across all twenty root
+contracts. This is separate from each boundary and player-wire digest. Native
+sample receipts must show one actual child PID, sequential call counters and
+non-overlapping call intervals; declaring parallelism one alone is insufficient.
