@@ -45,7 +45,7 @@ def _source_certificate():
     issues=fingerprint.check()
     if issues:raise ValueError('ORDINARY_NATIVE_BUILD_NOT_CURRENT: '+repr(issues))
     native_fingerprint=fingerprint.compute_fingerprint()['fingerprint']
-    if native_fingerprint!='d98714d9bc9cf2bd1cebc82f6c40e5e76f4b06a7bfabe7f0233172caee6aae5d':
+    if native_fingerprint!='752baa627f4858402578eca004608dbf1df06343085b35ef4a422c6e31afa46b':
         raise ValueError('ORDINARY_NATIVE_CONSUMER_DOMAIN_DRIFT')
     return (digest,tuple(MAPPING_PINS.items()),native_fingerprint,
         hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
