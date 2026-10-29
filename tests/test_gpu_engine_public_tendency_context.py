@@ -103,7 +103,10 @@ class PublicTendencyContextTests(unittest.TestCase):
     def test_namespaces_producer_drop_and_unknown_raw_noops_refuse(self):
         wire,_=self.project(self.prefix)
         with self.assertRaises(ValueError):self.project(['|'],state=wire,tendency_catalog=None)
-        for line in ('|unimplemented|p1a: Snorlax','|switch|p2a: absol|absol, L80|100/100','|turn|01'):
+        for line in ('|unimplemented|p1a: Snorlax',
+                '|unimplemented|p1a: Snorlax|x|[from] ability: Pressure|[of] p2a: Absol',
+                '|unimplemented|p1a: Snorlax|x|[from] item: Leftovers',
+                '|switch|p2a: absol|absol, L80|100/100','|turn|01'):
             with self.assertRaises(ValueError):self.project([line],state=wire)
         _,p=self.project([*self.prefix,'|turn|1']);chunk=self.chunks(p)[0];initial=self.initial()
         for bad in (chunk._replace(tendency_binding=None),chunk._replace(tendency_binding=chunk.tendency_binding.at[0].add(1))):
@@ -132,6 +135,100 @@ class PublicTendencyContextTests(unittest.TestCase):
                 (own._replace(vocabulary_binding=own.vocabulary_binding.at[0].add(1)),0)):
             bad=write(packet,observer);self.assertEqual(bad.admitted.tolist(),[False])
             self.assertFalse(bool(bad.numeric.any()));self.assertFalse(bool(bad.stats_numeric.any()));self.assertFalse(bool(bad.stats_attention.any()))
+
+
+@unittest.skipUnless(importlib.util.find_spec('jax'),'requires isolated JAX')
+class PublicTendencyJointContextTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        PublicTendencyContextTests.setUpClass.__func__(cls)
+        from test_gpu_engine_public_truant import configure_truant
+        from pokezero.category_vocab import CategoryVocabulary
+        from gpu_engine import public_toxic,public_sleep,public_types,public_damage
+        cls.vocab=CategoryVocabulary(tuple(dict.fromkeys((*cls.vocab.tokens,'stats','type:normal','type:water'))))
+        configure_truant(cls)
+        cls.catalog=cls.p.compile_moves(cls.host,cls.dex,cls.vocab)
+        cls.item_catalog=cls.items.compile_items(cls.host,cls.vocab,item_names=('Mystery Orb',))
+        cls.field_catalog=cls.f.compile_field(cls.vocab)
+        cls.damage_tables=public_damage.compile_damage(cls.vocab)
+        cls.type_catalog=public_types.compile_types(cls.species_catalog,cls.dex,cls.vocab)
+        cls.sleep_tables=public_sleep.compile_sleep(cls.species_catalog,cls.vocab)
+        cls.toxic_tables=public_toxic.compile_toxic(cls.species_catalog,cls.vocab)
+        cls.tendency_catalog=cls.t.compile_tendency(cls.species_catalog,cls.catalog,cls.vocab);cls.tables=cls.tendency_catalog.device
+        cls.contexts={n:cls.c.compile_context(cls.host,cls.abilities,cls.catalog,items=cls.item_catalog,
+            item_belief_narrowing=n,field_catalog=cls.field_catalog,active_catalog=cls.active_catalog,
+            damage_tables=cls.damage_tables,type_catalog=cls.type_catalog,sleep_tables=cls.sleep_tables,
+            toxic_tables=cls.toxic_tables,tendency_tables=cls.tables) for n in (False,True)}
+        cls.kwargs=dict(source=cls.host,species_catalog=cls.species_catalog,moves=cls.catalog,abilities=cls.abilities,
+            items=cls.item_catalog,field_catalog=cls.field_catalog,active_catalog=cls.active_catalog,
+            damage_tables=cls.damage_tables,type_catalog=cls.type_catalog,sleep_tables=cls.sleep_tables,
+            toxic_tables=cls.toxic_tables,tendency_catalog=cls.tendency_catalog)
+        cls.prefix=('|switch|p1a: Slaking|Slaking, L80|100/100','|switch|p2a: Gardevoir|Gardevoir, L80|100/100')
+
+    project=PublicTendencyContextTests.project
+    fold=PublicTendencyContextTests.fold
+    carry=staticmethod(PublicTendencyContextTests.carry)
+    run_lines=PublicTendencyContextTests.run_lines
+    same=PublicTendencyContextTests.same
+    compare=PublicTendencyContextTests.compare
+
+    def initial(self,narrow=False,batch=1):
+        beliefs=self.b.initialize(self.j.zeros((batch,2,6),self.j.int32),self.host.device)
+        binding=self.species_catalog.device.binding
+        return (self.i.initialize(self.j.arange(1,batch+1,dtype=self.j.int32),source_binding=self.host.device.binding),
+            beliefs,self.m.initialize(batch,species_binding=binding),self.c.initialize(beliefs,self.contexts[narrow],
+                species_binding=binding,tendency_complete_prefix=True,toxic_hp_visibility=(2,2)))
+
+    def chunks(self,projections,events=None):
+        import numpy as np
+        p=projections[0]
+        return list(self.i.pack_chunks(np.array([1],np.int32),[events if events is not None else [e for p in projections for e in p.events]],
+            source_binding=self.host.device.binding,**{n:np.asarray(getattr(p,n),np.uint32) for n in (
+                'species_binding','ability_binding','move_binding','item_binding','context_binding','field_binding',
+                'active_binding','damage_binding','type_binding','sleep_binding','toxic_binding','tendency_binding')}))
+
+    def test_all_mode_source_parity_independent_closes_continuation_and_rollback(self):
+        from test_gpu_engine_public_toxic import PublicToxicTests
+        from test_gpu_engine_public_damage import PublicDamageTests
+        from test_gpu_engine_public_truant import PublicTruantTests
+        lines=[*self.prefix,'|-ability|p1a: Slaking|Truant',
+            '|-ability|p2a: Gardevoir|Truant|[from] ability: Trace|[of] p1a: Slaking','|turn|1',
+            '|move|p1a: Slaking|Body Slam|p2a: Gardevoir','|-damage|p2a: Gardevoir|80/100',
+            '|-start|p2a: Gardevoir|typechange|Water','|-status|p1a: Slaking|tox','|','|upkeep','|turn|2',
+            '|cant|p1a: Slaking|ability: Truant','|cant|p2a: Gardevoir|ability: Truant','|upkeep','|turn|3',
+            '|-status|p2a: Gardevoir|slp|[from] move: Rest','|cant|p2a: Gardevoir|slp',
+            '|move|p2a: Gardevoir|Sleep Talk|p1a: Slaking',
+            '|move|p2a: Gardevoir|Body Slam|p1a: Slaking|[from] move: Sleep Talk',
+            '|-damage|p1a: Slaking|94/100 tox|[from] psn','|upkeep','|turn|4']
+        for narrow in (False,True):
+            result,p=self.run_lines(lines,narrow);self.compare(result,lines)
+            self.assertFalse(bool(result.context.toxic_raw_pending.any()))
+            wire,_=self.project(lines,narrow)
+            check=PublicToxicTests();check.t,check.tables,check.reference,check.dex=self.t.__class__,self.toxic_tables,self.s,self.dex
+            from gpu_engine import public_toxic
+            check.t=public_toxic
+            check.ids={entry.ident:entry.address.encounter for entries in wire.encounters for entry in entries}
+            parser=self.s._ReplayParser(complete_prefix=False,hp_visibility={'p1':'percentage','p2':'percentage'})
+            for line in lines:parser._feed_line(line)
+            check.compare(result.context.toxic,parser)
+            damage=PublicDamageTests();damage.d=__import__('gpu_engine.public_damage',fromlist=['']);damage.s=self.s;damage.tables=self.damage_tables
+            damage.compare(result.context.damage,result.mon_state,lines)
+            truant=PublicTruantTests();truant.s,truant.active,truant.tables=self.s,self.active,self.active_catalog.device
+            truant.compare(result.context.active,result.mon_state,lines)
+        # Force a chunk to end between the independently required raw closes.
+        base=[*self.prefix,'|turn|1'];status='|-status|p1a: Slaking|tox'
+        _,p=self.project([*base,status]);events=[e for row in p for e in row.events]
+        idx=next(i for i,e in enumerate(events) if e.kind==self.i.Kind.TOXIC)
+        padding=next(n for n in range(64) if (idx+3*n)%64==63)
+        lines=[*base,*(['|']*padding),status];_,p=self.project(lines);chunks=self.chunks(p);current=self.initial()
+        for chunk in chunks:
+            before=current;result=self.fold(current,chunk);self.assertEqual(result.error.tolist(),[0]);current=self.carry(result)
+            if int(chunk.words[0,63,0])==self.i.Kind.TOXIC:
+                self.assertFalse(bool(result.context.toxic_raw_pending[0]));self.assertTrue(bool(result.context.tendency_raw_pending[0]))
+        self.compare(result,lines);self.assertFalse(bool(result.context.toxic_raw_pending.any()))
+        for header in ('toxic_binding','tendency_binding'):
+            bad=self.chunks(p)[0]._replace(**{header:None});initial=self.initial();result=self.fold(initial,bad)
+            self.assertEqual(result.error.tolist(),[self.i.Error.SOURCE]);self.same(initial,self.carry(result))
 
 
 if __name__=='__main__':unittest.main()

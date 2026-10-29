@@ -18,7 +18,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from . import public_belief, public_mon_state, public_context, public_field, public_active, public_damage, public_types, public_sleep
+from . import public_belief, public_mon_state, public_context, public_field, public_active, public_damage, public_types, public_sleep, public_toxic
 from . import public_tendency, public_tendency_protocol
 
 
@@ -54,6 +54,7 @@ class Kind(IntEnum):
     DAMAGE_CONTROL = 25
     TYPES = 26
     SLEEP = 27
+    TOXIC = 28
     TENDENCY = 29
 
 
@@ -151,6 +152,15 @@ class PublicEvent:
                 good=0<=d[2]<=public_mon_state.TOXIC and (d[3] in (0,1) and (d[2]==public_mon_state.SLEEP or d[3]==0) if d[1]==public_sleep.STATUS else d[3] in (0,2,3))
             else:good=d[3]==0 and (d[2] in (0,1) if d[1]==public_sleep.CURE else d[2]==0)
             if not good:raise ValueError('invalid sleep lexical payload')
+        elif self.kind==Kind.TOXIC:
+            d=self.payload
+            named=(public_toxic.OTHER,public_toxic.TIMESTAMP,public_toxic.STATUS,public_toxic.CURE,
+                public_toxic.CONDITION,public_toxic.MOVE,public_toxic.WIN,public_toxic.TERMINAL)
+            if ((self.actor_side,self.actor_slot,self.target_slot)!=(-1,-1,-1) or self.target_side not in (-1,0,1)
+                    or d[0] not in named or not 0<=d[1]<=6 or d[2]<0 or d[3]<-1 or d[4]<0 or not 0<=d[5]<128 or any(d[6:])):
+                raise ValueError('invalid raw Toxic control header or payload')
+            if bool(d[5]&32)!=(d[0] in (public_toxic.WIN,public_toxic.TERMINAL)) or d[5]&64:
+                raise ValueError('Toxic raw control retirement flags disagree with its kind')
         elif self.kind==Kind.TENDENCY:
             if ((self.actor_side,self.actor_slot,self.target_slot)!=(-1,-1,-1)
                     or not public_tendency_protocol.valid_words(self.payload,self.target_side)):
@@ -236,6 +246,7 @@ class EventChunk(NamedTuple):
     damage_binding: jax.Array | None = None
     type_binding: jax.Array | None = None
     sleep_binding: jax.Array | None = None
+    toxic_binding: jax.Array | None = None
     tendency_binding: jax.Array | None = None
 
 
@@ -270,7 +281,7 @@ def initialize(stream_ids, *, source_binding) -> StreamCursor:
                         zeros, zeros, zeros, zeros, zeros, jnp.zeros(ids.shape, bool))
 
 
-def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, ability_binding=None, move_binding=None, item_binding=None, context_binding=None, field_binding=None, active_binding=None, damage_binding=None, type_binding=None, sleep_binding=None, tendency_binding=None):
+def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, ability_binding=None, move_binding=None, item_binding=None, context_binding=None, field_binding=None, active_binding=None, damage_binding=None, type_binding=None, sleep_binding=None, toxic_binding=None, tendency_binding=None):
     """Yield every event without truncation, in fixed chunks for a batch.
 
     The host registry must bind each positive stream ID to one full battle ID
@@ -289,7 +300,7 @@ def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, abi
         species_binding=np.asarray(species_binding)
         if species_binding.shape!=(8,) or species_binding.dtype!=np.uint32:
             raise ValueError('public events require eight uint32 species namespace words')
-    for namespace in (ability_binding,move_binding,item_binding,context_binding,field_binding,active_binding,damage_binding,type_binding,sleep_binding,tendency_binding):
+    for namespace in (ability_binding,move_binding,item_binding,context_binding,field_binding,active_binding,damage_binding,type_binding,sleep_binding,toxic_binding,tendency_binding):
         if namespace is not None and (getattr(namespace,'shape',None)!=(8,) or getattr(namespace,'dtype',None)!=np.dtype(np.uint32)):
             raise ValueError('public context namespace requires eight uint32 words')
     rows = [[event.words() for event in stream] for stream in events]
@@ -315,6 +326,7 @@ def pack_chunks(stream_ids, events, *, source_binding, species_binding=None, abi
                          jnp.asarray(damage_binding) if damage_binding is not None else None,
                          jnp.asarray(type_binding) if type_binding is not None else None,
                          jnp.asarray(sleep_binding) if sleep_binding is not None else None,
+                         jnp.asarray(toxic_binding) if toxic_binding is not None else None,
                          jnp.asarray(tendency_binding) if tendency_binding is not None else None)
 
 
@@ -550,6 +562,29 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
     if sleep_enabled:
         source_ok &= (context.sleep.turn==cursor.turn)&jnp.all(context.sleep.species_binding==mon_state.species_binding,axis=-1)
         source_ok &= jnp.all(context.sleep.species_binding==context_tables.sleep.species_binding,axis=-1)
+    toxic_enabled=context is not None and context.toxic is not None
+    if toxic_enabled and not field_enabled:raise ValueError('Toxic context requires ordered raw/field composition')
+    if context is not None and (context.toxic is None)!=(context_tables.toxic is None):
+        raise ValueError('Toxic context requires its frozen tables')
+    if context is not None and (context.toxic_raw_pending is None)!=(not toxic_enabled):
+        raise ValueError('Toxic raw transaction latch must match the enabled consumer')
+    if chunk.toxic_binding is not None:
+        if chunk.toxic_binding.shape!=(8,) or chunk.toxic_binding.dtype!=jnp.uint32:
+            raise ValueError('expected eight uint32 Toxic namespace words')
+        source_ok &= toxic_enabled
+        if toxic_enabled:
+            source_ok &= jnp.all(context.toxic.binding==chunk.toxic_binding,axis=-1)&jnp.all(context_tables.toxic.binding==chunk.toxic_binding)
+    elif toxic_enabled:source_ok &= False
+    if toxic_enabled:
+        if context.toxic_raw_pending.shape!=(batch,) or context.toxic_raw_pending.dtype!=jnp.bool_:
+            raise ValueError('Toxic raw transaction latch requires B boolean flags')
+        source_ok &= ~context.toxic_raw_pending|cursor.needs_more
+        source_ok &= (context.toxic.turn==cursor.turn)&(context.toxic.post_upkeep==(cursor.phase==Phase.RESIDUAL))
+        source_ok &= jnp.all(context.toxic.species_binding==mon_state.species_binding,axis=-1)
+        source_ok &= jnp.all(context.toxic.species_binding==context_tables.toxic.species_binding,axis=-1)
+        row=jnp.arange(batch)[:,None];seats=jnp.arange(2)[None,:]
+        current=jnp.where(mon_state.active>=0,mon_state.encounter[row,seats,jnp.clip(mon_state.active,0,5)],0)
+        source_ok &= jnp.all(context.toxic.active==current,axis=-1)
     tendency_enabled=context is not None and context.tendency is not None
     if tendency_enabled and not field_enabled:raise ValueError('tendency context requires ordered field composition')
     if context is not None and (context.tendency is None)!=(context_tables.tendency is None):
@@ -608,8 +643,9 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         damage_kind = kind==Kind.DAMAGE_CONTROL
         sleep_kind = kind==Kind.SLEEP
         type_kind = kind==Kind.TYPES
+        toxic_kind = kind==Kind.TOXIC
         tendency_kind = kind==Kind.TENDENCY
-        kind_ok = (tendency_kind if tendency_enabled else False) | (sleep_kind if sleep_enabled else False) | (type_kind if type_enabled else False) | (damage_kind if damage_enabled else False) | (active_kind if active_enabled else False) | (field_kind if field_enabled else False) | (item_kind if item_enabled else False) | boundary | fact | (mon_kind if mons is not None else False) | (context_kind if ctx is not None else False)
+        kind_ok = (tendency_kind if tendency_enabled else False) | (sleep_kind if sleep_enabled else False) | (toxic_kind if toxic_enabled else False) | (type_kind if type_enabled else False) | (damage_kind if damage_enabled else False) | (active_kind if active_enabled else False) | (field_kind if field_enabled else False) | (item_kind if item_enabled else False) | boundary | fact | (mon_kind if mons is not None else False) | (context_kind if ctx is not None else False)
         phase_ok = (phase == Phase.ACTION) | (phase == Phase.RESIDUAL)
         # Only TURN can advance turn or leave residual phase. Other events keep
         # the committed phase, except UPKEEP which enters the residual phase.
@@ -633,7 +669,7 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         damage_identity=jnp.all(row[:,4:6]==-1,axis=1)&(row[:,7]==-1)&jnp.where(
             row[:,8]==public_damage.CLOSE,row[:,6]==-1,(row[:,6]>=0)&(row[:,6]<=1))
         tendency_identity=jnp.all(row[:,4:6]==-1,axis=1)&(row[:,7]==-1)&(row[:,6]>=-1)&(row[:,6]<=1)
-        header_ok = turn_ok & phase_ok & jnp.where(tendency_kind,tendency_identity,jnp.where(damage_kind,damage_identity,jnp.where(kind==Kind.FIELD,field_identity,jnp.where(kind==Kind.RAW_BEGIN,raw_identity,jnp.where(boundary, boundary_identity,
+        header_ok = turn_ok & phase_ok & jnp.where(tendency_kind|toxic_kind,tendency_identity,jnp.where(damage_kind,damage_identity,jnp.where(kind==Kind.FIELD,field_identity,jnp.where(kind==Kind.RAW_BEGIN,raw_identity,jnp.where(boundary, boundary_identity,
             jnp.where(kind==Kind.CLEAR_ALL_BOOSTS,boundary_identity,jnp.where(kind==Kind.CURE_TEAM,cure_identity,
             jnp.where(kind == Kind.COPY_BOOST, copy_identity, jnp.where(double_context, context_identity, fact_identity)))))))))
         predicate = row[:, 8]
@@ -716,11 +752,11 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             apply=valid&(error==0)
         if ctx is not None:
             ctx, basis, accepted = public_context.consume(ctx, basis, mons, tables, context_tables, row,
-                apply & (context_kind | mon_kind | item_kind | field_kind | active_kind | damage_kind | type_kind | sleep_kind | tendency_kind | (boundary&tendency_enabled) | ((kind==Kind.TURN)&field_enabled) | ((kind==Kind.UPKEEP)&(truant_enabled|sleep_enabled))), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
+                apply & (context_kind | mon_kind | item_kind | field_kind | active_kind | damage_kind | type_kind | sleep_kind | toxic_kind | tendency_kind | (boundary&tendency_enabled) | ((kind==Kind.TURN)&field_enabled) | ((kind==Kind.UPKEEP)&(truant_enabled|sleep_enabled|toxic_enabled)) | ((kind==Kind.ACTION_CHUNK_END)&toxic_enabled)), move_kind=Kind.MOVE, ability_kind=Kind.ABILITY,
                 trace_kind=Kind.TRACE, transform_kind=Kind.TRANSFORM,
                 arrival=(kind >= Kind.SWITCH) & (kind <= Kind.BATON_PASS), faint=kind == Kind.FAINT,
                 raw_kind=Kind.RAW_BEGIN,item_kind=Kind.ITEM,field_kind=Kind.FIELD,turn_kind=Kind.TURN,
-                active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,upkeep_kind=Kind.UPKEEP,damage_kind=Kind.DAMAGE_CONTROL,type_kind=Kind.TYPES,sleep_kind=Kind.SLEEP,cure_kind=Kind.CURE_TEAM,tendency_kind=Kind.TENDENCY)
+                active_kind=Kind.ACTIVE,baton_kind=Kind.BATON_PASS,upkeep_kind=Kind.UPKEEP,damage_kind=Kind.DAMAGE_CONTROL,type_kind=Kind.TYPES,sleep_kind=Kind.SLEEP,toxic_kind=Kind.TOXIC,action_end_kind=Kind.ACTION_CHUNK_END,cure_kind=Kind.CURE_TEAM,tendency_kind=Kind.TENDENCY)
 
             error = jnp.where(apply & ~accepted, Error.PAYLOAD, error)
             apply = valid & (error == 0)
@@ -750,6 +786,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
 
     (candidate, state, error, mons, ctx, basis), _ = jax.lax.scan(step, (cursor, beliefs, error, mon_state, context, base),
                                               (jnp.swapaxes(chunk.words, 0, 1), chunk.valid.T))
+    if toxic_enabled:
+        error=jnp.where((error==0)&~chunk.more&ctx.toxic_raw_pending,Error.PAYLOAD,error)
     candidate = candidate._replace(needs_more=chunk.more)
     if tendency_enabled:
         error=jnp.where((error==0)&~chunk.more&ctx.tendency_raw_pending,Error.PAYLOAD,error)
