@@ -263,6 +263,96 @@ class ProductionHistoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'alias'):
             self.feed(envs, batch)
 
+    def test_original_nested_tracker_alias_counterexamples_refuse_before_advance(self):
+        for field in ('_tier2_trackers', '_investment_trackers'):
+            with self.subTest(family=field):
+                envs = self.make()
+                projector = SavedSourcePlayerProjector(battle_id='authored')
+                self.feed(envs, projector.project_nonrequest_delta(leads()))
+                first = getattr(envs['p1'], field)['p1']
+                getattr(envs['p2'], field)['p2'] = first
+                self.assertIsNot(getattr(envs['p1'], field), getattr(envs['p2'], field))
+                before = {seat: (env.protocol_lines, env._player_projection_next,
+                                len(env._request_history[seat])) for seat, env in envs.items()}
+                processed = first._fold._processed
+                with self.assertRaisesRegex(ValueError, 'contained annotation.*alias'):
+                    self.feed(envs, projector.project_nonrequest_delta(['|turn|2']))
+                self.assertEqual(before, {seat: (env.protocol_lines, env._player_projection_next,
+                    len(env._request_history[seat])) for seat, env in envs.items()})
+                self.assertEqual(first._fold._processed, processed)
+                with self.assertRaisesRegex(ValueError, 'contained annotation.*alias'):
+                    envs['p2'].observe('p2')
+
+    def test_distinct_trackers_with_wrong_owner_opponent_team_or_key_refuse(self):
+        for field in ('_tier2_trackers', '_investment_trackers'):
+            for wrong in ('perspective', 'opponent', 'team', 'key'):
+                with self.subTest(family=field, wrong=wrong):
+                    envs = self.make()
+                    projector = SavedSourcePlayerProjector(battle_id='authored')
+                    self.feed(envs, projector.project_nonrequest_delta(leads()))
+                    first, second = getattr(envs['p1'], field)['p1'], getattr(envs['p2'], field)['p2']
+                    self.assertIsNot(first, second)
+                    if wrong == 'perspective':
+                        # Distinct cloned object: identity-only rejection cannot
+                        # catch the reviewer's wrong-perspective counterexample.
+                        second = first.clone()
+                        self.assertIsNot(first, second)
+                        getattr(envs['p2'], field)['p2'] = second
+                    elif wrong == 'opponent':
+                        second._opponent = 'p2'
+                    elif wrong == 'team':
+                        second._own_by_species = dict(first._own_by_species)
+                    else:
+                        getattr(envs['p2'], field)['p1'] = getattr(envs['p2'], field).pop('p2')
+                    before = {seat: env.protocol_lines for seat, env in envs.items()}
+                    with self.assertRaisesRegex(ValueError, 'annotation.*(owner|owning)'):
+                        self.feed(envs, projector.project_nonrequest_delta(['|turn|2']))
+                    self.assertEqual(before, {seat: env.protocol_lines for seat, env in envs.items()})
+
+    def test_distinct_trackers_cannot_share_inner_mutable_annotation_state(self):
+        for field in ('_tier2_trackers', '_investment_trackers'):
+            for shared in ('fold', 'nested_fold_container', 'ledger'):
+                with self.subTest(family=field, shared=shared):
+                    envs = self.make()
+                    projector = SavedSourcePlayerProjector(battle_id='authored')
+                    self.feed(envs, projector.project_nonrequest_delta(leads()))
+                    first, second = getattr(envs['p1'], field)['p1'], getattr(envs['p2'], field)['p2']
+                    if shared == 'fold':
+                        second._fold = first._fold
+                    elif shared == 'nested_fold_container':
+                        second._fold.boosts['p1'] = first._fold.boosts['p1']
+                    elif field == '_tier2_trackers':
+                        second._residuals = first._residuals
+                    else:
+                        second._state.ledgers = first._state.ledgers
+                    self.assertIsNot(first, second)
+                    self.assertEqual(second._perspective, 'p2')
+                    before = {seat: env.protocol_lines for seat, env in envs.items()}
+                    with self.assertRaisesRegex(ValueError, 'contained annotation.*alias'):
+                        self.feed(envs, projector.project_nonrequest_delta(['|turn|2']))
+                    self.assertEqual(before, {seat: env.protocol_lines for seat, env in envs.items()})
+
+    def test_fresh_separate_annotation_histories_remain_valid_after_updates(self):
+        envs = self.make()
+        projector = SavedSourcePlayerProjector(battle_id='authored')
+        self.assertTrue(all(not env._tier2_trackers and not env._investment_trackers for env in envs.values()))
+        first = self.feed(envs, projector.project_nonrequest_delta(leads()))
+        second = self.feed(envs, projector.project_nonrequest_delta([
+            '|move|p2a: Gengar|Thunderbolt|p1a: Blissey', '|-damage|p1a: Blissey|275/400',
+            '|', '|upkeep', '|turn|2']))
+        self.assertEqual(set(first), {'p1', 'p2'})
+        self.assertEqual(set(second), {'p1', 'p2'})
+        for field in ('_tier2_trackers', '_investment_trackers'):
+            left, right = getattr(envs['p1'], field)['p1'], getattr(envs['p2'], field)['p2']
+            self.assertIsNot(left, right)
+            self.assertIsNot(left._fold, right._fold)
+            self.assertIsNot(left._fold.boosts['p1'], right._fold.boosts['p1'])
+            self.assertEqual((left._perspective, left._opponent), ('p1', 'p2'))
+            self.assertEqual((right._perspective, right._opponent), ('p2', 'p1'))
+            # Immutable metadata sharing is intentional and must stay valid.
+            self.assertIs(left._dex, right._dex)
+        self.assertTrue(all(not env._player_projection_failed for env in envs.values()))
+
     def test_actual_reference_identity_and_schema_are_bound_to_owner(self):
         for mode in ('seat', 'schema', 'metadata_owner', 'boolean_turn'):
             envs = self.make()

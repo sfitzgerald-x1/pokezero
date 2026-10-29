@@ -144,6 +144,18 @@ An ingestion/observation failure poisons both histories, preventing partial
 reference use. The helper returns complete new five-tensor observations; original
 stored observations remain trusted-collector reproduction references only.
 
+Annotation independence includes the **contained producer objects**, not merely
+the two outer tracker dictionaries. Each existing Tier2/investment producer must
+have only its owning map key, the correct owner/opponent perspective, and the
+exact team derived from that owner's first request. Tracker objects, folds,
+mutable fold containers and inference ledgers/cache containers cannot cross
+owners. Read-only dex/config/team metadata and immutable context/cache values
+may be shared. These checks run before any boundary ingestion and around
+observations, including lazy tracker creation; direct owning observe is guarded
+too. Focused controls retain the original nested-object alias counterexamples,
+distinct wrong-perspective objects, inner-state aliases, and a valid fresh
+separate-history control.
+
 Root must freeze the same validated immutable batch for production references
 and GPU consumption. Never re-query an arbitrary stateful `for_seat` provider
 after validating one result. Scope/Struggle/provenance flags stay attached to

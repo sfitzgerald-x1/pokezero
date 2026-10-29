@@ -9,7 +9,7 @@ trusted transcript cursor and its stored observation references remain separate.
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass
 import hashlib
 import json
 import re
@@ -238,6 +238,74 @@ class SavedSourcePlayerProjector:
             start, count, final.hexdigest(), dict(counters))
 
 
+def _assert_annotation_histories(environments: Mapping[str, Any]) -> None:
+    """Bind every contained producer to its owner and independent mutable state.
+
+    Read-only dex/config/team metadata and immutable context/cache values may
+    be shared. The mutable histories that the production tracker clone methods
+    copy (folds, ledgers and accumulator/cache containers) may not cross owners.
+    This is a bounded walk rooted only in those annotation-history fields, not
+    a walk through the source/dex/model object graph.
+    """
+    from .investment import InvestmentLiveTracker
+    from .tier2 import Tier2LiveTracker, _species_key, own_team_from_request
+    owners: dict[int, str] = {}
+
+    def claim(value: Any, owner: str) -> None:
+        previous = owners.setdefault(id(value), owner)
+        _require(previous == owner, 'contained annotation histories must not alias across owners')
+
+    def mutable_tree(value: Any, owner: str, visited: set[int]) -> None:
+        if id(value) in visited:
+            return
+        if isinstance(value, (dict, list, set)):
+            claim(value, owner)
+            visited.add(id(value))
+            children = value.values() if isinstance(value, dict) else value
+        elif is_dataclass(value) and not value.__dataclass_params__.frozen:
+            claim(value, owner)
+            visited.add(id(value))
+            children = vars(value).values()
+        elif isinstance(value, tuple):
+            children = value
+        else:
+            return
+        for child in children:
+            mutable_tree(child, owner, visited)
+
+    families = (
+        ('_tier2_trackers', Tier2LiveTracker,
+         ('_residuals', '_cb_turns', '_cb_non_ko', '_cb_bit_indices'), ('_stats_cache',)),
+        ('_investment_trackers', InvestmentLiveTracker,
+         ('_state', '_defender_levels'), ('_spread_cache',)),
+    )
+    for owner in ('p1', 'p2'):
+        env = environments[owner]
+        peer = 'p2' if owner == 'p1' else 'p1'
+        for field, expected_type, history_fields, cache_fields in families:
+            trackers = getattr(env, field)
+            _require(isinstance(trackers, dict) and set(trackers) <= {owner},
+                     'annotation map keys must bind only the owning seat')
+            for tracker in trackers.values():
+                claim(tracker, owner)
+                _require(isinstance(tracker, expected_type) and tracker._perspective == owner and
+                         tracker._opponent == peer, 'contained annotation tracker perspective must bind owner')
+                request = env._first_requests.get(owner) or env._latest_requests.get(owner)
+                _require(request is not None, 'annotation tracker requires its owning initial request')
+                own_team = {_species_key(mon.species): mon for mon in own_team_from_request(request)}
+                _require(bool(own_team) and tracker._own_by_species == own_team,
+                         'annotation tracker own team must bind owning initial request')
+                claim(tracker._fold, owner)
+                visited: set[int] = set()
+                mutable_tree(vars(tracker._fold), owner, visited)
+                for name in history_fields:
+                    mutable_tree(getattr(tracker, name), owner, visited)
+                # Cache values are read-only after creation in the production
+                # clone contract; the mutable cache container is still owned.
+                for name in cache_fields:
+                    claim(getattr(tracker, name), owner)
+
+
 def new_player_reference_environments(config: Any, *, battle_id: str) -> dict[str, Any]:
     """Fresh offline production histories; no simulator is started or restored."""
     from .local_showdown import LocalShowdownEnv
@@ -249,7 +317,11 @@ def new_player_reference_environments(config: Any, *, battle_id: str) -> dict[st
             _require(not self._player_projection_failed and self._terminal is None and
                      player == self._player_projection_seat and self.requested_players() == (player,),
                      'failed or foreign owning observation refused')
-            return super().observe(player)
+            _assert_annotation_histories(result)
+            observation = super().observe(player)
+            # Includes trackers lazily constructed by this observation.
+            _assert_annotation_histories(result)
+            return observation
     result = {}
     for seat in ('p1', 'p2'):
         env = OwningReferenceEnvironment(config)
@@ -314,6 +386,7 @@ def feed_player_reference_boundary(environments: Mapping[str, Any], batch: Playe
     for field in ('_parser', '_belief_engine', '_tier2_trackers', '_investment_trackers'):
         _require(getattr(environments['p1'], field) is not getattr(environments['p2'], field),
                  'owning parser/belief/annotation histories must not alias')
+    _assert_annotation_histories(environments)
     _require(set(own_request_deltas) == {'p1', 'p2'}, 'both owning request delta channels required')
     _require(batch.scope == PROJECTION_SCOPE and batch.showdown_revision == PINNED_SHOWDOWN_REVISION and
              batch.struggle_warning_policy == STRUGGLE_WARNING_POLICY and
@@ -381,7 +454,9 @@ def feed_player_reference_boundary(environments: Mapping[str, Any], batch: Playe
                 assert_struggle_omission_boundary(environments[seat], seat)
         observations = {}
         for seat in actual:
+            _assert_annotation_histories(environments)
             observation = environments[seat].observe(seat)
+            _assert_annotation_histories(environments)
             perspective = observation.perspective
             metadata = observation.metadata
             peer = 'p2' if seat == 'p1' else 'p1'
