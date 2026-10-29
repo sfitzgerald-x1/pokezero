@@ -15,6 +15,7 @@ from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_publ
 from pokezero.belief import _confirmed_ability_from_event
 
 from . import public_mon_protocol, public_context_protocol, public_items, public_field, public_active, public_damage, public_types, public_sleep, public_sleep_protocol, public_toxic_protocol
+from . import public_tendency, public_tendency_protocol
 from .public_context_protocol import PublicAddress, PublicAddresses, ContextProjection
 from .public_inputs import Kind, Phase, PublicEvent
 
@@ -45,6 +46,7 @@ class WireState:
     type_binding: tuple[int, ...] | None = None
     sleep_binding: tuple[int, ...] | None = None
     toxic_binding: tuple[int, ...] | None = None
+    tendency_binding: tuple[int, ...] | None = None
 
     def addresses(self):
         active = {side: rows[self.active[side]].address for side, rows in enumerate(self.encounters)
@@ -127,9 +129,10 @@ class WireProjection(ContextProjection):
     type_binding: tuple[int, ...] | None = None
     sleep_binding: tuple[int, ...] | None = None
     toxic_binding: tuple[int, ...] | None = None
+    tendency_binding: tuple[int, ...] | None = None
 
 
-def project_line(state, line, *, species_catalog, source, moves, abilities, items=None, context_tables=None, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None):
+def project_line(state, line, *, species_catalog, source, moves, abilities, items=None, context_tables=None, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_catalog=None):
     """Return a new registry and ordered named-field events, or refuse atomically.
 
     Callers commit this candidate state only with successful device fold of all
@@ -148,7 +151,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             or not np.array_equal(np.asarray(moves.device.source_binding),np.asarray(source.device.binding))
             or not np.array_equal(np.asarray(species_catalog.device.source_binding),np.asarray(source.device.binding))):
         raise ValueError('public wire requires the frozen species/ability/move namespaces')
-    item_binding=context_binding=field_binding=active_binding=damage_binding=type_binding=sleep_binding=toxic_binding=None
+    item_binding=context_binding=field_binding=active_binding=damage_binding=type_binding=sleep_binding=toxic_binding=tendency_binding=None
     if items is not None:
         if context_tables is None or context_tables.items is None or context_tables.binding is None:
             raise ValueError("item wire requires a frozen composed context")
@@ -216,7 +219,19 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         toxic_binding=tuple(int(x) for x in np.asarray(toxic_tables.binding))
     elif context_tables is not None and context_tables.toxic is not None:
         raise ValueError('Toxic context cannot drop its raw producer')
-    if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding or state.damage_binding!=damage_binding or state.type_binding!=type_binding or state.sleep_binding!=sleep_binding or state.toxic_binding!=toxic_binding):
+    tendency_projection=None
+    if tendency_catalog is not None:
+        if (context_tables is None or context_tables.tendency is None or field_catalog is None
+                or not np.array_equal(np.asarray(context_tables.tendency.binding),np.asarray(tendency_catalog.device.binding))
+                or not np.array_equal(np.asarray(tendency_catalog.device.species_binding),np.asarray(species_catalog.device.binding))
+                or not np.array_equal(np.asarray(tendency_catalog.device.move_binding),np.asarray(moves.device.binding))
+                or not np.array_equal(np.asarray(tendency_catalog.device.vocabulary_binding),np.asarray(species_catalog.device.vocabulary_binding))):
+            raise ValueError('tendency wire requires exact context/species/move/vocabulary namespaces')
+        tendency_binding=tuple(int(x) for x in np.asarray(tendency_catalog.device.binding))
+        tendency_projection=public_tendency_protocol.project_line(line,catalog=tendency_catalog)
+    elif context_tables is not None and context_tables.tendency is not None:
+        raise ValueError('tendency context cannot drop its raw producer')
+    if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding or state.damage_binding!=damage_binding or state.type_binding!=type_binding or state.sleep_binding!=sleep_binding or state.toxic_binding!=toxic_binding or state.tendency_binding!=tendency_binding):
         raise ValueError("item context cannot change or be dropped across continuation")
     parts = line.split('|')
     kind = parts[1] if len(parts) > 1 else ''
@@ -224,7 +239,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
     if kind == 'request':
         raise ValueError('private requests cannot enter the public event producer')
     candidate = replace(state,species_binding=binding,move_binding=move_binding,
-        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding,sleep_binding=sleep_binding,toxic_binding=toxic_binding)
+        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding,sleep_binding=sleep_binding,toxic_binding=toxic_binding,tendency_binding=tendency_binding)
     side = None
     if kind in ('switch', 'drag', 'replace'):
         candidate, side = _arrive(candidate, line, parts)
@@ -331,6 +346,8 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             event=PublicEvent(Kind.SLEEP,state.next_sequence+len(events),state.turn,state.phase,
                 target_side=holder.side,target_slot=holder.slot,payload=(holder.encounter,operation,first,second,0,0,0,0))
             event.words();events.append(event)
+    tendency_main=tendency_projection is not None and tendency_projection.payload[0]!=public_tendency.OTHER
+    main_handled |= tendency_main
     proc_only=kind in PROC_ONLY_KINDS and (all(confirmed) or item_projection is not None and bool(item_projection.facts))
     main_handled |= proc_only
     if toxic_tables is not None:
@@ -348,8 +365,13 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             event.words();events.append(event)
     if not main_handled and not (toxic_tables is not None and projection.timestamp):
         raise ValueError('raw main kind has no implemented consumer; incidental proc tags are insufficient')
-    if not events or item_projection is not None and len(events)==1 and not item_projection.trick_idents:
+    if (not events or item_projection is not None and len(events)==1 and not item_projection.trick_idents) and not tendency_main:
         raise ValueError("raw line has no implemented consumer; it must not be silently dropped")
+    if tendency_projection is not None:
+        last=events[-1]
+        event=PublicEvent(Kind.TENDENCY,state.next_sequence+len(events),last.turn,last.phase,
+            target_side=tendency_projection.side,payload=tendency_projection.payload)
+        event.words();events.append(event)
     pending = {f'p{s+1}' for s in (0, 1) if state.pending_baton[s]}
     _flag_baton_pass(parts, pending)
     if side is not None:
@@ -365,7 +387,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         turn=last.turn, phase=last.phase, pending_baton=tuple(f'p{s+1}' in pending for s in (0, 1)))
     return candidate, WireProjection(line, tuple(events), species_binding=binding,
         ability_binding=tuple(int(x) for x in np.asarray(abilities.device.binding)),move_binding=move_binding,
-        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding,sleep_binding=sleep_binding,toxic_binding=toxic_binding)
+        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding,sleep_binding=sleep_binding,toxic_binding=toxic_binding,tendency_binding=tendency_binding)
 
 
 def project_lines(state, lines, **tables):
