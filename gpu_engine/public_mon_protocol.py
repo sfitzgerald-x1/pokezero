@@ -102,9 +102,8 @@ def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents
     if kind in ("-status","-curestatus") and len(parts)>=4:
         if kind=="-curestatus" and not _ident_has_position(parts[2]):
             target=addresses.known_idents.get(parts[2]);side=_slot_from_ident(parts[2])
-            if (not isinstance(target,PublicAddress) or side!=f"p{target.side+1}"
-                    or addresses.active.get(target.side)==target):
-                raise ValueError("benched cure requires its registered inactive public encounter")
+            if not isinstance(target,PublicAddress) or side!=f"p{target.side+1}":
+                raise ValueError("positionless cure requires its registered public species")
             named=_normalize_name(_species_from_ident(parts[2]))
             matches={a for a,s in addresses.public_species.items() if a.side==target.side and
                 (_normalize_name(s)==named or _normalize_name(str(s).split('-',1)[0])==named)}
