@@ -103,6 +103,85 @@ class ActorTests(unittest.TestCase):
         self.assertEqual(self.observations[0].perspective.player_id,'p1')
         with self.assertRaises(TypeError):self.observations[0].metadata['generation']=100
 
+    def test_decision_observation_is_exact_policy_input_without_reexecution(self):
+        actor=self.make(); self.begin(actor); self.feed(actor,(request(),))
+        snap=actor.snapshot_boundary()
+        with self.assertRaisesRegex(ValueError,'no completed'):actor.decision_observation(snap)
+        self.assertEqual(self.backends[-1].encodes,[])
+        actor.decide(snap,rng=random.Random(42))
+        observation=actor.decision_observation(snap)
+        self.assertIs(observation,self.observations[-1])
+        self.assertIs(actor.decision_observation(snap),observation)
+        self.assertEqual(len(self.backends[-1].encodes),1)
+        self.assertEqual(len(self.observations),1)
+        with self.assertRaisesRegex(ValueError,'stale'):
+            actor.decision_observation(replace(snap))
+        self.assertIs(actor.decision_observation(snap),observation)
+        with self.assertRaisesRegex(ValueError,'already consumed'):actor.decide(snap,rng=random.Random())
+        with self.assertRaisesRegex(ValueError,'no completed'):actor.decision_observation(snap)
+        self.assertEqual(len(self.backends[-1].encodes),1)
+
+    def test_decision_observation_primitives_and_metadata_are_immutable(self):
+        from dataclasses import FrozenInstanceError
+        actor=self.make(); self.begin(actor); self.feed(actor,(request(),))
+        snap,_=self.decide(actor); observation=actor.decision_observation(snap)
+        for name in SHAPES:self.assertIs(type(getattr(observation,name)),tuple)
+        self.assertIs(type(observation.numeric_features[0]),tuple)
+        self.assertIs(type(observation.numeric_features[0][0]),float)
+        self.assertIs(type(observation.categorical_ids[0][0]),int)
+        self.assertIs(type(observation.attention_mask[0]),bool)
+        with self.assertRaises(TypeError):observation.numeric_features[0][0]=5.
+        with self.assertRaises(TypeError):observation.metadata['generation']=999
+        with self.assertRaises(FrozenInstanceError):observation.numeric_features=()
+        self.assertTrue(all(type(v) in (str,int,bool) for v in observation.metadata.values()))
+
+    def test_decision_observation_cleared_on_newstream_poison_close_and_reset(self):
+        actor=self.make(); self.begin(actor); self.feed(actor,(request(),))
+        previous,_=self.decide(actor)
+        self.feed(actor,(request(),))
+        with self.assertRaises(ValueError):actor.decision_observation(previous)
+        current=actor.snapshot_boundary()
+        with self.assertRaisesRegex(ValueError,'no completed'):actor.decision_observation(current)
+        self.action=1
+        with self.assertRaisesRegex(ValueError,'illegal'):actor.decide(current,rng=random.Random())
+        with self.assertRaises(ValueError):actor.decision_observation(current)
+        self.assertEqual(actor.close_game()['status'],'FAILED_CLOSED')
+        with self.assertRaises(ValueError):actor.decision_observation(current)
+        self.begin(actor,battle='next',stream=2)
+        with self.assertRaises(ValueError):actor.decision_observation(current)
+        with self.assertRaisesRegex(ValueError,'no completed'):
+            actor.decision_observation(actor.snapshot_boundary())
+
+    def test_decision_observation_refuses_terminal_wait_and_reissued_snapshot(self):
+        actor=self.make(); self.begin(actor); self.feed(actor,(request(wait=True),))
+        snap=actor.snapshot_boundary()
+        with self.assertRaises(NoAction):actor.decide(snap,rng=random.Random())
+        with self.assertRaisesRegex(ValueError,'no completed'):actor.decision_observation(snap)
+        self.feed(actor,(request(),)); snap,_=self.decide(actor)
+        new=actor.snapshot_boundary()
+        with self.assertRaises(ValueError):actor.decision_observation(snap)
+        with self.assertRaisesRegex(ValueError,'no completed'):actor.decision_observation(new)
+        self.feed(actor,('|win|Authored',)); terminal=actor.snapshot_boundary()
+        with self.assertRaises(NoAction):actor.decide(terminal,rng=random.Random())
+        with self.assertRaisesRegex(ValueError,'no completed'):actor.decision_observation(terminal)
+        self.assertEqual(len(self.backends[-1].encodes),1)
+
+    def test_decision_observation_not_published_when_late_policy_guard_fails(self):
+        holder={}
+        def choose(observation,*,rng):
+            self.observations.append(observation)
+            holder['policy'].contract=replace(self.contract,checkpoint_sha256='f'*64)
+            return PolicyDecision(0,'authored')
+        def policy(c):
+            holder['policy']=RawPolicy(c,choose,lambda:None)
+            return holder['policy']
+        actor=self.make(policy_factory=policy); self.begin(actor); self.feed(actor,(request(),))
+        snap=actor.snapshot_boundary()
+        with self.assertRaisesRegex(ValueError,'namespace drift'):actor.decide(snap,rng=random.Random())
+        with self.assertRaisesRegex(ValueError,'not active'):actor.decision_observation(snap)
+        self.assertEqual(len(self.observations),1)
+        self.assertEqual(actor.close_game()['status'],'FAILED_CLOSED')
+
     def test_wait_no_request_asymmetry_then_action(self):
         for owner in ('p1','p2'):
             actor=self.make(); self.begin(actor,owner=owner)
@@ -471,6 +550,7 @@ class ProductionPythonTests(unittest.TestCase):
             actor.accept_owner_stream(battle_id='authored',owner=owner,generation=0,
                 prefix_sha256=actor.prefix_sha256,lines=tuple(lines))
             snap=actor.snapshot_boundary(); actor.decide(snap,rng=random.Random(7))
+            self.assertIs(actor.decision_observation(snap),observations[0])
             self.assertEqual(backends[0].env.protocol_lines,tuple(lines))
             self.assertEqual(len(backends[0].env._request_history[owner]),2)
             self.assertEqual(set(backends[0].env._parser.requests),{owner})
@@ -521,6 +601,7 @@ class ProductionJaxTests(unittest.TestCase):
             actor.accept_owner_stream(battle_id=actor.battle_id,owner=actor.owner,
                 generation=0,prefix_sha256=actor.prefix_sha256,lines=lines)
             snap=actor.snapshot_boundary(); actor.decide(snap,rng=random.Random(3))
+            self.assertIs(actor.decision_observation(snap),observations[0])
             self.assertEqual(actor.choice(snap),'switch 1')
             self.assertEqual(observations[0].schema_version,'pokezero.observation.v4')
             self.assertEqual(snap.lines,lines); self.assertEqual(snap.request_count,2)

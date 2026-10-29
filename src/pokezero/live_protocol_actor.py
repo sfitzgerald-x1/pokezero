@@ -471,6 +471,7 @@ class LiveProtocolActor:
         self._lines, self._request_line, self._request_count = [], None, 0
         self.generation, self._prefix, self._snapshot = 0, hashlib.sha256(), None
         self._decision_generation, self._choice, self.error, self.close_error = None, None, None, None
+        self._decision_observation, self._decision_snapshot = None, None
         self._decision_request_count, self._terminal = None, False
         self._backend = self._policy = None
         self.status = 'ACTIVE'
@@ -493,6 +494,7 @@ class LiveProtocolActor:
 
     def _poison(self, error):
         self.status, self.error, self._snapshot, self._choice = 'POISONED', type(error).__name__, None, None
+        self._decision_observation, self._decision_snapshot = None, None
 
     @property
     def prefix_sha256(self):
@@ -529,6 +531,7 @@ class LiveProtocolActor:
             self._terminal = terminal_seen
             self.generation += 1
             self._snapshot, self._choice = None, None
+            self._decision_observation, self._decision_snapshot = None, None
         except BaseException as error:
             self._poison(error); raise
 
@@ -547,6 +550,7 @@ class LiveProtocolActor:
 
     def decide(self, snapshot, *, rng):
         self._current(snapshot)
+        self._decision_observation, self._decision_snapshot = None, None
         if self._terminal or snapshot.own_request_line is None or not _actionable(_packet(snapshot.own_request_line,self.owner)):
             raise NoAction('own request is not actionable')
         _require(self._decision_request_count != self._request_count, 'own request already consumed')
@@ -568,6 +572,7 @@ class LiveProtocolActor:
             _require(action < 4 or targets[action-4] >= 0, 'missing switch target')
             self._decision_generation = self.generation
             self._decision_request_count = self._request_count
+            self._decision_observation, self._decision_snapshot = observation, snapshot
             return decision
         except BaseException as error:
             self._poison(error); raise
@@ -603,6 +608,21 @@ class LiveProtocolActor:
         _require(self._choice is not None and self._decision_generation == self.generation, 'no bound decision')
         return self._choice
 
+    def decision_observation(self, snapshot):
+        """Exact immutable raw-policy input, after a completed current decision.
+
+        This accessor performs no encoding, inference or cursor advance. Keep
+        the snapshot passed to decide: an equal or newly issued snapshot is not
+        the successful decision's identity.
+        """
+        self._current(snapshot)
+        _require(not self._terminal and self._decision_snapshot is snapshot
+            and self._decision_observation is not None and self._choice is not None
+            and self._decision_generation == snapshot.generation
+            and self._decision_request_count == snapshot.request_count,
+            'no completed owning decision observation')
+        return self._decision_observation
+
     def close_game(self):
         _require(self.status in ('ACTIVE','POISONED'), 'actor already closed or unstarted')
         was_poisoned = self.status == 'POISONED'
@@ -613,6 +633,7 @@ class LiveProtocolActor:
                 except BaseException as error:
                     self.close_error = type(error).__name__; was_poisoned = True
         self.status, self._snapshot, self._choice = 'CLOSED', None, None
+        self._decision_observation, self._decision_snapshot = None, None
         return dict(status='FAILED_CLOSED' if was_poisoned else 'TERMINAL_UNQUALIFIED' if self._terminal else 'ABORTED_UNQUALIFIED',
             battle_id=self.battle_id,owner=self.owner,generation=self.generation,
             terminal_seen=self._terminal,
