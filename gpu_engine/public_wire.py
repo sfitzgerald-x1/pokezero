@@ -15,7 +15,7 @@ from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_publ
 from pokezero.belief import _confirmed_ability_from_event, _trace_copy_source
 
 from . import public_mon_protocol, public_context_protocol, public_items, public_field, public_active, public_damage, public_types, public_sleep, public_sleep_protocol, public_toxic_protocol
-from . import public_tendency, public_tendency_protocol, public_refresh_stream
+from . import public_tendency, public_tendency_protocol, public_refresh_stream, public_switch_protocol
 from .public_context_protocol import PublicAddress, PublicAddresses, ContextProjection
 from .public_inputs import Kind, Phase, PublicEvent
 
@@ -387,6 +387,16 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         raise ValueError('raw main kind has no implemented consumer; incidental proc tags are insufficient')
     if (not events or item_projection is not None and len(events)==1 and not item_projection.trick_idents) and not tendency_main:
         raise ValueError("raw line has no implemented consumer; it must not be silently dropped")
+    if context_tables is not None and context_tables.switches is not None:
+        if not refresh_family or not events or events[0].kind!=Kind.RAW_BEGIN:
+            raise ValueError('pending switch producer requires a raw source envelope')
+        facts=public_switch_protocol.lexical_facts(line,state,species_catalog=species_catalog,abilities=abilities)
+        prelude=PublicEvent(Kind.SWITCH_PRELUDE,state.next_sequence+1,state.turn,state.phase,
+            actor_side=facts.confirmed_side,actor_slot=facts.confirmed_slot,
+            payload=(int(facts.arrival),int(facts.boundary),facts.confirmed_ability,facts.confirmed_encounter,
+                int(facts.exact_ident),facts.species_ident,0,0))
+        prelude.words();events.insert(1,prelude)
+        events=[replace(event,sequence=state.next_sequence+index) for index,event in enumerate(events)]
     if refresh_family:
         meta=public_refresh_stream.metadata(refresh_family,line,events,context_tables.lifecycle,addresses=addresses,clause=context_tables.sleep_clause is not None)
         opener=events[0]

@@ -17,7 +17,7 @@ from . import public_tendency as tendency, public_mon_state as mon
 NOOP, ARRIVAL, MOVE, TURN, ABILITY, TRACE, TRANSFORM=range(1,8)
 STATUS,CANT,CURE,TEAM,FAINT,HP,CANT_OTHER=range(8,15)
 LAST_FAMILY=CANT_OTHER
-SCHEMA='pokezero.public_refresh_stream.v2'
+SCHEMA='pokezero.public_refresh_stream.v3'
 FAMILIES=('noop','arrival','move','turn','ability','trace','transform','status','sleep-cant','cure','team','faint','hp','other-cant')
 
 
@@ -30,12 +30,13 @@ class StreamState(NamedTuple):
     proc_seen: jax.Array
     common_seen: jax.Array
     common_proof: jax.Array
+    switch_seen: jax.Array
 
 
-def validate_source(source):
+def validate_source(source,*,pending_switch=False):
     for variants in source.variants:
         abilities={normalize_id(v.ability or '') for v in variants}
-        if 'intimidate' in abilities and len(abilities)>1:
+        if 'intimidate' in abilities and len(abilities)>1 and not pending_switch:
             raise ValueError('ordered refresh requires the pending Intimidate source consumer for this source')
 
 
@@ -72,7 +73,7 @@ def initialize(beliefs,source_tables,tables):
     batch=beliefs.species.shape[0]
     return StreamState(refresh.initialize(beliefs,source_tables,tables),jnp.zeros(batch,jnp.int32),
         jnp.zeros(batch,jnp.int32),jnp.zeros((batch,6),jnp.int32),
-        jnp.zeros((batch,4),jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros((batch,10),jnp.int32))
+        jnp.zeros((batch,4),jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros((batch,10),jnp.int32),jnp.zeros(batch,jnp.int32))
 
 
 def metadata(code,line,events,lifecycle_tables,*,addresses=None,clause=False):
@@ -155,7 +156,7 @@ def common_matches(state,row):
 def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,clause=False):
     batch=beliefs.species.shape[0]
     refresh._tables(tables,source_tables,move_tables);refresh._state_shape(state.controller,batch)
-    for value in (state.family,state.main_seen,state.proc_seen,state.common_seen):
+    for value in (state.family,state.main_seen,state.proc_seen,state.common_seen,state.switch_seen):
         if value.shape!=(batch,) or value.dtype!=jnp.int32:
             raise ValueError('source refresh frame requires B int32 state words')
     if state.main_proof.shape!=(batch,6) or state.main_proof.dtype!=jnp.int32:
@@ -171,6 +172,7 @@ def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,cl
     ok &= jnp.all((selected>=0)&(selected<tables.sleep_usable.shape[0]),axis=(1,2))
     ok &= (state.family>=0)&(state.family<=LAST_FAMILY)&(state.main_seen>=0)&(state.main_seen<=1)
     ok &= (state.proc_seen>=0)&(state.proc_seen<=1)&(state.common_seen>=0)&(state.common_seen<=1)
+    ok &= (state.switch_seen>=0)&(state.switch_seen<=1)&((state.family!=0)|(state.switch_seen==0))
     ok &= jnp.where(state.family==0,jnp.all(state.raw_meta==0,axis=-1),metadata_ok(state.family,state.raw_meta,lifecycle=lifecycle,clause=clause))
     ok &= (state.common_seen!=0)|jnp.all(state.common_proof==0,axis=-1)
     ok &= (state.family!=0)|((state.proc_seen==0)&(state.common_seen==0))
@@ -181,7 +183,7 @@ def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,cl
 
 def open_frame(state,code,meta,valid,*,lifecycle=False,clause=False):
     ok=(state.family==0)&(state.main_seen==0)&(code>=NOOP)&(code<=LAST_FAMILY)
-    ok &= (state.proc_seen==0)&(state.common_seen==0)&metadata_ok(code,meta,lifecycle=lifecycle,clause=clause)
+    ok &= (state.proc_seen==0)&(state.common_seen==0)&(state.switch_seen==0)&metadata_ok(code,meta,lifecycle=lifecycle,clause=clause)
     use=valid&ok
     return state._replace(family=jnp.where(use,code,state.family),raw_meta=jnp.where(use[:,None],meta,state.raw_meta)),ok|~valid
 
@@ -197,9 +199,10 @@ def checkpoint(state,beliefs,source_tables,mask):
     return state._replace(controller=state.controller._replace(visible=cache)),beliefs,jnp.all(ok,axis=(1,2))
 
 
-def close_frame(state,beliefs,source_tables,control,control_side,valid):
+def close_frame(state,beliefs,source_tables,control,control_side,valid,*,pending_switch=False):
     _,basis_ok=snapshot.read(state.controller.visible,beliefs,source_tables)
     ok=(state.family>=NOOP)&(state.family<=LAST_FAMILY)
+    ok &= state.switch_seen==int(pending_switch)
     ok &= state.main_seen==jnp.where((state.family==NOOP)|(state.family==CANT_OTHER),0,1)
     control_kind=control[:,0]
     arrival=(control_kind>=tendency.SWITCH)&(control_kind<=tendency.REPLACE)
@@ -222,7 +225,7 @@ def close_frame(state,beliefs,source_tables,control,control_side,valid):
     return state._replace(family=jnp.where(use,0,state.family),main_seen=jnp.where(use,0,state.main_seen),
         main_proof=jnp.where(use[:,None],0,state.main_proof),raw_meta=jnp.where(use[:,None],0,state.raw_meta),
         proc_seen=jnp.where(use,0,state.proc_seen),common_seen=jnp.where(use,0,state.common_seen),
-        common_proof=jnp.where(use[:,None],0,state.common_proof)),ok|~valid
+        common_proof=jnp.where(use[:,None],0,state.common_proof),switch_seen=jnp.where(use,0,state.switch_seen)),ok|~valid
 
 
 def commit(ok,before,after):
