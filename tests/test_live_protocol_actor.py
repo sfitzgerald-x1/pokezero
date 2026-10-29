@@ -223,6 +223,28 @@ class ActorTests(unittest.TestCase):
         actor=self.make(policy_factory=lambda c:policy); self.begin(actor); actor.close_game()
         with self.assertRaisesRegex(ValueError,'alias'):self.begin(actor,battle='next',stream=2)
 
+    def test_within_chunk_terminal_order_refuses_before_any_ingest(self):
+        tails=[('|turn|2',),(request(),),('|win|Again',),('|tie',),
+               ('|switch|p1a: Snorlax|Snorlax|100/100',),('|message|unproved annotation',)]
+        for terminal in ('|win|Authored','|tie'):
+            for tail in tails:
+                actor=self.make(); self.begin(actor)
+                with self.assertRaisesRegex(ValueError,'postterminal line'):
+                    self.feed(actor,(terminal,*tail))
+                self.assertEqual(self.backends[-1].lines,[])
+                self.assertEqual(actor.status,'POISONED')
+                with self.assertRaises(ValueError):self.decide(actor)
+                receipt=actor.close_game()
+                self.assertEqual(receipt['status'],'FAILED_CLOSED')
+                self.assertEqual(receipt['owner_lines'],0)
+
+    def test_within_chunk_terminal_allows_only_bare_pipe_separators(self):
+        actor=self.make(); self.begin(actor)
+        self.feed(actor,('|win|Authored','|','|'))
+        self.assertEqual(self.backends[-1].lines,['|win|Authored','|','|'])
+        with self.assertRaises(NoAction):self.decide(actor)
+        self.assertEqual(actor.close_game()['status'],'TERMINAL_UNQUALIFIED')
+
     def test_namespace_mismatch_refuses_before_any_encode(self):
         wrong=replace(self.contract,checkpoint_sha256='e'*64)
         actor=self.make(backend_factory=lambda c,**kw:FixtureBackend(wrong))
@@ -309,6 +331,120 @@ class RawTransformerBindingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'runtime precision'):
             bound.select_action(None,rng=random.Random())
 
+    def test_distinct_transformers_shared_history_original_counterexample(self):
+        c,p,torch=self.fixture(); _,q,_=self.fixture()
+        history={'p1':['authored prior observation']}
+        p._history_by_player=q._history_by_player=history
+        with patch('pokezero.neural_policy.require_torch',return_value=torch):
+            first,second=RawPolicy.from_transformer(c,p),RawPolicy.from_transformer(c,q)
+        first.claim(c)
+        with self.assertRaisesRegex(ValueError,'mutable raw history ownership alias'):second.claim(c)
+
+    def test_distinct_history_dicts_deep_list_array_and_metadata_aliases_refuse(self):
+        from pokezero.observation import PokeZeroObservationV0
+        array=np.arange(4,dtype=np.float32)
+        metadata={'mutable':[1]}
+        obs=lambda:PokeZeroObservationV0((),(),(),(),(),metadata=metadata)
+        for a,b in (([1],[1]),(array[:2],array[2:]),(obs(),obs())):
+            if type(a) is list:b=a
+            c,p,torch=self.fixture(); _,q,_=self.fixture()
+            p._history_by_player={'p1':[a]}; q._history_by_player={'p2':[b]}
+            with patch('pokezero.neural_policy.require_torch',return_value=torch):
+                first,second=RawPolicy.from_transformer(c,p),RawPolicy.from_transformer(c,q)
+            first.claim(c)
+            with self.assertRaisesRegex(ValueError,'mutable raw history ownership alias'):second.claim(c)
+
+    def test_immutable_model_sharing_allowed_and_owned_history_updates_leased(self):
+        c,p,torch=self.fixture(); _,q,_=self.fixture()
+        q.model=p.model  # Immutable model sharing is not a history alias.
+        calls=[]
+        def select(obs,**kwargs):
+            p._history_by_player.setdefault('p1',[]).append(obs)
+            calls.append(obs)
+            return PolicyDecision(0,'authored')
+        p.select_action=select
+        with patch('pokezero.neural_policy.require_torch',return_value=torch):
+            first,second=RawPolicy.from_transformer(c,p),RawPolicy.from_transformer(c,q)
+        first.claim(c); second.claim(c)
+        first.select_action('authored immutable observation',rng=random.Random())
+        q._history_by_player['p2']=['independent']
+        first.reset()
+        self.assertEqual(q._history_by_player,{'p2':['independent']})
+        self.assertEqual(calls,['authored immutable observation'])
+
+    def test_shared_history_inserted_after_binding_refuses_and_history_swap_refuses(self):
+        c,p,torch=self.fixture(); _,q,_=self.fixture()
+        p.select_action=lambda obs,**kwargs:PolicyDecision(0,'authored')
+        q.select_action=lambda obs,**kwargs:PolicyDecision(0,'authored')
+        with patch('pokezero.neural_policy.require_torch',return_value=torch):
+            first,second=RawPolicy.from_transformer(c,p),RawPolicy.from_transformer(c,q)
+        first.claim(c); second.claim(c)
+        values=[]; p._history_by_player['p1']=values
+        first.select_action(None,rng=random.Random())
+        q._history_by_player['p2']=values
+        with self.assertRaisesRegex(ValueError,'history ownership alias'):
+            second.select_action(None,rng=random.Random())
+        p._history_by_player={}
+        with self.assertRaisesRegex(ValueError,'history binding drift'):
+            first.select_action(None,rng=random.Random())
+
+    def test_every_bound_selection_control_function_and_namespace_drift_refuses(self):
+        changes=dict(deterministic=False,exploration_epsilon=1.,sampling_temperature=2.,
+            family_gated_selection=True,history_mask_k=0,device='cuda',policy_id='foreign',
+            checkpoint_path='/foreign',record_policy_distribution=True,
+            forward_fn=lambda t:None,select_action=lambda o,**kw:PolicyDecision(0,'changed'),
+            reset=lambda:None,_default_forward=lambda **kw:None)
+        for field,value in changes.items():
+            c,p,torch=self.fixture(); calls=[]
+            p.select_action=lambda obs,**kw:(calls.append(True),PolicyDecision(0,'original'))[1]
+            with patch('pokezero.neural_policy.require_torch',return_value=torch):
+                bound=RawPolicy.from_transformer(c,p)
+            setattr(p,field,value)
+            with self.assertRaises(ValueError,msg=field):bound.select_action(None,rng=random.Random())
+            self.assertEqual(calls,[],field)
+        for field,value in (('exact_state_enabled',False),('category_vocab',('foreign',))):
+            c,p,torch=self.fixture()
+            with patch('pokezero.neural_policy.require_torch',return_value=torch):bound=RawPolicy.from_transformer(c,p)
+            setattr(p.result.model_config,field,value)
+            with self.assertRaises(ValueError,msg=field):bound.select_action(None,rng=random.Random())
+
+    def test_callable_overloaded_equality_cannot_alias_bound_function(self):
+        class ForgedCallable:
+            def __eq__(self, other):return True
+            def __call__(self, *args, **kwargs):return PolicyDecision(0,'forged')
+        for field in ('forward_fn','select_action','reset','_default_forward'):
+            c,p,torch=self.fixture()
+            with patch('pokezero.neural_policy.require_torch',return_value=torch):
+                bound=RawPolicy.from_transformer(c,p)
+            setattr(p,field,ForgedCallable())
+            with self.assertRaisesRegex(ValueError,'selection/function'):
+                bound.select_action(None,rng=random.Random())
+
+    def test_late_selection_drift_refuses_after_callback(self):
+        c,p,torch=self.fixture()
+        def drift(obs,**kw):
+            p.deterministic=False
+            return PolicyDecision(0,'authored')
+        p.select_action=drift
+        with patch('pokezero.neural_policy.require_torch',return_value=torch):bound=RawPolicy.from_transformer(c,p)
+        with self.assertRaisesRegex(ValueError,'selection/function'):
+            bound.select_action(None,rng=random.Random())
+
+    def test_history_lease_ledger_releases_dead_wrapper_without_retaining_games(self):
+        import gc
+        import weakref
+        from pokezero.live_protocol_actor import _HISTORY_LEASES
+        c,p,torch=self.fixture()
+        with patch('pokezero.neural_policy.require_torch',return_value=torch):
+            bound=RawPolicy.from_transformer(c,p)
+        bound.claim(c)
+        identity=id(p._history_by_player); reference=weakref.ref(bound)
+        self.assertIn(identity,_HISTORY_LEASES)
+        del bound
+        gc.collect()
+        self.assertIsNone(reference())
+        self.assertNotIn(identity,_HISTORY_LEASES)
+
 
 class ProductionPythonTests(unittest.TestCase):
     def test_real_incremental_python_both_owners_own_request_interleaving(self):
@@ -340,6 +476,24 @@ class ProductionPythonTests(unittest.TestCase):
             self.assertEqual(set(backends[0].env._parser.requests),{owner})
             self.assertEqual(observations[0].perspective.player_id,owner)
             self.assertEqual(actor.close_game()['status'],'ABORTED_UNQUALIFIED')
+
+    def test_real_python_refuses_within_chunk_terminal_before_mutating_history(self):
+        from test_saved_player_projection import ProductionHistoryTests, leads, request as own_request
+        f=ProductionHistoryTests(); f.setUp(); self.addCleanup(f.doCleanups)
+        f.source.metadata=SimpleNamespace(source_hash='b'*16)
+        contract=replace(ActorContract.champion(),belief_set_source_hash='b'*16,
+            category_vocab_sha256=_vocab_sha(f.config.category_vocab),
+            categorical_vocab_size=f.config.category_vocab.size)
+        for tail in (('|turn|2',),(own_request('p1'),)):
+            backend=PythonBackend(contract,config=f.config,battle_id='terminal',owner='p1',stream_id=1)
+            actor=LiveProtocolActor(contract,backend_factory=lambda c,**kw:backend,
+                policy_factory=lambda c:RawPolicy(c,lambda o,**kw:PolicyDecision(0,'fake'),lambda:None))
+            actor.begin_game(battle_id='terminal',owner='p1',seed=42,stream_id=1)
+            with self.assertRaisesRegex(ValueError,'postterminal line'):
+                actor.accept_owner_stream(battle_id='terminal',owner='p1',generation=0,
+                    prefix_sha256=actor.prefix_sha256,lines=tuple(leads())+('|win|Authored',*tail))
+            self.assertEqual(backend.env.protocol_lines,())
+            self.assertEqual(actor.close_game()['status'],'FAILED_CLOSED')
 
 
 class ProductionJaxTests(unittest.TestCase):

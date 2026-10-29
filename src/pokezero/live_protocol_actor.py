@@ -10,8 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-from types import MappingProxyType
+import threading
+from types import MappingProxyType, MethodType
 from typing import Any, Callable
+import weakref
 
 import numpy as np
 
@@ -26,6 +28,60 @@ MASK_NAMES = ('exact_state', 'feature_pack_last_move', 'investment_belief_narrow
               'tier2_residuals', 'transition_token_budget')
 UNQUALIFIED = MappingProxyType(dict(public_wire_qualified=False,
     captured_player_wire=False, full_encoder_admitted=False, B3_qualified=False))
+
+
+# Lease only mutable policy HISTORY, never shared model weights/dex tables.
+# Strong container references prevent id reuse; weak owners release the ledger
+# when a wrapper dies, rather than retaining every completed game's history.
+_HISTORY_LEASES = {}
+_HISTORY_LOCK = threading.RLock()
+
+
+def _release_history(owner):
+    with _HISTORY_LOCK:
+        for identity, (_, lease) in tuple(_HISTORY_LEASES.items()):
+            if lease is owner:
+                del _HISTORY_LEASES[identity]
+
+
+def _mutable_history(root):
+    pending, seen = [root], set()
+    while pending:
+        value = pending.pop()
+        if id(value) in seen:
+            continue
+        seen.add(id(value))
+        if type(value) is dict or isinstance(value, MappingProxyType):
+            if type(value) is dict:
+                yield value
+            pending.extend(value.values())
+        elif type(value) in (list, set):
+            yield value
+            pending.extend(value)
+        elif type(value) is tuple:
+            pending.extend(value)
+        elif isinstance(value, PokeZeroObservationV0):
+            pending.extend(getattr(value, name) for name in value.__dataclass_fields__)
+        elif isinstance(value, np.ndarray):
+            yield value
+            if value.base is not None:
+                pending.append(value.base)
+        elif isinstance(value, memoryview):
+            yield value
+            pending.append(value.obj)
+        elif type(value) is bytearray:
+            yield value
+
+
+def _terminal(line):
+    return line.startswith('|win|') or line == '|tie' or line.startswith('|tie|')
+
+
+def _same_callable(actual, expected):
+    # Bound method lookup creates a new object. Compare its actual receiver and
+    # function identities, never an arbitrary callable's overloaded equality.
+    return actual is expected or (type(actual) is MethodType and type(expected) is MethodType
+        and actual.__self__ is expected.__self__ and actual.__func__ is expected.__func__)
 
 
 def _canonical(value):
@@ -151,6 +207,8 @@ class RawPolicy(OwnedProvider):
         _require(callable(select_action) and callable(reset), 'bound raw callbacks required')
         self._select_action, self.reset = select_action, reset
         self._transformer_policy = None
+        self._history = None
+        self._history_owner = weakref.ref(self, _release_history)
         self._validate = lambda: None
 
     def select_action(self, observation, *, rng):
@@ -164,7 +222,22 @@ class RawPolicy(OwnedProvider):
         if self._transformer_policy is not None:
             _require(not getattr(self._transformer_policy, '_live_protocol_claimed', False),
                      'raw policy ownership alias')
+            self._validate()
+            self._history = self._transformer_policy._history_by_player
+            _require(type(self._history) is dict, 'owned mutable history dictionary required')
+            self._claim_history()
             self._transformer_policy._live_protocol_claimed = True
+
+    def _claim_history(self):
+        containers = tuple(_mutable_history(self._history))
+        with _HISTORY_LOCK:
+            # Validate the whole roster first, so refusal takes no partial lease.
+            for value in containers:
+                previous = _HISTORY_LEASES.get(id(value))
+                _require(previous is None or previous[1]() is self,
+                         'mutable raw history ownership alias')
+            for value in containers:
+                _HISTORY_LEASES[id(value)] = (value, self._history_owner)
 
     @classmethod
     def from_transformer(cls, contract, policy):
@@ -193,7 +266,7 @@ class RawPolicy(OwnedProvider):
         _require(policy.deterministic is True and policy.exploration_epsilon == 0
             and policy.sampling_temperature == 1 and policy.family_gated_selection is False
             and policy.history_mask_k is None and not policy.model.training
-            and policy.forward_fn == policy._default_forward,
+            and _same_callable(policy.forward_fn, policy._default_forward),
             'unchanged deterministic raw selection required')
         torch = require_torch()
         _require(not torch.backends.mha.get_fastpath_enabled()
@@ -205,14 +278,39 @@ class RawPolicy(OwnedProvider):
                      for t in tensors), 'CPU FP32 model required')
         bound = cls(contract, policy.select_action, policy.reset)
         bound._transformer_policy = policy
+        result, model = policy.result, policy.model
+        forward, default_forward = policy.forward_fn, policy._default_forward
+        select, reset = policy.select_action, policy.reset
+        fields = ('deterministic', 'exploration_epsilon', 'sampling_temperature',
+                  'family_gated_selection', 'history_mask_k', 'device', 'policy_id',
+                  'checkpoint_path', 'record_policy_distribution')
+        selection = tuple((type(getattr(policy,k)),getattr(policy,k)) for k in fields)
+        timing = policy.inference_timing
         def validate_runtime():
-            _require(policy.weights_sha256 == contract.checkpoint_sha256 and not policy.model.training
+            _require(policy.result is result and policy.result.model_config is config
+                and policy.model is model and policy.weights_sha256 == contract.checkpoint_sha256
+                and _sha(_canonical(config.to_dict())) == contract.model_config_sha256
+                and _sha(_canonical(config.category_vocab)) == contract.category_vocab_sha256,
+                'raw model/config/vocabulary binding drift')
+            _require(tuple((k, getattr(config, {'exact_state':'exact_state_enabled',
+                'stats_block':'stats_block_enabled'}.get(k,k))) for k in MASK_NAMES) == contract.feature_masks,
+                'raw feature mask binding drift')
+            _require(tuple((type(getattr(policy,k)),getattr(policy,k)) for k in fields) == selection
+                and _same_callable(policy.forward_fn, forward)
+                and _same_callable(policy._default_forward, default_forward)
+                and _same_callable(policy.select_action, select) and _same_callable(policy.reset, reset)
+                and _same_callable(bound._select_action, select) and _same_callable(bound.reset, reset)
+                and policy.inference_timing is timing, 'raw selection/function binding drift')
+            _require(not policy.model.training
                 and not torch.backends.mha.get_fastpath_enabled()
                 and torch.get_float32_matmul_precision() == 'highest'
                 and not torch.backends.cuda.matmul.allow_tf32 and not torch.backends.cudnn.allow_tf32,
                 'raw runtime precision/binding drift')
             _require(all(t.device.type == 'cpu' and (not t.is_floating_point() or t.dtype == torch.float32)
                 for t in list(policy.model.parameters())+list(policy.model.buffers())), 'raw model dtype/device drift')
+            if bound._history is not None:
+                _require(policy._history_by_player is bound._history, 'raw history binding drift')
+                bound._claim_history()
         bound._validate = validate_runtime
         return bound
 
@@ -411,6 +509,13 @@ class LiveProtocolActor:
             _require(not self._terminal, 'postterminal owner stream')
             _require(type(lines) is tuple and bool(lines) and all(type(s) is str and s.startswith('|')
                 and '\n' not in s and '\r' not in s for s in lines), 'literal owning line tuple required')
+            terminal_seen = False
+            for line in lines:
+                # A bare pipe is the existing protocol's empty separator.
+                # It contains no event or private request. No other annotation
+                # or gameplay after a terminal is admitted by this actor.
+                _require(not terminal_seen or line == '|', 'postterminal line within owner chunk')
+                terminal_seen |= _terminal(line)
             requests = [line for line in lines if line.startswith('|request|')]
             for line in requests:
                 _packet(line,self.owner)
@@ -421,7 +526,7 @@ class LiveProtocolActor:
             self._request_count += len(requests)
             if requests:
                 self._request_line = requests[-1]
-            self._terminal = any(s.startswith('|win|') or s == '|tie' or s.startswith('|tie|') for s in lines)
+            self._terminal = terminal_seen
             self.generation += 1
             self._snapshot, self._choice = None, None
         except BaseException as error:
