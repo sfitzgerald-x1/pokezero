@@ -5,6 +5,7 @@ from pathlib import Path
 import tempfile
 import subprocess
 import sys
+import time
 import unittest
 from unittest.mock import patch
 
@@ -15,6 +16,22 @@ from pokezero.mirror_value_probe import (CHAMPION_SHA, cohort, collect_battle, d
     file_sha, paired_battle_interval, swap_own_view, terminal_labels, write_new)
 from pokezero.observation import ObservationPerspective, PokeZeroObservationV0
 from pokezero.showdown import CATEGORY_ROLE
+
+
+def pool_fixture_initialize(*arguments):
+    pass
+
+
+def pool_fixture_worker(arguments):
+    row, output, _ = arguments
+    if row["index"] == 0:
+        (Path(output) / "first-failure.txt").write_text("synthetic worker failure")
+        raise RuntimeError("synthetic first-game failure")
+    # Queued work must be terminated before this side effect, rather than
+    # draining the remaining scientific roster after a failed first game.
+    time.sleep(10)
+    (Path(output) / ("completed-" + str(row["index"]))).write_text("unexpected")
+    return {}
 
 
 def observation(seat, marker):
@@ -28,6 +45,26 @@ def observation(seat, marker):
 
 
 class MirrorContractTests(unittest.TestCase):
+    def test_first_pool_failure_terminates_active_and_queued_games_without_refill(self):
+        repo = Path(__file__).resolve().parents[1]
+        spec = importlib.util.spec_from_file_location("mirror_failure_runner", repo / "scripts/run_mirror_value_probe.py")
+        runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
+        config = dict(root="synthetic-pool-failure-fixture", battles=8, workers=2, threads=1,
+            checkpoint="fixture", showdown="fixture", node="fixture", max_rounds=1)
+        with tempfile.TemporaryDirectory() as tmp, patch.object(runner, "initialize", pool_fixture_initialize), patch.object(runner, "worker", pool_fixture_worker):
+            dest = Path(tmp) / "collection"
+            started = time.monotonic()
+            with self.assertRaisesRegex(RuntimeError, "synthetic first-game failure"):
+                runner.collect(config, dest)
+            self.assertLess(time.monotonic() - started, 8)
+            self.assertTrue((dest / "first-failure.txt").exists())
+            self.assertFalse(list(dest.glob("completed-*")))
+            self.assertFalse((dest / "collection.json").exists())
+            frozen = json.loads((dest / "cohort.json").read_text())
+            self.assertEqual(len(frozen["battles"]), 8)
+            with self.assertRaisesRegex(ValueError, "no resume/refill"):
+                runner.collect(config, dest)
+
     def test_refit_parameters_do_not_depend_on_heldout_test_outcomes(self):
         import torch
         repo = Path(__file__).resolve().parents[1]
