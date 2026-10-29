@@ -21,6 +21,7 @@ from . import public_sleep as sleep_api
 from . import public_toxic as toxic_api, public_toxic_protocol as toxic_protocol
 from . import public_tendency as tendency_api, public_tendency_protocol as tendency_protocol
 from . import public_belief_refresh as refresh_api, public_refresh_stream as refresh_stream
+from . import public_belief_lifecycle as lifecycle_api
 
 
 class ContextTables(NamedTuple):
@@ -39,6 +40,7 @@ class ContextTables(NamedTuple):
     toxic: toxic_api.ToxicTables | None = None
     tendency: tendency_api.TendencyTables | None = None
     refresh: refresh_api.RefreshTables | None = None
+    lifecycle: lifecycle_api.LifecycleTables | None = None
 
 
 class ContextState(NamedTuple):
@@ -58,9 +60,18 @@ class ContextState(NamedTuple):
     tendency: tendency_api.TendencyState | None = None
     tendency_raw_pending: jax.Array | None = None
     refresh: refresh_stream.StreamState | None = None
+    lifecycle: lifecycle_api.LifecycleState | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_tables=None, refresh_tables=None):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_tables=None, refresh_tables=None, lifecycle_tables=None):
+    if lifecycle_tables is not None:
+        if refresh_tables is None or sleep_tables is None:raise ValueError('lifecycle composition requires ordered source refresh and sleep')
+        for actual,expected in ((lifecycle_tables.sleep_binding,sleep_tables.binding),
+                (lifecycle_tables.species_binding,sleep_tables.species_binding),
+                (lifecycle_tables.ability_binding,abilities.device.binding),
+                (lifecycle_tables.move_binding,moves.device.binding)):
+            lifecycle_api._binding(actual);lifecycle_api._binding(expected)
+            if not np.array_equal(np.asarray(actual),np.asarray(expected)):raise ValueError('lifecycle context namespace mismatch')
     if refresh_tables is not None:
         if items is None or sleep_tables is None or tendency_tables is None:
             raise ValueError('ordered summary refresh requires item, sleep and final raw-frame consumers')
@@ -133,13 +144,15 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
     if refresh_tables is not None:
         payload.update(schema=payload['schema']+'.ordered-summary.v1',refresh=np.asarray(refresh_tables.binding).tolist(),
             refresh_stream_schema=refresh_stream.SCHEMA,refresh_families=refresh_stream.FAMILIES)
+    if lifecycle_tables is not None:
+        payload.update(schema=payload['schema']+'.lifecycle.v1',lifecycle=np.asarray(lifecycle_tables.binding).tolist())
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
         jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
         field_catalog.device if field_catalog is not None else None,
         active_catalog.device if active_catalog is not None else None,damage_tables,
-        type_catalog.device if type_catalog is not None else None,sleep_tables,toxic_tables,tendency_tables,refresh_tables)
+        type_catalog.device if type_catalog is not None else None,sleep_tables,toxic_tables,tendency_tables,refresh_tables,lifecycle_tables)
 
 
 def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=False, toxic_hp_visibility=(0,0), tendency_complete_prefix=False, source_tables=None):
@@ -180,7 +193,8 @@ def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=F
         tendency_api.initialize(batch,tables.tendency,species_binding=species_binding,
             complete_prefix=tendency_complete_prefix) if tables.tendency is not None else None,
         jnp.zeros(batch,bool) if tables.tendency is not None else None,
-        refresh_stream.initialize(beliefs,source_tables,tables.refresh) if tables.refresh is not None else None)
+        refresh_stream.initialize(beliefs,source_tables,tables.refresh) if tables.refresh is not None else None,
+        lifecycle_api.initialize(batch,tables.lifecycle) if tables.lifecycle is not None else None)
 
 
 def basis(context, beliefs):
@@ -240,13 +254,13 @@ def preconsume(context,mons,tables,row,valid,*,condition_kind):
 def consume(context, base, mons, source_tables, tables, row, valid, *,
             move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind,
             active_kind, baton_kind, upkeep_kind, damage_kind, type_kind, sleep_kind, cure_kind, toxic_kind=None, action_end_kind=None, tendency_kind=None,
-            boost_kind=None,copy_boost_kind=None,clear_all_kind=None):
+            boost_kind=None,copy_boost_kind=None,clear_all_kind=None,status_kind=None,condition_kind=None):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
     summary_control=data
     a, m = context.abilities, context.moves
-    summary=context.refresh
+    summary=context.refresh;life=context.lifecycle
     batch=row.shape[0];rows=jnp.arange(batch)
     def slots(seat,target,use):
         return (jnp.arange(2)[None,:,None]==(1-jnp.clip(seat,0,1))[:,None,None])&(jnp.arange(6)[None,None,:]==jnp.clip(target,0,5)[:,None,None])&use[:,None,None]
@@ -255,6 +269,11 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         summary,full,ok=refresh_stream.checkpoint(summary,full,source_tables,mask)
         return summary,base._replace(conflicts=full.conflicts),ok&bound
     summary_ok=jnp.ones(batch,bool)
+    def life_step(life,a,op,use,*,target_side=side,target_slot=slot,encounter=data[:,0],mid=0,aid=0,benched=False):
+        result=lifecycle_api.apply(life,context.sleep,a,mons,tables.lifecycle,operation=op,
+            side=target_side,slot=target_slot,encounter=encounter,move_id=mid,ability_id=aid,benched=benched,
+            producer_binding=tables.lifecycle.binding,valid=use)
+        return result.state,result.ability_claim,result.admitted
     if summary is not None:
         # These are the installed source stages. Additional public semantics
         # cannot bypass their missing source callback merely by leaving the
@@ -263,8 +282,10 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             k==turn_kind)|(k==action_end_kind)|(k==field_kind)|(k==active_kind)|(
             k==damage_kind)|(k==type_kind)|(k==toxic_kind)|(k==tendency_kind)|(
             (k==sleep_kind)&(data[:,1]==sleep_api.USABLE_MOVE))|(k==boost_kind)|(k==copy_boost_kind)|(k==clear_all_kind)
+        if life is not None:
+            supported |= (k==status_kind)|(k==condition_kind)|faint|(k==cure_kind)|(k==sleep_kind)
         summary_ok &= ~valid|supported
-        summary,opened=refresh_stream.open_frame(summary,data[:,3],valid&(k==raw_kind))
+        summary,opened=refresh_stream.open_frame(summary,data[:,3],data[:,4:],valid&(k==raw_kind),lifecycle=life is not None)
         summary_ok &= opened
         # Source marks the outgoing record before the incoming upsert. The
         # public mon consumer has introduced the incoming row already, but its
@@ -277,13 +298,24 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         # Natural Cure's source replacement needs its exit/cure-count evidence
         # producer. Do not infer it from a clean return while that producer is
         # still being integrated.
-        exited=jnp.where(leaving&(old_slot==slot),old.status[rows,safe_side,old_slot]!=mon.NONE,
-            old.status_on_exit[rows,safe_side,safe_slot])
-        summary_ok &= ~(valid&arrival&exited&(mons.status[rows,safe_side,safe_slot]==mon.NONE)&(a.original[rows,safe_side,safe_slot]==0))
+        if life is None:
+            exited=jnp.where(leaving&(old_slot==slot),old.status[rows,safe_side,old_slot]!=mon.NONE,
+                old.status_on_exit[rows,safe_side,safe_slot])
+            summary_ok &= ~(valid&arrival&exited&(mons.status[rows,safe_side,safe_slot]==mon.NONE)&(a.original[rows,safe_side,safe_slot]==0))
+        else:
+            summary,common_ok=refresh_stream.common(summary,row,status_kind=status_kind,condition_kind=condition_kind,
+                valid=valid&((k==status_kind)|(k==condition_kind)))
+            summary_ok &= common_ok
         # Transform performs an upsert before replacing its copied state.
         summary,base,ok=checkpoint(summary,base,a,slots(actor_side,actor_slot,valid&(k==transform_kind)));summary_ok &= ok
     a, aa = ability.arrive(a, mons, tables.abilities, side=side, slot=slot, encounter=data[:, 0], valid=valid & arrival)
     m, ma = move.arrive(m, tables.moves, side=side, valid=valid & arrival)
+    if life is not None:
+        life,claim,ok=life_step(life,a,lifecycle_api.ARRIVE,valid&arrival&summary_ok)
+        summary_ok &= ok
+        inferred=ability.reveal(a,mons,tables.abilities,side=side,slot=slot,encounter=data[:,0],
+            ability_id=claim,authoritative=True,valid=valid&arrival&(claim>0)&summary_ok)
+        a=inferred.state;summary_ok &= ~(valid&arrival&(claim>0))|inferred.admitted
     a, fa = ability.faint(a, mons, tables.abilities, side=side, slot=slot, encounter=data[:, 0], valid=valid & faint)
     is_move, is_ability, is_trace, is_transform = (k == x for x in (move_kind, ability_kind, trace_kind, transform_kind))
     transformed, pressure, ca = ability.move_context(a, mons, tables.abilities,
@@ -299,10 +331,33 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             side=actor_side,slot=actor_slot,encounter=data[:,0],move_id=data[:,1],caller=data[:,2],
             has_from=data[:,3]==1,transformed=transformed,opposing_pressure=pressure,wire_target_side=side,
             item_mutated=context.items.mutated,item_revealed=context.items.revealed>0,sleep_pending=context.sleep.pending,
-            item_belief_narrowing=tables.item_narrowing,valid=valid&is_move&ca&summary_ok)
-        summary=summary._replace(controller=result.refresh);update=result.move_update
+            item_belief_narrowing=tables.item_narrowing,lifecycle=life,lifecycle_tables=tables.lifecycle,
+            public_sleep=context.sleep,public_abilities=a,valid=valid&is_move&ca&summary_ok)
+        summary=summary._replace(controller=result.refresh);update=result.move_update;life=result.lifecycle
         summary_ok &= result.admitted&bound
     m, base = update.state, update.beliefs
+    if life is not None:
+        # _target_belief falls back to _upsert when a side has no active
+        # source record. Even an equal/borrowed proc still performs that
+        # lookup refresh. Trace looks up its donor again after the guard.
+        inactive=~context.sleep.live[rows,jnp.clip(side,0,1)]
+        summary,base,ok=checkpoint(summary,base,a,slots(side,slot,valid&is_ability&inactive&summary_ok));summary_ok &= ok
+        tracer_inactive=~context.sleep.live[rows,jnp.clip(actor_side,0,1)]
+        traced=valid&is_trace&(side>=0)
+        summary,base,ok=checkpoint(summary,base,a,slots(actor_side,actor_slot,traced&tracer_inactive&summary_ok));summary_ok &= ok
+        summary,base,ok=checkpoint(summary,base,a,slots(side,slot,traced&inactive&summary_ok));summary_ok &= ok
+        donor=(rows,jnp.clip(side,0,1),jnp.clip(slot,0,5))
+        eligible=(actor_side!=side)|(actor_slot!=slot)
+        eligible &= ~a.transformed[donor]&(a.running[donor]==0)
+        summary,base,ok=checkpoint(summary,base,a,slots(side,slot,traced&inactive&eligible&summary_ok));summary_ok &= ok
+        shed=valid&is_ability&((summary.raw_meta[:,0]&1)!=0)&(summary.family==refresh_stream.NOOP)
+        proof=summary.raw_meta[:,1:]
+        shed_ok=(summary.proc_seen==0)&jnp.all(jnp.stack((side,slot,data[:,0]),axis=-1)==proof,axis=-1)
+        shed_ok &= (data[:,1]==tables.lifecycle.shed_skin)&(data[:,2]==0)
+        summary_ok &= ~shed|shed_ok
+        life,_,ok=life_step(life,a,lifecycle_api.SHED_SKIN_ACTIVATE,shed&shed_ok&summary_ok,aid=data[:,1])
+        summary_ok &= ok
+        summary=summary._replace(proc_seen=jnp.where(shed&shed_ok&summary_ok,1,summary.proc_seen))
     before_ability=a
     rev = ability.reveal(a, mons, tables.abilities, side=side, slot=slot, encounter=data[:, 0],
         ability_id=data[:, 1], authoritative=data[:, 2] == 1, valid=valid & is_ability)
@@ -347,6 +402,45 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
                 jnp.where(code==refresh_stream.MOVE,jnp.where(side>=0,side,1-actor_side),-1),flags,
                 jnp.where(code==refresh_stream.TURN,row[:,2],0)),axis=-1)
             summary,ok=refresh_stream.main(summary,code,proof,valid&use);summary_ok &= ok
+    if life is not None:
+        is_sleep=k==sleep_kind;op=data[:,1]
+        status=valid&is_sleep&(op==sleep_api.STATUS)
+        cure=valid&is_sleep&(op==sleep_api.CURE)
+        hp=valid&is_sleep&(op==sleep_api.CONDITION)
+        cant=valid&is_sleep&(op==sleep_api.CANT_SLEEP)
+        common_use=status|cure|hp
+        summary_ok &= ~common_use|refresh_stream.common_matches(summary,row)
+        summary_ok &= ~status|((summary.family==refresh_stream.STATUS)&(data[:,2]==summary.raw_meta[:,1])&
+            (2*data[:,3]==(summary.raw_meta[:,0]&2)))
+        summary_ok &= ~cure|((summary.family==refresh_stream.CURE)&(data[:,2]==summary.raw_meta[:,1]))
+        summary_ok &= ~hp|((summary.family==refresh_stream.HP)&(data[:,2]==summary.raw_meta[:,3])&(data[:,3]==summary.raw_meta[:,0]))
+        summary_ok &= ~cant|(summary.family==refresh_stream.CANT)
+        # A sleep attempt upserts before replacing its counter; both calls
+        # see the same candidate-set predicates, including a standing pin.
+        summary,base,ok=checkpoint(summary,base,a,slots(side,slot,cant&summary_ok));summary_ok &= ok
+        summary,base,ok=checkpoint(summary,base,a,slots(side,slot,cure&(summary.raw_meta[:,0]==1)&summary_ok));summary_ok &= ok
+        life,claim,ok=life_step(life,a,lifecycle_api.CURE,cure&summary_ok,benched=data[:,2]==1)
+        summary_ok &= ok
+        inferred=ability.reveal(a,mons,tables.abilities,side=side,slot=slot,encounter=data[:,0],
+            ability_id=claim,authoritative=True,valid=cure&(claim>0)&summary_ok)
+        a=inferred.state;summary_ok &= ~(cure&(claim>0))|inferred.admitted
+        summary,base,ok=checkpoint(summary,base,a,slots(side,slot,cure&(claim>0)&summary_ok));summary_ok &= ok
+        summary,base,ok=checkpoint(summary,base,a,slots(side,slot,(status|cure|hp|cant|valid&faint)&summary_ok));summary_ok &= ok
+        life,_,ok=life_step(life,a,lifecycle_api.FAINT,valid&faint&summary_ok);summary_ok &= ok
+        team=valid&(k==cure_kind)
+        life,_,ok=life_step(life,a,lifecycle_api.CURE_TEAM,team&summary_ok,encounter=0,target_slot=-1);summary_ok &= ok
+        for index in range(6):
+            seat=jnp.clip(side,0,1)
+            affected=~context.sleep.literal_faint[rows,seat,index]&((context.sleep.status[rows,seat,index]!=mon.NONE)|
+                (context.sleep.condition_status[rows,seat,index]!=mon.NONE))
+            summary,base,ok=checkpoint(summary,base,a,slots(side,jnp.full(batch,index,jnp.int32),team&affected&summary_ok));summary_ok &= ok
+        for code,use in ((refresh_stream.STATUS,status),(refresh_stream.CURE,cure),(refresh_stream.HP,hp),
+                (refresh_stream.CANT,cant),(refresh_stream.TEAM,team),(refresh_stream.FAINT,valid&faint)):
+            closing_kind=jnp.full(batch,tendency_api.CANT if code==refresh_stream.CANT else
+                tendency_api.FAINT if code==refresh_stream.FAINT else tendency_api.OTHER,jnp.int32)
+            proof=jnp.stack((side,closing_kind,jnp.zeros(batch,jnp.int32),jnp.full(batch,-1,jnp.int32),
+                jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32)),axis=-1)
+            summary,ok=refresh_stream.main(summary,code,proof,use&summary_ok);summary_ok &= ok
     accepted = jnp.where(arrival, aa & ma, jnp.where(faint, fa, jnp.where(is_move, update.admitted,
         jnp.where(is_ability, rev.admitted, jnp.where(is_trace, ta, jnp.where(is_transform, tr, True))))))
     items=context.items
@@ -474,5 +568,5 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         full,bound=rebuild(context._replace(abilities=a,items=items),base,source_tables,tables)
         summary,ok=refresh_stream.close_frame(summary,full,source_tables,summary_control,side,valid&(k==tendency_kind))
         accepted &= summary_ok&bound&ok
-    return context._replace(refresh=summary,abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
+    return context._replace(refresh=summary,lifecycle=life,abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
         toxic=toxic,toxic_raw_pending=raw_pending,tendency=tendency,tendency_raw_pending=pending),base,accepted | ~valid

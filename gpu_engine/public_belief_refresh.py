@@ -53,6 +53,7 @@ class MoveRefreshResult(NamedTuple):
     beliefs: belief.BeliefState
     basis: belief.BeliefState
     admitted: jax.Array
+    lifecycle: object = None
 
 
 def _namespace(value,shape):
@@ -118,7 +119,7 @@ def reset_stay(state,mons,tables,*,side,slot,encounter,valid=True):
 def record_move(state,move_state,basis,full_beliefs,mons,source_tables,move_tables,tables,*,
         side,slot,encounter,move_id,caller=moves.NONE,has_from=False,transformed=False,
         opposing_pressure=False,wire_target_side=-1,item_mutated,item_revealed,sleep_pending,
-        item_belief_narrowing=False,valid=True):
+        item_belief_narrowing=False,lifecycle=None,lifecycle_tables=None,public_sleep=None,public_abilities=None,valid=True):
     """Source upsert -> sleep skip -> Choice Band -> PP -> move reveal.
 
     ``basis`` retains nonreplaceable evidence; ``full_beliefs`` also includes
@@ -128,6 +129,11 @@ def record_move(state,move_state,basis,full_beliefs,mons,source_tables,move_tabl
     The caller commits these results with its other raw consumers atomically.
     """
     batch=mons.species.shape[0]
+    if (lifecycle is None)!=(lifecycle_tables is None):
+        raise ValueError('move lifecycle ledger and tables must be supplied together')
+    if lifecycle is not None and (public_sleep is None or public_abilities is None):
+        raise ValueError('move lifecycle stage requires its pre-move public ledgers')
+    previous_lifecycle=lifecycle
     _tables(tables,source_tables,move_tables)
     _state_shape(state,batch)
     for name,value in (('item_mutated',item_mutated),('item_revealed',item_revealed),('sleep_pending',sleep_pending)):
@@ -177,6 +183,14 @@ def record_move(state,move_state,basis,full_beliefs,mons,source_tables,move_tabl
         return current,base._replace(conflicts=current.conflicts),visible,ok
     current,base,visible,ok=callback(current,base,visible,valid,ok) # _upsert, even called/transformed
     current,base,visible,ok=callback(current,base,visible,skip,ok)
+    if lifecycle is not None:
+        # The source increments cure epochs here, before called/transformed
+        # early returns and before choice/PP/reveal replacements.
+        from . import public_belief_lifecycle as life
+        effect=life.apply(lifecycle,public_sleep,public_abilities,mons,lifecycle_tables,
+            operation=life.MOVE,side=side,slot=slot,encounter=encounter,move_id=mid,
+            producer_binding=lifecycle_tables.binding,valid=valid&ok)
+        lifecycle=effect.state;ok &= effect.admitted
     use=mask&(exclude&ok)[:,None,None]
     for which in ('base','current'):
         before=base if which=='base' else current
@@ -203,4 +217,6 @@ def record_move(state,move_state,basis,full_beliefs,mons,source_tables,move_tabl
     move_update=update._replace(state=jax.tree.map(choose,move_state,update.state),beliefs=result_base,
         admitted=apply,revealed=apply&update.revealed,charge=jnp.where(apply,update.charge,0),
         doubled_despite_wire=apply&update.doubled_despite_wire)
-    return MoveRefreshResult(out,move_update,result_beliefs,result_base,ok|~valid)
+    if lifecycle is not None:
+        lifecycle=jax.tree.map(choose,previous_lifecycle,lifecycle)
+    return MoveRefreshResult(out,move_update,result_beliefs,result_base,ok|~valid,lifecycle)

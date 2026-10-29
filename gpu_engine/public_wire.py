@@ -12,7 +12,7 @@ import numpy as np
 from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_public_line,
     _flag_baton_pass, _slot_from_ident, _species_from_ident, _normalize_name,
     _public_event_from_line)
-from pokezero.belief import _confirmed_ability_from_event
+from pokezero.belief import _confirmed_ability_from_event, _trace_copy_source
 
 from . import public_mon_protocol, public_context_protocol, public_items, public_field, public_active, public_damage, public_types, public_sleep, public_sleep_protocol, public_toxic_protocol
 from . import public_tendency, public_tendency_protocol, public_refresh_stream
@@ -233,7 +233,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         raise ValueError('tendency context cannot drop its raw producer')
     if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding or state.damage_binding!=damage_binding or state.type_binding!=type_binding or state.sleep_binding!=sleep_binding or state.toxic_binding!=toxic_binding or state.tendency_binding!=tendency_binding):
         raise ValueError("item context cannot change or be dropped across continuation")
-    refresh_family=public_refresh_stream.family(line) if context_tables is not None and context_tables.refresh is not None else 0
+    refresh_family=public_refresh_stream.family(line,lifecycle=context_tables.lifecycle is not None) if context_tables is not None and context_tables.refresh is not None else 0
     parts = line.split('|')
     kind = parts[1] if len(parts) > 1 else ''
     main_handled=kind in MON_KINDS or kind in CONTEXT_KINDS or line=='|'
@@ -264,13 +264,30 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             kwargs=dict(actor_side=actor.side,actor_slot=actor.slot,target_side=target.side,target_slot=target.slot)
             payload=(2,actor.encounter,target.encounter,0,0,0,0,0)
         event=PublicEvent(Kind.RAW_BEGIN,state.next_sequence,state.turn,state.phase,payload=payload,**kwargs)
-        event.words();events.append(event)
+        # Source metadata uses subsequent decoded facts. Validate the complete
+        # header below, before returning any projection to its caller.
+        if not refresh_family:event.words()
+        events.append(event)
     # The belief engine records a raw proc BEFORE dispatching the line's main
     # consumer. A proc on a move can reveal Pressure before that move's PP
     # charge; a proc on Transform can establish the donor's current ability.
     # Direct/Trace declarations have their own authoritative attribution path.
     public_event = _public_event_from_line(line)
     confirmed = _confirmed_ability_from_event(public_event)
+    if refresh_family:
+        # Without an active record, source lookup uses the ident's species,
+        # not a nickname-to-encounter join. A different name would create a
+        # separate source row and cannot inherit this encounter's evidence.
+        lookups=[]
+        if kind in ('-ability','ability'):
+            trace,donor=_trace_copy_source(line)
+            if not trace:lookups=[public_event.target_ident]
+            elif _slot_from_ident(donor or '') in ('p1','p2'):lookups=[public_event.target_ident,donor]
+        elif all(confirmed):lookups=[confirmed[0]]
+        for ident in lookups:
+            holder=addresses.resolve(ident)
+            if holder.side not in addresses.active and _normalize_name(_species_from_ident(ident))!=_normalize_name(addresses.public_species[holder]):
+                raise ValueError('inactive source ability lookup requires its exact encountered species')
     # Explicit ability declarations are a supported main consumer of -start.
     # A volatile with an incidental [from] ability tag is not that declaration.
     main_handled |= (kind == '-start' and bool(public_event.primary)
@@ -370,6 +387,11 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         raise ValueError('raw main kind has no implemented consumer; incidental proc tags are insufficient')
     if (not events or item_projection is not None and len(events)==1 and not item_projection.trick_idents) and not tendency_main:
         raise ValueError("raw line has no implemented consumer; it must not be silently dropped")
+    if refresh_family:
+        meta=public_refresh_stream.metadata(refresh_family,line,events,context_tables.lifecycle,addresses=addresses)
+        opener=events[0]
+        events[0]=replace(opener,payload=(*opener.payload[:4],*meta))
+        events[0].words()
     if tendency_projection is not None:
         last=events[-1]
         event=PublicEvent(Kind.TENDENCY,state.next_sequence+len(events),last.turn,last.phase,
