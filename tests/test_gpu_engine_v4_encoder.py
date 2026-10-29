@@ -29,7 +29,7 @@ class V4EncoderTests(unittest.TestCase):
         labels|={'type:'+name for name in ('Normal','Fighting','Flying','Poison','Ground','Rock','Bug','Ghost','Steel',
             'Fire','Water','Grass','Electric','Psychic','Ice','Dragon','Dark','???')}
         labels|={'status:'+name for name in ('none','slp','par','brn','frz','psn','tox','fnt')}
-        for ability in ('naturalcure','earlybird','shedskin','trace','pressure','truant','levitate','immunity'):
+        for ability in ('naturalcure','earlybird','shedskin','trace','pressure','truant','levitate','immunity','arenatrap','shadowtag','magnetpull'):
             labels|={'ability:'+ability,'belief:possible_ability:'+ability}
         for name,info in dex.moves.items():
             labels|={'move:'+name,'move_category:'+info.gen3_category,'move_priority:'+str(info.priority)}
@@ -98,7 +98,7 @@ class V4EncoderTests(unittest.TestCase):
         for sub in (False,True):
             self.compare_source(lines+(['|-start|p1a: Snorlax|Substitute','|-start|p2a: Absol|Substitute'] if sub else []))
 
-    def compare_source(self,lines):
+    def compare_source(self,lines,*,exact_ability_case=False):
         import json
         from dataclasses import replace
         from pokezero import showdown as source
@@ -107,6 +107,9 @@ class V4EncoderTests(unittest.TestCase):
         for owner,flip in ((0,False),(1,False),(0,True),(1,True)):
             raw=self.request(owner)
             raw['side']['pokemon'][1]['condition']='120/247'
+            if exact_ability_case:
+                raw['side']['pokemon'][0]['ability']='Arena Trap'
+                raw['side']['pokemon'][1]['condition']='120/247 slp'
             if flip:
                 for row in raw['side']['pokemon']:row['active']=not row['active']
             own=self.e.parse_own_requests(self.catalog,[raw],owner_sides=[owner])
@@ -123,13 +126,18 @@ class V4EncoderTests(unittest.TestCase):
             numbers=np.asarray(actual.numeric_features[0]);want=np.asarray(expected.numeric_features)
             cats=np.asarray(actual.categorical_ids[0]);expected_cats=np.asarray(expected.categorical_ids)
             # Report exact physical mismatches, never hide missing fields by a
-            # union of partial masks. This fixture's pending cells26/28 are0.
+            # union of partial masks. No numeric column remains uninstalled.
             self.assertTrue(np.allclose(numbers,want,atol=1e-6,rtol=0),str(np.argwhere(abs(numbers-want)>1e-6).tolist()))
             self.assertTrue(np.array_equal(cats,expected_cats),str(np.argwhere(cats!=expected_cats).tolist()))
             self.assertEqual(actual.attention_mask[0].tolist(),list(expected.attention_mask))
             self.assertEqual(actual.legal_action_mask[0].tolist(),list(expected.legal_action_mask))
-            self.assertEqual(out.pending_numeric_columns.tolist(),[26,28])
+            self.assertEqual(out.pending_numeric_columns.tolist(),[])
             self.assertFalse(bool(out.full_encoder_admitted[0]))
+
+    def test_exact_wake_and_private_bench_trapper_registration(self):
+        lines=[*self.public.prefix,'|-status|p1a: Snorlax|slp|[from] move: Rest',
+            '|-status|p2a: Absol|slp|[from] move: Rest']
+        self.compare_source(lines,exact_ability_case=True)
 
     def test_contract_rollback_at_batch8_preserves_global_namespaces(self):
         import numpy as np
