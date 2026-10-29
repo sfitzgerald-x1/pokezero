@@ -3,6 +3,7 @@ import asyncio
 from dataclasses import replace
 import json
 from pathlib import Path
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -10,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import pokezero.foulplay_bridge as bridge_module
 from pokezero.foulplay_bridge import ControlledFoulPlayConfig, _ProcessLogBuffer, _run_single_game
 from pokezero.live_protocol_actor import ActorContract, JaxBackend, MASK_NAMES, PythonBackend, RawPolicy, _vocab_sha
-from pokezero.live_protocol_bridge import OwningActorFactory, encoder_provenance, require_actor_factory
+from pokezero.live_protocol_bridge import OwningActorFactory, OwningWireSession, encoder_provenance, require_actor_factory
 from pokezero.policy import PolicyDecision
 from test_live_protocol_actor import FixtureBackend, request
 
@@ -255,6 +256,132 @@ class OwningBridgeTests(unittest.TestCase):
         self.assertTrue(caught.exception.owning_encoder_receipt['actual_owner_terminal_seen'])
         self.assertEqual(caught.exception.owning_encoder_receipt['status'],'FAILED_CLOSED_UNQUALIFIED')
         self.assertEqual(self.trajectories,[])
+
+    def test_final_peer_forwarding_uses_remaining_deadline_and_cancels_blocked_write(self):
+        for owner in ('p1','p2'):
+            for blocked in (False,True):
+                config=self.config(owner=owner,owning_terminal_timeout_seconds=.005)
+                events=self.events(config)
+                events=events[:5]+[events[5],events[6],events[8],events[7]]
+                original=MemoryServer.send_room_lines
+                entered=[]; cancelled=[]; finished=[]
+                async def terminal_write(server,*args):
+                    if any(line.startswith('|win|') for line in args[-1]):
+                        entered.append(True)
+                        try:
+                            if blocked:await asyncio.Event().wait()
+                            else:await asyncio.sleep(.04)
+                        except asyncio.CancelledError:
+                            cancelled.append(True)
+                            raise
+                        finally:finished.append(True)
+                    return await original(server,*args)
+                before=len(self.trajectories)
+                started=time.monotonic()
+                with patch.object(MemoryServer,'send_room_lines',terminal_write):
+                    with self.assertRaises(TimeoutError) as caught:
+                        asyncio.run(self.game(config,events))
+                self.assertLess(time.monotonic()-started,.1)
+                self.assertEqual((entered,cancelled,finished),([True],[True],[True]))
+                self.assertEqual(caught.exception.owning_encoder_receipt['status'],'FAILED_CLOSED_UNQUALIFIED')
+                self.assertEqual(len(self.trajectories),before)
+                self.assertEqual(self.backends[-1].closed,1)
+
+    def test_expired_terminal_io_never_constructs_or_starts_operation(self):
+        config=self.config(); session=OwningWireSession(config,self.factory(),(None,None,None),
+            seed=7,battle_id='authored-unstarted',start_seed=bridge_module.showdown_seed_from_int(7))
+        session.terminal_deadline=time.monotonic()-1
+        operation=AsyncMock()
+        with self.assertRaises(TimeoutError):asyncio.run(session.terminal_io(operation))
+        operation.assert_not_called()
+
+    def test_terminal_write_swallowing_cancellation_cannot_publish_success(self):
+        config=self.config(owning_terminal_timeout_seconds=.005)
+        events=self.events(config); events=events[:5]+[events[5],events[6],events[8],events[7]]
+        original=MemoryServer.send_room_lines; cancelled=[]
+        async def terminal_write(server,*args):
+            if any(line.startswith('|win|') for line in args[-1]):
+                try:await asyncio.Event().wait()
+                except asyncio.CancelledError:cancelled.append(True)
+            return await original(server,*args)
+        with patch.object(MemoryServer,'send_room_lines',terminal_write):
+            with self.assertRaises(TimeoutError) as caught:asyncio.run(self.game(config,events))
+        self.assertEqual(cancelled,[True]); self.assertEqual(self.trajectories,[])
+        self.assertEqual(caught.exception.owning_encoder_receipt['status'],'FAILED_CLOSED_UNQUALIFIED')
+        self.assertEqual(self.backends[-1].closed,1)
+
+    def test_final_notification_uses_same_deadline(self):
+        config=self.config(owning_terminal_timeout_seconds=.005)
+        entered=[]; cancelled=[]
+        async def blocked_notification(**kwargs):
+            entered.append(True)
+            try:await asyncio.Event().wait()
+            finally:cancelled.append(True)
+        with patch.object(bridge_module,'_notify_foulplay_terminal',blocked_notification):
+            with self.assertRaises(TimeoutError) as caught:asyncio.run(self.game(config,self.events(config)))
+        self.assertEqual((entered,cancelled),([True],[True]))
+        self.assertEqual(self.trajectories,[]); self.assertEqual(self.backends[-1].closed,1)
+        self.assertEqual(caught.exception.owning_encoder_receipt['status'],'FAILED_CLOSED_UNQUALIFIED')
+
+    def test_sync_closure_expiry_keeps_closed_actor_and_never_publishes(self):
+        config=self.config(); original=OwningWireSession.close
+        def expired_close(session,*,failed):
+            session.terminal_deadline=time.monotonic()-1
+            return original(session,failed=failed)
+        with patch.object(OwningWireSession,'close',expired_close):
+            with self.assertRaises(TimeoutError) as caught:asyncio.run(self.game(config,self.events(config)))
+        self.assertEqual(self.backends[-1].closed,1); self.assertEqual(self.trajectories,[])
+        self.assertEqual(caught.exception.owning_encoder_receipt['status'],'FAILED_CLOSED_UNQUALIFIED')
+
+    def test_postclose_witness_expiry_refuses_before_trajectory_publication(self):
+        config=self.config(); original=OwningWireSession.close; witness=bridge_module._controlled_terminal_witness
+        closed=[]
+        def close(session,*,failed):
+            result=original(session,failed=failed); closed.append(session); return result
+        def expire_witness(*args,**kwargs):
+            result=witness(*args,**kwargs)
+            if closed:closed[-1].terminal_deadline=time.monotonic()-1
+            return result
+        with patch.object(OwningWireSession,'close',close), \
+             patch.object(bridge_module,'_controlled_terminal_witness',expire_witness):
+            with self.assertRaises(TimeoutError) as caught:asyncio.run(self.game(config,self.events(config)))
+        self.assertEqual(self.backends[-1].closed,1); self.assertEqual(self.trajectories,[])
+        self.assertEqual(caught.exception.owning_encoder_receipt['status'],'FAILED_CLOSED_UNQUALIFIED')
+        self.assertEqual(closed[-1].trajectory.metadata['encoder_provenance']['status'],'FAILED_CLOSED_UNQUALIFIED')
+
+    def test_primary_forward_error_survives_cleanup_deadline_expiry(self):
+        config=self.config(); original=OwningWireSession.close; failure=OSError('primary peer write failure')
+        def close(session,*,failed):
+            session.terminal_deadline=time.monotonic()-1
+            return original(session,failed=failed)
+        original_write=MemoryServer.send_room_lines
+        async def fail_write(server,*args):
+            if any(line.startswith('|win|') for line in args[-1]):raise failure
+            return await original_write(server,*args)
+        with patch.object(OwningWireSession,'close',close), patch.object(MemoryServer,'send_room_lines',fail_write):
+            with self.assertRaises(OSError) as caught:asyncio.run(self.game(config,self.events(config)))
+        self.assertIs(caught.exception,failure)
+        self.assertEqual(self.backends[-1].closed,1); self.assertEqual(self.trajectories,[])
+        self.assertEqual(caught.exception.owning_encoder_receipt['status'],'FAILED_CLOSED_UNQUALIFIED')
+
+    def test_first_owner_terminal_ingestion_is_inside_deadline(self):
+        config=self.config(); original=OwningWireSession.wait_for_owner_terminal
+        sessions=[]
+        def start_deadline(session):
+            original(session); sessions.append(session)
+        ingest=FixturePythonBackend.ingest
+        def expire_ingest(backend,lines):
+            result=ingest(backend,lines)
+            if any(line.startswith('|win|') for line in lines):
+                self.assertTrue(sessions)
+                sessions[-1].terminal_deadline=time.monotonic()-1
+            return result
+        events=self.events(config); events=events[:5]+[events[8],events[5],events[6],events[7]]
+        with patch.object(OwningWireSession,'wait_for_owner_terminal',start_deadline), \
+             patch.object(FixturePythonBackend,'ingest',expire_ingest):
+            with self.assertRaises(TimeoutError) as caught:asyncio.run(self.game(config,events))
+        self.assertEqual(self.backends[-1].closed,1); self.assertEqual(self.trajectories,[])
+        self.assertEqual(caught.exception.owning_encoder_receipt['status'],'FAILED_CLOSED_UNQUALIFIED')
 
     def test_missing_mismatched_factory_or_backend_cannot_fall_back(self):
         config=self.config()

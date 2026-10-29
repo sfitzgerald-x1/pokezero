@@ -5,6 +5,7 @@ Factories are explicit reviewed dependencies. The transport still needs separate
 actual-wire/runtime/B2 admission before any B3 scientific interpretation.
 """
 from dataclasses import dataclass
+import asyncio
 import math
 import os
 import time
@@ -142,6 +143,7 @@ class OwningWireSession:
                                   '|win|'+self.config.foulplay_username), 'foreign owner terminal winner')
             if _terminal(line):
                 terminal=line
+                self.wait_for_owner_terminal()
         if terminal is not None:
             _require(not self.terminal_streams or terminal in self.terminal_streams.values(),
                      'actual terminal streams disagree')
@@ -151,7 +153,7 @@ class OwningWireSession:
             self.owner_lines+=tuple(lines)
         if terminal is not None:
             self.terminal_streams[role]=terminal
-            self.wait_for_owner_terminal()
+        self.check_terminal_deadline()
 
     def requested(self,event):
         _require(type(event) is dict and event.get('battleId')==self.battle_id
@@ -206,8 +208,29 @@ class OwningWireSession:
         if self.terminal_deadline is None:
             return 120.
         remaining=self.terminal_deadline-time.monotonic()
-        _require(remaining>0, 'actual owning terminal was not received before deadline')
+        if remaining <= 0:
+            raise TimeoutError('actual owning terminal drain deadline expired')
         return remaining
+
+    def check_terminal_deadline(self):
+        # Synchronous parsing, closure and publication cannot bypass the same
+        # absolute clock merely because no further transport read is needed.
+        if self.terminal_deadline is not None:
+            self.wait_timeout()
+
+    async def terminal_io(self, operation):
+        """Bound an owning transport operation once any terminal was observed.
+
+        A factory avoids constructing an unawaited coroutine after expiry. The
+        post-check also refuses an operation that swallows timeout cancellation.
+        No new deadline is created for each write.
+        """
+        if self.terminal_deadline is None:
+            return await operation()
+        remaining = self.wait_timeout()
+        result = await asyncio.wait_for(operation(), timeout=remaining)
+        self.check_terminal_deadline()
+        return result
 
     @property
     def terminal_seen(self):
@@ -215,10 +238,13 @@ class OwningWireSession:
 
     def close(self, *, failed):
         self.receipt=self.actor.close_game()
-        clean=self.receipt['status']=='TERMINAL_UNQUALIFIED' and self.terminal_ready
+        in_budget=(self.terminal_deadline is not None and time.monotonic()<self.terminal_deadline)
+        clean=self.receipt['status']=='TERMINAL_UNQUALIFIED' and self.terminal_ready and in_budget
         if self.trajectory is not None:
             self.trajectory.metadata={**dict(self.trajectory.metadata),
                 'encoder_provenance':self.provenance(failed=failed or not clean)}
+        if not failed:
+            self.check_terminal_deadline()
         _require(failed or clean,
                  'owning game requires actual owner terminal and clean closure')
         return self.provenance(failed=failed or not clean)

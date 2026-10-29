@@ -7489,6 +7489,7 @@ async def _run_single_game(
             **kwargs, "trajectory_callback": captured.append if callback is not None else None,
             "owning_session": session,
         })
+        session.check_terminal_deadline()
     except BaseException as failure:
         error = failure
         raise
@@ -7504,20 +7505,28 @@ async def _run_single_game(
                 raise
             error.owning_encoder_receipt = receipt
             error.add_note(f"owning actor close error: {type(cleanup_error).__name__}")
-    terminal = _terminal_from_public_lines(session.owner_lines, config)
-    if terminal is None:
-        raise RuntimeError("actual owner terminal missing after actor close")
-    result = replace(result, encoder_kind=config.encoder_kind, encoder_provenance=provenance,
-        terminal_witness=_controlled_terminal_witness(session.owner_lines, terminal, config,
-            decision_rounds=result.decision_rounds))
-    if callback is not None:
-        try:
+    try:
+        session.check_terminal_deadline()
+        terminal = _terminal_from_public_lines(session.owner_lines, config)
+        if terminal is None:
+            raise RuntimeError("actual owner terminal missing after actor close")
+        result = replace(result, encoder_kind=config.encoder_kind, encoder_provenance=provenance,
+            terminal_witness=_controlled_terminal_witness(session.owner_lines, terminal, config,
+                decision_rounds=result.decision_rounds))
+        session.check_terminal_deadline()
+        if callback is not None:
             if len(captured) != 1:
                 raise RuntimeError("owning trajectory was not captured exactly once")
+            session.check_terminal_deadline()
             callback(captured[0])
-        except BaseException as callback_error:
-            callback_error.owning_encoder_receipt = session.provenance(failed=True)
-            raise
+        session.check_terminal_deadline()
+    except BaseException as publication_error:
+        receipt = session.provenance(failed=True)
+        if session.trajectory is not None:
+            session.trajectory.metadata = {**dict(session.trajectory.metadata),
+                'encoder_provenance': receipt}
+        publication_error.owning_encoder_receipt = receipt
+        raise
     return result
 
 
@@ -7671,12 +7680,11 @@ async def _run_single_game_body(
         raise LiveFoulPlayContinuationError(
             "source game ended without a successful live FoulPlay continuation-oracle decision"
         )
-    await _notify_foulplay_terminal(
-        state=state,
-        server=server,
-        terminal=terminal,
-        config=config,
-    )
+    if owning_session is None:
+        await _notify_foulplay_terminal(state=state, server=server, terminal=terminal, config=config)
+    else:
+        await owning_session.terminal_io(lambda: _notify_foulplay_terminal(
+            state=state, server=server, terminal=terminal, config=config))
     winner_name = _winner_name(terminal, config)
     if state.trajectory is not None:
         state.trajectory.record_terminal(terminal)
@@ -7925,6 +7933,8 @@ async def _run_single_game_body(
                 "omniscient_protocol": list(state.public_lines),
                 "request_history": [[seat, line] for seat, line in state.request_history],
             }
+        if owning_session is not None:
+            owning_session.check_terminal_deadline()
         trajectory_callback(state.trajectory)
     if phase_progress is not None:
         phase_progress.emit("game", "returned", seed=seed, seat=config.pokezero_player,
@@ -8228,7 +8238,10 @@ async def _handle_stream_event(
         if stream == config.foulplay_player:
             forwarded = [_line_for_foulplay(state, line) for line in lines]
             for chunk in _line_chunks_safe_for_foulplay(forwarded):
-                await server.send_room_lines(state.battle_id, chunk)
+                if owning_session is None:
+                    await server.send_room_lines(state.battle_id, chunk)
+                else:
+                    await owning_session.terminal_io(lambda: server.send_room_lines(state.battle_id, chunk))
                 if any(line.startswith("|request|") for line in chunk):
                     # THE START OF THE OPPONENT'S CLOCK, as precisely as the bridge can
                     # know it: the request that this round's choice answers has now been
