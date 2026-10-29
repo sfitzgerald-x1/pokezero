@@ -43,7 +43,7 @@ class SleepClauseContextTests(unittest.TestCase):
                 raw=self.f.request(owner);packet=self.f.e.parse_own_requests(self.catalog,[raw],owner_sides=[owner])
                 actual=encode(state,packet,self.j.array([owner],self.j.int32))
                 self.assertEqual(actual.observation.admitted.tolist(),[True])
-                self.assertEqual(actual.pending_numeric_columns.tolist(),[26,28,29]);self.assertFalse(bool(actual.full_encoder_admitted[0]))
+                self.assertEqual(actual.pending_numeric_columns.tolist(),[26,28]);self.assertFalse(bool(actual.full_encoder_admitted[0]))
                 replay=source.parse_showdown_replay([*prefix,'|request|'+json.dumps(raw)],battle_id='clause-integration-fixture')
                 normalized=source.normalize_for_player(replay,player_id=f'p{owner+1}',configured_showdown_slot=f'p{owner+1}',
                     format_id='gen3randombattle',set_source=self.source)

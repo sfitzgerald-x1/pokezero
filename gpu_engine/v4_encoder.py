@@ -21,11 +21,11 @@ from . import private_actions,private_team,public_inputs,public_mon_state,public
 from . import public_belief,public_moves,public_abilities,public_items,public_team,public_field
 from . import public_active,public_damage,public_types,public_sleep,public_toxic,public_tendency
 from . import public_belief_refresh,public_belief_lifecycle,public_belief_features,public_belief_snapshot
-from . import public_refresh_stream, public_sleep_clause
+from . import public_refresh_stream, public_sleep_clause, public_substitute
 from . import public_expected_stats,public_hazard_exposure,v4_assembly
 
 SCHEMA='pokezero.protocol_v4_encoder.v1'
-PENDING_NUMERIC_COLUMNS=(26,28,29)
+PENDING_NUMERIC_COLUMNS=(26,28)
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,7 @@ class Catalog:
     items: object
     field: object
     active: object
+    substitute: object
     damage: object
     types: object
     sleep: object
@@ -98,6 +99,7 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     species=public_team.compile_species(source,dex,vocabulary,abilities)
     field=public_field.compile_field(vocabulary)
     active=public_active.compile_active(vocabulary,species_catalog=species)
+    substitute=public_substitute.compile_substitute(active,species,vocabulary)
     damage=public_damage.compile_damage(vocabulary)
     types=public_types.compile_types(species,dex,vocabulary)
     sleep=public_sleep.compile_sleep(species,vocabulary)
@@ -118,10 +120,10 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     bindings=dict(checkpoint=checkpoint_sha256,masks=feature_masks,schema=SCHEMA,
         context=np.asarray(context.binding).tolist(),features=np.asarray(features.binding).tolist(),
         expected=np.asarray(expected.device.binding).tolist(),hazard=np.asarray(hazard.device.binding).tolist(),
-        actions=np.asarray(actions.device.binding).tolist())
+        actions=np.asarray(actions.device.binding).tolist(),substitute=np.asarray(substitute.binding).tolist())
     digest=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(',',':')).encode()).digest()
     binding=jnp.asarray(np.frombuffer(digest,dtype='>u4').astype(np.uint32))
-    return Catalog(source,vocabulary,dex,species,moves,abilities,items,field,active,damage,types,
+    return Catalog(source,vocabulary,dex,species,moves,abilities,items,field,active,substitute,damage,types,
         sleep,toxic,tendency,refresh,lifecycle,clause,context,features,expected,hazard,actions,masks,binding,checkpoint_sha256)
 
 
@@ -282,6 +284,10 @@ def encode(state,own,catalog,*,observer_sides):
     type_patch=private_team.TeamFeaturePatch(jnp.zeros((b,2,132),jnp.float32),types.categorical,
         jnp.zeros(132,bool),types.write_mask,types.admitted)
     result=_overlay_active(result,type_patch,mons,own.status,observer)
+    sub=public_substitute.project(context.active,tables.active,mons,own.actions.team,catalog.substitute,
+        observer_side=observer,expected_binding=catalog.substitute.binding,exact_state=catalog.masks.exact_state)
+    result=v4_assembly.overlay(result,sub.own,section='own')
+    result=v4_assembly.overlay(result,sub.opponent,section='opponent')
     result=v4_assembly.overlay(result,public_damage.project_credits(context.damage,tables.damage,mons,
         observer_side=observer,expected_vocabulary=catalog.species.device.vocabulary_binding),section='field')
     hazard=public_hazard_exposure.project(own.hazard,mons,context,state.beliefs,visible,catalog.source.device,
