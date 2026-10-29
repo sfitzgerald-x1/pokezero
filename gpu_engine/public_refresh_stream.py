@@ -16,9 +16,10 @@ from . import public_tendency as tendency, public_mon_state as mon
 
 NOOP, ARRIVAL, MOVE, TURN, ABILITY, TRACE, TRANSFORM=range(1,8)
 STATUS,CANT,CURE,TEAM,FAINT,HP,CANT_OTHER=range(8,15)
-LAST_FAMILY=CANT_OTHER
-SCHEMA='pokezero.public_refresh_stream.v3'
-FAMILIES=('noop','arrival','move','turn','ability','trace','transform','status','sleep-cant','cure','team','faint','hp','other-cant')
+ITEM=15
+LAST_FAMILY=ITEM
+SCHEMA='pokezero.public_refresh_stream.v4'
+FAMILIES=('noop','arrival','move','turn','ability','trace','transform','status','sleep-cant','cure','team','faint','hp','other-cant','item')
 
 
 class StreamState(NamedTuple):
@@ -31,6 +32,11 @@ class StreamState(NamedTuple):
     common_seen: jax.Array
     common_proof: jax.Array
     switch_seen: jax.Array
+    item_expected: jax.Array
+    item_seen: jax.Array
+    item_eat: jax.Array
+    item_mode: jax.Array
+    item_target: jax.Array
 
 
 def validate_source(source,*,pending_switch=False):
@@ -44,6 +50,7 @@ def family(line,*,lifecycle=False):
     """Lexical source family, never a CPU summary or callback count."""
     parts=line.split('|');kind=parts[1] if len(parts)>1 else ''
     if lifecycle:
+        if kind in ('-item','-enditem'):return ITEM
         if kind=='-status':return STATUS
         if kind=='-curestatus':return CURE
         if kind=='-cureteam':return TEAM
@@ -73,7 +80,20 @@ def initialize(beliefs,source_tables,tables):
     batch=beliefs.species.shape[0]
     return StreamState(refresh.initialize(beliefs,source_tables,tables),jnp.zeros(batch,jnp.int32),
         jnp.zeros(batch,jnp.int32),jnp.zeros((batch,6),jnp.int32),
-        jnp.zeros((batch,4),jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros((batch,10),jnp.int32),jnp.zeros(batch,jnp.int32))
+        jnp.zeros((batch,4),jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros((batch,10),jnp.int32),jnp.zeros(batch,jnp.int32),
+        jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,bool),
+        jnp.zeros(batch,jnp.int32),jnp.broadcast_to(jnp.array([-1,-1,0],jnp.int32),(batch,3)))
+
+
+def item_word_ok(word,*,framed,code=None):
+    if not framed:return (word>=0)&(word<=2)
+    kind=word&3;count=(word>>2)&3;eat=(word&16)!=0
+    ok=(word>=0)&(word<32)&(kind<=2)&(count<=2)&(((word&16)==0)|((count==1)&(kind==1)))
+    if code is not None:
+        ok &= (kind==1)==(code==ITEM)
+        ok &= (kind!=2)|((code==NOOP)&(count==0))
+        ok &= (count!=2)|(code==ITEM)
+    return ok
 
 
 def metadata(code,line,events,lifecycle_tables,*,addresses=None,clause=False):
@@ -153,12 +173,16 @@ def common_matches(state,row):
     return (state.common_seen==1)&jnp.all(state.common_proof[:,:3]==row[:,6:9],axis=-1)
 
 
-def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,clause=False):
+def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,clause=False,mons=None):
     batch=beliefs.species.shape[0]
     refresh._tables(tables,source_tables,move_tables);refresh._state_shape(state.controller,batch)
-    for value in (state.family,state.main_seen,state.proc_seen,state.common_seen,state.switch_seen):
+    for value in (state.family,state.main_seen,state.proc_seen,state.common_seen,state.switch_seen,state.item_expected,state.item_seen,state.item_mode):
         if value.shape!=(batch,) or value.dtype!=jnp.int32:
             raise ValueError('source refresh frame requires B int32 state words')
+    if state.item_eat.shape!=(batch,) or state.item_eat.dtype!=jnp.bool_:
+        raise ValueError('source item eat proof requires B boolean flags')
+    if state.item_target.shape!=(batch,3) or state.item_target.dtype!=jnp.int32:
+        raise ValueError('source item target requires B by3 int32 words')
     if state.main_proof.shape!=(batch,6) or state.main_proof.dtype!=jnp.int32:
         raise ValueError('source refresh main proof requires B by6 int32 words')
     for name,width in (('raw_meta',4),('common_proof',10)):
@@ -176,16 +200,33 @@ def validate(state,beliefs,source_tables,tables,move_tables,*,lifecycle=False,cl
     ok &= jnp.where(state.family==0,jnp.all(state.raw_meta==0,axis=-1),metadata_ok(state.family,state.raw_meta,lifecycle=lifecycle,clause=clause))
     ok &= (state.common_seen!=0)|jnp.all(state.common_proof==0,axis=-1)
     ok &= (state.family!=0)|((state.proc_seen==0)&(state.common_seen==0))
+    ok &= (state.item_expected>=0)&(state.item_expected<=2)&(state.item_seen>=0)&(state.item_seen<=state.item_expected)
+    item_word=state.item_mode|(state.item_expected<<2)|(state.item_eat.astype(jnp.int32)<<4)
+    ok &= (state.item_mode>=0)&(state.item_mode<=2)
+    ok &= jnp.where(state.family!=0,item_word_ok(item_word,framed=True,code=state.family),item_word==0)
+    address=state.item_target;seen=state.item_seen>0
+    target_ok=(address[:,0]>=0)&(address[:,0]<2)&(address[:,1]>=0)&(address[:,1]<6)&(address[:,2]>0)
+    if mons is not None:
+        rows=jnp.arange(batch);side=jnp.clip(address[:,0],0,1);slot=jnp.clip(address[:,1],0,5)
+        target_ok &= mons.encounter[rows,side,slot]==address[:,2]
+    ok &= jnp.where(seen,target_ok,jnp.all(address==jnp.array([-1,-1,0],jnp.int32),axis=-1))
+    ok &= ~state.item_eat|(state.item_expected==1)
+    ok &= (state.family!=ITEM)|(state.item_expected>0)
+    ok &= (state.family!=0)|((state.item_expected==0)&(state.item_seen==0)&~state.item_eat)
     ok &= (state.family!=0)|(state.main_seen==0)
     ok &= (state.main_seen!=0)|jnp.all(state.main_proof==0,axis=-1)
     return ok&jnp.all(visible_ok,axis=(1,2))
 
 
-def open_frame(state,code,meta,valid,*,lifecycle=False,clause=False):
+def open_frame(state,code,meta,valid,*,lifecycle=False,clause=False,item_word=0):
     ok=(state.family==0)&(state.main_seen==0)&(code>=NOOP)&(code<=LAST_FAMILY)
     ok &= (state.proc_seen==0)&(state.common_seen==0)&(state.switch_seen==0)&metadata_ok(code,meta,lifecycle=lifecycle,clause=clause)
+    count=(item_word>>2)&3;eat=(item_word&16)!=0
+    ok &= item_word_ok(item_word,framed=True,code=code)&((code!=ITEM)|(count>0))
+    ok &= (state.item_expected==0)&(state.item_seen==0)&~state.item_eat
     use=valid&ok
-    return state._replace(family=jnp.where(use,code,state.family),raw_meta=jnp.where(use[:,None],meta,state.raw_meta)),ok|~valid
+    return state._replace(family=jnp.where(use,code,state.family),raw_meta=jnp.where(use[:,None],meta,state.raw_meta),
+        item_expected=jnp.where(use,count,state.item_expected),item_eat=jnp.where(use,eat,state.item_eat),item_mode=jnp.where(use,item_word&3,state.item_mode)),ok|~valid
 
 
 def main(state,code,proof,valid):
@@ -203,7 +244,8 @@ def close_frame(state,beliefs,source_tables,control,control_side,valid,*,pending
     _,basis_ok=snapshot.read(state.controller.visible,beliefs,source_tables)
     ok=(state.family>=NOOP)&(state.family<=LAST_FAMILY)
     ok &= state.switch_seen==int(pending_switch)
-    ok &= state.main_seen==jnp.where((state.family==NOOP)|(state.family==CANT_OTHER),0,1)
+    ok &= state.item_seen==state.item_expected
+    ok &= state.main_seen==jnp.where((state.family==NOOP)|(state.family==CANT_OTHER)|(state.family==ITEM),0,1)
     control_kind=control[:,0]
     arrival=(control_kind>=tendency.SWITCH)&(control_kind<=tendency.REPLACE)
     callback_main=arrival|(control_kind==tendency.MOVE)|(control_kind==tendency.TURN)
@@ -219,13 +261,16 @@ def close_frame(state,beliefs,source_tables,control,control_side,valid,*,pending
     ok &= expected
     proof=jnp.stack((control_side,control_kind,jnp.where(arrival,control[:,1],control[:,2]),
         control[:,3],control[:,5],control[:,4]),axis=-1)
-    ok &= ((state.family==NOOP)|(state.family==CANT_OTHER))|jnp.all(proof==state.main_proof,axis=-1)
+    ok &= ((state.family==NOOP)|(state.family==CANT_OTHER)|(state.family==ITEM))|jnp.all(proof==state.main_proof,axis=-1)
     ok &= jnp.all(basis_ok,axis=(1,2))
     use=valid&ok
     return state._replace(family=jnp.where(use,0,state.family),main_seen=jnp.where(use,0,state.main_seen),
         main_proof=jnp.where(use[:,None],0,state.main_proof),raw_meta=jnp.where(use[:,None],0,state.raw_meta),
         proc_seen=jnp.where(use,0,state.proc_seen),common_seen=jnp.where(use,0,state.common_seen),
-        common_proof=jnp.where(use[:,None],0,state.common_proof),switch_seen=jnp.where(use,0,state.switch_seen)),ok|~valid
+        common_proof=jnp.where(use[:,None],0,state.common_proof),switch_seen=jnp.where(use,0,state.switch_seen),
+        item_expected=jnp.where(use,0,state.item_expected),item_seen=jnp.where(use,0,state.item_seen),
+        item_eat=jnp.where(use,False,state.item_eat),item_mode=jnp.where(use,0,state.item_mode),
+        item_target=jnp.where(use[:,None],jnp.array([-1,-1,0],jnp.int32),state.item_target)),ok|~valid
 
 
 def commit(ok,before,after):

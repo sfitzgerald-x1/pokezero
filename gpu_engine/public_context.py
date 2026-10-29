@@ -14,6 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from . import public_abilities as ability, public_moves as move, public_mon_state as mon, public_items as item, public_field as field_api
+from . import public_item_callbacks as item_callbacks
 from . import public_active as active_api
 from . import public_damage as damage_api
 from . import public_types as type_api
@@ -341,15 +342,20 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         # cannot bypass their missing source callback merely by leaving the
         # final hard mask unchanged.
         supported=(k==raw_kind)|arrival|(k==move_kind)|(k==ability_kind)|(k==trace_kind)|(k==transform_kind)|(
-            k==turn_kind)|(k==action_end_kind)|(k==field_kind)|(k==active_kind)|(
+            k==turn_kind)|(k==action_end_kind)|(k==item_kind)|(k==field_kind)|(k==active_kind)|(
             k==damage_kind)|(k==type_kind)|(k==toxic_kind)|(k==tendency_kind)|(
             (k==sleep_kind)&(data[:,1]==sleep_api.USABLE_MOVE))|(k==boost_kind)|(k==copy_boost_kind)|(k==clear_all_kind)
         if life is not None:
             supported |= (k==status_kind)|(k==condition_kind)|faint|(k==cure_kind)|(k==sleep_kind)
         if switches is not None:supported |= k==switch_kind
         summary_ok &= ~valid|supported
-        summary,opened=refresh_stream.open_frame(summary,data[:,3],data[:,4:],valid&(k==raw_kind),lifecycle=life is not None,clause=tables.sleep_clause is not None)
+        summary,opened=refresh_stream.open_frame(summary,data[:,3],data[:,4:],valid&(k==raw_kind),lifecycle=life is not None,clause=tables.sleep_clause is not None,item_word=data[:,0])
         summary_ok &= opened
+        raw_proc=(k==ability_kind)&(data[:,2]==0)
+        # Raw ability procs precede items; every main/common stage follows them.
+        stage=(k==raw_kind)|(k==switch_kind)|(k==item_kind)|raw_proc
+        summary_ok &= ~valid|stage|(summary.item_seen==summary.item_expected)
+        summary_ok &= ~(valid&raw_proc&(summary.item_expected>0))|(summary.item_seen==0)
         if switches is not None:
             prelude=k==switch_kind
             summary_ok &= ~(valid&~((k==raw_kind)|prelude))|(summary.switch_seen==1)
@@ -534,11 +540,40 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
     items=context.items
     if items is not None:
         raw=k==raw_kind
-        items,ra=item.begin_event(items,mons,tables.items,item_event=data[:,0]==1,trick=data[:,0]==2,
+        items,ra=item.begin_event(items,mons,tables.items,item_event=(data[:,0]&3)==1,trick=(data[:,0]&3)==2,
             actor_side=actor_side,actor_slot=actor_slot,actor_encounter=data[:,1],
             target_side=side,target_slot=slot,target_encounter=data[:,2],valid=valid&raw)
-        items,ia=item.record(items,mons,tables.items,side=side,slot=slot,encounter=data[:,0],
-            item_id=data[:,1],operation=data[:,2],item_binding=tables.items.binding,valid=valid&(k==item_kind))
+        if summary is None:
+            items,ia=item.record(items,mons,tables.items,side=side,slot=slot,encounter=data[:,0],
+                item_id=data[:,1],operation=data[:,2],item_binding=tables.items.binding,valid=valid&(k==item_kind))
+        else:
+            use=valid&(k==item_kind)&summary_ok
+            ready=(summary.family>0)&(summary.item_seen<summary.item_expected)
+            ready &= (summary.main_seen==0)&(summary.common_seen==0)
+            second=summary.item_seen>0
+            address=jnp.stack((side,slot,data[:,0]),axis=-1)
+            ready &= ~second|jnp.all(summary.item_target==address,axis=-1)
+            explicit=(data[:,2]==item.DIRECT)|(data[:,2]==item.TRICK_RECEIVE)|(data[:,2]==item.OTHER_RECEIVE)
+            ready &= (summary.item_expected!=2)|jnp.where(second,explicit,data[:,2]==item.INLINE)
+            summary_ok &= ~use|ready
+            use &= ready
+            # _target_belief upserts an inactive target before item replacement.
+            lookup=use&~context.sleep.live[rows,jnp.clip(side,0,1)]
+            summary,base,ok=checkpoint(summary,base,a,slots(side,slot,lookup));summary_ok &= ok
+            stages=item_callbacks.project(items,mons,tables.items,side=side,slot=slot,encounter=data[:,0],
+                item_id=data[:,1],operation=data[:,2],item_binding=tables.items.binding,
+                is_eat=summary.item_eat,valid=use&summary_ok)
+            ia=stages.admitted
+            for stage,mask in ((stages.mutation,slots(side,slot,stages.mutation_callback)),
+                    (stages.reveal,slots(side,slot,stages.reveal_callback)),
+                    (stages.partner,stages.partner_callback[:,::-1,:])):
+                full,bound=rebuild(context._replace(abilities=a,items=stage),base,source_tables,tables)
+                summary,full,ok=refresh_stream.checkpoint(summary,full,source_tables,mask)
+                base=base._replace(conflicts=full.conflicts);summary_ok &= bound&ok
+            items=stages.partner
+            first=use&ia&summary_ok&(summary.item_seen==0)
+            summary=summary._replace(item_seen=jnp.where(use&ia&summary_ok,summary.item_seen+1,summary.item_seen),
+                item_target=jnp.where(first[:,None],address,summary.item_target))
         accepted &= jnp.where(raw,ra,jnp.where(k==item_kind,ia,True))
     fields=context.field
     if fields is not None:

@@ -117,9 +117,9 @@ class PublicEvent:
                 raise ValueError('pending-switch prelude requires typed public lexical facts')
         elif self.kind==Kind.RAW_BEGIN:
             d=self.payload
-            if d[0] not in (0,1,2) or (d[3]==0 and any(d[4:])) or (d[3]!=0 and not public_refresh_stream.metadata_words_ok(d[3],d[4:])):
+            if not public_refresh_stream.item_word_ok(d[0],framed=d[3]!=0,code=d[3]) or (d[3]==0 and any(d[4:])) or (d[3]!=0 and not public_refresh_stream.metadata_words_ok(d[3],d[4:])):
                 raise ValueError("raw boundary requires a named item family")
-            if d[0]==2:
+            if d[0]&3==2:
                 if not (self.actor_side in (0,1) and 0<=self.actor_slot<6 and self.target_side in (0,1)
                         and 0<=self.target_slot<6 and self.actor_side!=self.target_side and d[1]>0 and d[2]>0):
                     raise ValueError("Trick boundary requires two public encounters")
@@ -649,9 +649,8 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             rebuilt.has_evidence == beliefs.has_evidence, axis=(1, 2))
         error = jnp.where((error == 0) & ~(bound & consistent), Error.SOURCE, error)
         if context.refresh is not None:
-            from . import public_refresh_stream
             coherent=public_refresh_stream.validate(context.refresh,beliefs,tables,context_tables.refresh,context_tables.moves,
-                lifecycle=context_tables.lifecycle is not None,clause=context_tables.sleep_clause is not None)
+                lifecycle=context_tables.lifecycle is not None,clause=context_tables.sleep_clause is not None,mons=mon_state)
             coherent &= (context.refresh.family!=0)==context.tendency_raw_pending
             if not switch_enabled:coherent &= context.refresh.switch_seen==0
             if context.lifecycle is not None:
@@ -708,7 +707,7 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         double_context = (kind == Kind.MOVE) | (kind == Kind.TRACE) | (kind == Kind.TRANSFORM)
         context_identity = actor_identity & (target_identity | (absent_target & (kind != Kind.TRANSFORM)))
         cure_identity=jnp.all(row[:,4:6]==-1,axis=1)&(row[:,6]>=0)&(row[:,6]<=1)&(row[:,7]==-1)
-        raw_identity=jnp.where(row[:,8]==2,copy_identity&(row[:,4]!=row[:,6]),boundary_identity)
+        raw_identity=jnp.where((row[:,8]&3)==2,copy_identity&(row[:,4]!=row[:,6]),boundary_identity)
         field_identity=jnp.all(row[:,4:6]==-1,axis=1)&(row[:,7]==-1)&jnp.where(
             row[:,8]==public_field.WEATHER,row[:,6]==-1,(row[:,6]>=0)&(row[:,6]<=1))
         damage_identity=jnp.all(row[:,4:6]==-1,axis=1)&(row[:,7]==-1)&jnp.where(
@@ -741,10 +740,10 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
             if item_enabled:
                 replaceable |= context_tables.item_predicate[jnp.clip(predicate,0,tables.predicates.shape[0]-1)]
                 summary_enabled=context_tables.refresh is not None
-                raw_payload=(d[:,0]>=0)&(d[:,0]<=2)
+                raw_payload=public_refresh_stream.item_word_ok(d[:,0],framed=summary_enabled,code=d[:,3])
                 raw_payload &= public_refresh_stream.metadata_ok(d[:,3],d[:,4:],
                     lifecycle=context_tables.lifecycle is not None,clause=context_tables.sleep_clause is not None) if summary_enabled else jnp.all(d[:,3:]==0,axis=1)
-                raw_payload &= jnp.where(d[:,0]==2,(d[:,1]>0)&(d[:,2]>0),jnp.all(d[:,1:3]==0,axis=1))
+                raw_payload &= jnp.where((d[:,0]&3)==2,(d[:,1]>0)&(d[:,2]>0),jnp.all(d[:,1:3]==0,axis=1))
                 item_payload=(d[:,0]>0)&(d[:,1]>0)&(d[:,2]>=0)&(d[:,2]<=6)&jnp.all(d[:,3:]==0,axis=1)
                 payload_ok &= jnp.where(kind==Kind.RAW_BEGIN,raw_payload,jnp.where(kind==Kind.ITEM,item_payload,True))
             if field_enabled:
@@ -862,7 +861,6 @@ def fold_chunk(cursor: StreamCursor, beliefs: public_belief.BeliefState,
         # VisibleSummary includes global namespace words, unlike batched context
         # leaves. Do not broadcast those words into a counterfeit B by8 binding.
         if context.refresh is not None:
-            from . import public_refresh_stream
             refreshed=public_refresh_stream.commit(error==0,context.refresh,ctx.refresh)
             committed_context=jax.tree.map(commit,context._replace(refresh=None),ctx._replace(refresh=None))._replace(refresh=refreshed)
         else:
