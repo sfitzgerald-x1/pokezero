@@ -29,7 +29,7 @@ class V4EncoderTests(unittest.TestCase):
         labels|={'type:'+name for name in ('Normal','Fighting','Flying','Poison','Ground','Rock','Bug','Ghost','Steel',
             'Fire','Water','Grass','Electric','Psychic','Ice','Dragon','Dark','???')}
         labels|={'status:'+name for name in ('none','slp','par','brn','frz','psn','tox','fnt')}
-        for ability in ('naturalcure','earlybird','shedskin','trace','pressure','truant','levitate','immunity','arenatrap','shadowtag','magnetpull'):
+        for ability in ('naturalcure','earlybird','shedskin','trace','pressure','truant','levitate','immunity','arenatrap','shadowtag','magnetpull','shielddust'):
             labels|={'ability:'+ability,'belief:possible_ability:'+ability}
         for name,info in dex.moves.items():
             labels|={'move:'+name,'move_category:'+info.gen3_category,'move_priority:'+str(info.priority)}
@@ -184,7 +184,7 @@ class V4EncoderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'ordered evidence consumer: request'):
             self.projections(['|request|'+json.dumps(self.request())])
         with self.assertRaisesRegex(ValueError,'ordered evidence consumer'):
-            self.projections([*self.public.prefix,'|upkeep'])
+            self.projections([*self.public.prefix,'|unimplemented|wire'])
 
 
 if __name__=='__main__':unittest.main()

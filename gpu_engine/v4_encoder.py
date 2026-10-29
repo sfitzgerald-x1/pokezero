@@ -21,6 +21,8 @@ from . import private_actions,private_team,public_inputs,public_mon_state,public
 from . import public_belief,public_moves,public_abilities,public_items,public_team,public_field
 from . import public_active,public_damage,public_types,public_sleep,public_toxic,public_tendency
 from . import public_belief_refresh,public_belief_lifecycle,public_belief_features,public_belief_snapshot
+from . import public_item_nonproc
+from . import public_mudshot
 from . import public_refresh_stream, public_sleep_clause, public_substitute, public_exact, public_switch_evidence
 from . import public_expected_stats,public_hazard_exposure,v4_assembly
 
@@ -95,7 +97,7 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     vocabulary=CategoryVocabulary(tuple(vocabulary.tokens),vocabulary.oov_buckets,dict(vocabulary.aliases))
     moves=public_moves.compile_moves(source,dex,vocabulary)
     abilities=public_abilities.compile_abilities(source,vocabulary,
-        ability_names=('Natural Cure','Early Bird','Shed Skin','Trace','Pressure','Truant','Levitate','Arena Trap','Shadow Tag','Magnet Pull'))
+        ability_names=('Natural Cure','Early Bird','Shed Skin','Trace','Pressure','Truant','Levitate','Arena Trap','Shadow Tag','Magnet Pull','Shield Dust'))
     items=public_items.compile_items(source,vocabulary)
     species=public_team.compile_species(source,dex,vocabulary,abilities)
     field=public_field.compile_field(vocabulary)
@@ -110,10 +112,13 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     lifecycle=public_belief_lifecycle.compile_lifecycle(species,abilities,moves,sleep)
     clause=public_sleep_clause.compile_clause(sleep)
     switches=public_switch_evidence.compile_switch_evidence(source,species,abilities)
+    nonproc=public_item_nonproc.compile_nonproc(source,species,items,sleep)
+    mudshot=public_mudshot.compile_mudshot(source,species,abilities)
     context=public_context.compile_context(source,abilities,moves,items=items,
         item_belief_narrowing=masks.item_belief_narrowing,field_catalog=field,active_catalog=active,
         damage_tables=damage,type_catalog=types,sleep_tables=sleep,toxic_tables=toxic,
-        tendency_tables=tendency.device,refresh_tables=refresh,lifecycle_tables=lifecycle,clause_tables=clause,switch_tables=switches)
+        tendency_tables=tendency.device,refresh_tables=refresh,lifecycle_tables=lifecycle,clause_tables=clause,switch_tables=switches,nonproc_tables=nonproc,
+        mudshot_tables=mudshot,mudshot_move_id=moves.ids.get('mudshot',0))
     features=public_belief_features.compile_features(source,abilities,items,moves,vocabulary,species_catalog=species)
     exact=public_exact.compile_exact(abilities,features,sleep,vocabulary)
     expected=public_expected_stats.compile_expected(source,dex,species)
@@ -251,6 +256,12 @@ def encode(state,own,catalog,*,observer_sides):
     visible=context.refresh.controller.visible
     summary,cache_ok=public_belief_snapshot.read(visible,state.beliefs,catalog.source.device)
     valid &= jnp.all(cache_ok,axis=(1,2))
+    if context.nonproc is None or tables.nonproc is None:
+        valid &= False
+    else:valid &= public_context.validate_nonproc(context,mons,tables)
+    if context.mudshot is None or tables.mudshot is None:
+        valid &= False
+    else:valid &= public_context.validate_mudshot(context,mons,catalog.source.device,tables,summary.effective)
     if context.switches is None or tables.switches is None:
         valid &= False
     else:

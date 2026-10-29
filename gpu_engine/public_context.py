@@ -15,6 +15,9 @@ import numpy as np
 
 from . import public_abilities as ability, public_moves as move, public_mon_state as mon, public_items as item, public_field as field_api
 from . import public_item_callbacks as item_callbacks
+from .public_moves import _bool
+from . import public_item_nonproc as nonproc_api,public_nonproc_protocol as nonproc_protocol,public_nonproc_refresh as nonproc_refresh
+from . import public_mudshot as mudshot_api,public_mudshot_protocol as mudshot_protocol,public_mudshot_refresh as mudshot_refresh
 from . import public_active as active_api
 from . import public_damage as damage_api
 from . import public_types as type_api
@@ -46,6 +49,9 @@ class ContextTables(NamedTuple):
     lifecycle: lifecycle_api.LifecycleTables | None = None
     sleep_clause: clause_api.Tables | None = None
     switches: switch_api.Tables | None = None
+    nonproc: nonproc_api.NonprocTables | None = None
+    mudshot: mudshot_api.Tables | None = None
+    mudshot_move_id: jax.Array | None = None
 
 
 class ContextState(NamedTuple):
@@ -68,9 +74,30 @@ class ContextState(NamedTuple):
     lifecycle: lifecycle_api.LifecycleState | None = None
     sleep_clause: clause_api.State | None = None
     switches: switch_api.State | None = None
+    nonproc: nonproc_api.NonprocState | None = None
+    nonproc_binding: jax.Array | None = None
+    mudshot: mudshot_api.State | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_tables=None, refresh_tables=None, lifecycle_tables=None, clause_tables=None, switch_tables=None):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_tables=None, refresh_tables=None, lifecycle_tables=None, clause_tables=None, switch_tables=None, nonproc_tables=None,mudshot_tables=None,mudshot_move_id=0):
+    if mudshot_tables is not None:
+        if nonproc_tables is None or sleep_tables is None or refresh_tables is None:
+            raise ValueError('Mud Shot requires ordered non-proc/sleep/source consumers')
+        if type(mudshot_move_id) is not int or not 0<=mudshot_move_id<len(moves.names):
+            raise ValueError('Mud Shot requires its frozen move ID')
+        for actual,expected in ((mudshot_tables.source_binding,source.device.binding),
+                (mudshot_tables.species_binding,sleep_tables.species_binding),
+                (mudshot_tables.ability_binding,abilities.device.binding)):
+            sleep_api._binding(actual);sleep_api._binding(expected)
+            if not np.array_equal(np.asarray(actual),np.asarray(expected)):raise ValueError('Mud Shot context namespace mismatch')
+    if nonproc_tables is not None:
+        if items is None or sleep_tables is None or refresh_tables is None:
+            raise ValueError('non-proc evidence requires ordered item/sleep/source consumers')
+        for actual,expected in ((nonproc_tables.source_binding,source.device.binding),
+                (nonproc_tables.species_binding,sleep_tables.species_binding),
+                (nonproc_tables.item_binding,items.device.binding),(nonproc_tables.sleep_binding,sleep_tables.binding)):
+            sleep_api._binding(actual);sleep_api._binding(expected)
+            if not np.array_equal(np.asarray(actual),np.asarray(expected)):raise ValueError('non-proc context namespace mismatch')
     if switch_tables is not None:
         if sleep_tables is None or lifecycle_tables is None or refresh_tables is None:
             raise ValueError('pending switch evidence requires ordered sleep/lifecycle/refresh consumers')
@@ -174,13 +201,18 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
         payload.update(schema=payload['schema']+'.sleep-clause-raw.v1',sleep_clause=np.asarray(clause_tables.binding).tolist())
     if switch_tables is not None:
         payload.update(schema=payload['schema']+'.pending-switch.v1',switches=np.asarray(switch_tables.binding).tolist())
+    if nonproc_tables is not None:
+        payload.update(schema=payload['schema']+'.nonproc-upkeep.v1',nonproc=np.asarray(nonproc_tables.binding).tolist())
+    if mudshot_tables is not None:
+        payload.update(schema=payload['schema']+'.mudshot.v1',mudshot=np.asarray(mudshot_tables.binding).tolist(),mudshot_move_id=mudshot_move_id)
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
         jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
         field_catalog.device if field_catalog is not None else None,
         active_catalog.device if active_catalog is not None else None,damage_tables,
-        type_catalog.device if type_catalog is not None else None,sleep_tables,toxic_tables,tendency_tables,refresh_tables,lifecycle_tables,clause_tables,switch_tables)
+        type_catalog.device if type_catalog is not None else None,sleep_tables,toxic_tables,tendency_tables,refresh_tables,lifecycle_tables,clause_tables,switch_tables,nonproc_tables,mudshot_tables,
+        jnp.asarray(mudshot_move_id,jnp.int32) if mudshot_tables is not None else None)
 
 
 def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=False, toxic_hp_visibility=(0,0), tendency_complete_prefix=False, source_tables=None, clause_complete_prefix=False):
@@ -224,7 +256,40 @@ def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=F
         refresh_stream.initialize(beliefs,source_tables,tables.refresh) if tables.refresh is not None else None,
         lifecycle_api.initialize(batch,tables.lifecycle) if tables.lifecycle is not None else None,
         clause_api.initialize(batch,tables.sleep_clause,complete_prefix=clause_complete_prefix) if tables.sleep_clause is not None else None,
-        switch_api.initialize(batch,tables.switches) if tables.switches is not None else None)
+        switch_api.initialize(batch,tables.switches) if tables.switches is not None else None,
+        nonproc_api.initialize(batch,species_binding=species_binding) if tables.nonproc is not None else None,
+        jnp.broadcast_to(tables.nonproc.binding,(batch,8)) if tables.nonproc is not None else None,
+        mudshot_api.initialize(batch,tables.mudshot) if tables.mudshot is not None else None)
+
+
+def validate_nonproc(context,mons,tables,*,pending_arrival=False):
+    """Join registered ledger identity and table namespace, also on empty chunks."""
+    b=mons.encounter.shape[0]
+    if context.nonproc is None or tables.nonproc is None:
+        return jnp.full(b,context.nonproc is None and tables.nonproc is None and context.nonproc_binding is None)
+    binding=context.nonproc_binding
+    if getattr(binding,'shape',None)!=(b,8) or binding.dtype!=jnp.uint32:
+        raise ValueError('non-proc context binding shape/dtype')
+    if tables.nonproc.binding.shape!=(8,) or tables.nonproc.binding.dtype!=jnp.uint32:
+        raise ValueError('non-proc table binding shape/dtype')
+    ok=nonproc_api._validate(context.nonproc,mons)&jnp.all(binding==tables.nonproc.binding,axis=-1)
+    difference=context.nonproc.encounter!=mons.encounter
+    active=jnp.arange(6)[None,None,:]==mons.active[:,:,None]
+    pending=jnp.broadcast_to(_bool(pending_arrival),(b,))
+    permitted=pending[:,None,None]&active&(context.nonproc.encounter==0)&(mons.encounter>0)
+    return ok&~jnp.any(difference&~permitted,axis=(1,2))&(jnp.sum(difference,axis=(1,2))<=1)
+
+
+def validate_mudshot(context,mons,source_tables,tables,effective):
+    if context.mudshot is None or tables.mudshot is None:
+        return jnp.full(mons.encounter.shape[0],context.mudshot is None and tables.mudshot is None and tables.mudshot_move_id is None)
+    if context.refresh is None or context.sleep is None or context.nonproc is None or tables.nonproc is None:
+        return jnp.zeros(mons.encounter.shape[0],bool)
+    mid=tables.mudshot_move_id
+    if getattr(mid,'shape',None)!=() or mid.dtype!=jnp.int32:raise ValueError('Mud Shot move ID requires scalar int32')
+    result=mudshot_api.apply(context.mudshot,mons,context.abilities,source_tables,tables.mudshot,effective,context.sleep.live,
+        operation=mudshot_api.RESOLVE,producer_binding=tables.mudshot.binding)
+    return result.admitted&(mid>=0)&(mid<tables.moves.max_pp.shape[0])
 
 
 def basis(context, beliefs):
@@ -316,7 +381,7 @@ def preconsume(context,mons,tables,row,valid,*,condition_kind):
 def consume(context, base, mons, source_tables, tables, row, valid, *,
             move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind,
             active_kind, baton_kind, upkeep_kind, damage_kind, type_kind, sleep_kind, cure_kind, toxic_kind=None, action_end_kind=None, tendency_kind=None,
-            boost_kind=None,copy_boost_kind=None,clear_all_kind=None,status_kind=None,condition_kind=None,switch_kind=None):
+            boost_kind=None,copy_boost_kind=None,clear_all_kind=None,status_kind=None,condition_kind=None,switch_kind=None,nonproc_kind=None,mudshot_kind=None):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
@@ -324,6 +389,8 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
     a, m = context.abilities, context.moves
     summary=context.refresh;life=context.lifecycle
     switches=context.switches if tables.switches is not None else None
+    nonproc=context.nonproc if tables.nonproc is not None else None
+    mudshot=context.mudshot if tables.mudshot is not None else None
     batch=row.shape[0];rows=jnp.arange(batch)
     def slots(seat,target,use):
         return (jnp.arange(2)[None,:,None]==(1-jnp.clip(seat,0,1))[:,None,None])&(jnp.arange(6)[None,None,:]==jnp.clip(target,0,5)[:,None,None])&use[:,None,None]
@@ -331,6 +398,14 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         full,bound=rebuild(context._replace(abilities=a),base,source_tables,tables)
         summary,full,ok=refresh_stream.checkpoint(summary,full,source_tables,mask)
         return summary,base._replace(conflicts=full.conflicts),ok&bound
+    def resolve_mudshot(summary,base,a,pending,use):
+        def resolve_once(values):
+            stream,b,abilities,ledger=values
+            result=mudshot_refresh.resolve(context._replace(refresh=stream,abilities=abilities,mudshot=ledger,
+                base_hard=b.hard,base_has_evidence=b.has_evidence),ledger,b,mons,source_tables,tables,tables.mudshot,
+                producer_binding=tables.mudshot.binding,valid=use)
+            return result.context.refresh,result.basis,result.context.abilities,result.state,result.admitted
+        return jax.lax.cond(jnp.any(use),resolve_once,lambda values:(*values,jnp.ones(batch,bool)),(summary,base,a,pending))
     summary_ok=jnp.ones(batch,bool)
     def life_step(life,a,op,use,*,target_side=side,target_slot=slot,encounter=data[:,0],mid=0,aid=0,benched=False):
         result=lifecycle_api.apply(life,context.sleep,a,mons,tables.lifecycle,operation=op,
@@ -348,14 +423,22 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         if life is not None:
             supported |= (k==status_kind)|(k==condition_kind)|faint|(k==cure_kind)|(k==sleep_kind)
         if switches is not None:supported |= k==switch_kind
+        if nonproc is not None:supported |= (k==nonproc_kind)|(k==upkeep_kind)
+        if mudshot is not None:supported |= k==mudshot_kind
         summary_ok &= ~valid|supported
         summary,opened=refresh_stream.open_frame(summary,data[:,3],data[:,4:],valid&(k==raw_kind),lifecycle=life is not None,clause=tables.sleep_clause is not None,item_word=data[:,0])
         summary_ok &= opened
+        if nonproc is None:summary_ok &= ~(valid&(k==raw_kind))|((data[:,0]>>5)==0)
+        if mudshot is None:summary_ok &= ~(valid&(k==raw_kind))|((data[:,0]>>13)==0)
         raw_proc=(k==ability_kind)&(data[:,2]==0)
         # Raw ability procs precede items; every main/common stage follows them.
         stage=(k==raw_kind)|(k==switch_kind)|(k==item_kind)|raw_proc
         summary_ok &= ~valid|stage|(summary.item_seen==summary.item_expected)
         summary_ok &= ~(valid&raw_proc&(summary.item_expected>0))|(summary.item_seen==0)
+        if mudshot is not None:
+            before=(k==raw_kind)|(k==switch_kind)|(k==item_kind)|raw_proc
+            summary_ok &= ~(valid&~(before|(k==mudshot_kind)))|(summary.mudshot_seen==1)
+            summary_ok &= ~(valid&((k==switch_kind)|(k==item_kind)|raw_proc))|(summary.mudshot_seen==0)
         if switches is not None:
             prelude=k==switch_kind
             summary_ok &= ~(valid&~((k==raw_kind)|prelude))|(summary.switch_seen==1)
@@ -381,6 +464,106 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             summary,base,ok=checkpoint(summary,base,a,slots(result.side,result.slot,result.checkpoint&summary_ok))
             summary_ok &= ok
             summary=summary._replace(switch_seen=jnp.where(use&summary_ok,1,summary.switch_seen))
+        if mudshot is not None:
+            is_fact=k==mudshot_kind
+            facts,codec_ok=mudshot_protocol.unpack(data)
+            op=facts.operation;family=summary.family
+            ready=(family>0)&(summary.mudshot_seen==0)&(summary.mudshot_effect_seen==0)
+            ready &= (summary.main_seen==0)&(summary.common_seen==0)&(summary.nonproc_seen==0)
+            ready &= summary.item_seen==summary.item_expected
+            if switches is not None:ready &= summary.switch_seen==1
+            word=(data[:,0]+1)|(data[:,4]<<3)|(data[:,5]<<4)
+            ready &= codec_ok&(word==summary.mudshot_word)
+            expected=jnp.where((family==refresh_stream.MOVE)|(family==refresh_stream.UPKEEP),op==mudshot_api.RESOLVE,
+                jnp.where(family==refresh_stream.FAINT,op==mudshot_api.FAINT,
+                jnp.where(family==refresh_stream.HP,(op==mudshot_protocol.NOTE)|(op==mudshot_api.DAMAGE),
+                jnp.where(family==refresh_stream.NOOP,(op==mudshot_protocol.NOTE)|(op==mudshot_api.UNBOOST),op==mudshot_protocol.NOTE))))
+            ready &= expected&(~facts.queue|(family==refresh_stream.MOVE))
+            use=valid&is_fact&ready&summary_ok
+            full,bound=rebuild(context._replace(abilities=a),base,source_tables,tables)
+            cached,cache_ok=snapshot_api.read(summary.controller.visible,full,source_tables)
+            event=(op==mudshot_api.DAMAGE)|(op==mudshot_api.UNBOOST)|(op==mudshot_api.FAINT)
+            result=mudshot_api.apply(mudshot,mons,a,source_tables,tables.mudshot,cached.effective,context.sleep.live,
+                operation=jnp.where(event,op,mudshot_api.RESOLVE),side=jnp.where(event,facts.side,-1),
+                slot=jnp.where(event,facts.slot,-1),encounter=jnp.where(event,facts.encounter,0),
+                tagged=event&facts.tagged,producer_binding=tables.mudshot.binding,valid=use&event)
+            summary_ok &= ~is_fact|(~valid|(ready&bound&jnp.all(cache_ok,axis=(1,2))&result.admitted))
+            mudshot=result.state
+            summary,base,a,mudshot,resolved=resolve_mudshot(summary,base,a,mudshot,use&(family==refresh_stream.MOVE)&summary_ok)
+            summary_ok &= resolved
+            identity=jnp.stack((facts.side,facts.slot,facts.encounter),axis=-1)
+            summary=summary._replace(mudshot_seen=jnp.where(use&summary_ok,1,summary.mudshot_seen),
+                mudshot_target=jnp.where((use&summary_ok)[:,None],identity,summary.mudshot_target))
+            # A bookkeeping packet cannot replace its actual raw consumer.
+            code=(summary.mudshot_word&7)-1
+            receipt=((code==mudshot_api.DAMAGE)&(k==condition_kind))|((code==mudshot_api.UNBOOST)&(k==boost_kind))|(
+                (code==mudshot_api.FAINT)&faint)|((code==mudshot_api.RESOLVE)&(
+                ((summary.family==refresh_stream.MOVE)&(k==move_kind))|((summary.family==refresh_stream.UPKEEP)&(k==upkeep_kind))))
+            target_receipt=(code==mudshot_api.DAMAGE)|(code==mudshot_api.UNBOOST)|(code==mudshot_api.FAINT)
+            matches=jnp.all(summary.mudshot_target==jnp.stack((side,slot,data[:,0]),axis=-1),axis=-1)
+            receipt_ok=(summary.mudshot_seen==1)&(summary.mudshot_effect_seen==0)&(~target_receipt|matches)
+            receipt_ok &= (code!=mudshot_api.DAMAGE)|((data[:,5]==1)&((data[:,6]==1)==((summary.mudshot_word&16)!=0)))
+            receipt_ok &= (code!=mudshot_api.UNBOOST)|((data[:,3]==mon.DELTA)&(data[:,4]==1))
+            # Bind both directions: genuine body facts cannot be hidden by a
+            # consistent forged header and NOTE packet, or invented by UNBOOST.
+            body_damage=k==condition_kind
+            body_boost=k==boost_kind
+            summary_ok &= ~(valid&body_damage)|((code==mudshot_api.DAMAGE)==(data[:,5]==1))
+            summary_ok &= ~(valid&body_boost)|((code==mudshot_api.UNBOOST)==(data[:,4]==1))
+            summary_ok &= ~(valid&receipt)|receipt_ok
+            summary=summary._replace(mudshot_effect_seen=jnp.where(valid&receipt&receipt_ok&summary_ok,1,summary.mudshot_effect_seen))
+        if nonproc is not None:
+            is_fact=k==nonproc_kind
+            facts,codec_ok=nonproc_protocol.unpack(data)
+            upkeep=summary.family==refresh_stream.UPKEEP
+            ordinary_main=~((summary.family==refresh_stream.NOOP)|(summary.family==refresh_stream.CANT_OTHER)|(summary.family==refresh_stream.ITEM)|upkeep)
+            ready=(summary.family>0)&(summary.nonproc_seen==0)&(summary.main_seen==ordinary_main.astype(jnp.int32))
+            ready &= summary.item_seen==summary.item_expected
+            if switches is not None:ready &= summary.switch_seen==1
+            expected_op=jnp.where(upkeep,nonproc_protocol.UPKEEP,jnp.where(summary.family==refresh_stream.ARRIVAL,
+                nonproc_api.ARRIVE,jnp.where(summary.family==refresh_stream.HP,nonproc_api.HP,nonproc_api.NOTE)))
+            ready &= codec_ok&(facts.operation==expected_op)
+            ready &= ((data[:,6]<<2)|data[:,7])==summary.nonproc_word
+            ready &= facts.berry_eat==((summary.family==refresh_stream.ITEM)&summary.item_eat)
+            targeted=(facts.operation==nonproc_api.ARRIVE)|(facts.operation==nonproc_api.HP)
+            address=(rows,jnp.clip(facts.side,0,1),jnp.clip(facts.slot,0,5))
+            ready &= ~targeted|((facts.hp==mons.hp_numerator[address])&(facts.maximum==mons.hp_denominator[address]))
+            identity=jnp.stack((facts.side,facts.slot,facts.encounter),axis=-1)
+            ready &= (facts.operation!=nonproc_api.HP)|jnp.all(identity==summary.common_proof[:,:3],axis=-1)
+            arrival_side=summary.main_proof[:,0]
+            arrival_slot=mons.active[rows,jnp.clip(arrival_side,0,1)]
+            ready &= (facts.operation!=nonproc_api.ARRIVE)|((facts.side==arrival_side)&(facts.slot==arrival_slot))
+            ready &= ~facts.berry_eat|jnp.all(identity==summary.item_target,axis=-1)
+            ready &= ~((summary.family==refresh_stream.MOVE)|(summary.family==refresh_stream.TURN))|(facts.phase==nonproc_api.ACTION_PHASE)
+            use=valid&is_fact&ready&summary_ok
+            updated,recorded=nonproc_api.record(nonproc,mons,operation=jnp.where(upkeep,nonproc_api.NOTE,facts.operation),
+                side=facts.side,slot=facts.slot,encounter=facts.encounter,hp=facts.hp,maximum=facts.maximum,
+                phase=facts.phase,action_phase_hp=facts.action_phase_hp,residual_phase_hp=facts.residual_phase_hp,
+                leftovers_heal=facts.leftovers_heal,berry_eat=facts.berry_eat,valid=use)
+            summary_ok &= ~is_fact|(~valid|(ready&recorded))
+            sweep_use=use&upkeep&summary_ok
+            def sweep_once(values):
+                stream,ledger,b=values
+                bridge=nonproc_refresh.upkeep(context._replace(refresh=stream,nonproc=ledger,
+                    base_hard=b.hard,base_has_evidence=b.has_evidence),ledger,b,mons,source_tables,tables,
+                    tables.nonproc,producer_binding=tables.nonproc.binding,valid=sweep_use)
+                return bridge.context.refresh,bridge.state,bridge.basis,bridge.admitted
+            summary,nonproc,base,swept=jax.lax.cond(jnp.any(sweep_use),sweep_once,
+                lambda values:(*values,jnp.ones(batch,bool)),(summary,updated,base))
+            summary_ok &= swept
+            if mudshot is not None:
+                summary,base,a,mudshot,resolved=resolve_mudshot(summary,base,a,mudshot,sweep_use&summary_ok)
+                summary_ok &= resolved
+            summary=summary._replace(nonproc_seen=jnp.where(use&summary_ok,1,summary.nonproc_seen))
+            # All non-upkeep facts are terminal bookkeeping before the closing
+            # tendency packet; upkeep alone still owes its main clock event.
+            after=summary.nonproc_seen==1
+            summary_ok &= ~(valid&~((k==raw_kind)|is_fact|(k==tendency_kind)|(upkeep&(k==upkeep_kind))))|~after
+            summary_ok &= ~(valid&(k==upkeep_kind))|((summary.family==refresh_stream.UPKEEP)&after)
+            proof=jnp.stack((jnp.full(batch,-1,jnp.int32),jnp.full(batch,tendency_api.UPKEEP,jnp.int32),
+                jnp.zeros(batch,jnp.int32),jnp.full(batch,-1,jnp.int32),jnp.zeros(batch,jnp.int32),jnp.zeros(batch,jnp.int32)),axis=-1)
+            summary,upkeep_ok=refresh_stream.main(summary,refresh_stream.UPKEEP,proof,valid&(k==upkeep_kind)&summary_ok)
+            summary_ok &= upkeep_ok
         # Source marks the outgoing record before the incoming upsert. The
         # public mon consumer has introduced the incoming row already, but its
         # source summary remains unrefreshed until these checkpoints.
@@ -430,6 +613,22 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         summary=summary._replace(controller=result.refresh);update=result.move_update;life=result.lifecycle
         summary_ok &= result.admitted&bound
     m, base = update.state, update.beliefs
+    if mudshot is not None:
+        queue=(summary.mudshot_word&8)!=0
+        expected=(tables.mudshot_move_id>0)&(data[:,1]==tables.mudshot_move_id)
+        use=valid&is_move
+        summary_ok &= ~use|(queue==expected)
+        peer=1-jnp.clip(actor_side,0,1);target=context.sleep.active[rows,peer]
+        live=context.sleep.live[rows,peer]&(target>=0)
+        encounter=mons.encounter[rows,peer,jnp.clip(target,0,5)]
+        address=jnp.stack((jnp.where(live,peer,-1),jnp.where(live,target,-1),jnp.where(live,encounter,0)),axis=-1)
+        summary_ok &= ~(use&queue)|jnp.all(address==summary.mudshot_target,axis=-1)
+        full,bound=rebuild(context._replace(abilities=a),base,source_tables,tables)
+        cached,cache_ok=snapshot_api.read(summary.controller.visible,full,source_tables)
+        queued=mudshot_api.apply(mudshot,mons,a,source_tables,tables.mudshot,cached.effective,context.sleep.live,
+            operation=mudshot_api.QUEUE,side=summary.mudshot_target[:,0],slot=summary.mudshot_target[:,1],
+            encounter=summary.mudshot_target[:,2],producer_binding=tables.mudshot.binding,valid=use&queue&summary_ok)
+        mudshot=queued.state;summary_ok &= ~(use&queue)|(queued.admitted&bound&jnp.all(cache_ok,axis=(1,2)))
     if life is not None:
         # _target_belief falls back to _upsert when a side has no active
         # source record. Even an equal/borrowed proc still performs that
@@ -620,6 +819,13 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
     sleep=context.sleep
     if sleep is not None:
         is_turn=k==turn_kind;is_upkeep=k==upkeep_kind;is_sleep=k==sleep_kind;team=k==cure_kind
+        if summary is not None and nonproc is not None:
+            # Source upkeep replaces each unresolved plain-sleep record with
+            # nonzero skippedTime, even though its variant mask is unchanged.
+            # Reapplying a standing pin at that replacement is observable.
+            reset=sleep.pending&(sleep.skipped>0)&(mons.encounter>0)
+            reset &= (valid&is_upkeep&summary_ok)[:,None,None]
+            summary,base,ok=checkpoint(summary,base,a,reset[:,::-1,:]);summary_ok &= ok
         relevant=arrival|faint|is_turn|is_upkeep|is_sleep|team
         global_fact=is_turn|is_upkeep
         op=jnp.where(arrival,sleep_api.ARRIVE,jnp.where(faint,sleep_api.FAINT,
@@ -656,6 +862,8 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         # belong to the open transaction. Otherwise dropping BOTH frame
         # markers could charge PP or mutate HP without visiting Toxic state.
         other_close=(k==tendency_kind) if context.tendency is not None else jnp.zeros(k.shape,bool)
+        if nonproc is not None:other_close |= k==nonproc_kind
+        if mudshot is not None:other_close |= k==mudshot_kind
         accepted &= other_close|jnp.where(raw,~raw_pending,raw_pending)
         # Arrival transport kinds are contiguous SWITCH, DRAG, REPLACE, BP;
         # derive from the supplied first arrival kind rather than party order.
@@ -705,7 +913,7 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
     if summary is not None:
         full,bound=rebuild(context._replace(abilities=a,items=items),base,source_tables,tables)
         queue_arrival=(summary.family==refresh_stream.ARRIVAL)&valid&(k==tendency_kind)
-        summary,ok=refresh_stream.close_frame(summary,full,source_tables,summary_control,side,valid&(k==tendency_kind),pending_switch=switches is not None)
+        summary,ok=refresh_stream.close_frame(summary,full,source_tables,summary_control,side,valid&(k==tendency_kind),pending_switch=switches is not None,nonproc=nonproc is not None,mudshot=mudshot is not None)
         if switches is not None:
             cached,cache_ok=snapshot_api.read(summary.controller.visible,full,source_tables)
             target=jnp.clip(mons.active[rows,jnp.clip(side,0,1)],0,5)
@@ -715,5 +923,5 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
                 valid=queue_arrival&summary_ok&bound&ok)
             accepted &= ~queue_arrival|(queued&jnp.all(cache_ok,axis=(1,2)))
         accepted &= summary_ok&bound&ok
-    return context._replace(refresh=summary,lifecycle=life,sleep_clause=clauses,switches=switches if tables.switches is not None else context.switches,abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
+    return context._replace(refresh=summary,lifecycle=life,sleep_clause=clauses,switches=switches if tables.switches is not None else context.switches,nonproc=nonproc if tables.nonproc is not None else context.nonproc,mudshot=mudshot if tables.mudshot is not None else context.mudshot,abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
         toxic=toxic,toxic_raw_pending=raw_pending,tendency=tendency,tendency_raw_pending=pending),base,accepted | ~valid

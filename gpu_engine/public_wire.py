@@ -14,6 +14,7 @@ from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_publ
     _public_event_from_line)
 from pokezero.belief import _confirmed_ability_from_event, _trace_copy_source
 
+from . import public_annotations
 from . import public_mon_protocol, public_context_protocol, public_items, public_field, public_active, public_damage, public_types, public_sleep, public_sleep_protocol, public_toxic_protocol
 from . import public_tendency, public_tendency_protocol, public_refresh_stream, public_switch_protocol
 from .public_context_protocol import PublicAddress, PublicAddresses, ContextProjection
@@ -47,6 +48,7 @@ class WireState:
     sleep_binding: tuple[int, ...] | None = None
     toxic_binding: tuple[int, ...] | None = None
     tendency_binding: tuple[int, ...] | None = None
+    player_names: tuple[str | None, str | None] = (None,None)
 
     def addresses(self):
         active = {side: rows[self.active[side]].address for side, rows in enumerate(self.encounters)
@@ -233,14 +235,19 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         raise ValueError('tendency context cannot drop its raw producer')
     if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding or state.damage_binding!=damage_binding or state.type_binding!=type_binding or state.sleep_binding!=sleep_binding or state.toxic_binding!=toxic_binding or state.tendency_binding!=tendency_binding):
         raise ValueError("item context cannot change or be dropped across continuation")
-    refresh_family=public_refresh_stream.family(line,lifecycle=context_tables.lifecycle is not None) if context_tables is not None and context_tables.refresh is not None else 0
+    refresh_family=public_refresh_stream.family(line,lifecycle=context_tables.lifecycle is not None,
+        nonproc=context_tables.nonproc is not None,mudshot=context_tables.mudshot is not None) if context_tables is not None and context_tables.refresh is not None else 0
     parts = line.split('|')
     kind = parts[1] if len(parts) > 1 else ''
-    main_handled=kind in MON_KINDS or kind in CONTEXT_KINDS or line=='|'
+    annotation=public_annotations.classify(line)
+    main_handled=kind in MON_KINDS or kind in CONTEXT_KINDS or line=='|' or annotation is not None
     if kind == 'request':
         raise ValueError('private requests cannot enter the public event producer')
     candidate = replace(state,species_binding=binding,move_binding=move_binding,
         item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding,sleep_binding=sleep_binding,toxic_binding=toxic_binding,tendency_binding=tendency_binding)
+    if annotation=='player':
+        player=int(parts[2][1])-1
+        candidate=replace(candidate,player_names=tuple(parts[3] if i==player else name for i,name in enumerate(candidate.player_names)))
     side = None
     if kind in ('switch', 'drag', 'replace'):
         candidate, side = _arrive(candidate, line, parts)
@@ -248,6 +255,8 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         # ID maps at the producer boundary.
         species_catalog.species_id(candidate.encounters[side][candidate.active[side]].species)
     addresses = _bench_alias(candidate.addresses(), parts)
+    if annotation=='target':
+        public_mon_protocol._exact_active(addresses,candidate.active_idents(),parts[2])
     events = []
     item_projection=public_items.project_line(line,items=items) if items is not None else None
     if item_projection is not None:
@@ -371,7 +380,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         projected = public_mon_protocol.project_line(line, sequence=state.next_sequence + len(events), turn=state.turn,
             addresses=addresses, active_idents=candidate.active_idents(), species_ids=species_catalog.ids,
             source=source, phase=state.phase, baton_pass=side is not None and state.pending_baton[side],
-            damage_metadata=damage_tables is not None)
+            damage_metadata=damage_tables is not None,boost_metadata=context_tables is not None and context_tables.mudshot is not None)
         events.extend(projected.events)
     if kind in CONTEXT_KINDS:
         projected = public_context_protocol.project_line(line, sequence=state.next_sequence + len(events),
@@ -421,7 +430,38 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         meta=public_refresh_stream.metadata(refresh_family,line,events,context_tables.lifecycle,addresses=addresses,clause=context_tables.sleep_clause is not None)
         opener=events[0]
         events[0]=replace(opener,payload=(*opener.payload[:4],*meta))
+        if context_tables.nonproc is not None:
+            from . import public_nonproc_protocol
+            facts=public_nonproc_protocol.project_line(line,state,candidate)
+            word=(facts.payload[6]<<2)|facts.payload[7]
+            opener=events[0]
+            events[0]=replace(opener,payload=(opener.payload[0]|(word<<5),*opener.payload[1:]))
+        if context_tables.mudshot is not None:
+            from . import public_mudshot_protocol
+            facts=public_mudshot_protocol.project_line(line,state)
+            word=(facts.payload[0]+1)|(facts.payload[4]<<3)|(facts.payload[5]<<4)
+            opener=events[0]
+            events[0]=replace(opener,payload=(opener.payload[0]|(word<<13),*opener.payload[1:]))
         events[0].words()
+    if context_tables is not None and context_tables.mudshot is not None:
+        from . import public_mudshot_protocol
+        facts=public_mudshot_protocol.project_line(line,state)
+        index=1
+        while index<len(events) and (events[index].kind in (Kind.SWITCH_PRELUDE,Kind.ITEM) or (
+                events[index].kind==Kind.ABILITY and events[index].payload[2]==0)):index+=1
+        event=PublicEvent(Kind.MUDSHOT,state.next_sequence+index,events[0].turn,events[0].phase,payload=facts.payload)
+        event.words();events.insert(index,event)
+        events=[replace(event,sequence=state.next_sequence+i) for i,event in enumerate(events)]
+    if context_tables is not None and context_tables.nonproc is not None:
+        from . import public_nonproc_protocol
+        facts=public_nonproc_protocol.project_line(line,state,candidate)
+        # HP/arrival bookkeeping follows its real main consumers. Upkeep's
+        # exclusions precede all upkeep clock updates, as in the source.
+        index=next((i for i,event in enumerate(events) if event.kind==Kind.UPKEEP),len(events))
+        exemplar=events[index-1] if index<len(events) else events[-1]
+        event=PublicEvent(Kind.NONPROC,state.next_sequence+index,exemplar.turn,exemplar.phase,payload=facts.payload)
+        event.words();events.insert(index,event)
+        events=[replace(event,sequence=state.next_sequence+i) for i,event in enumerate(events)]
     if tendency_projection is not None:
         last=events[-1]
         event=PublicEvent(Kind.TENDENCY,state.next_sequence+len(events),last.turn,last.phase,

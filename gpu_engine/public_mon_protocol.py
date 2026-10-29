@@ -46,7 +46,7 @@ def _exact_active(addresses,active_idents,ident):
     return value
 
 
-def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents,phase=Phase.ACTION,baton_pass=False,damage_metadata=False):
+def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents,phase=Phase.ACTION,baton_pass=False,damage_metadata=False,boost_metadata=False):
     """Decode a named mon field event or refuse it; never filter a full replay.
 
     Species IDs come from a frozen public dex namespace, separate from source
@@ -56,7 +56,7 @@ def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents
     entry; unresolved aliases refuse instead of erasing the active mon's status.
     """
     if not isinstance(line,str) or not line.startswith("|"):raise ValueError("public protocol line required")
-    if type(sequence) is not int or type(turn) is not int or type(baton_pass) is not bool or type(damage_metadata) is not bool:
+    if type(sequence) is not int or type(turn) is not int or type(baton_pass) is not bool or type(damage_metadata) is not bool or type(boost_metadata) is not bool:
         raise ValueError("exact sequence/turn integers and public Baton Pass flag required")
     parts=line.split("|");kind=parts[1] if len(parts)>1 else ""
     if line=="|-clearallboost":
@@ -126,5 +126,5 @@ def project_line(line,*,sequence,turn,addresses,species_ids,source,active_idents
         target=addresses.resolve(parts[2]);stat=parts[3].strip()
         if stat not in mon.STATS or not re.fullmatch(r"[+-]?[0-9]+",parts[4]):raise ValueError("known public boost stat and integer stage required")
         amount=int(parts[4])*(-1 if kind=="-unboost" else 1)
-        return emit(Kind.BOOST,[target.encounter,mon.STATS.index(stat),amount,mon.SET if kind=="-setboost" else mon.DELTA],target)
+        return emit(Kind.BOOST,[target.encounter,mon.STATS.index(stat),amount,mon.SET if kind=="-setboost" else mon.DELTA,int(boost_metadata and kind=="-unboost")],target)
     raise ValueError("line has no implemented public mon field consumer")
