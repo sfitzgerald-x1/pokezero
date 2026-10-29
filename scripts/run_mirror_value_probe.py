@@ -7,7 +7,6 @@ No replay/resume, no PPO/GAE, no test-driven head or epoch selection.
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ProcessPoolExecutor, as_completed
 import json
 import math
 import multiprocessing
@@ -29,7 +28,8 @@ def initialize(checkpoint, showdown, node, threads):
     _RUNTIME = load_runtime(checkpoint, showdown, node, threads)
 
 
-def worker(row, output, max_rounds):
+def worker(arguments):
+    row, output, max_rounds = arguments
     return collect_battle(row, output, _RUNTIME, max_rounds=max_rounds)
 
 
@@ -43,11 +43,13 @@ def collect(config, output):
     receipts = []
     started = time.monotonic()
     # One model + one Node simulator per process, at most workers*threads CPUs.
-    with ProcessPoolExecutor(max_workers=config["workers"], mp_context=multiprocessing.get_context("spawn"),
+    # Pool's context exit terminates pending/active workers on the first error;
+    # the outer PID1 owner reaps any remaining simulator descendants. Never
+    # drain a queued scientific roster after a collector failure.
+    with multiprocessing.get_context("spawn").Pool(processes=config["workers"],
         initializer=initialize, initargs=(config["checkpoint"], config["showdown"], config["node"], config["threads"])) as pool:
-        futures = {pool.submit(worker, row, str(output), config["max_rounds"]): row for row in rows}
-        for future in as_completed(futures):
-            receipt = future.result()
+        arguments = [(row, str(output), config["max_rounds"]) for row in rows]
+        for receipt in pool.imap_unordered(worker, arguments, chunksize=1):
             receipts.append(receipt)
             print(json.dumps(dict(event="battle_completed", completed=len(receipts),
                 battle_id=receipt["battle_id"], paired_rows=receipt["paired_rows"],
