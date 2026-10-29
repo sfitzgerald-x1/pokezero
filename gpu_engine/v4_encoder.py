@@ -21,11 +21,11 @@ from . import private_actions,private_team,public_inputs,public_mon_state,public
 from . import public_belief,public_moves,public_abilities,public_items,public_team,public_field
 from . import public_active,public_damage,public_types,public_sleep,public_toxic,public_tendency
 from . import public_belief_refresh,public_belief_lifecycle,public_belief_features,public_belief_snapshot
-from . import public_refresh_stream, public_sleep_clause, public_substitute
+from . import public_refresh_stream, public_sleep_clause, public_substitute, public_exact
 from . import public_expected_stats,public_hazard_exposure,v4_assembly
 
 SCHEMA='pokezero.protocol_v4_encoder.v1'
-PENDING_NUMERIC_COLUMNS=(26,28)
+PENDING_NUMERIC_COLUMNS=()
 
 
 @dataclass(frozen=True)
@@ -64,6 +64,7 @@ class Catalog:
     field: object
     active: object
     substitute: object
+    exact: object
     damage: object
     types: object
     sleep: object
@@ -94,7 +95,7 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     vocabulary=CategoryVocabulary(tuple(vocabulary.tokens),vocabulary.oov_buckets,dict(vocabulary.aliases))
     moves=public_moves.compile_moves(source,dex,vocabulary)
     abilities=public_abilities.compile_abilities(source,vocabulary,
-        ability_names=('Natural Cure','Early Bird','Shed Skin','Trace','Pressure','Truant','Levitate'))
+        ability_names=('Natural Cure','Early Bird','Shed Skin','Trace','Pressure','Truant','Levitate','Arena Trap','Shadow Tag','Magnet Pull'))
     items=public_items.compile_items(source,vocabulary)
     species=public_team.compile_species(source,dex,vocabulary,abilities)
     field=public_field.compile_field(vocabulary)
@@ -113,6 +114,7 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
         damage_tables=damage,type_catalog=types,sleep_tables=sleep,toxic_tables=toxic,
         tendency_tables=tendency.device,refresh_tables=refresh,lifecycle_tables=lifecycle,clause_tables=clause)
     features=public_belief_features.compile_features(source,abilities,items,moves,vocabulary,species_catalog=species)
+    exact=public_exact.compile_exact(abilities,features,sleep,vocabulary)
     expected=public_expected_stats.compile_expected(source,dex,species)
     hazard=public_hazard_exposure.compile_hazard(species,dex,vocabulary,feature_tables=features,
         field_tables=field.device,abilities=abilities)
@@ -120,10 +122,11 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     bindings=dict(checkpoint=checkpoint_sha256,masks=feature_masks,schema=SCHEMA,
         context=np.asarray(context.binding).tolist(),features=np.asarray(features.binding).tolist(),
         expected=np.asarray(expected.device.binding).tolist(),hazard=np.asarray(hazard.device.binding).tolist(),
-        actions=np.asarray(actions.device.binding).tolist(),substitute=np.asarray(substitute.binding).tolist())
+        actions=np.asarray(actions.device.binding).tolist(),substitute=np.asarray(substitute.binding).tolist(),
+        exact=np.asarray(exact.device.binding).tolist())
     digest=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(',',':')).encode()).digest()
     binding=jnp.asarray(np.frombuffer(digest,dtype='>u4').astype(np.uint32))
-    return Catalog(source,vocabulary,dex,species,moves,abilities,items,field,active,substitute,damage,types,
+    return Catalog(source,vocabulary,dex,species,moves,abilities,items,field,active,substitute,exact,damage,types,
         sleep,toxic,tendency,refresh,lifecycle,clause,context,features,expected,hazard,actions,masks,binding,checkpoint_sha256)
 
 
@@ -140,6 +143,7 @@ class OwnFacts(NamedTuple):
     status: object
     targets: object
     hazard: object
+    exact_abilities: object
     binding: object
 
 
@@ -175,6 +179,7 @@ def parse_own_requests(catalog,requests,*,owner_sides):
             public_sleep.parse_own_status(request,owner_side=owner,species_catalog=catalog.species,vocabulary=catalog.vocabulary),
             public_expected_stats.parse_own_targets(request,owner_side=owner,catalog=catalog.expected),
             public_hazard_exposure.parse_own_hazard(request,owner_side=owner,catalog=catalog.hazard,vocabulary=catalog.vocabulary),
+            public_exact.parse_own_abilities(request,owner_side=owner,catalog=catalog.exact,vocabulary=catalog.vocabulary),
             catalog.binding))
     return jax.tree.map(lambda *values:jnp.stack(values),*rows)
 
@@ -288,6 +293,16 @@ def encode(state,own,catalog,*,observer_sides):
         observer_side=observer,expected_binding=catalog.substitute.binding,exact_state=catalog.masks.exact_state)
     result=v4_assembly.overlay(result,sub.own,section='own')
     result=v4_assembly.overlay(result,sub.opponent,section='opponent')
+    # The raw Intimidate exclusion producer is not installed yet; the source
+    # compiler still refuses every mixed-Intimidate universe. Explicit zeros
+    # are safe only under that retained refusal, never invented from posterior
+    # or display-bucket absence.
+    ruled_out=jnp.zeros((b,2,6,len(catalog.abilities.names)),bool)
+    exact=public_exact.project(own.exact_abilities,own.actions.team,own.status,mons,context,state.beliefs,summary,
+        catalog.features,tables.sleep,catalog.exact.device,observer_side=observer,
+        expected_binding=catalog.exact.device.binding,ruled_out_abilities=ruled_out,exact_state=catalog.masks.exact_state)
+    result=v4_assembly.overlay(result,exact.own,section='own')
+    result=v4_assembly.overlay(result,exact.opponent,section='opponent')
     result=v4_assembly.overlay(result,public_damage.project_credits(context.damage,tables.damage,mons,
         observer_side=observer,expected_vocabulary=catalog.species.device.vocabulary_binding),section='field')
     hazard=public_hazard_exposure.project(own.hazard,mons,context,state.beliefs,visible,catalog.source.device,
