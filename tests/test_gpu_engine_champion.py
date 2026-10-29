@@ -91,3 +91,43 @@ class ChampionTests(unittest.TestCase):
         self.assertEqual(len(self.np.unique(pairs,axis=0)),512)
         pairs=root_indices(8192,200000)
         self.assertEqual(len(self.np.unique(pairs,axis=0)),8192)
+
+    def test_moe_partition_matches_shared_dense_expert_and_isolates_roles(self):
+        from dataclasses import replace
+        c=replace(self.c,moe=True)
+        p=dict(self.p)
+        for layer in range(c.layers):
+            prefix=f'encoder.layers.{layer}.'
+            for key in ('linear1.weight','linear1.bias','linear2.weight','linear2.bias'):
+                value=p.pop(prefix+key)
+                for expert in range(3):p[prefix+f'experts.{expert}.'+key]=value
+        expected=self.call()
+        actual=self.m.forward(p,self.num,self.cat,self.types,self.mask,c)
+        for a,b in zip(expected,actual):self.np.testing.assert_allclose(a,b,atol=1e-6)
+        # With one layer the field expert cannot change policy action queries.
+        key='encoder.layers.0.experts.2.linear2.bias'
+        changed=self.m.forward(dict(p,**{key:p[key]+1}),self.num,self.cat,self.types,self.mask,c)
+        self.np.testing.assert_array_equal(actual.policy_logits,changed.policy_logits)
+        self.assertFalse(self.np.array_equal(actual.value,changed.value))
+
+    def test_rms_attention_value_heads_appended_tokens_and_bf16_are_finite(self):
+        from dataclasses import replace
+        rng=self.np.random.default_rng(704)
+        for head in ('mlp','hl_gauss'):
+            c=replace(self.c,tokens=29,norm='rms',moe=True,expert_groups=(),value_head=head,value_hidden=12)
+            p={k:self.j.asarray(rng.normal(0,.05,s).astype(self.np.float32)) for k,s in self.m.shapes(c).items()}
+            self.m.validate_weights(p,c)
+            n=self.j.pad(self.num,((0,0),(0,0),(0,6),(0,0)))
+            k=self.j.pad(self.cat,((0,0),(0,0),(0,6),(0,0)))
+            t=self.j.pad(self.types,((0,0),(0,0),(0,6)))
+            a=self.j.pad(self.mask,((0,0),(0,0),(0,6)),constant_values=True)
+            out=self.jax.jit(lambda n,k,t,a:self.m.forward(p,n,k,t,a,c,compute_dtype='bfloat16'))(n,k,t,a)
+            self.assertEqual(out.policy_logits.shape,(2,2,9))
+            for value in out:
+                self.assertEqual(value.dtype,self.j.float32)
+                self.assertTrue(self.np.isfinite(value).all())
+            if head=='hl_gauss':self.assertTrue(self.np.all(self.np.abs(out.value)<=1))
+        for values in ({'norm':'unknown'},{'value_head':'unknown'},{'expert_groups':(0,)*22},
+                {'moe':True,'expert_groups':(0,)*23}):
+            with self.assertRaises(ValueError):replace(self.c,**values)
+        with self.assertRaises(ValueError):self.m.forward(self.p,self.num,self.cat,self.types,self.mask,self.c,compute_dtype='float16')
