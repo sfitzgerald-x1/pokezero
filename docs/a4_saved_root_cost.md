@@ -70,3 +70,40 @@ its actual combined capture build, known observed refusal lineage, fresh source
 regression receipts, exact qualified artifacts, source, tables and root roster.
 The readout helper always leaves cost/panel admission false; timing alone cannot
 admit a panel.
+
+The version-2 readout requires a pre-timing contract for each of the twenty
+source boundaries: source/boundary hashes, whether the opponent is requested,
+its legal-choice count, and the sample count/budget from production's random
+battle sampler. Time-pressure variants remain valid; the configured budget is
+1000 ms even when production divides it into 500 ms samples. The complete
+fixed roster remains in every timing calculation.
+
+A cost owner can use `native_call_timing` around the unchanged production
+`find_best_move`. It times the existing native callable without changing its
+arguments, result, sampling or executor. The actual platform's unmodified pool
+start method must be `fork` so child processes inherit the instrumentation;
+another method is a blocked geometry, never permission to switch it. The hook
+restores the original callable in `finally`. It emits only native call timing,
+CPU and visit metadata, with no state strings. The production sampling,
+Iterations and Choice log records must reconcile with every measured native
+call. The owner must retain and hash each complete decision-scoped log range.
+
+Request-window overlap alone cannot witness native work. The readout separately
+checks native call intervals, native CPU and visits against the endpoint's
+measured process plus reaped-child CPU. It requires actual native-work overlap
+witnesses in every arm and observed full twelve-worker cycle overlap involving
+every declared worker. Those intervals are elapsed intervals; even a positive
+CPU total does not establish which exact nanoseconds were CPU busy. Fully
+serialized workers, an entirely pre-completed opponent, or absent work leave
+contention ineligible and the decision-time gate false even if the arithmetic
+p95 is below fifteen seconds. All 240 timing cells and the arithmetic result
+remain available.
+
+A legitimate forced/single-choice or early-return cell retains its actual zero
+work. No positive visits or artificial 1000 ms delay is fabricated. A zero-work
+multi-choice cell cannot establish the intended contention, so eligibility
+remains false; this neither declares the opponent invalid nor permits replacing
+that root. A roster consisting only of zero-work forced cells likewise cannot
+qualify busy-opponent contention. These are source/readout controls only: the
+actual parser, native instrumentation, process geometry and cost packet still
+need separate prospective review before any real root or opponent work.
