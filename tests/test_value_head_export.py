@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from pokezero.neural_policy import torch_available
 from pokezero.value_head_export import (
@@ -137,6 +138,104 @@ class ExportTests(unittest.TestCase):
                 self.assertEqual(manifest["formats"]["refit"]["parity_batches"], [1, 7, 64])
                 with self.assertRaisesRegex(ValueError, "fresh export"):
                     export_pair(checkpoint, summary_path, root / "output", **options)
+        finally:
+            sys.path.remove(scripts)
+
+    def test_snapshot_swap_and_missing_value_head_refuse(self):
+        import io
+        import sys
+        import torch
+        from pokezero.neural_policy import (TransformerTrainingConfig, TransformerTrainingResult,
+                                            save_transformer_checkpoint)
+        from pokezero.value_precision_probe import checkpoint_contract, make_value_head
+        scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+        sys.path.insert(0, scripts)
+        try:
+            import export_value_probe_search as exporter
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                checkpoint, summary_path = root / "champion.pt", root / "head-refit-summary.json"
+                save_transformer_checkpoint(checkpoint, self.model, result=TransformerTrainingResult(
+                    model_config=self.config, training_config=TransformerTrainingConfig(), epochs=(),
+                    belief_set_source_hash="source"))
+                original = checkpoint.read_bytes()
+                payload = torch.load(io.BytesIO(original), weights_only=True)
+                payload["state_dict"]["policy_head.bias"] += 3
+                changed = io.BytesIO(); torch.save(payload, changed)
+                head_path = root / "attention_hl_gauss.pt"
+                torch.save({"schema": "pokezero.value_probe_head.v1", "kind": "attention_hl_gauss",
+                    "width": 16, "selected_epoch": 1, "features_manifest_sha256": "features",
+                    "state_dict": make_value_head("attention_hl_gauss", 16).state_dict()}, head_path)
+                summary = SelectionTests().summary()
+                summary.update(checkpoint_contract=checkpoint_contract(checkpoint), features_manifest_sha256="features")
+                summary["heads"]["attention_hl_gauss"]["artifact_sha256"] = sha256_file(head_path)
+                summary_path.write_text(json.dumps(summary))
+                options = dict(checkpoint_sha256=sha256_file(checkpoint), summary_sha256=sha256_file(summary_path))
+                # Contract sees A, snapshot sees B, and final external path would
+                # see A again. The snapshot SHA must stop before deserialization.
+                read_bytes = Path.read_bytes
+                calls = 0
+                def aba(path):
+                    nonlocal calls
+                    if path == checkpoint:
+                        calls += 1
+                        if calls == 2:
+                            return changed.getvalue()
+                    return read_bytes(path)
+                with patch.object(Path, "read_bytes", aba), self.assertRaisesRegex(ValueError, "snapshot SHA"):
+                    exporter.export_pair(checkpoint, summary_path, root / "aba", **options)
+                self.assertFalse((root / "aba").exists())
+                # If the external path changes only as the torch loader is called,
+                # immutable bytes remain A; B cannot enter the production model.
+                load = torch.load
+                def loader(source, *args, **kwargs):
+                    if isinstance(source, io.BytesIO) and source.getvalue() == original:
+                        checkpoint.write_bytes(changed.getvalue())
+                        try:
+                            return load(source, *args, **kwargs)
+                        finally:
+                            checkpoint.write_bytes(original)
+                    return load(source, *args, **kwargs)
+                import numpy as np
+                real_path = root / "real-inputs.npz"
+                real_tensors = self.exporter.make_random_inputs(self.config, 20, seed=21)
+                with real_path.open("wb") as stream:
+                    np.savez(stream, **{name: tensor.numpy() for name, tensor
+                                       in zip(self.exporter.INPUT_NAMES, real_tensors)})
+                real_original = real_path.read_bytes()
+                real_sha = sha256_file(real_path)
+                np_load = np.load
+                snapshot_seen = []
+                def load_inputs(source, *args, **kwargs):
+                    self.assertIsInstance(source, io.BytesIO)
+                    self.assertEqual(source.getvalue(), real_original)
+                    snapshot_seen.append(True)
+                    real_path.write_bytes(b"path swapped after snapshot")
+                    try:
+                        return np_load(source, *args, **kwargs)
+                    finally:
+                        real_path.write_bytes(real_original)
+                with patch.object(torch, "load", loader), patch.object(np, "load", load_inputs):
+                    manifest = exporter.export_pair(checkpoint, summary_path, root / "immutable",
+                        real_inputs=real_path, **options)
+                self.assertEqual(snapshot_seen, [True])
+                self.assertEqual(manifest["real_saved_inputs"]["sha256"], real_sha)
+                trace = torch.jit.load(manifest["formats"]["champion"]["path"])
+                inputs = self.exporter.make_random_inputs(self.config, 1, seed=11)
+                with torch.no_grad():
+                    reference = self.model(**dict(zip(self.exporter.INPUT_NAMES, inputs)))
+                    torch.testing.assert_close(trace(*inputs)[0], reference.policy_logits, rtol=0, atol=1e-5)
+                # A checksum-consistent checkpoint with missing value parameters
+                # must fail, rather than export randomly initialized fallback.
+                payload = load(io.BytesIO(original), weights_only=True)
+                del payload["state_dict"]["value_head.weight"]
+                torch.save(payload, checkpoint)
+                summary["checkpoint_contract"] = checkpoint_contract(checkpoint)
+                summary_path.write_text(json.dumps(summary))
+                with self.assertRaisesRegex(RuntimeError, "Missing key"):
+                    exporter.export_pair(checkpoint, summary_path, root / "missing",
+                        checkpoint_sha256=sha256_file(checkpoint), summary_sha256=sha256_file(summary_path))
+                self.assertFalse((root / "missing").exists())
         finally:
             sys.path.remove(scripts)
 

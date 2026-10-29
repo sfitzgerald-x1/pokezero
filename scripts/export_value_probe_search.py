@@ -7,12 +7,15 @@ admission or strength evidence. Large models remain on the remote output path.
 """
 from __future__ import annotations
 import argparse
+import hashlib
+import io
 import json
 from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from pokezero.neural_policy import load_transformer_checkpoint, require_torch
+from pokezero.neural_policy import (EntityTokenTransformerPolicy,
+    parse_transformer_model_config, require_torch)
 from pokezero.engine_search import _fence_calibration_seam
 from pokezero.value_precision_probe import checkpoint_contract
 from pokezero.value_head_export import (
@@ -38,19 +41,29 @@ def export_pair(checkpoint, summary, output, *, checkpoint_sha256, summary_sha25
         raise ValueError("fresh export output required")
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
-    model, result = load_transformer_checkpoint(str(checkpoint), map_location="cpu")
+    # Deserialize the exact bytes just hashed. Never reread through the general
+    # checkpoint loader: an ABA path swap can otherwise bind A but export B,
+    # and that loader deliberately permits a freshly initialized value head.
+    snapshot = Path(checkpoint).read_bytes()
+    if hashlib.sha256(snapshot).hexdigest() != checkpoint_sha256:
+        raise ValueError("loaded checkpoint snapshot SHA mismatch")
+    payload = torch.load(io.BytesIO(snapshot), map_location="cpu", weights_only=True)
+    config = parse_transformer_model_config(payload)
+    model = EntityTokenTransformerPolicy(config)
+    model.load_state_dict(payload["state_dict"], strict=True)
     model = model.float().to(device).eval()
     head = head.float().to(device).eval()
     output.mkdir(parents=True, exist_ok=False)
     # Test distinct batch sizes after trace; validate masks on randomized inputs.
-    batches = [make_random_inputs(result.model_config, size, seed=20261029+size, device=device)
+    batches = [make_random_inputs(config, size, seed=20261029+size, device=device)
                for size in (1, 7, 64)]
     real_binding = None
     if real_inputs is not None:
         import numpy as np
         # A caller freezes the saved nonholdout observation file externally.
-        real_binding = {"path": str(real_inputs), "sha256": sha256_file(real_inputs)}
-        with np.load(real_inputs, allow_pickle=False) as arrays:
+        real_blob = Path(real_inputs).read_bytes()
+        real_binding = {"path": str(real_inputs), "sha256": hashlib.sha256(real_blob).hexdigest()}
+        with np.load(io.BytesIO(real_blob), allow_pickle=False) as arrays:
             names = ("categorical_ids", "numeric_features", "token_type_ids", "attention_mask", "history_mask")
             if set(arrays.files) != set(names):
                 raise ValueError("exact five saved observation tensors required")
@@ -73,7 +86,7 @@ def export_pair(checkpoint, summary, output, *, checkpoint_sha256, summary_sha25
     for arm, selected in (("champion", None), ("refit", head)):
         module = build_value_head_export(model, selected).to(device).eval()
         path = output / (arm + "_ts_" + device + ".pt")
-        traced = export_torchscript(module, make_random_inputs(result.model_config, 4,
+        traced = export_torchscript(module, make_random_inputs(config, 4,
             seed=20261029, device=device), path)
         # Reload from disk: validate actual artifact, rather than in-memory trace.
         traced = torch.jit.load(str(path), map_location=device).eval()

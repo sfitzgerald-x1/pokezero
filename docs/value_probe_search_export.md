@@ -9,7 +9,9 @@ The exporter requires the exact champion checksum and completed head-summary
 checksum. Architecture selection uses minimum validation MSE, with the fixed A1
 kind order for ties. Test metrics do not enter selection. It checks the head
 artifact checksum, selected epoch, feature-manifest binding and complete source
-checkpoint contract before loading. Nonidentity checkpoint calibration refuses,
+checkpoint contract before loading. The actual model is strictly loaded from an
+immutable byte snapshot whose checksum matches the contract; missing value-head
+parameters refuse instead of producing a fresh head. Nonidentity calibration refuses,
 because the native evaluator does not apply it.
 
 The adapter calls the production embedding, encoder, history pool and action
@@ -32,7 +34,8 @@ The optional observation bundle must contain exactly `categorical_ids`,
 `numeric_features`, `token_type_ids`, `attention_mask`, and `history_mask`, in
 expanded one-frame window form, with at least 20 observations. The caller must
 prospectively freeze its nonholdout membership and input checksum; the exporter
-records the checksum. It does not establish that membership independently.
+records the checksum of the exact immutable bytes it deserializes. It does not
+establish that membership independently.
 
 The five positional inputs and three output tensors match `NativeLeafModel`.
 CPU and CUDA traces are separate artifacts; use the artifact on its traced
