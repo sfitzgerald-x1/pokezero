@@ -14,7 +14,7 @@ from pokezero.showdown import (_canonical_replacement_marker, _pokemon_from_publ
     _public_event_from_line)
 from pokezero.belief import _confirmed_ability_from_event
 
-from . import public_mon_protocol, public_context_protocol, public_items, public_field, public_active, public_damage
+from . import public_mon_protocol, public_context_protocol, public_items, public_field, public_active, public_damage, public_types
 from .public_context_protocol import PublicAddress, PublicAddresses, ContextProjection
 from .public_inputs import Kind, Phase, PublicEvent
 
@@ -42,6 +42,7 @@ class WireState:
     field_binding: tuple[int, ...] | None = None
     active_binding: tuple[int, ...] | None = None
     damage_binding: tuple[int, ...] | None = None
+    type_binding: tuple[int, ...] | None = None
 
     def addresses(self):
         active = {side: rows[self.active[side]].address for side, rows in enumerate(self.encounters)
@@ -118,9 +119,10 @@ class WireProjection(ContextProjection):
     field_binding: tuple[int, ...] | None = None
     active_binding: tuple[int, ...] | None = None
     damage_binding: tuple[int, ...] | None = None
+    type_binding: tuple[int, ...] | None = None
 
 
-def project_line(state, line, *, species_catalog, source, moves, abilities, items=None, context_tables=None, field_catalog=None, active_catalog=None, damage_tables=None):
+def project_line(state, line, *, species_catalog, source, moves, abilities, items=None, context_tables=None, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None):
     """Return a new registry and ordered named-field events, or refuse atomically.
 
     Callers commit this candidate state only with successful device fold of all
@@ -139,7 +141,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             or not np.array_equal(np.asarray(moves.device.source_binding),np.asarray(source.device.binding))
             or not np.array_equal(np.asarray(species_catalog.device.source_binding),np.asarray(source.device.binding))):
         raise ValueError('public wire requires the frozen species/ability/move namespaces')
-    item_binding=context_binding=field_binding=active_binding=damage_binding=None
+    item_binding=context_binding=field_binding=active_binding=damage_binding=type_binding=None
     if items is not None:
         if context_tables is None or context_tables.items is None or context_tables.binding is None:
             raise ValueError("item wire requires a frozen composed context")
@@ -180,14 +182,23 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         damage_binding=tuple(int(x) for x in np.asarray(damage_tables.binding))
     elif context_tables is not None and context_tables.damage is not None:
         raise ValueError("damage-enabled context cannot drop its public damage producer")
-    if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding or state.damage_binding!=damage_binding):
+    if type_catalog is not None:
+        if (context_tables is None or context_tables.types is None or field_catalog is None
+                or not np.array_equal(np.asarray(context_tables.types.binding),np.asarray(type_catalog.device.binding))
+                or not np.array_equal(np.asarray(type_catalog.device.vocabulary_binding),np.asarray(species_catalog.device.vocabulary_binding))
+                or not np.array_equal(np.asarray(type_catalog.device.species_binding),np.asarray(species_catalog.device.binding))):
+            raise ValueError('live-type wire requires matching type/context/species/vocabulary namespaces')
+        type_binding=tuple(int(x) for x in np.asarray(type_catalog.device.binding))
+    elif context_tables is not None and context_tables.types is not None:
+        raise ValueError('live-type context cannot drop its producer')
+    if state.next_sequence>1 and (state.item_binding!=item_binding or state.context_binding!=context_binding or state.field_binding!=field_binding or state.active_binding!=active_binding or state.damage_binding!=damage_binding or state.type_binding!=type_binding):
         raise ValueError("item context cannot change or be dropped across continuation")
     parts = line.split('|')
     kind = parts[1] if len(parts) > 1 else ''
     if kind == 'request':
         raise ValueError('private requests cannot enter the public event producer')
     candidate = replace(state,species_binding=binding,move_binding=move_binding,
-        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding)
+        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding)
     side = None
     if kind in ('switch', 'drag', 'replace'):
         candidate, side = _arrive(candidate, line, parts)
@@ -246,6 +257,16 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             event=PublicEvent(Kind.ACTIVE,state.next_sequence+len(events),state.turn,state.phase,
                 target_side=holder.side,target_slot=holder.slot,payload=(holder.encounter,operation,value,0,0,0,0,0))
             event.words();events.append(event)
+    if type_catalog is not None:
+        for operation,type_side,first,second in public_types.project_line(line,catalog=type_catalog).facts:
+            # The champion parser attributes these facts by public side, even
+            # for a positionless/stale nickname. Preserve that source rule.
+            ident=candidate.active_idents().get(type_side)
+            if not ident:raise ValueError('live-type fact requires an introduced active public encounter')
+            holder=addresses.resolve(ident)
+            event=PublicEvent(Kind.TYPES,state.next_sequence+len(events),state.turn,state.phase,
+                target_side=holder.side,target_slot=holder.slot,payload=(holder.encounter,operation,first,second,0,0,0,0))
+            event.words();events.append(event)
     if damage_tables is not None:
         for operation,damage_side in public_damage.control_facts(line):
             event=PublicEvent(Kind.DAMAGE_CONTROL,state.next_sequence+len(events),state.turn,state.phase,
@@ -278,7 +299,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
         turn=last.turn, phase=last.phase, pending_baton=tuple(f'p{s+1}' in pending for s in (0, 1)))
     return candidate, WireProjection(line, tuple(events), species_binding=binding,
         ability_binding=tuple(int(x) for x in np.asarray(abilities.device.binding)),move_binding=move_binding,
-        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding)
+        item_binding=item_binding,context_binding=context_binding,field_binding=field_binding,active_binding=active_binding,damage_binding=damage_binding,type_binding=type_binding)
 
 
 def project_lines(state, lines, **tables):
