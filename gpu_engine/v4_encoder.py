@@ -21,7 +21,7 @@ from . import private_actions,private_team,public_inputs,public_mon_state,public
 from . import public_belief,public_moves,public_abilities,public_items,public_team,public_field
 from . import public_active,public_damage,public_types,public_sleep,public_toxic,public_tendency
 from . import public_belief_refresh,public_belief_lifecycle,public_belief_features,public_belief_snapshot
-from . import public_refresh_stream, public_sleep_clause, public_substitute, public_exact
+from . import public_refresh_stream, public_sleep_clause, public_substitute, public_exact, public_switch_evidence
 from . import public_expected_stats,public_hazard_exposure,v4_assembly
 
 SCHEMA='pokezero.protocol_v4_encoder.v1'
@@ -109,10 +109,11 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
     refresh=public_belief_refresh.compile_refresh(source,moves)
     lifecycle=public_belief_lifecycle.compile_lifecycle(species,abilities,moves,sleep)
     clause=public_sleep_clause.compile_clause(sleep)
+    switches=public_switch_evidence.compile_switch_evidence(source,species,abilities)
     context=public_context.compile_context(source,abilities,moves,items=items,
         item_belief_narrowing=masks.item_belief_narrowing,field_catalog=field,active_catalog=active,
         damage_tables=damage,type_catalog=types,sleep_tables=sleep,toxic_tables=toxic,
-        tendency_tables=tendency.device,refresh_tables=refresh,lifecycle_tables=lifecycle,clause_tables=clause)
+        tendency_tables=tendency.device,refresh_tables=refresh,lifecycle_tables=lifecycle,clause_tables=clause,switch_tables=switches)
     features=public_belief_features.compile_features(source,abilities,items,moves,vocabulary,species_catalog=species)
     exact=public_exact.compile_exact(abilities,features,sleep,vocabulary)
     expected=public_expected_stats.compile_expected(source,dex,species)
@@ -250,6 +251,18 @@ def encode(state,own,catalog,*,observer_sides):
     visible=context.refresh.controller.visible
     summary,cache_ok=public_belief_snapshot.read(visible,state.beliefs,catalog.source.device)
     valid &= jnp.all(cache_ok,axis=(1,2))
+    if context.switches is None or tables.switches is None:
+        valid &= False
+    else:
+        valid &= public_switch_evidence.validate(context.switches,tables.switches,mons,context.abilities,
+            catalog.source.device,summary.effective,context.sleep.live)
+    context,view_beliefs,boundary_ok=public_context.observation_boundary_copy(context,state.beliefs,mons,
+        catalog.source.device,tables,valid=valid)
+    valid &= boundary_ok
+    state=state._replace(context=context,beliefs=view_beliefs)
+    visible=context.refresh.controller.visible
+    summary,cache_ok=public_belief_snapshot.read(visible,state.beliefs,catalog.source.device)
+    valid &= jnp.all(cache_ok,axis=(1,2))
     tendency=public_tendency.project_from_request(context.tendency,tables.tendency,mons,observer_side=observer,
         own_status=own.status,expected_vocabulary=catalog.species.device.vocabulary_binding,enabled=catalog.masks.stats_block)
     result=v4_assembly.project_base_sections(facts=own.actions,action_tables=catalog.actions.device,mons=mons,context=context,
@@ -293,11 +306,9 @@ def encode(state,own,catalog,*,observer_sides):
         observer_side=observer,expected_binding=catalog.substitute.binding,exact_state=catalog.masks.exact_state)
     result=v4_assembly.overlay(result,sub.own,section='own')
     result=v4_assembly.overlay(result,sub.opponent,section='opponent')
-    # The raw Intimidate exclusion producer is not installed yet; the source
-    # compiler still refuses every mixed-Intimidate universe. Explicit zeros
-    # are safe only under that retained refusal, never invented from posterior
-    # or display-bucket absence.
     ruled_out=jnp.zeros((b,2,6,len(catalog.abilities.names)),bool)
+    if context.switches is not None and tables.switches is not None:
+        ruled_out=context.switches.ruled_out[...,None]&(jnp.arange(len(catalog.abilities.names))==tables.switches.intimidate_id)
     exact=public_exact.project(own.exact_abilities,own.actions.team,own.status,mons,context,state.beliefs,summary,
         catalog.features,tables.sleep,catalog.exact.device,observer_side=observer,
         expected_binding=catalog.exact.device.binding,ruled_out_abilities=ruled_out,exact_state=catalog.masks.exact_state)

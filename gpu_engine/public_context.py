@@ -23,6 +23,7 @@ from . import public_tendency as tendency_api, public_tendency_protocol as tende
 from . import public_belief_refresh as refresh_api, public_refresh_stream as refresh_stream
 from . import public_belief_lifecycle as lifecycle_api
 from . import public_sleep_clause as clause_api
+from . import public_switch_evidence as switch_api, public_belief as belief_api, public_belief_snapshot as snapshot_api
 
 
 class ContextTables(NamedTuple):
@@ -43,6 +44,7 @@ class ContextTables(NamedTuple):
     refresh: refresh_api.RefreshTables | None = None
     lifecycle: lifecycle_api.LifecycleTables | None = None
     sleep_clause: clause_api.Tables | None = None
+    switches: switch_api.Tables | None = None
 
 
 class ContextState(NamedTuple):
@@ -64,9 +66,18 @@ class ContextState(NamedTuple):
     refresh: refresh_stream.StreamState | None = None
     lifecycle: lifecycle_api.LifecycleState | None = None
     sleep_clause: clause_api.State | None = None
+    switches: switch_api.State | None = None
 
 
-def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_tables=None, refresh_tables=None, lifecycle_tables=None, clause_tables=None):
+def compile_context(source, abilities, moves, *, items=None, item_belief_narrowing=False, field_catalog=None, active_catalog=None, damage_tables=None, type_catalog=None, sleep_tables=None, toxic_tables=None, tendency_tables=None, refresh_tables=None, lifecycle_tables=None, clause_tables=None, switch_tables=None):
+    if switch_tables is not None:
+        if sleep_tables is None or lifecycle_tables is None or refresh_tables is None:
+            raise ValueError('pending switch evidence requires ordered sleep/lifecycle/refresh consumers')
+        for actual,expected in ((switch_tables.species_binding,sleep_tables.species_binding),
+                (switch_tables.source_binding,source.device.binding),(switch_tables.ability_binding,abilities.device.binding)):
+            sleep_api._binding(actual);sleep_api._binding(expected)
+            if not np.array_equal(np.asarray(actual),np.asarray(expected)):
+                raise ValueError('pending switch context namespace mismatch')
     if clause_tables is not None:
         if sleep_tables is None or lifecycle_tables is None or refresh_tables is None:
             raise ValueError('sleep clause requires ordered lifecycle/sleep source consumers')
@@ -87,7 +98,7 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
     if refresh_tables is not None:
         if items is None or sleep_tables is None or tendency_tables is None:
             raise ValueError('ordered summary refresh requires item, sleep and final raw-frame consumers')
-        refresh_stream.validate_source(source)
+        refresh_stream.validate_source(source,pending_switch=switch_tables is not None)
         refresh_api._tables(refresh_tables,source.device,moves.device)
         if not np.array_equal(np.asarray(refresh_tables.source_binding),np.asarray(source.device.binding)) or not np.array_equal(np.asarray(refresh_tables.move_binding),np.asarray(moves.device.binding)):
             raise ValueError('ordered summary refresh requires exact source/move namespaces')
@@ -160,13 +171,15 @@ def compile_context(source, abilities, moves, *, items=None, item_belief_narrowi
         payload.update(schema=payload['schema']+'.lifecycle.v1',lifecycle=np.asarray(lifecycle_tables.binding).tolist())
     if clause_tables is not None:
         payload.update(schema=payload['schema']+'.sleep-clause-raw.v1',sleep_clause=np.asarray(clause_tables.binding).tolist())
+    if switch_tables is not None:
+        payload.update(schema=payload['schema']+'.pending-switch.v1',switches=np.asarray(switch_tables.binding).tolist())
     digest = hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":")).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest,dtype=">u4").astype(np.uint32))
     return ContextTables(abilities.device,moves.device,jnp.asarray(flags),items.device,
         jnp.asarray(item_flags),jnp.asarray(item_belief_narrowing),binding,
         field_catalog.device if field_catalog is not None else None,
         active_catalog.device if active_catalog is not None else None,damage_tables,
-        type_catalog.device if type_catalog is not None else None,sleep_tables,toxic_tables,tendency_tables,refresh_tables,lifecycle_tables,clause_tables)
+        type_catalog.device if type_catalog is not None else None,sleep_tables,toxic_tables,tendency_tables,refresh_tables,lifecycle_tables,clause_tables,switch_tables)
 
 
 def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=False, toxic_hp_visibility=(0,0), tendency_complete_prefix=False, source_tables=None, clause_complete_prefix=False):
@@ -209,7 +222,8 @@ def initialize(beliefs, tables, *, species_binding=None, toxic_complete_prefix=F
         jnp.zeros(batch,bool) if tables.tendency is not None else None,
         refresh_stream.initialize(beliefs,source_tables,tables.refresh) if tables.refresh is not None else None,
         lifecycle_api.initialize(batch,tables.lifecycle) if tables.lifecycle is not None else None,
-        clause_api.initialize(batch,tables.sleep_clause,complete_prefix=clause_complete_prefix) if tables.sleep_clause is not None else None)
+        clause_api.initialize(batch,tables.sleep_clause,complete_prefix=clause_complete_prefix) if tables.sleep_clause is not None else None,
+        switch_api.initialize(batch,tables.switches) if tables.switches is not None else None)
 
 
 def basis(context, beliefs):
@@ -256,6 +270,38 @@ def rebuild(context, base, source_tables, tables):
     return base._replace(hard=hard,has_evidence=evidence),ok
 
 
+
+def observation_boundary_copy(context,beliefs,mons,source_tables,tables,*,valid=True):
+    """Resolve pending negative evidence on a value copy for observation only.
+
+    Python's resolved_player_view clones the persistent engine before this
+    checkpoint. A later real trigger must still see the original raw queue,
+    base, visible cache generations and standing-pin conflict counters.
+    """
+    batch=beliefs.species.shape[0];rows=jnp.arange(batch)
+    if context.switches is None or tables.switches is None:
+        return context,beliefs,jnp.zeros(batch,bool)
+    use=ability._bool(valid)
+    if use.shape not in ((),(batch,)):raise ValueError('observation boundary validity must be scalar or exact batch')
+    use=jnp.broadcast_to(use,(batch,))
+    summary,cache_ok=snapshot_api.read(context.refresh.controller.visible,beliefs,source_tables)
+    resolved=switch_api.resolve(context.switches,tables.switches,mons,context.abilities,source_tables,
+        summary.effective,context.sleep.live,arrival=False,boundary=True,confirmed_ability=0,
+        producer_binding=tables.switches.binding,valid=use)
+    mask=(jnp.arange(2)[None,:,None]==(1-jnp.clip(resolved.side,0,1))[:,None,None])&(
+        jnp.arange(6)[None,None,:]==jnp.clip(resolved.slot,0,5)[:,None,None])&resolved.exclude[:,None,None]
+    base=basis(context,beliefs)
+    predicate=tables.abilities.predicate[jnp.clip(tables.switches.intimidate_id,0,tables.abilities.predicate.shape[0]-1)]
+    base,evidence_ok=belief_api.add_evidence(base,source_tables,predicate,exclude=True,valid=mask)
+    full,bound=rebuild(context,base,source_tables,tables)
+    visible,full,refresh_ok=snapshot_api.refresh(context.refresh.controller.visible,full,source_tables,source_refresh=mask)
+    controller=context.refresh.controller._replace(visible=visible)
+    copied=context._replace(switches=resolved.state,base_hard=base.hard,base_has_evidence=base.has_evidence,
+        refresh=context.refresh._replace(controller=controller))
+    ok=resolved.admitted&bound&jnp.all(cache_ok,axis=(1,2))&jnp.all(evidence_ok,axis=(1,2))&jnp.all(refresh_ok,axis=(1,2))
+    return copied,full,ok|~use
+
+
 def preconsume(context,mons,tables,row,valid,*,condition_kind):
     """Read damage's precondition HP in the same transaction as the HP update."""
     if context.damage is None:return context,jnp.ones(row.shape[0],bool)
@@ -269,13 +315,14 @@ def preconsume(context,mons,tables,row,valid,*,condition_kind):
 def consume(context, base, mons, source_tables, tables, row, valid, *,
             move_kind, ability_kind, trace_kind, transform_kind, arrival, faint, raw_kind, item_kind, field_kind, turn_kind,
             active_kind, baton_kind, upkeep_kind, damage_kind, type_kind, sleep_kind, cure_kind, toxic_kind=None, action_end_kind=None, tendency_kind=None,
-            boost_kind=None,copy_boost_kind=None,clear_all_kind=None,status_kind=None,condition_kind=None):
+            boost_kind=None,copy_boost_kind=None,clear_all_kind=None,status_kind=None,condition_kind=None,switch_kind=None):
     """One resolved typed event per battle; the outer fold commits atomically."""
     k, actor_side, actor_slot, side, slot = row[:, 0], row[:, 4], row[:, 5], row[:, 6], row[:, 7]
     data = row[:, 8:]
     summary_control=data
     a, m = context.abilities, context.moves
     summary=context.refresh;life=context.lifecycle
+    switches=context.switches if tables.switches is not None else None
     batch=row.shape[0];rows=jnp.arange(batch)
     def slots(seat,target,use):
         return (jnp.arange(2)[None,:,None]==(1-jnp.clip(seat,0,1))[:,None,None])&(jnp.arange(6)[None,None,:]==jnp.clip(target,0,5)[:,None,None])&use[:,None,None]
@@ -299,9 +346,35 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
             (k==sleep_kind)&(data[:,1]==sleep_api.USABLE_MOVE))|(k==boost_kind)|(k==copy_boost_kind)|(k==clear_all_kind)
         if life is not None:
             supported |= (k==status_kind)|(k==condition_kind)|faint|(k==cure_kind)|(k==sleep_kind)
+        if switches is not None:supported |= k==switch_kind
         summary_ok &= ~valid|supported
         summary,opened=refresh_stream.open_frame(summary,data[:,3],data[:,4:],valid&(k==raw_kind),lifecycle=life is not None,clause=tables.sleep_clause is not None)
         summary_ok &= opened
+        if switches is not None:
+            prelude=k==switch_kind
+            summary_ok &= ~(valid&~((k==raw_kind)|prelude))|(summary.switch_seen==1)
+            ready=(summary.family>0)&(summary.switch_seen==0)&(summary.main_seen==0)&(summary.common_seen==0)&(summary.proc_seen==0)
+            ready &= data[:,0]==(summary.family==refresh_stream.ARRIVAL)
+            summary_ok &= ~(valid&prelude)|ready
+            use=valid&prelude&ready&summary_ok
+            full,bound=rebuild(context._replace(abilities=a),base,source_tables,tables)
+            cached,cache_ok=snapshot_api.read(summary.controller.visible,full,source_tables)
+            result=switch_api.resolve(switches,tables.switches,mons,a,source_tables,cached.effective,context.sleep.live,
+                arrival=data[:,0]==1,boundary=data[:,1]==1,confirmed_ability=data[:,2],
+                confirmed_side=actor_side,confirmed_slot=actor_slot,confirmed_encounter=data[:,3],
+                exact_ident=data[:,4]==1,species_ident=data[:,5],producer_binding=tables.switches.binding,valid=use)
+            summary_ok &= ~use|(result.admitted&bound&jnp.all(cache_ok,axis=(1,2)))
+            switches=result.state
+            mask=slots(result.side,result.slot,result.exclude&summary_ok)
+            predicate=tables.abilities.predicate[jnp.clip(tables.switches.intimidate_id,0,tables.abilities.predicate.shape[0]-1)]
+            base,evidence_ok=belief_api.add_evidence(base,source_tables,predicate,exclude=True,valid=mask)
+            summary_ok &= ~use|jnp.all(evidence_ok,axis=(1,2))
+            inferred=ability.reveal(a,mons,tables.abilities,side=result.side,slot=result.slot,encounter=result.encounter,
+                ability_id=tables.switches.intimidate_id,authoritative=True,valid=result.reveal&summary_ok)
+            a=inferred.state;summary_ok &= ~result.reveal|inferred.admitted
+            summary,base,ok=checkpoint(summary,base,a,slots(result.side,result.slot,result.checkpoint&summary_ok))
+            summary_ok &= ok
+            summary=summary._replace(switch_seen=jnp.where(use&summary_ok,1,summary.switch_seen))
         # Source marks the outgoing record before the incoming upsert. The
         # public mon consumer has introduced the incoming row already, but its
         # source summary remains unrefreshed until these checkpoints.
@@ -596,7 +669,16 @@ def consume(context, base, mons, source_tables, tables, row, valid, *,
         pending=jnp.where(valid&raw,True,jnp.where(valid&control,False,pending))
     if summary is not None:
         full,bound=rebuild(context._replace(abilities=a,items=items),base,source_tables,tables)
-        summary,ok=refresh_stream.close_frame(summary,full,source_tables,summary_control,side,valid&(k==tendency_kind))
+        queue_arrival=(summary.family==refresh_stream.ARRIVAL)&valid&(k==tendency_kind)
+        summary,ok=refresh_stream.close_frame(summary,full,source_tables,summary_control,side,valid&(k==tendency_kind),pending_switch=switches is not None)
+        if switches is not None:
+            cached,cache_ok=snapshot_api.read(summary.controller.visible,full,source_tables)
+            target=jnp.clip(mons.active[rows,jnp.clip(side,0,1)],0,5)
+            encounter=mons.encounter[rows,jnp.clip(side,0,1),target]
+            switches,queued=switch_api.queue_arrival(switches,tables.switches,mons,a,source_tables,cached.effective,sleep.live,
+                side=side,slot=target,encounter=encounter,producer_binding=tables.switches.binding,
+                valid=queue_arrival&summary_ok&bound&ok)
+            accepted &= ~queue_arrival|(queued&jnp.all(cache_ok,axis=(1,2)))
         accepted &= summary_ok&bound&ok
-    return context._replace(refresh=summary,lifecycle=life,sleep_clause=clauses,abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
+    return context._replace(refresh=summary,lifecycle=life,sleep_clause=clauses,switches=switches if tables.switches is not None else context.switches,abilities=a,moves=m,items=items,field=fields,active=active,damage=damage,types=types,sleep=sleep,
         toxic=toxic,toxic_raw_pending=raw_pending,tendency=tendency,tendency_raw_pending=pending),base,accepted | ~valid
