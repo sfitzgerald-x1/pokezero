@@ -5,7 +5,13 @@ battles from a completed champion mirror collection. It first ranks training
 battles by a fixed salted hash and alternates the chosen seat, giving ten roots
 per seat. Within each selected battle it hash-ranks all boundaries requesting
 that seat. Selection never uses outcomes, predictions, observed costs or failure
-status, and never replaces a selected battle or boundary.
+status, and never replaces a selected battle or boundary. Every recorded
+nonterminal boundary is validated before seat eligibility: unique requested
+roles must match actionable requests and exactly cover observations/actions;
+committed actions must be legal, roots unique and chronological, and prefix and
+root digests exact. The complete roster/config and selected champion contracts
+are checked as well. Malformed records refuse instead of silently disappearing
+from the candidate list.
 
 The frozen address file binds the original roster/splits, collection, each
 battle receipt, compressed source transcript, exact boundary, original root

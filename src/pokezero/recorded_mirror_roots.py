@@ -23,6 +23,63 @@ OBSERVATION_FIELDS = ("categorical_ids", "numeric_features", "token_type_ids",
                       "attention_mask", "legal_action_mask")
 
 
+CHAMPION_CONTRACT = {'belief_set_source_hash': 'f5a5265143d423af', 'categorical_vocab_size': 916, 'category_vocab_sha256': '66627e048ac8a07053599b32398211579ec3216f51a390f74442ebb4c64650e8', 'checkpoint_sha256': '0fd095923b4ac7e05d6e2b3ccab9c1e6869dff4893c2dae456caff10dce690be', 'feature_masks': {'exact_state': True, 'feature_pack_last_move': True, 'investment_belief_narrowing': False, 'item_belief_narrowing': False, 'stats_block': True, 'tier2_investment': True, 'tier2_residuals': True, 'transition_token_budget': 0}, 'model_config_sha256': '35718643b3e8580f8a9ffb9dd48986b469d15f7ee5e27719ff39baae47ed0043', 'schema': 'pokezero.value_probe_checkpoint_contract.v1', 'token_type_vocab_size': 16, 'value_activation': 'tanh', 'value_calibration_transform': None, 'width': 512}
+
+
+def recorded_requested_players(requests):
+    """Match production request actionability without importing simulator code.
+
+    Tests compare this pure metadata projection to the production helper.
+    """
+    if not isinstance(requests, dict) or set(requests) - {"p1", "p2"}:
+        raise ValueError("only legal owning request seats required")
+    result = []
+    for seat in ("p1", "p2"):
+        request = requests.get(seat)
+        if request is None:
+            continue
+        if not isinstance(request, dict) or request.get("side", {}).get("id") != seat:
+            raise ValueError("owning request identity mismatch")
+        if request.get("wait") or request.get("teamPreview"):
+            continue
+        force_switch, active = request.get("forceSwitch"), request.get("active")
+        if ((isinstance(force_switch, list) and any(bool(slot) for slot in force_switch))
+                or (isinstance(active, list) and bool(active))):
+            result.append(seat)
+    return tuple(result)
+
+
+def validate_boundary_roles(row, battle):
+    """Validate even ineligible rows before any selection can exclude them."""
+    if (row.get("schema") != "pokezero.mirror_boundary.v1"
+            or row.get("battle_id") != battle["battle_id"] or row.get("seed") != battle["seed"]):
+        raise ValueError("source boundary identity mismatch")
+    requested = row.get("requested_players")
+    if (not isinstance(requested, list) or not requested or len(set(requested)) != len(requested)
+            or any(seat not in ("p1", "p2") for seat in requested)
+            or tuple(requested) != recorded_requested_players(row["requests"])):
+        raise ValueError("unique requested roles must match actionable source requests")
+    if (set(row.get("observations", {})) != set(requested)
+            or set(row.get("actions", {})) != set(requested)
+            or type(row.get("paired")) is not bool or row["paired"] != (len(requested) == 2)):
+        raise ValueError("exact requested observation/action role coverage required")
+    for seat in requested:
+        obs, action = row["observations"][seat], row["actions"][seat]
+        for name, shape, kinds in (("categorical_ids", (23,41), "iu"),
+                ("numeric_features", (23,132), "iuf"), ("token_type_ids", (23,), "iu"),
+                ("attention_mask", (23,), "b"), ("legal_action_mask", (9,), "b")):
+            value = np.asarray(obs[name])
+            if value.shape != shape or value.dtype.kind not in kinds or not np.isfinite(value).all():
+                raise ValueError("invalid recorded observation: " + seat + "." + name)
+        if (type(action) is not int or not 0 <= action < 9
+                or not obs["legal_action_mask"][action] or not any(obs["attention_mask"])):
+            raise ValueError("committed source action must be legal")
+    if (type(row.get("decision_round_index")) is not int or row["decision_round_index"] < 0
+            or row["root_id"] != digest([row["battle_id"], row["decision_round_index"],
+                                          row["public_prefix_sha256"], row["requests"]])):
+        raise ValueError("source root digest/round mismatch")
+
+
 def select_training_battles(roster: list[dict[str, Any]], *, count: int = 20,
                             salt: str = SELECTION_SALT) -> list[dict[str, Any]]:
     """Choose distinct training battles before reading their roots or values."""
@@ -43,14 +100,33 @@ def select_recorded_boundary(boundaries: list[dict[str, Any]], battle: dict[str,
     """Fixed hash rank over this seat's recorded requests; never filter by cost."""
     seat = battle["cost_seat"]
     candidates = []
+    seen_rounds, seen_roots, prefix = set(), set(), []
+    ended = False
     for row in boundaries:
+        if ended:
+            raise ValueError("records after terminal boundary")
         if row.get("event") == "end":
+            ended = True
+            if row["protocol_start"] != len(prefix):
+                raise ValueError("terminal source prefix continuity mismatch")
+            prefix.extend(row["protocol_delta"])
+            if row["protocol_end"] != len(prefix):
+                raise ValueError("terminal source prefix length mismatch")
             continue
-        if (row.get("schema") != "pokezero.mirror_boundary.v1"
-                or row.get("battle_id") != battle["battle_id"] or row.get("seed") != battle["seed"]):
-            raise ValueError("source boundary identity mismatch")
+        validate_boundary_roles(row, battle)
+        index, identity = row["decision_round_index"], row["root_id"]
+        if index in seen_rounds or identity in seen_roots or index != len(seen_rounds):
+            raise ValueError("unique chronological rounds and roots required")
+        seen_rounds.add(index); seen_roots.add(identity)
+        if row["protocol_start"] != len(prefix):
+            raise ValueError("source prefix continuity mismatch")
+        prefix.extend(row["protocol_delta"])
+        if row["protocol_end"] != len(prefix) or digest(prefix) != row["public_prefix_sha256"]:
+            raise ValueError("source prefix digest mismatch")
         if seat in row["requested_players"]:
             candidates.append(row)
+    if not ended:
+        raise ValueError("complete recorded battle with final boundary required")
     if not candidates:
         raise ValueError("selected training battle has no requested root; no replacements")
     return min(candidates, key=lambda row: digest([salt, "boundary", battle["battle_id"], seat, row["root_id"]]))
@@ -73,8 +149,15 @@ def freeze_cost_roots(collection: str | Path, *, expected_sha256: str = COLLECTI
         raise ValueError("cohort SHA mismatch")
     expected = cohort(manifest["config"]["root"], manifest["config"]["battles"])
     source = json.loads(cohort_blob)
-    if source["battles"] != expected or source["roster_sha256"] != digest(expected):
-        raise ValueError("original preassigned split/roster mismatch")
+    if (source.get("schema") != "pokezero.mirror_cohort.v1"
+            or source["battles"] != expected or source["roster_sha256"] != digest(expected)
+            or source.get("config") != manifest["config"]
+            or source.get("config_sha256") != digest(manifest["config"])
+            or manifest.get("config_sha256") != digest(manifest["config"])
+            or len(manifest.get("battles", [])) != len(expected)
+            or any(any(actual.get(k) != value for k, value in wanted.items())
+                   for wanted, actual in zip(expected, manifest["battles"]))):
+        raise ValueError("original preassigned split/roster/config mismatch")
     rows = select_training_battles(expected, salt=salt)
     selected = []
     for battle in rows:
@@ -85,8 +168,10 @@ def freeze_cost_roots(collection: str | Path, *, expected_sha256: str = COLLECTI
         if receipt_sha != manifest["battle_receipt_hashes"][rel]:
             raise ValueError("battle receipt SHA mismatch")
         receipt = json.loads(receipt_blob)
-        if any(receipt[name] != battle[name] for name in ("index", "battle_id", "seed", "split")):
-            raise ValueError("battle split/identity mismatch")
+        if (receipt.get("schema") != "pokezero.mirror_battle.v1"
+                or any(receipt.get(name) != battle[name] for name in ("index", "battle_id", "seed", "split", "split_key"))
+                or receipt.get("contract") != CHAMPION_CONTRACT):
+            raise ValueError("battle split/identity/champion contract mismatch")
         path = receipt_path.parent / "boundaries.jsonl.gz"
         boundary_blob = path.read_bytes()
         boundary_sha = hashlib.sha256(boundary_blob).hexdigest()
@@ -132,8 +217,9 @@ def feed_recorded_boundary(env: Any, row: dict[str, Any]) -> dict[str, Any]:
     """
     if env._process is not None or env._battle_token is not None:
         raise ValueError("offline reconstruction forbids a simulator process/token")
-    if row.get("schema") != "pokezero.mirror_boundary.v1" or row.get("event") is not None:
+    if row.get("event") is not None:
         raise ValueError("recorded nonterminal request boundary required")
+    validate_boundary_roles(row, {"battle_id":row.get("battle_id"), "seed":row.get("seed")})
     if (row["protocol_start"] != len(env.protocol_lines)
             or row["decision_round_index"] != getattr(env, "_recorded_cost_next_round", 0)):
         raise ValueError("source protocol continuity mismatch")
