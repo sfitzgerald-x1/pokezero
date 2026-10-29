@@ -3,9 +3,11 @@
 //! Preserves the observed refusal class only through external immutable lineage.
 use poke_engine::choices::Choices;
 use poke_engine::engine::generate_instructions::generate_instructions_from_move_pair;
-use poke_engine::engine::state::MoveChoice;
+use poke_engine::engine::state::{MoveChoice, PokemonVolatileStatus};
 use poke_engine::instruction::{Instruction, SleepTalkCalledInstruction};
-use poke_engine::state::{PokemonIndex, PokemonMoveIndex, PokemonStatus, SideReference, State};
+use poke_engine::state::{
+    LastUsedMove, PokemonIndex, PokemonMoveIndex, PokemonStatus, PreTransform, SideReference, State,
+};
 use pokezero_search::events::{render_branch_events, EventContext};
 
 #[test]
@@ -168,5 +170,147 @@ fn a4_two_sleep_talk_actions_allow_one_marker_per_seat() {
             2
         );
         assert_eq!(state.serialize(), before);
+    }
+}
+
+// Additional fresh controls from independent source review.
+fn ctx() -> EventContext {
+    EventContext {
+        species: [vec!["FreshOne".into(); 6], vec!["FreshTwo".into(); 6]],
+        turn: 1,
+        hp_percent: [false, false],
+    }
+}
+fn toy() -> State {
+    let mut s = State::default();
+    for side in [&mut s.side_one, &mut s.side_two] {
+        let p = side.get_active();
+        p.replace_move(PokemonMoveIndex::M0, Choices::SPLASH);
+        p.replace_move(PokemonMoveIndex::M1, Choices::NONE);
+        p.replace_move(PokemonMoveIndex::M2, Choices::NONE);
+        p.replace_move(PokemonMoveIndex::M3, Choices::NONE);
+    }
+    s
+}
+fn encore_redirect_probe(sleeper: SideReference) {
+    let mut s = toy();
+    s.use_last_used_move = true;
+    let (asleep, encorer) = match sleeper {
+        SideReference::SideOne => (&mut s.side_one, &mut s.side_two),
+        SideReference::SideTwo => (&mut s.side_two, &mut s.side_one),
+    };
+    asleep.last_used_move = LastUsedMove::Move(PokemonMoveIndex::M0);
+    let p = asleep.get_active();
+    p.status = PokemonStatus::SLEEP;
+    p.rest_turns = 2;
+    p.speed = 1;
+    p.replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+    p.replace_move(PokemonMoveIndex::M1, Choices::SPLASH);
+    let p = encorer.get_active();
+    p.speed = 500;
+    p.replace_move(PokemonMoveIndex::M0, Choices::ENCORE);
+    let (one, two) = match sleeper {
+        SideReference::SideOne => (
+            MoveChoice::Move(PokemonMoveIndex::M1),
+            MoveChoice::Move(PokemonMoveIndex::M0),
+        ),
+        SideReference::SideTwo => (
+            MoveChoice::Move(PokemonMoveIndex::M0),
+            MoveChoice::Move(PokemonMoveIndex::M1),
+        ),
+    };
+    let before = s.serialize();
+    let branches = generate_instructions_from_move_pair(&mut s, &one, &two, false);
+    assert_eq!(before, s.serialize());
+    let b = branches
+        .iter()
+        .find(|b| {
+            b.instruction_list
+                .iter()
+                .any(|i| matches!(i,Instruction::SleepTalkCalled(m) if m.side_ref==sleeper))
+        })
+        .expect("fresh Encore must redirect selected Splash to Sleep Talk");
+    let rendered = render_branch_events(&mut s, &one, &two, &b.instruction_list, false, &ctx());
+    assert_eq!(before, s.serialize());
+    assert!(
+        !rendered.is_attribution_unsafe(),
+        "valid fresh Encore redirect rejected {sleeper:?}: {rendered:?}; instructions={:?}",
+        b.instruction_list
+    );
+    assert!(rendered
+        .lines
+        .iter()
+        .any(|line| line.contains("[from] Sleep Talk")));
+}
+#[test]
+fn fresh_encore_redirect_side_one() {
+    encore_redirect_probe(SideReference::SideOne);
+}
+#[test]
+fn fresh_encore_redirect_side_two() {
+    encore_redirect_probe(SideReference::SideTwo);
+}
+#[test]
+fn fresh_struggle_and_ordinary_move_reject_injected_markers() {
+    for action in [MoveChoice::Struggle, MoveChoice::Move(PokemonMoveIndex::M0)] {
+        let mut s = toy();
+        let opponent = MoveChoice::Move(PokemonMoveIndex::M0);
+        let before = s.serialize();
+        let branches = generate_instructions_from_move_pair(&mut s, &action, &opponent, false);
+        for b in branches {
+            let base = render_branch_events(
+                &mut s,
+                &action,
+                &opponent,
+                &b.instruction_list,
+                false,
+                &ctx(),
+            );
+            assert!(
+                !base.is_attribution_unsafe(),
+                "fresh control rejected: {base:?}"
+            );
+            let mut ins = b.instruction_list;
+            ins.push(Instruction::SleepTalkCalled(SleepTalkCalledInstruction {
+                side_ref: SideReference::SideOne,
+                move_id: Choices::SPLASH,
+            }));
+            let bad = render_branch_events(&mut s, &action, &opponent, &ins, false, &ctx());
+            assert!(
+                bad.attribution_unsafe
+                    .iter()
+                    .any(|s| s == "sleeptalk_marker_missing_or_conflicting"),
+                "{bad:?}"
+            );
+            assert_eq!(before, s.serialize());
+        }
+    }
+}
+#[test]
+fn fresh_transformed_sleep_talk_uses_current_copied_moves() {
+    let mut s = toy();
+    let p = s.side_one.get_active();
+    p.replace_move(PokemonMoveIndex::M0, Choices::TRANSFORM);
+    p.pre_transform = Some(Box::new(PreTransform::capture(p)));
+    p.replace_move(PokemonMoveIndex::M0, Choices::SLEEPTALK);
+    p.replace_move(PokemonMoveIndex::M1, Choices::SPLASH);
+    p.status = PokemonStatus::SLEEP;
+    p.rest_turns = 2;
+    s.side_one
+        .volatile_statuses
+        .insert(PokemonVolatileStatus::TRANSFORMED);
+    let one = MoveChoice::Move(PokemonMoveIndex::M0);
+    let two = MoveChoice::Move(PokemonMoveIndex::M0);
+    let before = s.serialize();
+    let branches = generate_instructions_from_move_pair(&mut s, &one, &two, false);
+    assert!(!branches.is_empty());
+    for b in branches {
+        let rendered = render_branch_events(&mut s, &one, &two, &b.instruction_list, false, &ctx());
+        assert!(!rendered.is_attribution_unsafe(), "{rendered:?}");
+        assert!(rendered
+            .lines
+            .iter()
+            .any(|line| line.contains("[from] Sleep Talk")));
+        assert_eq!(before, s.serialize());
     }
 }

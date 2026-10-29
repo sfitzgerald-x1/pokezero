@@ -1201,13 +1201,11 @@ pub fn render_branch_events(
     let mut sleep_talk_markers = [false; 2];
     for instruction in instructions {
         if let Instruction::SleepTalkCalled(marker) = instruction {
-            let (slot, root_move, pokemon) = match marker.side_ref {
-                SideReference::SideOne => (0, s1_move, state.side_one.get_active_immutable()),
-                SideReference::SideTwo => (1, s2_move, state.side_two.get_active_immutable()),
+            let slot = match marker.side_ref {
+                SideReference::SideOne => 0,
+                SideReference::SideTwo => 1,
             };
-            let correct_caller = matches!(root_move, MoveChoice::Move(index)
-                if pokemon.moves[index].id == Choices::SLEEPTALK);
-            if sleep_talk_markers[slot] || !correct_caller {
+            if sleep_talk_markers[slot] {
                 out.mark_attribution_unsafe("sleeptalk_marker_missing_or_conflicting");
                 return out;
             }
@@ -1246,6 +1244,19 @@ pub fn render_branch_events(
             return out;
         }
     };
+
+    // Encore may redirect the selected slot, so caller identity must use the
+    // engine-mutated effective choices proved by segmentation, not root slots.
+    let (one_choice, two_choice) = match seg.first {
+        SideReference::SideOne => (&seg.first_choice, &seg.second_choice),
+        SideReference::SideTwo => (&seg.second_choice, &seg.first_choice),
+    };
+    if (sleep_talk_markers[0] && one_choice.move_id != Choices::SLEEPTALK)
+        || (sleep_talk_markers[1] && two_choice.move_id != Choices::SLEEPTALK)
+    {
+        out.mark_attribution_unsafe("sleeptalk_marker_missing_or_conflicting");
+        return out;
+    }
 
     let second_ref = other_side(seg.first);
     let (first_mc, second_mc) = match seg.first {
