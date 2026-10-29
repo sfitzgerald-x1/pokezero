@@ -307,7 +307,7 @@ def project_line(state, line, *, species_catalog, source, moves, abilities, item
             event.words();events.append(event)
     if damage_tables is not None:
         damage_facts=public_damage.control_facts(line)
-        main_handled |= bool(damage_facts) and kind in ('cant','-damage','-enditem')
+        main_handled |= bool(damage_facts) and kind in ('cant','-damage','-enditem','-activate')
         for operation,damage_side in damage_facts:
             event=PublicEvent(Kind.DAMAGE_CONTROL,state.next_sequence+len(events),state.turn,state.phase,
                 target_side=damage_side,payload=(operation,0,0,0,0,0,0,0))
