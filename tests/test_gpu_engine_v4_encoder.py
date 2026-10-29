@@ -93,15 +93,20 @@ class V4EncoderTests(unittest.TestCase):
         return state
 
     def test_full_installed_writers_use_one_owner_packet_and_source_parity(self):
+        lines=[*self.public.prefix,'|turn|1','|-boost|p1a: Snorlax|atk|2',
+            '|move|p1a: Snorlax|Body Slam|p2a: Absol','|-damage|p2a: Absol|75/100']
+        for sub in (False,True):
+            self.compare_source(lines+(['|-start|p1a: Snorlax|Substitute','|-start|p2a: Absol|Substitute'] if sub else []))
+
+    def compare_source(self,lines):
         import json
         from dataclasses import replace
         from pokezero import showdown as source
-        lines=[*self.public.prefix,'|turn|1','|-boost|p1a: Snorlax|atk|2',
-            '|move|p1a: Snorlax|Body Slam|p2a: Absol','|-damage|p2a: Absol|75/100']
         state=self.ingest(lines)
         encode=self.jax.jit(lambda s,o,p:self.e.encode(s,o,self.catalog,observer_sides=p))
         for owner,flip in ((0,False),(1,False),(0,True),(1,True)):
             raw=self.request(owner)
+            raw['side']['pokemon'][1]['condition']='120/247'
             if flip:
                 for row in raw['side']['pokemon']:row['active']=not row['active']
             own=self.e.parse_own_requests(self.catalog,[raw],owner_sides=[owner])
@@ -118,11 +123,12 @@ class V4EncoderTests(unittest.TestCase):
             numbers=np.asarray(actual.numeric_features[0]);want=np.asarray(expected.numeric_features)
             cats=np.asarray(actual.categorical_ids[0]);expected_cats=np.asarray(expected.categorical_ids)
             # Report exact physical mismatches, never hide missing fields by a
-            # union of partial masks. This fixture's seven pending cells are0.
+            # union of partial masks. This fixture's pending cells26/28 are0.
             self.assertTrue(np.allclose(numbers,want,atol=1e-6,rtol=0),str(np.argwhere(abs(numbers-want)>1e-6).tolist()))
             self.assertTrue(np.array_equal(cats,expected_cats),str(np.argwhere(cats!=expected_cats).tolist()))
             self.assertEqual(actual.attention_mask[0].tolist(),list(expected.attention_mask))
             self.assertEqual(actual.legal_action_mask[0].tolist(),list(expected.legal_action_mask))
+            self.assertEqual(out.pending_numeric_columns.tolist(),[26,28])
             self.assertFalse(bool(out.full_encoder_admitted[0]))
 
     def test_contract_rollback_at_batch8_preserves_global_namespaces(self):
