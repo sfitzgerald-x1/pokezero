@@ -15,7 +15,7 @@ import numpy as np
 
 from .mirror_value_probe import digest
 from .projected_encoder_collection import _close_environments, _forward_input
-from .projected_encoder_parity import ProjectedParityTally, projected_pair_arrays
+from .projected_encoder_parity import ProjectedParityTally
 from .recorded_encoder_corpus import RecordedEncoderCursor
 from .recorded_encoder_inventory import inventory_collection, _inside, _json, _HashedInput, _sha
 from .recorded_encoder_parity import SHAPES
@@ -49,8 +49,10 @@ def refusal(error, stage, lines=()):
 
 
 class DiagnosticTally:
-    def __init__(self, expected_views):
-        self.parity = ProjectedParityTally(expected_views=expected_views)
+    def __init__(self, expected_views, *, parity=None):
+        self.parity = parity if parity is not None else ProjectedParityTally(expected_views=expected_views)
+        if self.parity.expected_views != expected_views:
+            raise ValueError('matching fixed parity denominator required')
         self.seen = set()
         self.input_refusals = self.forward_refusals = 0
         self.by_kind, self.by_stage, self.by_column = Counter(), Counter(), Counter()
@@ -77,7 +79,7 @@ class DiagnosticTally:
             affected_columns=list(columns) if forward else 'ALL_INPUT_COLUMNS_UNKNOWN'))
 
     def pair(self, pair, adapter, with_forward):
-        actual, reference = projected_pair_arrays(pair)
+        actual, reference = self.parity.pair_arrays(pair)
         kwargs = {}
         forward_error = None
         if with_forward:
