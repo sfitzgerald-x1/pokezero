@@ -308,6 +308,35 @@ class StudyTests(unittest.TestCase):
         self.assertTrue(all(set(frame)=={'file','line','function'}
                             for frame in diagnostics['error_traceback']))
 
+    def test_broken_runtime_error_string_still_publishes_terminal_failed_ledger(self):
+        class BrokenRuntimeError(RuntimeError):
+            def __str__(self):raise ValueError('authored formatting failure')
+        calls=[]
+        async def benchmark(config,**kwargs):
+            calls.append(config)
+            raise BrokenRuntimeError()
+        ledger=asyncio.run(study.run_study(self.spec,self.root/'broken-runtime-message',
+            benchmark=benchmark,factory_builder=lambda _:object(),configure=lambda:None))
+        saved=json.loads((self.root/'broken-runtime-message'/'ledger.json').read_text())
+        self.assertEqual(saved,ledger)
+        self.assertEqual(ledger['status'],'FAILED')
+        self.assertEqual(ledger['actual_exit'],1)
+        self.assertEqual(ledger['failure']['error_type'],'BrokenRuntimeError')
+        self.assertEqual(ledger['failure']['error_message'],'<exception message unavailable>')
+        self.assertEqual(ledger['failure']['stage'],'benchmark')
+        self.assertEqual(ledger['failure']['seed'],study.SEED_START)
+        self.assertEqual(ledger['failure']['error_traceback'][-1]['function'],'benchmark')
+        self.assertEqual(len(calls),1)
+        self.assertEqual(ledger['recorded_games'],0)
+        self.assertEqual(len(ledger['cells']),2000)
+        self.assertEqual(ledger['cells'][0]['status'],'FAILED')
+        self.assertEqual(sum(row['status']=='NOT_ATTEMPTED' for row in ledger['cells']),1999)
+        self.assertTrue(all(row['win'] is None and row['score'] is None for row in ledger['cells']))
+        self.assertEqual([row['status'] for row in ledger['invocations']],
+                         ['FAILED','NOT_ATTEMPTED','NOT_ATTEMPTED','NOT_ATTEMPTED'])
+        self.assertEqual(ledger['readout']['paired_jax_minus_python']['score_rate']['full_roster_bounds'],[-1,1])
+        self.assertFalse(ledger['B3_qualified'])
+
     def test_progress_write_failure_aborts_and_publishes_failure_without_game_retry(self):
         real_write=study.atomic_json
         writes=[];calls=[]

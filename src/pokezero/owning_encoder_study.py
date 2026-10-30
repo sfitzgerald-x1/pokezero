@@ -519,7 +519,7 @@ async def run_study(spec, output, *, benchmark=None, factory_builder=None, confi
         if stage == 'benchmark' and completed < COUNT:
             cell = ledger['cells'][ordinal*COUNT+completed]
             cell['status'] = 'CAPPED' if isinstance(error, CappedGame) or (
-                isinstance(error, RuntimeError) and str(error) ==
+                isinstance(error, RuntimeError) and failure['error_message'] ==
                 'owning game round cap without actual owner terminal') else 'FAILED'
             failure['seed'] = cell['seed']
         if isinstance(error, PermissionError):
