@@ -53,6 +53,7 @@ The prespec retains the source-derived roster hashes and exclusion digest.
   `foulplay_python` and `node_binary` paths.
 - `max_decision_rounds`: prospective fixed cap (default 250); a cap is unknown.
 - `owning_terminal_timeout_seconds`: fixed timeout, default 5, bounded to 30.
+- `owning_decision_timeout_seconds`: required prospective learner ceiling, finite and positive, up to 3600; no borrowed opponent or terminal timeout.
 - `admission`: hash-bound `comparison` and `scientific_review` JSON references,
   each with `path` and `sha256`; plus `source_commit`, `selection_sha256`,
   `selection_metadata_sha256` and `collection_sha256`.
@@ -72,6 +73,8 @@ at most 1e-6, forwarded denominator equal to compared/expected, argmax agreement
 at least 99.9%, and maximum value difference below 1e-4. Older projected results
 cannot satisfy admission. Broader `full_encoder_admitted` and raw-chunk flags
 remain honest metadata; false values are not additional numerical gate failures.
+
+Prespec v2 forces one literal owner line per ingestion call, preserving line content/order and removing dependence on transport chunk grouping. It binds the explicit learner ceiling. The owning candidate deadline covers snapshot construction, encode, raw selection and choice; prefix ingestion and transport are distinct, and timing admission reports them honestly. A deadline failure submits no late choice, stops the study and leaves unknown outcomes. Python cannot forcibly terminate a running native worker thread, so a finite outer process/job deadline remains required. No numerical learner limit is silently selected by the study.
 
 The explicit `run` subcommand accepts the prepared file and its byte SHA256,
 and requires a fresh output directory under an existing parent. The new output

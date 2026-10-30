@@ -38,6 +38,8 @@ def game(spec, ordinal, offset, score=1):
         encoder_provenance=dict(encoder_kind=kind, status='CLOSED_UNQUALIFIED',
             input_source='ACTUAL_GETPLAYERSTREAMS_OWNER_LINES_UNQUALIFIED',
             owner_terminal_timeout_seconds=spec['owning_terminal_timeout_seconds'],
+            owning_decision_timeout_seconds=spec['owning_decision_timeout_seconds'],
+            owning_public_single_line=True,
             actor_namespace=ActorContract.champion().namespace, actual_owner_terminal_seen=True,
             completed_terminal_streams=['omniscient','p1','p2'], bridge_terminal_marker=True,
             bridge_started_witness=True, full_encoder_admitted=False, B3_qualified=False,
@@ -108,7 +110,8 @@ class StudyTests(unittest.TestCase):
         admission=dict(comparison=comparison,scientific_review=self.put('review.json',review),source_commit='d'*40,
             selection_sha256='a'*64,selection_metadata_sha256='b'*64,collection_sha256='c'*64)
         return study.make_prespec(study_id='authored-source-fixture',
-            runtime={key:'/authored/'+key for key in study.RUNTIME_KEYS},admission=admission)
+            runtime={key:'/authored/'+key for key in study.RUNTIME_KEYS},admission=admission,
+            owning_decision_timeout_seconds=.25)
 
     def empty_ledger(self):
         return dict(schema=study.LEDGER_SCHEMA,prespec_sha256=study.prespec_file_sha256(self.spec),status='RUNNING',
@@ -383,7 +386,7 @@ class StudyTests(unittest.TestCase):
         path=Path(__file__).resolve().parents[1]/'scripts'/'owning_encoder_study.py'
         module_spec=importlib.util.spec_from_file_location('owning_study_cli',path)
         module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)
-        inputs={key:self.spec[key] for key in ('study_id','runtime','admission','max_decision_rounds','owning_terminal_timeout_seconds')}
+        inputs={key:self.spec[key] for key in ('study_id','runtime','admission','max_decision_rounds','owning_terminal_timeout_seconds','owning_decision_timeout_seconds')}
         source=self.put('input.json',inputs)['path'];out=self.root/'prepared.json'
         with patch.object(module,'run_study',side_effect=AssertionError('no run')):
             self.assertEqual(module.main(['prepare','--input',source,'--out',str(out)]),0)

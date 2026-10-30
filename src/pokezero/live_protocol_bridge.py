@@ -30,7 +30,14 @@ def validate_encoder_config(config):
     kind=config.encoder_kind
     encoder_provenance(kind)
     if kind=='legacy-mixed':
+        _require(getattr(config,'owning_decision_timeout_seconds',None) is None
+            and getattr(config,'owning_public_single_line',False) is False,
+            'owning controls require an owning encoder')
         return
+    limit=config.owning_decision_timeout_seconds
+    _require(type(config.owning_public_single_line) is bool, 'typed owning dispatch flag required')
+    _require(limit is None or (type(limit) in (int,float) and math.isfinite(limit)
+        and 0 < limit <= 3600), 'explicit finite owning decision limit required')
     _require(config.policy_mode=='raw' and config.capture_driver=='checkpoint'
         and config.checkpoint is not None and config.value_checkpoint is None
         and config.opponent_policy_mode=='foul-play' and config.format_id=='gen3randombattle'
@@ -148,8 +155,10 @@ class OwningWireSession:
             _require(not self.terminal_streams or terminal in self.terminal_streams.values(),
                      'actual terminal streams disagree')
         if role==self.owner:
-            self.actor.accept_owner_stream(battle_id=self.battle_id,owner=self.owner,
-                generation=self.actor.generation,prefix_sha256=self.actor.prefix_sha256,lines=tuple(lines))
+            groups = ((line,) for line in lines) if self.config.owning_public_single_line else (tuple(lines),)
+            for group in groups:
+                self.actor.accept_owner_stream(battle_id=self.battle_id,owner=self.owner,
+                    generation=self.actor.generation,prefix_sha256=self.actor.prefix_sha256,lines=group)
             self.owner_lines+=tuple(lines)
         if terminal is not None:
             self.terminal_streams[role]=terminal
@@ -258,4 +267,6 @@ class OwningWireSession:
             bridge_terminal_marker=self.terminal_marker,
             bridge_started_witness=self.started,
             owner_terminal_timeout_seconds=self.config.owning_terminal_timeout_seconds,
+            owning_decision_timeout_seconds=self.config.owning_decision_timeout_seconds,
+            owning_public_single_line=self.config.owning_public_single_line,
             actor_receipt=self.receipt)
