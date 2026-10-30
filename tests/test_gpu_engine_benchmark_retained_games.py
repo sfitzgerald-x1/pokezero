@@ -47,8 +47,10 @@ def result(batch=3, *, reasons=None, waiting=(), forced=(), frames=None, done=No
             token_type_ids=j.zeros((batch, 23), j.int32), attention_mask=j.ones((batch, 23), bool),
             legal_action_mask=inputs.legal, switch_targets=inputs.switch_targets, admitted=ok)
         reports.append(NS(encoded=NS(observation=obs), reason=why, policy_admitted=ok,
-            full_line_consumers_complete=ok))
-        requests.append(NS(actions=actual)); ledgers.append(ledger); observers.append(NS(owner=owners))
+            full_line_consumers_complete=j.ones(batch, bool),
+            basic_error=j.zeros(batch, j.int32), retained_error=j.zeros(batch, j.int32)))
+        requests.append(NS(actions=actual)); ledgers.append(ledger)
+        observers.append(NS(owner=owners, retained_healthy=j.ones(batch, bool)))
     core = NS(cursor=NS(stream_id=streams), frame_number=j.asarray(frames if frames is not None else np.zeros(batch), j.int32),
         engine=NS(done=j.asarray(done if done is not None else np.zeros(batch), bool), turn=j.ones(batch, j.int32)),
         requests=tuple(requests), orders=tuple(ledgers), admitted=j.ones(batch, bool))
@@ -149,7 +151,8 @@ class RetainedBenchmarkTests(unittest.TestCase):
             next_result, _ = result(frames=mask.astype(np.int32), done=[False, True, False],
                 reasons=np.array([[256, 0], [256, 256], [0, 0]]))
             session.state, session.result = next_result.state, next_result
-            session.diagnostics = NS(active_rows=active_rows, invalid_actions=j.zeros(3, bool), placeholder_moves=j.ones(3, j.int32))
+            session.diagnostics = NS(active_rows=active_rows, executed_rows=active_rows,
+                invalid_actions=j.zeros(3, bool), placeholder_moves=j.ones(3, j.int32))
             for name in ('engine', 'requests', 'public_p1', 'public_p2', 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2'):
                 timing_callback(name, .001)
             return next_result
@@ -179,7 +182,8 @@ class RetainedBenchmarkTests(unittest.TestCase):
         def advance(session, actions, *, active_rows, timing_callback):
             out, _ = result(batch=1, frames=[1], done=[True])
             session.state, session.result = out.state, out
-            session.diagnostics = NS(active_rows=active_rows, invalid_actions=j.ones(1, bool), placeholder_moves=j.zeros(1, j.int32))
+            session.diagnostics = NS(active_rows=active_rows, executed_rows=active_rows,
+                invalid_actions=j.ones(1, bool), placeholder_moves=j.zeros(1, j.int32))
             for name in ('engine', 'requests', 'public_p1', 'public_p2', 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2'):
                 timing_callback(name, .001)
             return out
@@ -214,7 +218,8 @@ class RetainedBenchmarkTests(unittest.TestCase):
             out, _ = result(frames=frames, done=[False, True, turn == 2],
                 reasons=np.array([[256, 0], [256, 256], [0, 0]]))
             session.state, session.result = out.state, out
-            session.diagnostics = NS(active_rows=active_rows, invalid_actions=j.zeros(3, bool), placeholder_moves=j.ones(3, j.int32))
+            session.diagnostics = NS(active_rows=active_rows, executed_rows=active_rows,
+                invalid_actions=j.zeros(3, bool), placeholder_moves=j.ones(3, j.int32))
             for name in ('engine', 'requests', 'public_p1', 'public_p2', 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2'):
                 timing_callback(name, .001)
             return out
@@ -233,6 +238,50 @@ class RetainedBenchmarkTests(unittest.TestCase):
         measured, model, advance = self.measure(first, config)
         self.assertEqual((measured['completed_games'], measured['refused_games']), (0, 1))
         model.assert_not_called(); advance.assert_not_called()
+
+    def test_requested_but_unexecuted_row_is_unknown_while_other_row_completes(self):
+        first, config = result(batch=2)
+        def model(_, args):
+            return champion.Output(j.zeros((4, 9)), j.zeros(4), j.zeros((4, 9))), 0., 1.
+        def advance(session, actions, *, active_rows, timing_callback):
+            self.assertEqual(np.asarray(active_rows).tolist(), [True, True])
+            # The first row stays frozen. Its terminal bit cannot certify a
+            # completion even if a malformed/unknown fixture presents one.
+            out, _ = result(batch=2, frames=[0, 1], done=[True, True])
+            session.state, session.result = out.state, out
+            session.diagnostics = NS(active_rows=active_rows, executed_rows=j.array([False, True]),
+                invalid_actions=j.zeros(2, bool), placeholder_moves=j.array([7, 1], j.int32))
+            for name in ('engine', 'requests', 'public_p1', 'public_p2', 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2'):
+                timing_callback(name, .001)
+            return out
+        measured, _, _ = self.measure(first, config, network=model, advance=advance, cap=1)
+        self.assertEqual((measured['completed_games'], measured['refused_games']), (1, 1))
+        self.assertEqual(measured['executed_game_steps'], 1)
+        self.assertFalse(measured['cohort'][0]['refusal']['executed'])
+        self.assertEqual([x['executed_steps'] for x in measured['cohort']], [0, 1])
+        self.assertEqual(measured['engine_placeholder_moves'], 1)
+
+    def test_terminal_public_frame_refusal_prevents_completion(self):
+        first, config = result(batch=2)
+        def model(_, args):
+            return champion.Output(j.zeros((4, 9)), j.zeros(4), j.zeros((4, 9))), 0., 1.
+        def advance(session, actions, *, active_rows, timing_callback):
+            # Both engine transitions terminate; only row 1's public frame is
+            # healthy. Missing next owning requests alone are expected at done.
+            out, _ = result(batch=2, frames=[1, 1], done=[True, True], reasons=np.full((2, 2), driver.REQUEST))
+            out.owners[0].retained_error = j.array([1, 0], j.int32)
+            for owner in out.owners:
+                owner.full_line_consumers_complete = j.zeros(2, bool)
+            session.state, session.result = out.state, out
+            session.diagnostics = NS(active_rows=active_rows, executed_rows=active_rows,
+                invalid_actions=j.zeros(2, bool), placeholder_moves=j.zeros(2, j.int32))
+            for name in ('engine', 'requests', 'public_p1', 'public_p2', 'encode_p1', 'encode_p2', 'admission_p1', 'admission_p2'):
+                timing_callback(name, .001)
+            return out
+        measured, _, _ = self.measure(first, config, network=model, advance=advance, cap=1)
+        self.assertEqual((measured['completed_games'], measured['refused_games']), (1, 1))
+        self.assertFalse(measured['cohort'][0]['refusal']['public_frame_admitted'])
+        self.assertEqual(measured['cohort'][1]['final_owner_full_line_consumers_complete'], [False, False])
 
 
 if __name__ == '__main__':

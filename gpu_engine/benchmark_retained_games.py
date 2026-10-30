@@ -263,6 +263,7 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     full_steps, forward, compiles, phases, decisions = [], [], [], {}, []
     encoder_steps, valid_steps, model_rows = [], 0, 0
     placeholder_moves = np.zeros(batch, np.int64)
+    executed_steps = np.zeros(batch, np.int64)
     start = time.perf_counter_ns()
     status = 'REQUEST_CAP'
     for index in range(max_requests):
@@ -308,16 +309,28 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         jax.block_until_ready(diagnostics)
         if not np.array_equal(np.asarray(diagnostics.active_rows), active):
             raise RuntimeError('driver advanced a different physical row set')
-        if not np.array_equal(np.asarray(result.state.core.frame_number) - before_frames, active.astype(np.int32)):
+        executed = np.asarray(diagnostics.executed_rows)
+        if executed.shape != (batch,) or executed.dtype != np.bool_ or np.any(executed & ~active):
+            raise RuntimeError('driver executed outside the requested physical row set')
+        if not np.array_equal(np.asarray(result.state.core.frame_number) - before_frames, executed.astype(np.int32)):
             raise RuntimeError('physical core frame must advance exactly once per active row')
-        placeholder_moves += np.where(active, np.asarray(diagnostics.placeholder_moves), 0)
-        invalid = active & (np.asarray(diagnostics.invalid_actions)
-            | ~np.asarray(result.state.core.admitted))
+        executed_steps += executed
+        placeholder_moves += np.where(executed, np.asarray(diagnostics.placeholder_moves), 0)
+        # A terminal transition has no further owning request to score, but its
+        # public frame must still be consumed successfully by both observers.
+        # Do not treat an expected terminal OwnFacts refusal as public failure.
+        public_ok = np.logical_and.reduce([
+            (np.asarray(report.basic_error) == 0) & (np.asarray(report.retained_error) == 0)
+            & np.asarray(observer.retained_healthy)
+            for report, observer in zip(result.owners, result.state.observers)])
+        invalid = active & (~executed | np.asarray(diagnostics.invalid_actions)
+            | ~np.asarray(result.state.core.admitted) | ~public_ok)
         refused |= invalid
         for row in np.flatnonzero(invalid):
             details[row]['refusal'] = dict(kind='engine-or-source-refusal', request=index,
-                invalid_action=bool(np.asarray(diagnostics.invalid_actions)[row]))
-        completed |= active & ~invalid & np.asarray(result.state.core.engine.done)
+                invalid_action=bool(np.asarray(diagnostics.invalid_actions)[row]),
+                executed=bool(executed[row]), public_frame_admitted=bool(public_ok[row]))
+        completed |= executed & ~invalid & np.asarray(result.state.core.engine.done)
         required = {'engine', 'requests', 'public_p1', 'public_p2', 'encode_p1', 'encode_p2',
             'admission_p1', 'admission_p2'}
         if set(step_phases) != required:
@@ -343,7 +356,9 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
     for row, detail in enumerate(details):
         detail.update(status='COMPLETED' if completed[row] else 'UNKNOWN_REFUSED' if refused[row]
             else 'UNKNOWN_CENSORED', final_turn=int(np.asarray(session.state.core.engine.turn)[row]),
-            engine_placeholder_moves=int(placeholder_moves[row]))
+            engine_placeholder_moves=int(placeholder_moves[row]), executed_steps=int(executed_steps[row]),
+            final_owner_full_line_consumers_complete=[bool(np.asarray(owner.full_line_consumers_complete)[row])
+                for owner in session.result.owners])
     source_provenance._pool(pool, rehash=True)
     _checked(runtime)
     if _source_snapshot() != source:
@@ -359,7 +374,7 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         games_per_second=int(completed.sum()) / elapsed if valid_steps else None,
         advancing_elapsed_seconds=elapsed, construction_ms=construction_ms,
         advancing_steps=valid_steps, max_requests=max_requests, model_owner_rows=model_rows,
-        engine_placeholder_moves=int(placeholder_moves.sum()),
+        engine_placeholder_moves=int(placeholder_moves.sum()), executed_game_steps=int(executed_steps.sum()),
         full_step=_stats(full_steps), bf16_forward=_stats(forward), cold_compile=_stats(compiles),
         driver_components={name: _stats(values) for name, values in phases.items()},
         retained_encoder=_stats(encoder_steps),
