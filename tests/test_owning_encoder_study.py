@@ -263,6 +263,51 @@ class StudyTests(unittest.TestCase):
         self.assertEqual(ledger['actual_exit'],1)
         self.assertEqual(ledger['readout']['paired_jax_minus_python']['score_rate']['full_roster_bounds'],[-1,1])
 
+    def test_first_failure_preserves_bounded_message_and_throw_site_without_retry(self):
+        calls=[]
+        def authored_failure():
+            private_local = 'must never enter failure evidence'
+            raise ValueError('authored first-boundary failure ' + 'x' * 5000)
+        async def benchmark(config,**kwargs):
+            calls.append(config)
+            authored_failure()
+        ledger=asyncio.run(study.run_study(self.spec,self.root/'diagnostics',benchmark=benchmark,
+            factory_builder=lambda _:object(),configure=lambda:None))
+        saved=json.loads((self.root/'diagnostics'/'ledger.json').read_text())
+        self.assertEqual(saved,ledger)
+        failure=ledger['failure']
+        self.assertEqual(failure['error_type'],'ValueError')
+        self.assertTrue(failure['error_message'].startswith('authored first-boundary failure '))
+        self.assertEqual(len(failure['error_message']),4096)
+        self.assertTrue(failure['error_message_truncated'])
+        self.assertEqual(failure['error_traceback'][-1]['function'],'authored_failure')
+        self.assertTrue(failure['error_traceback'][-1]['file'].endswith(__file__))
+        self.assertFalse(failure['error_traceback_truncated'])
+        self.assertNotIn('private_local',study.canonical(failure).decode())
+        self.assertNotIn('must never enter',study.canonical(failure).decode())
+        self.assertEqual(len(calls),1)
+        self.assertEqual(ledger['actual_exit'],1)
+        self.assertEqual(ledger['recorded_games'],0)
+        self.assertEqual([row['status'] for row in ledger['cells'][:2]],['FAILED','NOT_ATTEMPTED'])
+        self.assertEqual(sum(row['status']=='NOT_ATTEMPTED' for row in ledger['cells']),1999)
+        self.assertEqual(ledger['readout']['paired_jax_minus_python']['score_rate']['full_roster_bounds'],[-1,1])
+
+    def test_failure_diagnostics_bounds_frames_and_survives_broken_exception_string(self):
+        class BrokenMessage(ValueError):
+            def __str__(self):raise RuntimeError('authored formatting failure')
+        def nested(depth):
+            if depth:nested(depth-1)
+            else:raise BrokenMessage()
+        try:nested(24)
+        except BrokenMessage as error:diagnostics=study._failure_diagnostics(error)
+        self.assertEqual(diagnostics['error_message'],'<exception message unavailable>')
+        self.assertFalse(diagnostics['error_message_truncated'])
+        self.assertEqual(len(diagnostics['error_traceback']),16)
+        self.assertTrue(diagnostics['error_traceback_truncated'])
+        self.assertEqual(diagnostics['error_traceback'][-1]['function'],'nested')
+        self.assertTrue(all(set(frame)=={'file','line','function'}
+                            for frame in diagnostics['error_traceback']))
+
     def test_progress_write_failure_aborts_and_publishes_failure_without_game_retry(self):
         real_write=study.atomic_json
         writes=[];calls=[]
