@@ -6,6 +6,7 @@ named spy; direct frame tests inspect actual numerical callbacks and carry.
 from dataclasses import replace
 import json
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
@@ -37,13 +38,14 @@ class RegisteredLeftoversDriverTests(unittest.TestCase):
     words = staticmethod(fixture.LeftoversOwningCallerTests.words)
     chance = fixture.LeftoversOwningCallerTests.chance
 
-    def construct(self, b=2, *, tie=False, move='hail'):
-        if not tie:
+    def construct(self, b=2, *, tie=False, move='hail', stored_speeds=None):
+        if not tie and stored_speeds is None:
             session = self.f().construct(b, move)
         else:
             arrays = self.f.f().arrays('pressure', 'pressure')
             arrays['moves'][0, 0, :2] = [self.f.f.ids[move], 1]
-            arrays['stats'][..., 5] = 199
+            arrays['stats'][..., 5] = (199 if stored_speeds is None
+                else np.array(stored_speeds)[:, None])
             with TemporaryDirectory() as directory:
                 path = Path(directory) / 'tiny.npz'
                 np.savez_compressed(path, **dict(arrays, metadata_utf8=np.frombuffer(
@@ -101,6 +103,71 @@ class RegisteredLeftoversDriverTests(unittest.TestCase):
         self.assertEqual(frame.weather_profile.qualified_birth.tolist(), [False, True])
         self.assertEqual(((frame.callbacks.refusal & 256) != 0).tolist(), [True, False])
         self.assertTrue(all((self.words(frame, row)[:, 0] == 17).any() for row in range(2)))
+
+    def test_actual_constructor_effective_gen3_high_speed_and_safe_edge(self):
+        # Qualify the original actual birth BEFORE adding the permitted stage.
+        # The BASE prototype maps raw10000 to1808; the effective Gen3 override
+        # returns10000. Cached source order is[0,1] in BOTH high-speed cases.
+        for stored, cached in ((2500, 10000), (2047, 8188)):
+            with self.subTest(stored=stored):
+                _, core = self.construct(stored_speeds=(stored, 2000))
+                core = core._replace(engine=core.engine._replace(
+                    boosts=core.engine.boosts.at[:, 0, :, 4].set(6)))
+                self.assertEqual(transition._speeds(core.engine, self.f.f.table).tolist(),
+                    [[cached, 2000], [cached, 2000]])
+                frame = self.frame(core, mask=j.array([True, False]))
+                self.assertEqual(frame.weather_profile.qualified_birth.tolist(), [True, True])
+                words = self.words(frame, 0)
+                self.assertEqual(words[words[:, 0] == 17, 3].tolist(), [0, 1])
+                self.assertFalse(bool(int(frame.callbacks.refusal[0]) & 256))
+                self.assertEqual(int(frame.callbacks.count[1]), 0)
+                self.same(jax.tree.map(lambda x: x[1], frame.state),
+                    jax.tree.map(lambda x: x[1], core.engine))
+                self.same(jax.tree.map(lambda x: x[1], frame.weather_profile),
+                    jax.tree.map(lambda x: x[1], core.weather_profile))
+
+    def test_original_effective_gen3_speed_override_and_cached_update(self):
+        # Original method fixtures only: no Battle/Pokemon construction/game.
+        script = r'''
+const {Dex} = require('./dist/sim/dex.js');
+const {Pokemon} = require('./dist/sim/pokemon.js');
+const dex = Dex.mod('gen3'); dex.includeData();
+const format = Dex.formats.get('gen3randombattle');
+const battle = {ruleTable:{has:()=>false},field:{getPseudoWeather:()=>false},
+  trunc:Dex.trunc,quickClawRoll:false};
+const inputs = [10000,2000];
+const base = inputs.map(speed => Pokemon.prototype.getActionSpeed.call({getStat:()=>speed,battle}));
+const cached = inputs.map(speed => {
+  const holder = Object.create(Pokemon.prototype);
+  Object.assign(holder,dex.data.Scripts.pokemon);
+  holder.getStat=()=>speed; holder.battle=battle; holder.hasItem=()=>false;
+  holder.updateSpeed(); return holder.speed;
+});
+console.log(JSON.stringify({base,cached,mod:format.mod,formatOverride:!!format.pokemon}));
+'''
+        result = json.loads(subprocess.check_output([self.f.f.f.f.node, '-e', script],
+            cwd=self.f.f.f.f.root, text=True))
+        self.assertEqual(result, dict(base=[1808, 2000], cached=[10000, 2000],
+            mod='gen3', formatOverride=False))
+
+    def test_cached_speed_above_source_cap_remains_unknown(self):
+        _, core = self.construct(move='raindance')
+        core = core._replace(engine=core.engine._replace(hp=core.engine.hp-20))
+        context = driver._checked(self.prepared)['leftovers_context']
+        # A faulted actual cached-speed helper output exceeds source getStat's
+        # cap. Rain has no HP segment to supply a separate weather refusal.
+        with patch.object(transition, '_speeds', return_value=j.array([[10001, 2000]]*2, j.int32)):
+            actual = transition.step_with_chance(core.engine,
+                j.tile(j.array([[0, 8]], j.int32), (2, 1)), self.f.f.table, self.chance(),
+                _public_trace=life._tape(core.cursor, self.f.f.producer, 64), _lifecycle_trace=True,
+                _weather_hp_context=(core.weather_profile, context.weather_profile_data),
+                _leftovers_context=context)
+        self.assertEqual(actual.weather_profile.qualified_birth.tolist(), [True, True])
+        for row in range(2):
+            words = self.words(actual, row)
+            self.assertFalse(bool((words[:, 0] == 16).any()))
+            self.assertEqual(int((words[:, 0] == 17).sum()), 2)
+            self.assertTrue(int(actual.callbacks.refusal[row]) & 256)
 
     def test_b8_inactive_false_profile_and_nonphysical_literal_targets(self):
         _, core = self.construct(8)
