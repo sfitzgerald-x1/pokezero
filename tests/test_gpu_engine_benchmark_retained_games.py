@@ -30,7 +30,8 @@ def result(batch=3, *, reasons=None, waiting=(), forced=(), frames=None, done=No
         wait = j.asarray([side in waiting for _ in range(batch)])
         force = j.asarray([side in forced for _ in range(batch)])
         request = private_requests.ActionRequest(owners, j.ones(batch, bool), j.zeros(batch, j.int32),
-            j.where(force, private_requests.RequestKind.FORCE_SWITCH, private_requests.RequestKind.MOVE).astype(j.int32),
+            j.where(wait, private_requests.RequestKind.WAIT,
+                j.where(force, private_requests.RequestKind.FORCE_SWITCH, private_requests.RequestKind.MOVE)).astype(j.int32),
             wait, force, j.zeros(batch, bool), j.full(batch, 6, j.int32),
             j.broadcast_to(j.array([True, False, False, False, False, False]), (batch, 6)),
             j.zeros((batch, 6), bool), j.ones((batch, 4), bool), j.zeros((batch, 4), bool),
@@ -41,12 +42,17 @@ def result(batch=3, *, reasons=None, waiting=(), forced=(), frames=None, done=No
             j.broadcast_to(j.arange(4, dtype=j.int32), (batch, 4)), j.ones((batch, 9), bool), boundary,
             j.ones(batch, bool))
         why = j.asarray(reasons[:, side] if reasons is not None else np.zeros(batch), j.int32)
+        # Actual v4 assembly sets admitted &= inputs.ready; the driver's safe
+        # policy observation for WAIT has no attention/legal/target contents.
+        why |= j.where(wait, driver.ENCODER, 0)
         ok = why == 0
         obs = NS(numeric_features=j.zeros((batch, 23, 132), j.float32),
             categorical_ids=j.zeros((batch, 23, 41), j.int32),
-            token_type_ids=j.zeros((batch, 23), j.int32), attention_mask=j.ones((batch, 23), bool),
-            legal_action_mask=inputs.legal, switch_targets=inputs.switch_targets, admitted=ok)
+            token_type_ids=j.zeros((batch, 23), j.int32), attention_mask=j.broadcast_to(ok[:, None], (batch, 23)),
+            legal_action_mask=inputs.legal & ok[:, None],
+            switch_targets=j.where(ok[:, None], inputs.switch_targets, -1), admitted=ok)
         reports.append(NS(encoded=NS(observation=obs), reason=why, policy_admitted=ok,
+            own=NS(admitted=j.ones(batch, bool)),
             full_line_consumers_complete=j.ones(batch, bool),
             basic_error=j.zeros(batch, j.int32), retained_error=j.zeros(batch, j.int32)))
         requests.append(NS(actions=actual)); ledgers.append(ledger)
@@ -121,6 +127,12 @@ class RetainedBenchmarkTests(unittest.TestCase):
         runtime = self.runtime(config); record = bench._RUNTIMES[runtime]
         eligible, failed, _ = bench._admission(first, np.ones(2, bool), config)
         self.assertEqual(eligible.tolist(), [[True, False], [True, False]])
+        self.assertFalse(failed.any())
+        self.assertEqual(first.owners[1].reason.tolist(), [driver.ENCODER, driver.ENCODER])
+        self.assertFalse(bool(first.owners[1].policy_admitted.any()))
+        self.assertFalse(bool(first.owners[1].encoded.observation.admitted.any()))
+        self.assertFalse(bool(first.owners[1].encoded.observation.attention_mask.any()))
+        self.assertTrue(bool((first.owners[1].encoded.observation.switch_targets == -1).all()))
         def model(_, args):
             self.assertEqual(args[0].shape[0], 2)
             logits = j.zeros((2, 9)).at[:, 4].set(1000)
@@ -228,10 +240,36 @@ class RetainedBenchmarkTests(unittest.TestCase):
         self.assertEqual((measured['completed_games'], measured['refused_games'], measured['censored_games']), (2, 1, 0))
         self.assertEqual([x['engine_placeholder_moves'] for x in measured['cohort']], [0, 1, 2])
 
-    def test_no_requested_owner_is_unknown_even_with_admitted_encoders(self):
+    def test_no_requested_owner_is_unknown_even_with_healthy_public_state(self):
         first, config = result(batch=1, waiting=(0, 1))
         eligible, failed, _ = bench._admission(first, np.ones(1, bool), config)
         self.assertTrue(failed[0]); self.assertFalse(eligible.any())
+
+    def test_wait_owner_public_or_source_failure_still_refuses_only_affected_game(self):
+        for failure in ('basic', 'retained', 'health', 'request-source', 'own-facts'):
+            with self.subTest(failure=failure):
+                first, config = result(batch=2, waiting=(1,), forced=(0,))
+                if failure == 'basic':
+                    first.owners[1].basic_error = j.array([1, 0], j.int32)
+                elif failure == 'retained':
+                    first.owners[1].retained_error = j.array([1, 0], j.int32)
+                elif failure == 'health':
+                    first.state.observers[1].retained_healthy = j.array([False, True])
+                elif failure == 'request-source':
+                    first.state.core.requests[1].actions = first.state.core.requests[1].actions._replace(
+                        admitted=j.array([False, True]))
+                else:
+                    first.owners[1].own.admitted = j.array([False, True])
+                eligible, failed, _ = bench._admission(first, np.ones(2, bool), config)
+                self.assertEqual(failed.tolist(), [True, False])
+                self.assertEqual(eligible.tolist(), [[False, False], [True, False]])
+
+    def test_wait_policy_and_global_coverage_are_separate_from_operational_health(self):
+        first, config = result(batch=1, waiting=(1,), forced=(0,))
+        first.owners[1].full_line_consumers_complete = j.zeros(1, bool)
+        eligible, failed, _ = bench._admission(first, np.ones(1, bool), config)
+        self.assertFalse(failed[0])
+        self.assertEqual(eligible.tolist(), [[True, False]])
 
     def test_initial_done_is_not_a_new_completed_game(self):
         first, config = result(batch=1, done=[True])

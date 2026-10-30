@@ -118,11 +118,13 @@ def _requested(state):
 
 
 def _admission(result, active, config):
-    """Validate both owner observations before gathering any model inputs."""
+    """Check both public/source carries; policy admission is seat-requested."""
     batch = len(active)
-    allowed = np.ones((batch, 2), bool)
+    requested = _requested(result.state)
+    allowed = np.zeros((batch, 2), bool)
+    operational = np.asarray(result.state.core.admitted).copy()
     reasons = np.zeros((batch, 2), np.int64)
-    for side, report in enumerate(result.owners):
+    for side, (report, observer) in enumerate(zip(result.owners, result.state.observers)):
         obs = report.encoded.observation
         reason = np.asarray(report.reason)
         if reason.shape != (batch,):
@@ -146,15 +148,19 @@ def _admission(result, active, config):
             & ((types >= 0) & (types < config.token_types)).all(axis=1)
             & attention.any(axis=1))
         actual = result.state.core.requests[side].actions
+        # WAIT still needs the original healthy public/source/own-fact carry,
+        # even though assembly deliberately rejects it as a policy decision.
+        operational &= (np.asarray(actual.admitted) & np.asarray(report.own.admitted)
+            & (np.asarray(report.basic_error) == 0) & (np.asarray(report.retained_error) == 0)
+            & np.asarray(observer.retained_healthy))
         valid &= (legal == np.asarray(actual.features.legal)).all(axis=1)
         request_inputs = private_requests.action_inputs(actual.facts.request,
             observer_side=result.state.core.orders[side].owner_side)
         valid &= (np.asarray(obs.switch_targets) == np.asarray(request_inputs.switch_targets)).all(axis=1)
         valid &= ~np.asarray(request_inputs.ready) | legal.any(axis=1)
         allowed[:, side] &= valid
-    requested = _requested(result.state)
     # Waiting is legitimate. A live game with no requested owner is unknown.
-    refused = active & (~allowed.all(axis=1) | ~requested.any(axis=1))
+    refused = active & (~operational | (requested & ~allowed).any(axis=1) | ~requested.any(axis=1))
     eligible = requested & allowed & (active & ~refused)[:, None]
     return eligible, refused, reasons
 
