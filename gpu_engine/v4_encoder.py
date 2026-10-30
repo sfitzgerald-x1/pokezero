@@ -103,6 +103,13 @@ def _static_snapshot(value, seen):
     seen.add(id(value))
     if is_dataclass(value):
         children = tuple((f.name, _static_snapshot(getattr(value, f.name), seen)) for f in fields(value))
+        if isinstance(value, CategoryVocabulary):
+            # encode/is_enumerated consult these operational attributes, which
+            # __post_init__ creates outside dataclasses.fields. Retain both
+            # original edges and index contents without freezing caller data.
+            # _observed_oov is diagnostic collection, not encoding semantics.
+            children += tuple((name, _static_snapshot(getattr(value, name), seen))
+                for name in ('_index', '_oov_offset'))
         return value, ('attrs', children)
     if isinstance(value, Mapping):
         return value, ('mapping', tuple((k, _static_snapshot(v, seen)) for k, v in value.items()))

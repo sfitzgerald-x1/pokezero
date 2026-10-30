@@ -347,5 +347,49 @@ class DeviceOwnFactsTests(unittest.TestCase):
             actual=own.produce_own_facts(self.start,self.compiled,owner_sides=owners)
         self.same(actual,expected)
 
+    def test_operational_vocab_index_and_offset_reject_drift_but_diagnostics_do_not(self):
+        owners=j.array([0,1],j.int32)
+        expected=own.produce_own_facts(self.start,self.compiled,owner_sides=owners)
+        vocab=self.catalog.vocabulary
+        original_index=vocab._index
+        original_offset=vocab._oov_offset
+        old=original_index['species:pikachu']
+        self.assertIsNot(original_index,self.vocab._index)
+        # In-place semantic edits, equal-content holder replacement and the
+        # operational OOV offset must all refuse after the kernel is warm.
+        try:
+            original_index['species:pikachu']=original_index['species:gengar']
+            with self.assertRaises(ValueError):own.produce_own_facts(self.start,self.compiled,owner_sides=owners)
+        finally:original_index['species:pikachu']=old
+        for name,value in (('_index',dict(original_index)),('_oov_offset',original_offset+1)):
+            try:
+                object.__setattr__(vocab,name,value)
+                with self.subTest(attribute=name):
+                    with self.assertRaises(ValueError):own.produce_own_facts(self.start,self.compiled,owner_sides=owners)
+            finally:object.__setattr__(vocab,name,original_index if name=='_index' else original_offset)
+        # Ordinary OOV collection and replacement cannot alter a category row.
+        diagnostic=vocab._observed_oov
+        try:
+            vocab.encode('own-facts-diagnostic-only')
+            self.assertIn('own-facts-diagnostic-only',vocab.observed_oov_tokens)
+            self.same(own.produce_own_facts(self.start,self.compiled,owner_sides=owners),expected)
+            object.__setattr__(vocab,'_observed_oov',set(diagnostic))
+            self.same(own.produce_own_facts(self.start,self.compiled,owner_sides=owners),expected)
+        finally:
+            object.__setattr__(vocab,'_observed_oov',diagnostic)
+            diagnostic.discard('own-facts-diagnostic-only')
+        # Snapshotting also preserves aliases, padding, normalization and exact
+        # OOV buckets; it never converts the original dictionary in place.
+        aliases={'species:alias':'species:pikachu'}
+        user=CategoryVocabulary(self.vocab.tokens,self.vocab.oov_buckets,aliases)
+        index=user._index
+        probe=('',' Species:Alias ','species:pikachu','never-enumerated-own-fact')
+        values=[user.encode(token) for token in probe]
+        snapshot=v4_encoder._static_snapshot(user,set())
+        self.assertIs(user._index,index);self.assertIs(user.aliases,aliases)
+        self.assertEqual([user.encode(token) for token in probe],values)
+        v4_encoder._check_static(user,snapshot)
+        self.same(own.produce_own_facts(self.start,self.compiled,owner_sides=owners),expected)
+
 
 if __name__=='__main__':unittest.main()
