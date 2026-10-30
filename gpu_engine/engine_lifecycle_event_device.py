@@ -33,6 +33,7 @@ from . import public_items, public_active
 from . import engine_weather_callbacks as weather_callbacks, weather, public_field, v4_encoder
 from . import engine_weather_progress_callbacks as weather_progress
 from . import engine_weather_effect_callbacks as weather_effects
+from . import engine_weather_speed_profile as weather_speed
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -311,7 +312,7 @@ def _snapshot_shape(snapshot, batch):
     base._shape(snapshot.revealed_species_id, (batch, 2), jnp.int32)
 
 
-def project_device(state, tape, before_registry, after_registry, tables):
+def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None):
     """Trusted device primitive: real LifecycleTape and causal source snapshots.
 
     All host guards are separate. No host reads, string reconstruction or event
@@ -358,6 +359,25 @@ def project_device(state, tape, before_registry, after_registry, tables):
             (tables.weather_ability,(4,),jnp.int32),(tables.weather_guard_species,(4,),jnp.int32),
             (tables.weather_guard_item_possible,(4,),jnp.bool_)):
         base._shape(value,shape,dtype)
+    # Optional trusted owning carry, never a naked admission boolean. Host
+    # Session checks the original compiled profile and actual birth boundary.
+    hp_profile = jnp.zeros(b, bool)
+    if weather_hp is not None:
+        if (type(weather_hp) is not tuple or len(weather_hp) != 2
+                or type(weather_hp[0]) is not weather_speed.BirthRecord
+                or type(weather_hp[1]) is not weather_speed.ProfileData):
+            raise ValueError('owning weather birth carry and original static profile required')
+        record, data = weather_hp
+        for value,shape,dtype in ((record.qualified_birth,(b,),jnp.bool_),
+                (record.stream_id,(b,),jnp.int32),(record.engine_binding,(b,8),jnp.uint32),
+                (record.source_binding,(b,8),jnp.uint32),(record.profile_binding,(b,8),jnp.uint32)):
+            base._shape(value,shape,dtype)
+        hp_profile = (record.qualified_birth & (record.stream_id == tape.stream_id)
+            & jnp.all(record.engine_binding == tape.engine_binding,axis=1)
+            & jnp.all(record.source_binding == tape.source_binding,axis=1)
+            & jnp.all(record.profile_binding == data.binding,axis=1)
+            & jnp.all(data.engine_binding == tape.engine_binding)
+            & jnp.all(data.source_binding == tape.source_binding))
     rows = jnp.arange(b)
     known = public.UNINSTRUMENTED | public.OVERFLOW | public.INVALID_ACTION | life.UNKNOWN_DETAILS | life.UNKNOWN_BATON | life.MISSING_INSTALL | life.CLOCK | status_callbacks.UNKNOWN_STATUS | weather_callbacks.UNKNOWN_WEATHER
     fatal = (tape.refusal & ~public.UNINSTRUMENTED) != 0
@@ -391,6 +411,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
         move_weather = kind == weather_progress.MOVE_WEATHER
         clock_weather = kind == weather_progress.WEATHER_CLOCK
         failed_weather = kind == weather_effects.SAME_WEATHER_FAILURE
+        weather_chip = kind == weather_effects.WEATHER_CHIP
         any_weather=entry_weather|move_weather|clock_weather
         safe_side, safe_in = jnp.clip(side, 0, 1), jnp.clip(incoming, 0, 5)
         old = cursor.physical_to_public[rows, safe_side, safe_in]
@@ -475,11 +496,16 @@ def project_device(state, tape, before_registry, after_registry, tables):
             & jnp.all(raw[:,1:5]==-1,axis=1)&(raw[:,5]>=weather.RAIN)&(raw[:,5]<=weather.HAIL)
             & (raw[:,7]>=0)&(raw[:,7]<=5)&(upkeep|expires)
             & (tables.weather_public[jnp.clip(raw[:,5],0,4)]>0))
+        chip_ok=(hp_profile & tables.weather_events & tables.status_events & ~tables.raw_begin
+            & status_identity & (phase==0) & (incoming==cursor.physical_active[rows,safe_side])
+            & (raw[:,1]>0)&(raw[:,2]>0)&(raw[:,1]!=raw[:,2])
+            & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5])&(raw[:,7]<=1_000_000)
+            & (raw[:,8]>=0)&(raw[:,8]<=6)&((raw[:,9]==weather.SAND)|(raw[:,9]==weather.HAIL)))
         event_ok = generation_ok & clock_ok & jnp.where(arrival, arrival_ok,
             jnp.where(clock, clock_payload, jnp.where(status_event,status_ok,
                 jnp.where(lum,lum_ok,jnp.where(entry_weather,weather_ok,
                     jnp.where(move_weather,move_weather_ok,jnp.where(clock_weather,clock_weather_ok,
-                        jnp.where(failed_weather,failed_weather_ok,component & component_ok))))))))
+                        jnp.where(failed_weather,failed_weather_ok,jnp.where(weather_chip,chip_ok,component & component_ok)))))))))
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -524,6 +550,14 @@ def project_device(state, tape, before_registry, after_registry, tables):
         failed_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),
             semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),failed_payload),axis=1)
         semantic=jnp.where(failed_weather[:,None],failed_semantic,semantic)
+        chip_percent=(100*raw[:,6]+jnp.maximum(1,raw[:,7])-1)//jnp.maximum(1,raw[:,7])
+        chip_percent=jnp.where((raw[:,6]<raw[:,7])&(chip_percent==100),99,chip_percent)
+        chip_payload=jnp.stack((status_enc,jnp.where(own,raw[:,6],chip_percent),
+            jnp.where(own,raw[:,7],100),jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(raw[:,8],0,6)],
+            z,jnp.ones_like(z),jnp.ones_like(z),z),axis=1)  # damage, explicit [from], no Spikes
+        chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
+            semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
+        semantic=jnp.where(weather_chip[:,None],chip_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)
@@ -570,11 +604,11 @@ def project_device(state, tape, before_registry, after_registry, tables):
     return Projection(next_state, chunk, error, refusal, admitted, no, no, no)
 
 
-def project_frame(state, frame, tables):
+def project_frame(state, frame, tables, *, weather_hp=None):
     """Device connection from an actual lifecycle result; never reads its state."""
     if type(frame) is not life.LifecycleResult:
         raise ValueError('actual lifecycle result required')
-    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables)
+    return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,weather_hp=weather_hp)
 
 
 class Consumed(NamedTuple):
