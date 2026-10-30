@@ -71,7 +71,9 @@ jobs:
         run: |
           set -o pipefail
           python -c 'import jax; print("Component test devices:", jax.devices())'
-          python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 4 2>&1 \
+          # Release each discovery block's compiled runtime resources before
+          # the next block; keep its original suite and every discovered case.
+          python scripts/run_gpu_component_shard.py --index '${{ matrix.shard }}' --count 4 --process-blocks 2>&1 \
             | tee /tmp/gpu-components.log
           if grep -Eq 'skipped=[1-9]|\.\.\. skipped' /tmp/gpu-components.log; then
             echo '::error::component tests skipped required JAX, source oracle or real-team fixture'
