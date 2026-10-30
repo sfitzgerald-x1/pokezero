@@ -447,15 +447,23 @@ def _gender(state, pool, indices, initialization):
 
 
 def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
-                        gender_initialization=None, capacity=64):
+                        gender_initialization=None, capacity=64, _execution_compiled=None):
     """Real opt-in constructor callsite; legacy state_from_pool stays unchanged.
 
     The same immutable pool and owned selection feed physical construction and
     both retained maxPP holders. Gender is assigned BEFORE actual initial public
     reveals/entry callbacks. Missing gender remains UNKNOWN, never absence.
     """
+    if _execution_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('checked accounting source constructor cannot be traced')
     from . import engine_lifecycle_callbacks as lifecycle
-    record = _checked(compiled); provenance._pool(pool,rehash=True)
+    record = _checked(compiled)
+    if _execution_compiled is not None:
+        from . import engine_execution_completeness as execution
+        _,_,execution_adapter=execution._checked(_execution_compiled)
+        if execution_adapter.causal.projector.catalog is not record['lifecycle']:
+            raise ValueError('same original source lifecycle catalog required for accounting')
+    provenance._pool(pool,rehash=True)
     if json.dumps(pool.metadata(),sort_keys=True) != record['metadata']:
         raise ValueError('actual constructor metadata differs from source producer')
     indices = np.asarray(team_indices)
@@ -480,7 +488,8 @@ def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
         expected_engine_binding=record['rules'].device.engine_binding)
     frame = lifecycle.initialize_with_lifecycle(state,record['engine_table'],cursor=cursor,
         catalog=catalog,expected_binding=catalog.binding,
-        expected_engine_binding=record['rules'].device.engine_binding,capacity=capacity)
+        expected_engine_binding=record['rules'].device.engine_binding,capacity=capacity,
+        execution_compiled=_execution_compiled)
     requests = tuple(produce_request(compiled,frame.state,o,r,frame.after_registry,
         lifecycle_admitted=frame.cursor.admitted) for o,r in zip(orders,registrations))
     return _bind_constructed(frame.state,frame.cursor,tuple(orders),tuple(registrations),requests,
@@ -492,6 +501,8 @@ def advance_source(constructed, engine_actions, *, compiled, chance_inputs=None,
     from . import engine_lifecycle_callbacks as lifecycle
     record = _checked(compiled)
     _constructed(constructed)
+    if constructed.callbacks.execution is not None:
+        raise ValueError('accounted source snapshots require the owning two-owner consuming driver')
     catalog = record['lifecycle']
     frame = lifecycle.trace_step(constructed.state,engine_actions,record['engine_table'],
         cursor=constructed.cursor,catalog=catalog,expected_binding=catalog.binding,

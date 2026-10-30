@@ -69,6 +69,7 @@ class LifecycleTape(NamedTuple):
     event_generation: object
     switch_details: object
     cursor: Cursor
+    execution: object = None  # PRIVATE partial source-site accounting
 
 
 class LeftoversContext(NamedTuple):
@@ -234,14 +235,22 @@ def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initi
 
 
 def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expected_engine_binding,
-                              tie_coin=None,capacity=64):
+                              tie_coin=None,capacity=64,execution_compiled=None):
     """Own NEW -> actual reveals0,1 -> SAME legacy initialize -> TURN1.
 
     Constructor wrappers must pass the uninitialized state_from_pool(table=None)
     result and any proven constructor gender values, not a post-step snapshot.
     """
+    if execution_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('checked accounting constructor must remain outside outer JIT')
     from . import transition
     public.check_catalog(catalog,table,expected_binding=expected_binding,expected_engine_binding=expected_engine_binding)
+    execution_tables=None
+    if execution_compiled is not None:
+        from . import engine_execution_completeness as execution
+        execution_tables,_,adapter=execution._checked(execution_compiled)
+        if adapter.causal.projector.catalog is not catalog:
+            raise ValueError('same original lifecycle catalog required for accounting constructor')
     ok=_valid(cursor)&~cursor.initialized&(cursor.turn==0)&(cursor.phase==0)&~state.done&(state.turn==0)
     ok &= jnp.all(cursor.engine_binding==jnp.array(catalog.engine_binding,jnp.uint32),axis=1)
     ok &= (jnp.all(cursor.next_slot==0,axis=1)&jnp.all(cursor.physical_to_public==-1,axis=(1,2))
@@ -254,6 +263,9 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
     cursor=cursor._replace(admitted=ok)
     tape=_tape(cursor,catalog,capacity)._replace(refusal=jnp.full_like(cursor.turn,public.UNINSTRUMENTED)
         |jnp.where(~ok,CLOCK,0))
+    if execution_tables is not None:
+        ledger=execution.initialize(cursor.stream_id,compiled=execution_compiled,capacity=32,receipt_capacity=capacity)
+        tape=execution.begin_on_tape(tape,ledger,execution_tables,active=ok)
     for side in (0,1):
         seat=jnp.full_like(cursor.turn,side)
         tape=_reveal(tape,state,seat,jnp.full_like(cursor.turn,-1),state.active[:,side],
