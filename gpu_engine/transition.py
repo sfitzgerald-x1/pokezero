@@ -495,10 +495,6 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work=history.record_move(work,side,chosen_slot,eligible=acts,struggle=struggle[rows,side])
         placeholders += acts.astype(jnp.int32)
         caller_acts=acts
-        if _public_trace is not None:
-            _public_trace = public_callbacks.move(_public_trace,side,work.active[rows,side],
-                work.active[rows,foe],caller_move,eligible=caller_acts,
-                unsupported=charge_locked | sleep_usable)
         if table.sleep_talk is not None:
             called,usable=talking.choose(table.sleep_talk,_active(work.moves,work,side),
                 _active(work.pp,work,side),sleep_talk_draws[rows,side])
@@ -523,6 +519,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 work.ability[rows[:,None],sides,work.active],work.hp[rows[:,None],sides,work.active])
             acts &= ~blocked
             explodes=acts & table.self_destruct.move[move]
+        if _public_trace is not None:
+            # A genuine ordinary declaration is known here, after the actual
+            # suppression/preparation gates and before any main-hit callback.
+            _public_trace = public_callbacks.move(_public_trace,side,work.active[rows,side],
+                work.active[rows,foe],caller_move,eligible=caller_acts,
+                unsupported=charge_locked | sleep_usable | ~acts)
         attack_stats = _active(work.stats, work, side)
         defense_stats = _active(work.stats, work, foe)
         attack_boosts = _active(work.boosts, work, side)

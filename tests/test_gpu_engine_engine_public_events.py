@@ -172,7 +172,7 @@ class EnginePublicEventsTests(unittest.TestCase):
         drift=self.engine_table._replace(power=self.engine_table.power.at[1].add(1))
         with self.assertRaises(ValueError):self.e.check_catalog(self.producer,drift,
             expected_binding=self.producer.binding,expected_engine_binding=self.j.array(self.producer.engine_binding,self.j.uint32))
-        for move_id in (4,6):
+        for move_id in (6,):
             unsupported=self.e.move(self.e.initialize(1,catalog=self.producer),self.j.array([0]),self.j.array([3]),self.j.array([5]),
                 self.j.array([move_id]),eligible=self.j.array([True]))
             with self.assertRaises(ValueError):self.project(unsupported)
@@ -185,7 +185,7 @@ class EnginePublicEventsTests(unittest.TestCase):
     def test_compiler_exact_source_identity_explicit_exposure_and_supported_rows(self):
         from pokezero.dex import ShowdownDex
         self.assertEqual(len(self.producer.ids),len(self.metadata['vocabulary']['moves']))
-        self.assertEqual([bool(x) for x in self.producer.ids],[False,True,True,False,False,True,False])
+        self.assertEqual([bool(x) for x in self.producer.ids],[False,True,True,True,True,True,False])
         bad=ShowdownDex(dict(self.dex.moves,surf=self.dex.moves['bodyslam']),{}, {})
         with self.assertRaisesRegex(ValueError,'identity drift'):
             self.e.compile_catalog(self.metadata,self.engine_table,public_moves=self.catalog,dex=bad,exposure=self.exposure)
@@ -196,6 +196,33 @@ class EnginePublicEventsTests(unittest.TestCase):
         metadata=deepcopy(self.metadata);metadata['moves'][1]['id']='surf'
         with self.assertRaises(ValueError):self.e.compile_catalog(metadata,self.engine_table,
             public_moves=self.catalog,dex=self.dex,exposure=self.exposure)
+
+    def test_source_derived_target_classes_cover_other_rows_without_move_roster(self):
+        from pokezero.dex import ShowdownDex
+        names=['shadowball','psychic','rest','curse','splash','sidefixture','scriptedfixture']
+        targets=['normal','normal','self','normal','self','foeSide','scripted']
+        dex=ShowdownDex(dict(self.dex.moves,**{name:replace(self.dex.moves['surf'],id=name,name=name,target=target)
+            for name,target in zip(names,targets)}),{}, {})
+        public=self.p.compile_moves(self.host,dex,self.vocab)
+        metadata=deepcopy(self.metadata)
+        metadata['vocabulary']['moves'].extend(names)
+        metadata['moves'].extend(dict(id=name,base_power=50,type=1,category='Physical') for name in names)
+        n=len(metadata['moves'])
+        table=self.engine_table._replace(power=self.j.array([0]+[row['base_power'] for row in metadata['moves'][1:]],self.j.int32),
+            type=self.j.array([0]+[1]*(n-1),self.j.int32),physical=self.j.array([False]+[True]*(n-1)),
+            accuracy=self.j.full((n,),100,self.j.int32),always_hit=self.j.ones((n,),bool),priority=self.j.zeros((n,),self.j.int32))
+        catalog=self.e.compile_catalog(metadata,table,public_moves=public,dex=dex,exposure=self.exposure)
+        offset=len(self.metadata['moves'])
+        self.assertEqual([bool(i) for i in catalog.ids[offset:]],[True,True,True,False,True,False,False])
+        self.assertEqual(catalog.targets[offset:],(1,1,0,-1,0,-1,-1))
+        # Rest is not in the original draft's five names; its source self
+        # target maps to the actor, not the kernel's placeholder foe address.
+        tape=self.e.move(self.e.initialize(1,catalog=catalog),self.j.array([0]),self.j.array([3]),self.j.array([5]),
+            self.j.array([offset+2]),eligible=self.j.array([True]))
+        result=self.e.project(tape,battle=0,stream_id=1,owner=0,next_sequence=1,catalog=catalog,
+            registry=self.registry(),expected_binding=catalog.binding,
+            expected_engine_binding=np.array(catalog.engine_binding,np.uint32))
+        self.assertEqual((result.events[0].actor_side,result.events[0].target_side),(0,0))
 
     def test_overflow_refuses_entire_projection_and_does_not_change_engine(self):
         state,actions,chance=self.state(),self.j.zeros((1,2),self.j.int32),self.chance()

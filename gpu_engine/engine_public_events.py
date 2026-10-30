@@ -7,9 +7,9 @@ FAINT component facts; no trace has complete raw-line consumers or observation
 admission. Entry, prevention, proc, status, recoil/residual, terminal and boundary
 callbacks remain uninstrumented. Overflow refuses the entire projection.
 
-Declaration admission is deliberately limited to exact static-target Tackle,
-Body Slam, Surf, Struggle and Protect rows. Other engine IDs remain untrimmed,
-but cannot manufacture a public move ID or called/locked lexical provenance.
+Declaration admission uses the exact canonical target enum and existing source
+dynamic-effect resolver, never a selected move roster. Unsupported engine rows
+remain untrimmed but cannot manufacture target/called/locked lexical provenance.
 """
 from dataclasses import asdict, dataclass
 import hashlib
@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from pokezero.dex import normalize_id
+from pokezero.dex import normalize_id, resolve_move_effect
 from .engine_private_team import engine_metadata_binding
 from .public_context_protocol import PublicAddress
 from .public_inputs import PublicEvent, Kind, Phase
@@ -164,10 +164,6 @@ def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
             or len(metadata['moves']) != len(names)):
         raise ValueError('exact ordered engine move namespace required')
     ids, targets = [0], [-1]
-    # This is a deliberately bounded declaration cut, not a mechanics roster.
-    # Other exact catalogue rows remain at their original IDs but unsupported.
-    # Do not infer dynamic/called/locked target grammar from a static dex row.
-    declared_targets = {'tackle':1,'bodyslam':1,'surf':1,'struggle':1,'protect':0}
     for i, name in enumerate(names[1:], 1):
         row = metadata['moves'][i]
         if not isinstance(row, dict) or row.get('id') != name:
@@ -181,16 +177,20 @@ def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
                 or public_moves.names[public_id] != normalize_id(name)):
             raise ValueError('public move namespace row drift')
         target = (0 if info.target == 'self' else 1 if info.target in
-            ('normal', 'adjacentFoe', 'any', 'allAdjacentFoes', 'allAdjacent') else -1) if info else -1
-        supported = bool(public_id and info and normalize_id(name) in declared_targets
-            and target == declared_targets[normalize_id(name)])
+            ('normal', 'adjacentFoe', 'any', 'allAdjacentFoes', 'allAdjacent', 'randomNormal') else -1) if info else -1
+        # The source resolver documents the one Gen3 type-dependent case.
+        # Never infer its target rewrite from a static row or physical types.
+        dynamic = bool(info and resolve_move_effect(info,()) != resolve_move_effect(info,('Ghost',)))
+        supported = bool(public_id and info and target >= 0 and not dynamic)
         ids.append(int(public_id) if supported else 0)
         targets.append(target if supported else -1)
     checks = dict(power=[0]+[r['base_power'] for r in metadata['moves'][1:]],
         type=[0]+[r['type'] for r in metadata['moves'][1:]],
         physical=[False]+[r['category']=='Physical' for r in metadata['moves'][1:]])
     for field, values in checks.items():
-        if not np.array_equal(np.asarray(getattr(engine_table, field)), np.asarray(values)):
+        actual=np.asarray(getattr(engine_table, field))
+        dtype=np.dtype(bool if field=='physical' else np.int32)
+        if actual.shape!=(len(names),) or actual.dtype!=dtype or not np.array_equal(actual, np.asarray(values)):
             raise ValueError('engine move table differs from metadata: ' + field)
     engine = _binding(engine_metadata_binding(metadata))
     source, moves = _binding(public_moves.device.source_binding), _binding(public_moves.device.binding)
