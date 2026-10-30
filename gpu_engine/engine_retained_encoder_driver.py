@@ -372,6 +372,10 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     Optional Leftovers diagnostics retain UNKNOWN. Explicit retained mode uses
     the original helper/profile and full-consumer contract; all scientific
     qualification flags remain false.
+    Explicit kernel-event status mode additionally binds the original status
+    helper and actual accounting carry. Only genuine full consumption by both
+    observers can close selected BRN/PSN spans. It establishes no original
+    physics equivalence or exhaustive event coverage.
     """
     if type(status_residual_mode) is not str or status_residual_mode not in ('diagnostic','kernel-event'):
         raise ValueError('explicit diagnostic or kernel-event status residual mode required')

@@ -1,8 +1,9 @@
 """Trusted format-seam controls, NOT owning hook/history/source qualification.
 
 The diagnostic emitter's own UNKNOWN is suppressed only by an explicit fixture
-patch. No aggregate prior bit is erased, and the actual owning registered path
-must remain closed until its separate hook/history proof is implemented.
+patch. No aggregate prior bit is erased. Actual kernel-event registration and
+two-owner consumption have separate tests; original hook/physics fidelity is
+outside this formatter fixture's scope.
 """
 import unittest
 from unittest.mock import patch
