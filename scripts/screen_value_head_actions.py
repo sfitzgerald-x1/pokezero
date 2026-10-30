@@ -353,6 +353,9 @@ def reconstruct_screen_root(config,collection,root):
 def persist_row(output,row,*,retained=False):
     write(output/f"row-{row['ordinal']:03d}.json",row)
     compact={k:row[k] for k in ('ordinal','root_id','seat','search_seed','paired_clean_search','chosen_actions_differ')}
+    compact.update(context_version=row.get('context_version'),legal_action_count=row.get('legal_action_count'),
+        history_context_sha256=row.get('history_context_sha256'),history_own_step_count=row.get('history_own_step_count'),
+        history_public_round_count=row.get('history_public_round_count'))
     compact['heads']={h:{'status':v['status'],'action':v['action'],
         'native_input_sha256':[x['input_sha256'] for x in v['native_calls']],
         'native_calls_started':sum(x['started'] for x in v['native_calls']),
@@ -366,7 +369,7 @@ def persist_row(output,row,*,retained=False):
 def summarize(rows,count=COUNT):
     require(len(rows)==count and [r['ordinal'] for r in rows]==list(range(count)),'whole frozen roster denominator')
     legacy=[r for r in rows if r.get('context_version')=='legacy-empty-trajectory-v1']
-    corrected=[r for r in rows if r not in legacy]
+    corrected=[r for r in rows if r.get('context_version')!='legacy-empty-trajectory-v1']
     clean=[r for r in corrected if r['paired_clean_search']]
     different=sum(r['chosen_actions_differ'] is True for r in clean)
     unresolved=count-len(clean)
