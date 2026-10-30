@@ -253,7 +253,10 @@ _CORPUS_TREES = ("reports", "docs")
 # 427 -> 428: against main 148af0cc, the sole reports/docs JSON addition is
 # rollout_leaf_witness_mutation_battery_20261029_live_protocol_bridge.json.
 # No selected files were removed; all 427 historical Git blobs are unchanged.
-_EXPECTED_COUNTER_ARTIFACTS = 428
+# 428 -> 429: measured against main 8afdcc77; the sole JSON addition is
+# rollout_leaf_witness_mutation_battery_20261030_owning_runtime_controls.json.
+# All 428 historical blobs remain identical and no selected path was removed.
+_EXPECTED_COUNTER_ARTIFACTS = 429
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's

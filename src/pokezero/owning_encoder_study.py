@@ -22,7 +22,7 @@ SEED_START = 30100000
 FP_SEED_START = 40100000
 ORDER = (('python-owning', 'p1'), ('jax-owning', 'p1'),
          ('jax-owning', 'p2'), ('python-owning', 'p2'))
-SPEC_SCHEMA = 'pokezero.B3-owning-study-prespec.v1'
+SPEC_SCHEMA = 'pokezero.B3-owning-study-prespec.v2'
 LEDGER_SCHEMA = 'pokezero.B3-owning-study-ledger.v1'
 VISIBILITY = 'ACTUAL_CAPTURED_OWNING_LINES_AND_IMMUTABLE_CONSUMED_PYTHON_TENSORS'
 RUNTIME_KEYS = ('checkpoint', 'showdown_root', 'foulplay_root', 'foulplay_python', 'node_binary')
@@ -91,7 +91,7 @@ def seed_audit():
 
 
 def make_prespec(*, study_id, runtime, admission, max_decision_rounds=250,
-                 owning_terminal_timeout_seconds=5):
+                 owning_terminal_timeout_seconds=5, owning_decision_timeout_seconds=None):
     require(type(study_id) is str and study_id and len(study_id) <= 128
         and all(c.isalnum() or c in '-_' for c in study_id), 'canonical study ID required')
     require(type(runtime) is dict and set(runtime) == set(RUNTIME_KEYS)
@@ -101,6 +101,9 @@ def make_prespec(*, study_id, runtime, admission, max_decision_rounds=250,
     require(type(owning_terminal_timeout_seconds) in (int, float)
         and math.isfinite(owning_terminal_timeout_seconds) and 0 < owning_terminal_timeout_seconds <= 30,
         'bounded terminal timeout required')
+    require(type(owning_decision_timeout_seconds) in (int,float)
+        and math.isfinite(owning_decision_timeout_seconds)
+        and 0 < owning_decision_timeout_seconds <= 3600, 'explicit prospective learner decision limit required')
     require(type(admission) is dict and set(admission) == {'comparison', 'scientific_review',
         'source_commit', 'selection_sha256', 'selection_metadata_sha256', 'collection_sha256'},
         'exact B2 comparison/review/source/selection bindings required')
@@ -115,16 +118,20 @@ def make_prespec(*, study_id, runtime, admission, max_decision_rounds=250,
         invocations=[dict(ordinal=i, encoder_kind=k, seat=s, games=COUNT) for i, (k, s) in enumerate(ORDER)],
         seed_audit=seed_audit(), max_decision_rounds=max_decision_rounds,
         owning_terminal_timeout_seconds=owning_terminal_timeout_seconds,
+        owning_decision_timeout_seconds=owning_decision_timeout_seconds,
         controls=dict(policy_mode='raw', capture_driver='checkpoint', format_id='gen3randombattle',
             opponent_policy_mode='foul-play', device='cpu', temperature=1., belief_set_source=True,
             opponent_legal_mask_mode='hidden', search_time_ms=1000, foulplay_mcts_iterations=None,
-            opponent_crash_retries=0, allow_search_fallback=False),
+            opponent_crash_retries=0, allow_search_fallback=False,
+            owning_decision_timeout_seconds=owning_decision_timeout_seconds, owning_public_single_line=True),
         precision=dict(cpu_only=True, torch_dtype='float32', mha_fastpath=False, tf32=False,
             torch_matmul_precision='highest', jax_enable_x64=False,
             jax_matmul_precision='highest', torch_threads=1, torch_interop_threads=1),
         execution=dict(invocation_count=4, games_per_invocation=500,
             failure_policy='stop_study_on_first_failure', resume=False, retries=0,
-            replacement_games=0, model_and_factory='fresh_per_invocation'),
+            replacement_games=0, model_and_factory='fresh_per_invocation',
+            public_dispatch='one_literal_line_per_call_terminal_suffix_atomic',
+            decision_timeout_scope='snapshot_encode_selection_choice_not_transport_or_prefix_priming'),
         analysis=dict(primary='win_rate', secondary='score_rate', contrast='jax-minus-python',
             cluster='battle_seed_both_seats_together', confidence=.90,
             interval='two_sided_paired_t_499df_full_normal_roster_only',
@@ -136,7 +143,8 @@ def validate_prespec(spec):
     require(type(spec) is dict and spec.get('schema') == SPEC_SCHEMA, 'B3 prespec required')
     expected = make_prespec(study_id=spec['study_id'], runtime=spec['runtime'], admission=spec['admission'],
         max_decision_rounds=spec['max_decision_rounds'],
-        owning_terminal_timeout_seconds=spec['owning_terminal_timeout_seconds'])
+        owning_terminal_timeout_seconds=spec['owning_terminal_timeout_seconds'],
+        owning_decision_timeout_seconds=spec['owning_decision_timeout_seconds'])
     require(canonical(spec) == canonical(expected), 'fixed B3 prespec drift')
 
 
@@ -236,6 +244,9 @@ def checked_game(row, spec, invocation, offset):
     require(provenance.get('encoder_kind') == kind and provenance.get('status') == 'CLOSED_UNQUALIFIED'
         and provenance.get('input_source') == 'ACTUAL_GETPLAYERSTREAMS_OWNER_LINES_UNQUALIFIED'
         and provenance.get('owner_terminal_timeout_seconds') == spec['owning_terminal_timeout_seconds']
+        and type(provenance.get('owning_decision_timeout_seconds')) in (int,float)
+        and provenance.get('owning_decision_timeout_seconds') == spec['owning_decision_timeout_seconds']
+        and provenance.get('owning_public_single_line') is True
         and provenance.get('actor_namespace') == ActorContract.champion().namespace
         and provenance.get('actual_owner_terminal_seen') is True
         and provenance.get('completed_terminal_streams') == ['omniscient', 'p1', 'p2']
