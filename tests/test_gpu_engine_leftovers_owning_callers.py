@@ -176,6 +176,34 @@ class LeftoversOwningCallerTests(unittest.TestCase):
             transition.step_with_chance(state,j.full((2,2),8,j.int32),self.f.table,self.chance(),
                 _public_trace=None,_lifecycle_trace=False,_leftovers_context=(self.leftovers.device,))
 
+    def test_checked_lifecycle_rejects_cursor_chance_and_allclosed_before_host_work(self):
+        session=self.construct();core=session.state.core
+        actions=j.full((2,2),8,j.int32);chance=self.chance()
+        def invoke(cursor=core.cursor,draws=chance):
+            return life.trace_step(core.engine,actions,self.f.table,cursor=cursor,catalog=self.f.producer,
+                expected_binding=self.f.producer.binding,
+                expected_engine_binding=np.array(self.f.producer.engine_binding,np.uint32),
+                chance_inputs=draws,leftovers_compiled=self.leftovers)
+        cases=(('cursor-only',jax.jit(lambda cursor:invoke(cursor=cursor)),(core.cursor,)),
+               ('chance-only',jax.jit(lambda draws:invoke(draws=draws)),(chance,)),
+               ('allclosed-dummy',jax.jit(lambda unused:invoke()),(j.array(0,j.int32),)),
+               ('allclosed-noargs',jax.jit(lambda:invoke()),()))
+        # The fresh tracing probe must run BEFORE all host catalog/compiler
+        # checks, and before the first numerical invocation can become cached.
+        with patch.object(life.public,'check_catalog',side_effect=AssertionError('host work reached')) as catalog_guard, \
+                patch.object(leftovers,'check_compiled',side_effect=AssertionError('helper guard reached')) as helper_guard, \
+                patch.object(transition,'step_with_chance',side_effect=AssertionError('core reached')) as core_call:
+            for label,fast,args in cases:
+                with self.subTest(case=label):
+                    for _ in range(2):
+                        with self.assertRaisesRegex(ValueError,'outside outer JIT'):fast(*args)
+            catalog_guard.assert_not_called();helper_guard.assert_not_called();core_call.assert_not_called()
+        # An ordinary checked host invocation is still usable afterward, and
+        # the absent opt-in continues through the existing default path.
+        plain=self.trace(core.engine,core.cursor,actions,compiled=False)
+        checked=self.trace(core.engine,core.cursor,actions)
+        self.same(checked.state,plain.state)
+
     def test_default_transition_ast_unchanged_outside_explicit_private_observer(self):
         old=ast.parse(subprocess.check_output(['git','show','7e949065:gpu_engine/transition.py'],text=True))
         new=ast.parse(Path(transition.__file__).read_text())
