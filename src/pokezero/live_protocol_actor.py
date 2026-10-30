@@ -377,7 +377,7 @@ class PythonBackend(OwnedProvider):
 
 class JaxBackend(OwnedProvider):
     """Public fold, own requests, and explicit non-feature terminal lifecycle."""
-    def __init__(self, contract, *, catalog, battle_id, owner, stream_id):
+    def __init__(self, contract, *, catalog, battle_id, owner, stream_id, compiled_functions=None):
         import numpy as np
 
         super().__init__(contract)
@@ -388,8 +388,11 @@ class JaxBackend(OwnedProvider):
             and catalog.vocabulary.size == contract.categorical_vocab_size
             and tuple((k,getattr(catalog.masks,k)) for k in MASK_NAMES) == contract.feature_masks,
             'JAX encoder contract differs')
+        _require(owner in ('p1','p2'), 'absolute owning side required')
         self.catalog, self.owner = catalog, owner
-        self.adapter = JaxRecordedAdapter(catalog, owner_side=int(owner[1])-1)
+        self._bound_owner, self._compiled_functions = owner, compiled_functions
+        self.adapter = JaxRecordedAdapter(catalog, owner_side=int(owner[1])-1,
+                                         compiled_functions=compiled_functions)
         _require(not self.adapter.jax.config.jax_enable_x64
             and self.adapter.jax.config.jax_default_matmul_precision == 'highest', 'JAX precision differs')
         self.adapter.reset(stream_id=stream_id, battle_id=battle_id)
@@ -399,6 +402,10 @@ class JaxBackend(OwnedProvider):
     def _check_namespace(self):
         import numpy as np
 
+        _require(self.owner == self._bound_owner and self.adapter.owner_side == int(self.owner[1])-1
+            and self.adapter.catalog is self.catalog
+            and self.adapter.compiled_functions is self._compiled_functions, 'JAX owner/catalog/function drift')
+        self.adapter._check_compiled_functions()
         _require(self.catalog.checkpoint_sha256 == self.contract.checkpoint_sha256
             and self.catalog.source.source_hash == self.contract.belief_set_source_hash
             and _vocab_sha(self.catalog.vocabulary) == self.contract.category_vocab_sha256
