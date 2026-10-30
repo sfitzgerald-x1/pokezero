@@ -58,7 +58,8 @@ function encode(input){
   const rule=dex.formats.getRuleTable(dex.formats.get('gen3randombattle'));
   for(const [slot,name] of Object.entries(species.abilities)){
    const id=toID(name);if(id===foe.ability||(slot==='H'&&species.unreleasedHidden)||rule.has('-ability:'+id))continue;
-   invoke(dex.abilities.get(id),true);
+   const alternate=dex.abilities.get(id).onFoeMaybeTrapPokemon;
+   if(alternate)alternate.call({effectState:{}},p,foe);
   }
  }
  return Battle.prototype.getRequests.call(battle,input.replacement?'switch':'move');

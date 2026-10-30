@@ -94,7 +94,8 @@ def _compile_rules(metadata, payload):
         if len(rows) != len(metadata['vocabulary'][kind]):
             raise ValueError('source rule namespace differs: '+kind)
     flag = lambda rows, key:jnp.asarray([row[key] for row in rows], jnp.bool_)
-    possible = lambda ability:jnp.asarray([ability in row['abilities'] for row in sp], jnp.bool_)
+    possible = lambda ability:jnp.asarray([
+        ability in row['alternate_maybe_trap_abilities'] for row in sp], jnp.bool_)
     type_ids = {name:i for i,name in enumerate(metadata['vocabulary']['types'])}
     species_types = [[type_ids.get(row['types'][i],-1) if i<len(row['types']) else 0
         for i in range(2)] for row in sp]
@@ -321,7 +322,9 @@ def _produce(state, ledger, arrival, original, constructor, unsafe_origin, rules
     visible_trap |= rules.shadow[fa]&(all_active_hp[rows,foe]>0)
     actual_hidden = ((rules.arena[fa]&grounded)|(rules.magnet[fa]&steel))&~immune
     # knownType=true is proved by unchanged original types/identity. Source
-    # MaybeTrap runs actual abilities and every permitted public alternative.
+    # Actual runEvent includes Any callbacks. Public alternatives dispatch only
+    # singleEvent('FoeMaybeTrapPokemon'); the static eligibility preserves that
+    # distinction (Gen3 Magnet Pull has no FoeMaybeTrapPokemon callback).
     possible = ((rules.possible_arena[safe_species]&grounded)
         |(rules.possible_magnet[safe_species]&steel)
         |(rules.possible_shadow[safe_species]&~rules.shadow[oa]))&~immune

@@ -228,7 +228,7 @@ class RequestSourceTests(unittest.TestCase):
         state=state._replace(species=state.species.at[0,1,0].set(5))
         arrival=arrival._replace(revealed_species_id=arrival.revealed_species_id.at[0,1].set(5))
         out=self.compare(state,ledger,reg,arrival)
-        self.assertTrue(bool(out.actions.facts.request.trapped[0]))  # Steel + possible Magnet Pull
+        self.assertFalse(bool(out.actions.facts.request.trapped[0]))  # No Gen3 alternate Foe callback
         self.assertTrue(bool(out.actions.engine_legal[0,4]))  # actual foe is Static
         state,ledger,reg,arrival=self.initial()
         receipt=order.SwitchInstalled(ledger.stream_id,ledger.owner_side,ledger.engine_binding,ledger.generation,
@@ -247,6 +247,34 @@ class RequestSourceTests(unittest.TestCase):
         self.assertFalse(bool(self.compare(state,ledger,reg,arrival).actions.facts.request.trapped[0]))
         state=state._replace(ability=state.ability.at[0,1,0].set(6))
         self.assertTrue(bool(self.compare(state,ledger,reg,arrival).actions.facts.request.trapped[0]))
+
+    def test_gen3_public_alternate_magnetpull_vs_actual_callback_both_owners(self):
+        state,ledger,reg,arrival=self.initial(np.array([[2,0],[0,2]],np.int64))
+        # Both owners retain their unchanged Steel constructor active and live
+        # bench. Public Magneton alone supplies no FoeMaybeTrapPokemon handler.
+        state=state._replace(species=state.species.at[0,1,0].set(5).at[1,0,0].set(5))
+        arrival=arrival._replace(revealed_species_id=j.full((2,2),5,j.int32))
+        payload=json.loads(s._rules(self.rules)[2])
+        magneton=payload['species'][5]
+        self.assertIn('magnetpull',magneton['abilities'])
+        self.assertNotIn('magnetpull',magneton['alternate_maybe_trap_abilities'])
+        self.assertFalse(bool(self.rules.device.possible_magnet[5]))
+        self.assertIn('arenatrap',payload['species'][4]['alternate_maybe_trap_abilities'])
+        self.assertIn('shadowtag',payload['species'][6]['alternate_maybe_trap_abilities'])
+        for actual,expected in ((1,False),(5,True)):
+            with self.subTest(actual_foe_ability=actual):
+                changed=state._replace(ability=state.ability.at[0,1,0].set(actual).at[1,0,0].set(actual))
+                raw=self.raw(changed,ledger,reg,arrival)
+                for request in raw:
+                    active=request['active'][0]
+                    self.assertEqual(bool(active.get('trapped',False) or active.get('maybeTrapped',False)),expected)
+                    if not expected:
+                        self.assertNotIn('trapped',active)
+                        self.assertNotIn('maybeTrapped',active)
+                out=self.compare(changed,ledger,reg,arrival)
+                self.assertEqual(out.actions.facts.request.trapped.tolist(),[expected]*2)
+                self.assertEqual(out.actions.features.legal[:,4].tolist(),[not expected]*2)
+                self.assertEqual(out.actions.engine_legal[:,4].tolist(),[not expected]*2)
 
     def test_missing_arrival_gender_origin_locks_or_disable_visibility_refuse(self):
         state,ledger,reg,arrival=self.initial()

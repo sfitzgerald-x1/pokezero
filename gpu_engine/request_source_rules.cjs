@@ -30,15 +30,19 @@ function build(root, metadata) {
   if (dex.gen !== 3 || format.gameType !== 'singles' || format.team !== 'random')
     throw new Error('exact Gen3 random singles source required');
   const species = metadata.vocabulary.species.map((id,i) => {
-    if (!i) return {supported:false,abilities:[],types:[]};
+    if (!i) return {supported:false,abilities:[],alternate_maybe_trap_abilities:[],types:[]};
     const s = dex.species.get(id);
     if (!s.exists || s.gen > 3 || toID(s.id) !== id)
-      return {supported:false,abilities:[],types:[]};
+      return {supported:false,abilities:[],alternate_maybe_trap_abilities:[],types:[]};
     // battle.ts nextTurn's alternate-ability iteration, including its rules.
     const abilities = Object.entries(s.abilities).filter(([slot,name]) =>
       !(slot === 'H' && s.unreleasedHidden) && !rules.has('-ability:'+toID(name)))
       .map(([,name]) => toID(name));
-    return {supported:true,abilities,types:s.types.map(toID)};
+    // Public alternatives use singleEvent('FoeMaybeTrapPokemon'), unlike the
+    // actual ability runEvent path. Gen3 Magnet Pull has only Any callbacks.
+    const alternate_maybe_trap_abilities=abilities.filter(id=>
+      typeof dex.abilities.get(id).onFoeMaybeTrapPokemon==='function');
+    return {supported:true,abilities,alternate_maybe_trap_abilities,types:s.types.map(toID)};
   });
   return {schema:'pokezero.gen3-request-source-rules.v1',revision:PIN,
     format:'gen3randombattle',compiled_tree:tree,source_tree,
