@@ -41,11 +41,15 @@ class FullHPAccountingTests(unittest.TestCase):
 
     def test_receipt_fields_or_later_storage_mutation_refuse_only_bad_row(self):
         tape,receipt=self.proof()
-        for label in ('afterHP','item','side','reason','prefix','binding'):
+        for label in ('afterHP','item','side','pairedTarget','reason','prefix','binding'):
             raw=tape;proof=receipt
             if label=='afterHP':proof=proof._replace(after_hp=proof.after_hp.at[0].add(-1))
             elif label=='item':proof=proof._replace(before=proof.before._replace(item=proof.before.item.at[0].set(0)))
             elif label=='side':proof=proof._replace(before=proof.before._replace(side=proof.before.side.at[0].set(1)))
+            elif label=='pairedTarget':
+                target=(proof.before.physical[0]+1)%6
+                proof=proof._replace(before=proof.before._replace(physical=proof.before.physical.at[0].set(target)),
+                    after_physical=proof.after_physical.at[0].set(target))
             elif label=='reason':proof=proof._replace(reason=proof.reason.at[0].set(no_output.AFTER))
             elif label=='prefix':raw=raw._replace(words=raw.words.at[0,63,0].set(1))
             else:proof=proof._replace(before=proof.before._replace(binding=proof.before.binding.at[0].add(j.uint32(1))))
@@ -104,21 +108,27 @@ class FullHPOwningRuntimeTests(unittest.TestCase):
         for owner in result.owners:self.assertFalse(bool(owner.scored.any()));self.assertFalse(bool(owner.B4_qualified.any()))
         # A malformed proof is fault injection into the actual frame, not a
         # fabricated consumer result or a reset of an existing Session.
-        failed_session=self.construct()
-        def corrupt(*args):
-            frame=actual(*args);tape=frame.callbacks;ledger=tape.execution.ledger
-            ledger=ledger._replace(no_output_binding=ledger.no_output_binding.at[0,0,0].add(j.uint32(1)))
-            return frame._replace(callbacks=tape._replace(execution=tape.execution._replace(ledger=ledger)))
-        r['frame']=corrupt
-        try:failed=driver.advance(failed_session,actions,chance_inputs=chance)
-        finally:r['frame']=actual
-        self.assertEqual(failed.state.core.admitted.tolist(),[False,True])
-        self.assertEqual(failed.state.core.execution.stage[0,:2].tolist(),[2,2])
-        self.assertEqual(failed.state.core.execution.stage[1,:2].tolist(),[3,3])
-        self.assertTrue(int(failed.state.core.execution.refusal[0])&accounting.UNRESOLVED)
-        for owner in failed.owners:
-            self.assertFalse(bool(owner.encoded.observation.attention_mask[0].any()))
-            self.assertFalse(bool(owner.scored.any()));self.assertFalse(bool(owner.B4_qualified.any()))
+        for corruption in ('binding','physical','generation'):
+            failed_session=self.construct()
+            def corrupt(*args):
+                frame=actual(*args);tape=frame.callbacks;ledger=tape.execution.ledger
+                if corruption=='binding':
+                    ledger=ledger._replace(no_output_binding=ledger.no_output_binding.at[0,0,0].add(j.uint32(1)))
+                elif corruption=='physical':
+                    ledger=ledger._replace(no_output_facts=ledger.no_output_facts.at[0,0,0].set(
+                        (ledger.no_output_facts[0,0,0]+1)%6))
+                else:ledger=ledger._replace(generation=ledger.generation.at[0,0,0].add(1))
+                return frame._replace(callbacks=tape._replace(execution=tape.execution._replace(ledger=ledger)))
+            r['frame']=corrupt
+            try:failed=driver.advance(failed_session,actions,chance_inputs=chance)
+            finally:r['frame']=actual
+            self.assertEqual(failed.state.core.admitted.tolist(),[False,True],msg=corruption)
+            self.assertEqual(failed.state.core.execution.stage[0,:2].tolist(),[2,2])
+            self.assertEqual(failed.state.core.execution.stage[1,:2].tolist(),[3,3])
+            self.assertTrue(int(failed.state.core.execution.refusal[0])&accounting.UNRESOLVED)
+            for owner in failed.owners:
+                self.assertFalse(bool(owner.encoded.observation.attention_mask[0].any()))
+                self.assertFalse(bool(owner.scored.any()));self.assertFalse(bool(owner.B4_qualified.any()))
 
 
 if __name__=='__main__':unittest.main()

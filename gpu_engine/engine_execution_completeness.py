@@ -305,6 +305,7 @@ def capture_leftovers_full_hp(tape,receipt,*,no_output_tables):
     facts=jnp.stack((before.physical,before.item,before.hp,before.maximum,before.status,before.residual_event),axis=1)
     specific=((before.residual_event>=2)&(before.residual_event<4)&(before.side==before.residual_event%2)
         &(before.physical>=0)&(before.physical<6)&(before.item==no_output_tables.leftovers.leftovers_item)
+        &(before.physical==tape.cursor.physical_active[rows,jnp.clip(before.side,0,1)])
         &(before.item>0)&(before.hp>0)&(before.hp==before.maximum)&(before.status>=0)&(before.status<7))
     good=namespace&same&specific&(before.reason==0)&(receipt.reason==0)
     use=before.requested&good
@@ -542,6 +543,8 @@ def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapt
         facts=ledger.no_output_facts
         silent=((ledger.no_output_kind==1)&(ledger.site==int(Site.LEFTOVERS))
             &(ledger.end==ledger.start)&source_same
+            &(facts[:,:,0]==jnp.take_along_axis(tape.cursor.physical_active,jnp.clip(ledger.side,0,1),axis=1))
+            &jnp.all(ledger.generation==tape.cursor.generation[:,None,:],axis=2)
             &jnp.all(ledger.no_output_binding==leftovers_no_output.binding[None,None,:],axis=2)
             &(facts[:,:,0]>=0)&(facts[:,:,0]<6)&(facts[:,:,1]==leftovers_no_output.leftovers.leftovers_item)
             &(facts[:,:,1]>0)&(facts[:,:,2]>0)&(facts[:,:,2]==facts[:,:,3])
