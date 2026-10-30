@@ -5,6 +5,7 @@ import argparse
 import csv
 import hashlib
 import json
+import os
 from pathlib import Path
 import time
 
@@ -32,10 +33,22 @@ def main(argv=None):
     try:
         adapters, config, runtime = build_runtime(args)
         from pokezero.projected_encoder_diagnostic import compare_diagnostic_collection
+        def checkpoint(row):
+            # One task-owned atomic checkpoint, not an accumulation of receipts.
+            temporary = output / '.progress-next.json'
+            with temporary.open('x') as stream:
+                json.dump(row, stream, sort_keys=True, allow_nan=False)
+                stream.write('\n'); stream.flush(); os.fsync(stream.fileno())
+            os.replace(temporary, output / 'progress.json')
+            fd = os.open(output, os.O_RDONLY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
         result = compare_diagnostic_collection(args.collection,
             expected_collection_sha256=args.collection_sha256,
             expected_cohort_sha256=args.cohort_sha256, adapters=adapters,
-            reference_config=config, with_forward=True,
+            reference_config=config, with_forward=True, checkpoint=checkpoint,
             progress=lambda row: print(json.dumps(dict(event='diagnostic_progress', **row)), flush=True))
         result['runtime'] = runtime
         data = (json.dumps(result, indent=2, sort_keys=True, allow_nan=False)+'\n').encode()
