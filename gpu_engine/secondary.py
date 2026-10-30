@@ -117,7 +117,10 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
                 get(state.confusion_counter),get(state.hp),eligible=changed)
             consumed=result.item!=old_item
             if _status_trace is not None:
-                _status_trace=callbacks.unknown(_status_trace,consumed & (get(state.status)!=m.NONE))
+                from . import engine_item_callbacks as item_callbacks
+                _status_trace=item_callbacks.lum_consumed(_status_trace,side,active,old_item,
+                    get(state.status),result.status,
+                    (get(state.confusion_counter)>0) & (result.confusion==0),eligible=consumed)
             updates={}
             for name,value in zip(('item','status','status_counter','confusion_counter'),result):
                 updates[name]=getattr(state,name).at[rows,side,active].set(value)
