@@ -163,5 +163,33 @@ class WeatherPublicTests(unittest.TestCase):
         s,p=self.start(frame,j.array([0,1],j.int32));result=self.fast(s,frame,p)
         self.assertFalse(bool(result.projection.frames.valid.any()))
 
+    def test_actual_same_weather_failure_and_chip_stay_internal_unknown(self):
+        frame=self.initial('raindance',arrays=self.arrays('pressure','pressure'))
+        s,p=self.start(frame,j.array([0,1],j.int32));initial=self.fast(s,frame,p)
+        first=self.step(frame,[[0,8],[0,8]])
+        accepted=self.fast(initial.projection.state,first,initial.public)
+        self.assertEqual(accepted.projection.error.tolist(),[0,0])
+        repeated=self.step(first,[[0,4],[0,4]])
+        raw=np.asarray(repeated.callbacks.words[0,:int(repeated.callbacks.count[0])])
+        failure=raw[raw[:,0]==15]
+        self.assertEqual(failure.tolist(),[[15,0,0,-1,-1,weather.RAIN,weather.RAIN,
+            self.ids['raindance'],weather.RAIN,1]])
+        self.assertTrue(bool((repeated.callbacks.refusal & weather_callbacks.UNKNOWN_WEATHER).all()))
+        refused=self.fast(accepted.projection.state,repeated,accepted.public)
+        self.assertFalse(bool(refused.projection.frames.valid.any()))
+        self.same(refused.public,accepted.public)
+        hail=self.initial('hail',arrays=self.arrays('pressure','pressure'))
+        hs,hp=self.start(hail,j.array([0,1],j.int32));before=self.fast(hs,hail,hp)
+        chipped=self.step(hail,[[0,8],[0,8]])
+        raw=np.asarray(chipped.callbacks.words[0,:int(chipped.callbacks.count[0])])
+        damage=raw[raw[:,0]==16];self.assertGreater(len(damage),0)
+        for w in damage:
+            self.assertGreater(w[5],w[6]);self.assertGreaterEqual(w[7],w[5])
+            self.assertEqual(int(w[9]),weather.HAIL)
+        self.assertTrue(bool((chipped.callbacks.refusal & weather_callbacks.UNKNOWN_WEATHER).all()))
+        refused=self.fast(before.projection.state,chipped,before.public)
+        self.assertFalse(bool(refused.projection.frames.valid.any()))
+        self.same(refused.public,before.public)
+
 
 if __name__=='__main__':unittest.main()

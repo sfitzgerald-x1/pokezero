@@ -298,6 +298,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         raise ValueError('lifecycle mode requires its actual registered callback tape')
     if _lifecycle_trace:
         from . import engine_status_callbacks as status_callbacks
+        from . import engine_weather_effect_callbacks as weather_effect_callbacks
     batch = state.hp.shape[0]
     shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,))
     for value,shape in zip(chance_inputs,shapes,strict=True):
@@ -952,10 +953,15 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # The field weather handler runs Weather on BOTH actives before
         # faintMessages/checkWin. A double last-mon weather KO is a Gen 3 tie.
         for side in range(2):
+            if _lifecycle_trace:_weather_old_hp=_active(work.hp,work,side)
             hp = climate.chip(table.weather,effective_weather,_active(work.types,work,side),
                 _active(work.ability,work,side),_active(work.hp,work,side),
                 _active(work.max_hp,work,side),eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,hp))
+            if _lifecycle_trace:
+                _public_trace=weather_effect_callbacks.weather_chip(_public_trace,side,work.active[rows,side],
+                    _weather_old_hp,hp,_active(work.max_hp,work,side),_active(work.status,work,side),weather,
+                    eligible=ordinary&(hp<_weather_old_hp))
     # Selected order10/priority0 handlers snapshot SPEED before suborder.
     # Equal-speed Speed Boost(3), Leftovers(4), seed(5), status(6) use independent ties.
     # Ability boosts do not re-sort the already queued residual handlers.

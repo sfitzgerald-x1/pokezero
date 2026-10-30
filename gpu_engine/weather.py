@@ -47,12 +47,15 @@ def set_move(weather,counter,requested,*,eligible=True,_weather_trace=None,
     change = jnp.asarray(eligible) & (requested != NONE) & (requested != weather)
     if _weather_trace is not None:
         from . import engine_weather_progress_callbacks as callbacks
+        from . import engine_weather_effect_callbacks as effects
         new_weather,new_counter=jnp.where(change,requested,weather),jnp.where(change,5,counter)
         trace=callbacks.move_weather(_weather_trace,_actor_side,_actor_physical,_move_id,
             weather,new_weather,counter,new_counter,eligible=change)
         # The real source emits a failed-move outcome on an attempted
         # same-weather use. Until that control is registered, keep it unknown.
-        trace=callbacks._unknown(trace,jnp.asarray(eligible)&(requested!=NONE)&(requested==weather))
+        trace=effects.same_weather_failure(trace,_actor_side,_actor_physical,_move_id,
+            weather,new_weather,requested,
+            eligible=jnp.asarray(eligible)&(requested!=NONE)&(requested==weather))
         return new_weather,new_counter,trace
     return jnp.where(change,requested,weather),jnp.where(change,5,counter)
 
