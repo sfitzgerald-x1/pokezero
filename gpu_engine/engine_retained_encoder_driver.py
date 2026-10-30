@@ -269,11 +269,13 @@ def _public(observer, frame, tables, context, catalog):
 
 
 def _full_public(observer, frame, tables, catalog, consume, *, weather_hp=None, leftovers=None, active=None,
-                 execution_tables=None):
+                 execution_tables=None,status_residual=None):
     """Consume genuine full-format controls without relabeling basic state."""
     kwargs = dict(weather_hp=weather_hp)
     if leftovers is not None:
         kwargs['leftovers'] = leftovers
+    if status_residual is not None:
+        kwargs['status_residual'] = status_residual
     accounting=observer.accounting
     if execution_tables is None:
         result = consume(observer.projection, frame, tables, observer.retained, catalog, **kwargs)
@@ -291,7 +293,8 @@ def _full_public(observer, frame, tables, catalog, consume, *, weather_hp=None, 
         if active is None:active=jnp.ones_like(observer.owner,dtype=bool)
         accounting,result=execution.consume_frame_device(ledger,frame,
             observer.projection,observer.retained,active=active,tables=execution_tables,
-            adapter_tables=tables,catalog=catalog,weather_hp=weather_hp,leftovers=leftovers)
+            adapter_tables=tables,catalog=catalog,weather_hp=weather_hp,leftovers=leftovers,
+            status_residual=status_residual)
     projection = result.projection
     healthy = observer.retained_healthy & (projection.error == 0) & projection.component_admitted
     return observer._replace(projection=projection.state, retained=result.public,
@@ -358,7 +361,8 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
 
 
 def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic', leftovers_compiled=None,
-            leftovers_mode='diagnostic',account_source_sites=False,status_residual_compiled=None):
+            leftovers_mode='diagnostic',account_source_sites=False,status_residual_compiled=None,
+            status_residual_mode='diagnostic'):
     """Host-only immutable preparation. fake_forward is a pure source-test spy.
 
     The returned compiled closures contain no registration calls or host reads.
@@ -369,6 +373,10 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     the original helper/profile and full-consumer contract; all scientific
     qualification flags remain false.
     """
+    if type(status_residual_mode) is not str or status_residual_mode not in ('diagnostic','kernel-event'):
+        raise ValueError('explicit diagnostic or kernel-event status residual mode required')
+    if status_residual_mode=='kernel-event' and (status_residual_compiled is None or not account_source_sites):
+        raise ValueError('kernel-event status requires original helper and actual source-site accounting')
     if status_residual_compiled is not None:
         if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
             raise ValueError('checked status residual driver must remain outside outer JIT')
@@ -417,13 +425,17 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         check_public, register_public = full.check_adapter, full.register
         speed_profile=weather_speed.compile_profile(json.loads(request['metadata']),catalog=catalog,
             engine_catalog=request['lifecycle'],rules=request['rules'])
+        if status_residual_mode=='kernel-event':
+            status_residual_context=status_residual_callbacks.RegisteredStatusResidualContext(
+                status_data,speed_profile.device)
         if leftovers_mode == 'retained':
             leftovers_context=leftovers_callbacks.RegisteredLeftoversContext(data,speed_profile.device)
         if account_source_sites:execution_compiled=execution.compile_accounting(public_handle)
         public_fast = lambda obs, frame, profile, active=None: _full_public(obs, frame, public_handle.device,
             catalog, full.project_and_fold,weather_hp=(profile,speed_profile.device),
             leftovers=None if leftovers_mode == 'diagnostic' else leftovers_context.data,active=active,
-            execution_tables=None if execution_compiled is None else execution_compiled.device)
+            execution_tables=None if execution_compiled is None else execution_compiled.device,
+            status_residual=None if status_residual_mode=='diagnostic' else status_residual_context.data)
     static = (request['rules'].device, request['adapter'].device,
         team._checked_tables(request['private_team']), request['catalog'].device, request['engine_table'])
     payload = dict(schema=SCHEMA, metadata=json.loads(request['metadata']), lifecycle=request['lifecycle'].binding,
@@ -435,7 +447,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         payload['leftovers_mode']=leftovers_mode
     if execution_compiled is not None:payload['execution_inventory']=np.asarray(execution_compiled.device.inventory_binding).tolist()
     if status_residual_context is not None:
-        payload['status_residual_diagnostic_binding']=np.asarray(status_residual_context.data.binding).tolist()
+        payload['status_residual_binding']=np.asarray(status_residual_context.data.binding).tolist()
+        payload['status_residual_mode']=status_residual_mode
     binding = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = Prepared(binding)
     _PREPARED[result] = dict(binding=binding, prepared=weakref.ref(result),request_compiled=request_compiled, own_compiled=own_compiled,
@@ -444,6 +457,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         speed_profile=speed_profile,leftovers_compiled=leftovers_compiled,
         leftovers_mode=leftovers_mode,leftovers_context=leftovers_context,execution_compiled=execution_compiled,
         status_residual_compiled=status_residual_compiled,status_residual_context=status_residual_context,
+        status_residual_mode=status_residual_mode,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
             weather_speed.retain_device(profile,state,streams,speed_profile.device)),
         frame=jax.jit(lambda core, act, chance, active=None:

@@ -433,7 +433,7 @@ def emitted(ledger, ticket, tape, *, active, tables):
 
 
 def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapter_tables, catalog,
-                         weather_hp=None, leftovers=None):
+                         weather_hp=None, leftovers=None, status_residual=None):
     """Trusted owning closure: actually project/fold before resolving ANY span.
 
     Dynamic objects remain trusted same-core inputs, as in the original full
@@ -450,7 +450,7 @@ def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapt
     # These are the SAME typed contexts guarded by the actual owning driver,
     # not an alternate resolver or a caller-provided consumption result.
     consumed=full.project_and_fold(stream,frame,adapter_tables,public,catalog,
-        weather_hp=weather_hp,leftovers=leftovers)
+        weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
     projection=consumed.projection
     emitted_count=jnp.sum(projection.frames.valid,axis=(0,2),dtype=jnp.int32)
     # A genuine nonempty consumed frame advances the SAME public/transport cursor

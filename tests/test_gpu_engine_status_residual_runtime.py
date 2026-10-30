@@ -71,5 +71,22 @@ class StatusResidualRuntimeTests(unittest.TestCase):
         for owner in session.result.owners:
             self.assertFalse(bool(owner.scored.any()));self.assertFalse(bool(owner.B4_qualified.any()))
 
+    def test_explicit_kernel_event_preparation_requires_original_helper_accounting_and_fresh_host_guards(self):
+        from gpu_engine import engine_status_residual_callbacks as callbacks
+        options=dict(self.kwargs,status_residual_mode='kernel-event')
+        prepared=driver.prepare(*self.args,**options);runtime=driver._checked(prepared)
+        self.assertIs(type(runtime['status_residual_context']),callbacks.RegisteredStatusResidualContext)
+        self.assertIs(runtime['status_residual_context'].data,self.helper.device)
+        self.assertIs(runtime['status_residual_context'].weather_profile_data,runtime['speed_profile'].device)
+        self.assertNotEqual(prepared.binding,self.prepared.binding)
+        for change in (dict(account_source_sites=False),dict(status_residual_compiled=None),
+                       dict(public_mode='basic'),dict(status_residual_mode='implicit')):
+            with self.assertRaises(ValueError):driver.prepare(*self.args,**dict(options,**change))
+        for call in (lambda:jax.jit(lambda:driver.prepare(*self.args,**options).binding)(),
+                     lambda:jax.jit(lambda dummy:driver.prepare(*self.args,**options).binding)(j.array(0))):
+            with self.assertRaisesRegex(ValueError,'outside outer JIT'):call()
+        with patch.object(status,'check_compiled',side_effect=ValueError('status original changed')):
+            with self.assertRaisesRegex(ValueError,'status original changed'):driver._checked(prepared)
+
 
 if __name__=='__main__':unittest.main()
