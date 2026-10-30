@@ -448,7 +448,10 @@ def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapt
     # Even a refused attempted frame closes its private accounting window;
     # lifetime refusal survives the next frame. Roll back ALL consumer state
     # on accounting failure, as on an actual full-consumer failure.
-    result=result._replace(opened=jnp.where(active,False,result.opened))
+    # Rejected attempts retain their newly observed source diagnostics too.
+    # Public rollback must not erase them; inactive private history is frozen.
+    result=result._replace(opened=jnp.where(active,False,result.opened),
+        upstream_refusal=result.upstream_refusal|jnp.where(active,tape.refusal,0))
     use=active & good & (result.refusal==0)
     error=jnp.where(active & ~use,jnp.where(projection.error!=0,projection.error,int(full.inputs.Error.PAYLOAD)),0)
     safe_projection=projection._replace(state=full._commit(use,stream,projection.state),error=error,
