@@ -35,6 +35,7 @@ from . import engine_weather_progress_callbacks as weather_progress
 from . import engine_weather_effect_callbacks as weather_effects
 from . import engine_weather_speed_profile as weather_speed
 from . import engine_leftovers_callbacks as leftovers_callbacks
+from . import engine_status_residual_callbacks as status_residual_callbacks
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -319,7 +320,8 @@ def _snapshot_shape(snapshot, batch):
     base._shape(snapshot.revealed_species_id, (batch, 2), jnp.int32)
 
 
-def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None, leftovers=None):
+def project_device(state, tape, before_registry, after_registry, tables, *, weather_hp=None, leftovers=None,
+                   status_residual=None):
     """Trusted device primitive: real LifecycleTape and causal source snapshots.
 
     All host guards are separate. No host reads, string reconstruction or event
@@ -405,6 +407,21 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & jnp.all(leftovers.source_binding==tape.source_binding)
             & jnp.all(leftovers.move_binding==tape.move_binding)
             & jnp.all(leftovers.producer_binding==tape.producer_binding))
+    status_profile=jnp.zeros(b,bool)
+    if status_residual is not None:
+        if type(status_residual) is not status_residual_callbacks.Data:
+            raise ValueError('original checked status residual helper data required')
+        for value in (status_residual.binding,status_residual.engine_binding,status_residual.source_binding,
+                status_residual.move_binding,status_residual.producer_binding):
+            base._shape(value,(8,),jnp.uint32)
+        base._shape(status_residual.reason_by_status,(7,),jnp.int32)
+        base._shape(status_residual.damage_tag_by_reason,(4,),jnp.int32)
+        status_profile=(hp_profile & jnp.all(status_residual.engine_binding==tape.engine_binding)
+            & jnp.all(status_residual.source_binding==tape.source_binding)
+            & jnp.all(status_residual.move_binding==tape.move_binding)
+            & jnp.all(status_residual.producer_binding==tape.producer_binding)
+            & jnp.all(status_residual.reason_by_status==jnp.array([0,0,1,2,3,0,0],jnp.int32))
+            & jnp.all(status_residual.damage_tag_by_reason==jnp.array([0,1,2,2],jnp.int32)))
     rows = jnp.arange(b)
     known = public.UNINSTRUMENTED | public.OVERFLOW | public.INVALID_ACTION | life.UNKNOWN_DETAILS | life.UNKNOWN_BATON | life.MISSING_INSTALL | life.CLOCK | status_callbacks.UNKNOWN_STATUS | weather_callbacks.UNKNOWN_WEATHER
     fatal = (tape.refusal & ~public.UNINSTRUMENTED) != 0
@@ -440,6 +457,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         failed_weather = kind == weather_effects.SAME_WEATHER_FAILURE
         weather_chip = kind == weather_effects.WEATHER_CHIP
         leftovers_heal = kind == leftovers_callbacks.LEFTOVERS_HEAL
+        status_damage = kind == status_residual_callbacks.STATUS_RESIDUAL
         any_weather=entry_weather|move_weather|clock_weather
         safe_side, safe_in = jnp.clip(side, 0, 1), jnp.clip(incoming, 0, 5)
         old = cursor.physical_to_public[rows, safe_side, safe_in]
@@ -540,6 +558,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
                     jnp.where(move_weather,move_weather_ok,jnp.where(clock_weather,clock_weather_ok,
                         jnp.where(failed_weather,failed_weather_ok,jnp.where(weather_chip,chip_ok,
                             jnp.where(leftovers_heal,leftovers_ok,component & component_ok))))))))))
+        status_damage_ok=(status_profile & tables.status_events & ~tables.raw_begin & status_identity
+            & (phase==0)&(incoming==cursor.physical_active[rows,safe_side])
+            & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]==raw[:,1])
+            & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5])&(raw[:,7]<=1_000_000)
+            & (((raw[:,8]==2)&(raw[:,9]==1))|((raw[:,8]==3)&(raw[:,9]==2))))
+        event_ok=jnp.where(status_damage,generation_ok & clock_ok & status_damage_ok,event_ok)
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -591,7 +615,7 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             z,jnp.where(leftovers_heal,0,1),jnp.where(leftovers_heal,0,1),z),axis=1)  # heal tags are not damage metadata
         chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
-        semantic=jnp.where((weather_chip|leftovers_heal)[:,None],chip_semantic,semantic)
+        semantic=jnp.where((weather_chip|leftovers_heal|status_damage)[:,None],chip_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)
@@ -638,12 +662,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
     return Projection(next_state, chunk, error, refusal, admitted, no, no, no)
 
 
-def project_frame(state, frame, tables, *, weather_hp=None, leftovers=None):
+def project_frame(state, frame, tables, *, weather_hp=None, leftovers=None,status_residual=None):
     """Device connection from an actual lifecycle result; never reads its state."""
     if type(frame) is not life.LifecycleResult:
         raise ValueError('actual lifecycle result required')
     return project_device(state, frame.callbacks, frame.before_registry, frame.after_registry, tables,
-        weather_hp=weather_hp,leftovers=leftovers)
+        weather_hp=weather_hp,leftovers=leftovers,status_residual=status_residual)
 
 
 class Consumed(NamedTuple):
