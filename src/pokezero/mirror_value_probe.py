@@ -108,10 +108,10 @@ def swap_own_view(actor, peer, vocab, *, move_facts=None):
                    metadata={**actor.metadata, "privileged_own_view_swap": True})
 
 
-def true_move_facts(state, initial_request, dex):
+def true_move_facts(state, initial_request, dex, *, copied_pp=None):
     """Exact current moves, with active PP from its request and base PP ledger.
 
-    Transform copies are request-scoped (including the 5-PP denominator), never
+    Transform copies use request-provided PP/maxpp, never
     retained after switch-out. Benched base moves use the initial set and the
     public PP-charge ledger, which excludes called/copied moves and counts
     Pressure. No future request or future reveal enters these facts.
@@ -145,8 +145,10 @@ def true_move_facts(state, initial_request, dex):
             if info is None or info.max_pp <= 0:
                 raise ValueError("true move dex PP required: " + move)
             if transformed:
-                # Every copied active slot must be confirmed by this request.
-                pp = None
+                # Recharge, locked continuation and Struggle requests omit PP.
+                # Only a chronologically charged, current-instance own snapshot
+                # can fill that gap; never guess zero or carry a previous stay.
+                pp = (copied_pp or {}).get(_base_move_id(move))
             else:
                 charged = sum(n for m, n in uses.items() if _base_move_id(m) == _base_move_id(move))
                 pp = max(0, info.max_pp - charged) / info.max_pp
@@ -165,6 +167,66 @@ def true_move_facts(state, initial_request, dex):
     return result
 
 
+def owning_wire_belief_engine(observer, seat):
+    """Add a separate privileged-only copied-PP ledger to the public engine.
+
+    Production deliberately excludes copied moves from the permanent base-set
+    PP ledger. Reuse its charging rules on a clone at the actual move event,
+    without changing any public belief or observation. Exact own requests reset
+    the snapshot; PP-less requests retain the charged current-instance state.
+    """
+    from .belief import PublicBattleBeliefEngine, _event_value, _called_move_source, _CALLER_MOVES
+    from .local_showdown import _base_move_id
+    from .showdown import _normalize_identifier
+
+    class CopiedPPBelief(PublicBattleBeliefEngine):
+        def __init__(self):
+            super().__init__(format_id=observer._observation_format_id,
+                set_source=observer._belief_set_source,
+                item_belief_narrowing=observer.item_belief_narrowing_active())
+            self.copied_pp = {}
+
+        def ingest_event(self, event):
+            kind = _event_value(event, "event_type")
+            actor = _event_value(event, "actor_slot")
+            if actor == seat and kind in {"switch", "drag", "replace", "-transform"}:
+                self.copied_pp.clear()
+            if kind == "move" and actor == seat:
+                belief = self._active_belief(seat)
+                move = _normalize_identifier(_event_value(event, "primary"))
+                caller = _called_move_source(_event_value(event, "raw_line"))
+                if (belief is not None and belief.transformed and caller not in _CALLER_MOVES
+                        and caller != "lockedmove" and move != "struggle"):
+                    key = _base_move_id(move)
+                    if key not in self.copied_pp:
+                        raise ValueError("copied move used before an exact own PP snapshot: " + move)
+                    clone = self.clone()
+                    charged = clone._charge_move_use(replace(belief, move_uses=()), move,
+                        wire_target_slot=_event_value(event, "target_slot") or "")
+                    cost = sum(n for _, n in charged.move_uses)
+                    pp, maxpp = self.copied_pp[key]
+                    self.copied_pp[key] = (max(0, pp - cost), maxpp)
+            return super().ingest_event(event)
+
+        def record_own_request(self, request):
+            belief = self._active_belief(seat)
+            if belief is None or not belief.transformed:
+                self.copied_pp.clear()
+                return
+            active = request.get("active", [])
+            moves = active[0].get("moves", []) if active else []
+            slots = [m for m in moves if "pp" in m]
+            if slots:
+                if len(slots) != len(moves) or any(m.get("maxpp", 0) <= 0 or not 0 <= m["pp"] <= m["maxpp"] for m in slots):
+                    raise ValueError("complete valid copied PP request required")
+                self.copied_pp = {_base_move_id(m["id"]): (m["pp"], m["maxpp"]) for m in slots}
+
+        def copied_fractions(self):
+            return {m: pp / maxpp for m, (pp, maxpp) in self.copied_pp.items()}
+
+    return CopiedPPBelief()
+
+
 def make_owning_wire_env(config):
     """Collector-only driver retaining literal streams and separate public folds."""
     from .local_showdown import LocalShowdownEnv, _decode_request_line
@@ -177,6 +239,7 @@ def make_owning_wire_env(config):
             for seat, observer in self.public_observers.items():
                 observer._parser = _ReplayParser("mirror-owning-wire", complete_prefix=True,
                     hp_visibility={s: "exact" if s == seat else "percentage" for s in ("p1", "p2")})
+                observer._belief_engine = owning_wire_belief_engine(observer, seat)
 
         def _apply_event(self, event):
             # Keep every literal player line, including private side updates,
@@ -189,6 +252,9 @@ def make_owning_wire_env(config):
                     line = str(raw)
                     self.owning_lines[seat].append(line)
                     observer._lines.append(line)
+                    # Charge public moves before the following own request
+                    # refreshes the copied PP snapshot, in literal wire order.
+                    observer._sync_incremental_state()
                     if line.startswith("|request|"):
                         request = _decode_request_line(line)
                         if request.get("side", {}).get("id") != seat:
@@ -196,6 +262,7 @@ def make_owning_wire_env(config):
                         observer._latest_requests[seat] = request
                         observer._first_requests.setdefault(seat, request)
                         observer._request_history[seat].append(json.loads(json.dumps(request)))
+                        observer._belief_engine.record_own_request(request)
                 observer._battle_id = self._battle_id
             return super()._apply_event(event)
 
@@ -204,6 +271,9 @@ def make_owning_wire_env(config):
 
         def peer_state(self, player):
             return self.public_observers[player]._state_for_player(player)
+
+        def copied_move_pp(self, player):
+            return self.public_observers[player]._belief_engine.copied_fractions()
 
     return OwningWireEnv(config)
 
@@ -336,7 +406,8 @@ def collect_battle(row, output, runtime, *, max_rounds=300):
                     for seat in ("p1", "p2"):
                         actor, peer = observations[seat], observations["p2" if seat == "p1" else "p1"]
                         peer_seat = peer.perspective.player_id
-                        facts = true_move_facts(env.peer_state(peer_seat), initial_requests[peer_seat], dex)
+                        facts = true_move_facts(env.peer_state(peer_seat), initial_requests[peer_seat], dex,
+                            copied_pp=env.copied_move_pp(peer_seat))
                         public.append(actor); privileged.append(swap_own_view(actor, peer, vocab, move_facts=facts))
                         identities.append(dict(root_id=boundary["root_id"], seat=seat,
                             turn_number=actor.metadata.get("turn_number"), decision_round_index=round_index))

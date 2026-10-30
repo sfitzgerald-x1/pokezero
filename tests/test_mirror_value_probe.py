@@ -108,6 +108,12 @@ class MirrorContractTests(unittest.TestCase):
         dex = NS(move_info=lambda _: NS(max_pp=16))
         facts = true_move_facts(state, initial, dex)
         self.assertEqual(facts[0], dict(icebeam=.8, surf=.6))
+        state.request["active"] = [dict(moves=[dict(id="recharge")])]
+        facts = true_move_facts(state, initial, dex, copied_pp=dict(icebeam=4/16, surf=3/24))
+        self.assertEqual(facts[0], dict(icebeam=4/16, surf=3/24))
+        state.request["active"] = [dict(moves=[dict(id="struggle")])]
+        facts = true_move_facts(state, initial, dex, copied_pp=dict(icebeam=4/16, surf=3/24))
+        self.assertEqual(facts[0], dict(icebeam=4/16, surf=3/24))
         self.assertEqual(facts[1], dict(hiddenpowerice=14/16, **{"return": 13/16}))
         # A copied set in an old side snapshot cannot survive switch-out.
         current[0]["active"] = False
@@ -118,6 +124,40 @@ class MirrorContractTests(unittest.TestCase):
         state.request["active"] = [dict(moves=[dict(id="hiddenpower", pp=7, maxpp=24), dict(id="return", pp=2, maxpp=32)])]
         facts = true_move_facts(state, initial, dex)
         self.assertEqual(facts[1], dict(hiddenpowerice=7/24, **{"return": 2/32}))
+
+    def test_copied_pp_history_charges_before_refresh_and_resets_on_switch(self):
+        from pokezero.local_showdown import LocalShowdownConfig, LocalShowdownEnv
+        from pokezero.mirror_value_probe import owning_wire_belief_engine
+        from pokezero.showdown import _public_event_from_line
+        observer = LocalShowdownEnv(LocalShowdownConfig(set_belief_source=False))
+        engine = owning_wire_belief_engine(observer, "p1")
+        def feed(line): engine.ingest_event(_public_event_from_line(line))
+        feed("|switch|p1a: Ditto|Ditto, L80|100/100")
+        feed("|switch|p2a: Absol|Absol, L80|100/100")
+        feed("|-ability|p2a: Absol|Pressure")
+        feed("|-transform|p1a: Ditto|p2a: Absol")
+        request = dict(active=[dict(moves=[dict(id=m, pp=5, maxpp=16) for m in ("hyperbeam", "sleeptalk", "solarbeam", "rest")])])
+        engine.record_own_request(request)
+        feed("|move|p1a: Ditto|Hyper Beam|p2a: Absol")
+        engine.record_own_request(dict(active=[dict(moves=[dict(id="recharge")])]))
+        self.assertEqual(engine.copied_fractions()["hyperbeam"], 3/16)
+        feed("|move|p1a: Ditto|Sleep Talk|p1a: Ditto")
+        feed("|move|p1a: Ditto|Hyper Beam|p2a: Absol|[from] Sleep Talk")
+        self.assertEqual(engine.copied_fractions()["sleeptalk"], 4/16)
+        self.assertEqual(engine.copied_fractions()["hyperbeam"], 3/16)
+        feed("|move|p1a: Ditto|Solar Beam|p2a: Absol")
+        feed("|move|p1a: Ditto|Solar Beam|p2a: Absol|[from]lockedmove")
+        self.assertEqual(engine.copied_fractions()["solarbeam"], 3/16)
+        feed("|move|p1a: Ditto|Struggle|p2a: Absol")
+        engine.record_own_request(dict(active=[dict(moves=[dict(id="struggle")])]))
+        self.assertEqual(engine.copied_fractions()["rest"], 5/16)
+        # Public base-set PP is untouched by the separate copied ledger.
+        self.assertEqual(engine._active_belief("p1").move_uses, ())
+        engine.record_own_request(dict(active=[dict(moves=[dict(id="rest", pp=2, maxpp=8)])]))
+        self.assertEqual(engine.copied_fractions(), dict(rest=.25))
+        feed("|switch|p1a: Swampert|Swampert, L80|100/100")
+        self.assertEqual(engine.copied_fractions(), {})
+        observer.close()
 
     def test_actual_owning_wire_fold_has_no_other_request_or_omniscient_hp(self):
         from pokezero.local_showdown import LocalShowdownConfig
@@ -289,6 +329,7 @@ class MirrorContractTests(unittest.TestCase):
             @property
             def owning_lines(self): return {s: list(self.protocol_lines) for s in ("p1", "p2")}
             def peer_state(self, seat): return None
+            def copied_move_pp(self, seat): return {}
         class Policy:
             def __init__(self, *a, **kw): pass
             def select_action(self, obs, **kw): return PolicyDecision(0, "fixture")
