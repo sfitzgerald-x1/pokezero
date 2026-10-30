@@ -189,7 +189,7 @@ def _report_rows(ok, before, after):
 
 
 def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
-           leftovers_context=None,execution_tables=None):
+           leftovers_context=None,execution_tables=None,status_residual_context=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -210,7 +210,7 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
     result = transition.step_with_chance(masked, engine_actions, engine_table, chance,
         _public_trace=tape, _lifecycle_trace=True,
         _weather_hp_context=None if weather_profile_data is None else (core.weather_profile,weather_profile_data),
-        _leftovers_context=leftovers_context)
+        _leftovers_context=leftovers_context,_status_residual_context=status_residual_context)
     engine = _rows(source_ready, core.engine, result.step.state)
     cursor = _rows(source_ready, core.cursor, result.callbacks.cursor)
     # Bindings are GLOBAL [8], never row-select them by a coincidental B=8.
@@ -358,7 +358,7 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
 
 
 def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic', leftovers_compiled=None,
-            leftovers_mode='diagnostic',account_source_sites=False):
+            leftovers_mode='diagnostic',account_source_sites=False,status_residual_compiled=None):
     """Host-only immutable preparation. fake_forward is a pure source-test spy.
 
     The returned compiled closures contain no registration calls or host reads.
@@ -369,6 +369,11 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     the original helper/profile and full-consumer contract; all scientific
     qualification flags remain false.
     """
+    if status_residual_compiled is not None:
+        if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+            raise ValueError('checked status residual driver must remain outside outer JIT')
+        if public_mode!='retained-full':
+            raise ValueError('status residual diagnostics require explicit retained-full mode')
     if type(account_source_sites) is not bool:
         raise ValueError('explicit private source-site accounting mode required')
     if account_source_sites and (public_mode!='retained-full' or leftovers_mode!='retained' or leftovers_compiled is None):
@@ -384,7 +389,13 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         raise ValueError('same original request/OwnFacts producer and pure fake forward required')
     request = source._checked(request_compiled)
     catalog = record['catalog']
-    leftovers_context=None
+    leftovers_context=None;status_residual_context=None
+    if status_residual_compiled is not None:
+        from . import engine_status_residual_callbacks as status_residual_callbacks
+        status_data=status_residual_callbacks.check_compiled(status_residual_compiled)
+        if status_residual_callbacks._COMPILED[status_residual_compiled][4] is not request['lifecycle']:
+            raise ValueError('same original request engine catalog required for status residual caller')
+        status_residual_context=life.StatusResidualContext(status_data)
     if leftovers_compiled is not None:
         from . import engine_leftovers_callbacks as leftovers_callbacks
         data=leftovers_callbacks.check_compiled(leftovers_compiled)
@@ -423,6 +434,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         payload['leftovers_binding']=np.asarray(leftovers_context.data.binding).tolist()
         payload['leftovers_mode']=leftovers_mode
     if execution_compiled is not None:payload['execution_inventory']=np.asarray(execution_compiled.device.inventory_binding).tolist()
+    if status_residual_context is not None:
+        payload['status_residual_diagnostic_binding']=np.asarray(status_residual_context.data.binding).tolist()
     binding = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = Prepared(binding)
     _PREPARED[result] = dict(binding=binding, prepared=weakref.ref(result),request_compiled=request_compiled, own_compiled=own_compiled,
@@ -430,12 +443,13 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         public_mode=public_mode, check_public=check_public, register_public=register_public,
         speed_profile=speed_profile,leftovers_compiled=leftovers_compiled,
         leftovers_mode=leftovers_mode,leftovers_context=leftovers_context,execution_compiled=execution_compiled,
+        status_residual_compiled=status_residual_compiled,status_residual_context=status_residual_context,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
             weather_speed.retain_device(profile,state,streams,speed_profile.device)),
         frame=jax.jit(lambda core, act, chance, active=None:
             _frame(core, (None, base_handle.device, request['engine_table']), act, chance, active,
                 weather_profile_data=None if speed_profile is None else speed_profile.device,
-                leftovers_context=leftovers_context,
+                leftovers_context=leftovers_context,status_residual_context=status_residual_context,
                 execution_tables=None if execution_compiled is None else execution_compiled.device)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
@@ -462,6 +476,9 @@ def _checked(prepared):
     if r['leftovers_compiled'] is not None:
         from . import engine_leftovers_callbacks as leftovers_callbacks
         leftovers_callbacks.check_compiled(r['leftovers_compiled'])
+    if r['status_residual_compiled'] is not None:
+        from . import engine_status_residual_callbacks as status_residual_callbacks
+        status_residual_callbacks.check_compiled(r['status_residual_compiled'])
     return r
 
 
