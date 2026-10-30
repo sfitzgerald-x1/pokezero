@@ -129,11 +129,13 @@ class ScreenTests(unittest.TestCase):
             finally:fc._capture_native_events=original
 
     def checkpoint_fixture(self,root):
-        prior=root/'prior';prior.mkdir();result=dict(status='SEARCHED_WITH_NATIVE_PRIOR_REFUSALS',action=0,native_calls=[dict(started=True,completed=True,input_sha256='a',semantic_sha256='b',prior_fallbacks=1)])
+        prior=root/'prior';prior.mkdir();native_input={'input':'fixed'};reply={'witness':'fixed'}
+        semantic=s.digest({k:reply.get(k) for k in ('side_one','side_two','root_value','iterations','model_evals','prior_branches','prior_fallbacks','depth_reached','capture_refusals')})
+        result=dict(status='SEARCHED_WITH_NATIVE_PRIOR_REFUSALS',action=0,native_calls=[dict(started=True,completed=True,input_sha256=s.digest(native_input),reply_sha256=s.digest(reply),semantic_sha256=semantic,prior_fallbacks=1)])
         for ordinal,head,label in [(0,h,l) for h in ('champion','refit') for l in ('primary','determinism')]+[(1,'champion','primary'),(1,'refit','primary'),(1,'champion','determinism')]:
             p=prior/f'root-{ordinal:03d}-{head}-{label}';p.mkdir();value=copy.deepcopy(result)
             if ordinal==1 and label=='determinism':value.update(status='CAPTURE_FAILED',action=None)
-            s.write(p/'decision.json',value);s.write(p/'native-00-input.json',{'input':'fixed'});s.write(p/'native-00-reply.json',{'witness':'fixed'})
+            s.write(p/'decision.json',value);s.write(p/'native-00-input.json',native_input);s.write(p/'native-00-reply.json',reply)
         bank={'roots':[dict(root_id=str(i),cost_seat='p1',search_seed=i) for i in range(2)]};s.write(prior/'root-bank.json',bank)
         for i in range(2):s.write(prior/f'row-{i:03d}.json',dict(ordinal=i,root_id=str(i),seat='p1',search_seed=i,paired_clean_search=False,chosen_actions_differ=None,heads={h:copy.deepcopy(result) for h in ('champion','refit')}))
         runtime=dict(build={'fingerprint':'toy'},search_config={'worlds':1},numeric_mode='FP32_MHAOFF_TF32OFF_HIGHEST',models={'champion.pt':'model-sha'})

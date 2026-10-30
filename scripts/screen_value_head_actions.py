@@ -229,6 +229,16 @@ def install_native_refusal_batches(fc,output):
 def decision_signature(result):
     return (result['status'],result['action'],[(x['input_sha256'],x.get('semantic_sha256')) for x in result['native_calls']])
 
+def verify_prior_native_files(directory,result):
+    for i,call in enumerate(result['native_calls']):
+        require(call['started'] is True and call['completed'] is True,'prior consumed call is incomplete; never replay it')
+        blob=(directory/f'native-{i:02d}-input.json').read_bytes()
+        reply=json.loads((directory/f'native-{i:02d}-reply.json').read_bytes())
+        require(blob.endswith(b'\n') and hashlib.sha256(blob[:-1]).hexdigest()==call['input_sha256']
+            and digest(reply)==call['reply_sha256'] and digest({k:reply.get(k) for k in
+            ('side_one','side_two','root_value','iterations','model_evals','prior_branches','prior_fallbacks','depth_reached','capture_refusals')})==call['semantic_sha256'],
+            'prior decision/native evidence mismatch')
+
 def repeat_record(ordinal,head,original,again):
     return dict(ordinal=ordinal,head=head,status='ATTEMPTED',native_calls=sum(x['started'] for x in again['native_calls']),
         both_clean_search=original['status']==again['status']=='SEARCHED',
@@ -268,14 +278,18 @@ def restore_checkpoint(plan,bank):
     for head in ('champion','refit'):
         original=json.loads((prior/f'root-000-{head}-primary/decision.json').read_bytes())
         again=json.loads((prior/f'root-000-{head}-determinism/decision.json').read_bytes())
+        verify_prior_native_files(prior/f'root-000-{head}-primary',original)
+        verify_prior_native_files(prior/f'root-000-{head}-determinism',again)
         require(original==row['heads'][head],'completed primary/row mismatch')
         repeats.append(repeat_record(0,head,original,again))
     root=bank['roots'][1];interrupted=json.loads((prior/'root-001-champion-determinism/decision.json').read_bytes())
     require(interrupted['status']=='CAPTURE_FAILED','interrupted root must stay unknown')
+    verify_prior_native_files(prior/'root-001-champion-determinism',interrupted)
     unknown=json.loads((prior/'row-001.json').read_bytes())
     require(unknown['ordinal']==1 and unknown['root_id']==root['root_id'],'interrupted repeat root identity')
     for head in ('champion','refit'):
         original=json.loads((prior/f'root-001-{head}-primary/decision.json').read_bytes())
+        verify_prior_native_files(prior/f'root-001-{head}-primary',original)
         require(original==unknown['heads'][head] and type(original['action']) is int,'completed interrupted-root primary mismatch')
     unknown.update(continuation_status='INTERRUPTED_REPEAT_PRIMARY_COMPLETE_WITH_NATIVE_REFUSALS',
         prior_row_sha256=checkpoint['files']['row-001.json']['sha256'],prior_evidence_root=str(prior))
