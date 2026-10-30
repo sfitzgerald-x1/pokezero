@@ -43,11 +43,14 @@ def compare_battle(rows,*,battle,stream_id,adapter,tally,with_forward):
 
 class JaxRecordedAdapter:
     """Actual device fold/encode with atomic public-boundary host commitment."""
-    def __init__(self,catalog,*,model=None,torch_module=None):
+    def __init__(self,catalog,*,model=None,torch_module=None,owner_side=None):
         import jax
         from gpu_engine import v4_encoder
         self.jax=jax;self.encoder=v4_encoder;self.catalog=catalog
         self.model=model;self.torch=torch_module;self.registered={}
+        if owner_side is not None and (type(owner_side) is not int or owner_side not in (0,1)):
+            raise ValueError('absolute owning side must be zero or one')
+        self.owner_side=owner_side
         if (model is None)!=(torch_module is None):raise ValueError('model and Torch supplied together')
         if model is not None:
             if model.training or any(p.dtype!=torch_module.float32 or p.device.type!='cpu' for p in model.parameters()):
@@ -61,7 +64,8 @@ class JaxRecordedAdapter:
                 or not isinstance(battle_id,str) or not battle_id.strip() or battle_id in self.registered.values()):
             raise ValueError('fresh unique stream/battle registration required')
         self.stream_ids=np.array([stream_id],np.int32);self.battle_id=battle_id
-        self.state=self.encoder.initialize(self.catalog,stream_ids=self.jax.numpy.asarray(self.stream_ids))
+        owners=None if self.owner_side is None else np.array([self.owner_side],np.int32)
+        self.state=self.encoder.initialize(self.catalog,stream_ids=self.jax.numpy.asarray(self.stream_ids),owner_sides=owners)
         self.host=public_wire.WireState();self.bindings=None;self.registered[stream_id]=battle_id
 
     def feed(self,lines):
@@ -90,6 +94,8 @@ class JaxRecordedAdapter:
         self.state,self.host,self.bindings=state,host,bindings
 
     def encode(self,request,*,owner_side):
+        if self.owner_side is not None and owner_side != self.owner_side:
+            raise ValueError('request owner differs from owning stream')
         own=self.encoder.parse_own_requests(self.catalog,[request],owner_sides=[owner_side])
         out=self.encode_step(self.state,own,self.jax.numpy.array([owner_side],self.jax.numpy.int32))
         observation=out.observation

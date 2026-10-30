@@ -94,7 +94,8 @@ def compile_species(source, dex, vocabulary, abilities, *, extra_species=()):
             jnp.asarray(opponent,jnp.int32), source.device.binding, vb, abilities.device.binding, binding))
 
 
-def project_opponent(mons, abilities, tables, *, observer_side, expected_binding):
+def project_opponent(mons, abilities, tables, *, observer_side, expected_binding,
+                     belief_status=None):
     """Write the public base patch for the opponent of each observer.
 
     Transform uses the publicly recorded donor identity; original HP, level and
@@ -118,7 +119,18 @@ def project_opponent(mons, abilities, tables, *, observer_side, expected_binding
     present = mons.encounter[address] > 0
     valid_ids = (species > 0) & (species < len(tables.species_category)) & (effective > 0) & (effective < len(tables.species_category))
     statuses = mons.status[address]
+    status_ok = jnp.ones((batch,), bool)
+    if belief_status is not None:
+        if belief_status.shape != mons.status.shape or belief_status.dtype != jnp.int32:
+            raise ValueError('retained public belief status requires B,2,6 int32 facts')
+        status_ok = jnp.all((belief_status >= 0) & (belief_status < 7), axis=(1, 2))
+        retained = belief_status[address]
+        # The Python opponent writer prefers the belief's explicit status to
+        # the current condition suffix. Faint clears the raw condition but
+        # deliberately retains that belief fact; a cure clears the ledger.
+        statuses = jnp.where(retained != 0, retained, statuses)
     admitted = ((observer>=0) & (observer<=1) & jnp.all(tables.binding==expected_binding)
+        & status_ok
         & jnp.all(abilities.binding==tables.ability_binding,axis=-1)
         & jnp.all(mons.species_binding==tables.binding,axis=-1)
         & jnp.all(abilities.species_binding==tables.binding,axis=-1)

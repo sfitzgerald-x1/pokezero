@@ -64,6 +64,39 @@ class RecordedRunnerTests(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec('jax'),'requires isolated JAX')
 class ActualJaxAdapterTests(unittest.TestCase):
+    def test_owning_stream_hp_visibility_recovers_percentage_toxic_before_encode(self):
+        import numpy as np
+        from pokezero import showdown
+        from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+        from test_gpu_engine_v4_encoder import V4EncoderTests
+        V4EncoderTests.setUpClass();f=V4EncoderTests()
+        lines=(*f.public.prefix,
+            '|switch|p1a: Gardevoir|Gardevoir, L80|100/100 tox',
+            '|switch|p2a: Gardevoir|Gardevoir, L80|100/100 tox',
+            '|-damage|p1a: Gardevoir|95/100 tox|[from] psn',
+            '|-damage|p2a: Gardevoir|95/100 tox|[from] psn','|turn|1')
+        for owner in (0,1):
+            adapter=JaxRecordedAdapter(f.catalog,owner_side=owner)
+            adapter.reset(stream_id=1,battle_id='owning-toxic')
+            adapter.feed(lines)
+            parser=showdown._ReplayParser('owning-toxic',complete_prefix=True,
+                hp_visibility={f'p{side+1}':'exact' if side==owner else 'percentage' for side in (0,1)})
+            for line in lines:parser._feed_line(line)
+            toxic=adapter.state.context.toxic
+            self.assertEqual(np.asarray(toxic.visibility).tolist(),[[1 if side==owner else 2 for side in (0,1)]])
+            self.assertEqual(int(toxic.stage[0,1-owner]),2)
+            self.assertFalse(bool(toxic.known[0,owner]))
+            for side in (0,1):
+                self.assertEqual(int(toxic.stage[0,side]),parser.toxic_stage[f'p{side+1}'])
+                self.assertEqual(bool(toxic.known[0,side]),parser.toxic_stage_known[f'p{side+1}'])
+            with self.assertRaisesRegex(ValueError,'request owner differs'):
+                adapter.encode({},owner_side=1-owner)
+        for bad in (True,-1,2):
+            with self.assertRaises(ValueError):JaxRecordedAdapter(f.catalog,owner_side=bad)
+        for bad in (np.array([True]),np.array([2],np.int32),np.array([[0]],np.int32)):
+            with self.assertRaises(ValueError):
+                f.e.initialize(f.catalog,stream_ids=f.j.array([1],f.j.int32),owner_sides=bad)
+
     def test_actual_adapter_own_requests_and_late_refusal_leave_public_boundary_atomic(self):
         from test_gpu_engine_v4_encoder import V4EncoderTests
         from pokezero.recorded_encoder_runner import JaxRecordedAdapter

@@ -162,14 +162,24 @@ class Encoded(NamedTuple):
     full_encoder_admitted: object
 
 
-def initialize(catalog,*,stream_ids):
+def initialize(catalog,*,stream_ids,owner_sides=None):
     if getattr(stream_ids,'ndim',None)!=1 or stream_ids.dtype!=jnp.int32 or not stream_ids.shape[0]:
         raise ValueError('nonempty int32 stream identifiers required')
     b=stream_ids.shape[0]
+    visibility = (public_toxic.UNKNOWN, public_toxic.UNKNOWN)
+    if owner_sides is not None:
+        owners = np.asarray(owner_sides)
+        if owners.shape != (b,) or owners.dtype != np.int32 or np.any((owners < 0) | (owners > 1)):
+            raise ValueError('owning stream requires B int32 absolute owner sides')
+        # The wire owner fixes HP representation before the first event, as in
+        # the Python owning parser. A denominator of 100 alone is ambiguous.
+        visibility = np.where(np.arange(2)[None, :] == owners[:, None],
+            public_toxic.EXACT, public_toxic.PERCENTAGE).astype(np.int32)
     beliefs=public_belief.initialize(jnp.zeros((b,2,6),jnp.int32),catalog.source.device)
     mons=public_mon_state.initialize(b,species_binding=catalog.species.device.binding)
     context=public_context.initialize(beliefs,catalog.context,species_binding=catalog.species.device.binding,
-        toxic_complete_prefix=True,tendency_complete_prefix=True,source_tables=catalog.source.device,clause_complete_prefix=True)
+        toxic_complete_prefix=True,toxic_hp_visibility=visibility,tendency_complete_prefix=True,
+        source_tables=catalog.source.device,clause_complete_prefix=True)
     cursor=public_inputs.initialize(stream_ids,source_binding=catalog.source.device.binding)
     return State(cursor,beliefs,mons,context,jnp.broadcast_to(catalog.binding,(b,8)))
 
