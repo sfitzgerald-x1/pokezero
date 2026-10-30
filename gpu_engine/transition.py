@@ -295,7 +295,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
-                     _weather_hp_context=None, _leftovers_context=None) -> StepResult:
+                     _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -304,6 +304,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     """
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
+    if _status_residual_context is not None:
+        from . import engine_lifecycle_callbacks as lifecycle_callbacks
+        from . import engine_status_residual_callbacks as status_residual_callbacks
+        if (not _lifecycle_trace or type(_status_residual_context) is not lifecycle_callbacks.StatusResidualContext
+                or type(_status_residual_context.data) is not status_residual_callbacks.Data):
+            raise ValueError('typed owning lifecycle status residual context required')
     if _leftovers_context is not None:
         from . import engine_lifecycle_callbacks as lifecycle_callbacks
         from . import engine_leftovers_callbacks as leftovers_callbacks
@@ -1101,11 +1107,27 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 execution_accounting.Site.STATUS_RESIDUAL,side,
                 active=eligible & status_event & (hp>0)
                 & ((_execution_status==m.BRN)|(_execution_status==m.PSN)|(_execution_status==m.TOX)))
+        if _status_residual_context is not None:
+            # Literal BEFORE values at this exact numerical assignment. The
+            # existing source-site obligation remains unhandled, never credited.
+            _status_physical=work.active[rows,side]
+            _status_old_hp=_active(work.hp,work,side)
+            _status_maximum=_active(work.max_hp,work,side)
+            _status_old_status=_active(work.status,work,side)
+            _status_old_counter=_active(work.status_counter,work,side)
         residual = m.major_status_residual(hp,
             _active(work.max_hp, work, side), _active(work.status, work, side),
             _active(work.status_counter, work, side), active=eligible & status_event)
         work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
             status_counter=_set_active(work.status_counter, work, side, residual.counter))
+        if _status_residual_context is not None:
+            # Read AFTER the SAME HP/counter write, before later handlers. No
+            # damage/stage formula, final-state reconstruction or faint event.
+            _public_trace=status_residual_callbacks.record_status_residual_device(_public_trace,
+                side,_status_physical,_status_old_hp,_active(work.hp,work,side),_status_maximum,
+                _status_old_status,_status_old_counter,_active(work.status_counter,work,side),
+                _status_residual_context.data,eligible=eligible & status_event & (_status_old_hp>0)
+                & ((_status_old_status==m.BRN)|(_status_old_status==m.PSN)|(_status_old_status==m.TOX)))
         if _leftovers_context is not None:
             # Record immediately AFTER this exact HP assignment. The immutable
             # Diagnostic mode retains UNKNOWN. The registered actual context
