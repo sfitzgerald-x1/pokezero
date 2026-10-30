@@ -239,8 +239,8 @@ def verify_prior_native_files(directory,result):
             ('side_one','side_two','root_value','iterations','model_evals','prior_branches','prior_fallbacks','depth_reached','capture_refusals')})==call['semantic_sha256'],
             'prior decision/native evidence mismatch')
 
-def repeat_record(ordinal,head,original,again):
-    return dict(ordinal=ordinal,head=head,status='ATTEMPTED',native_calls=sum(x['started'] for x in again['native_calls']),
+def repeat_record(ordinal,head,original,again,*,context_version='saved-own-public-history-v2'):
+    return dict(ordinal=ordinal,head=head,status='ATTEMPTED',context_version=context_version,native_calls=sum(x['started'] for x in again['native_calls']),
         both_clean_search=original['status']==again['status']=='SEARCHED',
         action_and_root_arm_repeat_equal=decision_signature(original)==decision_signature(again))
 
@@ -281,7 +281,8 @@ def restore_checkpoint(plan,bank):
         verify_prior_native_files(prior/f'root-000-{head}-primary',original)
         verify_prior_native_files(prior/f'root-000-{head}-determinism',again)
         require(original==row['heads'][head],'completed primary/row mismatch')
-        repeats.append(repeat_record(0,head,original,again))
+        repeats.append(repeat_record(0,head,original,again,context_version='legacy-empty-trajectory-v1'))
+    row.update(context_version='legacy-empty-trajectory-v1',prior_row_sha256=checkpoint['files']['row-000.json']['sha256'],prior_evidence_root=str(prior))
     root=bank['roots'][1];interrupted=json.loads((prior/'root-001-champion-determinism/decision.json').read_bytes())
     require(interrupted['status']=='CAPTURE_FAILED','interrupted root must stay unknown')
     verify_prior_native_files(prior/'root-001-champion-determinism',interrupted)
@@ -292,9 +293,11 @@ def restore_checkpoint(plan,bank):
         verify_prior_native_files(prior/f'root-001-{head}-primary',original)
         require(original==unknown['heads'][head] and type(original['action']) is int,'completed interrupted-root primary mismatch')
     unknown.update(continuation_status='INTERRUPTED_REPEAT_PRIMARY_COMPLETE_WITH_NATIVE_REFUSALS',
+        context_version='legacy-empty-trajectory-v1',
         prior_row_sha256=checkpoint['files']['row-001.json']['sha256'],prior_evidence_root=str(prior))
     for head in ('champion','refit'):repeats.append(dict(ordinal=1,head=head,
         status='CAPTURE_FAILED_CONSUMED_ROOT_UNKNOWN' if head=='champion' else 'NOT_ATTEMPTED_CONSUMED_ROOT_UNKNOWN',
+        context_version='legacy-empty-trajectory-v1',
         native_calls=sum(x['started'] for x in interrupted['native_calls']) if head=='champion' else 0,
         both_clean_search=False,action_and_root_arm_repeat_equal=None))
     return [row,unknown],repeats,checkpoint
@@ -303,6 +306,49 @@ def remaining_fixed_roots(bank,retained_rows):
     require([r['ordinal'] for r in retained_rows]==[0,1]
         and [r['root_id'] for r in retained_rows]==[r['root_id'] for r in bank['roots'][:2]],'never restart a consumed fixed root')
     return bank['roots'][2:]
+
+def reconstruct_screen_root(config,collection,root):
+    """Rebuild only original own/public pre-root history, never a simulator.
+
+    Protocol delta at boundary N completes the public action round N-1. Own
+    observations/actions are appended only for strictly earlier requests. The
+    current/future committed actions, peer observations/requests, and outcomes
+    never enter the trajectory supplied to either head.
+    """
+    require(type(root['cost_ordinal']) is int and 2<=root['cost_ordinal']<COUNT,'consumed roots must never be reconstructed')
+    require(root.get('split')=='train' and root.get('cost_seat') in ('p1','p2'),'fixed TRAIN owning root required')
+    from pokezero.recorded_mirror_roots import new_recorded_environment,feed_recorded_boundary
+    from pokezero.trajectory import BattleTrajectory,TrajectoryStep
+    from pokezero.public_action_capture import public_action_round_from_protocol_lines,append_public_action_round
+    base=Path(collection).resolve(strict=True);path=(base/root['boundaries_relative_path']).resolve(strict=True)
+    require(path.is_relative_to(base) and file_sha(path)==root['boundaries_file_sha256'],'frozen source boundary artifact changed')
+    trajectory=BattleTrajectory(root['battle_id'],'gen3randombattle',root['seed']);env=new_recorded_environment(config,seed=root['seed']);previous=None
+    try:
+        with gzip.open(path,'rb') as stream:
+            for line in stream:
+                row=json.loads(line)
+                require(row.get('event') is None and row['battle_id']==root['battle_id'] and row['seed']==root['seed'],'selected root absent before terminal or source identity changed')
+                require(not any(v.startswith('|win|') or v in ('|tie','|tie|') for v in row['protocol_delta']),'terminal information before selected root')
+                if previous is not None:
+                    public_lines=[v for v in row['protocol_delta'] if not v.startswith('|request|')]
+                    append_public_action_round(trajectory,public_action_round_from_protocol_lines(public_lines,
+                        turn_index=previous['round'],requested_players=previous['requested']))
+                observations=feed_recorded_boundary(env,row)
+                if row['decision_round_index']==root['decision_round_index']:
+                    require(digest(row)==root['boundary_sha256'] and row['root_id']==root['root_id']
+                        and digest(row['requests'])==root['requests_sha256']
+                        and digest(row['observations'][root['cost_seat']])==root['observation_sha256'],'frozen root or observation changed')
+                    return env,observations[root['cost_seat']],trajectory
+                require(row['decision_round_index']<root['decision_round_index'],'selected root missing; no replacement')
+                seat=root['cost_seat']
+                if seat in row['requested_players']:
+                    observation=observations[seat]
+                    trajectory.append(TrajectoryStep(player_id=seat,turn_index=row['decision_round_index'],observation=observation,
+                        legal_action_mask=tuple(observation.legal_action_mask),action_index=row['actions'][seat]))
+                previous=dict(round=row['decision_round_index'],requested=tuple(row['requested_players']))
+        raise ValueError('selected root absent; no replacement')
+    except BaseException:
+        env.close();raise
 
 def persist_row(output,row,*,retained=False):
     write(output/f"row-{row['ordinal']:03d}.json",row)
@@ -319,12 +365,21 @@ def persist_row(output,row,*,retained=False):
 
 def summarize(rows,count=COUNT):
     require(len(rows)==count and [r['ordinal'] for r in rows]==list(range(count)),'whole frozen roster denominator')
-    clean=[r for r in rows if r['paired_clean_search']]
+    legacy=[r for r in rows if r.get('context_version')=='legacy-empty-trajectory-v1']
+    corrected=[r for r in rows if r not in legacy]
+    clean=[r for r in corrected if r['paired_clean_search']]
     different=sum(r['chosen_actions_differ'] is True for r in clean)
     unresolved=count-len(clean)
-    returned=[r for r in rows if all(type(r['heads'][h].get('action')) is int for h in ('champion','refit'))]
+    returned=[r for r in corrected if all(type(r['heads'][h].get('action')) is int for h in ('champion','refit'))]
+    legacy_returned=[r for r in legacy if all(type(r['heads'][h].get('action')) is int for h in ('champion','refit'))]
+    returned_different=sum(r['heads']['champion']['action']!=r['heads']['refit']['action'] for r in returned)
     return dict(frozen_roots=count,paired_clean_searches=len(clean),chosen_actions_differ=different,
-        all_returned_pairs=len(returned),all_returned_chosen_actions_differ=sum(r['heads']['champion']['action']!=r['heads']['refit']['action'] for r in returned),
+        corrected_context_roots=len(corrected),legacy_empty_context_roots=len(legacy),legacy_empty_context_ordinals=[r['ordinal'] for r in legacy],
+        legacy_observed_returned_pairs=len(legacy_returned),legacy_observed_action_differences=sum(r['heads']['champion']['action']!=r['heads']['refit']['action'] for r in legacy_returned),
+        legacy_context_unknown_for_corrected_metric=True,all_returned_pairs=len(returned),all_returned_chosen_actions_differ=returned_different,
+        difference_fraction_among_returned_corrected_pairs=returned_different/len(returned) if returned else None,
+        full_roster_returned_action_difference_lower=returned_different/count,
+        full_roster_returned_action_difference_upper=(returned_different+count-len(returned))/count,
         difference_fraction_among_clean_pairs=different/len(clean) if clean else None,
         full_roster_difference_fraction_lower=different/count,full_roster_difference_fraction_upper=(different+unresolved)/count,
         unresolved_roots=unresolved,head_refusals={h:sum(r['heads'][h]['status']!='SEARCHED' for r in rows) for h in ('champion','refit')},
@@ -399,18 +454,18 @@ def run(plan):
     from pokezero import failure_capture as fc
     from pokezero.failure_capture import runtime_build,canonical as native_canonical,CaptureFailed
     from pokezero.engine_search import EngineMctsConfig,EngineMctsPolicy
-    from pokezero.recorded_mirror_roots import reconstruct_cost_root
     from pokezero.neural_policy import (load_transformer_checkpoint_payload,parse_transformer_model_config,
         category_vocab_from_model_config,feature_masks_from_model_config,observation_spec_from_model_config)
     from pokezero.local_showdown import LocalShowdownConfig,env_config_from_checkpoint_provenance,_public_materialization_payload
     from pokezero.dex import load_showdown_dex_cached
     from pokezero.randbat import load_gen3_randbat_source_cached
     from pokezero.policy import PolicyContext
-    from pokezero.trajectory import BattleTrajectory
+    from pokezero.trajectory import trajectory_to_dict
     output=Path(plan['output']);output.mkdir(exist_ok=False)
     summary={'status':'FAILED_OR_PARTIAL_NO_RETRY','fixed_roots':COUNT,'no_foulplay_panel':True};rows=[];repeats=[];quarantine=None;original_capture=None
     try:
         require(type(plan.get('continuation')) is dict,'this fixed bank requires its stopped-run checkpoint; never restart consumed roots')
+        require(plan.get('history_context')=='saved-own-public-history-v2','explicit corrected pre-root history required')
         require(all(os.environ.get(k) is None for k in ('TORCH_ALLOW_TF32_CUBLAS_OVERRIDE','NVIDIA_TF32_OVERRIDE')),'precision override present')
         torch.set_num_threads(plan['cpu_threads']);torch.set_default_dtype(torch.float32)
         torch.set_float32_matmul_precision('highest');torch.backends.cuda.matmul.allow_tf32=False
@@ -468,6 +523,7 @@ def run(plan):
             models={k:file_sha(v) for k,v in private.items()},numeric_mode='FP32_MHAOFF_TF32OFF_HIGHEST',
             search_config=plan['search_config'],historical_config_sha256=plan['historical_config_sha256'],
             scientific_producer_sha256=file_sha(__file__),capture_transport=plan['capture_transport'],
+            history_context=plan['history_context'],
             capture_adapter_scope='Screen-only native refusal transport differs from untouched qualified base package/native/model build.',
             continuation_checkpoint_sha256=summary.get('continuation_checkpoint_sha256')))
 
@@ -499,18 +555,22 @@ def run(plan):
 
         for root in remaining_fixed_roots(bank,rows):
             row=dict(ordinal=root['cost_ordinal'],root_id=root['root_id'],seat=root['cost_seat'],search_seed=root['search_seed'],
-                paired_clean_search=False,chosen_actions_differ=None,heads={})
+                paired_clean_search=False,chosen_actions_differ=None,heads={},context_version=plan['history_context'])
             env=None
             try:
-                env,observation=reconstruct_cost_root(config,plan['collection'],root)
+                env,observation,trajectory=reconstruct_screen_root(config,plan['collection'],root)
                 public=env.public_materialization_state(root['cost_seat'])
                 require(not public.replay.requests,'peer requests in public materialization')
                 context=PolicyContext(player_id=root['cost_seat'],decision_round_index=root['decision_round_index'],
                     battle_id=root['battle_id'],format_id='gen3randombattle',seed=root['seed'],observation=observation,
-                    requested_players=tuple(env.requested_players()),trajectory=BattleTrajectory(root['battle_id'],'gen3randombattle',root['seed']),
+                    requested_players=tuple(env.requested_players()),trajectory=trajectory,
                     requested_legal_action_masks={root['cost_seat']:tuple(observation.legal_action_mask)},
                     requested_observations={root['cost_seat']:observation},public_materialization_state=public)
                 row['public_input_sha256']=digest(_public_materialization_payload(public))
+                history=fc.snapshot(trajectory_to_dict(trajectory));write(output/f"history-{root['cost_ordinal']:03d}.json",history)
+                row.update(history_context_sha256=digest(history),history_own_step_count=len(trajectory.steps),
+                    history_public_round_count=len(trajectory.metadata.get('public_resolved_action_rounds',[])),
+                    legal_action_count=sum(observation.legal_action_mask))
                 for head in ('champion','refit'):row['heads'][head]=evaluate(root,head,context,'primary')
                 a,b=(row['heads'][head] for head in ('champion','refit'))
                 row['paired_native_input_identity']=bool(a['native_calls']) and [x['input_sha256'] for x in a['native_calls']]==[x['input_sha256'] for x in b['native_calls']]
@@ -533,11 +593,13 @@ def run(plan):
         require(len(repeat_keys)==len(repeats) and repeat_keys<={(i,h) for i in range(8) for h in ('champion','refit')},'duplicate/foreign repeat address')
         for ordinal in range(8):
             for head in ('champion','refit'):
-                if (ordinal,head) not in repeat_keys:repeats.append(dict(ordinal=ordinal,head=head,status='NOT_ATTEMPTED_AFTER_ROOT_REFUSAL',native_calls=0,both_clean_search=False,action_and_root_arm_repeat_equal=None))
+                if (ordinal,head) not in repeat_keys:repeats.append(dict(ordinal=ordinal,head=head,status='NOT_ATTEMPTED_AFTER_ROOT_REFUSAL',context_version=plan['history_context'],native_calls=0,both_clean_search=False,action_and_root_arm_repeat_equal=None))
         repeats.sort(key=lambda r:(r['ordinal'],r['head']))
         summary.update(summarize(rows),status='COMPLETE_FIXED_ROOT_SCREEN',determinism_controls=repeats,
-            all_fixed_repeats_equal=len(repeats)==16 and all(r['both_clean_search'] and r['action_and_root_arm_repeat_equal'] for r in repeats),
+            all_fixed_repeats_equal=len(repeats)==16 and all(r['context_version']==plan['history_context'] and r['both_clean_search'] and r['action_and_root_arm_repeat_equal'] for r in repeats),
             fixed_repeat_denominator=16,completed_repeat_cells=sum(r.get('status')=='ATTEMPTED' for r in repeats),
+            corrected_completed_repeat_cells=sum(r.get('status')=='ATTEMPTED' and r['context_version']==plan['history_context'] for r in repeats),
+            legacy_completed_repeat_cells=sum(r.get('status')=='ATTEMPTED' and r['context_version']=='legacy-empty-trajectory-v1' for r in repeats),
             native_started_repeat_cells=sum(r['native_calls']>0 for r in repeats),
             selected_root_sha256=bank['selected_root_sha256'],native_search_calls_primary=sum(x['started'] for r in rows for v in r['heads'].values() for x in v['native_calls']),
             native_search_calls_repeats=sum(r['native_calls'] for r in repeats),

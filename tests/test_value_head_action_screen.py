@@ -17,6 +17,68 @@ spec=importlib.util.spec_from_file_location('action_screen',P/'scripts/screen_va
 s=importlib.util.module_from_spec(spec);spec.loader.exec_module(s)
 
 class ScreenTests(unittest.TestCase):
+    def history_fixture(self,directory,owner='p1'):
+        from pokezero.observation import PokeZeroObservationV0
+        peer='p2' if owner=='p1' else 'p1'
+        def obs(species):return PokeZeroObservationV0(categorical_ids=((0,),),numeric_features=((0.,),),token_type_ids=(0,),attention_mask=(True,),
+            legal_action_mask=(True,True)+(False,)*7,metadata={'opponent_active':{'species':species}})
+        observations={0:obs('Pikachu'),2:obs('Pikachu')};rows=[]
+        for i in range(3):
+            delta=[f'|switch|{peer}a: Pikachu|Pikachu, L80|100/100'] if i==0 else [f'|switch|{peer}a: '+('Snorlax|Snorlax' if i==1 else 'Pikachu|Pikachu')+', L80|100/100']
+            delta.append('|request|'+json.dumps({'side':{'id':peer},'private':'PEER_PRIVATE_REQUEST'}))
+            rows.append(dict(battle_id='synthetic-history',seed=11,decision_round_index=i,root_id='r'+str(i),protocol_delta=delta,
+                requests={owner:{'owner':True},peer:{'private':'PEER_PRIVATE_REQUEST'}},requested_players=[owner,peer] if i!=1 else [peer],
+                observations={owner:{'reference':'own-'+str(i)},peer:{'private':'PEER_PRIVATE_OBSERVATION'}},actions={owner:0 if i<2 else 1,peer:8}))
+        path=directory/'boundaries.jsonl.gz';path.write_bytes(gzip.compress(b'\n'.join(s.canonical(r) for r in rows)+b'\nTHIS FUTURE OUTCOME MUST NEVER BE PARSED'))
+        target=rows[2];root=dict(cost_ordinal=2,split='train',cost_seat=owner,battle_id=target['battle_id'],seed=11,decision_round_index=2,root_id=target['root_id'],boundaries_relative_path=path.name,
+            boundaries_file_sha256=s.file_sha(path),boundary_sha256=s.digest(target),requests_sha256=s.digest(target['requests']),observation_sha256=s.digest(target['observations'][owner]))
+        feeds=[];closed=[];env=SimpleNamespace(close=lambda:closed.append(1))
+        def feed(got,row):
+            self.assertIs(got,env);feeds.append(row['decision_round_index'])
+            return {owner:observations[row['decision_round_index']],peer:'PEER_PRIVATE_OBSERVATION'} if row['decision_round_index'] in observations else {peer:'PEER_PRIVATE_OBSERVATION'}
+        return root,observations,feed,feeds,env,closed
+
+    def test_saved_public_history_both_seats_resolves_asymmetric_forced_order_without_private_or_future_data(self):
+        from pokezero.engine_search import opponent_request_order_resolution
+        from pokezero.public_action_capture import public_action_rounds_from_trajectory_metadata
+        from pokezero.trajectory import trajectory_to_dict,BattleTrajectory
+        for owner in ('p1','p2'):
+            with self.subTest(owner=owner),tempfile.TemporaryDirectory() as d:
+                root,observations,feed,feeds,env,closed=self.history_fixture(Path(d),owner)
+                with mock.patch('pokezero.recorded_mirror_roots.new_recorded_environment',return_value=env),mock.patch('pokezero.recorded_mirror_roots.feed_recorded_boundary',side_effect=feed):
+                    got,observation,trajectory=s.reconstruct_screen_root(None,d,root)
+                self.assertIs(got,env);self.assertEqual(feeds,[0,1,2]);self.assertEqual(closed,[])
+                self.assertEqual([(x.player_id,x.turn_index,x.action_index) for x in trajectory.steps],[(owner,0,0)])
+                rounds=public_action_rounds_from_trajectory_metadata(trajectory);self.assertEqual(sorted(rounds),[0,1])
+                self.assertEqual(rounds[1].team_transitions[0]['species'],'pikachu')
+                serialized=s.canonical(trajectory_to_dict(trajectory)).decode();self.assertNotIn('PEER_PRIVATE',serialized)
+                self.assertNotIn('FUTURE OUTCOME',serialized);self.assertIs(observation,observations[2])
+                context=SimpleNamespace(player_id=owner,decision_round_index=2,observation=observation,trajectory=trajectory)
+                resolved=opponent_request_order_resolution(context,['pikachu','snorlax'])
+                self.assertEqual((resolved.status,resolved.order),('resolved',('pikachu','snorlax')))
+                context.trajectory=BattleTrajectory('synthetic-history','gen3randombattle',11)
+                self.assertEqual(opponent_request_order_resolution(context,['pikachu','snorlax']).status,'lost_active_permutation')
+
+    def test_history_reconstruction_refuses_consumed_roots_before_any_io_and_closes_on_source_failure(self):
+        with tempfile.TemporaryDirectory() as d:
+            root,observations,feed,feeds,env,closed=self.history_fixture(Path(d))
+            for i in (0,1):
+                with self.assertRaisesRegex(ValueError,'consumed roots'):s.reconstruct_screen_root(None,'/absent',dict(root,cost_ordinal=i))
+            with mock.patch('pokezero.recorded_mirror_roots.new_recorded_environment',return_value=env),mock.patch('pokezero.recorded_mirror_roots.feed_recorded_boundary',side_effect=ValueError('source refusal')):
+                with self.assertRaisesRegex(ValueError,'source refusal'):s.reconstruct_screen_root(None,d,root)
+            self.assertEqual(closed,[1])
+
+    def test_legacy_primary_points_are_separate_unknown_cells_for_corrected_context_metric(self):
+        rows=[]
+        for i in range(4):
+            rows.append(dict(ordinal=i,paired_clean_search=True,chosen_actions_differ=i%2==0,heads={'champion':{'status':'SEARCHED','action':0},'refit':{'status':'SEARCHED','action':int(i%2==0)}},
+                context_version='legacy-empty-trajectory-v1' if i<2 else 'saved-own-public-history-v2'))
+        result=s.summarize(rows,count=4)
+        self.assertEqual((result['all_returned_pairs'],result['all_returned_chosen_actions_differ']),(2,1))
+        self.assertEqual((result['legacy_observed_returned_pairs'],result['legacy_observed_action_differences']),(2,1))
+        self.assertEqual((result['full_roster_returned_action_difference_lower'],result['full_roster_returned_action_difference_upper']),(.25,.75))
+        self.assertEqual(result['unresolved_roots'],2)
+
     def capture_context(self):
         return SimpleNamespace(battle_id='synthetic',seed=7,player_id='p1',decision_round_index=0,
             observation=SimpleNamespace(categorical_ids=((1,),),numeric_features=((.5,),),token_type_ids=(0,),
