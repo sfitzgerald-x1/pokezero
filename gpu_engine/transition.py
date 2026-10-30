@@ -181,7 +181,7 @@ def _speeds(state,table):
     return jnp.where(state.hp[rows,sides,state.active] > 0,live_speed,stats[...,5])
 
 
-def initialize(state,table,*,eligible=True,tie_coin=None):
+def initialize(state,table,*,eligible=True,tie_coin=None,_weather_trace=None):
     """Resolve initial entries before building the first policy observation.
 
     No turn, residual, hazard or ordinary-step RNG is consumed. A dedicated
@@ -189,6 +189,7 @@ def initialize(state,table,*,eligible=True,tie_coin=None):
     step's compatibility initialization produce identical ordinary trajectories.
     """
     if table.entry is None:
+        if _weather_trace is not None:return state,_weather_trace
         return state
     rows = jnp.arange(state.hp.shape[0])
     live = ~state.done & jnp.asarray(eligible)
@@ -200,9 +201,14 @@ def initialize(state,table,*,eligible=True,tie_coin=None):
     for order in range(2):
         side = jnp.where(order == 0,first,1-first)
         pending = live & state.entry_pending[rows,side]
-        state,_ = arrival.enter(state,side,table.entry,eligible=pending,hazards=False,startup=state.turn==0)
+        if _weather_trace is not None:
+            state,_,_weather_trace = arrival.enter(state,side,table.entry,eligible=pending,
+                hazards=False,startup=state.turn==0,_weather_trace=_weather_trace)
+        else:
+            state,_ = arrival.enter(state,side,table.entry,eligible=pending,hazards=False,startup=state.turn==0)
         state = state._replace(entry_pending=state.entry_pending.at[rows,side].set(
             state.entry_pending[rows,side] & ~pending))
+    if _weather_trace is not None:return _lum_update(state,table,pending_battle),_weather_trace
     return _lum_update(state,table,pending_battle)
 
 
@@ -336,8 +342,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     age = state.active_turns + ((live & ~replacement)[:,None] & (active_hp > 0)).astype(jnp.int32)
     if _lifecycle_trace:
         _public_trace=status_callbacks.initial_context(_public_trace,state,table,live)
-    work = initialize(state,table,eligible=live,tie_coin=chance_inputs.initial_tie)._replace(
-        keys=jnp.where(resuming[:,None],state.keys,splits[:,0]),active_turns=age)
+    if _lifecycle_trace:
+        work,_public_trace=initialize(state,table,eligible=live,tie_coin=chance_inputs.initial_tie,
+            _weather_trace=_public_trace)
+        work=work._replace(keys=jnp.where(resuming[:,None],state.keys,splits[:,0]),active_turns=age)
+    else:
+        work = initialize(state,table,eligible=live,tie_coin=chance_inputs.initial_tie)._replace(
+            keys=jnp.where(resuming[:,None],state.keys,splits[:,0]),active_turns=age)
     if _lifecycle_trace:work,_public_trace=_lum_update(work,table,live,_public_trace)
     else:work = _lum_update(work,table,live)
     # All action speeds are frozen before ordinary switches. In Gen 3 a
@@ -414,7 +425,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # Air Lock/Cloud Nine entrant must not re-sort an already queued event.
         callback_speed = callback_speed.at[rows,side].set(_speeds(work,table)[rows,side])
         if table.entry is not None:
-            work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
+            if _lifecycle_trace:
+                work,knocked_out,_public_trace = arrival.enter(work,side,table.entry,
+                    eligible=do_switch & ~replacement,_weather_trace=_public_trace)
+            else:
+                work,knocked_out = arrival.enter(work,side,table.entry,eligible=do_switch & ~replacement)
             switch_faint |= knocked_out
         else:
             work=arrival.restore_sleep(work,side,eligible=do_switch)
@@ -430,7 +445,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             side = jnp.where(order == 0,first_entry,1-first_entry)
             continues = jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
             eligible = replacement & installed[rows,side] & continues & ~switch_faint
-            work,knocked_out = arrival.enter(work,side,table.entry,eligible=eligible)
+            if _lifecycle_trace:
+                work,knocked_out,_public_trace = arrival.enter(work,side,table.entry,
+                    eligible=eligible,_weather_trace=_public_trace)
+            else:
+                work,knocked_out = arrival.enter(work,side,table.entry,eligible=eligible)
             # A hazard KO cancels subsequent queued runSwitch callbacks too.
             switch_faint |= knocked_out
     if _lifecycle_trace:work,_public_trace=_lum_update(work,table,live,_public_trace)

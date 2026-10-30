@@ -256,7 +256,7 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
     # static tables prove no cure possible for other known-status arrivals.
     from . import engine_status_callbacks as status_callbacks
     tape=status_callbacks.initial_context(tape,state,table,ok)
-    updated=transition.initialize(state,table,eligible=ok,tie_coin=tie_coin)
+    updated,tape=transition.initialize(state,table,eligible=ok,tie_coin=tie_coin,_weather_trace=tape)
     complete=ok&jnp.all(~updated.entry_pending,axis=1)&tape.cursor.admitted
     tape=tape._replace(cursor=tape.cursor._replace(initialized=complete,admitted=complete))
     tape=_turn(tape,complete)
