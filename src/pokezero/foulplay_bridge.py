@@ -962,6 +962,9 @@ class ControlledFoulPlayConfig:
     # Source-only programmatic opt-in; no owning backend is assembled by CLI.
     encoder_kind: str = "legacy-mixed"
     owning_terminal_timeout_seconds: float = 5.0
+    # Explicit prospective owning-policy controls; legacy axes stay unchanged.
+    owning_decision_timeout_seconds: float | None = None
+    owning_public_single_line: bool = False
 
     def __post_init__(self) -> None:
         validate_encoder_config(self)
@@ -8480,8 +8483,6 @@ async def _handle_owning_decision_boundary(
     """Raw own policy sees only its actor snapshot; FP coordination is separate."""
     if state.battle_id != session.battle_id or state.seed != session.seed:
         raise ValueError("owning boundary battle/seed mismatch")
-    snapshot = session.boundary(requested_players=requested_players,
-        decision_round=decision_round, requests=state.request_lines)
     state.previous_requested_players = requested_players
     choices = {}
     owner = config.pokezero_player
@@ -8489,18 +8490,37 @@ async def _handle_owning_decision_boundary(
         if phase_progress is not None:
             phase_progress.emit("candidate_policy", "started", seed=state.seed,
                                 seat=owner, decision_round=decision_round)
+        # The limit covers snapshot construction, encode, selection and choice.
+        # Cancellation never submits a late choice. A native worker thread is
+        # not forcibly killed; the owning outer process/job must stay bounded.
+        def candidate():
+            snapshot = session.boundary(requested_players=requested_players,
+                decision_round=decision_round, requests=state.request_lines)
+            decision = session.actor.decide(snapshot,
+                rng=random.Random(f"{state.seed}:{owner}:{decision_round}"))
+            return (snapshot, decision, session.actor.decision_observation(snapshot),
+                    session.actor.choice(snapshot))
         started = time.perf_counter()
-        decision = await asyncio.to_thread(session.actor.decide, snapshot,
-            rng=random.Random(f"{state.seed}:{owner}:{decision_round}"))
+        pending = asyncio.to_thread(candidate)
+        if config.owning_decision_timeout_seconds is None:
+            snapshot, decision, observation, choice = await pending
+        else:
+            snapshot, decision, observation, choice = await asyncio.wait_for(
+                pending, timeout=config.owning_decision_timeout_seconds)
         elapsed = time.perf_counter() - started
-        observation = session.actor.decision_observation(snapshot)
-        choices[owner] = session.actor.choice(snapshot)
+        # A busy event loop/GIL can delay wait_for's timeout callback until
+        # after the candidate completes. Never publish that late result.
+        if (config.owning_decision_timeout_seconds is not None
+                and elapsed >= config.owning_decision_timeout_seconds):
+            raise TimeoutError('owning candidate decision deadline expired')
+        choices[owner] = choice
         if phase_progress is not None:
             phase_progress.emit("candidate_policy", "returned", seed=state.seed,
                                 seat=owner, decision_round=decision_round)
         decision = replace(decision, metadata={**dict(decision.metadata),
             "policy_elapsed_seconds": elapsed,
-            "policy_elapsed_scope": "owning-encode-and-raw-selection",
+            "policy_elapsed_scope": "owning-snapshot-encode-selection-and-choice",
+            "owning_decision_timeout_seconds": config.owning_decision_timeout_seconds,
             "encoder_kind": config.encoder_kind,
             "owner_prefix_sha256": snapshot.prefix_sha256,
             "actor_namespace": snapshot.namespace})
@@ -8510,6 +8530,9 @@ async def _handle_owning_decision_boundary(
             metadata={"policy_id":decision.policy_id,**dict(decision.metadata)}))
         state.decisions.append(decision)
         state.pokezero_decision_players.append(owner)
+    else:
+        session.boundary(requested_players=requested_players,
+            decision_round=decision_round, requests=state.request_lines)
     if config.foulplay_player in requested_players:
         # This legacy state is solely the external opponent's choice decoder;
         # it never enters the owning actor, own context, tensor or trajectory.
