@@ -320,10 +320,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     or _weather_hp_context[1] is not _status_residual_context.weather_profile_data):
                 raise ValueError('registered status residual requires actual birth and same original profile')
             if _status_residual_context.hook_context is not None:
-                raise ValueError('original status hook/history compiler is not registered')
-            # Missing hook context remains UNPROVEN. Speed-domain membership
-            # alone cannot exclude Shed Skin/cures/Damage cancellation hooks.
-            _status_hook_bound=_status_residual_context.hook_context is not None
+                raise ValueError('kernel-event observer does not accept original hook/history context')
+            # This private registration observes the ACTUAL kernel write.
+            # Original Showdown hook differences belong to physics fidelity,
+            # never to an invented source event or a caller proof boolean.
     if _leftovers_context is not None:
         from . import engine_lifecycle_callbacks as lifecycle_callbacks
         from . import engine_leftovers_callbacks as leftovers_callbacks
@@ -1139,7 +1139,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     execution_accounting.Site.STATUS_RESIDUAL,side,active=_execution_status_requested)
         if _status_residual_context is not None:
             # Literal BEFORE values at this exact numerical assignment. The
-            # existing source-site obligation remains unhandled, never credited.
+            # kernel-site ticket may capture its exact appended span later;
+            # no ticket is consumed or physically qualified by this write.
             _status_physical=work.active[rows,side]
             _status_old_hp=_active(work.hp,work,side)
             _status_maximum=_active(work.max_hp,work,side)
@@ -1163,8 +1164,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _weather_hp_record=status_residual_callbacks.retain_profile_device(_weather_hp_record,
                     work,_public_trace.stream_id,_status_residual_context.weather_profile_data,
                     eligible=_execution_status_requested)
+                # Selected kernel-event coverage only. Original-hook/history
+                # equivalence is deliberately not inferred from speed membership.
                 _status_guard_valid=(_weather_hp_record.qualified_birth & _status_cached_speed_ok
-                    & _status_hook_bound & ((_public_trace.refusal&~public_callbacks.UNINSTRUMENTED)==0))
+                    & ((_public_trace.refusal&~public_callbacks.UNINSTRUMENTED)==0))
                 _status_defer=_status_guard_valid
             _public_trace=status_residual_callbacks.record_status_residual_device(_public_trace,
                 side,_status_physical,_status_old_hp,_active(work.hp,work,side),_status_maximum,

@@ -1,4 +1,4 @@
-"""Registered status dataflow with original hook/history support CLOSED."""
+"""Selected actual kernel-event coverage; original physics remains unqualified."""
 import ast
 import inspect
 from pathlib import Path
@@ -30,24 +30,37 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
     def same(self,a,b):
         for x,y in zip(jax.tree.leaves(a),jax.tree.leaves(b)):np.testing.assert_array_equal(x,y)
 
-    def start(self,*,toxic=False,lethal=False,tie=False):
+    def start(self,*,toxic=False,lethal=False,tie=False,warmup=True):
         session=fixtures.WeatherHPRuntimeTests.construct(self,tie=tie)
         core=session.state.core
-        # Explicit tiny component state; no proof of real status hook history.
-        state=core.engine._replace(item=j.zeros_like(core.engine.item),
-            moves=core.engine.moves.at[:,0,0,0].set(self.f.ids['raindance']),
-            status=core.engine.status.at[:,0,0].set(m.TOX if toxic else m.BRN).at[:,1,5].set(m.PSN),
-            status_counter=core.engine.status_counter.at[:,0,0].set(15 if toxic else 0))
+        # Establish the nonphysical current target with an ACTUAL clean
+        # kernel switch first. Injecting PSN into the incoming bench would
+        # correctly trigger the separate uninstrumented entry-status family.
+        clean=core.engine._replace(item=j.zeros_like(core.engine.item),
+            moves=core.engine.moves.at[:,:,:,0].set(self.f.ids['raindance']))
+        if warmup:
+            warm=t.step_with_chance(clean,j.tile(j.array([[0,8]],j.int32),(2,1)),self.f.table,
+                self.f().chance(),_public_trace=life._tape(core.cursor,self.f.producer,64),
+                _lifecycle_trace=True,_weather_hp_context=(core.weather_profile,self.profile.device))
+            current,birth,raw=warm.callbacks.cursor,warm.weather_profile,warm.step.state
+        else:
+            current,birth,raw=core.cursor,core.weather_profile,clean
+        # Explicit component pre-state after a real installation. This proves
+        # the next kernel write, not original Showdown status-hook history.
+        state=raw._replace(
+            status=raw.status.at[:,0,0].set(m.TOX if toxic else m.BRN).at[:,1,5].set(m.PSN),
+            status_counter=raw.status_counter.at[:,0,0].set(15 if toxic else 0))
         if lethal:state=state._replace(hp=state.hp.at[:,0,0].set(1))
-        return state,core.cursor,core.weather_profile
+        return state,current,birth
 
-    def run_step(self,state,cursor,record,*,registered=True,prior=1,capacity=64,context=None,weather_data=None):
+    def run_step(self,state,cursor,record,*,registered=True,prior=1,capacity=64,context=None,weather_data=None,actions=None):
         tape=life._tape(cursor,self.f.producer,capacity)._replace(refusal=j.full_like(cursor.turn,prior))
         ledger=e.initialize(cursor.stream_id,compiled=self.accounting,capacity=32,receipt_capacity=capacity)
         tape=e.begin_on_tape(tape,ledger,self.accounting.device,active=~state.done)
         data=self.profile.device if weather_data is None else weather_data
         ctx=(c.RegisteredStatusResidualContext(self.helper.device,data) if registered else life.StatusResidualContext(self.helper.device)) if context is None else context
-        return t.step_with_chance(state,j.tile(j.array([[0,8]],j.int32),(state.hp.shape[0],1)),self.f.table,
+        actions=j.tile(j.array([[0,0]] if actions is None else [actions],j.int32),(state.hp.shape[0],1))
+        return t.step_with_chance(state,actions,self.f.table,
             self.f().chance(),_public_trace=tape,_lifecycle_trace=True,_weather_hp_context=(record,data),
             _status_residual_context=ctx)
 
@@ -56,16 +69,18 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         mask=(j.arange(ledger.site.shape[1])<ledger.count[row])&(ledger.site[row]==int(e.Site.STATUS_RESIDUAL))
         return ledger.stage[row][mask]
 
-    def test_actual_registered_positive_keeps_missing_original_hooks_unknown_and_stage1(self):
+    def test_actual_kernel_positive_captures_literal_spans_without_claiming_original_hooks(self):
         state,cursor,record=self.start();result=self.run_step(state,cursor,record)
-        default=t.step_with_chance(state,j.tile(j.array([[0,8]],j.int32),(2,1)),self.f.table,self.f().chance())
+        default=t.step_with_chance(state,j.tile(j.array([[0,0]],j.int32),(2,1)),self.f.table,self.f().chance())
         self.same(result.step.state,default.state)
         self.assertTrue(bool(result.weather_profile.qualified_birth.all()))
         for row in range(2):
-            self.assertEqual(self.status_entries(result,row).tolist(),[1,1])
+            self.assertEqual(self.status_entries(result,row).tolist(),[2,2])
             words=np.asarray(result.callbacks.words[row,:int(result.callbacks.count[row])]);status=words[words[:,0]==20]
             self.assertEqual(len(status),2);self.assertTrue(bool((status[:,6]>0).all()))
-            self.assertTrue(int(result.callbacks.refusal[row])&256);self.assertTrue(int(result.callbacks.refusal[row])&512)
+            self.assertEqual(int(result.callbacks.refusal[row])&768,0)
+            self.assertEqual(sorted(status[:,4].tolist()),[0,5])
+            self.assertEqual(sorted(status[:,8].tolist()),[m.BRN,m.PSN])
             self.assertFalse(bool(e.report(result.callbacks.execution.ledger,tables=self.accounting.device).scoped_drained[row]))
         diagnostic=self.run_step(state,cursor,record,registered=False)
         self.same(diagnostic.step.state,result.step.state)
@@ -91,10 +106,19 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
             state,cursor,record=self.start(**kwargs)
             if not kwargs:record=record._replace(qualified_birth=j.array([False,True]))
             result=self.run_step(state,cursor,record)
-            self.assertTrue(bool((result.callbacks.refusal&256).all()))
-            self.assertTrue(bool((result.callbacks.refusal&512).all()))
-            for row in range(2):self.assertTrue(bool((self.status_entries(result,row)==1).all()))
-            if not kwargs:self.assertEqual(result.weather_profile.qualified_birth.tolist(),[False,True])
+            ledger=result.callbacks.execution.ledger
+            if kwargs:
+                self.assertTrue(bool((result.callbacks.refusal&256).all()))
+                self.assertTrue(bool((result.callbacks.refusal&512).all()))
+                for row in range(2):
+                    selected=(j.arange(ledger.site.shape[1])<ledger.count[row])&(ledger.site[row]==int(e.Site.STATUS_RESIDUAL))
+                    unsafe=selected if kwargs.get('tie') else selected&(ledger.side[row]==0)
+                    self.assertTrue(bool((ledger.stage[row][unsafe]==1).all()))
+            else:
+                self.assertEqual(result.weather_profile.qualified_birth.tolist(),[False,True])
+                self.assertEqual(self.status_entries(result,0).tolist(),[1,1])
+                self.assertEqual(self.status_entries(result,1).tolist(),[2,2])
+                self.assertEqual(int(result.callbacks.refusal[1])&768,0)
             if kwargs.get('toxic'):
                 for row in range(2):
                     words=np.asarray(result.callbacks.words[row]);tox=words[(words[:,0]==20)&(words[:,8]==m.TOX)]
@@ -122,7 +146,7 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         kwargs=dict(cursor=cursor,catalog=self.f.producer,expected_binding=self.f.producer.binding,
             expected_engine_binding=np.array(self.f.producer.engine_binding,np.uint32),chance_inputs=self.f().chance(),
             status_residual_compiled=self.helper)
-        for mode in ('retained',True,'accepted'):
+        for mode in ('kernel-event','retained',True,'accepted'):
             with self.assertRaises(ValueError):life.trace_step(state,j.full((2,2),0,j.int32),self.f.table,
                 status_residual_mode=mode,**kwargs)
         call=lambda:life.trace_step(state,j.full((2,2),0,j.int32),self.f.table,**kwargs)
@@ -143,7 +167,7 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         tape=life._tape(cursor,self.f.producer,64)
         ledger=e.initialize(ids,compiled=self.accounting,capacity=32)
         tape=e.begin_on_tape(tape,ledger,self.accounting.device,active=~state.done)
-        result=t.step_with_chance(state,j.tile(j.array([[0,8]],j.int32),(8,1)),self.f.table,chance,
+        result=t.step_with_chance(state,j.tile(j.array([[0,0]],j.int32),(8,1)),self.f.table,chance,
             _public_trace=tape,_lifecycle_trace=True,_weather_hp_context=(record,self.profile.device),
             _status_residual_context=c.RegisteredStatusResidualContext(self.helper.device,self.profile.device))
         self.assertEqual(result.weather_profile.qualified_birth[2::4].tolist(),[False,False])
@@ -151,9 +175,29 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
             self.assertEqual(int(result.callbacks.count[row]),0)
             self.same(result.step.state.hp[row],state.hp[row])
             self.same(jax.tree.map(lambda x:x[row],result.weather_profile),jax.tree.map(lambda x:x[row],record))
+        for row in (0,4):self.assertEqual(self.status_entries(result,row).tolist(),[2,2])
+        for row in (2,6):self.assertEqual(self.status_entries(result,row).tolist(),[1,1])
         for name in ('engine_binding','source_binding','move_binding','producer_binding'):
             self.assertEqual(getattr(result.callbacks,name).shape,(8,))
             self.same(getattr(result.callbacks,name),getattr(self.helper.device,name))
+    def test_prior_refusals_and_overflow_cannot_open_kernel_event_coverage(self):
+        state,cursor,record=self.start()
+        for prior in (257,129,513):
+            result=self.run_step(state,cursor,record,prior=prior)
+            self.assertTrue(bool(((result.callbacks.refusal&prior)==prior).all()))
+            for row in range(2):self.assertTrue(bool((self.status_entries(result,row)==1).all()))
+            self.assertFalse(bool(e.report(result.callbacks.execution.ledger,tables=self.accounting.device).scoped_drained.any()))
+        # A different actual kernel family remains unhandled: newly arriving
+        # status on the original physical5 arrival emits UNKNOWN_STATUS128.
+        # The selected observer must preserve it and claim neither span.
+        incoming,entry_cursor,entry_record=self.start(warmup=False)
+        blocked=self.run_step(incoming,entry_cursor,entry_record,actions=[0,8])
+        self.assertTrue(bool((blocked.callbacks.refusal&128).all()))
+        for row in range(2):self.assertTrue(bool((self.status_entries(blocked,row)==1).all()))
+        result=self.run_step(state,cursor,record,capacity=1)
+        self.assertTrue(bool((result.callbacks.refusal&public.OVERFLOW).all()))
+        self.assertFalse(bool((result.callbacks.execution.ledger.stage==2).any()))
+
     def test_default_numeric_ast_parent_identity_and_detect_changed_residual_input(self):
         old=ast.parse(subprocess.check_output(['git','show','df4c0dc5:gpu_engine/transition.py'],text=True))
         new=ast.parse(Path(t.__file__).read_text())

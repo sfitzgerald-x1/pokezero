@@ -8,16 +8,16 @@ source damage tag is '[from] psn'. The caller must capture the actual numerical
 HP/counter assignment. No damage, counter progression or faint is reconstructed.
 
 Diagnostic attempts always latch UNKNOWN256. A PRIVATE registered owning
-context may defer ONLY this new emitter latch on supported nonlethal BRN/PSN
-writes after separately proven source hooks/history as well as sticky birth
-and cached-speed checks. The actual registered caller currently has no original
-hook compiler: its missing hook_context stays CLOSED/unknown, never proofTrue. Prior bits and
-invalid/no-output/TOX/lethal/overflow claims remain unknown. Positive lethal writes are explicitly
-UNQUALIFIED diagnostics; this helper emits no faint and cannot prove its queue
-order. Original source Damage/status/ability hooks, no-output paths, owning
-history and public consumer registration remain unproved. Legacy tapes are
-unchanged. Only the pure device seam is suitable inside a cached JIT; original
-host compiler/metadata/catalog guards must run outside every owning invocation.
+kernel-event observer may defer ONLY this new emitter latch on literal,
+nonlethal BRN/PSN writes after sticky birth and actual cached-speed checks.
+This observes this kernel's executed write; it does not prove original
+Showdown hooks, physical equivalence, exhaustive source events or no-output
+paths. Original-hook/history diagnostics remain separate. Prior bits and
+invalid/no-output/TOX/lethal/overflow claims remain unknown. Positive lethal
+writes are explicitly UNQUALIFIED diagnostics; this helper emits no faint.
+Legacy tapes are unchanged. Only the pure device seam belongs inside a cached
+JIT; original host compiler/metadata/catalog guards must run outside every
+owning invocation.
 """
 from dataclasses import dataclass
 import hashlib
@@ -53,15 +53,17 @@ class Data(NamedTuple):
 
 
 class RegisteredStatusResidualContext(NamedTuple):
-    """PRIVATE statics; not an accepted boolean or constructor attestation.
+    """PRIVATE kernel-event statics, not original-physics qualification.
 
-    The owning transition also requires actual BirthRecord and the SAME original
+    The owning transition requires actual BirthRecord and the SAME original
     ProfileData object. Host driver must check both original compiler holders.
+    Registration enables only selected literal kernel writes and transport;
+    original hook/history diagnostics do not gate or establish that observation.
     """
     data: object
     weather_profile_data: object
-    # Original source hook/history proof is deliberately NOT supplied by the
-    # speed profile. No implementation currently registers a non-None value.
+    # Reserved original-hook diagnostic context, not a kernel-event opener.
+    # This observer registers no non-None value and rejects caller proof values.
     hook_context: object = None
 
 
