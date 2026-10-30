@@ -118,11 +118,18 @@ class StatusCallbacksTests(unittest.TestCase):
             new,ps=public_wire.project_lines(wire[row],lines,**v4.wire_kwargs(self.catalog))
             rows.append([e for p in ps for e in p.events]);next_wire.append(new)
         ns={k:np.array(getattr(self.compiled.device.namespaces,k)) for k in full._NAMES if k!='source_binding'}
-        expected=next(inputs.pack_chunks(np.array(frame.cursor.stream_id),rows,
+        expected=list(inputs.pack_chunks(np.array(frame.cursor.stream_id),rows,
             source_binding=np.array(self.catalog.source.device.binding),**ns))
-        want,error=v4.fold_chunk(current,expected,self.catalog);self.assertEqual(error.tolist(),[0,0])
+        want=current
+        for chunk in expected:
+            want,error=v4.fold_chunk(want,chunk,self.catalog);self.assertEqual(error.tolist(),[0,0])
         result=self.fast(state,frame,current);self.assertEqual(result.projection.error.tolist(),[0,0])
-        self.same(result.projection.chunk,expected);self.same(result.public,want)
+        self.same(result.projection.chunk,expected[0]);self.same(result.public,want)
+        for i,chunk in enumerate(expected):
+            self.same(result.projection.frames.words[i],chunk.words)
+            self.same(result.projection.frames.valid[i],chunk.valid)
+            self.same(result.projection.frames.more[i],chunk.more)
+        self.assertFalse(bool(result.projection.frames.valid[len(expected):].any()))
         self.assertFalse(bool(result.projection.full_encoder_admitted.any()))
         self.assertFalse(bool(result.projection.B4_qualified.any()))
         return result,next_wire

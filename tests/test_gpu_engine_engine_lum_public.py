@@ -1,5 +1,6 @@
 """Actual Lum receipts joined into pinned full controls; no scientific games."""
 import unittest
+from unittest.mock import patch
 import numpy as np
 import jax
 import jax.numpy as j
@@ -62,10 +63,10 @@ class LumPublicTests(unittest.TestCase):
             self.assertFalse(bool(result.projection.full_line_consumers_complete.any()))
 
     def test_wrong_old_status_and_wrong_item_roll_back_only_bad_row(self):
-        frame=self.setup_frame();actual=self.step(frame,[[0,0],[0,0]])
+        frame=self.setup_frame(5);actual=self.step(frame,[[0,8],[0,8]])
         s,p=self.start(frame,j.array([0,1],j.int32));initial=self.fast(s,frame,p)
         index=int(np.flatnonzero(np.asarray(actual.callbacks.words[0,:,0])==item.LUM_CONSUMED)[0])
-        for column,value in ((6,m.BRN),(5,0),(8,2),(9,1),(4,5)):
+        for column,value in ((6,m.BRN),(5,0),(8,2),(9,1),(4,0)):
             bad=actual._replace(callbacks=actual.callbacks._replace(words=actual.callbacks.words.at[0,index,column].set(value)))
             result=self.fast(initial.projection.state,bad,initial.public)
             self.assertNotEqual(int(result.projection.error[0]),0)
@@ -89,6 +90,25 @@ class LumPublicTests(unittest.TestCase):
         result=full.project_and_fold(initial.projection.state,actual,disabled,initial.public,self.catalog)
         self.assertFalse(bool(result.projection.chunk.valid.any()))
         self.same(result.public,initial.public)
+
+    def test_large_frame_drains_all_chunks_and_late_error_rolls_back_whole_frame(self):
+        frame=self.setup_frame();actual=self.step(frame,[[0,0],[0,0]])
+        s,p=self.start(frame,j.array([0,1],j.int32))
+        initial,wire=self.compare(s,frame,p,[public_wire.WireState()]*2)
+        result,_=self.compare(initial.projection.state,actual,initial.public,wire)
+        self.assertTrue(bool(result.projection.chunk.more.all()))
+        self.assertTrue(bool(result.projection.frames.valid[1].any()))
+        self.assertFalse(bool(result.public.cursor.needs_more.any()))
+        projection=full.project_frame(initial.projection.state,actual,self.compiled.device)
+        damaged=projection.frames._replace(words=projection.frames.words.at[1,0,0,1].add(9))
+        with patch.object(full,'project_frame',return_value=projection._replace(frames=damaged)):
+            rejected=full.project_and_fold(initial.projection.state,actual,self.compiled.device,initial.public,self.catalog)
+        self.assertNotEqual(int(rejected.projection.error[0]),0)
+        self.assertEqual(int(rejected.projection.error[1]),0)
+        self.assertFalse(bool(rejected.projection.frames.valid[:,0].any()))
+        self.assertEqual(int(rejected.public.cursor.sequence[0]),int(initial.public.cursor.sequence[0]))
+        self.assertEqual(int(rejected.projection.state.sequence[0]),int(initial.projection.state.sequence[0]))
+        self.same(full._commit_public(j.array([False,True]),initial.public,rejected.public),rejected.public)
 
 
 if __name__=='__main__':unittest.main()
