@@ -3,6 +3,7 @@ import asyncio
 from copy import deepcopy
 from pathlib import Path
 import time
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -31,9 +32,11 @@ class RuntimeControlsTests(unittest.TestCase):
                 config=f.config(owner=owner,owning_decision_timeout_seconds=.5,
                     owning_public_single_line=single)
                 events=f.events(config,owner_lines=['|turn|1',fixtures.request(owner)])
+                events[-1]['lines'].append('|')
                 with patch.object(LiveProtocolActor,'accept_owner_stream',new=accepted):
                     result,memory,_=asyncio.run(f.game(config,events))
-                self.assertEqual(all(len(group)==1 for group in groups),single)
+                self.assertEqual(all(len(group)==1 for group in groups[:-1]),single)
+                self.assertEqual(groups[-1],('|win|'+config.pokezero_username,'|'))
                 self.assertEqual(result.pokezero_submitted_choice_players,(owner,))
                 prefixes.append(result.encoder_provenance['actor_receipt']['prefix_sha256'])
                 choices.append(memory.sent[1]['choices'][owner])
@@ -45,6 +48,22 @@ class RuntimeControlsTests(unittest.TestCase):
             self.assertEqual(prefixes[0],prefixes[1])
             self.assertEqual(choices[0],choices[1])
             self.assertEqual(observed[0],observed[1])
+
+    def test_canonical_tie_terminal_padding_preserves_literals_and_closure(self):
+        f=self.fixture()
+        for owner in ('p1','p2'):
+            config=f.config(owner=owner,owning_decision_timeout_seconds=.5,
+                owning_public_single_line=True)
+            events=f.events(config)
+            for event in events:
+                if event.get('type')=='stream':
+                    event['lines']=['|tie' if line.startswith('|win|') else line
+                                    for line in event['lines']]
+            events[-1]['lines']+=['|','|']
+            result,_,_=asyncio.run(f.game(config,events))
+            self.assertTrue(result.tied)
+            self.assertEqual(f.backends[-1].lines[-3:],['|tie','|','|'])
+            self.assertEqual(result.encoder_provenance['actor_receipt']['status'],'TERMINAL_UNQUALIFIED')
 
     def test_encode_timeout_submits_no_late_choice_or_opponent_work(self):
         f=self.fixture(); original=fixtures.FixturePythonBackend.encode
@@ -59,6 +78,27 @@ class RuntimeControlsTests(unittest.TestCase):
             self.assertFalse(any(x.get('type')=='choices' for x in memory.sent))
             self.assertEqual(len(f.trajectories),count)
         f.fp.assert_not_awaited()
+
+    def test_delayed_timeout_callback_cannot_publish_late_result(self):
+        f=self.fixture(); original=fixtures.FixturePythonBackend.encode
+        def holds_gil(backend,*args,**kwargs):
+            until=time.perf_counter()+.04
+            while time.perf_counter()<until: pass
+            return original(backend,*args,**kwargs)
+        previous=sys.getswitchinterval()
+        try:
+            sys.setswitchinterval(.1)
+            for owner in ('p1','p2'):
+                config=f.config(owner=owner,owning_decision_timeout_seconds=.002)
+                memory=fixtures.MemoryBridge(f.events(config))
+                count=len(f.trajectories)
+                with patch.object(fixtures.FixturePythonBackend,'encode',new=holds_gil):
+                    with self.assertRaises(TimeoutError):
+                        asyncio.run(f.game(config,memory.events,memory=memory))
+                self.assertFalse(any(x.get('type')=='choices' for x in memory.sent))
+                self.assertEqual(len(f.trajectories),count)
+            f.fp.assert_not_awaited()
+        finally:sys.setswitchinterval(previous)
 
     def test_choice_decoding_is_inside_deadline(self):
         f=self.fixture();original=LiveProtocolActor.choice

@@ -8508,6 +8508,11 @@ async def _handle_owning_decision_boundary(
             snapshot, decision, observation, choice = await asyncio.wait_for(
                 pending, timeout=config.owning_decision_timeout_seconds)
         elapsed = time.perf_counter() - started
+        # A busy event loop/GIL can delay wait_for's timeout callback until
+        # after the candidate completes. Never publish that late result.
+        if (config.owning_decision_timeout_seconds is not None
+                and elapsed >= config.owning_decision_timeout_seconds):
+            raise TimeoutError('owning candidate decision deadline expired')
         choices[owner] = choice
         if phase_progress is not None:
             phase_progress.emit("candidate_policy", "returned", seed=state.seed,

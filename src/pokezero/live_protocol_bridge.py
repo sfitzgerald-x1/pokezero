@@ -155,7 +155,16 @@ class OwningWireSession:
             _require(not self.terminal_streams or terminal in self.terminal_streams.values(),
                      'actual terminal streams disagree')
         if role==self.owner:
-            groups = ((line,) for line in lines) if self.config.owning_public_single_line else (tuple(lines),)
+            groups = [tuple(lines)]
+            if self.config.owning_public_single_line:
+                groups = []
+                for index, line in enumerate(lines):
+                    # The actor seals on terminal consumption. Preserve its
+                    # accepted terminal+padding suffix as one atomic call.
+                    if _terminal(line):
+                        groups.append(tuple(lines[index:]))
+                        break
+                    groups.append((line,))
             for group in groups:
                 self.actor.accept_owner_stream(battle_id=self.battle_id,owner=self.owner,
                     generation=self.actor.generation,prefix_sha256=self.actor.prefix_sha256,lines=group)
