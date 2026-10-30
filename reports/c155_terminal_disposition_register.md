@@ -824,6 +824,11 @@ The optional search-label change adds only
 JSON corpus: 426 members before, 427 after. It records a fresh full execution on
 the current source; every historical receipt remains unchanged.
 
+For #1778, the tracked-JSON selector gives 427 members on main `148af0cc` and
+428 on the integrated branch. The sole addition is the fresh complete
+`rollout_leaf_witness_mutation_battery_20261029_live_protocol_bridge.json`;
+no member was removed and all 427 historical Git blobs are unchanged.
+
 For #1635, re-running the tracked-JSON selector against main `a310e5ed` gives 421
 members and the integrated branch gives 422. The sole addition is the freshly executed
 `rollout_leaf_witness_mutation_battery_20261023_regret_selection.json`; no member was removed
@@ -1004,7 +1009,7 @@ added to the derivation and not to this table is red, and so is the reverse.
 | `bar.roll_window_holdout_fraction` | 0.899 % |
 | `bar.support_gated_dev` | 8.689 % |
 | `bar.support_gated_holdout` | 9.185 % |
-| `base.expected_counter_artifacts` | 427 |
+| `base.expected_counter_artifacts` | 428 |
 | `base.expected_sweep_artifacts` | 115 |
 | `base.patch_stack` | 100 |
 | `base.section3_rows` | 82 |

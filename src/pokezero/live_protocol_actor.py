@@ -15,8 +15,6 @@ from types import MappingProxyType, MethodType
 from typing import Any, Callable
 import weakref
 
-import numpy as np
-
 from .observation import ObservationPerspective, PokeZeroObservationV0
 from .policy import PolicyDecision
 
@@ -45,6 +43,8 @@ def _release_history(owner):
 
 
 def _mutable_history(root):
+    import numpy as np
+
     pending, seen = [root], set()
     while pending:
         value = pending.pop()
@@ -74,7 +74,16 @@ def _mutable_history(root):
 
 
 def _terminal(line):
-    return line.startswith('|win|') or line == '|tie' or line.startswith('|tie|')
+    parts = line.split('|')
+    kind = parts[1] if len(parts) > 1 else ''
+    if kind == 'win':
+        _require(len(parts) == 3 and bool(parts[2]) and parts[2] == parts[2].strip(),
+                 'canonical owning win lifecycle required')
+        return True
+    if kind == 'tie':
+        _require(line == '|tie', 'canonical owning tie lifecycle required')
+        return True
+    return False
 
 
 def _same_callable(actual, expected):
@@ -367,8 +376,10 @@ class PythonBackend(OwnedProvider):
 
 
 class JaxBackend(OwnedProvider):
-    """Existing atomic public fold plus own-request encoding and target checks."""
+    """Public fold, own requests, and explicit non-feature terminal lifecycle."""
     def __init__(self, contract, *, catalog, battle_id, owner, stream_id):
+        import numpy as np
+
         super().__init__(contract)
         from .recorded_encoder_runner import JaxRecordedAdapter
         _require(catalog.checkpoint_sha256 == contract.checkpoint_sha256
@@ -383,8 +394,11 @@ class JaxBackend(OwnedProvider):
             and self.adapter.jax.config.jax_default_matmul_precision == 'highest', 'JAX precision differs')
         self.adapter.reset(stream_id=stream_id, battle_id=battle_id)
         self._catalog_binding = np.asarray(catalog.binding).copy()
+        self.terminal_lifecycle_line = None
 
     def _check_namespace(self):
+        import numpy as np
+
         _require(self.catalog.checkpoint_sha256 == self.contract.checkpoint_sha256
             and self.catalog.source.source_hash == self.contract.belief_set_source_hash
             and _vocab_sha(self.catalog.vocabulary) == self.contract.category_vocab_sha256
@@ -395,11 +409,21 @@ class JaxBackend(OwnedProvider):
 
     def ingest(self, lines):
         self._check_namespace()
+        _require(self.terminal_lifecycle_line is None, 'JAX lifecycle already terminal')
         # Flush segments at EVERY request: never move a request across later
         # public evidence, even though JAX private features are boundary-local.
         segment = []
         for line in lines:
-            if line.startswith('|request|'):
+            if self.terminal_lifecycle_line is not None:
+                _require(line == '|', 'postterminal JAX lifecycle input')
+            elif _terminal(line):
+                if segment:
+                    self.adapter.feed(tuple(segment)); segment = []
+                # Canonical win/tie is consumed as a host lifecycle control,
+                # not mislabeled as an implemented public feature event. The
+                # actor retains its literal bytes in the owning prefix journal.
+                self.terminal_lifecycle_line = line
+            elif line.startswith('|request|'):
                 if segment:
                     self.adapter.feed(tuple(segment)); segment = []
                 self.adapter.encoder.parse_own_requests(self.catalog,
@@ -410,7 +434,10 @@ class JaxBackend(OwnedProvider):
             self.adapter.feed(tuple(segment))
 
     def encode(self, snapshot):
+        import numpy as np
+
         self._check_namespace()
+        _require(self.terminal_lifecycle_line is None, 'no encoding after JAX terminal lifecycle')
         side = int(self.owner[1])-1
         packet = _packet(snapshot.own_request_line, self.owner)
         arrays = self.adapter.encode(packet, owner_side=side)
@@ -473,6 +500,7 @@ class LiveProtocolActor:
         self._decision_generation, self._choice, self.error, self.close_error = None, None, None, None
         self._decision_observation, self._decision_snapshot = None, None
         self._decision_request_count, self._terminal = None, False
+        self._terminal_lifecycle_line = None
         self._backend = self._policy = None
         self.status = 'ACTIVE'
         try:
@@ -512,12 +540,14 @@ class LiveProtocolActor:
             _require(type(lines) is tuple and bool(lines) and all(type(s) is str and s.startswith('|')
                 and '\n' not in s and '\r' not in s for s in lines), 'literal owning line tuple required')
             terminal_seen = False
+            terminal_line = None
             for line in lines:
                 # A bare pipe is the existing protocol's empty separator.
                 # It contains no event or private request. No other annotation
                 # or gameplay after a terminal is admitted by this actor.
                 _require(not terminal_seen or line == '|', 'postterminal line within owner chunk')
-                terminal_seen |= _terminal(line)
+                if _terminal(line):
+                    terminal_seen, terminal_line = True, line
             requests = [line for line in lines if line.startswith('|request|')]
             for line in requests:
                 _packet(line,self.owner)
@@ -529,6 +559,7 @@ class LiveProtocolActor:
             if requests:
                 self._request_line = requests[-1]
             self._terminal = terminal_seen
+            self._terminal_lifecycle_line = terminal_line
             self.generation += 1
             self._snapshot, self._choice = None, None
             self._decision_observation, self._decision_snapshot = None, None
@@ -578,6 +609,8 @@ class LiveProtocolActor:
             self._poison(error); raise
 
     def _observation(self, encoded, snapshot):
+        import numpy as np
+
         arrays = encoded if type(encoded) is dict else {k:getattr(encoded,k) for k in SHAPES}
         _require(set(arrays) == set(SHAPES), 'exact five owning tensors required')
         result = {}
@@ -637,5 +670,9 @@ class LiveProtocolActor:
         return dict(status='FAILED_CLOSED' if was_poisoned else 'TERMINAL_UNQUALIFIED' if self._terminal else 'ABORTED_UNQUALIFIED',
             battle_id=self.battle_id,owner=self.owner,generation=self.generation,
             terminal_seen=self._terminal,
+            terminal_lifecycle=(dict(consumed=True,kind=self._terminal_lifecycle_line.split('|')[1],
+                line_sha256=_sha(self._terminal_lifecycle_line.encode()),
+                scope='OWNING_HOST_LIFECYCLE_NOT_A_DEVICE_FEATURE')
+                if self._terminal_lifecycle_line is not None else None),
             owner_lines=len(self._lines),owner_requests=self._request_count,
             prefix_sha256=self.prefix_sha256,error=self.error,close_error=self.close_error,**UNQUALIFIED)
