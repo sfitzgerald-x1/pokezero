@@ -52,14 +52,35 @@ class WeatherCallsiteTests(unittest.TestCase):
                     return [self.visit(n) for n in node.orelse]
                 return self.generic_visit(node)
             def visit_FunctionDef(self,node):
-                if '_weather_trace' in [a.arg for a in node.args.kwonlyargs]:
-                    i=[a.arg for a in node.args.kwonlyargs].index('_weather_trace')
-                    node.args.kwonlyargs.pop(i);node.args.kw_defaults.pop(i)
+                for name in ('_weather_trace','_weather_hp_context'):
+                    if name in [a.arg for a in node.args.kwonlyargs]:
+                        i=[a.arg for a in node.args.kwonlyargs].index(name)
+                        node.args.kwonlyargs.pop(i);node.args.kw_defaults.pop(i)
                 return self.generic_visit(node)
-        def normalized(raw):return ast.dump(Strip().visit(ast.parse(raw)),include_attributes=False)
+            def visit_ClassDef(self,node):
+                if node.name=='WeatherProfileTracedStep':
+                    # Remove ONLY this non-executable tracing return type, not
+                    # arbitrary classes or any default mathematical statement.
+                    expected=ast.parse('''class WeatherProfileTracedStep(NamedTuple):
+    """Private owning-profile path only; legacy StepResult/TracedStep unchanged."""
+    step: StepResult
+    callbacks: object
+    weather_profile: object
+''').body[0]
+                    if ast.dump(node)!=ast.dump(expected):raise ValueError('changed observer type declaration')
+                    return None
+                return self.generic_visit(node)
+        def normalized(raw):
+            tree=Strip().visit(ast.parse(raw))
+            if any(isinstance(x,ast.Name) and x.id=='WeatherProfileTracedStep' for x in ast.walk(tree)):
+                raise ValueError('observer type is reachable from the default program')
+            return ast.dump(tree,include_attributes=False)
         old=subprocess.check_output(['git','show','d38caf8808a87cb64319b8e3bf2f358c10729399:gpu_engine/transition.py'])
         from pathlib import Path
-        self.assertEqual(normalized(old),normalized(Path(transition.__file__).read_text()))
+        current=Path(transition.__file__).read_text()
+        self.assertEqual(normalized(old),normalized(current))
+        with self.assertRaises(ValueError):normalized(current.replace('weather_profile: object', 'weather_profile: object = 1',1))
+        with self.assertRaises(ValueError):normalized(current+'\nBAD=WeatherProfileTracedStep\n')
 
 
 if __name__=='__main__':unittest.main()
