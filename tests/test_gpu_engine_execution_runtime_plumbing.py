@@ -1,6 +1,8 @@
 """Owning partial accounting plumbing; no exhaustive-source/model/game proof."""
 from dataclasses import replace
 import json
+import gc
+import weakref
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -50,7 +52,7 @@ class ExecutionRuntimePlumbingTests(unittest.TestCase):
         # final-state reconstruction. This does not attest site exhaustiveness.
         tape=frame.callbacks;original=tape
         for index in range(tape.words.shape[1]):
-            raw=original.words[:,index];active=(index<original.count)&(raw[:,0]==17)
+            raw=original.words[:,index];active=(index<original.count)&(raw[:,0]==17)&(tape.execution.ledger.claimed[:,index]==0)
             if not bool(j.any(active)):continue
             cursor=original.cursor._replace(turn=original.event_turn[:,index],phase=original.event_phase[:,index],
                 generation=original.event_generation[:,index])
@@ -140,7 +142,7 @@ class ExecutionRuntimePlumbingTests(unittest.TestCase):
         for owner in result.owners:
             self.assertFalse(bool(owner.scored.any()))
             self.assertFalse(bool(owner.encoded.observation.attention_mask[0].any()))
-            self.assertFalse(bool(owner.facts.admitted[0]))
+            self.assertFalse(bool(owner.own.admitted[0]))
 
     def test_b8_zero_and_mixed_rows_preserve_globals_and_private_history(self):
         session=self.construct(8);before=session.result;r=d._checked(self.prepared)
@@ -156,6 +158,17 @@ class ExecutionRuntimePlumbingTests(unittest.TestCase):
             self.same(d._observer_rows(mask,old,new),new)
         self.same(d._core_rows(mask,before.state.core._replace(originals=None,constructors=None),
             later.state.core._replace(originals=None,constructors=None)),later.state.core._replace(originals=None,constructors=None))
+
+    def test_phase_guard_handle_is_weak_not_a_registry_self_reference(self):
+        r=d._checked(self.prepared)
+        self.assertIs(r['prepared'](),self.prepared)
+        temporary=d.prepare(r['request_compiled'],r['own_compiled'],public_mode='retained-full',
+            leftovers_compiled=r['leftovers_compiled'],leftovers_mode='retained',account_source_sites=True,
+            fake_forward=lambda _:d.FakeScores(j.zeros(9),j.array(0,j.int32)))
+        reference=weakref.ref(temporary)
+        del temporary
+        gc.collect()
+        self.assertIsNone(reference())
 
     def test_explicit_original_compiler_modes_and_host_tracing_boundaries(self):
         r=d._checked(self.prepared)
