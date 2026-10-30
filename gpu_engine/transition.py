@@ -307,9 +307,18 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     if _leftovers_context is not None:
         from . import engine_lifecycle_callbacks as lifecycle_callbacks
         from . import engine_leftovers_callbacks as leftovers_callbacks
-        if (not _lifecycle_trace or type(_leftovers_context) is not lifecycle_callbacks.LeftoversContext
+        _leftovers_registered=type(_leftovers_context) is leftovers_callbacks.RegisteredLeftoversContext
+        if (not _lifecycle_trace or type(_leftovers_context) not in
+                (lifecycle_callbacks.LeftoversContext,leftovers_callbacks.RegisteredLeftoversContext)
                 or type(_leftovers_context.data) is not leftovers_callbacks.Data):
             raise ValueError('typed owning lifecycle Leftovers context required')
+        if _leftovers_registered:
+            from . import engine_weather_speed_profile as weather_speed_profile
+            if (type(_leftovers_context.weather_profile_data) is not weather_speed_profile.ProfileData
+                    or type(_weather_hp_context) is not tuple or len(_weather_hp_context)!=2
+                    or type(_weather_hp_context[0]) is not weather_speed_profile.BirthRecord
+                    or _weather_hp_context[1] is not _leftovers_context.weather_profile_data):
+                raise ValueError('registered Leftovers requires actual owning birth and same original profile')
     if _lifecycle_trace:
         from . import engine_status_callbacks as status_callbacks
         from . import engine_weather_effect_callbacks as weather_effect_callbacks
@@ -956,6 +965,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     # Snapshot before Wish(order7), weather(order8), and order10 handlers.
     end_speed = _speeds(work,table)
     if _lifecycle_trace:_weather_pre_wish=work
+    if _leftovers_context is not None:
+        if _leftovers_registered:
+            _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
+                work,_public_trace.stream_id,_leftovers_context.weather_profile_data,eligible=residual_ready)
+            # Actual source cache, not a resample after Speed Boost/pinch.
+            # The cap guard keeps original getStat's 10000 clamp inactive even
+            # when an installed weather ability doubles a bounded live Speed.
+            _leftovers_cached_speed_ok=(jnp.all((end_speed>0)&(end_speed<=10000),axis=1)
+                & (end_speed[:,0]!=end_speed[:,1])
+                & jnp.all(_leftovers_context.data.engine_binding==_leftovers_context.weather_profile_data.engine_binding)
+                & jnp.all(_leftovers_context.data.source_binding==_leftovers_context.weather_profile_data.source_binding))
     if table.sustain is not None:
         ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         for side in range(2):
@@ -1037,6 +1057,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _leftovers_old_hp=hp
             _leftovers_maximum=_active(work.max_hp,work,side)
             _leftovers_status=_active(work.status,work,side)
+            if _leftovers_registered:
+                _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
+                    work,_public_trace.stream_id,_leftovers_context.weather_profile_data,eligible=eligible)
         if table.items is not None:
             healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
                 _active(work.max_hp,work,side),eligible=eligible & heal_event)
@@ -1045,6 +1068,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 eligible=eligible & heal_event)
             work=work._replace(item=_set_active(work.item,work,side,item),
                 boosts=_set_active(work.boosts,work,side,boosts))
+            if _leftovers_context is not None:
+                if _leftovers_registered:
+                    _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
+                        work,_public_trace.stream_id,_leftovers_context.weather_profile_data,
+                        eligible=eligible & heal_event)
         residual = m.major_status_residual(hp,
             _active(work.max_hp, work, side), _active(work.status, work, side),
             _active(work.status_counter, work, side), active=eligible & status_event)
@@ -1052,12 +1080,20 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             status_counter=_set_active(work.status_counter, work, side, residual.counter))
         if _leftovers_context is not None:
             # Record immediately AFTER this exact HP assignment. The immutable
-            # helper ALWAYS keeps its own UNKNOWN; registration is separate.
+            # Diagnostic mode retains UNKNOWN. The registered actual context
+            # defers ONLY this new emitter latch; all prior refusals survive.
             _leftovers_new_hp=_active(work.hp,work,side)
+            _leftovers_defer=False
+            if _leftovers_registered:
+                _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
+                    work,_public_trace.stream_id,_leftovers_context.weather_profile_data,
+                    eligible=eligible & heal_event)
+                _leftovers_defer=_weather_hp_record.qualified_birth & _leftovers_cached_speed_ok
             _public_trace=leftovers_callbacks.record_leftovers_heal_device(_public_trace,
                 side,_leftovers_physical,_leftovers_item,_leftovers_old_hp,_leftovers_new_hp,
                 _leftovers_maximum,_leftovers_status,_leftovers_context.data,
-                eligible=eligible & heal_event & (_leftovers_new_hp>_leftovers_old_hp))
+                eligible=eligible & heal_event & (_leftovers_new_hp>_leftovers_old_hp),
+                _defer_own_unknown=_leftovers_defer)
         if table.sustain is not None:
             foe = 1-side
             drained = recovery.leech(_active(work.hp,work,side),_active(work.max_hp,work,side),

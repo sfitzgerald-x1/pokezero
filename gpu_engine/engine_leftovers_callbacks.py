@@ -7,10 +7,12 @@ state/item or recompute a healing amount. Successful raw source heals disclose
 the item; no-op/dead/inactive writes do not. Future public projection still
 needs exact source owner/peer HP exposure, lexical attribution and chronology.
 
-Eligible attempts ALWAYS retain this helper's own UNKNOWN256. No caller or
-consumer is registered, no existing refusal is cleared, no faint is inferred,
-and the legacy CallbackTape remains unchanged. Device data is trusted only
-after the original compiler/catalog guard outside each owning JIT invocation.
+Diagnostic attempts retain this helper's own UNKNOWN256. The PRIVATE registered
+owning context may defer only this emitter's new latch after its actual cached
+speed and sticky birth-profile checks; invalid/overflowed attempts still latch.
+No existing refusal is cleared, no faint is inferred, and the legacy tape is
+unchanged. Public/full/B4 qualification is separate. Device data is trusted only
+after original compiler/catalog guards outside each owning JIT invocation.
 """
 from dataclasses import dataclass
 import hashlib
@@ -38,6 +40,26 @@ class Data(NamedTuple):
     move_binding: object
     producer_binding: object
     leftovers_item: object
+
+
+class RegisteredLeftoversContext(NamedTuple):
+    """PRIVATE immutable statics; not an admission boolean or origin token.
+
+    The owning transition also requires its actual weather BirthRecord and the
+    SAME ProfileData object. Host driver checks both original compiler holders.
+    """
+    data: object
+    weather_profile_data: object
+
+
+def retain_profile_device(record, state, streams, data, *, eligible):
+    """Retain the actual intermediate state; inactive rows keep original carry."""
+    from . import engine_weather_speed_profile as speed_profile
+    retained = speed_profile.retain_device(record, state, streams, data)
+    mask = _eligible(eligible, record.qualified_birth)
+    b = mask.shape[0]
+    return jax.tree.map(lambda old, new: jnp.where(
+        mask.reshape((b,) + (1,) * (old.ndim - 1)), new, old), record, retained)
 
 
 @dataclass(frozen=True, eq=False)
@@ -139,7 +161,7 @@ def _unknown(tape, eligible):
 
 
 def record_leftovers_heal_device(tape, side, physical, old_item, old_hp, new_hp,
-                                maximum, status, data, *, eligible):
+                                maximum, status, data, *, eligible, _defer_own_unknown=False):
     """Trusted actual-write seam; operational eligibility is not item proof.
 
     Valid payloads append once and get the current event stamps. Invalid
@@ -149,6 +171,7 @@ def record_leftovers_heal_device(tape, side, physical, old_item, old_hp, new_hp,
     if not _check(tape, data):
         return tape
     eligible = _eligible(eligible, tape.count)
+    defer = _eligible(_defer_own_unknown, tape.count)
     try:
         values = tuple(public_mon_state._int32(v) for v in
             (side, physical, old_item, old_hp, new_hp, maximum, status))
@@ -177,9 +200,10 @@ def record_leftovers_heal_device(tape, side, physical, old_item, old_hp, new_hp,
         & (status >= mechanics.NONE) & (status <= mechanics.FRZ)
         & (~room | jnp.all(tape.switch_details[rows, index] == 0, axis=1)))
     absent = jnp.full_like(tape.count, -1)
+    can_defer = defer & valid & room & ((tape.refusal & public.OVERFLOW) == 0)
     tape = public._append(tape, LEFTOVERS_HEAL, absent, absent, side, physical,
         (old_hp, new_hp, maximum, status, old_item), eligible & valid)
-    return _unknown(tape, eligible)
+    return _unknown(tape, eligible & ~can_defer)
 
 
 def record_leftovers_heal(tape, side, physical, old_item, old_hp, new_hp,
