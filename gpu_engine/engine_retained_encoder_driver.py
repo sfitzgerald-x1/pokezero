@@ -30,6 +30,7 @@ from . import engine_lifecycle_callbacks as life, engine_public_events as events
 from . import engine_public_event_device as base, engine_lifecycle_event_device as public
 from . import engine_own_facts as own, public_context, public_mon_state, public_belief
 from . import private_actions, v4_encoder, transition
+from . import engine_weather_speed_profile as weather_speed
 
 SCHEMA = 'pokezero.engine_retained173_driver.partial.v1'
 SOURCE, PUBLIC_COMPONENT, FULL_PUBLIC, REQUEST, OWN, ENCODER, PENDING, CELLS, PUBLIC_COVERAGE = (1 << n for n in range(9))
@@ -49,6 +50,7 @@ class Core(NamedTuple):
     requests: tuple
     admitted: object
     frame_number: object
+    weather_profile: object = None
 
 
 class BasicPublic(NamedTuple):
@@ -332,22 +334,29 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         species_catalog=catalog.species, source=catalog.source, context_tables=context)
     check_public, register_public = public.check_projector, public.register
     public_fast = lambda obs, frame: _public(obs, frame, public_handle.device, context, catalog)
+    speed_profile=None
     if public_mode == 'retained-full':
         from . import engine_full_v4_event_device as full
         public_handle = full.compile_adapter(json.loads(request['metadata']), base_handle, catalog=catalog)
         check_public, register_public = full.check_adapter, full.register
         public_fast = lambda obs, frame: _full_public(obs, frame, public_handle.device,
             catalog, full.project_and_fold)
+        speed_profile=weather_speed.compile_profile(json.loads(request['metadata']),catalog=catalog,
+            engine_catalog=request['lifecycle'],rules=request['rules'])
     static = (request['rules'].device, request['adapter'].device,
         team._checked_tables(request['private_team']), request['catalog'].device, request['engine_table'])
     payload = dict(schema=SCHEMA, metadata=json.loads(request['metadata']), lifecycle=request['lifecycle'].binding,
         request=np.asarray(request_compiled.binding).tolist(), own=np.asarray(own_compiled.device.binding).tolist(),
-        encoder=np.asarray(catalog.binding).tolist(), forward='FAKE_ONLY', public_mode=public_mode)
+        encoder=np.asarray(catalog.binding).tolist(), forward='FAKE_ONLY', public_mode=public_mode,
+        weather_speed_profile=None if speed_profile is None else np.asarray(speed_profile.device.binding).tolist())
     binding = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = Prepared(binding)
     _PREPARED[result] = dict(binding=binding, request_compiled=request_compiled, own_compiled=own_compiled,
         own=record, request=request, catalog=catalog, context=context, public=public_handle, fake=fake_forward,
         public_mode=public_mode, check_public=check_public, register_public=register_public,
+        speed_profile=speed_profile,
+        retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
+            weather_speed.retain_device(profile,state,streams,speed_profile.device)),
         frame=jax.jit(lambda core, act, chance, active=None:
             _frame(core, (None, base_handle.device, request['engine_table']), act, chance, active)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
@@ -368,6 +377,7 @@ def _checked(prepared):
     own._checked(r['own_compiled'])
     source._checked(r['request_compiled'])
     r['check_public'](r['public'])
+    if r['speed_profile'] is not None:weather_speed.check_profile(r['speed_profile'])
     return r
 
 
@@ -416,10 +426,17 @@ def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initia
     frame = life.LifecycleResult(snapshot.state, snapshot.cursor, snapshot.callbacks, life.snapshot(new),
         snapshot.registry, jnp.zeros(b, bool), jnp.zeros(b, jnp.int32))
     admitted = snapshot.cursor.admitted & ((snapshot.callbacks.refusal & ~events.UNINSTRUMENTED) == 0)
+    # Only this actual constructor callsite mints the birth record. The sealed
+    # pre-entry state retains unsafe items even if later callbacks consume them.
+    profile=None
+    if r['speed_profile'] is not None:
+        if snapshot.birth_state is None:raise ValueError('actual pre-entry birth state required')
+        profile=weather_speed.qualify_birth(snapshot.birth_state,stream_ids,profile=r['speed_profile'])
+        profile=r['retain_speed'](profile,snapshot.state,stream_ids)
     core = Core(snapshot.state, snapshot.cursor, snapshot.orders,
         tuple(reg.original for reg in snapshot.registrations),
         tuple(actions._constructor(reg.constructor) for reg in snapshot.registrations),
-        tuple(reg.unsafe_origin for reg in snapshot.registrations), snapshot.requests, admitted, jnp.zeros(b, jnp.int32))
+        tuple(reg.unsafe_origin for reg in snapshot.registrations), snapshot.requests, admitted, jnp.zeros(b, jnp.int32),profile)
     observers = []
     for side in (0, 1):
         owners = jnp.full((b,), side, jnp.int32)
@@ -501,8 +518,11 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
             requests = tuple(r['request_fast'](frame.state, ledger, original, retained, history,
                 frame.after_registry, admitted) for ledger, original, retained, history in
                 zip(orders, core.originals, core.constructors, unsafe))
+            profile=core.weather_profile if r['retain_speed'] is None else r['retain_speed'](
+                core.weather_profile,frame.state,frame.cursor.stream_id)
             candidate = core._replace(engine=frame.state, cursor=frame.cursor, orders=orders, unsafe=unsafe,
-                requests=requests, admitted=admitted, frame_number=core.frame_number+executed.astype(jnp.int32))
+                requests=requests, admitted=admitted, frame_number=core.frame_number+executed.astype(jnp.int32),
+                weather_profile=profile)
             # Originals and constructor snapshots are immutable source constants.
             chosen = _rows(executed, core._replace(originals=None, constructors=None),
                 candidate._replace(originals=None, constructors=None))

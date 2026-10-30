@@ -397,6 +397,7 @@ class Constructed:
     requests: tuple
     callbacks: object
     registry: object
+    birth_state: object = None  # actual pre-entry constructor output, never reconstructed later
 
 
 def _constructed(value):
@@ -412,7 +413,7 @@ def _bind_constructed(*fields):
     value = Constructed(*fields)
     # Real constructor/transition outputs have immutable device leaves. A type
     # tag or copied holder cannot authorize a different physical lifetime.
-    for part in (value.state,value.cursor,value.orders,value.requests,value.callbacks,value.registry):
+    for part in (value.state,value.cursor,value.orders,value.requests,value.callbacks,value.registry,value.birth_state):
         actions._immutable_arrays(jax.tree.leaves(part),'actual source lifetime')
     _CONSTRUCTED[value] = tuple((name,getattr(value,name)) for name in value.__dataclass_fields__)
     return value
@@ -483,7 +484,7 @@ def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
     requests = tuple(produce_request(compiled,frame.state,o,r,frame.after_registry,
         lifecycle_admitted=frame.cursor.admitted) for o,r in zip(orders,registrations))
     return _bind_constructed(frame.state,frame.cursor,tuple(orders),tuple(registrations),requests,
-        frame.callbacks,frame.after_registry)
+        frame.callbacks,frame.after_registry,state)
 
 
 def advance_source(constructed, engine_actions, *, compiled, chance_inputs=None, capacity=64):
@@ -502,7 +503,7 @@ def advance_source(constructed, engine_actions, *, compiled, chance_inputs=None,
     requests = tuple(produce_request(compiled,frame.state,o,r,frame.after_registry,
         lifecycle_admitted=frame.cursor.admitted) for o,r in zip(orders,registrations))
     return _bind_constructed(frame.state,frame.cursor,orders,registrations,requests,
-        frame.callbacks,frame.after_registry)
+        frame.callbacks,frame.after_registry,constructed.birth_state)
 
 
 def route_choice(produced, ledger, choices):
