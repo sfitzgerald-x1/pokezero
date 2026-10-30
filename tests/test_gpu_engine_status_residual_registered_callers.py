@@ -1,4 +1,4 @@
-"""Registered status dataflow with original hook/history support CLOSED."""
+"""Selected actual kernel-event coverage; original physics remains unqualified."""
 import ast
 import inspect
 from pathlib import Path
@@ -56,16 +56,18 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         mask=(j.arange(ledger.site.shape[1])<ledger.count[row])&(ledger.site[row]==int(e.Site.STATUS_RESIDUAL))
         return ledger.stage[row][mask]
 
-    def test_actual_registered_positive_keeps_missing_original_hooks_unknown_and_stage1(self):
+    def test_actual_kernel_positive_captures_literal_spans_without_claiming_original_hooks(self):
         state,cursor,record=self.start();result=self.run_step(state,cursor,record)
         default=t.step_with_chance(state,j.tile(j.array([[0,8]],j.int32),(2,1)),self.f.table,self.f().chance())
         self.same(result.step.state,default.state)
         self.assertTrue(bool(result.weather_profile.qualified_birth.all()))
         for row in range(2):
-            self.assertEqual(self.status_entries(result,row).tolist(),[1,1])
+            self.assertEqual(self.status_entries(result,row).tolist(),[2,2])
             words=np.asarray(result.callbacks.words[row,:int(result.callbacks.count[row])]);status=words[words[:,0]==20]
             self.assertEqual(len(status),2);self.assertTrue(bool((status[:,6]>0).all()))
-            self.assertTrue(int(result.callbacks.refusal[row])&256);self.assertTrue(int(result.callbacks.refusal[row])&512)
+            self.assertEqual(int(result.callbacks.refusal[row])&768,0)
+            self.assertEqual(sorted(status[:,4].tolist()),[0,5])
+            self.assertEqual(sorted(status[:,8].tolist()),[m.BRN,m.PSN])
             self.assertFalse(bool(e.report(result.callbacks.execution.ledger,tables=self.accounting.device).scoped_drained[row]))
         diagnostic=self.run_step(state,cursor,record,registered=False)
         self.same(diagnostic.step.state,result.step.state)
@@ -91,10 +93,19 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
             state,cursor,record=self.start(**kwargs)
             if not kwargs:record=record._replace(qualified_birth=j.array([False,True]))
             result=self.run_step(state,cursor,record)
-            self.assertTrue(bool((result.callbacks.refusal&256).all()))
-            self.assertTrue(bool((result.callbacks.refusal&512).all()))
-            for row in range(2):self.assertTrue(bool((self.status_entries(result,row)==1).all()))
-            if not kwargs:self.assertEqual(result.weather_profile.qualified_birth.tolist(),[False,True])
+            ledger=result.callbacks.execution.ledger
+            if kwargs:
+                self.assertTrue(bool((result.callbacks.refusal&256).all()))
+                self.assertTrue(bool((result.callbacks.refusal&512).all()))
+                for row in range(2):
+                    selected=(j.arange(ledger.site.shape[1])<ledger.count[row])&(ledger.site[row]==int(e.Site.STATUS_RESIDUAL))
+                    unsafe=selected if kwargs.get('tie') else selected&(ledger.side[row]==0)
+                    self.assertTrue(bool((ledger.stage[row][unsafe]==1).all()))
+            else:
+                self.assertEqual(result.weather_profile.qualified_birth.tolist(),[False,True])
+                self.assertEqual(self.status_entries(result,0).tolist(),[1,1])
+                self.assertEqual(self.status_entries(result,1).tolist(),[2,2])
+                self.assertEqual(int(result.callbacks.refusal[1])&768,0)
             if kwargs.get('toxic'):
                 for row in range(2):
                     words=np.asarray(result.callbacks.words[row]);tox=words[(words[:,0]==20)&(words[:,8]==m.TOX)]
@@ -122,7 +133,7 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
         kwargs=dict(cursor=cursor,catalog=self.f.producer,expected_binding=self.f.producer.binding,
             expected_engine_binding=np.array(self.f.producer.engine_binding,np.uint32),chance_inputs=self.f().chance(),
             status_residual_compiled=self.helper)
-        for mode in ('retained',True,'accepted'):
+        for mode in ('kernel-event','retained',True,'accepted'):
             with self.assertRaises(ValueError):life.trace_step(state,j.full((2,2),0,j.int32),self.f.table,
                 status_residual_mode=mode,**kwargs)
         call=lambda:life.trace_step(state,j.full((2,2),0,j.int32),self.f.table,**kwargs)
@@ -151,9 +162,22 @@ class RegisteredStatusResidualCallerTests(unittest.TestCase):
             self.assertEqual(int(result.callbacks.count[row]),0)
             self.same(result.step.state.hp[row],state.hp[row])
             self.same(jax.tree.map(lambda x:x[row],result.weather_profile),jax.tree.map(lambda x:x[row],record))
+        for row in (0,4):self.assertEqual(self.status_entries(result,row).tolist(),[2,2])
+        for row in (2,6):self.assertEqual(self.status_entries(result,row).tolist(),[1,1])
         for name in ('engine_binding','source_binding','move_binding','producer_binding'):
             self.assertEqual(getattr(result.callbacks,name).shape,(8,))
             self.same(getattr(result.callbacks,name),getattr(self.helper.device,name))
+    def test_prior_refusals_and_overflow_cannot_open_kernel_event_coverage(self):
+        state,cursor,record=self.start()
+        for prior in (257,129,513):
+            result=self.run_step(state,cursor,record,prior=prior)
+            self.assertTrue(bool(((result.callbacks.refusal&prior)==prior).all()))
+            for row in range(2):self.assertTrue(bool((self.status_entries(result,row)==1).all()))
+            self.assertFalse(bool(e.report(result.callbacks.execution.ledger,tables=self.accounting.device).scoped_drained.any()))
+        result=self.run_step(state,cursor,record,capacity=1)
+        self.assertTrue(bool((result.callbacks.refusal&public.OVERFLOW).all()))
+        self.assertFalse(bool((result.callbacks.execution.ledger.stage==2).any()))
+
     def test_default_numeric_ast_parent_identity_and_detect_changed_residual_input(self):
         old=ast.parse(subprocess.check_output(['git','show','df4c0dc5:gpu_engine/transition.py'],text=True))
         new=ast.parse(Path(t.__file__).read_text())

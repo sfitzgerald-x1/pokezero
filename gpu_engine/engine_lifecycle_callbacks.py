@@ -332,10 +332,10 @@ def trace_step(state,actions,table,*,cursor,catalog,expected_binding,expected_en
     if (leftovers_compiled is not None or status_residual_compiled is not None) and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
         raise ValueError('checked lifecycle helper API must remain outside outer JIT')
     from . import transition
-    if type(status_residual_mode) is not str or status_residual_mode not in ('diagnostic','retained'):
-        raise ValueError('explicit diagnostic or retained status residual mode required')
-    if status_residual_mode=='retained':
-        raise ValueError('retained status residual requires the actual owning birth/profile runtime')
+    if type(status_residual_mode) is not str or status_residual_mode not in ('diagnostic','kernel-event'):
+        raise ValueError('explicit diagnostic or kernel-event status residual mode required')
+    if status_residual_mode=='kernel-event':
+        raise ValueError('kernel-event status residual requires the actual owning birth/profile runtime')
     public.check_catalog(catalog,table,expected_binding=expected_binding,expected_engine_binding=expected_engine_binding)
     leftovers_context=None
     if leftovers_compiled is not None:
