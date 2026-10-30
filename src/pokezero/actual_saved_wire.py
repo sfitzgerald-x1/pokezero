@@ -220,29 +220,38 @@ class SavedWireJaxAdapter:
 
     def reset(self, *, stream_id, battle_id):
         from .live_protocol_actor import ActorContract, JaxBackend
-        self.backend = JaxBackend(ActorContract.champion(), catalog=self.forward_adapter.catalog,
-            battle_id=battle_id, owner=self.seat, stream_id=stream_id)
+        if hasattr(self, 'backend'):
+            # Keep this owner's compiled functions and registration ledger;
+            # replace every per-battle host/device state through the existing
+            # reset. A fresh reset must never conceal prior namespace drift.
+            self._check_contract()
+            self.backend.adapter.reset(stream_id=stream_id, battle_id=battle_id)
+            self.backend.terminal_lifecycle_line = None
+        else:
+            self.backend = JaxBackend(ActorContract.champion(), catalog=self.forward_adapter.catalog,
+                battle_id=battle_id, owner=self.seat, stream_id=stream_id)
         require(getattr(self.backend.adapter, 'owner_side', None) == SEATS.index(self.seat),
                 'reviewed explicit owner HP-provenance encoder fix required')
+        self._check_contract(identity=(stream_id, battle_id))
         self._identity = (stream_id, battle_id)
-        self._check_contract()
 
-    def _check_contract(self):
+    def _check_contract(self, *, identity=None):
         """Namespace/ownership drift is fatal, distinct from input coverage."""
         from .live_protocol_actor import ActorContract
+        identity = self._identity if identity is None else identity
         try:
             stream_ids = self.backend.adapter.stream_ids
-            require(type(self._identity[0]) is int and 0 < self._identity[0] < 2**31
-                and type(self._identity[1]) is str and bool(self._identity[1].strip())
+            require(type(identity[0]) is int and 0 < identity[0] < 2**31
+                and type(identity[1]) is str and bool(identity[1].strip())
                 and type(self.backend.owner) is str and self.backend.owner == self.seat
                 and self.backend.catalog is self.forward_adapter.catalog
                 and self.backend.contract == ActorContract.champion()
                 and type(self.backend.adapter.owner_side) is int
                 and self.backend.adapter.owner_side == SEATS.index(self.seat)
                 and type(self.backend.adapter.battle_id) is str
-                and self.backend.adapter.battle_id == self._identity[1]
+                and self.backend.adapter.battle_id == identity[1]
                 and type(stream_ids) is np.ndarray and stream_ids.shape == (1,)
-                and stream_ids.dtype == np.int32 and int(stream_ids[0]) == self._identity[0],
+                and stream_ids.dtype == np.int32 and int(stream_ids[0]) == identity[0],
                 'saved-wire owning runtime identity changed')
             self.backend._check_namespace()
         except Exception as error:

@@ -4,6 +4,7 @@ from contextlib import ExitStack
 import csv
 from dataclasses import replace
 import gzip
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -554,6 +555,115 @@ class ActualSavedWireTests(unittest.TestCase):
                 compare_saved_battle(rows, battle=battle, ordinal=0, adapters=adapters,
                     tally=tally, with_forward=True)
             self.assertEqual((tally.input_refusals, tally.forward_refusals, tally.parity.rows), (0, 0, 0))
+
+
+@unittest.skipUnless(importlib.util.find_spec('jax'), 'requires isolated JAX')
+class ActualSavedWireJaxReuseTests(unittest.TestCase):
+    def test_real_jax_compilation_survives_fresh_battles_without_state_leak(self):
+        """Authored catalog/requests only; no checkpoint, corpus or game launch."""
+        import jax
+        from pokezero.live_protocol_actor import ActorContract, MASK_NAMES, _vocab_sha
+        from gpu_engine.public_wire import WireState
+        from test_gpu_engine_v4_encoder import V4EncoderTests
+        V4EncoderTests.setUpClass()
+        fixture = V4EncoderTests()
+        contract = ActorContract('a' * 64, _vocab_sha(fixture.catalog.vocabulary),
+            fixture.catalog.source.source_hash, 'd' * 64,
+            tuple((key, fixture.masks[key]) for key in MASK_NAMES), 'e' * 40,
+            categorical_vocab_size=fixture.catalog.vocabulary.size)
+        with (patch.object(ActorContract, 'champion', return_value=contract),
+              patch('numpy.load', side_effect=AssertionError('model/corpus forbidden')),
+              patch('subprocess.Popen', side_effect=AssertionError('no simulator')),
+              patch('subprocess.run', side_effect=AssertionError('no external runtime')),
+              jax.default_matmul_precision('highest'), jax.enable_x64(False)):
+            adapters = {seat: SavedWireJaxAdapter(SimpleNamespace(catalog=fixture.catalog), seat)
+                for seat in ('p1', 'p2')}
+            compiled = {}
+            for side, (seat, adapter) in enumerate(adapters.items()):
+                adapter.reset(stream_id=side + 1, battle_id='authored-first')
+                backend, inner = adapter.backend, adapter.backend.adapter
+                adapter.ingest(tuple(fixture.public.prefix) + ('|turn|1',
+                    '|-boost|p1a: Snorlax|atk|2',
+                    '|move|p1a: Snorlax|Body Slam|p2a: Absol',
+                    '|-damage|p2a: Absol|75/100', '|upkeep', '|turn|2'))
+                adapter.encode(SimpleNamespace(own_request_json=canonical(fixture.request(side))))
+                self.assertGreater(int(inner.state.cursor.sequence[0]), 0)
+                self.assertEqual(int(inner.state.cursor.turn[0]), 2)
+                self.assertNotEqual(inner.host, WireState())
+                self.assertIsNotNone(inner.bindings)
+                self.assertTrue(bool(np.asarray(inner.state.mons.encounter).any()))
+                cache_sizes = (inner.step._cache_size(), inner.encode_step._cache_size())
+                self.assertTrue(all(size > 0 for size in cache_sizes))
+                compiled[seat] = (backend, inner, inner.step, inner.encode_step, cache_sizes)
+                adapter.ingest(('|win|authored-first',))
+                self.assertEqual(backend.terminal_lifecycle_line, '|win|authored-first')
+            self.assertIsNot(adapters['p1'].backend, adapters['p2'].backend)
+            self.assertIsNot(adapters['p1'].backend.adapter, adapters['p2'].backend.adapter)
+            self.assertIsNot(adapters['p1'].backend.adapter.step, adapters['p2'].backend.adapter.step)
+            self.assertIsNot(adapters['p1'].backend.adapter.registered, adapters['p2'].backend.adapter.registered)
+            for side, (seat, adapter) in enumerate(adapters.items()):
+                backend, inner, step, encode_step, cache_sizes = compiled[seat]
+                old_state, old_host, old_bindings = inner.state, inner.host, inner.bindings
+                adapter.reset(stream_id=side + 3, battle_id='authored-second')
+                self.assertIs(adapter.backend, backend)
+                self.assertIs(backend.adapter, inner)
+                self.assertIs(inner.step, step)
+                self.assertIs(inner.encode_step, encode_step)
+                self.assertEqual((step._cache_size(), encode_step._cache_size()), cache_sizes)
+                self.assertIs(backend.catalog, fixture.catalog)
+                self.assertIs(backend.contract, contract)
+                self.assertIsNot(inner.state, old_state)
+                self.assertIsNot(inner.host, old_host)
+                self.assertIsNot(inner.bindings, old_bindings)
+                self.assertEqual(inner.host, WireState())
+                self.assertIsNone(inner.bindings)
+                self.assertIsNone(backend.terminal_lifecycle_line)
+                self.assertEqual(inner.registered, {side + 1: 'authored-first', side + 3: 'authored-second'})
+                fresh = fixture.e.initialize(fixture.catalog,
+                    stream_ids=fixture.j.array([side + 3], fixture.j.int32),
+                    owner_sides=fixture.j.array([side], fixture.j.int32))
+                # Compare every ledger/state leaf against an independent fresh
+                # initialization; prior turns, boosts, moves and encounters vanish.
+                for actual, expected in zip(jax.tree.leaves(inner.state), jax.tree.leaves(fresh), strict=True):
+                    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+                adapter.ingest(tuple(fixture.public.prefix) + ('|turn|1',))
+                request = fixture.request(side)
+                request['rqid'] = 4
+                adapter.encode(SimpleNamespace(own_request_json=canonical(request)))
+                self.assertEqual((step._cache_size(), encode_step._cache_size()), cache_sizes)
+                self.assertEqual(int(inner.state.cursor.turn[0]), 1)
+                np.testing.assert_array_equal(np.asarray(inner.state.context.toxic.visibility),
+                    [[1 if player == side else 2 for player in (0, 1)]])
+                adapter.ingest(('|win|authored-second',))
+                snapshot = (inner.state, inner.host, inner.bindings, inner.stream_ids,
+                    inner.battle_id, dict(inner.registered), adapter._identity,
+                    backend.terminal_lifecycle_line)
+                # Duplicate stream or battle IDs refuse before ANY mutation,
+                # including clearing a completed battle's terminal lifecycle.
+                for stream_id, battle_id in ((side + 1, 'authored-third'), (99, 'authored-first')):
+                    with self.assertRaisesRegex(ValueError, 'fresh unique'):
+                        adapter.reset(stream_id=stream_id, battle_id=battle_id)
+                    self.assertIs(inner.state, snapshot[0])
+                    self.assertIs(inner.host, snapshot[1])
+                    self.assertIs(inner.bindings, snapshot[2])
+                    self.assertIs(inner.stream_ids, snapshot[3])
+                    self.assertEqual((inner.battle_id, inner.registered, adapter._identity,
+                        backend.terminal_lifecycle_line), snapshot[4:])
+                original_owner = backend.owner
+                backend.owner = 'p2' if seat == 'p1' else 'p1'
+                with self.assertRaises(WireContractError):
+                    adapter.reset(stream_id=99, battle_id='authored-third')
+                self.assertIs(inner.state, snapshot[0])
+                self.assertEqual((inner.registered, adapter._identity, backend.terminal_lifecycle_line),
+                    (snapshot[5], snapshot[6], snapshot[7]))
+                backend.owner = original_owner
+                with jax.default_matmul_precision('default'):
+                    with self.assertRaises(WireContractError):
+                        adapter.reset(stream_id=99, battle_id='authored-third')
+                self.assertIs(inner.host, snapshot[1])
+                self.assertEqual((inner.registered, adapter._identity, backend.terminal_lifecycle_line),
+                    (snapshot[5], snapshot[6], snapshot[7]))
+                adapter._check_contract()
 
 
 if __name__ == '__main__':
