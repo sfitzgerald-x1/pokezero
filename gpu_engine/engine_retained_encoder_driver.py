@@ -178,7 +178,8 @@ def _report_rows(ok, before, after):
         observation=selected.encoded.observation._replace(category_count=before.encoded.observation.category_count)))
 
 
-def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None):
+def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
+           leftovers_context=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -196,7 +197,8 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
     masked = core.engine._replace(done=core.engine.done | ~source_ready)
     result = transition.step_with_chance(masked, engine_actions, engine_table, chance,
         _public_trace=tape, _lifecycle_trace=True,
-        _weather_hp_context=None if weather_profile_data is None else (core.weather_profile,weather_profile_data))
+        _weather_hp_context=None if weather_profile_data is None else (core.weather_profile,weather_profile_data),
+        _leftovers_context=leftovers_context)
     engine = _rows(source_ready, core.engine, result.step.state)
     cursor = _rows(source_ready, core.cursor, result.callbacks.cursor)
     # Bindings are GLOBAL [8], never row-select them by a coincidental B=8.
@@ -314,13 +316,15 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
         projection.full_line_consumers_complete, encoded.full_encoder_admitted, no)
 
 
-def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'):
+def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic', leftovers_compiled=None):
     """Host-only immutable preparation. fake_forward is a pure source-test spy.
 
     The returned compiled closures contain no registration calls or host reads.
     The checked host API reruns guards before every cached device invocation.
     The explicit retained-full mode consumes the full-format device adapter;
     its remaining coverage and scientific qualification flags stay unchanged.
+    Optional Leftovers diagnostics require the original checked host compiler;
+    they keep UNKNOWN and do not register a public consumer or order proof.
     """
     if type(public_mode) is not str or public_mode not in ('basic', 'retained-full'):
         raise ValueError('explicit basic or retained-full public mode required')
@@ -329,6 +333,13 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         raise ValueError('same original request/OwnFacts producer and pure fake forward required')
     request = source._checked(request_compiled)
     catalog = record['catalog']
+    leftovers_context=None
+    if leftovers_compiled is not None:
+        from . import engine_leftovers_callbacks as leftovers_callbacks
+        data=leftovers_callbacks.check_compiled(leftovers_compiled)
+        if leftovers_callbacks._COMPILED[leftovers_compiled][4] is not request['lifecycle']:
+            raise ValueError('same original request engine catalog required for Leftovers caller')
+        leftovers_context=life.LeftoversContext(data)
     base_handle = base.compile_projector(request['lifecycle'], expected_binding=request['lifecycle'].binding,
         expected_engine_binding=request['rules'].device.engine_binding)
     context = public_context.compile_context(catalog.source, catalog.abilities, request['lifecycle'].public_moves,
@@ -352,17 +363,20 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         request=np.asarray(request_compiled.binding).tolist(), own=np.asarray(own_compiled.device.binding).tolist(),
         encoder=np.asarray(catalog.binding).tolist(), forward='FAKE_ONLY', public_mode=public_mode,
         weather_speed_profile=None if speed_profile is None else np.asarray(speed_profile.device.binding).tolist())
+    if leftovers_context is not None:
+        payload['leftovers_binding']=np.asarray(leftovers_context.data.binding).tolist()
     binding = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     result = Prepared(binding)
     _PREPARED[result] = dict(binding=binding, request_compiled=request_compiled, own_compiled=own_compiled,
         own=record, request=request, catalog=catalog, context=context, public=public_handle, fake=fake_forward,
         public_mode=public_mode, check_public=check_public, register_public=register_public,
-        speed_profile=speed_profile,
+        speed_profile=speed_profile,leftovers_compiled=leftovers_compiled,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
             weather_speed.retain_device(profile,state,streams,speed_profile.device)),
         frame=jax.jit(lambda core, act, chance, active=None:
             _frame(core, (None, base_handle.device, request['engine_table']), act, chance, active,
-                weather_profile_data=None if speed_profile is None else speed_profile.device)),
+                weather_profile_data=None if speed_profile is None else speed_profile.device,
+                leftovers_context=leftovers_context)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
         installations=jax.jit(life.apply_installations),
@@ -382,6 +396,9 @@ def _checked(prepared):
     source._checked(r['request_compiled'])
     r['check_public'](r['public'])
     if r['speed_profile'] is not None:weather_speed.check_profile(r['speed_profile'])
+    if r['leftovers_compiled'] is not None:
+        from . import engine_leftovers_callbacks as leftovers_callbacks
+        leftovers_callbacks.check_compiled(r['leftovers_compiled'])
     return r
 
 

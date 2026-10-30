@@ -295,7 +295,7 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
-                     _weather_hp_context=None) -> StepResult:
+                     _weather_hp_context=None, _leftovers_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -304,6 +304,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     """
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
+    if _leftovers_context is not None:
+        from . import engine_lifecycle_callbacks as lifecycle_callbacks
+        from . import engine_leftovers_callbacks as leftovers_callbacks
+        if (not _lifecycle_trace or type(_leftovers_context) is not lifecycle_callbacks.LeftoversContext
+                or type(_leftovers_context.data) is not leftovers_callbacks.Data):
+            raise ValueError('typed owning lifecycle Leftovers context required')
     if _lifecycle_trace:
         from . import engine_status_callbacks as status_callbacks
         from . import engine_weather_effect_callbacks as weather_effect_callbacks
@@ -1023,6 +1029,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             boosts = boosts.at[:,4].set(jnp.where(speed_boost,jnp.minimum(6,boosts[:,4]+1),boosts[:,4]))
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
         healed = hp
+        if _leftovers_context is not None:
+            # Literal BEFORE values precede both the numerical heal and item
+            # consumption. No final item/state reconstruction or amount formula.
+            _leftovers_physical=work.active[rows,side]
+            _leftovers_item=_active(work.item,work,side)
+            _leftovers_old_hp=hp
+            _leftovers_maximum=_active(work.max_hp,work,side)
+            _leftovers_status=_active(work.status,work,side)
         if table.items is not None:
             healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
                 _active(work.max_hp,work,side),eligible=eligible & heal_event)
@@ -1036,6 +1050,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _active(work.status_counter, work, side), active=eligible & status_event)
         work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
             status_counter=_set_active(work.status_counter, work, side, residual.counter))
+        if _leftovers_context is not None:
+            # Record immediately AFTER this exact HP assignment. The immutable
+            # helper ALWAYS keeps its own UNKNOWN; registration is separate.
+            _leftovers_new_hp=_active(work.hp,work,side)
+            _public_trace=leftovers_callbacks.record_leftovers_heal_device(_public_trace,
+                side,_leftovers_physical,_leftovers_item,_leftovers_old_hp,_leftovers_new_hp,
+                _leftovers_maximum,_leftovers_status,_leftovers_context.data,
+                eligible=eligible & heal_event & (_leftovers_new_hp>_leftovers_old_hp))
         if table.sustain is not None:
             foe = 1-side
             drained = recovery.leech(_active(work.hp,work,side),_active(work.max_hp,work,side),
