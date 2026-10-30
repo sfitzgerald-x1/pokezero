@@ -138,6 +138,8 @@ class StatusResidualCallbacksTests(unittest.TestCase):
             if name in ('engine_binding','source_binding','move_binding','producer_binding'):
                 self.same(getattr(expected,name),getattr(tape,name))
             elif name=='cursor':self.same(jax.tree.map(lambda x:x[6],expected.cursor),jax.tree.map(lambda x:x[6],tape.cursor))
+            elif name=='execution':
+                self.assertIsNone(tape.execution);self.assertIsNone(expected.execution)
             else:self.same(getattr(expected,name)[6],getattr(tape,name)[6])
         text=str(jax.make_jaxpr(call)(tape))
         for callback in ('io_callback','pure_callback','debug_callback'):self.assertNotIn(callback,text)
