@@ -58,6 +58,29 @@ class PublicTeamTests(unittest.TestCase):
         return self.reference.ShowdownPokemon(ident=f'p2a: {name}',showdown_slot='p2',species=name,
             condition=condition,active=active,details=details)
 
+    def test_default_namespace_carries_source_unown_forms_without_category_relabeling(self):
+        from pokezero.randbat_vocab import UNOWN_FORMES
+        catalog=self.public.compile_species(self.host,self.dex,self.vocab,self.abilities)
+        for name in UNOWN_FORMES:
+            identity=catalog.species_id(name)
+            self.assertEqual(catalog.names[identity],name)
+            self.assertEqual(int(catalog.device.species_category[identity]),self.vocab.encode('species:'+name))
+            self.assertEqual(catalog.device.base_stats[identity].tolist(),[48,72,48,72,48,48])
+            # Source's exact-dex HP lookup intentionally stays distinct from
+            # its base-form fallback; do not silently repair that old quirk.
+            self.assertEqual(float(catalog.device.original_hp[identity]),0)
+        with self.assertRaises(ValueError):catalog.species_id('Unown-A')
+        with self.assertRaises(ValueError):catalog.species_id('Unown-Unknown')
+        mons=self.m.initialize(1,species_binding=catalog.device.binding)
+        mons,ok=self.m.arrive(mons,side=1,slot=0,encounter=1,species=catalog.species_id('Unown-S'),
+            source_species=self.host.species_id('Unown-S'),level=80,gender=0,
+            hp_numerator=258,hp_denominator=258,status=self.m.NONE)
+        self.assertTrue(bool(ok.all()))
+        abilities=self.a.initialize(1,self.abilities.device,species_binding=catalog.device.binding)
+        got=self.public.project_opponent(mons,abilities,catalog.device,observer_side=0,expected_binding=catalog.device.binding)
+        self.assertTrue(bool(got.admitted.all()))
+        self.compare(got,[self.mon('Unown-S','258/258',True)])
+
     def test_all18_numeric_five_category_columns_and_padding_match_actual_writer(self):
         mons,abilities=self.state();got=self.project(mons,abilities)
         self.compare(got,[self.mon('Absol','70/100 par',False,gender='F'),
