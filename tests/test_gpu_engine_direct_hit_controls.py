@@ -167,6 +167,26 @@ class DirectHitControlsTests(unittest.TestCase):
         legacy = self.tape(legacy=True)
         self.assertIs(self.record(legacy,write), legacy)
 
+    def test_capacity_diagnostic_ignores_existing_prefix_switch_details(self):
+        tape = self.tape(2,capacity=1,prior=512)
+        tape = tape._replace(count=j.ones(2,j.int32), words=tape.words.at[:,0,0].set(life.SWITCH_INSTALLED),
+            switch_details=tape.switch_details.at[0,0,0].set(1))
+        write = self.write(2)._replace(critical=True,numerator=1,denominator=1)
+        out = self.record(tape,write)
+        self.same(out.words,tape.words)
+        self.same(out.switch_details,tape.switch_details)
+        self.same(out.event_turn,tape.event_turn)
+        self.same(out.event_generation,tape.event_generation)
+        self.assertEqual(out.count.tolist(), [1,1])
+        self.assertEqual(out.refusal.tolist(), [512|256|public.OVERFLOW]*2)
+        # Even stale NEW-slot details cannot hide simultaneous capacity loss.
+        partial = self.tape(capacity=2)._replace(count=j.ones(1,j.int32),
+            switch_details=j.zeros((1,2,6),j.int32).at[0,1,0].set(1))
+        result = self.record(partial,self.write(numerator=2))
+        self.assertEqual(int(result.refusal[0]), 256|public.OVERFLOW)
+        self.same(result.words,partial.words)
+        self.assertEqual(int(result.count[0]),1)
+
     def test_hot_jit_has_one_cache_no_callbacks_and_original_host_guards(self):
         tape = self.tape(8); write = self.write(8,numerator=2)
         call = lambda t,w:c.record_direct_hit_controls_device(t,0,2,4,self.move,w,self.data,eligible=True)

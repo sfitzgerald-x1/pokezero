@@ -241,17 +241,21 @@ def record_direct_hit_controls_device(tape, actor_side, actor_physical, target_p
         & (w.power > 0) & w.hit & ~w.immune & ~w.substitute & ~w.protected & ~w.enduring
         & _positive_ratio(w.numerator, w.denominator)
         & (w.old_hp > w.new_hp) & (w.new_hp > 0) & (w.maximum >= w.old_hp))
-    # SWITCH detail storage is not part of a hit; refuse stale side payloads.
+    overflow = eligible & valid & ~room
+    # Check only actual NEW slots. A clipped out-of-storage address would
+    # inspect the previous prefix and must never hide capacity exhaustion.
     for offset in range(2):
-        index = jnp.clip(tape.count+offset, 0, tape.words.shape[1]-1)
-        valid &= (need <= offset) | jnp.all(tape.switch_details[rows, index] == 0, axis=1)
+        address = tape.count+offset
+        inside = (address >= 0) & (address < tape.words.shape[1])
+        index = jnp.clip(address, 0, tape.words.shape[1]-1)
+        valid &= (need <= offset) | ~inside | jnp.all(tape.switch_details[rows, index] == 0, axis=1)
     use = eligible & valid & room
     facts = (move, w.old_hp, w.new_hp, w.numerator, w.denominator)
     for kind, flag in ((CRITICAL, w.critical), (SUPER_EFFECTIVE, w.numerator > w.denominator),
                        (RESISTED, w.numerator < w.denominator)):
         tape = public._append(tape, kind, actor_side, actor_physical, target_side, target_physical,
             facts, use & flag)
-    tape = tape._replace(refusal=tape.refusal | jnp.where(eligible & valid & ~room, public.OVERFLOW, 0))
+    tape = tape._replace(refusal=tape.refusal | jnp.where(overflow, public.OVERFLOW, 0))
     return _unknown(tape, eligible)
 
 
