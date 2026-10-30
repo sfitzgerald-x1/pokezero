@@ -224,6 +224,29 @@ class SavedWireJaxAdapter:
             battle_id=battle_id, owner=self.seat, stream_id=stream_id)
         require(getattr(self.backend.adapter, 'owner_side', None) == SEATS.index(self.seat),
                 'reviewed explicit owner HP-provenance encoder fix required')
+        self._identity = (stream_id, battle_id)
+        self._check_contract()
+
+    def _check_contract(self):
+        """Namespace/ownership drift is fatal, distinct from input coverage."""
+        from .live_protocol_actor import ActorContract
+        try:
+            stream_ids = self.backend.adapter.stream_ids
+            require(type(self._identity[0]) is int and 0 < self._identity[0] < 2**31
+                and type(self._identity[1]) is str and bool(self._identity[1].strip())
+                and type(self.backend.owner) is str and self.backend.owner == self.seat
+                and self.backend.catalog is self.forward_adapter.catalog
+                and self.backend.contract == ActorContract.champion()
+                and type(self.backend.adapter.owner_side) is int
+                and self.backend.adapter.owner_side == SEATS.index(self.seat)
+                and type(self.backend.adapter.battle_id) is str
+                and self.backend.adapter.battle_id == self._identity[1]
+                and type(stream_ids) is np.ndarray and stream_ids.shape == (1,)
+                and stream_ids.dtype == np.int32 and int(stream_ids[0]) == self._identity[0],
+                'saved-wire owning runtime identity changed')
+            self.backend._check_namespace()
+        except Exception as error:
+            raise WireContractError('saved-wire runtime contract changed') from error
 
     def ingest(self, lines):
         # The backend already flushes every own request. These same segments
@@ -238,9 +261,13 @@ class SavedWireJaxAdapter:
         if start < len(lines):
             segments.append((start, lines[start:]))
         for start, segment in segments:
+            self._check_contract()
             try:
                 self.backend.ingest(segment)
+            except WireContractError:
+                raise
             except Exception as error:
+                self._check_contract()
                 detail = refusal(error, 'jax_ingest', segment)
                 if len(segment) == 1:
                     detail.update(line_kind=segment[0].split('|')[1] or 'SEPARATOR', line_offset=0,
@@ -248,14 +275,33 @@ class SavedWireJaxAdapter:
                 if detail['line_offset'] is not None:
                     detail['line_offset'] += start
                 raise WireEncoderRefusal(detail) from error
+            self._check_contract()
+        self._check_contract()
 
     def encode(self, view):
-        arrays, _ = self.backend.encode(SimpleNamespace(
-            own_request_line='|request|' + view.own_request_json.decode()))
+        self._check_contract()
+        try:
+            arrays, _ = self.backend.encode(SimpleNamespace(
+                own_request_line='|request|' + view.own_request_json.decode()))
+        except Exception:
+            self._check_contract()
+            raise
+        self._check_contract()
         return arrays
 
     def forward(self, arrays):
-        return self.forward_adapter.forward(arrays)
+        self._check_contract()
+        try:
+            result = self.forward_adapter.forward(arrays)
+        except Exception:
+            self._check_contract()
+            raise
+        self._check_contract()
+        return result
+
+
+class WireContractError(ValueError):
+    """Fatal source/runtime/namespace/ownership contract failure."""
 
 
 class WireEncoderRefusal(Exception):
@@ -320,6 +366,8 @@ def compare_saved_battle(rows, *, battle, ordinal, adapters, tally, with_forward
             if taints[seat] is None:
                 try:
                     adapters[seat].ingest(deltas[seat])
+                except WireContractError:
+                    raise
                 except Exception as error:
                     cause = error.detail if type(error) is WireEncoderRefusal else refusal(error, 'jax_ingest', deltas[seat])
                     taints[seat] = dict(cause, origin_decision_round_index=row['decision_round_index'])
@@ -335,6 +383,8 @@ def compare_saved_battle(rows, *, battle, ordinal, adapters, tally, with_forward
                 _arrays(actual, device=True)
                 for value in actual.values():
                     value.setflags(write=False)
+            except WireContractError:
+                raise
             except Exception as error:
                 # Encode may mutate an implementation or fail after a partial
                 # update: conservatively taint this owner's remaining prefix.
@@ -356,11 +406,13 @@ def compare_saved_battle(rows, *, battle, ordinal, adapters, tally, with_forward
 def _selection(root, selection, expected_selection_sha256, expected_collection_sha256,
                selection_metadata, expected_selection_metadata_sha256):
     spec = _json(selection, expected_selection_sha256)
-    require(spec.get('schema') == 'pokezero.B2-actual-owning-wire-selection-prespec.v1'
+    require(spec.get('schema') == 'pokezero.B2-actual-owning-wire-selection-prespec.v2'
         and spec.get('producer_source') == PRODUCER_SOURCE
         and spec.get('producer_config_sha256') == PRODUCER_CONFIG_SHA
         and spec.get('producer_prespec_sha256') == PRODUCER_PRESPEC_SHA
-        and spec.get('cohort_sha256') == PRODUCER_ROSTER_DIGEST
+        and spec.get('cohort_file_sha256') == PRODUCER_COHORT_FILE_SHA
+        and spec.get('roster_digest_sha256') == PRODUCER_ROSTER_DIGEST
+        and 'cohort_sha256' not in spec
         and spec.get('selection_is_training_only') is True
         and spec.get('no_actual_tensors_or_outcomes_examined') is True
         and spec.get('minimum_view_gate') == 10000
@@ -468,7 +520,8 @@ def compare_saved_collection(inventory, *, adapters, checkpoint=None, progress=N
     require(type(with_forward) is bool and set(adapters) == set(SEATS)
         and adapters['p1'] is not adapters['p2'], 'two independent owner adapters required')
     expected = inventory['expected_views']
-    tally = DiagnosticTally(expected, parity=ActualSavedWireTally(expected))
+    tally = DiagnosticTally(expected, parity=ActualSavedWireTally(expected),
+        fatal_errors=(WireContractError,))
     for ordinal, battle in enumerate(inventory['battles']):
         directory = f"battle-{battle['index']:04d}/"
         compare_saved_battle(_rows(_inside(inventory['root'], directory + 'boundaries.jsonl.gz'),

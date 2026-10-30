@@ -5,6 +5,7 @@ import csv
 from dataclasses import replace
 import gzip
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from unittest.mock import patch
 import numpy as np
 
 from pokezero.actual_saved_wire import (ActualSavedWireCursor, ActualSavedWirePair,
-    ActualSavedWireTally, SavedWireJaxAdapter, WireEncoderRefusal, actual_pair_arrays,
+    ActualSavedWireTally, SavedWireJaxAdapter, WireContractError, WireEncoderRefusal, actual_pair_arrays,
     compare_saved_battle, compare_saved_collection, inventory_saved_battle, _rows)
 from pokezero.mirror_value_probe import canonical, digest, file_sha
 from pokezero.projected_encoder_diagnostic import DiagnosticTally
@@ -114,7 +115,7 @@ class ActualSavedWireTests(unittest.TestCase):
         if rows is None:
             battle, rows = fixture()
         adapters = {s: Adapter(s, refusal_stage=refusal_stage) for s in ('p1', 'p2')}
-        tally = DiagnosticTally(3, parity=ActualSavedWireTally(3))
+        tally = DiagnosticTally(3, parity=ActualSavedWireTally(3), fatal_errors=(WireContractError,))
         with patch('numpy.load', side_effect=AssertionError('NPZ forbidden')), patch(
                 'subprocess.Popen', side_effect=AssertionError('simulator forbidden')):
             compare_saved_battle(rows, battle=battle, ordinal=0, adapters=adapters,
@@ -311,6 +312,7 @@ class ActualSavedWireTests(unittest.TestCase):
             adapter = SimpleNamespace(encoder=Encoder(), feed=lambda lines: events.append(('public', lines)))
         adapter = SavedWireJaxAdapter(None, 'p1')
         adapter.backend = Backend()
+        adapter._check_contract = lambda: None  # This test isolates literal ordering.
         request = lambda i: '|request|' + json.dumps({'side': {'id': 'p1'}, 'rqid': i})
         adapter.ingest(('|turn|1', request(1), '|', '|turn|2', request(2), '|upkeep'))
         self.assertEqual(events, [('public', ('|turn|1',)), ('request', 1),
@@ -350,9 +352,10 @@ class ActualSavedWireTests(unittest.TestCase):
                 battles=roster, no_refill=True, sibling_measurement=False,
                 battle_receipt_hashes={f"battle-{row['index']:04d}/battle.json": 'a' * 64 for row in roster})
             collection_sha = write(root / 'collection.json', manifest)
-            prespec = dict(schema='pokezero.B2-actual-owning-wire-selection-prespec.v1',
+            prespec = dict(schema='pokezero.B2-actual-owning-wire-selection-prespec.v2',
                 producer_source=actual.PRODUCER_SOURCE, producer_config_sha256=config_sha,
-                producer_prespec_sha256=prespec_sha, cohort_sha256=logical,
+                producer_prespec_sha256=prespec_sha, cohort_file_sha256=cohort_sha,
+                roster_digest_sha256=logical,
                 selection_is_training_only=True, no_actual_tensors_or_outcomes_examined=True,
                 minimum_view_gate=10000,
                 selection='Exactly first256 TRAIN cohort battles sorted by numeric index, both seats and every requested decision; no tensor/outcome/mismatch/length-based selection.')
@@ -382,6 +385,16 @@ class ActualSavedWireTests(unittest.TestCase):
                 self.assertEqual(got, selected)
                 self.assertEqual(counts['expected_views'], 512)
                 self.assertNotEqual(logical, cohort_sha)
+                for mutate in (lambda p: p.update(schema='pokezero.B2-actual-owning-wire-selection-prespec.v1'),
+                    lambda p: p.update(cohort_file_sha256=logical),
+                    lambda p: p.update(roster_digest_sha256=cohort_sha),
+                    lambda p: p.update(cohort_sha256=logical)):
+                    bad = copy.deepcopy(prespec)
+                    mutate(bad)
+                    selection_sha = write(selection_path, bad)
+                    with self.assertRaisesRegex(ValueError, 'selection prespec'):
+                        read(metadata)
+                selection_sha = write(selection_path, prespec)
                 for mutate in (lambda m: m.update(expected_views=513),
                     lambda m: m['selected'].reverse(),
                     lambda m: m['selected'][0].update(split='test'),
@@ -396,6 +409,59 @@ class ActualSavedWireTests(unittest.TestCase):
                 (producer / 'repo/source.py').write_text('# changed\n')
                 with self.assertRaisesRegex(ValueError, 'source file mismatch'):
                     read(metadata)
+
+    def test_actual_local_frozen_v2_contract_and_compact_metadata(self):
+        """Read only the two approved compact LOCAL metadata files, when supplied.
+
+        Other producer metadata is authored in memory; no collection, tensor,
+        model, feature NPZ, JAX runtime, or simulator is accessed by this test.
+        """
+        import pokezero.actual_saved_wire as actual
+        from pokezero.mirror_value_probe import cohort
+        location = os.environ.get('POKEZERO_ACTUAL_SELECTION_FIXTURES')
+        if location is None:
+            self.skipTest('optional actual local compact metadata directory not supplied')
+        directory = Path(location).resolve(strict=True)
+        prespec_path = directory / 'actual-wire-selection-prespec.json'
+        metadata_path = directory / 'actual-wire-fixed-selection-metadata.json'
+        prespec_sha = 'adab39f10b1501a549f7fead4375be5f18d01da2b4f9c4a23c6fb136403a766c'
+        metadata_sha = '29ba9feb1ac6b26257cc8408b26567c999a53a257a55265b20ef9e2bb5ecdd67'
+        original_json = actual._json
+        metadata = original_json(metadata_path, metadata_sha)
+        original_json(prespec_path, prespec_sha)
+        config = dict(root=metadata['selected'][0]['battle_id'].rsplit('-battle-', 1)[0],
+            battles=4096, champion_sha256=actual.CHAMPION_SHA,
+            probe_contract='owning-wire-true-moves-champion-linear-v2')
+        roster = cohort(config['root'], config['battles'])
+        manifest = dict(schema='pokezero.mirror_collection.v1', status='COMPLETE_FIXED_COHORT',
+            config=config, config_sha256=digest(config), cohort_sha256=actual.PRODUCER_COHORT_FILE_SHA,
+            battles=roster, no_refill=True, sibling_measurement=False,
+            battle_receipt_hashes={f"battle-{row['index']:04d}/battle.json": row['battle_receipt_sha256']
+                for row in metadata['selected']})
+        authored = {
+            'config.json': config,
+            'prespec.json': {'authored_nonselection_producer_metadata': True},
+            'scientific-hashes.json': actual.PRODUCER_FILES,
+            'cohort.json': dict(schema='pokezero.mirror_cohort.v1', config=config,
+                config_sha256=digest(config), battles=roster, roster_sha256=actual.PRODUCER_ROSTER_DIGEST),
+            'collection.json': manifest,
+        }
+        def json_source(path, expected):
+            if path in (prespec_path, metadata_path):
+                return original_json(path, expected)
+            return authored[path.name]
+        def source_sha(path):
+            return actual.PRODUCER_FILES[str(path).split('/repo/', 1)[1]]
+        with patch.object(actual, '_json', side_effect=json_source), patch.object(
+            actual, '_inside', side_effect=lambda root, relative: root / relative), patch.object(
+            actual, '_sha', side_effect=source_sha), patch('numpy.load',
+            side_effect=AssertionError('model/corpus loads forbidden')), patch('subprocess.Popen',
+            side_effect=AssertionError('simulator forbidden')):
+            _, selected, counts = actual._selection(Path('/authored/collection'), prespec_path,
+                prespec_sha, metadata['collection_sha256'], metadata_path, metadata_sha)
+        self.assertEqual([r['index'] for r in selected], [r['index'] for r in metadata['selected']])
+        self.assertTrue(all(r['split'] == 'train' for r in selected))
+        self.assertEqual((len(selected), counts['expected_views']), (256, 23749))
 
     def test_cli_integrity_failure_precedes_runtime_and_creates_no_table(self):
         from scripts import compare_actual_saved_wire as cli
@@ -425,6 +491,69 @@ class ActualSavedWireTests(unittest.TestCase):
                 return_value=SimpleNamespace(adapter=SimpleNamespace(owner_side=None))):
             with self.assertRaisesRegex(ValueError, 'HP-provenance encoder fix required'):
                 adapter.reset(stream_id=1, battle_id='fixture')
+
+    def synthetic_actual_adapter(self, seat):
+        from pokezero.live_protocol_actor import ActorContract
+        forward = SimpleNamespace(catalog=object(), forward=lambda arrays: fp32())
+        adapter = SavedWireJaxAdapter(forward, seat)
+        backend = SimpleNamespace(owner=seat, catalog=forward.catalog, contract=ActorContract.champion(),
+            adapter=SimpleNamespace(owner_side=int(seat[1]) - 1), _check_namespace=lambda: None,
+            ingest=lambda lines: None)
+        adapter.backend = backend
+        def reset(**identity):
+            adapter._identity = (identity['stream_id'], identity['battle_id'])
+            backend.adapter.battle_id = identity['battle_id']
+            backend.adapter.stream_ids = np.array([identity['stream_id']], np.int32)
+            adapter._check_contract()
+        adapter.reset = reset
+        return adapter
+
+    def test_actual_wrapper_namespace_owner_and_identity_failures_are_fatal(self):
+        for mutate in (lambda b: setattr(b, 'owner', 'p2'),
+            lambda b: setattr(b.adapter, 'owner_side', 1),
+            lambda b: setattr(b.adapter, 'owner_side', False),
+            lambda b: setattr(b.adapter, 'owner_side', np.int32(0)),
+            lambda b: setattr(b.adapter, 'battle_id', 'foreign'),
+            lambda b: setattr(b.adapter, 'stream_ids', np.array([99], np.int32)),
+            lambda b: setattr(b.adapter, 'stream_ids', np.array([1], np.int64)),
+            lambda b: setattr(b.adapter, 'stream_ids', np.array([1.], np.float32)),
+            lambda b: setattr(b.adapter, 'stream_ids', np.array([[1]], np.int32)),
+            lambda b: setattr(b, 'catalog', object()),
+            lambda b: setattr(b, '_check_namespace', lambda: (_ for _ in ()).throw(ValueError('precision drift')))):
+            adapter = self.synthetic_actual_adapter('p1')
+            adapter.reset(stream_id=1, battle_id='fixture')
+            mutate(adapter.backend)
+            for call in (lambda: adapter.ingest(('|turn|1',)),
+                         lambda: adapter.encode(SimpleNamespace()),
+                         lambda: adapter.forward({})):
+                with self.assertRaises(WireContractError):
+                    call()
+        adapter = self.synthetic_actual_adapter('p1')
+        with self.assertRaises(WireContractError):
+            adapter.reset(stream_id=True, battle_id='fixture')
+
+    def test_actual_wrapper_postcall_contract_drift_never_counts_as_unknown(self):
+        battle, rows = fixture()
+        reference = rows[0]['observations']['p1']
+        arrays = {key: np.asarray(reference[key], dtype=np.bool_ if key.endswith('mask')
+            else np.float32 if key == 'numeric_features' else np.int32) for key in SHAPES}
+        for stage in ('ingest', 'encode', 'forward'):
+            adapters = {s: self.synthetic_actual_adapter(s) for s in ('p1', 'p2')}
+            for adapter in adapters.values():
+                adapter.backend.encode = lambda snapshot: (arrays, ())
+            failed = adapters['p1']
+            def drift(*args):
+                failed.backend.owner = 'p2'
+                return (arrays, ()) if stage == 'encode' else fp32() if stage == 'forward' else None
+            if stage == 'forward':
+                failed.forward_adapter.forward = drift
+            else:
+                setattr(failed.backend, stage, drift)
+            tally = DiagnosticTally(3, parity=ActualSavedWireTally(3), fatal_errors=(WireContractError,))
+            with self.subTest(stage=stage), self.assertRaises(WireContractError):
+                compare_saved_battle(rows, battle=battle, ordinal=0, adapters=adapters,
+                    tally=tally, with_forward=True)
+            self.assertEqual((tally.input_refusals, tally.forward_refusals, tally.parity.rows), (0, 0, 0))
 
 
 if __name__ == '__main__':

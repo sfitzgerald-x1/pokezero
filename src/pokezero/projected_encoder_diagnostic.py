@@ -49,10 +49,11 @@ def refusal(error, stage, lines=()):
 
 
 class DiagnosticTally:
-    def __init__(self, expected_views, *, parity=None):
+    def __init__(self, expected_views, *, parity=None, fatal_errors=()):
         self.parity = parity if parity is not None else ProjectedParityTally(expected_views=expected_views)
         if self.parity.expected_views != expected_views:
             raise ValueError('matching fixed parity denominator required')
+        self.fatal_errors = fatal_errors
         self.seen = set()
         self.input_refusals = self.forward_refusals = 0
         self.by_kind, self.by_stage, self.by_column = Counter(), Counter(), Counter()
@@ -92,6 +93,8 @@ class DiagnosticTally:
                 _, rv = _forward(r)
                 kwargs = dict(actual_forward=a, reference_forward=r)
             except Exception as error:
+                if isinstance(error, self.fatal_errors):
+                    raise
                 forward_error = refusal(error, 'fp32_forward')
         self.parity.add(pair, **kwargs)
         if forward_error is not None:
