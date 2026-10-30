@@ -94,7 +94,12 @@ class StatusCallbacksTests(unittest.TestCase):
                     name=self.catalog.species.names[p[1]]; active[target]=f'p{target+1}a: {name}'
                     lines.append(f'|switch|{active[target]}|{name}, L{p[3]}'+
                         (', M' if p[4]==1 else ', F' if p[4]==2 else '')+f'|{p[5]}/{p[6]}'+(' '+tokens[p[7]] if p[7] else ''))
-                elif k==inputs.Kind.MOVE:lines.append(f'|move|{active[actor]}|{self.catalog.moves.names[p[1]]}|{active[target]}')
+                elif k==inputs.Kind.MOVE:
+                    still=index+1<int(frame.callbacks.count[row]) and int(frame.callbacks.words[row,index+1,0])==15
+                    lines.append(f'|move|{active[actor]}|{self.catalog.moves.names[p[1]]}|{active[target]}'+('|[still]' if still else ''))
+                elif k==inputs.Kind.ACTIVE:
+                    self.assertEqual(int(frame.callbacks.words[row,index,0]),15)
+                    lines.append(f'|-fail|{active[target]}')
                 elif k==inputs.Kind.CONDITION:lines.append(f'|-damage|{active[target]}|'+
                     ('0 fnt' if p[4] else f'{p[1]}/{p[2]}'+(' '+tokens[p[3]] if p[3] else '')))
                 elif k==inputs.Kind.STATUS:
@@ -110,6 +115,12 @@ class StatusCallbacksTests(unittest.TestCase):
                     lines.append(f'|-enditem|{active[target]}|Lum Berry|[eat]')
                     if old:lines.append(f'|-curestatus|{active[target]}|{tokens[old]}|[msg]')
                     if int(frame.callbacks.words[row,index,8]):lines.append(f'|-end|{active[target]}|confusion')
+                elif k==inputs.Kind.FIELD:
+                    raw=frame.callbacks.words[row,index];label=('none','RainDance','SunnyDay','Sandstorm','Hail')[int(raw[6])]
+                    if int(raw[0])==12:
+                        proc=int(raw[7]);source=int(raw[1]);ability=('', 'Drizzle','Drought','Sand Stream')[proc]
+                        lines.append(f'|-weather|{label}|[from] ability: {ability}|[of] {active[source]}')
+                    else:lines.append(f'|-weather|{label}'+('|[upkeep]' if int(raw[0])==14 and int(raw[9])==1 else ''))
                 elif k==inputs.Kind.TURN:lines.append(f'|turn|{turn}')
                 elif k==inputs.Kind.ACTION_CHUNK_END:lines.append('|')
                 elif k==inputs.Kind.UPKEEP:lines.append('|upkeep')

@@ -218,6 +218,11 @@ def compile_catalog(metadata, engine_table, *, public_moves, dex, exposure):
             raise ValueError('public move namespace row drift')
         target = (0 if wire_info.target == 'self' else 1 if wire_info.target in
             ('normal', 'adjacentFoe', 'any', 'allAdjacentFoes', 'allAdjacent', 'randomNormal') else -1) if wire_info else -1
+        # Pinned Gen3 useMoveInner prints the getRandomTarget result; the
+        # original battle resolver returns the user for these field moves.
+        # Do not generalize this lexical proof to other field/side targets.
+        if wire_info and wire_info.target=='all' and wire_key in ('raindance','sunnyday','sandstorm','hail'):
+            target=0
         # The source resolver documents the one Gen3 type-dependent case.
         # Never infer its target rewrite from a static row or physical types.
         dynamic = bool(wire_info and resolve_move_effect(wire_info,()) != resolve_move_effect(wire_info,('Ghost',)))
