@@ -14,9 +14,16 @@ arm, value-head replacement, privileged input, retry, fallback or refill.
 
 ## Fixed roster and invocation order
 
-There are 500 battle seeds, 30100000 through 30100499. Each is played from both
-learner seats, once per encoder: 1000 planned games per arm, 2000 total. Each
-matching seed-seat pair uses FoulPlay seed 40100000 plus the battle ordinal.
+Each immutable prespec fixes 500 consecutive battle seeds starting at
+`seed_start` and 500 FoulPlay seeds starting at `foulplay_seed_start`. Each
+battle seed is played from both learner seats, once per encoder: 1000 planned
+games per arm, 2000 total. Matching seed-seat pairs use the same FoulPlay seed
+at the corresponding ordinal. The historical defaults remain 30100000 through
+30100499 and 40100000 through 40100499, with byte-identical default v2 prespecs.
+The failed original bank is closed; these defaults do not authorize resuming
+or retrying it. A future bank requires a new identifier, prospectively declared
+seed bands and fresh output directory. For example, 30500000/40500000 can be
+prepared only as a new bank; preparation does not authorize collection.
 Both seats stay together inside the statistical seed cluster.
 
 Four serial 500-game invocations run in this order, frozen before outcomes:
@@ -51,6 +58,14 @@ The prespec retains the source-derived roster hashes and exclusion digest.
 - `study_id`: a new immutable identifier.
 - `runtime`: explicit `checkpoint`, `showdown_root`, `foulplay_root`,
   `foulplay_python` and `node_binary` paths.
+- `seed_start`, `foulplay_seed_start`: optional prospective band starts, default
+  30100000/40100000. Each must be an integer (not a boolean) with all 500
+  offsets in `[0, 2**31)`. The bands must be disjoint and exclude the consumed
+  A2/A4 cohorts above. The root workstream also checks previously declared or
+  closed banks before authorizing a fresh bank; this source audit does not
+  claim a registry of every past reservation. Both bands are bound in the
+  prespec and used unchanged by planning, benchmark configuration, chronological
+  result checks and paired reduction.
 - `max_decision_rounds`: prospective fixed cap (default 250); a cap is unknown.
 - `owning_terminal_timeout_seconds`: fixed timeout, default 5, bounded to 30.
 - `owning_decision_timeout_seconds`: required prospective learner ceiling, finite and positive, up to 3600; no borrowed opponent or terminal timeout.
@@ -86,7 +101,11 @@ The output records observed precision/library versions. Node selected through
 PATH must match the configured executable because the Dex loader uses PATH.
 
 No command in this document is a launch request. This wrapper introduces no
-additional cost study or approval gate. The existing B2 numeric gate,
+additional cost study or approval gate. Changing only the prospectively fixed
+seed bands leaves the numerical controls, encoder timing scope and cost
+threshold unchanged. Existing hash-bound cost prespecs/receipts retain their
+original study reference and validation; they are not rewritten or re-bound to
+a new bank. The existing B2 numeric gate,
 independent scientific producer/results reviews and prescribed compute/runtime
 controls remain in force; the root workstream owns launches and merges.
 
