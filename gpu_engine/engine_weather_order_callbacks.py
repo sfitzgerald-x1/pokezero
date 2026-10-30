@@ -52,7 +52,8 @@ def _unknown(tape, eligible):
     return tape._replace(refusal=tape.refusal | jnp.where(eligible, UNKNOWN_WEATHER, 0))
 
 
-def annotate_weather_chip(tape, before_count, side, physical, speed0, speed1, *, eligible):
+def annotate_weather_chip(tape, before_count, side, physical, speed0, speed1, *, eligible,
+                          _defer_own_unknown=False):
     """Annotate exactly the actual write appended since per-row before_count.
 
     Call immediately after kind16's owning HP-write callback, with the count
@@ -96,4 +97,4 @@ def annotate_weather_chip(tape, before_count, side, physical, speed0, speed1, *,
         & (speed0 > 0) & (speed1 > 0))
     annotated = receipt.at[:, 1].set(speed0).at[:, 2].set(speed1)
     words = tape.words.at[rows, index].set(jnp.where((eligible & valid)[:, None], annotated, receipt))
-    return _unknown(tape._replace(words=words), eligible)
+    return _unknown(tape._replace(words=words), eligible & ~valid if _defer_own_unknown else eligible)

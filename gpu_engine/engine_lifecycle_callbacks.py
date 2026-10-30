@@ -79,6 +79,7 @@ class LifecycleResult(NamedTuple):
     after_registry: PublicArrivalSnapshot
     invalid_actions: object
     placeholder_moves: object
+    weather_profile: object = None  # INTERNAL owning carry, never a public fact
 
     @property
     def full_line_consumers_complete(self):return False

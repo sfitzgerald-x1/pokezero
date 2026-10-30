@@ -100,7 +100,8 @@ def same_weather_failure(tape, side, physical, move_id, old_weather, current_wea
     return _unknown(tape, eligible & ~valid)
 
 
-def weather_chip(tape, side, physical, old_hp, new_hp, maximum, status, raw_weather, *, eligible):
+def weather_chip(tape, side, physical, old_hp, new_hp, maximum, status, raw_weather, *, eligible,
+                 _defer_own_unknown=False):
     """Called at applied chip write; no-change/immune/dead guards stay caller-owned.
 
     Claiming an eligible write without a strict HP decrease is unknown-only.
@@ -119,4 +120,6 @@ def weather_chip(tape, side, physical, old_hp, new_hp, maximum, status, raw_weat
     absent = jnp.full_like(tape.count, -1)
     tape = public._append(tape, WEATHER_CHIP, absent, absent, side, physical,
         (old_hp, new_hp, maximum, status, raw_weather), eligible & valid)
-    return _unknown(tape, eligible)
+    # Only the owning exact post-both-writes segment seam may defer OUR latch.
+    # Invalid/overflow/foreign latches remain; the segment must OR failure back.
+    return _unknown(tape, eligible & ~valid if _defer_own_unknown else eligible)

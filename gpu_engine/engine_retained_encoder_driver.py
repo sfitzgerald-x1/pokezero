@@ -178,7 +178,7 @@ def _report_rows(ok, before, after):
         observation=selected.encoded.observation._replace(category_count=before.encoded.observation.category_count)))
 
 
-def _frame(core, statics, engine_actions, chance, active_rows=None):
+def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -195,7 +195,8 @@ def _frame(core, statics, engine_actions, chance, active_rows=None):
         source_ready &= active_rows
     masked = core.engine._replace(done=core.engine.done | ~source_ready)
     result = transition.step_with_chance(masked, engine_actions, engine_table, chance,
-        _public_trace=tape, _lifecycle_trace=True)
+        _public_trace=tape, _lifecycle_trace=True,
+        _weather_hp_context=None if weather_profile_data is None else (core.weather_profile,weather_profile_data))
     engine = _rows(source_ready, core.engine, result.step.state)
     cursor = _rows(source_ready, core.cursor, result.callbacks.cursor)
     # Bindings are GLOBAL [8], never row-select them by a coincidental B=8.
@@ -203,9 +204,11 @@ def _frame(core, statics, engine_actions, chance, active_rows=None):
     callbacks = result.callbacks._replace(**{name: _rows(source_ready, getattr(tape, name),
         getattr(result.callbacks, name)) for name in tape._fields if name not in globals_})
     callbacks = callbacks._replace(cursor=cursor)
+    profile=None if weather_profile_data is None else _rows(source_ready,
+        core.weather_profile,result.weather_profile)
     return life.LifecycleResult(engine, cursor, callbacks, before,
         life.snapshot(cursor), jnp.where(source_ready, result.step.invalid_actions, False),
-        jnp.where(source_ready, result.step.placeholder_moves, 0))
+        jnp.where(source_ready, result.step.placeholder_moves, 0),profile)
 
 
 def _request(engine, ledger, original, retained, unsafe, arrival, admitted, statics):
@@ -248,9 +251,9 @@ def _public(observer, frame, tables, context, catalog):
         retained_healthy=healthy), p.projection, error
 
 
-def _full_public(observer, frame, tables, catalog, consume):
+def _full_public(observer, frame, tables, catalog, consume, *, weather_hp=None):
     """Consume genuine full-format controls without relabeling basic state."""
-    result = consume(observer.projection, frame, tables, observer.retained, catalog)
+    result = consume(observer.projection, frame, tables, observer.retained, catalog,weather_hp=weather_hp)
     projection = result.projection
     healthy = observer.retained_healthy & (projection.error == 0) & projection.component_admitted
     return observer._replace(projection=projection.state, retained=result.public,
@@ -333,16 +336,16 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     public_handle = public.compile_projector(json.loads(request['metadata']), base_handle,
         species_catalog=catalog.species, source=catalog.source, context_tables=context)
     check_public, register_public = public.check_projector, public.register
-    public_fast = lambda obs, frame: _public(obs, frame, public_handle.device, context, catalog)
+    public_fast = lambda obs, frame, profile: _public(obs, frame, public_handle.device, context, catalog)
     speed_profile=None
     if public_mode == 'retained-full':
         from . import engine_full_v4_event_device as full
         public_handle = full.compile_adapter(json.loads(request['metadata']), base_handle, catalog=catalog)
         check_public, register_public = full.check_adapter, full.register
-        public_fast = lambda obs, frame: _full_public(obs, frame, public_handle.device,
-            catalog, full.project_and_fold)
         speed_profile=weather_speed.compile_profile(json.loads(request['metadata']),catalog=catalog,
             engine_catalog=request['lifecycle'],rules=request['rules'])
+        public_fast = lambda obs, frame, profile: _full_public(obs, frame, public_handle.device,
+            catalog, full.project_and_fold,weather_hp=(profile,speed_profile.device))
     static = (request['rules'].device, request['adapter'].device,
         team._checked_tables(request['private_team']), request['catalog'].device, request['engine_table'])
     payload = dict(schema=SCHEMA, metadata=json.loads(request['metadata']), lifecycle=request['lifecycle'].binding,
@@ -358,7 +361,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
             weather_speed.retain_device(profile,state,streams,speed_profile.device)),
         frame=jax.jit(lambda core, act, chance, active=None:
-            _frame(core, (None, base_handle.device, request['engine_table']), act, chance, active)),
+            _frame(core, (None, base_handle.device, request['engine_table']), act, chance, active,
+                weather_profile_data=None if speed_profile is None else speed_profile.device)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
         installations=jax.jit(life.apply_installations),
@@ -398,7 +402,7 @@ def _consume(r, state, frame, active_rows=None, timing_callback=None, previous_r
     observers, reports = [], []
     for side, observer in enumerate(state.observers, 1):
         def public_phase(before, frame, active):
-            candidate, projection, error = r['public_fast'](before, frame)
+            candidate, projection, error = r['public_fast'](before, frame,state.core.weather_profile)
             return _observer_rows(active, before, candidate), projection, error
         observer, projection, error = _timed(timing_callback, f'public_p{side}', public_phase,
             observer, frame, active_rows)
@@ -519,7 +523,7 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
                 frame.after_registry, admitted) for ledger, original, retained, history in
                 zip(orders, core.originals, core.constructors, unsafe))
             profile=core.weather_profile if r['retain_speed'] is None else r['retain_speed'](
-                core.weather_profile,frame.state,frame.cursor.stream_id)
+                frame.weather_profile,frame.state,frame.cursor.stream_id)
             candidate = core._replace(engine=frame.state, cursor=frame.cursor, orders=orders, unsafe=unsafe,
                 requests=requests, admitted=admitted, frame_number=core.frame_number+executed.astype(jnp.int32),
                 weather_profile=profile)

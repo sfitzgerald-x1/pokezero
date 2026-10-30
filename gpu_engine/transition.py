@@ -221,6 +221,13 @@ class StepResult(NamedTuple):
     placeholder_moves: jax.Array   # [B]; every executed move is still a placeholder
 
 
+class WeatherProfileTracedStep(NamedTuple):
+    """Private owning-profile path only; legacy StepResult/TracedStep unchanged."""
+    step: StepResult
+    callbacks: object
+    weather_profile: object
+
+
 class ChanceInputs(NamedTuple):
     """Finite semantic inputs, not a claim of independent PRNG-key outcomes.
 
@@ -287,7 +294,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 
 
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
-                     chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False) -> StepResult:
+                     chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
+                     _weather_hp_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -300,6 +308,14 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         from . import engine_status_callbacks as status_callbacks
         from . import engine_weather_effect_callbacks as weather_effect_callbacks
         from . import engine_weather_order_callbacks as weather_order_callbacks
+        if _weather_hp_context is not None:
+            from . import engine_weather_hp_segment as weather_hp_segment
+            from . import engine_weather_speed_profile as weather_speed_profile
+            if (type(_weather_hp_context) is not tuple or len(_weather_hp_context)!=2
+                    or type(_weather_hp_context[0]) is not weather_speed_profile.BirthRecord
+                    or type(_weather_hp_context[1]) is not weather_speed_profile.ProfileData):
+                raise ValueError('owning birth record and original static weather profile required')
+            _weather_hp_record=_weather_hp_context[0]
     batch = state.hp.shape[0]
     shapes = ((batch,2,12),(batch,2),(batch,2),(batch,2),(batch,2),(batch,))
     for value,shape in zip(chance_inputs,shapes,strict=True):
@@ -933,6 +949,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _public_trace=lifecycle_callbacks.action_end(_public_trace,residual_ready)
     # Snapshot before Wish(order7), weather(order8), and order10 handlers.
     end_speed = _speeds(work,table)
+    if _lifecycle_trace:_weather_pre_wish=work
     if table.sustain is not None:
         ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         for side in range(2):
@@ -951,6 +968,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         active_abilities = work.ability[rows[:,None],sides,work.active]
         active_hp = work.hp[rows[:,None],sides,work.active]
         effective_weather = climate.effective(table.weather,weather,active_abilities,active_hp)
+        if _lifecycle_trace:_weather_segment_before_count=_public_trace.count
         # The field weather handler runs Weather on BOTH actives before
         # faintMessages/checkWin. A double last-mon weather KO is a Gen 3 tie.
         for side in range(2):
@@ -963,10 +981,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _weather_before_count=_public_trace.count
                 _public_trace=weather_effect_callbacks.weather_chip(_public_trace,side,work.active[rows,side],
                     _weather_old_hp,hp,_active(work.max_hp,work,side),_active(work.status,work,side),weather,
-                    eligible=ordinary&(hp<_weather_old_hp))
+                    eligible=ordinary&(hp<_weather_old_hp),_defer_own_unknown=_weather_hp_context is not None)
                 _public_trace=weather_order_callbacks.annotate_weather_chip(_public_trace,_weather_before_count,
                     side,work.active[rows,side],end_speed[:,0],end_speed[:,1],
-                    eligible=ordinary&(hp<_weather_old_hp))
+                    eligible=ordinary&(hp<_weather_old_hp),_defer_own_unknown=_weather_hp_context is not None)
+        if _lifecycle_trace:
+            if _weather_hp_context is not None:
+                _weather_segment=weather_hp_segment.order_segment_device(_public_trace,
+                    _weather_segment_before_count,_weather_pre_wish,work,end_speed,
+                    _weather_hp_context[0],_weather_hp_context[1],eligible=ordinary)
+                _public_trace=_weather_segment.tape
+                _weather_hp_record=_weather_segment.record
     # Selected order10/priority0 handlers snapshot SPEED before suborder.
     # Equal-speed Speed Boost(3), Leftovers(4), seed(5), status(6) use independent ties.
     # Ability boosts do not re-sort the already queued residual handlers.
@@ -1062,4 +1087,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work.volatile & jnp.uint32(~(FLINCH|FOCUS_PUNCH|FOCUS_LOST) & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
     result = StepResult(work, invalid, placeholders)
+    if _lifecycle_trace:
+        if _weather_hp_context is not None:
+            return WeatherProfileTracedStep(result,_public_trace,_weather_hp_record)
     return result if _public_trace is None else public_callbacks.TracedStep(result,_public_trace)
