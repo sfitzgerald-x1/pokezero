@@ -23,7 +23,7 @@ class WeatherHPSegmentTests(unittest.TestCase):
         for x, y in zip(jax.tree.leaves(a), jax.tree.leaves(b)):
             np.testing.assert_array_equal(x, y)
 
-    def case(self, batch=1, *, speeds=(199, 301), types=None, wish=False, capacity=64,
+    def case(self, batch=1, *, speeds=(199, 301), types=None, wish=False, wish_both=False, capacity=64,
              prefix=True, prior=0):
         born = self.f.state(batch)._replace(active=j.broadcast_to(j.array([2, 5], j.int32), (batch, 2)))
         values = j.broadcast_to(j.array(speeds, j.int32), (batch, 2))
@@ -37,8 +37,9 @@ class WeatherHPSegmentTests(unittest.TestCase):
         if types is not None:
             pre = pre._replace(types=pre.types.at[:, 0, 2].set(j.array(types[0], j.int32))
                 .at[:, 1, 5].set(j.array(types[1], j.int32)))
-        if wish:
-            pre = pre._replace(wish_counter=pre.wish_counter.at[:, 0].set(1))
+        wishes = (0, 1) if wish_both else (0,) if wish else ()
+        for side in wishes:
+            pre = pre._replace(wish_counter=pre.wish_counter.at[:, side].set(1))
         end_speed = transition._speeds(pre, self.f.table)
         cursor = tapes.tape(pre).cursor._replace(stream_id=ids,
             engine_binding=j.broadcast_to(self.data.engine_binding, (batch, 8)),
@@ -52,16 +53,18 @@ class WeatherHPSegmentTests(unittest.TestCase):
         # internal append represents a future emitter deferring ONLY its own
         # UNKNOWN; this test does not register a public producer/callsite.
         work = pre
-        if wish:
+        for side in wishes:
             from gpu_engine import sustain
-            result = sustain.wish_residual(pre.hp[:, 0, 2], pre.max_hp[:, 0, 2],
-                pre.wish_counter[:, 0], eligible=j.ones(batch, bool))
-            work = pre._replace(hp=pre.hp.at[:, 0, 2].set(result.hp),
-                wish_counter=pre.wish_counter.at[:, 0].set(result.counter))
+            rows = j.arange(batch); active = work.active[:, side]
+            result = sustain.wish_residual(work.hp[rows, side, active], work.max_hp[rows, side, active],
+                work.wish_counter[:, side], eligible=j.ones(batch, bool))
+            work = work._replace(hp=work.hp.at[rows, side, active].set(result.hp),
+                wish_counter=work.wish_counter.at[:, side].set(result.counter))
         changed, counter, tape = weather.residual_clock(work.weather, work.weather_counter,
             eligible=j.ones(batch, bool), _weather_trace=tape)
         work = work._replace(weather=changed, weather_counter=counter)
         before = tape.count
+        pre_writes = work
         for side in (0, 1):
             rows = j.arange(batch); active = work.active[:, side]
             old = work.hp[rows, side, active]
@@ -73,10 +76,11 @@ class WeatherHPSegmentTests(unittest.TestCase):
             work = work._replace(hp=work.hp.at[rows, side, active].set(new))
             tape = public._append(tape, 16, end_speed[:, 0], end_speed[:, 1],
                 j.full(batch, side, j.int32), active, (old, new, maximum, status, work.weather), new < old)
-        return tape, before, pre, work, end_speed, record
+        return tape, before, pre, work, end_speed, record, pre_writes
 
     def run_case(self, values, *, eligible=True, data=None):
-        return segment.order_segment_device(*values, self.data if data is None else data, eligible=eligible)
+        return segment.order_segment_device(*values[:6], self.data if data is None else data,
+            pre_writes_state=values[6], eligible=eligible)
 
     def test_two_whole_receipts_sorted_only_by_checked_cached_speed(self):
         values = self.case(prior=128 | 256)
@@ -100,7 +104,7 @@ class WeatherHPSegmentTests(unittest.TestCase):
         single = self.run_case(single_values)
         self.assertTrue(bool(single.supported[0])); self.same(single.tape, single_values[0])
         empty_values = self.case(types=((5, 0), (6, 0)), speeds=(200, 200))
-        empty_values = (*empty_values[:-1], empty_values[-1]._replace(qualified_birth=j.array([False])))
+        empty_values = (*empty_values[:5], empty_values[5]._replace(qualified_birth=j.array([False])), empty_values[6])
         empty = self.run_case(empty_values)
         self.assertEqual((empty.tape.count - empty_values[1]).tolist(), [0])
         self.assertTrue(bool(empty.supported[0])); self.same(empty.tape, empty_values[0])
@@ -118,17 +122,18 @@ class WeatherHPSegmentTests(unittest.TestCase):
 
     def test_ties_stale_speed_nonpositive_and_false_birth_are_unknown_only(self):
         tied = self.case(speeds=(200, 200), prior=128)
-        stale = self.case(prior=128); stale = (*stale[:4], stale[4].at[0, 0].add(1), stale[5])
+        stale = self.case(prior=128); stale = (*stale[:4], stale[4].at[0, 0].add(1), *stale[5:])
         refused_birth = self.case(prior=128)
-        refused_birth = (*refused_birth[:-1], refused_birth[-1]._replace(qualified_birth=j.array([False])))
+        refused_birth = (*refused_birth[:5], refused_birth[5]._replace(qualified_birth=j.array([False])), refused_birth[6])
         nonpositive = self.case(speeds=(1, 301), prior=128)
-        t, n, pre, after, _, birth = nonpositive
+        t, n, pre, after, _, birth, pre_writes = nonpositive
         pre = pre._replace(boosts=pre.boosts.at[0, 0, 2, 4].set(-6))
         after = after._replace(boosts=after.boosts.at[0, 0, 2, 4].set(-6))
+        pre_writes = pre_writes._replace(boosts=pre_writes.boosts.at[0, 0, 2, 4].set(-6))
         speed = transition._speeds(pre, self.f.table)
         for offset in (0, 1):
             t = t._replace(words=t.words.at[0, n[0] + offset, 1:3].set(speed[0]))
-        nonpositive = (t, n, pre, after, speed, birth)
+        nonpositive = (t, n, pre, after, speed, birth, pre_writes)
         for values in (tied, stale, refused_birth, nonpositive):
             result = self.run_case(values)
             self.assertFalse(bool(result.supported[0])); self.assertFalse(bool(result.reordered[0]))
@@ -152,7 +157,7 @@ class WeatherHPSegmentTests(unittest.TestCase):
         self.assertFalse(bool(self.run_case((duplicate, *values[1:])).supported[0]))
 
     def test_late_physical_changes_and_missing_hp_write_refuse(self):
-        values = self.case(); tape, before, pre, after, end_speed, birth = values
+        values = self.case(); tape, before, pre, after, end_speed, birth, pre_writes = values
         variations = [after._replace(stats=after.stats.at[0, 1, 5, 5].add(1)),
             after._replace(boosts=after.boosts.at[0, 1, 5, 4].add(1)),
             after._replace(status=after.status.at[0, 1, 5].set(mechanics.PAR)),
@@ -161,11 +166,97 @@ class WeatherHPSegmentTests(unittest.TestCase):
             after._replace(active=after.active.at[0, 1].set(4)),
             after._replace(hp=after.hp.at[0, 1, 4].add(-1))]
         for changed in variations:
-            result = self.run_case((tape, before, pre, changed, end_speed, birth))
+            result = self.run_case((tape, before, pre, changed, end_speed, birth, pre_writes))
             self.assertFalse(bool(result.supported[0])); self.same(result.tape.words, tape.words)
         # Drop the second receipt while retaining its actual HP decrease.
         missing = tape._replace(count=tape.count - 1)
         self.assertFalse(bool(self.run_case((missing, *values[1:])).supported[0]))
+
+    def test_missing_both_hp_receipts_refuses_without_changing_tape_records(self):
+        values = self.case(prior=128)
+        tape, before, pre, after, *_ = values
+        self.assertLess(int(after.hp[0, 0, 2]), int(pre.hp[0, 0, 2]))
+        self.assertLess(int(after.hp[0, 1, 5]), int(pre.hp[0, 1, 5]))
+        # Neither actual HP decrease has a counted receipt. The uncounted tail
+        # is not a substitute for the missing events and must remain untouched.
+        missing = tape._replace(count=before)
+        result = self.run_case((missing, *values[1:]))
+        self.assertEqual(result.supported.tolist(), [False])
+        self.assertEqual(result.reordered.tolist(), [False])
+        self.assertEqual(result.tape.refusal.tolist(), [128 | 256])
+        self.same(result.tape._replace(refusal=missing.refusal), missing)
+
+    def test_both_wish_heals_cannot_mask_dropped_receipts_but_immune_empty_is_valid(self):
+        values = self.case(wish_both=True, prior=128)
+        tape, before, pre, after, _, _, pre_writes = values
+        # Both final HPs exceed their pre-Wish HP, concealing BOTH missing chip
+        # receipts from a mere pre-Wish/final comparison.
+        for side, active in ((0, 2), (1, 5)):
+            self.assertGreaterEqual(int(after.hp[0, side, active]), int(pre.hp[0, side, active]))
+            self.assertLess(int(after.hp[0, side, active]), int(pre_writes.hp[0, side, active]))
+        missing = tape._replace(count=before)
+        result = self.run_case((missing, *values[1:]))
+        self.assertEqual(result.supported.tolist(), [False])
+        self.assertEqual(result.tape.refusal.tolist(), [128 | 256])
+        self.same(result.tape._replace(refusal=missing.refusal), missing)
+        immune = self.case(wish_both=True, types=((5, 0), (6, 0)), speeds=(200, 200))
+        self.assertEqual((immune[0].count - immune[1]).tolist(), [0])
+        valid = self.run_case(immune)
+        self.assertTrue(bool(valid.supported[0])); self.assertFalse(bool(valid.reordered[0]))
+        self.same(valid.tape, immune[0])
+
+    def test_actual_prewrite_old_hp_and_clock_window_and_intermediate_profile_are_required(self):
+        values = self.case(wish=True, prior=128)
+        tape, before, pre, after, speeds, birth, pre_writes = values
+        at = int(before[0])
+        wrong_old = tape._replace(words=tape.words.at[0, at, 5].add(-1))
+        self.assertFalse(bool(self.run_case((wrong_old, *values[1:])).supported[0]))
+        # Clocks/Wish may change before the HP window, never inside it.
+        changed = [after._replace(weather=j.full_like(after.weather, weather.HAIL)),
+            after._replace(weather_counter=after.weather_counter + 1),
+            after._replace(wish_counter=after.wish_counter.at[0, 0].add(1))]
+        for state in changed:
+            result = self.run_case((tape, before, pre, state, speeds, birth, pre_writes))
+            self.assertFalse(bool(result.supported[0]))
+            self.same(result.tape._replace(refusal=tape.refusal), tape)
+        unsafe = pre_writes._replace(item=pre_writes.item.at[0, 1, 4].set(4))
+        result = self.run_case((tape, before, pre, after, speeds, birth, unsafe))
+        self.assertFalse(bool(result.record.qualified_birth[0]))
+        self.assertFalse(bool(result.supported[0]))
+        with self.assertRaises(TypeError):
+            segment.order_segment_device(*values[:6], self.data, eligible=True)
+
+    def test_b8_empty_segments_validate_seam_without_inventing_order_or_profile(self):
+        values = self.case(8, prior=128 | 4096)
+        tape, before, pre, after, end_speed, birth, pre_writes = values
+        # Rows0..5 and7 have no counted HP receipts. Row0 drops both actual
+        # decreases. Rows1/2 are genuine no-event tie/false-profile cases. Row3
+        # is inactive, row4 foreign, row5 has an impossible late status change.
+        empty_rows = j.array([True] * 6 + [False, True])
+        tape = tape._replace(count=j.where(empty_rows, before, tape.count))
+        same_hp = j.array([False, True, True, False, True, True, False, True])
+        after = after._replace(hp=j.where(same_hp[:, None, None], pre.hp, after.hp))
+        pre = pre._replace(stats=pre.stats.at[1, ..., 5].set(200))
+        pre_writes = pre_writes._replace(stats=pre_writes.stats.at[1, ..., 5].set(200))
+        after = after._replace(stats=after.stats.at[1, ..., 5].set(200),
+            status=after.status.at[5, 1, 5].set(mechanics.PAR))
+        end_speed = end_speed.at[1].set(j.array([200, 200], j.int32))
+        birth = birth._replace(qualified_birth=birth.qualified_birth.at[2].set(False),
+            source_binding=birth.source_binding.at[4, 0].add(1))
+        eligible = j.array([True, True, True, False, True, True, True, True])
+        fast = jax.jit(lambda t, n, a, z, s, r, w:segment.order_segment_device(
+            t, n, a, z, s, r, self.data, pre_writes_state=w, eligible=eligible))
+        result = jax.block_until_ready(fast(tape, before, pre, after, end_speed, birth, pre_writes))
+        self.assertEqual(result.supported.tolist(), [False, True, True, False, False, False, True, True])
+        self.assertEqual(result.reordered.tolist(), [False] * 6 + [True, False])
+        self.assertFalse(bool(result.record.qualified_birth[1]))
+        self.assertFalse(bool(result.record.qualified_birth[2]))
+        self.assertEqual(result.tape.refusal.tolist(),
+            [(128 | 4096 | 256) if row in (0, 4, 5) else (128 | 4096) for row in range(8)])
+        for row in (0, 1, 2, 3, 4, 5, 7):
+            self.same(result.tape.words[row], tape.words[row])
+            self.same(result.tape.event_generation[row], tape.event_generation[row])
+        self.same(jax.tree.map(lambda a:a[3], result.record), jax.tree.map(lambda a:a[3], birth))
 
     def test_bad_counts_overflow_tail_and_ineligible_rows_cannot_rewrite(self):
         values = self.case(prior=128); tape, before, *_ = values
@@ -177,12 +268,12 @@ class WeatherHPSegmentTests(unittest.TestCase):
         self.assertFalse(bool(result.supported[0])); self.same(result.tape.words, overflow.words)
         self.assertEqual(result.tape.refusal.tolist(), [128 | public.OVERFLOW | 256])
         inactive = self.run_case(values, eligible=False)
-        self.same(inactive.tape, tape); self.same(inactive.record, values[-1])
+        self.same(inactive.tape, tape); self.same(inactive.record, values[5])
         self.assertFalse(bool(inactive.supported[0]))
 
     def test_b8_mixed_hot_jit_and_namespaces_preserve_global_bindings(self):
         speeds = j.array([[199, 301], [301, 199], [200, 200]] + [[199, 301]] * 5, j.int32)
-        values = self.case(8, speeds=speeds, prior=128); tape, before, pre, after, speed, birth = values
+        values = self.case(8, speeds=speeds, prior=128); tape, before, pre, after, speed, birth, pre_writes = values
         # Row1 already source-ordered; row2 tie; row3 unsafe birth; row4 stale
         # source namespace; row5 late state; row6 no operational processing.
         after = after._replace(status=after.status.at[5, 1, 5].set(1))
@@ -194,12 +285,12 @@ class WeatherHPSegmentTests(unittest.TestCase):
             words = words.at[j.arange(8), at + offset, 1:3].set(speed)
         tape = tape._replace(words=words)
         eligible = j.array([True] * 6 + [False, True])
-        fast = jax.jit(lambda t, n, a, z, s, r:segment.order_segment_device(t, n, a, z, s, r,
-            self.data, eligible=eligible))
-        result = jax.block_until_ready(fast(tape, before, pre, after, speed, birth))
+        fast = jax.jit(lambda t, n, a, z, s, r, w:segment.order_segment_device(t, n, a, z, s, r,
+            self.data, pre_writes_state=w, eligible=eligible))
+        result = jax.block_until_ready(fast(tape, before, pre, after, speed, birth, pre_writes))
         self.assertEqual(result.supported.tolist(), [True, True, False, False, False, False, False, True])
         self.assertEqual(result.reordered.tolist(), [True, False, False, False, False, False, False, True])
-        self.same(jax.block_until_ready(fast(tape, before, pre, after, speed, birth)), result)
+        self.same(jax.block_until_ready(fast(tape, before, pre, after, speed, birth, pre_writes)), result)
         self.assertEqual(fast._cache_size(), 1)
         for name in ('engine_binding', 'source_binding', 'move_binding', 'producer_binding'):
             self.assertEqual(getattr(result.tape, name).shape, (8,))
@@ -224,19 +315,19 @@ class WeatherHPSegmentTests(unittest.TestCase):
 
     def test_strict_types_checked_host_profile_and_legacy_noop(self):
         values = self.case()
-        with self.assertRaises(ValueError):self.run_case((*values[:4], values[4].astype(j.float32), values[5]))
+        with self.assertRaises(ValueError):self.run_case((*values[:4], values[4].astype(j.float32), *values[5:]))
         with self.assertRaises(ValueError):self.run_case((values[0], np.array([1], np.int64), *values[2:]))
-        with self.assertRaises(ValueError):self.run_case((*values[:-1], True))
+        with self.assertRaises(ValueError):self.run_case((*values[:5], True, values[6]))
         with self.assertRaises(ValueError):self.run_case(values, eligible=j.ones(2, bool))
-        result = segment.order_segment(*values, profile_handle=self.f.profile, eligible=True)
+        result = segment.order_segment(*values[:6], pre_writes_state=values[6], profile_handle=self.f.profile, eligible=True)
         self.assertTrue(bool(result.supported[0]))
         original = self.f.profile.device
         try:
             object.__setattr__(self.f.profile, 'device', original._replace(current_items=j.ones_like(original.current_items)))
-            with self.assertRaises(ValueError):segment.order_segment(*values, profile_handle=self.f.profile, eligible=True)
+            with self.assertRaises(ValueError):segment.order_segment(*values[:6], pre_writes_state=values[6], profile_handle=self.f.profile, eligible=True)
         finally:object.__setattr__(self.f.profile, 'device', original)
         legacy = public.CallbackTape(*values[0][:8])
-        old = segment.order_segment_device(legacy, None, None, None, None, None, None, eligible=True)
+        old = segment.order_segment_device(legacy, None, None, None, None, None, None, pre_writes_state=None, eligible=True)
         self.same(old.tape, legacy); self.assertFalse(bool(old.supported[0]))
 
 
