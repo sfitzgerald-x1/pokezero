@@ -6,7 +6,9 @@ import hashlib
 import importlib.util
 import json
 from math import sqrt
+import os
 from pathlib import Path
+import stat
 from statistics import fmean, stdev
 import tempfile
 from types import SimpleNamespace
@@ -280,6 +282,43 @@ class StudyTests(unittest.TestCase):
         self.assertEqual(saved,ledger);self.assertEqual(calls,[True])
         self.assertEqual(ledger['actual_exit'],1);self.assertEqual(ledger['failure']['error_type'],'OSError')
         self.assertEqual(ledger['cells'][1]['status'],'FAILED')
+
+    def test_atomic_publication_orders_file_sync_replace_and_directory_sync(self):
+        events=[]
+        original_open,original_sync,original_replace,original_close=os.open,os.fsync,os.replace,os.close
+        def opened(path, flags, *args, **kwargs):
+            fd=original_open(path,flags,*args,**kwargs)
+            if Path(path)==self.root:events.append('directory-open')
+            return fd
+        def synced(fd):
+            events.append('directory-sync' if stat.S_ISDIR(os.fstat(fd).st_mode) else 'file-sync')
+            return original_sync(fd)
+        def replaced(*args,**kwargs):
+            events.append('replace');return original_replace(*args,**kwargs)
+        def closed(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):events.append('directory-close')
+            return original_close(fd)
+        with patch.object(study.os,'open',side_effect=opened),patch.object(study.os,'fsync',side_effect=synced), \
+             patch.object(study.os,'replace',side_effect=replaced),patch.object(study.os,'close',side_effect=closed):
+            study.atomic_json(self.root/'ordered.json',{'authored':1})
+        self.assertEqual(events,['file-sync','replace','directory-open','directory-sync','directory-close'])
+        self.assertEqual(json.loads((self.root/'ordered.json').read_text()),{'authored':1})
+
+    def test_initial_directory_sync_failure_blocks_all_setup_and_game_calls(self):
+        original_sync=os.fsync;failed=[];closed=[];original_close=os.close
+        def synced(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                failed.append(fd);raise OSError('authored directory sync failure')
+            return original_sync(fd)
+        def close(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):closed.append(fd)
+            return original_close(fd)
+        async def forbidden(*args,**kwargs):self.fail('no benchmark before durable initial publications')
+        with patch.object(study.os,'fsync',side_effect=synced),patch.object(study.os,'close',side_effect=close):
+            with self.assertRaisesRegex(OSError,'directory sync failure'):
+                asyncio.run(study.run_study(self.spec,self.root/'sync-fault',benchmark=forbidden,
+                    factory_builder=lambda _:self.fail('no factory'),configure=lambda:self.fail('no precision setup')))
+        self.assertEqual(len(failed),1);self.assertEqual(closed,failed)
 
     def test_changed_prefix_wrong_fp_seed_and_wrong_seat_cannot_publish_scored_cells(self):
         for mode in ('changed','fp-seed','foreign-seat','duplicate','cap'):

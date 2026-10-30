@@ -352,13 +352,18 @@ def summarize(spec, ledger):
 
 
 def atomic_json(path, document):
-    """Publish a complete compact ledger; fsync before atomic replacement."""
+    """Publish durable bytes and name: file fsync, replace, directory fsync."""
     path = Path(path)
     fd, name = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
     try:
         with os.fdopen(fd, 'wb') as stream:
             stream.write(canonical(document) + b'\n'); stream.flush(); os.fsync(stream.fileno())
         os.replace(name, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     finally:
         Path(name).unlink(missing_ok=True)
 
