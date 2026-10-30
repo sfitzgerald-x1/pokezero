@@ -169,8 +169,10 @@ def project_base_sections(*,facts,action_tables,mons,context,team_tables,field_t
         tendency,observer_side,vocabulary_binding,category_count,exact_state=True):
     """Run the existing source writers and assemble their real base sections."""
     own=private_team.project_team(facts.team,observer_side=observer_side,expected_vocabulary_binding=vocabulary_binding)
+    retained_status = getattr(context, 'sleep', None)
     opponent=public_team.project_opponent(mons,context.abilities,team_tables,
-        observer_side=observer_side,expected_binding=team_tables.binding)
+        observer_side=observer_side,expected_binding=team_tables.binding,
+        belief_status=retained_status.status if retained_status is not None else None)
     actions=private_actions.project_actions(facts,action_tables,observer_side=observer_side)
     field=public_field.project(context.field,field_tables,facts.request,observer_side=observer_side,
         expected_vocabulary=vocabulary_binding,exact_state=exact_state)
