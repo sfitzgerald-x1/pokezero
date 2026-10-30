@@ -16,7 +16,7 @@ from pokezero import owning_encoder_cost as cost
 from pokezero import owning_encoder_study as study
 from pokezero.recorded_mirror_roots import CHAMPION_CONTRACT
 from pokezero.live_protocol_bridge import OwningWireSession, OwningActorFactory
-from pokezero.live_protocol_actor import ActorContract
+from pokezero.live_protocol_actor import ActorContract, UNQUALIFIED
 from pokezero.foulplay_bridge import ControlledFoulPlayConfig as RealConfig
 
 
@@ -34,6 +34,8 @@ class FakeActor:
 
     def begin_game(self, **identity):
         self.identity = identity
+        self.contract=ActorContract.champion()
+        for name,value in identity.items():setattr(self,name,value)
         self.events.append(('begin', identity))
 
     def accept_owner_stream(self, **data):
@@ -63,7 +65,10 @@ class FakeActor:
 
     def close_game(self):
         self.events.append(('close',))
-        return dict(status='ABORTED_UNQUALIFIED', error=None, close_error=None)
+        return dict(status='ABORTED_UNQUALIFIED',battle_id=self.battle_id,owner=self.owner,
+            generation=self.generation,terminal_seen=False,terminal_lifecycle=None,
+            owner_lines=len(self.lines),owner_requests=sum(line.startswith('|request|') for line in self.lines),
+            prefix_sha256=self.prefix_sha256,error=None,close_error=None,**UNQUALIFIED)
 
 
 class FakeSession:
@@ -337,16 +342,105 @@ class CostTests(unittest.TestCase):
 
     def test_reducer_nearest_rank_includes_cold_outlier_and_max(self):
         ledger,_,_=self.run_fake()
-        for i,row in enumerate(ledger['roots']):row['decision_seconds']=i/100.
+        for i,row in enumerate(ledger['roots']):
+            row['decision_seconds']=row['decision_attempt_seconds']=i/100.
         summary=cost.summarize(self.spec,ledger)
         self.assertEqual(summary['p95_seconds'],.18)
         self.assertEqual(summary['maximum_seconds'],.19)
         self.assertEqual(summary['threshold_seconds'],.125)
         self.assertFalse(summary['cost_rule_satisfied'])
-        ledger['roots'][-1]['decision_seconds']=1000.
+        ledger['roots'][-1]['decision_seconds']=ledger['roots'][-1]['decision_attempt_seconds']=1000.
         self.assertEqual(cost.summarize(self.spec,ledger)['maximum_seconds'],1000.)
         ledger['roots'][-1]['status']='FAILED_UNKNOWN'
+        ledger.update(status='FAILED_UNKNOWN',actual_exit=1,failure={'authored':True})
         self.assertIsNone(cost.summarize(self.spec,ledger)['p95_seconds'])
+
+    def test_reducer_requires_complete_actual_actor_receipt_and_context(self):
+        original,_,_=self.run_fake()
+        mutations=(
+            lambda d:d['roots'][0].pop('actor_receipt'),
+            lambda d:d['roots'][0].update(actor_receipt={}),
+            lambda d:d['roots'][0]['actor_receipt'].update(status='TERMINAL_UNQUALIFIED'),
+            lambda d:d['roots'][0]['actor_receipt'].update(error='RuntimeError'),
+            lambda d:d['roots'][0]['actor_receipt'].update(close_error='RuntimeError'),
+            lambda d:d['roots'][0]['actor_receipt'].update(battle_id='other'),
+            lambda d:d['roots'][0]['actor_receipt'].update(owner='other'),
+            lambda d:d['roots'][0]['actor_receipt'].update(prefix_sha256='0'*64),
+            lambda d:d['roots'][0]['actor_receipt'].update(owner_lines=0),
+            lambda d:d['roots'][0]['actor_receipt'].update(owner_requests=True),
+            lambda d:d['roots'][0]['actor_receipt'].update(generation=0),
+            lambda d:d['roots'][0]['actor_receipt'].update(terminal_seen=True),
+            lambda d:d['roots'][0]['actor_receipt'].update(public_wire_qualified=True),
+            lambda d:d['roots'][0].pop('actor_context'),
+            lambda d:d['roots'][0]['actor_context'].update(namespace='other'),
+            lambda d:d['roots'][0]['actor_context'].update(seed=0),
+            lambda d:d['roots'][0]['actor_context'].update(stream_id=True),
+            lambda d:d['roots'][0]['root'].update(root_id='other'),
+            lambda d:d['roots'][0]['root'].update(seed=float(d['roots'][0]['root']['seed'])),
+            lambda d:d['roots'][0].update(status='UNRECOGNIZED'),
+            lambda d:d.update(actual_exit=False),
+            lambda d:d.update(actual_exit=0.),
+            lambda d:d.pop('actual_exit'),
+            lambda d:d.pop('failure'),
+        )
+        for ordinal,mutate in enumerate(mutations):
+            changed=deepcopy(original);mutate(changed)
+            with self.subTest(control=ordinal),self.assertRaises(ValueError):
+                cost.summarize(self.spec,changed)
+
+    def test_reducer_requires_finite_consistent_stage_timings_and_full_normal_exit(self):
+        original,_,_=self.run_fake()
+        for key in ('actor_catalog_seconds','prior_priming_seconds','decision_attempt_seconds','decision_seconds'):
+            for value in (None,True,-.1,float('nan'),float('inf')):
+                changed=deepcopy(original);changed['roots'][0][key]=value
+                with self.subTest(key=key,value=value),self.assertRaises(ValueError):cost.summarize(self.spec,changed)
+        for value in (None,False,-.1,float('nan'),float('inf')):
+            changed=deepcopy(original);changed['setup_seconds']=value
+            with self.subTest(setup=value),self.assertRaises(ValueError):cost.summarize(self.spec,changed)
+        changed=deepcopy(original);changed['roots'][0]['decision_attempt_seconds']+=.01
+        with self.assertRaisesRegex(ValueError,'inconsistent'):cost.summarize(self.spec,changed)
+        changed=deepcopy(original);changed['roots'][1]['first_selected_encode_in_attempt']=True
+        with self.assertRaisesRegex(ValueError,'inconsistent'):cost.summarize(self.spec,changed)
+        changed=deepcopy(original);changed.update(status='RUNNING',actual_exit=None)
+        self.assertFalse(cost.summarize(self.spec,changed)['cost_rule_satisfied'])
+        for alter in (lambda d:d.update(actual_exit=1),lambda d:d.update(failure={'authored':True}),
+                      lambda d:d['roots'][0].update(status='NOT_ATTEMPTED')):
+            changed=deepcopy(original);alter(changed)
+            result=cost.summarize(self.spec,changed)
+            self.assertFalse(result['cost_rule_satisfied'])
+            self.assertIsNone(result['p95_seconds'])
+
+    def test_producer_rejects_changed_actual_close_provenance_before_valid_status(self):
+        original=FakeActor.close_game
+        def wrong(actor):
+            receipt=original(actor);receipt['prefix_sha256']='0'*64
+            return receipt
+        with patch.object(FakeActor,'close_game',wrong):ledger,_,actors=self.run_fake()
+        self.assertEqual(len(actors),1)
+        self.assertEqual(ledger['actual_exit'],1)
+        self.assertEqual(ledger['roots'][0]['status'],'FAILED_UNKNOWN')
+        self.assertEqual(ledger['summary']['valid'],0)
+        self.assertFalse(ledger['summary']['cost_rule_satisfied'])
+
+    def test_actual_actor_close_envelope_binds_fixed_root_without_encoding(self):
+        from pokezero.live_protocol_actor import LiveProtocolActor, RawPolicy
+        from test_live_protocol_actor import FixtureBackend
+        planned=self.spec['roster'][0]
+        data=cost._owner_input(self.root,planned)
+        def forbidden(*args,**kwargs):self.fail('no encoder/model/policy selection')
+        actor=LiveProtocolActor(ActorContract.champion(),
+            backend_factory=lambda contract,**identity:FixtureBackend(contract),
+            policy_factory=lambda contract:RawPolicy(contract,forbidden,lambda:None))
+        actor.begin_game(battle_id=planned['battle_id'],owner=planned['seat'],seed=planned['seed'],stream_id=1)
+        for line in data['prior']+data['delta']:
+            actor.accept_owner_stream(battle_id=actor.battle_id,owner=actor.owner,generation=actor.generation,
+                prefix_sha256=actor.prefix_sha256,lines=(line,))
+        self.assertEqual(actor._backend.encodes,[])
+        row=dict(actor_context=dict(namespace=actor.contract.namespace,battle_id=actor.battle_id,
+            owner=actor.owner,seed=actor.seed,stream_id=actor.stream_id),actor_receipt=actor.close_game(),
+            actor_catalog_seconds=.01,prior_priming_seconds=.01,decision_attempt_seconds=.01,
+            decision_seconds=.01,first_selected_encode_in_attempt=True)
+        self.assertEqual(cost._checked_valid_sample(row,planned,0),.01)
 
     def test_durable_roster_before_setup_and_io_failure_blocks_model(self):
         writes=[]

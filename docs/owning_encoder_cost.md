@@ -74,3 +74,12 @@ interruption cannot label an already started root as not attempted.
 No retries, resume, redraw or refill exist. Fewer than 20 valid roots cannot
 satisfy the rule. A completed numeric readout still requires independent
 scientific results review and does not qualify B3 automatically.
+
+A `VALID` label alone is insufficient. Both producer and reducer require the
+actual actor registration context and full clean `ABORTED_UNQUALIFIED` closure,
+matching the fixed battle, owner, namespace, seed, stream, prefix, generation,
+line count and request count. Terminal/error/qualification claims cannot replace
+that evidence. Setup, actor/catalog, prior priming and selected attempt/completed
+timings must be finite and nonnegative; selected attempt and completed durations
+must agree. Only a full normal ledger with a strict integer exit code zero and
+no failure can satisfy the rule. Missing or modified evidence refuses reduction.

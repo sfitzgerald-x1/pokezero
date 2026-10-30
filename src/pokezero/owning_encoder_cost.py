@@ -15,7 +15,7 @@ import subprocess
 import time
 
 from . import owning_encoder_study as study
-from .live_protocol_actor import ActorContract, _actionable, _packet, _terminal
+from .live_protocol_actor import ActorContract, UNQUALIFIED, _actionable, _packet, _terminal
 from .recorded_encoder_corpus import _Prefix
 
 SCHEMA = 'pokezero.B3-owning-cost-prespec.v1'
@@ -186,6 +186,7 @@ def _owner_input(collection, row):
                 own_request_line_sha256=hashlib.sha256(request.encode()).hexdigest(),
                 actor_prefix_sha256=hashlib.sha256(b''.join((s+'\n').encode() for s in prior+lines)).hexdigest(),
                 prior_line_count=len(prior), delta_line_count=len(lines),
+                own_request_count=sum(s.startswith('|request|') for s in prior+lines),
                 host_request_cache_sha256=digest(requests),
                 host_owner_prefixes_sha256={seat:p.sha256() for seat,p in prefixes.items()},
                 requested_players=boundary['requested_players'])
@@ -339,22 +340,53 @@ def _session(config, factory, runtime, row):
         battle_id=row['battle_id'],start_seed=row['seed'])
 
 
+def _seconds(value, label):
+    require(type(value) in (int,float) and math.isfinite(value) and value >= 0,
+            'finite nonnegative timing required: '+label)
+    return value
+
+
+def _checked_valid_sample(row, planned, ordinal):
+    """Validate actual registered/closed actor evidence before counting time."""
+    counts = [planned.get(key) for key in ('prior_line_count','delta_line_count','own_request_count')]
+    require(all(type(n) is int and n >= 0 for n in counts)
+        and 0 < counts[2] <= counts[0]+counts[1], 'fixed own line/request counts required')
+    line_count = counts[0]+counts[1]
+    context = dict(namespace=ActorContract.champion().namespace,battle_id=planned['battle_id'],
+        owner=planned['seat'],seed=planned['seed'],stream_id=1)
+    receipt = dict(status='ABORTED_UNQUALIFIED',battle_id=planned['battle_id'],owner=planned['seat'],
+        generation=line_count,terminal_seen=False,terminal_lifecycle=None,
+        owner_lines=line_count,owner_requests=counts[2],prefix_sha256=planned['actor_prefix_sha256'],
+        error=None,close_error=None,**UNQUALIFIED)
+    require(type(row.get('actor_context')) is dict and canonical(row['actor_context']) == canonical(context),
+            'actual actor context/namespace differs from fixed root')
+    require(type(row.get('actor_receipt')) is dict and canonical(row['actor_receipt']) == canonical(receipt),
+            'complete clean nonterminal actor receipt differs from fixed root')
+    for key in ('actor_catalog_seconds','prior_priming_seconds','decision_attempt_seconds','decision_seconds'):
+        _seconds(row.get(key),key)
+    require(row['decision_seconds'] == row['decision_attempt_seconds']
+        and row.get('first_selected_encode_in_attempt') is (ordinal == 0),
+        'selected timing/first-use context inconsistent')
+    return row['decision_seconds']
+
+
 def summarize(spec, ledger):
     _validate_cost(spec)
     require(ledger.get('schema') == LEDGER_SCHEMA
         and ledger['prespec_sha256'] == digest(spec) and len(ledger['roots']) == COUNT,
             'cost ledger/prespec mismatch')
+    require('actual_exit' in ledger and 'failure' in ledger and ledger.get('B3_qualified') is False
+        and (ledger['actual_exit'] is None or type(ledger['actual_exit']) is int),
+        'explicit strict integer exit/failure/unqualified ledger required')
     valid = []
-    for planned, row in zip(spec['roster'], ledger['roots']):
-        require(row['root'] == planned and row['status'] in
+    for ordinal, (planned, row) in enumerate(zip(spec['roster'], ledger['roots'])):
+        require(type(row) is dict and canonical(row.get('root')) == canonical(planned) and row['status'] in
             ('VALID','ATTEMPTING_UNKNOWN','FAILED_UNKNOWN','NOT_ATTEMPTED'),
                 'cost ledger roster/status drift')
         if row['status'] == 'VALID':
-            value = row['decision_seconds']
-            require(type(value) in (int,float) and math.isfinite(value) and value >= 0,
-                    'invalid selected cost sample')
-            valid.append(value)
-    complete = (len(valid) == COUNT and ledger.get('actual_exit') == 0
+            _seconds(ledger.get('setup_seconds'),'setup_seconds')
+            valid.append(_checked_valid_sample(row,planned,ordinal))
+    complete = (len(valid) == COUNT and type(ledger['actual_exit']) is int and ledger['actual_exit'] == 0
         and ledger.get('status') == 'COMPLETE_REQUIRES_SCIENTIFIC_REVIEW'
         and ledger.get('failure') is None)
     p95 = sorted(valid)[18] if complete else None
@@ -395,6 +427,7 @@ def run_cost(spec, output, *, runtime_builder=None, input_loader=None, admission
             factory, runtime, precision, config = (runtime_builder or _runtime)(source)
         finally:
             ledger['setup_seconds'] = clock()-started
+        _seconds(ledger['setup_seconds'],'setup_seconds')
         ledger['runtime_precision'] = precision
         for ordinal, current in enumerate(ledger['roots']):
             stage = 'input'
@@ -449,11 +482,11 @@ def run_cost(spec, output, *, runtime_builder=None, input_loader=None, admission
                 'timed own snapshot provenance differs')
             current['decision_seconds'] = elapsed
             stage = 'close'
+            current['actor_context'] = dict(namespace=actor.contract.namespace,battle_id=actor.battle_id,
+                owner=actor.owner,seed=actor.seed,stream_id=actor.stream_id)
             current['actor_receipt'] = actor.close_game()
             actor = None
-            require(current['actor_receipt']['status'] == 'ABORTED_UNQUALIFIED'
-                and current['actor_receipt']['error'] is None and current['actor_receipt']['close_error'] is None,
-                'selected nonterminal actor did not close cleanly')
+            _checked_valid_sample(current,row,ordinal)
             current['status'] = 'VALID'
             ledger['status'] = 'RUNNING'
             publish()
