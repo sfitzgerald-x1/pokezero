@@ -155,9 +155,11 @@ class Context(NamedTuple):
     """PRIVATE actual lifecycle carry; never an exhaustive-source certificate."""
     ledger: Ledger
     tables: Tables
+    risks: object = None  # PRIVATE actual-kernel diagnostics; never a coverage certificate
 
 
 UNKNOWN_EXECUTION = 512
+UNKNOWN_KERNEL_RISK = 1024
 
 
 def commit_rows(active, before, after):

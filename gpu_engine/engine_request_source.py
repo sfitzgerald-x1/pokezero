@@ -481,7 +481,8 @@ def _gender(state, pool, indices, initialization):
 
 
 def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
-                        gender_initialization=None, capacity=64, _execution_compiled=None):
+                        gender_initialization=None, capacity=64, _execution_compiled=None,
+                        _kernel_risk_compiled=None):
     """Real opt-in constructor callsite; legacy state_from_pool stays unchanged.
 
     The same immutable pool and owned selection feed physical construction and
@@ -490,6 +491,8 @@ def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
     """
     if _execution_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
         raise ValueError('checked accounting source constructor cannot be traced')
+    if _kernel_risk_compiled is not None and _execution_compiled is None:
+        raise ValueError('kernel risks require the actual accounting constructor')
     from . import engine_lifecycle_callbacks as lifecycle
     record = _checked(compiled)
     if _execution_compiled is not None:
@@ -523,7 +526,7 @@ def construct_from_pool(pool, team_indices, *, compiled, stream_ids, seed=0,
     frame = lifecycle.initialize_with_lifecycle(state,record['engine_table'],cursor=cursor,
         catalog=catalog,expected_binding=catalog.binding,
         expected_engine_binding=record['rules'].device.engine_binding,capacity=capacity,
-        execution_compiled=_execution_compiled)
+        execution_compiled=_execution_compiled,kernel_risk_compiled=_kernel_risk_compiled)
     requests = tuple(produce_request(compiled,frame.state,o,r,frame.after_registry,
         lifecycle_admitted=frame.cursor.admitted) for o,r in zip(orders,registrations))
     return _bind_constructed(frame.state,frame.cursor,tuple(orders),tuple(registrations),requests,

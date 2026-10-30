@@ -240,7 +240,7 @@ def _reveal(tape,state,side,outgoing,incoming,*,eligible,replacement,baton,initi
 
 
 def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expected_engine_binding,
-                              tie_coin=None,capacity=64,execution_compiled=None):
+                              tie_coin=None,capacity=64,execution_compiled=None,kernel_risk_compiled=None):
     """Own NEW -> actual reveals0,1 -> SAME legacy initialize -> TURN1.
 
     Constructor wrappers must pass the uninitialized state_from_pool(table=None)
@@ -248,6 +248,8 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
     """
     if execution_compiled is not None and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
         raise ValueError('checked accounting constructor must remain outside outer JIT')
+    if kernel_risk_compiled is not None and execution_compiled is None:
+        raise ValueError('kernel risk constructor requires genuine accounting')
     from . import transition
     public.check_catalog(catalog,table,expected_binding=expected_binding,expected_engine_binding=expected_engine_binding)
     execution_tables=None
@@ -256,6 +258,13 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
         execution_tables,_,adapter=execution._checked(execution_compiled)
         if adapter.causal.projector.catalog is not catalog:
             raise ValueError('same original lifecycle catalog required for accounting constructor')
+    risk_tables=None
+    if kernel_risk_compiled is not None:
+        from . import engine_kernel_frame_risk as risks
+        risk_tables=risks.check_compiled(kernel_risk_compiled)
+        source_record=risks._COMPILED[kernel_risk_compiled]
+        if source_record[2] is not catalog or source_record[3] is not execution_compiled:
+            raise ValueError('same original kernel/accounting compiler required for constructor risk carry')
     ok=_valid(cursor)&~cursor.initialized&(cursor.turn==0)&(cursor.phase==0)&~state.done&(state.turn==0)
     ok &= jnp.all(cursor.engine_binding==jnp.array(catalog.engine_binding,jnp.uint32),axis=1)
     ok &= (jnp.all(cursor.next_slot==0,axis=1)&jnp.all(cursor.physical_to_public==-1,axis=(1,2))
@@ -271,6 +280,12 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
     if execution_tables is not None:
         ledger=execution.initialize(cursor.stream_id,compiled=execution_compiled,capacity=32,receipt_capacity=capacity)
         tape=execution.begin_on_tape(tape,ledger,execution_tables,active=ok)
+    if risk_tables is not None:
+        carry=risks.initialize_device(tape.stream_id,risk_tables)
+        carry=risks.begin_frame_device(carry,tape,risk_tables,active=ok)
+        carry=risks.observe_constructor_device(carry,tape,state,risk_tables,active=ok)
+        tape=tape._replace(execution=tape.execution._replace(risks=risks.Context(carry,risk_tables)),
+            refusal=tape.refusal|jnp.where(ok&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
     for side in (0,1):
         seat=jnp.full_like(cursor.turn,side)
         tape=_reveal(tape,state,seat,jnp.full_like(cursor.turn,-1),state.active[:,side],
@@ -283,6 +298,11 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
     complete=ok&jnp.all(~updated.entry_pending,axis=1)&tape.cursor.admitted
     tape=tape._replace(cursor=tape.cursor._replace(initialized=complete,admitted=complete))
     tape=_turn(tape,complete)
+    if risk_tables is not None:
+        context=tape.execution.risks
+        carry=risks.observe_end_device(context.carry,tape,updated,risk_tables,active=ok)
+        tape=tape._replace(execution=tape.execution._replace(risks=context._replace(carry=carry)),
+            refusal=tape.refusal|jnp.where(ok&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
     return LifecycleResult(updated,tape.cursor,tape,before,snapshot(tape.cursor),jnp.zeros_like(ok),jnp.zeros_like(cursor.turn))
 
 

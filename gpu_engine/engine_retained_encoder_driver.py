@@ -32,6 +32,7 @@ from . import engine_own_facts as own, public_context, public_mon_state, public_
 from . import private_actions, v4_encoder, transition
 from . import engine_weather_speed_profile as weather_speed
 from . import engine_execution_completeness as execution
+from . import engine_kernel_frame_risk as kernel_risks
 
 SCHEMA = 'pokezero.engine_retained173_driver.partial.v1'
 SOURCE, PUBLIC_COMPONENT, FULL_PUBLIC, REQUEST, OWN, ENCODER, PENDING, CELLS, PUBLIC_COVERAGE = (1 << n for n in range(9))
@@ -53,6 +54,7 @@ class Core(NamedTuple):
     frame_number: object
     weather_profile: object = None
     execution: object = None  # PRIVATE joined closed ledger
+    risks: object = None  # PRIVATE sticky actual-kernel diagnostics
 
 
 class BasicPublic(NamedTuple):
@@ -165,7 +167,22 @@ def _public_rows(ok, before, after):
 
 def _core_rows(ok, before, after):
     ledger=None if before.execution is None else execution.commit_rows(ok,before.execution,after.execution)
-    return _rows(ok,before._replace(execution=None),after._replace(execution=None))._replace(execution=ledger)
+    risks=_risk_rows(ok,before.risks,after.risks)
+    return _rows(ok,before._replace(execution=None,risks=None),after._replace(execution=None,risks=None))._replace(
+        execution=ledger,risks=risks)
+
+
+def _risk_rows(active,before,after):
+    if before is None and after is None:return None
+    if type(before) is not kernel_risks.Carry or type(after) is not kernel_risks.Carry:
+        raise ValueError('actual typed risk carry must survive every owning phase')
+    selected=kernel_risks.commit_rows(active,before,after)
+    same=jnp.array(True)
+    for name in ('binding','accounting_binding'):
+        old,new=getattr(before,name),getattr(after,name)
+        execution._shape(old,(8,),jnp.uint32);execution._shape(new,(8,),jnp.uint32)
+        same &= jnp.all(old==new)
+    return selected._replace(risk=selected.risk|jnp.where(active&~same,kernel_risks.NAMESPACE,0))
 
 
 def _observer_rows(ok, before, after):
@@ -189,7 +206,7 @@ def _report_rows(ok, before, after):
 
 
 def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_profile_data=None,
-           leftovers_context=None,execution_tables=None,status_residual_context=None):
+           leftovers_context=None,execution_tables=None,status_residual_context=None,kernel_risk_tables=None):
     """One real core invocation; no host registration/read in the hot path."""
     catalog, bindings, engine_table = statics
     del catalog  # the real constructor's host catalog is never checked in JIT
@@ -206,6 +223,12 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
         source_ready &= active_rows
     if execution_tables is not None:
         tape=execution.begin_on_tape(tape,core.execution,execution_tables,active=source_ready)
+    if kernel_risk_tables is not None:
+        if execution_tables is None or type(core.risks) is not kernel_risks.Carry:
+            raise ValueError('actual original accounting and retained risk carry required')
+        carry=kernel_risks.begin_frame_device(core.risks,tape,kernel_risk_tables,active=source_ready)
+        tape=tape._replace(execution=tape.execution._replace(risks=kernel_risks.Context(carry,kernel_risk_tables)),
+            refusal=tape.refusal|jnp.where(source_ready&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
     masked = core.engine._replace(done=core.engine.done | ~source_ready)
     result = transition.step_with_chance(masked, engine_actions, engine_table, chance,
         _public_trace=tape, _lifecycle_trace=True,
@@ -220,7 +243,16 @@ def _frame(core, statics, engine_actions, chance, active_rows=None, *, weather_p
     callbacks = callbacks._replace(cursor=cursor)
     if execution_tables is not None:
         ledger=execution.commit_rows(source_ready,tape.execution.ledger,result.callbacks.execution.ledger)
-        callbacks=callbacks._replace(execution=tape.execution._replace(ledger=ledger))
+        context=tape.execution._replace(ledger=ledger)
+        if kernel_risk_tables is not None:
+            after=result.callbacks.execution.risks
+            if type(after) is not kernel_risks.Context:
+                raise ValueError('actual kernel discarded its owning risk context')
+            carry=_risk_rows(source_ready,tape.execution.risks.carry,after.carry)
+            context=context._replace(risks=tape.execution.risks._replace(carry=carry))
+            callbacks=callbacks._replace(refusal=callbacks.refusal|jnp.where(
+                source_ready&(carry.risk!=0),execution.UNKNOWN_KERNEL_RISK,0))
+        callbacks=callbacks._replace(execution=context)
     profile=None if weather_profile_data is None else _rows(source_ready,
         core.weather_profile,result.weather_profile)
     return life.LifecycleResult(engine, cursor, callbacks, before,
@@ -364,7 +396,7 @@ def _score(observer, facts, encoded, projection, public_error, core_admitted, fa
 
 def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic', leftovers_compiled=None,
             leftovers_mode='diagnostic',account_source_sites=False,status_residual_compiled=None,
-            status_residual_mode='diagnostic'):
+            status_residual_mode='diagnostic',track_kernel_risks=False):
     """Host-only immutable preparation. fake_forward is a pure source-test spy.
 
     The returned compiled closures contain no registration calls or host reads.
@@ -379,6 +411,12 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
     observers can close selected BRN/PSN spans. It establishes no original
     physics equivalence or exhaustive event coverage.
     """
+    if type(track_kernel_risks) is not bool:
+        raise ValueError('explicit kernel risk tracking mode required')
+    if track_kernel_risks and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('checked kernel risk driver must remain outside outer JIT')
+    if track_kernel_risks and not account_source_sites:
+        raise ValueError('kernel risk tracking requires actual source-site accounting')
     if type(status_residual_mode) is not str or status_residual_mode not in ('diagnostic','kernel-event'):
         raise ValueError('explicit diagnostic or kernel-event status residual mode required')
     if status_residual_mode=='kernel-event' and (status_residual_compiled is None or not account_source_sites):
@@ -424,7 +462,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         species_catalog=catalog.species, source=catalog.source, context_tables=context)
     check_public, register_public = public.check_projector, public.register
     public_fast = lambda obs, frame, profile: _public(obs, frame, public_handle.device, context, catalog)
-    speed_profile=None;execution_compiled=None;no_output_compiled=None
+    speed_profile=None;execution_compiled=None;no_output_compiled=None;kernel_risk_compiled=None
     if public_mode == 'retained-full':
         from . import engine_full_v4_event_device as full
         public_handle = full.compile_adapter(json.loads(request['metadata']), base_handle, catalog=catalog)
@@ -442,6 +480,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
             no_output_compiled=no_output.compile_no_output(leftovers_compiled,
                 profile=speed_profile,accounting_compiled=execution_compiled)
             leftovers_context=leftovers_context._replace(no_output_tables=no_output_compiled.device)
+            if track_kernel_risks:
+                kernel_risk_compiled=kernel_risks.compile_risks(request['lifecycle'],execution_compiled)
         public_fast = lambda obs, frame, profile, active=None: _full_public(obs, frame, public_handle.device,
             catalog, full.project_and_fold,weather_hp=(profile,speed_profile.device),
             leftovers=None if leftovers_mode == 'diagnostic' else leftovers_context.data,active=active,
@@ -459,6 +499,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         payload['leftovers_mode']=leftovers_mode
     if execution_compiled is not None:payload['execution_inventory']=np.asarray(execution_compiled.device.inventory_binding).tolist()
     if no_output_compiled is not None:payload['leftovers_no_output_binding']=np.asarray(no_output_compiled.device.binding).tolist()
+    if kernel_risk_compiled is not None:payload['kernel_risk_binding']=np.asarray(kernel_risk_compiled.device.binding).tolist()
     if status_residual_context is not None:
         payload['status_residual_binding']=np.asarray(status_residual_context.data.binding).tolist()
         payload['status_residual_mode']=status_residual_mode
@@ -470,6 +511,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         speed_profile=speed_profile,leftovers_compiled=leftovers_compiled,
         leftovers_mode=leftovers_mode,leftovers_context=leftovers_context,execution_compiled=execution_compiled,
         no_output_compiled=no_output_compiled,
+        kernel_risk_compiled=kernel_risk_compiled,
         status_residual_compiled=status_residual_compiled,status_residual_context=status_residual_context,
         status_residual_mode=status_residual_mode,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
@@ -478,7 +520,8 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
             _frame(core, (None, base_handle.device, request['engine_table']), act, chance, active,
                 weather_profile_data=None if speed_profile is None else speed_profile.device,
                 leftovers_context=leftovers_context,status_residual_context=status_residual_context,
-                execution_tables=None if execution_compiled is None else execution_compiled.device)),
+                execution_tables=None if execution_compiled is None else execution_compiled.device,
+                kernel_risk_tables=None if kernel_risk_compiled is None else kernel_risk_compiled.device)),
         request_fast=jax.jit(lambda engine, ledger, original, retained, unsafe, arrival, admitted:
             _request(engine, ledger, original, retained, unsafe, arrival, admitted, static)),
         installations=jax.jit(life.apply_installations),
@@ -503,6 +546,7 @@ def _checked(prepared):
     if r['no_output_compiled'] is not None:
         from . import engine_leftovers_no_output as no_output
         no_output.check_compiled(r['no_output_compiled'])
+    if r['kernel_risk_compiled'] is not None:kernel_risks.check_compiled(r['kernel_risk_compiled'])
     if r['speed_profile'] is not None:weather_speed.check_profile(r['speed_profile'])
     if r['leftovers_compiled'] is not None:
         from . import engine_leftovers_callbacks as leftovers_callbacks
@@ -587,7 +631,7 @@ def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initia
     r = _checked(prepared)
     snapshot = source.construct_from_pool(pool, team_indices, compiled=r['request_compiled'],
         stream_ids=stream_ids, seed=seed, gender_initialization=gender_initialization,
-        _execution_compiled=r['execution_compiled'])
+        _execution_compiled=r['execution_compiled'],_kernel_risk_compiled=r['kernel_risk_compiled'])
     b = snapshot.state.hp.shape[0]
     new = life.register(stream_ids, catalog=r['request']['lifecycle'], expected_binding=r['request']['lifecycle'].binding,
         expected_engine_binding=r['request']['rules'].device.engine_binding)
@@ -605,7 +649,9 @@ def construct(pool, team_indices, *, prepared, stream_ids, seed=0, gender_initia
         tuple(reg.original for reg in snapshot.registrations),
         tuple(actions._constructor(reg.constructor) for reg in snapshot.registrations),
         tuple(reg.unsafe_origin for reg in snapshot.registrations), snapshot.requests, admitted, jnp.zeros(b, jnp.int32),profile,
-        None if snapshot.callbacks.execution is None else snapshot.callbacks.execution.ledger)
+        None if snapshot.callbacks.execution is None else snapshot.callbacks.execution.ledger,
+        None if snapshot.callbacks.execution is None or snapshot.callbacks.execution.risks is None
+            else snapshot.callbacks.execution.risks.carry)
     observers = []
     for side in (0, 1):
         owners = jnp.full((b,), side, jnp.int32)
@@ -692,6 +738,8 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
             candidate = core._replace(engine=frame.state, cursor=frame.cursor, orders=orders, unsafe=unsafe,
                 requests=requests, admitted=admitted, frame_number=core.frame_number+executed.astype(jnp.int32),
                 weather_profile=profile,execution=None if frame.callbacks.execution is None else frame.callbacks.execution.ledger)
+            candidate=candidate._replace(risks=None if frame.callbacks.execution is None
+                or frame.callbacks.execution.risks is None else frame.callbacks.execution.risks.carry)
             # Originals and constructor snapshots are immutable source constants.
             chosen = _core_rows(executed, core._replace(originals=None, constructors=None),
                 candidate._replace(originals=None, constructors=None))
