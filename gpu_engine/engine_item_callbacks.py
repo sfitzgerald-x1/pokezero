@@ -5,12 +5,12 @@ Words5..9 are consumed old engine item ID, old/new public major-status enums,
 public confusion-cured boolean, and reserved0. Hidden confusion duration and
 held items without actual consumption never enter the tape.
 
-The old CallbackTape ABI/kinds0..3 remain unchanged. This lifecycle-only receipt
-retains UNKNOWN_STATUS until a separately reviewed full consumer is registered.
+The old CallbackTape ABI/kinds0..3 remain unchanged. Only the full typed device
+consumer supports this kind; basic consumers reject it as an unknown receipt.
 """
 import jax.numpy as jnp
 
-from . import engine_public_events as public, engine_status_callbacks as status
+from . import engine_public_events as public
 
 LUM_CONSUMED = 11
 
@@ -30,4 +30,4 @@ def lum_consumed(tape, side, physical, old_item, old_status, new_status, confusi
     cured = jnp.asarray(confusion_cured, jnp.bool_).astype(jnp.int32)
     tape = public._append(tape, LUM_CONSUMED, absent, absent, side, physical,
         (old_item, old_status, new_status, cured, z), eligible)
-    return status.unknown(tape, eligible)
+    return tape

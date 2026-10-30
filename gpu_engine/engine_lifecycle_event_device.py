@@ -28,7 +28,8 @@ from pokezero.dex import normalize_id
 from . import engine_lifecycle_callbacks as life, engine_public_event_device as base
 from . import engine_public_events as public, public_inputs as inputs
 from . import public_belief, public_context, public_team
-from . import engine_status_callbacks as status_callbacks
+from . import engine_status_callbacks as status_callbacks, engine_item_callbacks as item_callbacks
+from . import public_items
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -46,6 +47,9 @@ class Tables(NamedTuple):
     damage_binding: object
     raw_begin: object
     status_events: object
+    lum_engine_item: object
+    lum_public_item: object
+    lum_events: object
     binding: object
 
 
@@ -56,6 +60,7 @@ class Compiled:
     source: object
     context_tables: object
     device: Tables
+    items: object = None
 
 
 _COMPILED = weakref.WeakKeyDictionary()
@@ -94,7 +99,18 @@ def _host_inputs(projector, species_catalog, source, context_tables):
             raise ValueError('lifecycle source/public namespace drift')
 
 
-def compile_projector(metadata, projector, *, species_catalog, source, context_tables, status_events=False):
+def _item_inputs(items, source):
+    if items is None:
+        return
+    if (type(items) is not public_items.ItemCatalog or type(items.device) is not public_items.ItemTables
+            or type(items.names) is not tuple or type(items.ids) is not MappingProxyType
+            or not _immutable(items.device)
+            or not np.array_equal(np.asarray(items.device.source_binding), np.asarray(source.device.binding))):
+        raise ValueError('original immutable public item namespace required')
+
+
+def compile_projector(metadata, projector, *, species_catalog, source, context_tables, status_events=False,
+        items=None):
     """Host-only compilation, retaining original guarded upstream handles.
 
     Upstream constructor/compiler provenance is trusted, not attested by tags.
@@ -102,10 +118,13 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     source ID0, exactly as the existing source species_id lookup does.
     """
     _host_inputs(projector, species_catalog, source, context_tables)
+    _item_inputs(items, source)
     if type(status_events) is not bool:
         raise ValueError('explicit static status-event mode required')
     if status_events and context_tables.items is not None:
         raise ValueError('status receipts require typed mode plus actual full raw-control composition')
+    if items is not None and not status_events:
+        raise ValueError('Lum receipts require full typed status/raw composition')
     if not np.array_equal(np.asarray(engine_metadata_binding(metadata)), np.asarray(projector.device.engine_binding)):
         raise ValueError('exact original constructor metadata required')
     names = metadata['vocabulary']['species']
@@ -122,6 +141,10 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         species.append(value)
         source_ids.append(source.species_id(name))
     raw = context_tables.items is not None
+    item_names = metadata['vocabulary'].get('items', [])
+    lum_engine = next((i for i, name in enumerate(item_names) if normalize_id(name) == 'lumberry'), 0)
+    lum_public = 0 if items is None else items.ids.get('lumberry', 0)
+    lum = items is not None and lum_engine > 0 and lum_public > 0
     payload = dict(schema=SCHEMA, base=np.asarray(projector.device.binding).tolist(), names=names,
         species=species, source_species=source_ids, species_binding=np.asarray(species_catalog.device.binding).tolist(),
         context=[None if a is None else np.asarray(a).tolist() for a in (
@@ -130,19 +153,25 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
             context_tables.field.binding if context_tables.field is not None else None,
             context_tables.damage.binding if context_tables.damage is not None else None)],
         raw_begin='source_basic_item_nonitem_zero_before_line' if raw else 'absent',
-        status_events=status_events, admission=False)
+        status_events=status_events, lum_engine_item=lum_engine, lum_public_item=lum_public,
+        lum_events=lum, item_binding=None if items is None else np.asarray(items.device.binding).tolist(), admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
-        context_tables.items.binding if raw else None, context_tables.binding if raw else None,
+        context_tables.items.binding if raw else None if items is None else items.device.binding,
+        context_tables.binding if raw else None,
         context_tables.field.binding if context_tables.field is not None else None,
         context_tables.damage.binding if context_tables.damage is not None else None,
-        jnp.array(raw), jnp.array(status_events), jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
-    result = Compiled(projector, species_catalog, source, context_tables, device)
+        jnp.array(raw), jnp.array(status_events), jnp.array(lum_engine, jnp.int32),
+        jnp.array(lum_public, jnp.int32), jnp.array(lum),
+        jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
+    result = Compiled(projector, species_catalog, source, context_tables, device, items)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
         tuple(jax.tree.leaves((species_catalog.device, source.device, context_tables, device))),
         tuple(species_catalog.names), tuple(sorted(species_catalog.ids.items())),
-        tuple(source.species_names), tuple(sorted(source.species_ids.items())))
+        tuple(source.species_names), tuple(sorted(source.species_ids.items())), items,
+        () if items is None else tuple(jax.tree.leaves(items.device)),
+        () if items is None else tuple(items.names), () if items is None else tuple(sorted(items.ids.items())))
     return result
 
 
@@ -150,9 +179,16 @@ def check_projector(compiled):
     """Host-only original-holder/immutable-edge guard, never inside hot JIT."""
     r = _COMPILED.get(compiled) if type(compiled) is Compiled else None
     if (r is None or compiled.projector is not r[0] or compiled.species_catalog is not r[1]
-            or compiled.source is not r[2] or compiled.context_tables is not r[3] or compiled.device is not r[4]):
+            or compiled.source is not r[2] or compiled.context_tables is not r[3] or compiled.device is not r[4]
+            or compiled.items is not r[10]):
         raise ValueError('original compiled lifecycle projector required')
     _host_inputs(compiled.projector, compiled.species_catalog, compiled.source, compiled.context_tables)
+    _item_inputs(compiled.items, compiled.source)
+    if compiled.items is not None:
+        item_leaves = tuple(jax.tree.leaves(compiled.items.device))
+        if (len(item_leaves) != len(r[11]) or any(a is not b for a, b in zip(item_leaves, r[11]))
+                or tuple(compiled.items.names) != r[12] or tuple(sorted(compiled.items.ids.items())) != r[13]):
+            raise ValueError('original immutable item namespace edges required')
     leaves = tuple(jax.tree.leaves((compiled.species_catalog.device, compiled.source.device,
         compiled.context_tables, compiled.device)))
     if (len(leaves) != len(r[5]) or any(a is not b for a, b in zip(leaves, r[5]))
@@ -267,6 +303,9 @@ def project_device(state, tape, before_registry, after_registry, tables):
         raise ValueError('static engine/public species maps required')
     base._shape(tables.raw_begin, (), jnp.bool_)
     base._shape(tables.status_events, (), jnp.bool_)
+    base._shape(tables.lum_events, (), jnp.bool_)
+    base._shape(tables.lum_engine_item, (), jnp.int32)
+    base._shape(tables.lum_public_item, (), jnp.int32)
     rows = jnp.arange(b)
     known = public.UNINSTRUMENTED | public.OVERFLOW | public.INVALID_ACTION | life.UNKNOWN_DETAILS | life.UNKNOWN_BATON | life.MISSING_INSTALL | life.CLOCK | status_callbacks.UNKNOWN_STATUS
     fatal = (tape.refusal & ~public.UNINSTRUMENTED) != 0
@@ -295,6 +334,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
         applied = kind == status_callbacks.STATUS_APPLIED
         cured = kind == status_callbacks.STATUS_CURED
         status_event = applied | cured
+        lum = kind == item_callbacks.LUM_CONSUMED
         safe_side, safe_in = jnp.clip(side, 0, 1), jnp.clip(incoming, 0, 5)
         old = cursor.physical_to_public[rows, safe_side, safe_in]
         slot = jnp.where(old < 0, cursor.next_slot[rows, safe_side], old)
@@ -333,8 +373,16 @@ def project_device(state, tape, before_registry, after_registry, tables):
             & jnp.where(applied,(old_status==0)&(new_status>0)&(new_status<=6)&(reason==status_callbacks.PRIMARY),
                 (new_status==0)&(((old_status==5)&(reason==status_callbacks.WAKE))
                     |((old_status==6)&(reason==status_callbacks.THAW)))))
+        lum_ok = (tables.lum_events & tables.status_events & ~tables.raw_begin & status_identity
+            & jnp.all(raw[:,1:3] == -1, axis=1)
+            & (incoming == cursor.physical_active[rows,safe_side])
+            & (raw[:,5] == tables.lum_engine_item) & (tables.lum_engine_item > 0)
+            & (raw[:,6] >= 0) & (raw[:,6] <= 6) & (raw[:,7] == 0)
+            & ((raw[:,8] == 0) | (raw[:,8] == 1)) & (raw[:,9] == 0)
+            & ((raw[:,6] != 0) | (raw[:,8] == 1)))
         event_ok = generation_ok & clock_ok & jnp.where(arrival, arrival_ok,
-            jnp.where(clock, clock_payload, jnp.where(status_event,status_ok,component & component_ok)))
+            jnp.where(clock, clock_payload, jnp.where(status_event,status_ok,
+                jnp.where(lum,lum_ok,component & component_ok))))
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -363,6 +411,11 @@ def project_device(state, tape, before_registry, after_registry, tables):
         status_semantic = jnp.concatenate((jnp.stack((jnp.full((b,),int(inputs.Kind.STATUS),jnp.int32),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),status_payload),axis=1)
         semantic=jnp.where(status_event[:,None],status_semantic,semantic)
+        item_payload = jnp.stack((status_enc, jnp.full_like(z, tables.lum_public_item),
+            jnp.full_like(z, public_items.CONSUME), z,z,z,z,z), axis=1)
+        item_semantic = jnp.concatenate((jnp.stack((jnp.full_like(z, int(inputs.Kind.ITEM)),
+            semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),item_payload),axis=1)
+        semantic=jnp.where(lum[:,None],item_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)

@@ -105,6 +105,11 @@ class StatusCallbacksTests(unittest.TestCase):
                     lines.append(f'|-status|{active[target]}|{tokens[p[1]]}'+
                         ('|[from] move: Sleep Powder' if p[1]==1 else '') if p[1] else
                         f'|-curestatus|{active[target]}|{tokens[old]}|[msg]')
+                elif k==inputs.Kind.ITEM:
+                    old=status_map[int(frame.callbacks.words[row,index,6])]
+                    lines.append(f'|-enditem|{active[target]}|Lum Berry|[eat]')
+                    if old:lines.append(f'|-curestatus|{active[target]}|{tokens[old]}|[msg]')
+                    if int(frame.callbacks.words[row,index,8]):lines.append(f'|-end|{active[target]}|confusion')
                 elif k==inputs.Kind.TURN:lines.append(f'|turn|{turn}')
                 elif k==inputs.Kind.ACTION_CHUNK_END:lines.append('|')
                 elif k==inputs.Kind.UPKEEP:lines.append('|upkeep')
@@ -207,7 +212,7 @@ class StatusCallbacksTests(unittest.TestCase):
         arrays['item'][1,0]=self.metadata['vocabulary']['items'].index('lumberry')
         frame=self.initial(arrays=arrays)
         actual=self.step(frame,[[0,0],[0,0]])
-        self.assertTrue(bool((actual.callbacks.refusal & status.UNKNOWN_STATUS).all()))
+        self.assertFalse(bool((actual.callbacks.refusal & status.UNKNOWN_STATUS).any()))
         self.assertEqual(actual.state.status[:,1,0].tolist(),[0,0])
         state,current=self.start(frame,j.array([0,1],j.int32))
         initial=self.fast(state,frame,current)
@@ -245,7 +250,7 @@ class StatusCallbacksTests(unittest.TestCase):
         frame=self.initial(arrays=arrays)
         state,p=self.start(frame,j.array([0,1],j.int32));initial=self.fast(state,frame,p)
         mixed=self.step(frame,[[0,0],[1,0]])
-        self.assertEqual((mixed.callbacks.refusal & status.UNKNOWN_STATUS).tolist(),[status.UNKNOWN_STATUS,0])
+        self.assertEqual((mixed.callbacks.refusal & status.UNKNOWN_STATUS).tolist(),[0,0])
         result=self.fast(initial.projection.state,mixed,initial.public)
         self.assertNotEqual(result.projection.error[0].item(),0)
         self.assertEqual(result.projection.error[1].item(),0)

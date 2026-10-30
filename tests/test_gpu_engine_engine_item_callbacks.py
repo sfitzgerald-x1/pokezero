@@ -107,7 +107,7 @@ class ItemCallbacksTests(unittest.TestCase):
         self.assertEqual(self.words(trace, 0).tolist(), [[11, -1, -1, 0, 2, 1, m.PAR, 0, 0, 0]])
         self.assertEqual(self.words(trace, 1).tolist(), [[11, -1, -1, 0, 2, 1, 0, 0, 1, 0]])
         self.assertEqual(self.words(trace, 2).tolist(), [[11, -1, -1, 0, 2, 1, m.SLP, 0, 1, 0]])
-        self.assertEqual((trace.refusal & status.UNKNOWN_STATUS).tolist(), [128, 128, 128, 0, 0, 0, 0])
+        self.assertEqual((trace.refusal & status.UNKNOWN_STATUS).tolist(), [0]*7)
         self.assertFalse(np.isin(np.asarray(trace.words), [42, 99]).any())
         self.assertEqual(trace.event_generation[1, 0].tolist(), [0, 0])
         self.assertEqual(trace.event_turn[1, 0].item(), 1)

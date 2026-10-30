@@ -42,6 +42,7 @@ class Tables(NamedTuple):
     conditions: object
     statuses: object
     cures: object
+    lum: object
     namespaces: Bindings
     binding: object
 
@@ -69,7 +70,7 @@ def compile_adapter(metadata, projector, *, catalog):
         raise ValueError('original engine/public FULL catalog move edge required')
     simple = public_context.compile_context(catalog.source, catalog.abilities, catalog.moves)
     lower = causal.compile_projector(metadata, projector, species_catalog=catalog.species,
-        source=catalog.source, context_tables=simple, status_events=True)
+        source=catalog.source, context_tables=simple, status_events=True, items=catalog.items)
     kwargs = v4_encoder.wire_kwargs(catalog)
     name = catalog.species.names[1]
     ident = ('p1a: '+name, 'p2a: '+name)
@@ -84,12 +85,16 @@ def compile_adapter(metadata, projector, *, catalog):
     allowed = {int(k) for k in (inputs.Kind.RAW_BEGIN, inputs.Kind.SWITCH_PRELUDE,
         inputs.Kind.MUDSHOT, inputs.Kind.NONPROC, inputs.Kind.TENDENCY,
         inputs.Kind.ACTIVE, inputs.Kind.TYPES, inputs.Kind.FIELD,
-        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC)}
+        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS)}
 
     def add(line, main_kind, before=prior):
         try:
-            _, projection = public_wire.project_line(before, line, **kwargs)
-            words = np.array([e.words() for e in projection.events], np.int32)
+            if isinstance(line, tuple):
+                _, projections = public_wire.project_lines(before, line, **kwargs)
+            else:
+                _, projection = public_wire.project_line(before, line, **kwargs)
+                projections = (projection,)
+            words = np.array([e.words() for p in projections for e in p.events], np.int32)
             indices = np.flatnonzero(words[:, 0] == int(main_kind))
             if (len(indices) != 1 or not 1 <= len(words) <= 64
                     or any(int(k) not in allowed | {int(main_kind)} for k in words[:, 0])):
@@ -112,6 +117,23 @@ def compile_adapter(metadata, projector, *, catalog):
     tokens=('', 'slp', 'par', 'brn', 'frz', 'psn', 'tox')
     statuses=np.array([0]+[add(f'|-status|{ident[0]}|{token}',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
     cures=np.array([0]+[add(f'|-curestatus|{ident[0]}|{token}|[msg]',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
+    lum = np.zeros((7, 2), np.int32)
+    if bool(lower.device.lum_events):
+        # Effective Gen3 inherited eatItem/onEat emits these genuine source
+        # lines in this order. Keep every raw begin/closure from the original
+        # writer, including multiple semantic events in one consume receipt.
+        for old_status in range(7):
+            for confusion in range(2):
+                if old_status == 0 and not confusion:
+                    continue
+                lines = [f'|-enditem|{ident[0]}|Lum Berry|[eat]']
+                if old_status:
+                    lines.append(f'|-curestatus|{ident[0]}|{tokens[old_status]}|[msg]')
+                if confusion:
+                    lines.append(f'|-end|{ident[0]}|confusion')
+                lum[old_status, confusion] = add(tuple(lines), inputs.Kind.ITEM)
+        if not np.all(lum[1:]) or lum[0, 1] == 0:
+            raise ValueError('FULL writer lacks exact Lum raw schemas')
     moves = np.zeros(len(catalog.moves.names), np.int32)
     targets = {}
     for pid, target in zip(projector.catalog.ids, projector.catalog.targets):
@@ -128,11 +150,11 @@ def compile_adapter(metadata, projector, *, catalog):
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
     payload = packed.tobytes()+np.array(lengths, np.int32).tobytes()+np.array(mains, np.int32).tobytes()
-    payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
+    payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
-        jnp.array(statuses), jnp.array(cures), ns, binding)
+        jnp.array(statuses), jnp.array(cures), jnp.array(lum), ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -225,6 +247,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
         ci = jnp.where(semantic[:, 12] == 1, 7, semantic[:, 11])
         key = jnp.where(condition, tables.conditions[jnp.clip(ci, 0, 7)], key)
         status_event = kind == int(inputs.Kind.STATUS)
+        lum_event = kind == int(inputs.Kind.ITEM)
         # This is a SAME-index causal receipt join, not a final-state join:
         # status-enabled lower mode forbids RAW_BEGIN and emits exactly one
         # semantic per accepted input. It never drops a receipt. The actual
@@ -233,6 +256,10 @@ def project_device(state, tape, before_registry, after_registry, tables):
         old_public_status = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(old_engine_status,0,6)]
         status_key=jnp.where(semantic[:,9]>0,tables.statuses[jnp.clip(semantic[:,9],0,6)],tables.cures[old_public_status])
         key=jnp.where(status_event,status_key,key)
+        lum_old_engine = tape.words[:,index,6]
+        lum_old_public = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(lum_old_engine,0,6)]
+        lum_key = tables.lum[lum_old_public,jnp.clip(tape.words[:,index,8],0,1)]
+        key=jnp.where(lum_event,lum_key,key)
         size = tables.length[key]; main = tables.main[key]
         enough = (count <= 64-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > 64-size)
@@ -256,13 +283,14 @@ def project_device(state, tape, before_registry, after_registry, tables):
         # lexical metadata or silently erase a different observed condition.
         previous_status=statuses[rows,safe,safe_slot]
         identity &= ~status_event | (old_public_status==previous_status)
+        identity &= ~lum_event | ((lum_old_public==previous_status) & live[rows,safe])
         error = jnp.where(present & (error == 0) & ~identity, int(inputs.Error.IDENTITY), error)
         use = present & (error == 0)
         next_species = species.at[rows, safe, safe_slot].set(
             jnp.where(arrival, semantic[:, 9], prior_species))
         next_status=jnp.where(arrival,semantic[:,15],jnp.where(condition,semantic[:,11],
-            jnp.where(status_event,semantic[:,9],jnp.where(faint,0,previous_status))))
-        status_written=arrival|condition|status_event|faint
+            jnp.where(status_event,semantic[:,9],jnp.where(faint|lum_event,0,previous_status))))
+        status_written=arrival|condition|status_event|faint|lum_event
         next_statuses=statuses.at[rows,safe,safe_slot].set(jnp.where(status_written,next_status,previous_status))
         current_slots = slots.at[rows, safe].set(jnp.where(arrival, new_slot, slots[rows, safe]))
         current_live = live.at[rows, safe].set(jnp.where(arrival, True, live[rows, safe]))
@@ -287,7 +315,8 @@ def project_device(state, tape, before_registry, after_registry, tables):
         target_side = result[:, :, 6]
         target_enc = current_slots[rows[:, None], jnp.clip(target_side, 0, 1)]+1
         addressed = ((kinds == int(inputs.Kind.ACTIVE)) | (kinds == int(inputs.Kind.TYPES))
-            | (kinds == int(inputs.Kind.SLEEP)))
+            | (kinds == int(inputs.Kind.SLEEP)) | (kinds == int(inputs.Kind.STATUS))
+            | (kinds == int(inputs.Kind.ITEM)))
         result = result.at[:, :, 8].set(jnp.where(addressed, target_enc, result[:, :, 8]))
         mud = kinds == int(inputs.Kind.MUDSHOT)
         ms, sl = address(schema[:, :, 9]); enc = jnp.where(ms >= 0, sl+1, 0)
