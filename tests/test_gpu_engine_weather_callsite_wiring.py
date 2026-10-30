@@ -30,7 +30,7 @@ class WeatherCallsiteTests(unittest.TestCase):
         self.assertEqual(receipt.words[:,:2,2].tolist(),[[2,4],[4,2]])
         self.assertEqual(traced.weather.tolist(),[weather.SUN,weather.RAIN])
         self.assertFalse(bool(traced.entry_pending.any()))
-        self.assertTrue(bool((receipt.refusal & callbacks.UNKNOWN_WEATHER).all()))
+        self.assertFalse(bool((receipt.refusal & callbacks.UNKNOWN_WEATHER).any()))
         fast=jax.jit(lambda x,c,r:transition.initialize(x,engine,tie_coin=c,_weather_trace=r))
         for _ in range(2):
             actual,events=fast(s,coin,tape(s));self.same(actual,expected);self.same(events,receipt)

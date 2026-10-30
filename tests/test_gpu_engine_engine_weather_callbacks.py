@@ -95,7 +95,7 @@ class WeatherCallbacksTests(unittest.TestCase):
         self.assertEqual(self.words(trace, 0).tolist(), [[12, 0, 2, -1, -1, 0, 1, 1, 0, 1]])
         self.assertEqual(self.words(trace, 1).tolist(), [[12, 0, 2, -1, -1, 1, 2, 2, 1, 1]])
         self.assertEqual(self.words(trace, 2).tolist(), [[12, 0, 2, -1, -1, 3, 3, 3, 1, 1]])
-        self.assertEqual(trace.refusal.tolist(), [256, 256, 256, 0, 0, 0, 0, 0])
+        self.assertEqual(trace.refusal.tolist(), [0]*8)
         self.assertTrue(bool(ko[7])); self.assertFalse(bool((trace.words == 123).any()))
         self.assertEqual(trace.event_turn[0, 0].item(), 1)
 
@@ -198,7 +198,7 @@ class WeatherCallbacksTests(unittest.TestCase):
         actual, _, small = entry.enter(s, 0, self.table, eligible=j.ones(1, bool), _weather_trace=small)
         _, _, small = entry.enter(actual, 1, self.table, eligible=j.ones(1, bool), _weather_trace=small)
         self.assertEqual(small.count.tolist(), [1])
-        self.assertEqual(small.refusal.tolist(), [128 | 256 | public.OVERFLOW])
+        self.assertEqual(small.refusal.tolist(), [128 | public.OVERFLOW])
 
 
 if __name__ == '__main__':

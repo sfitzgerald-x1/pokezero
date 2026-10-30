@@ -7,8 +7,8 @@ must occur before this callback; no final-state diff or no-op reveals an ability
 
 Kind12 words5..9 hold old/new weather, canonical proc code, actual temporary-
 before boolean, and actual permanent-after boolean. No numeric duration is
-serialized. UNKNOWN_WEATHER remains centralized here until root registration.
-These are existing numeric-write diagnostics, not public lexical assertions.
+serialized. Invalid/copy evidence retains UNKNOWN_WEATHER; the full consumer
+binds valid receipts to the original catalogue and source lexical constraints.
 Rain/sun registration also needs the original Gen3 source/metadata proof that
 excludes the inherited Kyogre/Blue Orb and Groudon/Red Orb early-return cases;
 EntryTable alone cannot establish those item/species identities.
@@ -59,4 +59,6 @@ def entry_weather(tape, side, physical, old_weather, new_weather, old_counter, n
     tape = public._append(tape, ENTRY_WEATHER, side, physical, absent, absent,
         (old_weather, new_weather, canonical, temporary.astype(jnp.int32), permanent.astype(jnp.int32)),
         eligible & valid)
-    return tape._replace(refusal=tape.refusal | jnp.where(eligible, UNKNOWN_WEATHER, 0))
+    # Full consumer now owns valid typed receipts. Invalid writes still poison
+    # the row; unattributed_ability remains a separate, untouched source latch.
+    return tape._replace(refusal=tape.refusal | jnp.where(eligible & ~valid, UNKNOWN_WEATHER, 0))

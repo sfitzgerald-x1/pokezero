@@ -30,6 +30,7 @@ from . import engine_public_events as public, public_inputs as inputs
 from . import public_belief, public_context, public_team
 from . import engine_status_callbacks as status_callbacks, engine_item_callbacks as item_callbacks
 from . import public_items
+from . import engine_weather_callbacks as weather_callbacks, weather, public_field, v4_encoder
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -50,6 +51,11 @@ class Tables(NamedTuple):
     lum_engine_item: object
     lum_public_item: object
     lum_events: object
+    weather_public: object
+    weather_ability: object
+    weather_guard_species: object
+    weather_guard_item_possible: object
+    weather_events: object
     binding: object
 
 
@@ -61,6 +67,7 @@ class Compiled:
     context_tables: object
     device: Tables
     items: object = None
+    weather_catalog: object = None
 
 
 _COMPILED = weakref.WeakKeyDictionary()
@@ -110,7 +117,7 @@ def _item_inputs(items, source):
 
 
 def compile_projector(metadata, projector, *, species_catalog, source, context_tables, status_events=False,
-        items=None):
+        items=None, weather_catalog=None):
     """Host-only compilation, retaining original guarded upstream handles.
 
     Upstream constructor/compiler provenance is trusted, not attested by tags.
@@ -125,6 +132,12 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         raise ValueError('status receipts require typed mode plus actual full raw-control composition')
     if items is not None and not status_events:
         raise ValueError('Lum receipts require full typed status/raw composition')
+    if weather_catalog is not None:
+        v4_encoder.check_catalog(weather_catalog)
+        if (not status_events or weather_catalog.source is not source or weather_catalog.species is not species_catalog
+                or weather_catalog.items is not items or weather_catalog.abilities.device is not context_tables.abilities
+                or weather_catalog.moves.device is not context_tables.moves):
+            raise ValueError('original full weather catalogue edges required')
     if not np.array_equal(np.asarray(engine_metadata_binding(metadata)), np.asarray(projector.device.engine_binding)):
         raise ValueError('exact original constructor metadata required')
     names = metadata['vocabulary']['species']
@@ -145,6 +158,18 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     lum_engine = next((i for i, name in enumerate(item_names) if normalize_id(name) == 'lumberry'), 0)
     lum_public = 0 if items is None else items.ids.get('lumberry', 0)
     lum = items is not None and lum_engine > 0 and lum_public > 0
+    weather_ids = [0]*5; ability_ids = [0]*4; guard_species = [0]*4; guard_item = [False]*4
+    if weather_catalog is not None:
+        for code, name in ((weather.RAIN,'raindance'),(weather.SUN,'sunnyday'),
+                (weather.SAND,'sandstorm'),(weather.HAIL,'hail')):
+            weather_ids[code] = weather_catalog.field.weather_ids.get(name,0)
+        ability_ids = [weather_catalog.abilities.ids.get(name,0) for name in weather_callbacks.CANONICAL_ABILITIES]
+        # These are source lexical guards, not private held-item reads. If an
+        # Orb exists in the bound engine namespace, only the publicly revealed
+        # corresponding species is ambiguous; other actors are still proved.
+        for proc, species_name, item_name in ((1,'kyogre','blueorb'),(2,'groudon','redorb')):
+            guard_species[proc] = next((i for i,n in enumerate(names) if normalize_id(n)==species_name),0)
+            guard_item[proc] = any(normalize_id(n)==item_name for n in item_names)
     payload = dict(schema=SCHEMA, base=np.asarray(projector.device.binding).tolist(), names=names,
         species=species, source_species=source_ids, species_binding=np.asarray(species_catalog.device.binding).tolist(),
         context=[None if a is None else np.asarray(a).tolist() for a in (
@@ -154,7 +179,10 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
             context_tables.damage.binding if context_tables.damage is not None else None)],
         raw_begin='source_basic_item_nonitem_zero_before_line' if raw else 'absent',
         status_events=status_events, lum_engine_item=lum_engine, lum_public_item=lum_public,
-        lum_events=lum, item_binding=None if items is None else np.asarray(items.device.binding).tolist(), admission=False)
+        lum_events=lum, item_binding=None if items is None else np.asarray(items.device.binding).tolist(),
+        weather_public=weather_ids,weather_ability=ability_ids,weather_guard_species=guard_species,
+        weather_guard_item_possible=guard_item,
+        weather_binding=None if weather_catalog is None else np.asarray(weather_catalog.binding).tolist(),admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
@@ -164,14 +192,16 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
         context_tables.damage.binding if context_tables.damage is not None else None,
         jnp.array(raw), jnp.array(status_events), jnp.array(lum_engine, jnp.int32),
         jnp.array(lum_public, jnp.int32), jnp.array(lum),
+        jnp.array(weather_ids,jnp.int32),jnp.array(ability_ids,jnp.int32),
+        jnp.array(guard_species,jnp.int32),jnp.array(guard_item),jnp.array(weather_catalog is not None),
         jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
-    result = Compiled(projector, species_catalog, source, context_tables, device, items)
+    result = Compiled(projector, species_catalog, source, context_tables, device, items, weather_catalog)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
         tuple(jax.tree.leaves((species_catalog.device, source.device, context_tables, device))),
         tuple(species_catalog.names), tuple(sorted(species_catalog.ids.items())),
         tuple(source.species_names), tuple(sorted(source.species_ids.items())), items,
         () if items is None else tuple(jax.tree.leaves(items.device)),
-        () if items is None else tuple(items.names), () if items is None else tuple(sorted(items.ids.items())))
+        () if items is None else tuple(items.names), () if items is None else tuple(sorted(items.ids.items())),weather_catalog)
     return result
 
 
@@ -180,10 +210,12 @@ def check_projector(compiled):
     r = _COMPILED.get(compiled) if type(compiled) is Compiled else None
     if (r is None or compiled.projector is not r[0] or compiled.species_catalog is not r[1]
             or compiled.source is not r[2] or compiled.context_tables is not r[3] or compiled.device is not r[4]
-            or compiled.items is not r[10]):
+            or compiled.items is not r[10] or compiled.weather_catalog is not r[14]):
         raise ValueError('original compiled lifecycle projector required')
     _host_inputs(compiled.projector, compiled.species_catalog, compiled.source, compiled.context_tables)
     _item_inputs(compiled.items, compiled.source)
+    if compiled.weather_catalog is not None:
+        v4_encoder.check_catalog(compiled.weather_catalog)
     if compiled.items is not None:
         item_leaves = tuple(jax.tree.leaves(compiled.items.device))
         if (len(item_leaves) != len(r[11]) or any(a is not b for a, b in zip(item_leaves, r[11]))
@@ -306,8 +338,13 @@ def project_device(state, tape, before_registry, after_registry, tables):
     base._shape(tables.lum_events, (), jnp.bool_)
     base._shape(tables.lum_engine_item, (), jnp.int32)
     base._shape(tables.lum_public_item, (), jnp.int32)
+    base._shape(tables.weather_events, (), jnp.bool_)
+    for value,shape,dtype in ((tables.weather_public,(5,),jnp.int32),
+            (tables.weather_ability,(4,),jnp.int32),(tables.weather_guard_species,(4,),jnp.int32),
+            (tables.weather_guard_item_possible,(4,),jnp.bool_)):
+        base._shape(value,shape,dtype)
     rows = jnp.arange(b)
-    known = public.UNINSTRUMENTED | public.OVERFLOW | public.INVALID_ACTION | life.UNKNOWN_DETAILS | life.UNKNOWN_BATON | life.MISSING_INSTALL | life.CLOCK | status_callbacks.UNKNOWN_STATUS
+    known = public.UNINSTRUMENTED | public.OVERFLOW | public.INVALID_ACTION | life.UNKNOWN_DETAILS | life.UNKNOWN_BATON | life.MISSING_INSTALL | life.CLOCK | status_callbacks.UNKNOWN_STATUS | weather_callbacks.UNKNOWN_WEATHER
     fatal = (tape.refusal & ~public.UNINSTRUMENTED) != 0
     ok = (state.admitted & life._valid(state.cursor) & life._valid(tape.cursor)
         & _snapshot_equal(state.cursor, before_registry)
@@ -335,6 +372,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
         cured = kind == status_callbacks.STATUS_CURED
         status_event = applied | cured
         lum = kind == item_callbacks.LUM_CONSUMED
+        entry_weather = kind == weather_callbacks.ENTRY_WEATHER
         safe_side, safe_in = jnp.clip(side, 0, 1), jnp.clip(incoming, 0, 5)
         old = cursor.physical_to_public[rows, safe_side, safe_in]
         slot = jnp.where(old < 0, cursor.next_slot[rows, safe_side], old)
@@ -380,9 +418,23 @@ def project_device(state, tape, before_registry, after_registry, tables):
             & (raw[:,6] >= 0) & (raw[:,6] <= 6) & (raw[:,7] == 0)
             & ((raw[:,8] == 0) | (raw[:,8] == 1)) & (raw[:,9] == 0)
             & ((raw[:,6] != 0) | (raw[:,8] == 1)))
+        actor_side,actor_physical = raw[:,1],raw[:,2]
+        actor_slot,actor_enc,actor_ok = (v[:,0] for v in
+            base._resolve(_registry(cursor),actor_side[:,None],actor_physical[:,None]))
+        proc=jnp.clip(raw[:,7],0,3)
+        new_weather=jnp.array([0,weather.RAIN,weather.SUN,weather.SAND],jnp.int32)[proc]
+        source_species=cursor.revealed_species_id[rows,jnp.clip(actor_side,0,1)]
+        orb_ambiguous=tables.weather_guard_item_possible[proc] & (source_species==tables.weather_guard_species[proc])
+        weather_ok=(tables.weather_events & tables.status_events & ~tables.raw_begin & actor_ok
+            & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            & jnp.all(raw[:,3:5]==-1,axis=1) & (raw[:,5]>=weather.NONE)&(raw[:,5]<=weather.HAIL)
+            & (raw[:,7]>0)&(raw[:,7]<4)&(raw[:,6]==new_weather)
+            & ((raw[:,8]==0)|(raw[:,8]==1))&(raw[:,9]==1)
+            & ((raw[:,5]!=raw[:,6])|(raw[:,8]==1))
+            & (tables.weather_public[jnp.clip(raw[:,6],0,4)]>0)&(tables.weather_ability[proc]>0)&~orb_ambiguous)
         event_ok = generation_ok & clock_ok & jnp.where(arrival, arrival_ok,
             jnp.where(clock, clock_payload, jnp.where(status_event,status_ok,
-                jnp.where(lum,lum_ok,component & component_ok))))
+                jnp.where(lum,lum_ok,jnp.where(entry_weather,weather_ok,component & component_ok)))))
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -416,6 +468,11 @@ def project_device(state, tape, before_registry, after_registry, tables):
         item_semantic = jnp.concatenate((jnp.stack((jnp.full_like(z, int(inputs.Kind.ITEM)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),item_payload),axis=1)
         semantic=jnp.where(lum[:,None],item_semantic,semantic)
+        weather_payload=jnp.stack((jnp.full_like(z,public_field.WEATHER),
+            tables.weather_public[jnp.clip(raw[:,6],0,4)],z,jnp.ones_like(z),z,z,z,z),axis=1)
+        weather_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.FIELD)),
+            semantic_sequence,turn,phase,absent,absent,absent,absent),axis=1),weather_payload),axis=1)
+        semantic=jnp.where(entry_weather[:,None],weather_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)

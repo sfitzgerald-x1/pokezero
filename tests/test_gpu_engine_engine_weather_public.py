@@ -1,0 +1,104 @@
+"""Causal entry weather -> original full public controls; tiny source fixtures."""
+from copy import deepcopy
+import unittest
+from types import MappingProxyType
+import jax
+import jax.numpy as j
+import numpy as np
+from pokezero.randbat import Gen3RandbatSource,RandbatSourceMetadata,Gen3RandbatSpeciesUniverse,Gen3RandbatVariant
+from pokezero.category_vocab import CategoryVocabulary
+from gpu_engine import transition as t,engine_lifecycle_callbacks as life,engine_public_events as events
+from gpu_engine import engine_public_event_device as base,engine_full_v4_event_device as full
+from gpu_engine import engine_weather_callbacks as weather_callbacks,weather,public_wire,v4_encoder as v4
+import test_gpu_engine_engine_status_callbacks as fixture
+
+
+class WeatherPublicTests(unittest.TestCase):
+    kwargs=fixture.StatusCallbacksTests.kwargs
+    initial=fixture.StatusCallbacksTests.initial
+    chance=fixture.StatusCallbacksTests.chance
+    step=fixture.StatusCallbacksTests.step
+    same=fixture.StatusCallbacksTests.same
+    start=fixture.StatusCallbacksTests.start
+    compare=fixture.StatusCallbacksTests.compare
+
+    @classmethod
+    def setUpClass(cls):
+        fixture.StatusCallbacksTests.setUpClass();f=fixture.StatusCallbacksTests
+        cls.f,cls.ids=f.f,f.ids
+        cls.metadata=deepcopy(f.metadata)
+        for name in ('drizzle','drought','sandstream','pressure','trace'):
+            if name not in cls.metadata['vocabulary']['abilities']:cls.metadata['vocabulary']['abilities'].append(name)
+        names=cls.metadata['vocabulary']['species'][1:]
+        variants={name:Gen3RandbatSpeciesUniverse(name,80,tuple(Gen3RandbatVariant(
+            name+'-'+a,'fixture',name,'fixture',80,('Surf','Hidden Power Ice'),a,'Leftovers')
+            for a in ('Drizzle','Drought','Sand Stream','Pressure','Trace'))) for name in names}
+        host=public_belief_source=Gen3RandbatSource(RandbatSourceMetadata('gen3randombattle',3,None,None,None,'weather-public-fixture'),variants)
+        from gpu_engine import public_belief
+        host=public_belief.compile_source(public_belief_source)
+        labels=set(f.catalog.vocabulary.tokens)
+        for name in ('drizzle','drought','sandstream','pressure','trace'):
+            labels|={'ability:'+name,'belief:possible_ability:'+name}
+        labels|={'weather:raindance','weather:sunnyday','weather:sandstorm','weather:hail'}
+        cls.catalog=v4.compile_encoder(host,f.catalog.dex,CategoryVocabulary(tuple(sorted(labels))),
+            checkpoint_sha256='a'*64,feature_masks=f.catalog.masks.__dict__)
+        cls.table=t.tables_from_metadata(cls.metadata)
+        cls.producer=events.compile_catalog(cls.metadata,cls.table,public_moves=cls.catalog.moves,dex=cls.catalog.dex,
+            exposure=events.HealthExposure(events.SHOWDOWN,'gen3randombattle',True,False))
+        projector=base.compile_projector(cls.producer,expected_binding=cls.producer.binding,
+            expected_engine_binding=np.array(cls.producer.engine_binding,np.uint32))
+        cls.compiled=full.compile_adapter(cls.metadata,projector,catalog=cls.catalog)
+        cls.fast=staticmethod(jax.jit(lambda s,f,p:full.project_and_fold(s,f,cls.compiled.device,p,cls.catalog)))
+
+    def arrays(self,first='drizzle',second='drought',physical=0):
+        arrays={k:np.array(v,copy=True) for k,v in self.f.arrays.items()}
+        abilities=self.metadata['vocabulary']['abilities']
+        arrays['ability'][:]=abilities.index('pressure')
+        arrays['ability'][0,physical]=abilities.index(first)
+        arrays['ability'][1,physical]=abilities.index(second)
+        return arrays
+
+    def test_actual_initial_weather_order_exact_both_owner_full_words_and_state(self):
+        frame=self.initial(arrays=self.arrays())
+        for row in range(2):
+            words=np.asarray(frame.callbacks.words[row]);at=np.flatnonzero(words[:,0]==12)
+            self.assertEqual(len(at),2)
+            self.assertEqual(words[at[1],5],words[at[0],6])
+        for owner in (0,1):
+            s,p=self.start(frame,j.full(2,owner,j.int32))
+            result,_=self.compare(s,frame,p,[public_wire.WireState()]*2)
+            self.assertTrue(bool(result.public.context.field.weather_ability.all()))
+            self.assertFalse(bool(result.projection.full_line_consumers_complete.any()))
+
+    def test_actual_nonphysical_switch_weather_and_malformed_row_atomicity(self):
+        frame=self.initial(arrays=self.arrays(physical=5))
+        s,p=self.start(frame,j.array([0,1],j.int32))
+        initial,wire=self.compare(s,frame,p,[public_wire.WireState()]*2)
+        changed=self.step(frame,[[8,8],[8,8]])
+        result,_=self.compare(initial.projection.state,changed,initial.public,wire)
+        words=np.asarray(changed.callbacks.words[0]);at=np.flatnonzero(words[:,0]==12)
+        self.assertEqual(len(at),2);self.assertEqual(words[at,2].tolist(),[5,5])
+        for column,value in ((1,2),(2,0),(5,weather.HAIL),(7,0),(8,1),(9,0)):
+            bad=changed._replace(callbacks=changed.callbacks._replace(words=changed.callbacks.words.at[0,int(at[0]),column].set(value)))
+            failed=self.fast(initial.projection.state,bad,initial.public)
+            self.assertNotEqual(int(failed.projection.error[0]),0)
+            self.assertEqual(int(failed.projection.error[1]),0)
+            self.assertFalse(bool(failed.projection.frames.valid[:,0].any()))
+            self.assertEqual(int(failed.public.cursor.sequence[0]),int(initial.public.cursor.sequence[0]))
+            self.same(full._commit_public(j.array([False,True]),initial.public,failed.public),failed.public)
+
+    def test_namespace_edge_drift_and_unattributed_copy_stay_closed(self):
+        catalog=self.compiled.causal.weather_catalog
+        before=catalog.field.weather_ids
+        try:
+            object.__setattr__(catalog.field,'weather_ids',MappingProxyType(dict(before,raindance=0)))
+            with self.assertRaises(ValueError):full.check_adapter(self.compiled)
+        finally:object.__setattr__(catalog.field,'weather_ids',before)
+        arrays=self.arrays('trace','drizzle')
+        frame=self.initial(arrays=arrays)
+        self.assertTrue(bool((frame.callbacks.refusal & weather_callbacks.UNKNOWN_WEATHER).any()))
+        s,p=self.start(frame,j.array([0,1],j.int32));result=self.fast(s,frame,p)
+        self.assertFalse(bool(result.projection.frames.valid.any()))
+
+
+if __name__=='__main__':unittest.main()

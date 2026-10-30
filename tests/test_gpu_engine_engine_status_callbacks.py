@@ -110,6 +110,11 @@ class StatusCallbacksTests(unittest.TestCase):
                     lines.append(f'|-enditem|{active[target]}|Lum Berry|[eat]')
                     if old:lines.append(f'|-curestatus|{active[target]}|{tokens[old]}|[msg]')
                     if int(frame.callbacks.words[row,index,8]):lines.append(f'|-end|{active[target]}|confusion')
+                elif k==inputs.Kind.FIELD:
+                    proc=int(frame.callbacks.words[row,index,7]);source=int(frame.callbacks.words[row,index,1])
+                    label=('', 'RainDance','SunnyDay','Sandstorm')[proc]
+                    ability=('', 'Drizzle','Drought','Sand Stream')[proc]
+                    lines.append(f'|-weather|{label}|[from] ability: {ability}|[of] {active[source]}')
                 elif k==inputs.Kind.TURN:lines.append(f'|turn|{turn}')
                 elif k==inputs.Kind.ACTION_CHUNK_END:lines.append('|')
                 elif k==inputs.Kind.UPKEEP:lines.append('|upkeep')

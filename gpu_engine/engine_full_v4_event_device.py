@@ -25,6 +25,7 @@ import numpy as np
 from . import engine_lifecycle_event_device as causal
 from . import engine_public_events as engine, public_context, public_inputs as inputs
 from . import public_wire, public_refresh_stream, public_toxic, v4_encoder
+from . import engine_weather_callbacks as weather_callbacks, weather, public_field
 
 SCHEMA = 'pokezero.engine_full_v4_raw_device.partial.v1'
 _NAMES = ('source_binding', 'species_binding', 'ability_binding', 'move_binding',
@@ -44,6 +45,7 @@ class Tables(NamedTuple):
     statuses: object
     cures: object
     lum: object
+    weather: object
     namespaces: Bindings
     binding: object
 
@@ -71,7 +73,7 @@ def compile_adapter(metadata, projector, *, catalog):
         raise ValueError('original engine/public FULL catalog move edge required')
     simple = public_context.compile_context(catalog.source, catalog.abilities, catalog.moves)
     lower = causal.compile_projector(metadata, projector, species_catalog=catalog.species,
-        source=catalog.source, context_tables=simple, status_events=True, items=catalog.items)
+        source=catalog.source, context_tables=simple, status_events=True, items=catalog.items,weather_catalog=catalog)
     kwargs = v4_encoder.wire_kwargs(catalog)
     name = catalog.species.names[1]
     ident = ('p1a: '+name, 'p2a: '+name)
@@ -86,7 +88,7 @@ def compile_adapter(metadata, projector, *, catalog):
     allowed = {int(k) for k in (inputs.Kind.RAW_BEGIN, inputs.Kind.SWITCH_PRELUDE,
         inputs.Kind.MUDSHOT, inputs.Kind.NONPROC, inputs.Kind.TENDENCY,
         inputs.Kind.ACTIVE, inputs.Kind.TYPES, inputs.Kind.FIELD,
-        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS)}
+        inputs.Kind.DAMAGE_CONTROL, inputs.Kind.SLEEP, inputs.Kind.TOXIC, inputs.Kind.STATUS,inputs.Kind.ABILITY)}
 
     def add(line, main_kind, before=prior):
         try:
@@ -135,6 +137,11 @@ def compile_adapter(metadata, projector, *, catalog):
                 lum[old_status, confusion] = add(tuple(lines), inputs.Kind.ITEM)
         if not np.all(lum[1:]) or lum[0, 1] == 0:
             raise ValueError('FULL writer lacks exact Lum raw schemas')
+    weather_keys=np.zeros(4,np.int32)
+    for proc,label,ability in ((1,'RainDance','Drizzle'),(2,'SunnyDay','Drought'),(3,'Sandstorm','Sand Stream')):
+        if int(lower.device.weather_ability[proc])>0:
+            weather_keys[proc]=add(f'|-weather|{label}|[from] ability: {ability}|[of] {ident[0]}',inputs.Kind.FIELD)
+            if weather_keys[proc]==0:raise ValueError('FULL writer lacks exact entry-weather schema')
     moves = np.zeros(len(catalog.moves.names), np.int32)
     targets = {}
     for pid, target in zip(projector.catalog.ids, projector.catalog.targets):
@@ -151,11 +158,11 @@ def compile_adapter(metadata, projector, *, catalog):
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
     payload = packed.tobytes()+np.array(lengths, np.int32).tobytes()+np.array(mains, np.int32).tobytes()
-    payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
+    payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+lum.tobytes()+weather_keys.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
         jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
-        jnp.array(statuses), jnp.array(cures), jnp.array(lum), ns, binding)
+        jnp.array(statuses), jnp.array(cures), jnp.array(lum),jnp.array(weather_keys), ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -182,6 +189,8 @@ class StreamState(NamedTuple):
     live: object
     species: object               # ONLY already observed public arrival IDs
     status: object                # ONLY prior accepted public status facts
+    weather: object               # ONLY weather already accepted from public receipts
+    weather_permanent: object
 
 
 def register(stream_ids, owners, *, compiled):
@@ -189,7 +198,7 @@ def register(stream_ids, owners, *, compiled):
     return StreamState(causal.register(stream_ids, owners, compiled=compiled.causal),
         jnp.zeros_like(stream_ids), jnp.zeros((stream_ids.shape[0], 2), bool),
         jnp.zeros((stream_ids.shape[0], 2, 6), jnp.int32),
-        jnp.zeros((stream_ids.shape[0], 2, 6), jnp.int32))
+        jnp.zeros((stream_ids.shape[0], 2, 6), jnp.int32),jnp.zeros_like(stream_ids),jnp.zeros_like(stream_ids,dtype=bool))
 
 
 class FrameChunks(NamedTuple):
@@ -239,6 +248,8 @@ def project_device(state, tape, before_registry, after_registry, tables):
     causal.base._shape(state.live, (b, 2), jnp.bool_)
     causal.base._shape(state.species, (b, 2, 6), jnp.int32)
     causal.base._shape(state.status, (b, 2, 6), jnp.int32)
+    causal.base._shape(state.weather,(b,),jnp.int32)
+    causal.base._shape(state.weather_permanent,(b,),jnp.bool_)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     width = tables.templates.shape[1]
@@ -247,7 +258,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
     capacity = 64*width
 
     def step(carry, index):
-        words, count, sequence, turn, phase, slots, live, species, statuses, error, overflow = carry
+        words, count, sequence, turn, phase, slots, live, species, statuses, current_weather,permanent,error, overflow = carry
         semantic = lower.chunk.words[:, index]; kind = semantic[:, 0]
         present = lower.chunk.valid[:, index]
         move = kind == int(inputs.Kind.MOVE); condition = kind == int(inputs.Kind.CONDITION)
@@ -259,6 +270,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
         key = jnp.where(condition, tables.conditions[jnp.clip(ci, 0, 7)], key)
         status_event = kind == int(inputs.Kind.STATUS)
         lum_event = kind == int(inputs.Kind.ITEM)
+        weather_event=(kind==int(inputs.Kind.FIELD)) & (tape.words[:,index,0]==weather_callbacks.ENTRY_WEATHER)
         # This is a SAME-index causal receipt join, not a final-state join:
         # status-enabled lower mode forbids RAW_BEGIN and emits exactly one
         # semantic per accepted input. It never drops a receipt. The actual
@@ -271,15 +283,16 @@ def project_device(state, tape, before_registry, after_registry, tables):
         lum_old_public = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(lum_old_engine,0,6)]
         lum_key = tables.lum[lum_old_public,jnp.clip(tape.words[:,index,8],0,1)]
         key=jnp.where(lum_event,lum_key,key)
+        key=jnp.where(weather_event,tables.weather[jnp.clip(tape.words[:,index,7],0,3)],key)
         size = tables.length[key]; main = tables.main[key]
         enough = (count <= capacity-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > capacity-size)
         good = (key > 0) & enough
         error = jnp.where(present & (error == 0) & ~good, int(inputs.Error.PAYLOAD), error)
         schema = tables.templates[key]
-        subject = jnp.where(move, semantic[:, 4], semantic[:, 6])
+        subject = jnp.where(weather_event,tape.words[:,index,1],jnp.where(move, semantic[:, 4], semantic[:, 6]))
         safe = jnp.clip(subject, 0, 1)
-        new_slot = jnp.where(move, semantic[:, 5], semantic[:, 7])
+        new_slot = jnp.where(weather_event,slots[rows,safe],jnp.where(move, semantic[:, 5], semantic[:, 7]))
         safe_slot = jnp.clip(new_slot, 0, 5)
         prior_species = species[rows, safe, safe_slot]
         collision = jnp.any((species[rows, safe] == semantic[:, 9, None])
@@ -295,6 +308,10 @@ def project_device(state, tape, before_registry, after_registry, tables):
         previous_status=statuses[rows,safe,safe_slot]
         identity &= ~status_event | (old_public_status==previous_status)
         identity &= ~lum_event | ((lum_old_public==previous_status) & live[rows,safe])
+        old_weather=tables.causal.weather_public[jnp.clip(tape.words[:,index,5],0,4)]
+        temporary=tape.words[:,index,8]==1
+        clock_matches=jnp.where(current_weather==0,~temporary&~permanent,temporary==~permanent)
+        identity &= ~weather_event | ((old_weather==current_weather)&clock_matches&live[rows,safe])
         error = jnp.where(present & (error == 0) & ~identity, int(inputs.Error.IDENTITY), error)
         use = present & (error == 0)
         next_species = species.at[rows, safe, safe_slot].set(
@@ -327,8 +344,13 @@ def project_device(state, tape, before_registry, after_registry, tables):
         target_enc = current_slots[rows[:, None], jnp.clip(target_side, 0, 1)]+1
         addressed = ((kinds == int(inputs.Kind.ACTIVE)) | (kinds == int(inputs.Kind.TYPES))
             | (kinds == int(inputs.Kind.SLEEP)) | (kinds == int(inputs.Kind.STATUS))
-            | (kinds == int(inputs.Kind.ITEM)))
+            | (kinds == int(inputs.Kind.ITEM)) | (kinds == int(inputs.Kind.ABILITY)))
         result = result.at[:, :, 8].set(jnp.where(addressed, target_enc, result[:, :, 8]))
+        prelude = (kinds == int(inputs.Kind.SWITCH_PRELUDE)) & weather_event[:,None]
+        # Confirmed ability lexical facts use the already observed exact ident
+        # and its raw species spelling, rather than schema-fixture encounter1.
+        for col,value in ((11,new_slot+1),(13,prior_species)):
+            result=result.at[:,:,col].set(jnp.where(prelude,value[:,None],result[:,:,col]))
         mud = kinds == int(inputs.Kind.MUDSHOT)
         ms, sl = address(schema[:, :, 9]); enc = jnp.where(ms >= 0, sl+1, 0)
         queue = schema[:, :, 12] == 1
@@ -351,7 +373,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
         for col, value in ((12, hp), (13, maximum)):
             result = result.at[:, :, col].set(jnp.where(targeted, value[:, None], result[:, :, col]))
         toxic = kinds == int(inputs.Kind.TOXIC)
-        result = result.at[:, :, 9].set(jnp.where(toxic, semantic[:, 8, None], result[:, :, 9]))
+        result = result.at[:, :, 9].set(jnp.where(toxic & ~weather_event[:,None], semantic[:, 8, None], result[:, :, 9]))
         result = result.at[:, :, 11].set(jnp.where(toxic & condition[:, None],
             jnp.where(semantic[:, 12, None] == 1, -1, hp[:, None]), result[:, :, 11]))
         result = result.at[:, :, 12].set(jnp.where(toxic & condition[:, None], maximum[:, None], result[:, :, 12]))
@@ -375,14 +397,16 @@ def project_device(state, tape, before_registry, after_registry, tables):
             jnp.where(use, semantic[:, 2], turn), jnp.where(use, semantic[:, 3], phase),
             jnp.where(use[:, None], current_slots, slots), jnp.where(use[:, None], live_next, live),
             jnp.where(use[:, None, None], next_species, species),
-            jnp.where(use[:, None, None],next_statuses,statuses),error, overflow), None
+            jnp.where(use[:, None, None],next_statuses,statuses),
+            jnp.where(use&weather_event,semantic[:,9],current_weather),
+            permanent|(use&weather_event),error, overflow), None
 
     init = (jnp.zeros((b, capacity, 16), jnp.int32), jnp.zeros(b, jnp.int32), state.sequence,
         state.causal.cursor.turn, state.causal.cursor.phase, state.causal.cursor.public_slot,
-        state.live, state.species, state.status,error, jnp.zeros(b, bool))
-    (words, count, sequence, _, _, _, live, species,statuses,error, overflow), _ = jax.lax.scan(step, init, jnp.arange(64))
+        state.live, state.species, state.status,state.weather,state.weather_permanent,error, jnp.zeros(b, bool))
+    (words, count, sequence, _, _, _, live, species,statuses,current_weather,permanent,error, overflow), _ = jax.lax.scan(step, init, jnp.arange(64))
     ok = error == 0
-    next_state = _commit(ok, state, StreamState(lower.state, sequence, live, species,statuses))
+    next_state = _commit(ok, state, StreamState(lower.state, sequence, live, species,statuses,current_weather,permanent))
     next_state = next_state._replace(causal=next_state.causal._replace(admitted=state.causal.admitted & ok,
         cursor=next_state.causal.cursor._replace(admitted=state.causal.cursor.admitted & ok)))
     valid = (jnp.arange(capacity)[None, :] < count[:, None]) & ok[:, None]
@@ -427,7 +451,10 @@ def project_and_fold(state, frame, tables, public, catalog):
         & (public.cursor.turn == state.causal.cursor.turn) & (public.cursor.phase == state.causal.cursor.phase)
         & jnp.all(public.context.toxic.visibility == visibility, axis=1)
         & jnp.all(public.mons.species == state.species, axis=(1, 2))
-        & jnp.all(public.mons.status == state.status,axis=(1,2)))
+        & jnp.all(public.mons.status == state.status,axis=(1,2))
+        & (public.context.field.weather==state.weather)
+        & (public.context.field.weather_ability==state.weather_permanent)
+        & (public.context.field.weather_set==(state.weather>0)))
     error = jnp.where(projection.error != 0, projection.error,
         jnp.where(same, fold_error, int(inputs.Error.STREAM)))
     ok = error == 0
