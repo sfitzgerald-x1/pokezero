@@ -9,6 +9,20 @@ This module does not qualify transition tokens or a complete player wire.
 import re
 
 
+def attract_idents(line):
+    """Closed singles before-move announcement, including its explicit source."""
+    if not isinstance(line,str) or '\n' in line or '\r' in line or line.strip()!=line:
+        return None
+    parts=line.split('|')
+    if (len(parts)!=5 or parts[:2]!=['','-activate'] or parts[3]!='move: Attract'
+            or not parts[4].startswith('[of] ') or '[from]' in line):return None
+    target,source=parts[2],parts[4][5:]
+    if (not re.fullmatch(r'p[12]a: \S(?:[^|]*\S)?',target)
+            or not re.fullmatch(r'p[12]a: \S(?:[^|]*\S)?',source)
+            or target[1]==source[1]):return None
+    return target,source
+
+
 def classify(line):
     """Return a supported main-payload category, or no admission authority."""
     if not isinstance(line,str) or '\n' in line or '\r' in line or line.strip()!=line:
@@ -16,6 +30,7 @@ def classify(line):
     parts=line.split('|')
     if len(parts)<2 or parts[0]:return None
     kind=parts[1]
+    if attract_idents(line) is not None:return 'attract'
     # Incidental proc tags retain their existing consumers; text cannot
     # manufacture a source ability/item reveal under this annotation contract.
     if any(tag in line for tag in ('[from]','[of]')):return None
@@ -26,7 +41,7 @@ def classify(line):
         # the wire must prove the exact current, already-fainted encounter.
         return 'fainted_target'
     if (kind, parts[3] if len(parts)>3 else '') in (
-            ('-activate','move: Heal Bell'), ('-singleturn','move: Focus Punch')):
+            ('-activate','move: Heal Bell'), ('-activate','move: Struggle'), ('-singleturn','move: Focus Punch')):
         # These observed Gen3 announcements have no additional V4 feature
         # writer. Keep the exact active target and every shared raw consumer;
         # healing statuses and actual move use still require their own events.
