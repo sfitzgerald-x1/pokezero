@@ -249,7 +249,9 @@ def capture_status_residual_write(tape, ticket, *, requested, positive_write):
     semantic=(same & (ledger.site[rows,slot]==int(Site.STATUS_RESIDUAL)) & (tape.count==start+1)
         & (raw[:,0]==20)&(raw[:,3]==ledger.side[rows,slot])&brn_psn
         & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]==raw[:,1])
-        & (raw[:,4]>=0)&(raw[:,4]<6)&(raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5]))
+        & (raw[:,4]>=0)&(raw[:,4]<6)
+        & (raw[:,4]==tape.cursor.physical_active[rows,jnp.clip(raw[:,3],0,1)])
+        & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5]))
     accepted=requested & positive_write & semantic
     ledger=unhandled(ledger,ticket,active=requested&~(positive_write&semantic),tables=context.tables)
     ledger=emitted(ledger,ticket,tape,active=accepted,tables=context.tables)
