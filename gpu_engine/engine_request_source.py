@@ -73,6 +73,7 @@ class SourceRules:
 
 
 _RULES = weakref.WeakKeyDictionary()
+_RULE_ORIGINS = weakref.WeakKeyDictionary()
 _COMPILED = weakref.WeakKeyDictionary()
 _REGISTRATIONS = weakref.WeakKeyDictionary()
 _CONSTRUCTED = weakref.WeakKeyDictionary()
@@ -112,13 +113,22 @@ def _compile_rules(metadata, payload):
 
 def load_source_rules(showdown_root, metadata, *, node='node'):
     """Read only the pinned static Dex; never construct a team or a Battle."""
+    if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('verified source rule loader must remain outside outer JIT')
     script = Path(__file__).with_name('request_source_rules.cjs')
     result = subprocess.run([node,str(script),str(Path(showdown_root).resolve())],
         input=json.dumps(metadata,allow_nan=False),text=True,capture_output=True,check=True)
     payload = json.loads(result.stdout)
     if payload.get('generator_sha256') != hashlib.sha256(script.read_bytes()).hexdigest():
         raise ValueError('request rule generator changed')
-    return _compile_rules(metadata,payload)
+    rules=_compile_rules(metadata,payload)
+    # Only this successful pinned-source loader can mint an origin. Trusted
+    # shape fixtures built through _compile_rules intentionally have none.
+    origin=VerifiedRulesOrigin(str(Path(showdown_root).resolve()),str(node),
+        json.dumps(payload['source_tree'],sort_keys=True),
+        json.dumps(payload['compiled_tree'],sort_keys=True),payload['generator_sha256'])
+    _RULE_ORIGINS[rules]=(origin,rules.device,_RULES[rules][2])
+    return rules
 
 
 def _rules(rules):
@@ -128,6 +138,26 @@ def _rules(rules):
         raise ValueError('original static source rules required')
     actions._immutable_arrays(rules.device,'source rules')
     return record
+
+
+@dataclass(frozen=True,eq=False)
+class VerifiedRulesOrigin:
+    root: str
+    node: str
+    source_tree_json: str
+    compiled_tree_json: str
+    generator_sha256: str
+
+
+def _rules_origin(rules):
+    """Private original-loader edge, never a caller path or proof boolean."""
+    if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('verified source rule origin must remain outside outer JIT')
+    record=_rules(rules);origin=_RULE_ORIGINS.get(rules)
+    if (origin is None or origin[1] is not rules.device or origin[2]!=record[2]
+            or origin[0].generator_sha256!=hashlib.sha256(Path(__file__).with_name('request_source_rules.cjs').read_bytes()).hexdigest()):
+        raise ValueError('original rules from verified pinned-source loader required')
+    return origin[0]
 
 
 @dataclass(frozen=True, eq=False)
