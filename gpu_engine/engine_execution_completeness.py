@@ -73,6 +73,8 @@ def compile_accounting(adapter):
     Actual callsite integration must be separately reviewed against these exact
     source hashes; this compiler does not claim that integration has occurred.
     """
+    if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('checked accounting compiler must remain outside outer JIT')
     full.check_adapter(adapter)
     lower = adapter.causal.projector.catalog
     payload = dict(schema=SCHEMA, sites={s.name: int(s) for s in Site},
@@ -91,6 +93,8 @@ def compile_accounting(adapter):
 
 
 def _checked(compiled):
+    if isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+        raise ValueError('checked accounting compiler must remain outside outer JIT')
     record = _COMPILED.get(compiled) if type(compiled) is Compiled else None
     if record is None or compiled.device is not record[0] or any(a is not b for a, b in zip(compiled.device, record[1])):
         raise ValueError('original immutable accounting compiler required')

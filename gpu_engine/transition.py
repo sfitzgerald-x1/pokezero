@@ -320,6 +320,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     or _weather_hp_context[1] is not _leftovers_context.weather_profile_data):
                 raise ValueError('registered Leftovers requires actual owning birth and same original profile')
     if _lifecycle_trace:
+        from . import engine_execution_completeness as execution_accounting
+        from .state import LEECH_SEED as _execution_leech_seed
         from . import engine_status_callbacks as status_callbacks
         from . import engine_weather_effect_callbacks as weather_effect_callbacks
         from . import engine_weather_order_callbacks as weather_order_callbacks
@@ -979,6 +981,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     if table.sustain is not None:
         ordinary = residual_ready & jnp.all(jnp.any(work.hp > 0,axis=2),axis=1)
         for side in range(2):
+            if _lifecycle_trace:
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.WISH,side,
+                    active=ordinary & (work.wish_counter[:,side]>0))
             wish = recovery.wish_residual(_active(work.hp,work,side),_active(work.max_hp,work,side),
                 work.wish_counter[:,side],eligible=ordinary)
             work = work._replace(hp=_set_active(work.hp,work,side,wish.hp),
@@ -1046,6 +1052,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             speed_boost = (eligible & ability_event & (hp > 0)
                 & (work.active_turns[rows,side] > 0)
                 & table.entry.speed_boost[_active(work.ability,work,side)])
+            if _lifecycle_trace:
+                # The attempt exists at stage+6 too, even if min leaves no write.
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.SPEED_BOOST,side,active=speed_boost)
             boosts = boosts.at[:,4].set(jnp.where(speed_boost,jnp.minimum(6,boosts[:,4]+1),boosts[:,4]))
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
         healed = hp
@@ -1061,6 +1071,18 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
                     work,_public_trace.stream_id,_leftovers_context.weather_profile_data,eligible=eligible)
         if table.items is not None:
+            if _lifecycle_trace:
+                _execution_item=_active(work.item,work,side)
+                _execution_leftovers_requested=(eligible & heal_event & (hp>0)
+                    & table.items.leftovers[_execution_item])
+                _execution_old_heal_hp=hp
+                _public_trace,_execution_leftovers_ticket=execution_accounting.open_attempt(
+                    _public_trace,execution_accounting.Site.LEFTOVERS,side,
+                    active=_execution_leftovers_requested)
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.PINCH_ITEM,side,
+                    active=eligible & heal_event & (hp>0)
+                    & (hp*4<=_active(work.max_hp,work,side)) & (table.items.pinch_stat[_execution_item]>=0))
             healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
                 _active(work.max_hp,work,side),eligible=eligible & heal_event)
             item,boosts=held.consume_pinch(table.items,_active(work.item,work,side),
@@ -1073,6 +1095,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     _weather_hp_record=leftovers_callbacks.retain_profile_device(_weather_hp_record,
                         work,_public_trace.stream_id,_leftovers_context.weather_profile_data,
                         eligible=eligible & heal_event)
+        if _lifecycle_trace:
+            _execution_status=_active(work.status,work,side)
+            _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                execution_accounting.Site.STATUS_RESIDUAL,side,
+                active=eligible & status_event & (hp>0)
+                & ((_execution_status==m.BRN)|(_execution_status==m.PSN)|(_execution_status==m.TOX)))
         residual = m.major_status_residual(hp,
             _active(work.max_hp, work, side), _active(work.status, work, side),
             _active(work.status_counter, work, side), active=eligible & status_event)
@@ -1094,8 +1122,24 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _leftovers_maximum,_leftovers_status,_leftovers_context.data,
                 eligible=eligible & heal_event & (_leftovers_new_hp>_leftovers_old_hp),
                 _defer_own_unknown=_leftovers_defer)
+        if _lifecycle_trace:
+            if table.items is not None:
+                _public_trace=execution_accounting.capture_leftovers_write(_public_trace,
+                    _execution_leftovers_ticket,requested=_execution_leftovers_requested,
+                    positive_write=_active(work.hp,work,side)>_execution_old_heal_hp)
         if table.sustain is not None:
             foe = 1-side
+            if _lifecycle_trace:
+                _execution_seed_attempt=(eligible & seed_event & (_active(work.hp,work,side)>0)
+                    & ((_active(work.volatile,work,side)&_execution_leech_seed)!=0))
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.LEECH_DRAIN,side,active=_execution_seed_attempt)
+                # This is the numerical handler's recipient-live dispatch
+                # guard, not a reconstructed drain/healing delta. Source-slot
+                # provenance and cancellation hooks remain unproved/UNKNOWN.
+                _public_trace=execution_accounting.unhandled_attempt(_public_trace,
+                    execution_accounting.Site.LEECH_HEAL,foe,
+                    active=_execution_seed_attempt & (_active(work.hp,work,foe)>0))
             drained = recovery.leech(_active(work.hp,work,side),_active(work.max_hp,work,side),
                 _active(work.volatile,work,side),_active(work.hp,work,foe),_active(work.max_hp,work,foe),
                 eligible=eligible & seed_event)
