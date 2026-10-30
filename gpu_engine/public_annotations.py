@@ -20,6 +20,11 @@ def classify(line):
     # manufacture a source ability/item reveal under this annotation contract.
     if any(tag in line for tag in ('[from]','[of]')):return None
     ident=len(parts)>2 and re.fullmatch(r'p[12]a: \S(?:[^|]*\S)?',parts[2])
+    if kind=='-activate' and len(parts)==4 and parts[3]=='move: Destiny Bond' and ident:
+        # The pinned emitter announces this AFTER the user's |faint| and
+        # BEFORE the attacker's separate |faint|. It adds no V4 fact itself;
+        # the wire must prove the exact current, already-fainted encounter.
+        return 'fainted_target'
     if (kind, parts[3] if len(parts)>3 else '') in (
             ('-activate','move: Heal Bell'), ('-singleturn','move: Focus Punch')):
         # These observed Gen3 announcements have no additional V4 feature

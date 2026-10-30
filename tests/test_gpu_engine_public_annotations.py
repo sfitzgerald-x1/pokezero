@@ -14,6 +14,7 @@ class AnnotationLexicalTests(unittest.TestCase):
     def test_bounded_canonical_shapes_and_refusals(self):
         from gpu_engine.public_annotations import classify
         for line in (*SETUP,*ANNOTATIONS):self.assertIsNotNone(classify(line),line)
+        self.assertEqual(classify('|-activate|p2a: Gengar|move: Destiny Bond'),'fainted_target')
         for line in ('|gen|4','|gametype|doubles','|tier|gen9randombattle','|start|extra',
                 '|teamsize|p1|7','|teamsize|p3|6','|player|p3|Three','|player|p1|',
                 '|-miss','|-miss|p1a: Nick','|-miss|p1: Nick|p2a: Absol',
@@ -24,6 +25,10 @@ class AnnotationLexicalTests(unittest.TestCase):
                 '|-fieldactivate|move: Mud Sport','|-fieldactivate|move: Perish Song|extra',
                 '|-activate|p2: Absol|move: Heal Bell','|-activate|p2a: Absol|move: Heal Bell|extra',
                 '|-activate|p2a: Absol|move: Heal Bell|[from] ability: Pressure',
+                '|-activate|p2: Gengar|move: Destiny Bond','|-activate|p2a: Gengar|Destiny Bond',
+                '|-activate|p2a: Gengar|move: Destiny Bond|extra',
+                '|-activate|p2a: Gengar|move: Destiny Bond|[of] p1a: Grumpig',
+                '|-activate|p2a: Gengar|move: Destiny Bond|[from] ability: Pressure',
                 '|-activate|p2a: Absol|move: Unknown','|-singleturn|p1a: Nick|move: Unknown',
                 '|-singleturn|p1: Nick|move: Focus Punch','|-singleturn|p1a: Nick|move: Focus Punch|extra',
                 '|-hint|[from] ability: Pressure|[of] p2a: Absol','|request|{}','|UNSUPPORTED|x'):
@@ -94,3 +99,43 @@ class AnnotationStreamTests(unittest.TestCase):
                 '|gen|4','|gametype|doubles','|request|{}'):
             with self.assertRaises(ValueError):public_wire.project_line(host,line,**self.f.e.wire_kwargs(self.f.catalog))
         self.assertEqual(host.player_names,(None,None))
+
+    def test_destiny_bond_activation_requires_current_fainted_identity_and_retains_raw_consumers(self):
+        from gpu_engine import public_wire,public_inputs
+        prefix=[*self.f.public.prefix,'|turn|1','|-singlemove|p2a: Absol|Destiny Bond',
+            '|move|p1a: Nick|Surf|p2a: Absol','|-damage|p2a: Absol|0 fnt','|faint|p2a: Absol']
+        line='|-activate|p2a: Absol|move: Destiny Bond'
+        host,_=public_wire.project_lines(public_wire.WireState(),prefix,**self.f.e.wire_kwargs(self.f.catalog))
+        next_host,projection=public_wire.project_line(host,line,**self.f.e.wire_kwargs(self.f.catalog))
+        self.assertEqual(next_host.encounters,host.encounters)
+        self.assertEqual(next_host.live,host.live)
+        self.assertEqual(next_host.active,host.active)
+        self.assertGreater(next_host.next_sequence,host.next_sequence)
+        self.assertEqual([event.kind for event in projection.events[:2]],
+            [public_inputs.Kind.RAW_BEGIN,public_inputs.Kind.SWITCH_PRELUDE])
+        self.assertEqual(sum(event.kind==public_inputs.Kind.NONPROC for event in projection.events),1)
+        self.assertEqual(sum(event.kind==public_inputs.Kind.MUDSHOT for event in projection.events),1)
+        self.assertFalse(any(event.kind in (public_inputs.Kind.FAINT,public_inputs.Kind.ACTIVE)
+            for event in projection.events))
+        self.assertFalse(projection.full_line_consumers_complete)
+        # The activation cannot substitute for either recorded faint. Continue
+        # through the independent attacker's faint and actual replacement lines.
+        lines=[*prefix,line,'|faint|p1a: Nick',
+            '|switch|p1a: Gardevoir|Gardevoir, L80|100/100',
+            '|switch|p2a: Gardevoir|Gardevoir, L80|100/100']
+        self.f.compare_source(lines)
+        live,_=public_wire.project_lines(public_wire.WireState(),self.f.public.prefix,
+            **self.f.e.wire_kwargs(self.f.catalog))
+        for initial,bad in ((live,line),(host,'|-activate|p1a: Nick|move: Destiny Bond'),
+            (host,'|-activate|p2a: Unknown|move: Destiny Bond'),
+            (host,line+'|extra'),(host,line+'|[of] p1a: Nick'),
+            (host,'|-activate|p2a: Absol|move: Grudge')):
+            with self.subTest(line=bad),self.assertRaises(ValueError):
+                public_wire.project_line(initial,bad,**self.f.e.wire_kwargs(self.f.catalog))
+        # A known benched encounter is not this side's fainted active.
+        bench=[self.f.public.prefix[0],
+            '|switch|p2a: Gardevoir|Gardevoir, L80|100/100',self.f.public.prefix[1],'|faint|p2a: Absol']
+        host,_=public_wire.project_lines(public_wire.WireState(),bench,**self.f.e.wire_kwargs(self.f.catalog))
+        with self.assertRaisesRegex(ValueError,'exact registered fainted active'):
+            public_wire.project_line(host,'|-activate|p2a: Gardevoir|move: Destiny Bond',
+                **self.f.e.wire_kwargs(self.f.catalog))
