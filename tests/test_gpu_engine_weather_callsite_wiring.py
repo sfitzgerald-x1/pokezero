@@ -1,5 +1,6 @@
 """Actual initializer trace threading, literal engine states; no public claims."""
 import ast
+from gpu_engine_default_observer_ast import default_program, assert_hp_rng_mutations_detected
 import subprocess
 from types import SimpleNamespace
 import unittest
@@ -46,17 +47,6 @@ class WeatherCallsiteTests(unittest.TestCase):
 
     def test_whole_default_transition_ast_stays_equal_to_actual_main_parent(self):
         class Strip(ast.NodeTransformer):
-            def visit_If(self,node):
-                if ast.unparse(node.test) in ('_weather_trace is not None','_status_trace is not None',
-                        '_public_trace is not None','_lifecycle_trace'):
-                    return [self.visit(n) for n in node.orelse]
-                return self.generic_visit(node)
-            def visit_FunctionDef(self,node):
-                for name in ('_weather_trace','_weather_hp_context'):
-                    if name in [a.arg for a in node.args.kwonlyargs]:
-                        i=[a.arg for a in node.args.kwonlyargs].index(name)
-                        node.args.kwonlyargs.pop(i);node.args.kw_defaults.pop(i)
-                return self.generic_visit(node)
             def visit_ClassDef(self,node):
                 if node.name=='WeatherProfileTracedStep':
                     # Remove ONLY this non-executable tracing return type, not
@@ -71,14 +61,16 @@ class WeatherCallsiteTests(unittest.TestCase):
                     return None
                 return self.generic_visit(node)
         def normalized(raw):
-            tree=Strip().visit(ast.parse(raw))
+            tree=Strip().visit(default_program(ast.parse(raw) if isinstance(raw,(str,bytes)) else raw))
             if any(isinstance(x,ast.Name) and x.id=='WeatherProfileTracedStep' for x in ast.walk(tree)):
                 raise ValueError('observer type is reachable from the default program')
             return ast.dump(tree,include_attributes=False)
         old=subprocess.check_output(['git','show','d38caf8808a87cb64319b8e3bf2f358c10729399:gpu_engine/transition.py'])
         from pathlib import Path
         current=Path(transition.__file__).read_text()
-        self.assertEqual(normalized(old),normalized(current))
+        baseline=normalized(old)
+        self.assertEqual(baseline,normalized(current))
+        assert_hp_rng_mutations_detected(self,ast.parse(current),baseline,dump=normalized)
         with self.assertRaises(ValueError):normalized(current.replace('weather_profile: object', 'weather_profile: object = 1',1))
         with self.assertRaises(ValueError):normalized(current+'\nBAD=WeatherProfileTracedStep\n')
 
