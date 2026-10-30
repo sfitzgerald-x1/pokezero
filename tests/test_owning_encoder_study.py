@@ -23,7 +23,7 @@ from pokezero import owning_encoder_study as study
 def game(spec, ordinal, offset, score=1):
     kind, seat = study.ORDER[ordinal]
     peer = 'p2' if seat == 'p1' else 'p1'
-    seed = study.SEED_START+offset
+    seed = spec['seed_start']+offset
     battle = f'battle-gen3randombattle-controlled-{seed}'
     winner = seat if score == 1 else peer if score == 0 else None
     players = {seat:'PokeZeroBot',peer:'FoulPlayBot'}
@@ -53,9 +53,9 @@ def game(spec, ordinal, offset, score=1):
 def result(spec, ordinal, rows):
     document = dict(encoder_kind=study.ORDER[ordinal][0], pokezero_player=study.ORDER[ordinal][1],
         checkpoint_sha256=ActorContract.champion().checkpoint_sha256,
-        seed_start=study.SEED_START, games=study.COUNT, completed_games=len(rows),
+        seed_start=spec['seed_start'], games=study.COUNT, completed_games=len(rows),
         policy_mode='raw', format_id='gen3randombattle', game_results=rows,
-        foulplay_random_seed_schedule=dict(seeds=list(range(study.FP_SEED_START,study.FP_SEED_START+len(rows)))),
+        foulplay_random_seed_schedule=dict(seeds=list(range(spec['foulplay_seed_start'],spec['foulplay_seed_start']+len(rows)))),
         execution_integrity={k:0 for k in ('retries','errors','refusal_records',
             'refusal_recorder_instrument_errors','refusal_records_unrowed')})
     return SimpleNamespace(to_dict=lambda:deepcopy(document))
@@ -115,7 +115,7 @@ class StudyTests(unittest.TestCase):
 
     def empty_ledger(self):
         return dict(schema=study.LEDGER_SCHEMA,prespec_sha256=study.prespec_file_sha256(self.spec),status='RUNNING',
-            cells=study.planned_cells(),invocations=[dict(i,status='NOT_ATTEMPTED') for i in self.spec['invocations']],
+            cells=study.planned_cells(self.spec),invocations=[dict(i,status='NOT_ATTEMPTED') for i in self.spec['invocations']],
             actual_exit=None,failure=None)
 
     def add(self, ledger, ordinal, offset, score):
@@ -134,6 +134,129 @@ class StudyTests(unittest.TestCase):
         self.assertEqual([s[0] for s in study.ORDER],['python-owning','jax-owning','jax-owning','python-owning'])
         altered=deepcopy(self.spec);altered['invocations'].reverse()
         with self.assertRaisesRegex(ValueError,'prespec drift'):study.validate_prespec(altered)
+
+    def prospective_spec(self):
+        inputs={key:self.spec[key] for key in ('study_id','runtime','admission',
+            'max_decision_rounds','owning_terminal_timeout_seconds','owning_decision_timeout_seconds')}
+        return study.make_prespec(**inputs,seed_start=30500000,foulplay_seed_start=40500000)
+
+    def test_historical_default_prespec_and_audit_bytes_unchanged(self):
+        admission=dict(comparison=dict(path='/authored/comparison',sha256='a'*64),
+            scientific_review=dict(path='/authored/review',sha256='b'*64),source_commit='c'*40,
+            selection_sha256='d'*64,selection_metadata_sha256='e'*64,collection_sha256='f'*64)
+        args=dict(study_id='historical-v2-default',runtime={k:'/authored/'+k for k in study.RUNTIME_KEYS},
+            admission=admission,owning_decision_timeout_seconds=30)
+        default=study.make_prespec(**args)
+        self.assertEqual(study.prespec_file_sha256(default),
+            '238affa1a7c5bc8e6702380183c4c47b7d8386f322b48e63f75974d9c0edf5c7')
+        self.assertEqual(study.digest(default['seed_audit']),
+            '66d87039b26b1bf31b48a5692bfa1d03f49b61bd57a0afcfeef94055200a8ae2')
+        self.assertEqual(default,study.make_prespec(**args,seed_start=30100000,foulplay_seed_start=40100000))
+        study.validate_prespec(default)
+        self.assertEqual(study.planned_cells(),study.planned_cells(default))
+
+    def test_nondefault_bands_are_bound_paired_and_keep_controls(self):
+        spec=self.prospective_spec();study.validate_prespec(spec)
+        self.assertNotEqual(study.prespec_file_sha256(spec),study.prespec_file_sha256(self.spec))
+        self.assertEqual({k:v for k,v in spec.items() if k not in ('seed_start','foulplay_seed_start')},
+                         {k:v for k,v in self.spec.items() if k not in ('seed_start','foulplay_seed_start')})
+        cells=study.planned_cells(spec)
+        self.assertEqual(len(cells),2000)
+        for ordinal,(kind,seat) in enumerate(study.ORDER):
+            config=study._config(spec,ordinal)
+            self.assertEqual((config.seed_start,config.foulplay_random_seed,config.games),(30500000,40500000,500))
+            self.assertEqual((config.encoder_kind,config.pokezero_player),(kind,seat))
+            self.assertEqual({(r['seed'],r['foulplay_seed']) for r in cells if r['invocation']==ordinal},
+                {(30500000+i,40500000+i) for i in range(500)})
+            for offset in (0,499):
+                self.assertEqual(study.checked_game(game(spec,ordinal,offset),spec,ordinal,offset)['status'],'COMPLETE')
+        for invocation,offset in ((True,0),(-1,0),(4,0),(0,True),(0,-1),(0,500)):
+            with self.subTest(invocation=invocation,offset=offset),self.assertRaisesRegex(ValueError,'offset'):
+                study.checked_game(game(spec,0,0),spec,invocation,offset)
+        bad=deepcopy(spec);bad['seed_audit']['consumed_unique_seeds']=0
+        with self.assertRaisesRegex(ValueError,'prespec drift'):study.validate_prespec(bad)
+        # The independent cost gate concerns numerical/dispatch controls, not a live bank's seeds.
+        from pokezero.owning_encoder_cost import validate_controls
+        self.assertEqual(validate_controls(spec),validate_controls(self.spec))
+
+    def test_seed_band_validation_rejects_nonintegers_bounds_overlap_and_consumed_cohorts(self):
+        inputs={key:self.spec[key] for key in ('study_id','runtime','admission',
+            'max_decision_rounds','owning_terminal_timeout_seconds','owning_decision_timeout_seconds')}
+        # Prime equal-value integer cache entries; bool/float must still be refused.
+        study.seed_audit(30500000,40500000)
+        for key in ('seed_start','foulplay_seed_start'):
+            for value in (True,False,None,30500000.,'30500000',[],{},-1,2**31-499,2**64):
+                with self.subTest(key=key,value=value),self.assertRaisesRegex(ValueError,'nonbool integers'):
+                    study.make_prespec(**inputs,**{key:value})
+        for a,b in ((30500000,30500000),(30500000,30500499),(30500499,30500000)):
+            with self.subTest(a=a,b=b),self.assertRaisesRegex(ValueError,'overlap'):
+                study.seed_audit(a,b)
+        from pokezero.mirror_value_probe import cohort
+        for root,count,_ in study.CONSUMED:
+            consumed=cohort(root,count)[0]['seed']
+            for a,b in ((consumed,40500000),(30500000,consumed)):
+                with self.subTest(root=root,a=a,b=b),self.assertRaisesRegex(ValueError,'overlap'):
+                    study.seed_audit(a,b)
+        # Both finite endpoint bands are legal when disjoint and free of consumed seeds.
+        self.assertEqual(study.seed_audit(0,2**31-500)['overlap'],[])
+
+    def test_nondefault_full_fake_run_and_reducer_match_default_arithmetic(self):
+        original=self.spec
+        patterns=((0,.5,1,0),(1,.5,1,0),(0,1,0,0),(1,0,.5,0))
+        async def run(spec,name):
+            calls=[];factories=[]
+            def factory(config):
+                value=object();factories.append(value);return value
+            async def benchmark(config,**kwargs):
+                ordinal=len(calls);calls.append(config)
+                self.assertIs(kwargs['owning_actor_factory'],factories[-1])
+                self.assertEqual((config.seed_start,config.foulplay_random_seed),
+                    (spec['seed_start'],spec['foulplay_seed_start']))
+                rows=[game(spec,ordinal,i,patterns[ordinal][i%4]) for i in range(500)]
+                prefix=result(spec,ordinal,rows[:2]);kwargs['progress_callback'](prefix)
+                return result(spec,ordinal,rows)
+            ledger=await study.run_study(spec,self.root/name,benchmark=benchmark,
+                factory_builder=factory,configure=lambda:None)
+            self.assertEqual(len(calls),4);self.assertEqual(len({id(v) for v in factories}),4)
+            self.assertEqual((ledger['actual_exit'],ledger['recorded_games']),(0,2000))
+            self.assertEqual(ledger['readout'],study.summarize(spec,ledger))
+            return ledger
+        default=asyncio.run(run(original,'default-full'))
+        prospective=asyncio.run(run(self.prospective_spec(),'prospective-full'))
+        self.assertEqual(prospective['readout'],default['readout'])
+        bad=deepcopy(prospective);bad['cells'][0]['foulplay_seed']+=1
+        with self.assertRaisesRegex(ValueError,'roster'):study.summarize(self.prospective_spec(),bad)
+        with self.assertRaisesRegex(ValueError,'bound study ledger'):study.summarize(original,prospective)
+
+    def test_nondefault_failure_and_wrong_summary_keep_fixed_unknown_denominators(self):
+        spec=self.prospective_spec()
+        for mode in ('failure','old-summary','old-fp-schedule','float-summary','float-fp-schedule','old-row'):
+            calls=[]
+            async def benchmark(config,**kwargs):
+                calls.append(config)
+                rows=[game(spec,0,i) for i in range(2)]
+                if mode=='old-row':rows[0]=game(self.spec,0,0)
+                answer=result(spec,0,rows)
+                doc=answer.to_dict()
+                if mode=='old-summary':doc['seed_start']=study.SEED_START
+                if mode=='old-fp-schedule':doc['foulplay_random_seed_schedule']['seeds'][0]=study.FP_SEED_START
+                if mode=='float-summary':doc['seed_start']=float(spec['seed_start'])
+                if mode=='float-fp-schedule':doc['foulplay_random_seed_schedule']['seeds'][0]=float(spec['foulplay_seed_start'])
+                kwargs['progress_callback'](SimpleNamespace(to_dict=lambda:doc))
+                raise ValueError('authored prospective stop')
+            ledger=asyncio.run(study.run_study(spec,self.root/mode,benchmark=benchmark,
+                factory_builder=lambda _:object(),configure=lambda:None))
+            count=2 if mode=='failure' else 0
+            self.assertEqual(len(calls),1);self.assertEqual(ledger['actual_exit'],1)
+            self.assertEqual((len(ledger['cells']),ledger['recorded_games']),(2000,count))
+            self.assertEqual(ledger['failure']['seed'],30500000+count)
+            self.assertEqual(ledger['cells'][count]['status'],'FAILED')
+            self.assertEqual(sum(r['status']=='NOT_ATTEMPTED' for r in ledger['cells']),1999-count)
+            self.assertEqual(sum(r['unknown'] for r in ledger['readout']['arms'].values()),2000-count)
+            self.assertIsNone(ledger['readout']['paired_jax_minus_python']['win_rate']['interval90'])
+            self.assertTrue(all(r['score'] is None and r['win'] is None for r in ledger['cells'][count:]))
+            with self.assertRaises(FileExistsError):
+                asyncio.run(study.run_study(spec,self.root/mode,benchmark=benchmark))
 
     def test_actual_173_fp32_admission_accepts_honest_broad_false_flags(self):
         checked=study.validate_admission(self.spec)
@@ -456,11 +579,16 @@ class StudyTests(unittest.TestCase):
         ledger['cells'][0]['encoder_provenance']['actual_owner_terminal_seen']=False
         with self.assertRaises(ValueError):study.summarize(self.spec,ledger)
 
+    def test_nondefault_prepare_and_hash_bound_reduce_cli(self):
+        self.spec=self.prospective_spec()
+        self.test_prepare_cli_writes_only_prespec_no_admission_or_runtime_calls()
+
     def test_prepare_cli_writes_only_prespec_no_admission_or_runtime_calls(self):
         path=Path(__file__).resolve().parents[1]/'scripts'/'owning_encoder_study.py'
         module_spec=importlib.util.spec_from_file_location('owning_study_cli',path)
         module=importlib.util.module_from_spec(module_spec);module_spec.loader.exec_module(module)
-        inputs={key:self.spec[key] for key in ('study_id','runtime','admission','max_decision_rounds','owning_terminal_timeout_seconds','owning_decision_timeout_seconds')}
+        inputs={key:self.spec[key] for key in ('study_id','runtime','admission','max_decision_rounds',
+            'owning_terminal_timeout_seconds','owning_decision_timeout_seconds','seed_start','foulplay_seed_start')}
         source=self.put('input.json',inputs)['path'];out=self.root/'prepared.json'
         with patch.object(module,'run_study',side_effect=AssertionError('no run')):
             self.assertEqual(module.main(['prepare','--input',source,'--out',str(out)]),0)

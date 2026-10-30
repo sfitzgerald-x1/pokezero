@@ -95,15 +95,15 @@ def read_bound(reference):
     return json.loads(payload)
 
 
-@lru_cache(maxsize=1)
-def _seed_audit_bytes():
+@lru_cache(maxsize=32)
+def _seed_audit_bytes(seed_start, foulplay_seed_start):
     from .mirror_value_probe import cohort
     consumed = set()
     for root, count, expected in CONSUMED:
         rows = cohort(root, count)
         require(digest(rows) == expected, 'consumed seed derivation changed')
         consumed.update(row['seed'] for row in rows)
-    proposed = set(range(SEED_START, SEED_START + COUNT)) | set(range(FP_SEED_START, FP_SEED_START + COUNT))
+    proposed = set(range(seed_start, seed_start + COUNT)) | set(range(foulplay_seed_start, foulplay_seed_start + COUNT))
     require(not proposed.intersection(consumed) and len(proposed) == 2 * COUNT,
             'B3 seeds overlap consumed A2/A4 schedules')
     return canonical(dict(consumed_cohorts=[dict(root=r, games=n, roster_sha256=h) for r, n, h in CONSUMED],
@@ -111,12 +111,16 @@ def _seed_audit_bytes():
         overlap=[], new_games=0))
 
 
-def seed_audit():
-    return json.loads(_seed_audit_bytes())
+def seed_audit(seed_start=SEED_START, foulplay_seed_start=FP_SEED_START):
+    require(all(type(start) is int and 0 <= start <= 2**31 - COUNT
+        for start in (seed_start, foulplay_seed_start)),
+        'seed bands require nonbool integers with all 500 seeds in [0, 2**31)')
+    return json.loads(_seed_audit_bytes(seed_start, foulplay_seed_start))
 
 
 def make_prespec(*, study_id, runtime, admission, max_decision_rounds=250,
-                 owning_terminal_timeout_seconds=5, owning_decision_timeout_seconds=None):
+                 owning_terminal_timeout_seconds=5, owning_decision_timeout_seconds=None,
+                 seed_start=SEED_START, foulplay_seed_start=FP_SEED_START):
     require(type(study_id) is str and study_id and len(study_id) <= 128
         and all(c.isalnum() or c in '-_' for c in study_id), 'canonical study ID required')
     require(type(runtime) is dict and set(runtime) == set(RUNTIME_KEYS)
@@ -139,9 +143,9 @@ def make_prespec(*, study_id, runtime, admission, max_decision_rounds=250,
                      scientific_review=_reference(admission['scientific_review']))
     return dict(schema=SPEC_SCHEMA, study_id=study_id, runtime=dict(runtime), admission=admission,
         champion_contract=json.loads(canonical(asdict(ActorContract.champion()))),
-        seed_start=SEED_START, foulplay_seed_start=FP_SEED_START, seed_count=COUNT,
+        seed_start=seed_start, foulplay_seed_start=foulplay_seed_start, seed_count=COUNT,
         invocations=[dict(ordinal=i, encoder_kind=k, seat=s, games=COUNT) for i, (k, s) in enumerate(ORDER)],
-        seed_audit=seed_audit(), max_decision_rounds=max_decision_rounds,
+        seed_audit=seed_audit(seed_start, foulplay_seed_start), max_decision_rounds=max_decision_rounds,
         owning_terminal_timeout_seconds=owning_terminal_timeout_seconds,
         owning_decision_timeout_seconds=owning_decision_timeout_seconds,
         controls=dict(policy_mode='raw', capture_driver='checkpoint', format_id='gen3randombattle',
@@ -169,7 +173,8 @@ def validate_prespec(spec):
     expected = make_prespec(study_id=spec['study_id'], runtime=spec['runtime'], admission=spec['admission'],
         max_decision_rounds=spec['max_decision_rounds'],
         owning_terminal_timeout_seconds=spec['owning_terminal_timeout_seconds'],
-        owning_decision_timeout_seconds=spec['owning_decision_timeout_seconds'])
+        owning_decision_timeout_seconds=spec['owning_decision_timeout_seconds'],
+        seed_start=spec['seed_start'], foulplay_seed_start=spec['foulplay_seed_start'])
     require(canonical(spec) == canonical(expected), 'fixed B3 prespec drift')
 
 
@@ -243,9 +248,14 @@ def validate_admission(spec):
         raw_bridge_chunk_bytes_captured=document.get('raw_bridge_chunk_bytes_captured'))
 
 
-def planned_cells():
-    return [dict(invocation=i, encoder_kind=kind, seat=seat, seed=SEED_START + offset,
-        foulplay_seed=FP_SEED_START + offset, status='NOT_ATTEMPTED', score=None, win=None)
+def planned_cells(spec=None):
+    # Retain the historical no-argument roster for source callers. Runs/reducers
+    # always supply their validated, hash-bound prespec.
+    seed_start = SEED_START if spec is None else spec['seed_start']
+    foulplay_seed_start = FP_SEED_START if spec is None else spec['foulplay_seed_start']
+    seed_audit(seed_start, foulplay_seed_start)
+    return [dict(invocation=i, encoder_kind=kind, seat=seat, seed=seed_start + offset,
+        foulplay_seed=foulplay_seed_start + offset, status='NOT_ATTEMPTED', score=None, win=None)
         for i, (kind, seat) in enumerate(ORDER) for offset in range(COUNT)]
 
 
@@ -255,8 +265,10 @@ class CappedGame(ValueError):
 
 def checked_game(row, spec, invocation, offset):
     from .foulplay_bridge import DEFAULT_BATTLE_ID_PREFIX
+    require(type(invocation) is int and 0 <= invocation < len(ORDER)
+        and type(offset) is int and 0 <= offset < COUNT, 'planned invocation/offset required')
     kind, seat = ORDER[invocation]
-    seed = SEED_START + offset
+    seed = spec['seed_start'] + offset
     require(type(row) is dict and type(row.get('seed')) is int and row['seed'] == seed
         and row.get('encoder_kind') == kind and row.get('battle_id') == f'{DEFAULT_BATTLE_ID_PREFIX}-{seed}',
         'game identity differs from planned cell')
@@ -322,7 +334,7 @@ def summarize(spec, ledger):
     require(len(ledger['invocations']) == 4 and all(all(actual.get(k) == expected[k]
         for k in ('ordinal','encoder_kind','seat','games'))
         for actual, expected in zip(ledger['invocations'], spec['invocations'])), 'invocation roster differs')
-    expected = planned_cells()
+    expected = planned_cells(spec)
     cells = ledger['cells']
     require(len(cells) == len(expected), 'every planned cell must remain in ledger')
     for actual, planned in zip(cells, expected):
@@ -342,7 +354,7 @@ def summarize(spec, ledger):
                 pokezero_score=actual['score'], pokezero_decisions=actual['pokezero_decisions'],
                 pokezero_decision_players=[actual['seat']]*actual['pokezero_decisions'],
                 pokezero_submitted_choice_players=[actual['seat']]*actual['pokezero_decisions'])
-            checked_game(row, spec, actual['invocation'], actual['seed']-SEED_START)
+            checked_game(row, spec, actual['invocation'], actual['seed']-spec['seed_start'])
             require(_hex(actual.get('game_sha256')), 'observed game hash required')
         else:
             require(actual.get('score') is None and actual.get('win') is None, 'unknown cell cannot carry a score')
@@ -362,7 +374,7 @@ def summarize(spec, ledger):
     contrasts = {}
     for metric, field in (('win_rate', 'win'), ('score_rate', 'score')):
         lower, upper = [], []
-        for seed in range(SEED_START, SEED_START+COUNT):
+        for seed in range(spec['seed_start'], spec['seed_start']+COUNT):
             bounds = {}
             for kind in ('python-owning', 'jax-owning'):
                 rows = [indexed[kind, seat, seed] for seat in ('p1','p2')]
@@ -415,7 +427,8 @@ def _config(spec, ordinal):
     for key in RUNTIME_KEYS[:-1]:
         runtime[key] = Path(runtime[key])
     return ControlledFoulPlayConfig(**runtime, **spec['controls'], encoder_kind=kind,
-        pokezero_player=seat, games=COUNT, seed_start=SEED_START, foulplay_random_seed=FP_SEED_START,
+        pokezero_player=seat, games=COUNT, seed_start=spec['seed_start'],
+        foulplay_random_seed=spec['foulplay_seed_start'],
         max_decision_rounds=spec['max_decision_rounds'],
         owning_terminal_timeout_seconds=spec['owning_terminal_timeout_seconds'])
 
@@ -463,7 +476,7 @@ async def run_study(spec, output, *, benchmark=None, factory_builder=None, confi
     _sync_directory(output.parent)
     atomic_json(output/'prespec.json', spec)
     ledger = dict(schema=LEDGER_SCHEMA, prespec_sha256=prespec_file_sha256(spec), status='PREPARING',
-        cells=planned_cells(), invocations=[dict(item, status='NOT_ATTEMPTED') for item in spec['invocations']],
+        cells=planned_cells(spec), invocations=[dict(item, status='NOT_ATTEMPTED') for item in spec['invocations']],
         failure=None, actual_exit=None, B3_qualified=False)
     def publish():
         ledger['recorded_games'] = sum(row['status'] == 'COMPLETE' for row in ledger['cells'])
@@ -493,14 +506,16 @@ async def run_study(spec, output, *, benchmark=None, factory_builder=None, confi
                 require(document.get('encoder_kind') == ORDER[ordinal][0]
                     and document.get('pokezero_player') == ORDER[ordinal][1]
                     and document.get('checkpoint_sha256') == ActorContract.champion().checkpoint_sha256
-                    and document.get('seed_start') == SEED_START and document.get('games') == COUNT,
+                    and type(document.get('seed_start')) is int
+                    and document['seed_start'] == spec['seed_start'] and document.get('games') == COUNT,
                     'benchmark summary binding differs')
                 rows = document['game_results']
                 require(type(rows) is list and completed <= len(rows) <= COUNT
                     and document.get('completed_games') == len(rows), 'chronological cumulative prefix required')
+                fp_seeds = document.get('foulplay_random_seed_schedule', {}).get('seeds')
                 require(document.get('policy_mode') == 'raw' and document.get('format_id') == 'gen3randombattle'
-                    and document.get('foulplay_random_seed_schedule', {}).get('seeds') ==
-                        list(range(FP_SEED_START, FP_SEED_START+len(rows)))
+                    and type(fp_seeds) is list and all(type(seed) is int for seed in fp_seeds)
+                    and fp_seeds == list(range(spec['foulplay_seed_start'], spec['foulplay_seed_start']+len(rows)))
                     and all(type(document.get('execution_integrity', {}).get(k)) is int
                         and document['execution_integrity'][k] == 0 for k in ('retries','errors',
                             'refusal_records','refusal_recorder_instrument_errors','refusal_records_unrowed')),
