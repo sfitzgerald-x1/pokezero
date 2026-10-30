@@ -368,6 +368,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
                 or type(weather_hp[1]) is not weather_speed.ProfileData):
             raise ValueError('owning weather birth carry and original static profile required')
         record, data = weather_hp
+        for value in (data.binding,data.engine_binding,data.source_binding):
+            base._shape(value,(8,),jnp.uint32)
         for value,shape,dtype in ((record.qualified_birth,(b,),jnp.bool_),
                 (record.stream_id,(b,),jnp.int32),(record.engine_binding,(b,8),jnp.uint32),
                 (record.source_binding,(b,8),jnp.uint32),(record.profile_binding,(b,8),jnp.uint32)):
