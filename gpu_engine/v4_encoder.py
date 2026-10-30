@@ -4,9 +4,11 @@ This is the real writer composition, separate from observation.py's cost
 placeholder. Remaining column and wire-family gaps stay explicit. Numerical
 parity and model qualification are measured on recorded decisions separately.
 """
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, fields, is_dataclass
+from collections.abc import Mapping
 import hashlib
 import json
+import weakref
 from typing import NamedTuple
 from types import MappingProxyType
 
@@ -54,7 +56,7 @@ class Masks:
         return cls(**values)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Catalog:
     source: object
     vocabulary: object
@@ -83,6 +85,64 @@ class Catalog:
     masks: Masks
     binding: object
     checkpoint_sha256: str
+
+
+_CATALOGS = weakref.WeakKeyDictionary()
+
+
+def _static_snapshot(value, seen):
+    """Retain actual immutable array edges, including nested writer tables."""
+    if isinstance(value, np.ndarray):
+        raise ValueError('encoder static arrays require immutable JAX storage')
+    if isinstance(value, jax.Array):
+        return value, ()
+    if isinstance(value, (str, int, float, bool, type(None))):
+        return value, ()
+    if id(value) in seen:
+        return value, ()
+    seen.add(id(value))
+    if is_dataclass(value):
+        children = tuple((f.name, _static_snapshot(getattr(value, f.name), seen)) for f in fields(value))
+        return value, ('attrs', children)
+    if isinstance(value, Mapping):
+        return value, ('mapping', tuple((k, _static_snapshot(v, seen)) for k, v in value.items()))
+    if isinstance(value, (tuple, list)):
+        return value, ('sequence', tuple(_static_snapshot(v, seen) for v in value))
+    raise ValueError('unsupported encoder static holder: '+type(value).__name__)
+
+
+def _check_static(value, snapshot):
+    original, children = snapshot
+    if value is not original:
+        raise ValueError('original encoder catalog edges required')
+    if not children:
+        return
+    kind, entries = children
+    if kind == 'attrs':
+        for key, child in entries:
+            _check_static(getattr(value, key), child)
+    elif kind == 'mapping':
+        if tuple(value) != tuple(k for k, _ in entries):
+            raise ValueError('original encoder catalog namespace required')
+        for key, child in entries:
+            _check_static(value[key], child)
+    else:
+        if len(value) != len(entries):
+            raise ValueError('original encoder static sequence required')
+        for current, child in zip(value, entries):
+            _check_static(current, child)
+
+
+def check_catalog(catalog):
+    """Checked host boundary for the actual compiled encoder lifetime."""
+    record = _CATALOGS.get(catalog) if type(catalog) is Catalog else None
+    if record is None:
+        raise ValueError('original compiled v4 encoder catalog required')
+    for name, snapshot in record:
+        _check_static(getattr(catalog, name), snapshot)
+    if isinstance(jnp.zeros((), jnp.int32), jax.core.Tracer):
+        raise ValueError('checked encoder catalog boundary cannot be traced')
+    return catalog
 
 
 def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
@@ -132,8 +192,11 @@ def compile_encoder(source,dex,vocabulary,*,checkpoint_sha256,feature_masks):
         exact=np.asarray(exact.device.binding).tolist())
     digest=hashlib.sha256(json.dumps(bindings,sort_keys=True,separators=(',',':')).encode()).digest()
     binding=jnp.asarray(np.frombuffer(digest,dtype='>u4').astype(np.uint32))
-    return Catalog(source,vocabulary,dex,species,moves,abilities,items,field,active,substitute,exact,damage,types,
+    catalog = Catalog(source,vocabulary,dex,species,moves,abilities,items,field,active,substitute,exact,damage,types,
         sleep,toxic,tendency,refresh,lifecycle,clause,context,features,expected,hazard,actions,masks,binding,checkpoint_sha256)
+    seen = set()
+    _CATALOGS[catalog] = tuple((f.name, _static_snapshot(getattr(catalog, f.name), seen)) for f in fields(catalog))
+    return catalog
 
 
 class State(NamedTuple):
