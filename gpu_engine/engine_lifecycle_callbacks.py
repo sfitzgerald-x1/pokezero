@@ -71,6 +71,11 @@ class LifecycleTape(NamedTuple):
     cursor: Cursor
 
 
+class LeftoversContext(NamedTuple):
+    """PRIVATE checked helper data, not public/source-order admission."""
+    data: object
+
+
 class LifecycleResult(NamedTuple):
     state: object
     cursor: Cursor
@@ -302,12 +307,22 @@ def finish(tape,state,*,live,replacement,pending_before,residual_ready,defer_res
 
 
 def trace_step(state,actions,table,*,cursor,catalog,expected_binding,expected_engine_binding,
-               chance_inputs=None,capacity=64):
+               chance_inputs=None,capacity=64,leftovers_compiled=None):
     from . import transition
     public.check_catalog(catalog,table,expected_binding=expected_binding,expected_engine_binding=expected_engine_binding)
+    leftovers_context=None
+    if leftovers_compiled is not None:
+        if any(isinstance(value,jax.core.Tracer) for value in jax.tree.leaves((state,actions))):
+            raise ValueError('checked Leftovers lifecycle API must remain outside outer JIT')
+        from . import engine_leftovers_callbacks as leftovers_callbacks
+        data=leftovers_callbacks.check_compiled(leftovers_compiled)
+        if leftovers_callbacks._COMPILED[leftovers_compiled][4] is not catalog:
+            raise ValueError('same original engine catalog required for Leftovers caller')
+        leftovers_context=LeftoversContext(data)
     before=snapshot(cursor);tape=_tape(cursor,catalog,capacity)
     chance_inputs=transition.sample_chance_inputs(state) if chance_inputs is None else chance_inputs
-    result=transition.step_with_chance(state,actions,table,chance_inputs,_public_trace=tape,_lifecycle_trace=True)
+    result=transition.step_with_chance(state,actions,table,chance_inputs,_public_trace=tape,_lifecycle_trace=True,
+        _leftovers_context=leftovers_context)
     tape=result.callbacks
     return LifecycleResult(result.step.state,tape.cursor,tape,before,snapshot(tape.cursor),
         result.step.invalid_actions,result.step.placeholder_moves)
