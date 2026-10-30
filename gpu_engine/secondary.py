@@ -190,17 +190,30 @@ def apply(state, side, move, roll, table, *, eligible, effective_weather=0, subs
     if _status_trace is not None:
         from . import engine_status_callbacks as callbacks
         _status_trace=callbacks.unknown(_status_trace,changes)
+        from . import engine_kernel_frame_risk as kernel_risks
     boosts = get(state.boosts)
     drops = proc & table.spd_drop[move] & ~table.clear_body[ability]
+    if _status_trace is not None:
+        _status_trace=kernel_risks.branch_on_tape(_status_trace,kernel_risks.Branch.SECONDARY_STATS,
+            proc & table.spd_drop[move],active=jnp.asarray(eligible))
     boosts = boosts.at[:, 3].set(jnp.where(drops, jnp.maximum(-6, boosts[:, 3] - 1), boosts[:, 3]))
     speed = proc & table.speed_drop[move] & ~table.clear_body[ability]
+    if _status_trace is not None:
+        _status_trace=kernel_risks.branch_on_tape(_status_trace,kernel_risks.Branch.SECONDARY_STATS,
+            proc & table.speed_drop[move],active=jnp.asarray(eligible))
     boosts = boosts.at[:, 4].set(jnp.where(speed, jnp.maximum(-6, boosts[:, 4] - 1), boosts[:, 4]))
     self_proc = trigger & table.self_omni[move] & (state.hp[rows, side, own] > 0)
+    if _status_trace is not None:
+        _status_trace=kernel_risks.branch_on_tape(_status_trace,kernel_risks.Branch.SECONDARY_STATS,
+            self_proc,active=jnp.asarray(eligible))
     own_boosts = state.boosts[rows, side, own]
     own_boosts = own_boosts.at[:, :5].set(jnp.where(self_proc[:, None],
         jnp.clip(own_boosts[:, :5] + 1, -6, 6), own_boosts[:, :5]))
     flinch = (proc & table.flinch[move] & ~table.inner_focus[ability]
         & ((get(state.volatile) & FOCUS_PUNCH)==0))
+    if _status_trace is not None:
+        _status_trace=kernel_risks.branch_on_tape(_status_trace,kernel_risks.Branch.SECONDARY_FLINCH,
+            proc & table.flinch[move],active=jnp.asarray(eligible))
     state=state._replace(
         status=state.status.at[rows, foe, target].set(jnp.where(changes, status, get(state.status))),
         status_counter=state.status_counter.at[rows, foe, target].set(

@@ -382,6 +382,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # partial; this must never authorize a full observation or B4 gate.
         if _lifecycle_trace:
             from . import engine_lifecycle_callbacks as lifecycle_callbacks
+            from . import engine_kernel_frame_risk as kernel_risks
             _public_trace=lifecycle_callbacks.begin(_public_trace,state,live,invalid)
         _public_trace = _public_trace._replace(
             turn=_public_trace.turn if _lifecycle_trace else state.turn+(live & ~replacement).astype(jnp.int32),
@@ -562,6 +563,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             flinched=(_active(work.volatile, work, side) & FLINCH) != 0,
             sleep_usable=sleep_usable,early_bird=early_bird,loafing=loafing)
         if _lifecycle_trace:
+            _public_trace=kernel_risks.pre_move_on_tape(_public_trace,work,side,before,
+                eligible=eligible,active=live)
+        if _lifecycle_trace:
             old_status=_active(work.status,work,side)
             _public_trace=status_callbacks.changed(_public_trace,side,work.active[rows,side],old_status,
                 before.status,jnp.where(old_status==m.SLP,status_callbacks.WAKE,status_callbacks.THAW),
@@ -594,6 +598,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             attack_num=confusion_num,attack_den=confusion_den,
             roll=85 + chance[:, 5])
         hp = _active(work.hp, work, side)
+        if _lifecycle_trace:
+            _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.CONFUSION_HP,
+                eligible & before.confusion_self_hit,active=live)
         hp = jnp.where(eligible & before.confusion_self_hit, jnp.maximum(0, hp - confusion_damage), hp)
         work = work._replace(hp=_set_active(work.hp, work, side, hp))
         # Gen 3 singles cancels all queued actions after any faint, not only
@@ -646,6 +653,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _public_trace = public_callbacks.move(_public_trace,side,work.active[rows,side],
                 work.active[rows,foe],caller_move,eligible=caller_acts,
                 unsupported=charge_locked | sleep_usable | ~acts)
+        if _lifecycle_trace:
+            _public_trace=kernel_risks.selected_on_tape(_public_trace,move,
+                eligible=caller_acts,active=live)
         attack_stats = _active(work.stats, work, side)
         defense_stats = _active(work.stats, work, foe)
         attack_boosts = _active(work.boosts, work, side)
@@ -727,10 +737,18 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         # TryMove (including Damp) succeeds before self-KO, which occurs even
         # if the subsequent target hit misses, is protected, immune or a sub.
         # Damage inputs were resolved while the user's ability was still active.
+        if _lifecycle_trace:
+            _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_DESTRUCT,
+                explodes,active=live)
         work=work._replace(hp=_set_active(work.hp,work,side,
             jnp.where(explodes,0,_active(work.hp,work,side))))
         bypass_sub = jnp.zeros_like(acts)
+        if _lifecycle_trace:
+            _risk_protected=jnp.zeros_like(acts)
+            _risk_absorbed=jnp.zeros_like(acts)
         if table.effects is not None:
+            if _lifecycle_trace:
+                _risk_protected=protected[rows,foe] & table.effects.protectable[move]
             hit &= ~(protected[rows,foe] & table.effects.protectable[move])
             bypass_sub = table.effects.bypass_sub[move]
         if table.absorption is not None:
@@ -743,6 +761,8 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 _active(work.status,work,foe),foe_types,_active(work.hp,work,foe),
                 _active(work.max_hp,work,foe),_active(work.substitute_hp,work,foe),
                 _active(work.volatile,work,foe),eligible=acts & hit & targets_mon)
+            if _lifecycle_trace:
+                _risk_absorbed=absorbed.blocked
             work = work._replace(hp=_set_active(work.hp,work,foe,absorbed.hp),
                 volatile=_set_active(work.volatile,work,foe,absorbed.volatile))
             hit &= ~absorbed.blocked
@@ -765,6 +785,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         recoil=jnp.where(is_struggle & (dealt>0),jnp.maximum(1,dealt//4),0)
         if table.damage_moves is not None:
             recoil=special_hits.recoil_damage(table.damage_moves,move,_active(work.ability,work,side),dealt)
+        if _lifecycle_trace:
+            _public_trace=kernel_risks.outcome_on_tape(_public_trace,
+                kernel_risks.Outcome(power,critical,hit,immune,num,den,_risk_absorbed,
+                    hits_sub,_risk_protected,enduring[rows,foe],recoil,explodes),
+                eligible=acts,active=live)
         if table.effects is not None:
             effects = table.effects
             # Protect/Endure fail if there is no queued move left (including
@@ -785,6 +810,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             sub_hp = _active(work.substitute_hp,work,side)
             creates_sub = (acts & effects.substitute[move] & (sub_hp == 0)
                 & (max_hp > 1) & (hp * 4 > max_hp))
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SUBSTITUTE,
+                    acts & effects.substitute[move],active=live)
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_HEAL,
+                    acts & (effects.heal_half[move] | effects.weather_heal[move] | effects.rest[move]),active=live)
             cost = max_hp // 4
             hp -= jnp.where(creates_sub,cost,0)
             work = work._replace(substitute_hp=_set_active(work.substitute_hp,work,side,
@@ -819,6 +849,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             target_hp=_active(work.hp,work,foe)
             split=(acts & hit & effects.pain_split[move] & (hp>0) & (target_hp>0)
                 & (_active(work.substitute_hp,work,foe)==0))
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.PAIN_SPLIT,
+                    acts & hit & effects.pain_split[move],active=live)
             average=jnp.maximum(1,(hp+target_hp)//2)
             hp=jnp.where(split,jnp.minimum(max_hp,average),hp)
             target_hp=jnp.where(split,jnp.minimum(_active(work.max_hp,work,foe),average),target_hp)
@@ -830,15 +863,24 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             # +12 boost reaches +6 even from -6; other stages are untouched.
             drum=(acts & effects.belly_drum[move] & (max_hp>1)
                 & (hp*2>max_hp) & (boosts[:,0]<6))
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.BELLY_DRUM,
+                    acts & effects.belly_drum[move],active=live)
             hp=hp-jnp.where(drum,max_hp//2,0)
             boosts=boosts.at[:,0].set(jnp.where(drum,6,boosts[:,0]))
             work=work._replace(hp=_set_active(work.hp,work,side,hp))
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SELF_BOOST,
+                    acts & jnp.any(effects.self_boosts[move]!=0,axis=1),active=live)
             boosts = jnp.clip(boosts + jnp.where(acts[:,None],effects.self_boosts[move],0),-6,6)
             # These damaging moves lower their own SpA on a successful hit,
             # including Substitute/KO, but not miss, Protect, immunity or
             # absorption. Unlike target secondaries this is not Shield Dust
             # or Clear Body gated. White Herb handling remains a separate gap.
             drop = acts & hit & ~immune & effects.hit_spa_drop[move]
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.HIT_SPA_DROP,
+                    drop,active=live)
             boosts = boosts.at[:,2].set(jnp.where(drop,jnp.maximum(-6,boosts[:,2]-2),boosts[:,2]))
             work = work._replace(boosts=_set_active(work.boosts,work,side,boosts))
             if _lifecycle_trace:
@@ -846,6 +888,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     & (work.status[rows,side]!=m.NONE) & ~effects.soundproof[work.ability[rows,side]])
                 _public_trace=status_callbacks.unknown(_public_trace,jnp.any(team_cured,axis=1))
             work=cure_team(work,side,effects,eligible=acts & effects.heal_bell[move])
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.HAZE,
+                    acts & effects.haze[move],active=live)
             for target_side in range(2):
                 old = _active(work.boosts,work,target_side)
                 work = work._replace(boosts=_set_active(work.boosts,work,target_side,
@@ -880,6 +925,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     work=secondaries.after_status_event(work,side,foe,status,table.secondary,
                         applied=apply_status,item_table=table.items)
         if table.sustain is not None:
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SEED_START,
+                    acts & hit & table.sustain.seed[move],active=live)
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.WISH_START,
+                    acts & table.sustain.wish[move],active=live)
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SPIN_CLEAR,
+                    acts & hit & ~immune & table.sustain.spin[move],active=live)
             seeded = recovery.seed_target(table.sustain,move,_active(work.types,work,foe),
                 _active(work.hp,work,foe),_active(work.substitute_hp,work,foe),
                 _active(work.volatile,work,foe),eligible=acts & hit)
@@ -900,11 +952,17 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 & table.items.choice_band[_active(work.item,work,side)] & (locked == 0))
             work = work._replace(choice_move=_set_active(work.choice_move,work,side,jnp.where(lock,caller_move,locked)))
         if table.linked_traps is not None:
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.LINK_TRAP,
+                    acts & hit & table.linked_traps.move[move],active=live)
             work=linking.apply(work,side,move,table.linked_traps,eligible=acts & hit)
         if table.encore is not None:
             # Duration uses the existing uniform [0,4) status-duration column:
             # a dispatched Encore cannot also inflict a primary sleep status.
             queued=(order==0) & ~state.pending_residual & ~switches[rows,foe] & ~displaced[rows,foe]
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
+                    acts & hit & table.encore.move[move],active=live)
             work=repeating.apply(work,foe,move,chance[:,7],table.encore,eligible=acts & hit,queued=queued)
         if table.secondary is not None:
             effective_weather=work.weather
@@ -942,6 +1000,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         else:work = _lum_update(work,table,live & move_context)
         # Gen3 applies contact DamagingHit (and immediate Lum cure) before
         # recoil. A source about to faint can still consume its berry first.
+        if _lifecycle_trace:
+            _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.RECOIL,
+                recoil>0,active=live)
         hp = jnp.maximum(0,_active(work.hp,work,side)-recoil)
         work = work._replace(hp=_set_active(work.hp,work,side,hp))
         if table.weather is not None:
@@ -955,6 +1016,9 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             work = work._replace(weather=weather,weather_counter=counter)
         if table.entry is not None:
             old_layers = work.spikes[rows,foe]
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.SPIKES,
+                    acts & table.entry.spikes_move[move],active=live)
             work = work._replace(spikes=work.spikes.at[rows,foe].set(jnp.where(
                 acts & table.entry.spikes_move[move],jnp.minimum(3,old_layers+1),old_layers)))
         moves_cancelled |= acts & ((foe_hp == 0) | (hp == 0))
@@ -1248,6 +1312,10 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             work = work._replace(hp=_set_active(work.hp,work,side,drained.hp))
             work = work._replace(hp=_set_active(work.hp,work,foe,drained.recipient_hp))
         if table.encore is not None:
+            if _lifecycle_trace:
+                _public_trace=kernel_risks.branch_on_tape(_public_trace,kernel_risks.Branch.ENCORE,
+                    eligible & (event>=8) & (_active(work.hp,work,side)>0)
+                    & (_active(work.encore_counter,work,side)>0),active=live)
             work=repeating.residual(work,side,eligible=eligible & (event>=8))
     work=linking.prune(work)
     work=work._replace(volatile=jnp.where(work.hp>0,work.volatile,
@@ -1290,6 +1358,7 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         _public_trace=lifecycle_callbacks.finish(_public_trace,work,live=live,replacement=replacement,
             pending_before=state.pending_residual,residual_ready=residual_ready,
             defer_residual=defer_residual,turn_context=turn_context)
+        _public_trace=kernel_risks.end_on_tape(_public_trace,work,active=live)
     work = work._replace(volatile=jnp.where(ordinary[:, None, None],
         work.volatile & jnp.uint32(~(FLINCH|FOCUS_PUNCH|FOCUS_LOST) & 0xffffffff), work.volatile))
     work = jax.tree.map(lambda old, new: jnp.where(live.reshape((-1,) + (1,) * (old.ndim - 1)), new, old), state, work)
