@@ -9,9 +9,11 @@ these flags or ratios is reconstructed from the amount of HP lost.
 
 Only positive nonlethal ordinary direct-target writes are represented. Miss,
 immunity, substitute, protection, Endure, no-output and lethal writes stay
-UNKNOWN. Every eligible call retains UNKNOWN256 pending the owning original
-full-line consumers; neutral/noncritical writes emit no control and provide no
-no-output certificate. No damage formula, faint, source exhaustiveness, public
+UNKNOWN. Diagnostic calls retain UNKNOWN256. The separate PRIVATE registered
+source seam omits only this new latch for valid literal writes in the matching
+open accounting context; prior refusal bits remain unchanged. Neutral/noncritical
+writes emit no control and provide no no-output certificate. No damage formula,
+faint, source exhaustiveness, public
 admission, original-physics equivalence or qualification is implemented here.
 The actual caller must pass literal values from the same execution. Device
 data/copies are trusted transport, not proof of caller origin or single use.
@@ -55,6 +57,17 @@ class Context(NamedTuple):
     this holder merely transports its SAME Data into the actual numerical core.
     """
     data: Data
+
+
+class RegisteredContext(NamedTuple):
+    """PRIVATE same-helper/accounting statics; not a caller acceptance flag.
+
+    Original compiler identities must be checked by the owning host. The root
+    still owns the actual BEFORE ticket and exact following HP span capture;
+    static tables alone cannot attest a ticket, origin or consumer completion.
+    """
+    data: Data
+    accounting: object
 
 
 @dataclass(frozen=True, eq=False)
@@ -177,6 +190,31 @@ def _unknown(tape, eligible):
     return tape._replace(refusal=tape.refusal | jnp.where(eligible, UNKNOWN_DIRECT_HIT, 0))
 
 
+def _typed_write(write, b):
+    if type(write) is not HitWrite:
+        raise ValueError('literal typed direct-hit write required')
+    return HitWrite(**{name:(_boolean(value, (b,)) if name in
+        ('critical', 'hit', 'immune', 'substitute', 'protected', 'enduring')
+        else _word(value, (b,))) for name, value in zip(write._fields, write)})
+
+
+def _valid_write(w):
+    return ((w.power > 0) & w.hit & ~w.immune & ~w.substitute & ~w.protected & ~w.enduring
+        & _positive_ratio(w.numerator, w.denominator)
+        & (w.old_hp > w.new_hp) & (w.new_hp > 0) & (w.maximum >= w.old_hp))
+
+
+def validate_write_device(write, b):
+    """Pure literal write validity only; no damage formula or caller proof."""
+    if type(b) is not int or b <= 0 or type(write) is not HitWrite:
+        raise ValueError('positive static batch and literal HitWrite required')
+    try:
+        w = _typed_write(write, b)
+    except (TypeError, ValueError):
+        return jnp.zeros(b, bool)
+    return _valid_write(w)
+
+
 def _positive_ratio(numerator, denominator):
     pairs = jnp.asarray(POSITIVE_EFFECTIVENESS_RATIOS, jnp.int32)
     return jnp.any((numerator[...,None] == pairs[:,0]) & (denominator[...,None] == pairs[:,1]), axis=-1)
@@ -200,28 +238,24 @@ def validate_raw_device(raw):
         & (move > 0) & (old > new) & (new > 0) & _positive_ratio(num, den))
 
 
-def record_direct_hit_controls_device(tape, actor_side, actor_physical, target_physical,
-                                     move, write, data, *, eligible):
-    """Actual write seam. Eligibility is operational, never a proof boolean.
+def _record(tape, actor_side, actor_physical, target_physical, move, write, data, *, eligible):
+    """Shared actual-write body; returns valid-and-room, never latches UNKNOWN.
 
     Rows for one write are appended atomically: a two-control write with one
     remaining slot sets OVERFLOW/UNKNOWN without publishing a partial prefix.
     The caller must not invoke this from final state or move-selection metadata.
     """
     if not _check(tape, data):
-        return tape
+        return tape, jnp.zeros_like(tape.count, bool)
     eligible = _boolean(eligible, tape.count.shape)
     if type(write) is not HitWrite:
         raise ValueError('literal typed direct-hit write required')
     try:
         actor_side, actor_physical, target_physical, move = (
             _word(x, tape.count.shape) for x in (actor_side, actor_physical, target_physical, move))
-        values = {name:(_boolean(value, tape.count.shape) if name in
-            ('critical', 'hit', 'immune', 'substitute', 'protected', 'enduring')
-            else _word(value, tape.count.shape)) for name, value in zip(write._fields, write)}
+        w = _typed_write(write, tape.count.shape[0])
     except (TypeError, ValueError):
-        return _unknown(tape, eligible)
-    w = HitWrite(**values)
+        return tape, jnp.zeros_like(tape.count, bool)
     target_side = 1-actor_side
     rows = jnp.arange(tape.count.shape[0]); safe = jnp.clip(actor_side, 0, 1)
     need = w.critical.astype(jnp.int32) + (w.numerator != w.denominator).astype(jnp.int32)
@@ -238,9 +272,7 @@ def record_direct_hit_controls_device(tape, actor_side, actor_physical, target_p
         & (target_physical == tape.cursor.physical_active[rows, 1-safe])
         & (data.move_count > 1) & (move > 0) & (move < data.move_count)
         & (tape.count >= 0) & (tape.count <= tape.words.shape[1])
-        & (w.power > 0) & w.hit & ~w.immune & ~w.substitute & ~w.protected & ~w.enduring
-        & _positive_ratio(w.numerator, w.denominator)
-        & (w.old_hp > w.new_hp) & (w.new_hp > 0) & (w.maximum >= w.old_hp))
+        & _valid_write(w))
     overflow = eligible & valid & ~room
     # Check only actual NEW slots. A clipped out-of-storage address would
     # inspect the previous prefix and must never hide capacity exhaustion.
@@ -256,7 +288,67 @@ def record_direct_hit_controls_device(tape, actor_side, actor_physical, target_p
         tape = public._append(tape, kind, actor_side, actor_physical, target_side, target_physical,
             facts, use & flag)
     tape = tape._replace(refusal=tape.refusal | jnp.where(overflow, public.OVERFLOW, 0))
-    return _unknown(tape, eligible)
+    return tape, valid & room
+
+
+def record_direct_hit_controls_device(tape, actor_side, actor_physical, target_physical,
+                                     move, write, data, *, eligible):
+    """Diagnostic API: every requested observation retains UNKNOWN256."""
+    result, _ = _record(tape, actor_side, actor_physical, target_physical,
+        move, write, data, eligible=eligible)
+    if type(tape) is public.CallbackTape:
+        return result
+    return _unknown(result, _boolean(eligible, tape.count.shape))
+
+
+def _registered_bound(tape, context):
+    # Local import avoids a cycle through the full adapter's control port.
+    from . import engine_execution_completeness as accounting
+    if (type(context) is not RegisteredContext or type(context.data) is not Data
+            or type(context.accounting) is not accounting.Tables):
+        raise ValueError('typed private original direct-hit/accounting context required')
+    if type(tape) is not life.LifecycleTape:
+        raise ValueError('registered direct-hit requires actual LifecycleTape')
+    _check(tape, context.data)
+    b = tape.count.shape[0]
+    for value in context.accounting:
+        life._typed(value, (8,), jnp.uint32)
+    actual = accounting._context(tape)
+    if actual is None:
+        return jnp.zeros(b, bool)
+    if type(actual.tables) is not accounting.Tables or type(actual.ledger) is not accounting.Ledger:
+        raise ValueError('typed actual accounting tables/ledger required')
+    for value in actual.tables:
+        life._typed(value, (8,), jnp.uint32)
+    ledger = actual.ledger
+    for value, shape, dtype in ((ledger.stream_id,(b,),jnp.int32), (ledger.frame,(b,),jnp.int32),
+            (ledger.opened,(b,),jnp.bool_), (ledger.inventory_binding,(8,),jnp.uint32)):
+        life._typed(value, shape, dtype)
+    bound = (accounting._validate(ledger, actual.tables) & accounting._tape(ledger, tape, actual.tables)
+        & (ledger.stream_id == tape.stream_id) & (ledger.frame > 0) & ledger.opened
+        & jnp.all(ledger.inventory_binding == context.accounting.inventory_binding))
+    for old, new in zip(context.accounting, actual.tables):
+        bound &= jnp.all(old == new)
+    for name in ('engine_binding','source_binding','producer_binding'):
+        bound &= jnp.all(getattr(context.accounting,name) == getattr(context.data,name))
+        bound &= jnp.all(getattr(actual.tables,name) == getattr(tape,name))
+    return bound
+
+
+def record_registered_direct_hit_controls_device(tape, actor_side, actor_physical, target_physical,
+                                                move, write, context, *, eligible):
+    """PRIVATE source registration, never completeness or consumer credit.
+
+    Only a valid literal write in the matching open actual accounting frame
+    avoids this emitter's NEW UNKNOWN. Missing/bad context, unsupported writes
+    and capacity loss remain UNKNOWN. No BEFORE refusal bit is removed.
+    An exact root-owned ticket/span and BOTH genuine owners are still required.
+    """
+    bound = _registered_bound(tape, context)
+    requested = _boolean(eligible, tape.count.shape)
+    result, valid = _record(tape, actor_side, actor_physical, target_physical,
+        move, write, context.data, eligible=requested & bound)
+    return _unknown(result, requested & ~(bound & valid))
 
 
 def record_direct_hit_controls(tape, actor_side, actor_physical, target_physical,
