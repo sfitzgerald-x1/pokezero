@@ -130,6 +130,9 @@ class Ledger(NamedTuple):
     event_turn: object
     event_phase: object
     event_generation: object
+    no_output_kind: object            # 0 positive span; 1 typed full-HP Leftovers
+    no_output_facts: object           # physical,item,hp,max,status,residual_event
+    no_output_binding: object         # original source-specific compiler binding
 
 
 class Ticket(NamedTuple):
@@ -258,13 +261,73 @@ def capture_status_residual_write(tape, ticket, *, requested, positive_write):
     return _put_context(tape,ledger,context)
 
 
+def capture_leftovers_full_hp(tape,receipt,*,no_output_tables):
+    """Capture ONLY the typed actual full-HP Leftovers branch, never a generic empty span.
+
+    The source-specific producer must run before/after the SAME numerical write.
+    This records branch facts at stage2; both genuine owner consumers still have
+    to drain the entire frame before stage3. Prior failures are never cleared.
+    """
+    from . import engine_leftovers_no_output as no_output
+    if type(receipt) is not no_output.Receipt or type(receipt.before) is not no_output.Before:
+        raise ValueError('source-specific full-HP Leftovers receipt required')
+    context,namespace=no_output._context(tape,no_output_tables)
+    ledger=context.ledger;before=receipt.before;slot,same=_ticket(ledger,before.ticket)
+    b=ledger.stream_id.shape[0];rows=jnp.arange(b)
+    if not no_output.leftovers._check(before.tape,no_output_tables.leftovers):
+        raise ValueError('actual retained full-HP BEFORE tape required')
+    _shape(before.binding,(8,),jnp.uint32);_shape(before.requested,(b,),jnp.bool_)
+    for name in ('ledger_count','next_serial','residual_event','side','physical','item','hp','maximum','status','reason'):
+        _shape(getattr(before,name),(b,),jnp.int32)
+    for name in ('after_count','after_hp','after_maximum','after_status','after_item','after_physical',
+                 'upstream_refusal','reason'):
+        _shape(getattr(receipt,name),(b,),jnp.int32)
+    namespace &= jnp.all(before.binding==no_output_tables.binding)
+    same &= ((before.tape.stream_id==tape.stream_id)&(before.tape.turn==tape.turn)
+        &(before.tape.refusal==tape.refusal))
+    for name in ('words','event_turn','event_phase','event_generation','switch_details'):
+        old,new=getattr(before.tape,name),getattr(tape,name)
+        _shape(old,new.shape,new.dtype)
+        same &= jnp.all(old==new,axis=tuple(range(1,new.ndim)))
+    for old,new in zip(before.tape.cursor,tape.cursor):
+        same &= jnp.all(old==new,axis=tuple(range(1,new.ndim))) if new.ndim>1 else old==new
+    for name in ('engine_binding','source_binding','move_binding','producer_binding'):
+        namespace &= jnp.all(getattr(before.tape,name)==getattr(tape,name))
+    same &= ((ledger.site[rows,slot]==int(Site.LEFTOVERS))&(ledger.side[rows,slot]==before.side)
+        &(ledger.stage[rows,slot]==1)&(ledger.start[rows,slot]==before.tape.count)
+        &(ledger.end[rows,slot]==before.tape.count)&(tape.count==before.tape.count)
+        &(ledger.count==before.ledger_count)&(ledger.next_serial==before.next_serial)
+        &(ledger.turn[rows,slot]==tape.cursor.turn)&(ledger.phase[rows,slot]==tape.cursor.phase)
+        &jnp.all(ledger.generation[rows,slot]==tape.cursor.generation,axis=1))
+    same &= ((receipt.after_count==tape.count)&(receipt.after_hp==before.hp)
+        &(receipt.after_maximum==before.maximum)&(receipt.after_status==before.status)
+        &(receipt.after_item==before.item)&(receipt.after_physical==before.physical))
+    facts=jnp.stack((before.physical,before.item,before.hp,before.maximum,before.status,before.residual_event),axis=1)
+    specific=((before.residual_event>=2)&(before.residual_event<4)&(before.side==before.residual_event%2)
+        &(before.physical>=0)&(before.physical<6)&(before.item==no_output_tables.leftovers.leftovers_item)
+        &(before.item>0)&(before.hp>0)&(before.hp==before.maximum)&(before.status>=0)&(before.status<7))
+    good=namespace&same&specific&(before.reason==0)&(receipt.reason==0)
+    use=before.requested&good
+    ledger=unhandled(ledger,before.ticket,active=before.requested&~good,tables=context.tables)
+    def put(array,value):
+        old=array[rows,slot]
+        return array.at[rows,slot].set(jnp.where(use.reshape((b,)+(1,)*(old.ndim-1)),value,old))
+    ledger=ledger._replace(stage=put(ledger.stage,jnp.full(b,2,jnp.int32)),
+        no_output_kind=put(ledger.no_output_kind,jnp.ones(b,jnp.int32)),
+        no_output_facts=put(ledger.no_output_facts,facts),
+        no_output_binding=put(ledger.no_output_binding,jnp.broadcast_to(no_output_tables.binding,(b,8))),
+        upstream_refusal=ledger.upstream_refusal|jnp.where(before.requested,receipt.upstream_refusal|tape.refusal,0))
+    return _put_context(tape,ledger,context)
+
+
 def join_consumed_owners(first, second, *, tables):
     """Credit comes from TWO genuine consume_frame calls, never an input bool."""
     a,b=report(first,tables=tables),report(second,tables=tables)
     same=((first.frame==second.frame)&(first.stream_id==second.stream_id)
         & (first.count==second.count)&(first.next_serial==second.next_serial))
     for name in ('site','side','serial','start','end','turn','phase','generation','claimed','words',
-                 'event_turn','event_phase','event_generation'):
+                 'event_turn','event_phase','event_generation','no_output_kind','no_output_facts',
+                 'no_output_binding'):
         same &= jnp.all((getattr(first,name)==getattr(second,name)).reshape((first.stream_id.shape[0],-1)),axis=1)
     good=a.scoped_drained & b.scoped_drained & same
     joined=first._replace(stage=jnp.minimum(first.stage,second.stage),opened=first.opened|second.opened,
@@ -287,7 +350,8 @@ def initialize(stream_ids, *, compiled, capacity=16, receipt_capacity=64):
     z = lambda *shape: jnp.zeros(shape, jnp.int32)
     return Ledger(stream_ids, tables.inventory_binding, z(b), jnp.zeros(b, bool), z(b), z(b), z(b), z(b),
         *[z(b, capacity) for _ in range(8)], z(b, capacity, 2), z(b, receipt_capacity),
-        z(b, receipt_capacity, 10), z(b, receipt_capacity), z(b, receipt_capacity), z(b, receipt_capacity, 2))
+        z(b, receipt_capacity, 10), z(b, receipt_capacity), z(b, receipt_capacity), z(b, receipt_capacity, 2),
+        z(b,capacity),z(b,capacity,6),jnp.zeros((b,capacity,8),jnp.uint32))
 
 
 def _validate(ledger, tables):
@@ -306,10 +370,14 @@ def _validate(ledger, tables):
     _shape(ledger.claimed, (b, c), jnp.int32); _shape(ledger.words, (b, c, 10), jnp.int32)
     _shape(ledger.event_turn, (b, c), jnp.int32); _shape(ledger.event_phase, (b, c), jnp.int32)
     _shape(ledger.event_generation, (b, c, 2), jnp.int32)
+    _shape(ledger.no_output_kind,(b,k),jnp.int32)
+    _shape(ledger.no_output_facts,(b,k,6),jnp.int32)
+    _shape(ledger.no_output_binding,(b,k,8),jnp.uint32)
     return (jnp.all(ledger.inventory_binding == tables.inventory_binding)
         & (ledger.stream_id>0) & (ledger.frame>=0) & (ledger.next_serial>=0)
         & (ledger.count>=0) & (ledger.count<=k)
         & jnp.all((ledger.stage>=0)&(ledger.stage<=3),axis=1)
+        & jnp.all((ledger.no_output_kind>=0)&(ledger.no_output_kind<=1),axis=1)
         & jnp.all((ledger.claimed>=0)&(ledger.claimed<=k),axis=1))
 
 
@@ -433,7 +501,7 @@ def emitted(ledger, ticket, tape, *, active, tables):
 
 
 def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapter_tables, catalog,
-                         weather_hp=None, leftovers=None, status_residual=None):
+                         weather_hp=None, leftovers=None, status_residual=None,leftovers_no_output=None):
     """Trusted owning closure: actually project/fold before resolving ANY span.
 
     Dynamic objects remain trusted same-core inputs, as in the original full
@@ -462,7 +530,25 @@ def consume_frame_device(ledger, frame, stream, public, *, active, tables, adapt
     drained &= (projection.state.causal.cursor.stream_id==ledger.stream_id)
     drained &= jnp.where(jnp.any(claimed,axis=1),emitted_count>0,True)
     present=jnp.arange(ledger.stage.shape[1])[None,:]<ledger.count[:,None]
-    all_emitted=jnp.all(~present | (ledger.stage==2),axis=1)
+    positive=(ledger.no_output_kind==0)&(ledger.end>ledger.start)
+    silent=jnp.zeros_like(positive)
+    if leftovers_no_output is not None:
+        from . import engine_leftovers_no_output as no_output
+        if type(leftovers_no_output) is not no_output.Tables:
+            raise ValueError('original typed Leftovers no-output tables required')
+        _shape(leftovers_no_output.binding,(8,),jnp.uint32)
+        source_same=jnp.array(True)
+        for actual,expected in zip(leftovers_no_output.accounting,tables):source_same &= jnp.all(actual==expected)
+        facts=ledger.no_output_facts
+        silent=((ledger.no_output_kind==1)&(ledger.site==int(Site.LEFTOVERS))
+            &(ledger.end==ledger.start)&source_same
+            &jnp.all(ledger.no_output_binding==leftovers_no_output.binding[None,None,:],axis=2)
+            &(facts[:,:,0]>=0)&(facts[:,:,0]<6)&(facts[:,:,1]==leftovers_no_output.leftovers.leftovers_item)
+            &(facts[:,:,1]>0)&(facts[:,:,2]>0)&(facts[:,:,2]==facts[:,:,3])
+            &(facts[:,:,4]>=0)&(facts[:,:,4]<7)&(facts[:,:,5]>=2)&(facts[:,:,5]<4)
+            &(ledger.side==facts[:,:,5]%2))
+    captured=(ledger.stage==2)&(ledger.start>=0)&(ledger.end<=tape.count[:,None])&(positive|silent)
+    all_emitted=jnp.all(~present|captured,axis=1)
     good=ns & ledger.opened & exact & all_emitted & drained
     candidate=ledger._replace(stage=jnp.where(present,3,ledger.stage),opened=jnp.zeros(b,bool),
         upstream_refusal=ledger.upstream_refusal|tape.refusal)

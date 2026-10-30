@@ -333,6 +333,13 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                 or type(_leftovers_context.data) is not leftovers_callbacks.Data):
             raise ValueError('typed owning lifecycle Leftovers context required')
         if _leftovers_registered:
+            if _leftovers_context.no_output_tables is not None:
+                from . import engine_leftovers_no_output as _leftovers_no_output
+                if (type(_leftovers_context.no_output_tables) is not _leftovers_no_output.Tables
+                        or _leftovers_context.no_output_tables.leftovers is not _leftovers_context.data
+                        or _leftovers_context.no_output_tables.profile is not _leftovers_context.weather_profile_data
+                        or getattr(_public_trace,'execution',None) is None):
+                    raise ValueError('original no-output metadata and actual owning accounting required')
             from . import engine_weather_speed_profile as weather_speed_profile
             if (type(_leftovers_context.weather_profile_data) is not weather_speed_profile.ProfileData
                     or type(_weather_hp_context) is not tuple or len(_weather_hp_context)!=2
@@ -1115,6 +1122,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                     execution_accounting.Site.PINCH_ITEM,side,
                     active=eligible & heal_event & (hp>0)
                     & (hp*4<=_active(work.max_hp,work,side)) & (table.items.pinch_stat[_execution_item]>=0))
+                if _leftovers_context is not None:
+                    if _leftovers_registered and _leftovers_context.no_output_tables is not None:
+                        _execution_full_hp_before=_leftovers_no_output.capture_before_device(
+                            _public_trace,_execution_leftovers_ticket,work,event,_weather_hp_record,
+                            _leftovers_context.no_output_tables,
+                            requested=_execution_leftovers_requested&(hp==_active(work.max_hp,work,side)))
             healed = held.leftovers_heal(table.items,_active(work.item,work,side),hp,
                 _active(work.max_hp,work,side),eligible=eligible & heal_event)
             item,boosts=held.consume_pinch(table.items,_active(work.item,work,side),
@@ -1155,6 +1168,16 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
             _active(work.status_counter, work, side), active=eligible & status_event)
         work = work._replace(hp=_set_active(work.hp, work, side,jnp.where(heal_event,healed,residual.hp)),
             status_counter=_set_active(work.status_counter, work, side, residual.counter))
+        if _leftovers_context is not None:
+            if _leftovers_registered and _leftovers_context.no_output_tables is not None:
+                if table.items is not None:
+                    _execution_full_hp_after=_leftovers_no_output.finish_device(_execution_full_hp_before,
+                        _public_trace,work,_weather_hp_record,_leftovers_context.no_output_tables)
+                    _public_trace=execution_accounting.capture_leftovers_full_hp(_public_trace,
+                        _execution_full_hp_after,no_output_tables=_leftovers_context.no_output_tables)
+                    # Only this exact entered full-HP branch uses its typed
+                    # no-output receipt; failed proofs remain sticky/unhandled.
+                    _execution_leftovers_requested &= ~_execution_full_hp_before.requested
         if _status_residual_context is not None:
             # Read AFTER the SAME HP/counter write, before later handlers. No
             # damage/stage formula, final-state reconstruction or faint event.

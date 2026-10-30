@@ -269,7 +269,7 @@ def _public(observer, frame, tables, context, catalog):
 
 
 def _full_public(observer, frame, tables, catalog, consume, *, weather_hp=None, leftovers=None, active=None,
-                 execution_tables=None,status_residual=None):
+                 execution_tables=None,status_residual=None,leftovers_no_output=None):
     """Consume genuine full-format controls without relabeling basic state."""
     kwargs = dict(weather_hp=weather_hp)
     if leftovers is not None:
@@ -278,6 +278,8 @@ def _full_public(observer, frame, tables, catalog, consume, *, weather_hp=None, 
         kwargs['status_residual'] = status_residual
     accounting=observer.accounting
     if execution_tables is None:
+        if leftovers_no_output is not None:
+            raise ValueError('Leftovers no-output requires actual owning accounting')
         result = consume(observer.projection, frame, tables, observer.retained, catalog, **kwargs)
     else:
         if type(frame.callbacks.execution) is not execution.Context:
@@ -294,7 +296,7 @@ def _full_public(observer, frame, tables, catalog, consume, *, weather_hp=None, 
         accounting,result=execution.consume_frame_device(ledger,frame,
             observer.projection,observer.retained,active=active,tables=execution_tables,
             adapter_tables=tables,catalog=catalog,weather_hp=weather_hp,leftovers=leftovers,
-            status_residual=status_residual)
+            status_residual=status_residual,leftovers_no_output=leftovers_no_output)
     projection = result.projection
     healthy = observer.retained_healthy & (projection.error == 0) & projection.component_admitted
     return observer._replace(projection=projection.state, retained=result.public,
@@ -422,7 +424,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         species_catalog=catalog.species, source=catalog.source, context_tables=context)
     check_public, register_public = public.check_projector, public.register
     public_fast = lambda obs, frame, profile: _public(obs, frame, public_handle.device, context, catalog)
-    speed_profile=None;execution_compiled=None
+    speed_profile=None;execution_compiled=None;no_output_compiled=None
     if public_mode == 'retained-full':
         from . import engine_full_v4_event_device as full
         public_handle = full.compile_adapter(json.loads(request['metadata']), base_handle, catalog=catalog)
@@ -434,12 +436,18 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
                 status_data,speed_profile.device)
         if leftovers_mode == 'retained':
             leftovers_context=leftovers_callbacks.RegisteredLeftoversContext(data,speed_profile.device)
-        if account_source_sites:execution_compiled=execution.compile_accounting(public_handle)
+        if account_source_sites:
+            from . import engine_leftovers_no_output as no_output
+            execution_compiled=execution.compile_accounting(public_handle)
+            no_output_compiled=no_output.compile_no_output(leftovers_compiled,
+                profile=speed_profile,accounting_compiled=execution_compiled)
+            leftovers_context=leftovers_context._replace(no_output_tables=no_output_compiled.device)
         public_fast = lambda obs, frame, profile, active=None: _full_public(obs, frame, public_handle.device,
             catalog, full.project_and_fold,weather_hp=(profile,speed_profile.device),
             leftovers=None if leftovers_mode == 'diagnostic' else leftovers_context.data,active=active,
             execution_tables=None if execution_compiled is None else execution_compiled.device,
-            status_residual=None if status_residual_mode=='diagnostic' else status_residual_context.data)
+            status_residual=None if status_residual_mode=='diagnostic' else status_residual_context.data,
+            leftovers_no_output=None if no_output_compiled is None else no_output_compiled.device)
     static = (request['rules'].device, request['adapter'].device,
         team._checked_tables(request['private_team']), request['catalog'].device, request['engine_table'])
     payload = dict(schema=SCHEMA, metadata=json.loads(request['metadata']), lifecycle=request['lifecycle'].binding,
@@ -450,6 +458,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         payload['leftovers_binding']=np.asarray(leftovers_context.data.binding).tolist()
         payload['leftovers_mode']=leftovers_mode
     if execution_compiled is not None:payload['execution_inventory']=np.asarray(execution_compiled.device.inventory_binding).tolist()
+    if no_output_compiled is not None:payload['leftovers_no_output_binding']=np.asarray(no_output_compiled.device.binding).tolist()
     if status_residual_context is not None:
         payload['status_residual_binding']=np.asarray(status_residual_context.data.binding).tolist()
         payload['status_residual_mode']=status_residual_mode
@@ -460,6 +469,7 @@ def prepare(request_compiled, own_compiled, *, fake_forward, public_mode='basic'
         public_mode=public_mode, check_public=check_public, register_public=register_public,
         speed_profile=speed_profile,leftovers_compiled=leftovers_compiled,
         leftovers_mode=leftovers_mode,leftovers_context=leftovers_context,execution_compiled=execution_compiled,
+        no_output_compiled=no_output_compiled,
         status_residual_compiled=status_residual_compiled,status_residual_context=status_residual_context,
         status_residual_mode=status_residual_mode,
         retain_speed=None if speed_profile is None else jax.jit(lambda profile,state,streams:
@@ -490,6 +500,9 @@ def _checked(prepared):
     source._checked(r['request_compiled'])
     r['check_public'](r['public'])
     if r['execution_compiled'] is not None:execution._checked(r['execution_compiled'])
+    if r['no_output_compiled'] is not None:
+        from . import engine_leftovers_no_output as no_output
+        no_output.check_compiled(r['no_output_compiled'])
     if r['speed_profile'] is not None:weather_speed.check_profile(r['speed_profile'])
     if r['leftovers_compiled'] is not None:
         from . import engine_leftovers_callbacks as leftovers_callbacks

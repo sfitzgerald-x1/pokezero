@@ -50,6 +50,7 @@ class RegisteredLeftoversContext(NamedTuple):
     """
     data: object
     weather_profile_data: object
+    no_output_tables: object = None  # original source-specific compiler, owning accounting only
 
 
 def retain_profile_device(record, state, streams, data, *, eligible):
