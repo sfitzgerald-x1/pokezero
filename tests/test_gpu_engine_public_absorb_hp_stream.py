@@ -24,11 +24,14 @@ class AbsorbHPStreamTests(unittest.TestCase):
         rows = {}
         profiles = (('Plusle', 'Plus', ('Thunderbolt', 'Surf')),
             ('Jolteon', 'Volt Absorb', ('Thunderbolt',)),
-            ('Vaporeon', 'Water Absorb', ('Surf',)))
+            ('Vaporeon', 'Water Absorb', ('Surf',)),
+            ('Gardevoir', 'Trace', ('Surf',)),
+            ('Lanturn', 'Volt Absorb', ('Thunderbolt', 'Surf')))
         for name, ability, moves in profiles:
-            variant = Gen3RandbatVariant(name, 'synthetic', name, 'synthetic', 80,
+            level = 79 if name == 'Gardevoir' else 82 if name == 'Lanturn' else 80
+            variant = Gen3RandbatVariant(name, 'synthetic', name, 'synthetic', level,
                 moves, ability, 'Leftovers')
-            rows[name.lower()] = Gen3RandbatSpeciesUniverse(name, 80, (variant,))
+            rows[name.lower()] = Gen3RandbatSpeciesUniverse(name, level, (variant,))
         raw = Gen3RandbatSource(RandbatSourceMetadata('gen3randombattle', 3,
             None, None, None, 'synthetic-absorb-hp-stream'), rows)
         source = public_belief.compile_source(raw)
@@ -37,7 +40,7 @@ class AbsorbHPStreamTests(unittest.TestCase):
             'Special', 95, 100, 0, False, False, False, 'par', {}, 'normal', False, pp=15)
         species = dict(base.inputdex.species)
         for name, types in (('plusle', ('Electric',)), ('jolteon', ('Electric',)),
-                             ('vaporeon', ('Water',))):
+                             ('vaporeon', ('Water',)), ('lanturn', ('Water', 'Electric'))):
             species[name] = SpeciesInfo(name, name.title(), types,
                 dict(hp=65, atk=65, **{'def': 65}, spa=110, spd=95, spe=130), 25.)
         dex = ShowdownDex(moves, species, base.inputdex.type_chart)
@@ -114,9 +117,9 @@ class AbsorbHPStreamTests(unittest.TestCase):
             stats=dict(atk=150, **{'def': 160}, spa=170, spd=180, spe=190))]),
             active=[dict(moves=own_moves)])
 
-    def assert_source_parity(self, state, lines, owner, name, ability):
+    def assert_source_parity(self, state, lines, owner, name, ability, *, request=None):
         from pokezero import showdown
-        request = self.request(owner, name, ability)
+        request = self.request(owner, name, ability) if request is None else request
         own = self.e.parse_own_requests(self.catalog, [request], owner_sides=[owner])
         encoded = type(self).encode(state, own, self.j.array([owner], self.j.int32))
         actual = encoded.observation
@@ -173,6 +176,117 @@ class AbsorbHPStreamTests(unittest.TestCase):
         self.assertEqual(mask.shape, (len(self.catalog.abilities.names),))
         self.assertEqual({self.catalog.abilities.names[i] for i in np.flatnonzero(mask)},
             {'voltabsorb', 'waterabsorb'})
+
+    def context_request(self, owner, *, borrowed):
+        """Only source-consistent own rows; Trace keeps its base ability."""
+        name, ability = ('Gardevoir', 'Trace') if borrowed else ('Lanturn', 'Volt Absorb')
+        packet = self.request(owner, name, ability)
+        row = packet['side']['pokemon'][0]
+        if owner == 0 and borrowed:
+            row.update(ident='p1: Vaporeon', details='Vaporeon, L80', baseAbility='Water Absorb', moves=['Surf'])
+            row.pop('ability')
+            maximum = int(self.catalog.dex.moves['surf'].pp * 8 // 5)
+            packet['active'][0]['moves'] = [dict(id='surf', pp=maximum - 1, maxpp=maximum)]
+        elif owner == 0:
+            # This control used Thunderbolt, with no prior Surf charge.
+            packet['active'][0]['moves'][1]['pp'] = packet['active'][0]['moves'][1]['maxpp']
+        else:
+            row.update(details=name + (', L79' if borrowed else ', L82'),
+                condition='237/237 slp' if borrowed else '229/339', baseAbility=ability)
+            row.pop('ability')
+            if not borrowed:
+                row['moves'] = ['Thunderbolt', 'Surf']
+                packet['active'][0]['moves'] = [dict(id=move.lower(),
+                    pp=int(self.catalog.dex.moves[move.lower()].pp * 8 // 5),
+                    maxpp=int(self.catalog.dex.moves[move.lower()].pp * 8 // 5)) for move in row['moves']]
+            bench = dict(row, ident='p2: Jolteon' if borrowed else 'p2: Vaporeon',
+                details='Jolteon, L80' if borrowed else 'Vaporeon, L80',
+                condition='227/227' if borrowed else '240/240', active=False,
+                baseAbility='Volt Absorb' if borrowed else 'Water Absorb',
+                moves=['Thunderbolt'] if borrowed else ['Surf'])
+            packet['side']['pokemon'].append(bench)
+        return packet
+
+    def test_borrowed_water_absorb_sleeping_reentry_with_spikes_both_owners(self):
+        from pokezero import showdown
+        from pokezero.belief import PublicBattleBeliefEngine
+        from gpu_engine import public_mon_state
+        trace = '|-ability|p2a: Gardevoir|Water Absorb|Trace|[from] ability: Trace|[of] p1a: Vaporeon'
+        for owner in (0, 1):
+            with self.subTest(owner=owner):
+                full = '100/100' if owner == 0 else '237/237'
+                hurt = '88/100' if owner == 0 else '208/237'
+                lines = ['|switch|p1a: Vaporeon|Vaporeon, L80|' + ('200/200' if owner == 0 else '100/100'),
+                    '|switch|p2a: Gardevoir|Gardevoir, L79|' + full, trace,
+                    '|-status|p2a: Gardevoir|slp',
+                    '|switch|p2a: Jolteon|Jolteon, L80|' + ('100/100' if owner == 0 else '227/227'),
+                    '|-sidestart|p2: Two|Spikes', '|turn|1',
+                    '|switch|p2a: Gardevoir|Gardevoir, L79|' + full + ' slp',
+                    '|-damage|p2a: Gardevoir|' + hurt + ' slp|[from] Spikes', trace,
+                    '|move|p1a: Vaporeon|Surf|p2a: Gardevoir',
+                    '|-heal|p2a: Gardevoir|' + full + ' slp|[from] ability: Water Absorb|[of] p1a: Vaporeon',
+                    '|', '|upkeep', '|turn|2']
+                engine = PublicBattleBeliefEngine(format_id='gen3randombattle', set_source=self.raw)
+                state, host = self.initial(owner), self.w.WireState()
+                water = self.catalog.abilities.ability_id('Water Absorb')
+                original = None
+                for line in lines:
+                    host, projections = self.projections([line], host)
+                    for chunk in self.chunks(projections):
+                        state, error = type(self).step(state, chunk)
+                        self.assertEqual(error.tolist(), [0], line)
+                    engine.ingest_event(showdown._public_event_from_line(line))
+                    if line == trace:
+                        self.assertEqual(int(state.context.abilities.running[0, 1, 0]), water)
+                        self.assertEqual(int(state.context.abilities.traced[0, 1]), water)
+                        self.assertEqual(int(state.context.abilities.original[0, 0, 0]), water)
+                        original = int(state.context.abilities.original[0, 1, 0])
+                        self.assertEqual(original, 0)  # No original-ability declaration was emitted.
+                    if line.startswith('|-damage|'):
+                        self.assertEqual(int(state.mons.hp_numerator[0, 1, 0]), 88 if owner == 0 else 208)
+                    if line.startswith('|-heal|'):
+                        self.assertIsNotNone(original)
+                        self.assertEqual(int(state.context.abilities.original[0, 1, 0]), original)
+                        self.assertEqual(int(state.context.abilities.running[0, 1, 0]), water)
+                tracer = engine.snapshot().side('p2')[0]
+                self.assertIsNone(tracer.revealed_ability)
+                self.assertEqual(tracer.possible_abilities, ('Trace',))
+                self.assertEqual(engine._running_ability[tracer.key], 'Water Absorb')
+                self.assertEqual(int(state.mons.status[0, 1, 0]), public_mon_state.SLEEP)
+                self.assertEqual(int(state.context.field.spikes[0, 1]), 1)
+                packet = self.context_request(owner, borrowed=True)
+                self.assert_source_parity(state, lines, owner, 'Gardevoir', 'Trace', request=packet)
+                # Parsing the owning request cannot poison the public original set.
+                self.assertEqual(int(state.context.abilities.original[0, 1, 0]), original)
+
+    def test_volt_absorb_after_switch_and_spikes_both_owners(self):
+        for owner in (0, 1):
+            with self.subTest(owner=owner):
+                lines = ['|switch|p1a: Plusle|Plusle, L80|' + ('200/200' if owner == 0 else '100/100'),
+                    '|switch|p2a: Vaporeon|Vaporeon, L80|' + ('100/100' if owner == 0 else '240/240'),
+                    '|-sidestart|p2: Two|Spikes', '|-sidestart|p2: Two|Spikes', '|turn|1',
+                    '|switch|p2a: Lanturn|Lanturn, L82|' + ('54/100' if owner == 0 else '180/339'),
+                    '|-damage|p2a: Lanturn|' + ('37/100' if owner == 0 else '124/339') + '|[from] Spikes',
+                    '|move|p1a: Plusle|Thunderbolt|p2a: Lanturn',
+                    '|-heal|p2a: Lanturn|' + ('62/100' if owner == 0 else '208/339') +
+                        '|[from] ability: Volt Absorb|[of] p1a: Plusle',
+                    '|', '|-heal|p2a: Lanturn|' + ('68/100' if owner == 0 else '229/339') +
+                        '|[from] item: Leftovers', '|upkeep', '|turn|2']
+                state, host = self.initial(owner), self.w.WireState()
+                for line in lines:
+                    host, projections = self.projections([line], host)
+                    for chunk in self.chunks(projections):
+                        state, error = type(self).step(state, chunk)
+                        self.assertEqual(error.tolist(), [0], line)
+                    if line.startswith('|-damage|'):
+                        self.assertEqual(int(state.mons.hp_numerator[0, 1, 1]), 37 if owner == 0 else 124)
+                    if '[from] ability:' in line:
+                        self.assertEqual(int(state.mons.hp_numerator[0, 1, 1]), 62 if owner == 0 else 208)
+                self.assertEqual(int(state.context.field.spikes[0, 1]), 2)
+                self.assertEqual(int(state.context.abilities.original[0, 1, 1]),
+                    self.catalog.abilities.ability_id('Volt Absorb'))
+                packet = self.context_request(owner, borrowed=False)
+                self.assert_source_parity(state, lines, owner, 'Lanturn', 'Volt Absorb', request=packet)
 
     def test_missing_duplicate_wrong_identity_and_downgraded_frames_roll_back(self):
         before, frame, _, _ = self.before_heal(declared=True)
