@@ -232,6 +232,30 @@ def capture_leftovers_write(tape, ticket, *, requested, positive_write):
     return _put_context(tape,ledger,context)
 
 
+def capture_status_residual_write(tape, ticket, *, requested, positive_write):
+    """Map this actual STATUS attempt only to one nonlethal BRN/PSN kind20.
+
+    This is exact span capture, not consumption credit. TOX, no-output, lethal,
+    malformed and missing spans stay unhandled. Genuine full consumption by
+    both owning perspectives is still required; prior refusals never clear.
+    """
+    context=_context(tape)
+    if context is None:return tape
+    ledger=context.ledger;slot,same=_ticket(ledger,ticket);rows=jnp.arange(tape.count.shape[0])
+    _shape(requested,tape.count.shape,jnp.bool_);_shape(positive_write,tape.count.shape,jnp.bool_)
+    start=ledger.start[rows,slot];index=jnp.clip(start,0,tape.words.shape[1]-1)
+    raw=tape.words[rows,index]
+    brn_psn=((raw[:,8]==2)&(raw[:,9]==1))|((raw[:,8]==3)&(raw[:,9]==2))
+    semantic=(same & (ledger.site[rows,slot]==int(Site.STATUS_RESIDUAL)) & (tape.count==start+1)
+        & (raw[:,0]==20)&(raw[:,3]==ledger.side[rows,slot])&brn_psn
+        & (raw[:,1]>=0)&(raw[:,1]<=15)&(raw[:,2]==raw[:,1])
+        & (raw[:,4]>=0)&(raw[:,4]<6)&(raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5]))
+    accepted=requested & positive_write & semantic
+    ledger=unhandled(ledger,ticket,active=requested&~(positive_write&semantic),tables=context.tables)
+    ledger=emitted(ledger,ticket,tape,active=accepted,tables=context.tables)
+    return _put_context(tape,ledger,context)
+
+
 def join_consumed_owners(first, second, *, tables):
     """Credit comes from TWO genuine consume_frame calls, never an input bool."""
     a,b=report(first,tables=tables),report(second,tables=tables)
