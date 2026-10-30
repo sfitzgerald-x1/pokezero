@@ -59,6 +59,68 @@ def observation(seat, marker):
 
 
 class MirrorContractTests(unittest.TestCase):
+    def test_champion_warmstart_preserves_exact_masked_mean_predictions(self):
+        import torch
+        from types import SimpleNamespace
+        from pokezero.mirror_value_probe import champion_linear_head
+        from pokezero.neural_policy import _masked_mean
+        torch.manual_seed(19)
+        model = SimpleNamespace(value_head=torch.nn.Linear(512, 1),
+            config=SimpleNamespace(value_activation="tanh"))
+        tokens = torch.randn(17, 23, 512)
+        valid = torch.rand(17, 23) > .2
+        head = champion_linear_head(model)
+        expected = torch.tanh(model.value_head(_masked_mean(tokens, valid)).squeeze(-1))
+        self.assertTrue(torch.equal(head(tokens, valid)[0], expected))
+        self.assertEqual(sum(p.numel() for p in head.parameters()), 513)
+        self.assertTrue(torch.equal(head.network.weight, model.value_head.weight))
+        self.assertTrue(torch.equal(head.network.bias, model.value_head.bias))
+
+    def test_true_moves_canonical_pp_pressure_and_transform_scope(self):
+        from types import SimpleNamespace as NS
+        from pokezero.mirror_value_probe import true_move_facts
+        initial = {"side": {"pokemon": [dict(ident="p2: " + str(i), moves=["transform"] if i == 0 else
+            ["hiddenpowerice", "return102"] if i == 1 else ["surf"]) for i in range(6)]}}
+        current = json.loads(json.dumps(initial["side"]["pokemon"]))
+        current[0].update(active=True, moves=["surf", "icebeam"])
+        team = [NS(ident=r["ident"], species="species" + str(i)) for i, r in enumerate(current)]
+        ledger = [NS(species="species" + str(i), transformed=(i == 0), move_uses=
+            (("hiddenpowerice", 2), ("return", 3)) if i == 1 else (("transform", 1),) if i == 0 else ()) for i in range(6)]
+        request = dict(side=dict(pokemon=current), active=[dict(moves=[dict(id="surf", pp=3, maxpp=5), dict(id="icebeam", pp=4, maxpp=5)])])
+        state = NS(request=request, self_team=team, belief_view=NS(self_pokemon=ledger))
+        dex = NS(move_info=lambda _: NS(max_pp=16))
+        facts = true_move_facts(state, initial, dex)
+        self.assertEqual(facts[0], dict(icebeam=.8, surf=.6))
+        self.assertEqual(facts[1], dict(hiddenpowerice=14/16, **{"return": 13/16}))
+        # A copied set in an old side snapshot cannot survive switch-out.
+        current[0]["active"] = False
+        facts = true_move_facts(state, initial, dex)
+        self.assertEqual(facts[0], dict(transform=15/16))
+        # Current active Hidden Power base id maps back to its typed true set.
+        current[1]["active"] = True
+        state.request["active"] = [dict(moves=[dict(id="hiddenpower", pp=7, maxpp=24), dict(id="return", pp=2, maxpp=32)])]
+        facts = true_move_facts(state, initial, dex)
+        self.assertEqual(facts[1], dict(hiddenpowerice=7/24, **{"return": 2/32}))
+
+    def test_actual_owning_wire_fold_has_no_other_request_or_omniscient_hp(self):
+        from pokezero.local_showdown import LocalShowdownConfig
+        from pokezero.mirror_value_probe import make_owning_wire_env
+        env = make_owning_wire_env(LocalShowdownConfig(set_belief_source=False))
+        env._battle_token = "b1"
+        try:
+            env._apply_event(dict(type="stream", battleId="b1", stream="omniscient", lines=["|-damage|p2a: Test|277/333"]))
+            for seat in ("p1", "p2"):
+                request = "|request|" + json.dumps(dict(side=dict(id=seat, pokemon=[])))
+                env._apply_event(dict(type="stream", battleId="b1", stream=seat, lines=["", "|turn|1", request]))
+            for seat, observer in env.public_observers.items():
+                self.assertEqual(observer._lines, env.owning_lines[seat])
+                self.assertEqual(set(observer._latest_requests), {seat})
+                self.assertFalse(any("277/333" in line for line in observer._lines))
+                self.assertEqual(observer._parser.hp_visibility[seat], "exact")
+                self.assertEqual(observer._parser.hp_visibility["p2" if seat == "p1" else "p1"], "percentage")
+        finally:
+            env.close()
+
     def test_failed_initializer_surfaces_once_per_worker_without_pool_restarts(self):
         scripts = str(Path(__file__).resolve().parents[1] / "scripts")
         if scripts not in sys.path:
@@ -102,12 +164,17 @@ class MirrorContractTests(unittest.TestCase):
 
     def test_refit_parameters_do_not_depend_on_heldout_test_outcomes(self):
         import torch
+        from types import SimpleNamespace
         repo = Path(__file__).resolve().parents[1]
         spec = importlib.util.spec_from_file_location("mirror_runner", repo / "scripts/run_mirror_value_probe.py")
         runner = importlib.util.module_from_spec(spec); spec.loader.exec_module(runner)
-        def fixture(root, flip):
+        torch.manual_seed(4)
+        model = torch.nn.Module()
+        model.value_head = torch.nn.Linear(4, 1)
+        model.config = SimpleNamespace(value_activation="tanh")
+        def fixture(root, flip, checkpoint):
             root.mkdir()
-            config = dict(root="synthetic-refit-fixture", battles=16, champion_sha256=CHAMPION_SHA)
+            config = dict(root="synthetic-refit-fixture", battles=16, champion_sha256=CHAMPION_SHA, checkpoint=str(checkpoint), probe_contract="owning-wire-true-moves-champion-linear-v2")
             rows = cohort(config["root"], 16)
             receipts, hashes = [], {}
             for row in rows:
@@ -116,13 +183,17 @@ class MirrorContractTests(unittest.TestCase):
                 y, status = terminal_labels(dict(winner=winner, capped=False), ["p1", "p2"])
                 rng = np.random.default_rng(row["index"])
                 x = rng.normal(size=(2, 23, 4)).astype(np.float32)
+                pooled = x.mean(1)
+                with torch.no_grad():
+                    values = torch.tanh(model.value_head(torch.from_numpy(pooled)).squeeze(-1)).numpy()
                 arrays = dict(outcomes=y, label_status=status)
                 for arm in ("public", "privileged"):
-                    arrays.update({arm + "_tokens": x, arm + "_mask": np.ones((2, 23), bool), arm + "_values": np.zeros(2, np.float32)})
+                    arrays.update({arm + "_tokens": x, arm + "_pooled": pooled,
+                        arm + "_mask": np.ones((2, 23), bool), arm + "_values": values})
                 np.savez(dest / "features.npz", **arrays)
                 (dest / "boundaries.jsonl.gz").write_bytes(b"synthetic fixture, no games")
                 receipt = dict(**row, paired_rows=2, actual_terminal=dict(winner=winner, capped=False),
-                    contract=dict(width=4), identities=[dict(root_id="fixture", seat=s, turn_number=1, decision_round_index=0) for s in ("p1", "p2")],
+                    contract=dict(width=4), identities=[dict(root_id="fixture", seat=t, turn_number=1, decision_round_index=0) for t in ("p1", "p2")],
                     files={p.name:file_sha(p) for p in dest.iterdir()})
                 write_new(dest / "battle.json", receipt)
                 hashes[f"battle-{row['index']:04d}/battle.json"] = file_sha(dest / "battle.json")
@@ -131,13 +202,14 @@ class MirrorContractTests(unittest.TestCase):
                 new_games=0, paired_rows=32, known_rows=32, unknown_rows=0)
             write_new(root / "collection.json", manifest)
         with tempfile.TemporaryDirectory() as tmp:
-            tmp = Path(tmp)
-            for label, flip in (("normal", False), ("flipped", True)):
-                root, out = tmp / label, tmp / (label + "-fit")
-                fixture(root, flip)
-                command = [sys.executable, "-c", "import importlib.util,pathlib; p=pathlib.Path('scripts/run_mirror_value_probe.py'); s=importlib.util.spec_from_file_location('runner',p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); m.fit(pathlib.Path(__import__('sys').argv[1]),pathlib.Path(__import__('sys').argv[2]),collection_sha=__import__('sys').argv[3],epochs=2,threads=1)", str(root), str(out), file_sha(root / "collection.json")]
-                completed = subprocess.run(command, cwd=repo, capture_output=True, text=True)
-                self.assertEqual(completed.returncode, 0, completed.stderr)
+            tmp = Path(tmp); checkpoint = tmp / "synthetic-champion.pt"; checkpoint.write_bytes(b"fixture")
+            with patch("pokezero.neural_policy.load_transformer_checkpoint", return_value=(model, None)), patch.object(
+                    runner, "file_sha", side_effect=lambda p: CHAMPION_SHA if Path(p) == checkpoint else file_sha(p)), patch(
+                    "torch.set_num_interop_threads"):
+                for label, flip in (("normal", False), ("flipped", True)):
+                    root, out = tmp / label, tmp / (label + "-fit")
+                    fixture(root, flip, checkpoint)
+                    runner.fit(root, out, collection_sha=file_sha(root / "collection.json"), epochs=2, threads=1)
             for arm in ("public", "privileged"):
                 a = torch.load(tmp / "normal-fit" / (arm + "-head.pt"), weights_only=True)
                 b = torch.load(tmp / "flipped-fit" / (arm + "-head.pt"), weights_only=True)
@@ -197,14 +269,17 @@ class MirrorContractTests(unittest.TestCase):
             def protocol_lines(self): return ("|turn|1",) + (() if self.round == 0 else ("|turn|2",)) + (() if self.round < 2 else ("|win|p2",))
             def step(self, actions): self.round += 1
             def close(self): pass
+            @property
+            def owning_lines(self): return {s: list(self.protocol_lines) for s in ("p1", "p2")}
+            def peer_state(self, seat): return None
         class Policy:
             def __init__(self, *a, **kw): pass
             def select_action(self, obs, **kw): return PolicyDecision(0, "fixture")
         def features(model, tensors):
             n = tensors["numeric_features"].shape[0]
             return torch.zeros((n, 23, 4)), type("Output", (), {"value": torch.zeros(n)})()
-        runtime = (torch.nn.Linear(1, 1), None, CategoryVocabulary(("pokemon:self", "pokemon:opponent")), None, {"width": 4})
-        with tempfile.TemporaryDirectory() as tmp, patch("pokezero.local_showdown.LocalShowdownEnv", Env), patch(
+        runtime = (torch.nn.Linear(1, 1), None, CategoryVocabulary(("pokemon:self", "pokemon:opponent", "belief:possible_move:surf")), type("Config", (), {"resolved_showdown_root": lambda self: "fixture"})(), {"width": 4})
+        with tempfile.TemporaryDirectory() as tmp, patch("pokezero.mirror_value_probe.make_owning_wire_env", Env), patch("pokezero.mirror_value_probe.true_move_facts", return_value=[{"surf": .5}] * 6), patch("pokezero.dex.load_showdown_dex_cached"), patch(
                 "pokezero.neural_policy.TransformerSoftmaxPolicy", Policy), patch("pokezero.value_precision_probe.frozen_token_features", features):
             receipt = collect_battle(cohort("fixture", 8)[0], tmp, runtime)
             self.assertEqual(receipt["paired_rows"], 2)

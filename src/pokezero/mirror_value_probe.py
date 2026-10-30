@@ -1,10 +1,8 @@
 """Fresh paired-seat observations and outcome-only, frozen-trunk value probes.
 
-The privileged arm swaps the peer's six pre-transformer own Pokémon rows into
-the actor's opponent block. Role categories are normalized; token types remain
-opponent types. This is a literal own-view swap, not an omniscient simulator
-encoder: current self Pokémon rows omit move-set buckets. Full initial requests
-are retained separately as true-set provenance, never supplied to the policy.
+Public observations use separate owning-wire parsers. The privileged arm swaps
+the peer's six own Pokémon rows and adds its current true move identities and
+PP, using only the initial sets and requests available at that boundary.
 """
 from __future__ import annotations
 
@@ -60,7 +58,7 @@ def cohort(root: str, count: int = 256) -> list[dict[str, Any]]:
     return rows
 
 
-def swap_own_view(actor, peer, vocab):
+def swap_own_view(actor, peer, vocab, *, move_facts=None):
     """Copy raw own-team rows only, preserving every other actor input."""
     from .showdown import CATEGORY_ROLE
     if actor.schema_version != "pokezero.observation.v4" or peer.schema_version != actor.schema_version:
@@ -84,10 +82,148 @@ def swap_own_view(actor, peer, vocab):
             if categories[index, CATEGORY_ROLE] != vocab.encode("pokemon:self"):
                 raise ValueError("peer own row role mismatch")
             categories[index, CATEGORY_ROLE] = vocab.encode("pokemon:opponent")
+    if move_facts is not None:
+        from .showdown import (CATEGORY_BELIEF_MOVE_OFFSET, BELIEF_MOVE_BUCKET_COUNT,
+            NUMERIC_OPP_MOVE_PP_OFFSET, NUMERIC_REVEALED_MOVE_COUNT,
+            NUMERIC_POSSIBLE_MOVE_COUNT)
+        if len(move_facts) != 6:
+            raise ValueError("six peer move records required")
+        for index, facts in enumerate(move_facts, 7):
+            categories[index, CATEGORY_BELIEF_MOVE_OFFSET:CATEGORY_BELIEF_MOVE_OFFSET + BELIEF_MOVE_BUCKET_COUNT] = 0
+            numeric[index, NUMERIC_OPP_MOVE_PP_OFFSET:NUMERIC_OPP_MOVE_PP_OFFSET + BELIEF_MOVE_BUCKET_COUNT] = 0
+            for bucket, (move, pp_fraction) in enumerate(sorted(facts.items())):
+                label = "belief:possible_move:" + move
+                if bucket >= BELIEF_MOVE_BUCKET_COUNT or not vocab.is_enumerated(label):
+                    raise ValueError("true move must have an exact champion vocabulary entry: " + label)
+                categories[index, CATEGORY_BELIEF_MOVE_OFFSET + bucket] = vocab.encode(label)
+                numeric[index, NUMERIC_OPP_MOVE_PP_OFFSET + bucket] = pp_fraction
+            numeric[index, NUMERIC_REVEALED_MOVE_COUNT] = len(facts)
+            numeric[index, NUMERIC_POSSIBLE_MOVE_COUNT] = len(facts)
     return replace(actor, categorical_ids=tuple(tuple(map(int, r)) for r in categories),
                    numeric_features=tuple(tuple(map(float, r)) for r in numeric),
                    attention_mask=tuple(map(bool, attention)),
                    metadata={**actor.metadata, "privileged_own_view_swap": True})
+
+
+def true_move_facts(state, initial_request, dex):
+    """Exact current moves, with active PP from its request and base PP ledger.
+
+    Transform copies are request-scoped (including the 5-PP denominator), never
+    retained after switch-out. Benched base moves use the initial set and the
+    public PP-charge ledger, which excludes called/copied moves and counts
+    Pressure. No future request or future reveal enters these facts.
+    """
+    from .showdown import _normalize_identifier
+    from .tier2 import canonical_move_id
+    from .local_showdown import _base_move_id
+    def key(value):
+        return _normalize_identifier(canonical_move_id(str(value)))
+    initial = {str(r["ident"]): r for r in initial_request["side"]["pokemon"]}
+    current = state.request["side"]["pokemon"]
+    if len(initial) != 6 or len(current) != 6 or len(state.self_team) != 6:
+        raise ValueError("six unique initial and current own identities required")
+    exact = {_normalize_identifier(b.species): b for b in state.belief_view.self_pokemon}
+    active = state.request.get("active", [])
+    active_moves = active[0].get("moves", []) if active else []
+    result = []
+    for candidate, row in zip(state.self_team, current):
+        if candidate.ident != row["ident"] or row["ident"] not in initial:
+            raise ValueError("peer token/request identity alignment")
+        belief = exact.get(_normalize_identifier(candidate.species))
+        transformed = bool(belief and belief.transformed and row.get("active"))
+        source = row if transformed else initial[row["ident"]]
+        moves = {key(m): m for m in source["moves"]}
+        if not moves or len(moves) > 4:
+            raise ValueError("one to four true moves required")
+        uses = dict(belief.move_uses) if belief else {}
+        facts = {}
+        for move in sorted(moves):
+            info = dex.move_info(move)
+            if info is None or info.max_pp <= 0:
+                raise ValueError("true move dex PP required: " + move)
+            if transformed:
+                # Every copied active slot must be confirmed by this request.
+                pp = None
+            else:
+                charged = sum(n for m, n in uses.items() if _base_move_id(m) == _base_move_id(move))
+                pp = max(0, info.max_pp - charged) / info.max_pp
+            if row.get("active"):
+                matches = [m for m in active_moves if "pp" in m and
+                           _base_move_id(m.get("id", "")) == _base_move_id(move)]
+                if len(matches) == 1:
+                    slot = matches[0]
+                    if slot.get("maxpp", 0) <= 0 or not 0 <= slot["pp"] <= slot["maxpp"]:
+                        raise ValueError("invalid request PP")
+                    pp = slot["pp"] / slot["maxpp"]
+            if pp is None:
+                raise ValueError("copied move PP absent from current peer request")
+            facts[move] = float(pp)
+        result.append(facts)
+    return result
+
+
+def make_owning_wire_env(config):
+    """Collector-only driver retaining literal streams and separate public folds."""
+    from .local_showdown import LocalShowdownEnv, _decode_request_line
+    from .showdown import _ReplayParser
+    class OwningWireEnv(LocalShowdownEnv):
+        def __init__(self, config):
+            super().__init__(config)
+            self.owning_lines = {s: [] for s in ("p1", "p2")}
+            self.public_observers = {s: LocalShowdownEnv(config) for s in ("p1", "p2")}
+            for seat, observer in self.public_observers.items():
+                observer._parser = _ReplayParser("mirror-owning-wire", complete_prefix=True,
+                    hp_visibility={s: "exact" if s == seat else "percentage" for s in ("p1", "p2")})
+
+        def _apply_event(self, event):
+            # Keep every literal player line, including private side updates,
+            # blanks and terminal lines. Never project an omniscient stream.
+            seat = event.get("stream")
+            if (event.get("type") == "stream" and seat in self.owning_lines and
+                    event.get("battleId") == self._battle_token):
+                observer = self.public_observers[seat]
+                for raw in event["lines"]:
+                    line = str(raw)
+                    self.owning_lines[seat].append(line)
+                    observer._lines.append(line)
+                    if line.startswith("|request|"):
+                        request = _decode_request_line(line)
+                        if request.get("side", {}).get("id") != seat:
+                            raise ValueError("literal player request ownership mismatch")
+                        observer._latest_requests[seat] = request
+                        observer._first_requests.setdefault(seat, request)
+                        observer._request_history[seat].append(json.loads(json.dumps(request)))
+                observer._battle_id = self._battle_id
+            return super()._apply_event(event)
+
+        def observe(self, player):
+            return self.public_observers[player].observe(player)
+
+        def peer_state(self, player):
+            return self.public_observers[player]._state_for_player(player)
+
+    return OwningWireEnv(config)
+
+
+def champion_linear_head(model):
+    """Copy the actual champion layer, preserving its masked mean and tanh."""
+    from .neural_policy import require_torch
+    torch = require_torch()
+    if (not isinstance(model.value_head, torch.nn.Linear) or model.value_head.out_features != 1
+            or model.config.value_activation != "tanh"):
+        raise ValueError("linear tanh champion required")
+    from .neural_policy import _masked_mean
+    class ChampionHead(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.network = torch.nn.Linear(model.value_head.in_features, 1)
+
+        def forward(self, tokens, valid):
+            pooled = tokens if tokens.ndim == 2 else _masked_mean(tokens, valid)
+            return torch.tanh(self.network(pooled).squeeze(-1)), None
+    head = ChampionHead().float()
+    head.network.load_state_dict(model.value_head.state_dict(), strict=True)
+    return head
 
 
 def terminal_labels(terminal: dict | None, seats) -> tuple[np.ndarray, np.ndarray]:
@@ -140,7 +276,7 @@ def load_runtime(checkpoint, showdown_root, node, threads=2):
 
 def collect_battle(row, output, runtime, *, max_rounds=300):
     """No branch/replay: once through a fresh battle; capture before selection."""
-    from .local_showdown import LocalShowdownEnv
+    from .dex import load_showdown_dex_cached
     from .neural_policy import TransformerSoftmaxPolicy, observation_windows_to_torch
     from .value_precision_probe import frozen_token_features
     model, result, vocab, env_config, contract = runtime
@@ -150,7 +286,8 @@ def collect_battle(row, output, runtime, *, max_rounds=300):
     policy = TransformerSoftmaxPolicy(model, result, deterministic=False, sampling_temperature=1.,
                                       exploration_epsilon=0., device="cpu")
     rngs = {seat: random.Random(int(digest([row["battle_id"], seat, "action-rng"])[:16], 16)) for seat in ("p1", "p2")}
-    env = LocalShowdownEnv(env_config)
+    env = make_owning_wire_env(env_config)
+    dex = load_showdown_dex_cached(env_config.resolved_showdown_root())
     public, privileged, identities = [], [], []
     terminal = None
     try:
@@ -160,6 +297,7 @@ def collect_battle(row, output, runtime, *, max_rounds=300):
             len(initial_requests[s].get("side", {}).get("pokemon", [])) != 6 for s in initial_requests):
             raise ValueError("complete initial true-set requests for both seats required")
         protocol_count = 0
+        owning_counts = {s: 0 for s in ("p1", "p2")}
         with gzip.open(dest / "boundaries.jsonl.gz", "xt") as log:
             for round_index in range(max_rounds):
                 terminal = env.terminal()
@@ -177,6 +315,8 @@ def collect_battle(row, output, runtime, *, max_rounds=300):
                     requests=json.loads(json.dumps(env._latest_requests)),
                     paired=set(requested) == {"p1", "p2"})
                 boundary["root_id"] = digest([row["battle_id"], round_index, boundary["public_prefix_sha256"], boundary["requests"]])
+                boundary["owning_wire"] = {s: dict(start=owning_counts[s], end=len(env.owning_lines[s]),
+                    delta=env.owning_lines[s][owning_counts[s]:], prefix_sha256=digest(env.owning_lines[s])) for s in owning_counts}
                 for seat, obs in observations.items():
                     if obs.perspective.player_id != seat:
                         raise ValueError("observation seat mismatch")
@@ -192,7 +332,9 @@ def collect_battle(row, output, runtime, *, max_rounds=300):
                         raise ValueError("paired observations disagree on turn")
                     for seat in ("p1", "p2"):
                         actor, peer = observations[seat], observations["p2" if seat == "p1" else "p1"]
-                        public.append(actor); privileged.append(swap_own_view(actor, peer, vocab))
+                        peer_seat = peer.perspective.player_id
+                        facts = true_move_facts(env.peer_state(peer_seat), initial_requests[peer_seat], dex)
+                        public.append(actor); privileged.append(swap_own_view(actor, peer, vocab, move_facts=facts))
                         identities.append(dict(root_id=boundary["root_id"], seat=seat,
                             turn_number=actor.metadata.get("turn_number"), decision_round_index=round_index))
                 actions = {seat: policy.select_action(obs, rng=rngs[seat]).action_index for seat, obs in observations.items()}
@@ -200,12 +342,16 @@ def collect_battle(row, output, runtime, *, max_rounds=300):
                 log.write(json.dumps(boundary, sort_keys=True, separators=(",", ":")) + "\n")
                 log.flush()
                 protocol_count = len(lines)
+                owning_counts = {s: len(env.owning_lines[s]) for s in owning_counts}
                 env.step(actions)
             terminal = env.terminal()
             # Preserve last transition and terminal protocol, including a genuine tie.
             log.write(json.dumps(dict(event="end", protocol_start=protocol_count,
                 protocol_end=len(env.protocol_lines), protocol_delta=env.protocol_lines[protocol_count:],
-                actual_terminal=None if terminal is None else asdict(terminal))) + "\n")
+                actual_terminal=None if terminal is None else asdict(terminal),
+                battle_id=row["battle_id"],
+                owning_wire={s: dict(start=owning_counts[s], end=len(env.owning_lines[s]),
+                    delta=env.owning_lines[s][owning_counts[s]:], prefix_sha256=digest(env.owning_lines[s])) for s in owning_counts})) + "\n")
     finally:
         env.close()
     if not public:
@@ -223,6 +369,10 @@ def collect_battle(row, output, runtime, *, max_rounds=300):
         arrays[arm + "_tokens"] = np.concatenate(tokens)
         arrays[arm + "_values"] = np.concatenate(values)
         arrays[arm + "_mask"] = np.array([o.attention_mask for o in observations], bool)
+        from .neural_policy import _masked_mean, require_torch
+        torch = require_torch()
+        arrays[arm + "_pooled"] = _masked_mean(torch.from_numpy(arrays[arm + "_tokens"]),
+            torch.from_numpy(arrays[arm + "_mask"])).numpy()
     if model_digest(model) != before:
         raise ValueError("champion state changed")
     with (dest / "features.npz").open("xb") as stream:
@@ -231,6 +381,8 @@ def collect_battle(row, output, runtime, *, max_rounds=300):
         paired_rows=len(identities), identities=identities, actual_terminal=terminal_dict,
         known_rows=int((status == 0).sum()), unknown_rows=int((status != 0).sum()),
         initial_true_requests=initial_requests, initial_true_requests_sha256=digest(initial_requests),
+        public_view_source="literal owning player wire plus own request only; separate production parser/belief/annotation histories",
+        privileged_move_source="current own request, initial true sets, boundary-local own PP charge ledger",
         frozen_model_sha256=before, observation_roots_are_siblings=False,
         files={p.name: file_sha(p) for p in sorted(dest.iterdir())})
     write_new(dest / "battle.json", receipt)
@@ -246,4 +398,6 @@ def paired_battle_interval(public_losses, privileged_losses, *, seed=20261029, s
     estimates = difference[rng.integers(0, len(difference), (samples, len(difference)))].mean(1)
     return dict(privileged_minus_public_mse=float(difference.mean()), battles=len(difference),
         interval90=np.quantile(estimates, [.05, .95]).tolist(),
+        public_equal_battle_mse=float(np.mean(public_losses)),
+        privileged_equal_battle_mse=float(np.mean(privileged_losses)),
         method="percentile paired bootstrap over battles; equal battle weight")
