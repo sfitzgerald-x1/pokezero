@@ -264,10 +264,11 @@ def project_device(state, tape, before_registry, after_registry, tables):
         result = result.at[:, :, 8].set(jnp.where(addressed, target_enc, result[:, :, 8]))
         mud = kinds == int(inputs.Kind.MUDSHOT)
         ms, sl = address(schema[:, :, 9]); enc = jnp.where(ms >= 0, sl+1, 0)
-        queue = (schema[:, :, 12] == 1) & current_live[rows[:, None], jnp.clip(ms, 0, 1)]
-        # Source Mud Shot queues only a publicly live target. No other move is
-        # recognized here; the schema compiler owns the original lexical rule.
-        missing_queue = (schema[:, :, 12] == 1) & ~queue
+        queue = schema[:, :, 12] == 1
+        # QUEUE is a lexical declaration flag even without a live target. The
+        # source then emits QUEUE + none-address; it does not turn it into a
+        # different lexical fact or clear the packed RAW_BEGIN queue bit.
+        missing_queue = queue & ~current_live[rows[:, None], jnp.clip(ms, 0, 1)]
         ms = jnp.where(missing_queue, -1, ms); sl = jnp.where((ms >= 0), sl, -1)
         enc = jnp.where(ms >= 0, enc, 0)
         for col, value in ((9, ms), (10, sl), (11, enc), (12, queue.astype(jnp.int32))):
@@ -290,10 +291,6 @@ def project_device(state, tape, before_registry, after_registry, tables):
         raw = kinds == int(inputs.Kind.RAW_BEGIN)
         for col, value in ((13, hp), (14, maximum), (15, semantic[:, 11])):
             result = result.at[:, :, col].set(jnp.where(raw & condition[:, None], value[:, None], result[:, :, col]))
-        # Queue is the sole dynamic packed lexical bit; preserve all other
-        # source-derived framed item/nonproc/MudShot words exactly.
-        any_missing = jnp.any(mud & missing_queue, axis=1)
-        result = result.at[:, :, 8].set(jnp.where(raw & any_missing[:, None], result[:, :, 8] & ~(1 << 16), result[:, :, 8]))
         semantic = semantic.at[:, 1].set(sequence+main+1)
         result = result.at[rows, main].set(semantic)
 

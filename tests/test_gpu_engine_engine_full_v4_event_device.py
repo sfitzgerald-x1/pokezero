@@ -1,5 +1,6 @@
 """Actual tiny constructor/core -> FULL writer words/consumers; no model/game."""
 from dataclasses import replace
+from copy import deepcopy
 import json
 import unittest
 
@@ -311,6 +312,75 @@ class FullV4EventDeviceTests(unittest.TestCase):
         self.assertEqual(encoded.pending_numeric_columns.tolist(), [])
         self.assertFalse(bool(encoded.full_encoder_admitted.any()))
         self.assertFalse(bool(result.projection.B4_qualified.any()))
+
+    def test_source_mudshot_queue_bit_survives_absent_public_target(self):
+        from pokezero.dex import ShowdownDex
+        from pokezero.category_vocab import CategoryVocabulary
+        # Add a literal source schema, not a mechanics admission roster. An
+        # actual core declaration supplies the receipt. The one-event prefix
+        # below is explicitly a trusted-lower boundary fixture, not a claim
+        # that an ordinary core frame declares against a dead target.
+        metadata = deepcopy(self.f.metadata)
+        metadata['vocabulary']['moves'].append('mudshot')
+        metadata['moves'].append(dict(id='mudshot', base_power=55, type=5, source_type='Ground',
+            category='Physical', pp=15, accuracy=95, priority=0, flags={}))
+        mud = replace(self.f.dex.moves['surf'], id='mudshot', name='mudshot', type='Ground',
+            category='Physical', gen3_category='Physical', base_power=55, pp=15, accuracy=95,
+            effect_label='lower_foe_spe', effect_chance=100)
+        dex = ShowdownDex(dict(self.f.dex.moves, mudshot=mud), self.f.dex.species, self.f.dex.type_chart)
+        vocab = CategoryVocabulary(tuple(sorted(set(self.f.catalog.vocabulary.tokens) |
+            {'move:mudshot', 'belief:possible_move:mudshot', 'move_effect:lower_foe_spe'})))
+        catalog = v4.compile_encoder(self.f.host, dex, vocab, checkpoint_sha256='a'*64,
+            feature_masks=self.f.catalog.masks.__dict__)
+        table = transition.tables_from_metadata(metadata)
+        events = d.engine.compile_catalog(metadata, table, public_moves=catalog.moves, dex=dex,
+            exposure=d.engine.HealthExposure(d.engine.SHOWDOWN, 'gen3randombattle', True, False))
+        projector = base.compile_projector(events, expected_binding=events.binding,
+            expected_engine_binding=np.array(events.engine_binding, np.uint32))
+        compiled = d.compile_adapter(metadata, projector, catalog=catalog)
+        streams = self.f.start.cursor.stream_id
+        kwargs = dict(catalog=events, expected_binding=events.binding,
+            expected_engine_binding=np.array(events.engine_binding, np.uint32))
+        cursor = life.register(streams, **kwargs)
+        state = self.f.start.state._replace(entry_pending=j.ones((2, 2), bool),
+            moves=self.f.start.state.moves.at[:, 0, 0, 0].set(len(metadata['moves'])-1))
+        frame = life.initialize_with_lifecycle(state, table, cursor=cursor, tie_coin=j.zeros(2, j.int32), **kwargs)
+        stream = d.register(streams, j.zeros(2, j.int32), compiled=compiled)
+        initial = d.project_frame(stream, frame, compiled.device)
+        self.assertEqual(initial.error.tolist(), [0, 0])
+        prefix = []
+        for w in self.words(initial, 0):
+            if w[0] != inputs.Kind.SWITCH: continue
+            name = catalog.species.names[int(w[9])]
+            prefix.append(f'|switch|p{w[6]+1}a: {name}|{name}, L{w[11]}'+
+                (', M' if w[12] == 1 else ', F' if w[12] == 2 else '')+f'|{w[13]}/{w[14]}')
+        wire, _ = public_wire.project_lines(public_wire.WireState(), prefix+['|turn|1'], **v4.wire_kwargs(catalog))
+        actual = life.trace_step(frame.state, j.zeros((2, 2), j.int32), table, cursor=frame.cursor,
+            chance_inputs=self.chance(), **kwargs)
+        index = int(np.flatnonzero((np.array(actual.callbacks.words[0, :, 0]) == d.engine.MOVE) &
+            (np.array(actual.callbacks.words[0, :, 1]) == 0))[0])
+        tape = actual.callbacks
+        def one(array): return j.zeros_like(array).at[:, 0].set(array[:, index])
+        tape = tape._replace(words=one(tape.words), count=j.ones(2, j.int32),
+            event_turn=one(tape.event_turn), event_phase=one(tape.event_phase),
+            event_generation=one(tape.event_generation), switch_details=one(tape.switch_details), cursor=frame.cursor)
+        before = life.snapshot(frame.cursor)
+        literal = life.LifecycleResult(None, frame.cursor, tape, before, before, j.zeros(2, bool), j.zeros(2, j.int32))
+        fast = jax.jit(d.project_frame)
+        for live in (True, False):
+            current = initial.state._replace(live=initial.state.live.at[:, 1].set(live))
+            result = fast(current, literal, compiled.device)
+            self.assertEqual(result.error.tolist(), [0, 0])
+            source = replace(wire, live=(True, live))
+            line = f'|move|{wire.active_idents()[0]}|mudshot|{wire.active_idents()[1]}'
+            _, reference = public_wire.project_line(source, line, **v4.wire_kwargs(catalog))
+            expected = np.array([e.words() for e in reference.events])
+            np.testing.assert_array_equal(self.words(result, 0), expected)
+            word = expected[expected[:, 0] == inputs.Kind.MUDSHOT][0]
+            self.assertEqual(word[12], 1)
+            self.assertEqual(word[9:12].tolist(), [1, 0, 1] if live else [-1, -1, 0])
+            self.assertTrue(bool(expected[0, 8] & (1 << 16)))
+        self.assertEqual(fast._cache_size(), 1)
 
 
 if __name__ == '__main__': unittest.main()
