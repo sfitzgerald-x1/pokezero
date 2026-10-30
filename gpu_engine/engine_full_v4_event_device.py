@@ -40,6 +40,8 @@ class Tables(NamedTuple):
     kinds: object
     moves: object
     conditions: object
+    statuses: object
+    cures: object
     namespaces: Bindings
     binding: object
 
@@ -67,7 +69,7 @@ def compile_adapter(metadata, projector, *, catalog):
         raise ValueError('original engine/public FULL catalog move edge required')
     simple = public_context.compile_context(catalog.source, catalog.abilities, catalog.moves)
     lower = causal.compile_projector(metadata, projector, species_catalog=catalog.species,
-        source=catalog.source, context_tables=simple)
+        source=catalog.source, context_tables=simple, status_events=True)
     kwargs = v4_encoder.wire_kwargs(catalog)
     name = catalog.species.names[1]
     ident = ('p1a: '+name, 'p2a: '+name)
@@ -107,6 +109,9 @@ def compile_adapter(metadata, projector, *, catalog):
     conditions = np.array([add(f'|-damage|{ident[0]}|71/100'+suffix, inputs.Kind.CONDITION)
         for suffix in ('', ' slp', ' par', ' brn', ' frz', ' psn', ' tox')]
         + [add(f'|-damage|{ident[0]}|0 fnt', inputs.Kind.CONDITION)], np.int32)
+    tokens=('', 'slp', 'par', 'brn', 'frz', 'psn', 'tox')
+    statuses=np.array([0]+[add(f'|-status|{ident[0]}|{token}',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
+    cures=np.array([0]+[add(f'|-curestatus|{ident[0]}|{token}|[msg]',inputs.Kind.STATUS) for token in tokens[1:]],np.int32)
     moves = np.zeros(len(catalog.moves.names), np.int32)
     targets = {}
     for pid, target in zip(projector.catalog.ids, projector.catalog.targets):
@@ -117,16 +122,17 @@ def compile_adapter(metadata, projector, *, catalog):
     for pid, target in targets.items():
         if target in (0, 1):
             moves[pid] = add(f'|move|{ident[0]}|{catalog.moves.names[pid]}|{ident[target]}', inputs.Kind.MOVE)
-    if not all(kinds[k] for k in (1, 2, 3, 6, 12)) or not np.all(conditions):
+    if not all(kinds[k] for k in (1, 2, 3, 6, 12)) or not np.all(conditions) or not np.all(statuses[1:]) or not np.all(cures[1:]):
         raise ValueError('FULL writer lacks required causal lifecycle schemas')
     width = max(lengths)
     packed = np.zeros((len(templates), width, 16), np.int32)
     for i, words in enumerate(templates): packed[i, :len(words)] = words
     payload = packed.tobytes()+np.array(lengths, np.int32).tobytes()+np.array(mains, np.int32).tobytes()
-    payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
+    payload += kinds.tobytes()+moves.tobytes()+conditions.tobytes()+statuses.tobytes()+cures.tobytes()+np.asarray(catalog.binding).tobytes()+SCHEMA.encode()
     binding = jnp.array(np.frombuffer(hashlib.sha256(payload).digest(), dtype='>u4').astype(np.uint32))
     tables = Tables(lower.device, jnp.array(packed), jnp.array(lengths, jnp.int32),
-        jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions), ns, binding)
+        jnp.array(mains, jnp.int32), jnp.array(kinds), jnp.array(moves), jnp.array(conditions),
+        jnp.array(statuses), jnp.array(cures), ns, binding)
     result = Compiled(catalog, lower, tables)
     _COMPILED[result] = (catalog, lower, tables, tuple(jax.tree.leaves(tables)))
     return result
@@ -152,12 +158,14 @@ class StreamState(NamedTuple):
     sequence: object
     live: object
     species: object               # ONLY already observed public arrival IDs
+    status: object                # ONLY prior accepted public status facts
 
 
 def register(stream_ids, owners, *, compiled):
     check_adapter(compiled)
     return StreamState(causal.register(stream_ids, owners, compiled=compiled.causal),
         jnp.zeros_like(stream_ids), jnp.zeros((stream_ids.shape[0], 2), bool),
+        jnp.zeros((stream_ids.shape[0], 2, 6), jnp.int32),
         jnp.zeros((stream_ids.shape[0], 2, 6), jnp.int32))
 
 
@@ -200,12 +208,13 @@ def project_device(state, tape, before_registry, after_registry, tables):
     causal.base._shape(state.sequence, (b,), jnp.int32)
     causal.base._shape(state.live, (b, 2), jnp.bool_)
     causal.base._shape(state.species, (b, 2, 6), jnp.int32)
+    causal.base._shape(state.status, (b, 2, 6), jnp.int32)
     error = jnp.where((lower.error == 0) & (state.sequence >= 0), 0,
         jnp.where(lower.error != 0, lower.error, int(inputs.Error.SEQUENCE)))
     width = tables.templates.shape[1]
 
     def step(carry, index):
-        words, count, sequence, turn, phase, slots, live, species, error, overflow = carry
+        words, count, sequence, turn, phase, slots, live, species, statuses, error, overflow = carry
         semantic = lower.chunk.words[:, index]; kind = semantic[:, 0]
         present = lower.chunk.valid[:, index]
         move = kind == int(inputs.Kind.MOVE); condition = kind == int(inputs.Kind.CONDITION)
@@ -215,6 +224,15 @@ def project_device(state, tape, before_registry, after_registry, tables):
         key = jnp.where(move, tables.moves[jnp.clip(mid, 0, tables.moves.shape[0]-1)], key)
         ci = jnp.where(semantic[:, 12] == 1, 7, semantic[:, 11])
         key = jnp.where(condition, tables.conditions[jnp.clip(ci, 0, 7)], key)
+        status_event = kind == int(inputs.Kind.STATUS)
+        # This is a SAME-index causal receipt join, not a final-state join:
+        # status-enabled lower mode forbids RAW_BEGIN and emits exactly one
+        # semantic per accepted input. It never drops a receipt. The actual
+        # preceding-MOVE/HP -> wake-CURE regression locks this alignment.
+        old_engine_status = tape.words[:,index,5]
+        old_public_status = jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(old_engine_status,0,6)]
+        status_key=jnp.where(semantic[:,9]>0,tables.statuses[jnp.clip(semantic[:,9],0,6)],tables.cures[old_public_status])
+        key=jnp.where(status_event,status_key,key)
         size = tables.length[key]; main = tables.main[key]
         enough = (count <= 64-size) & (sequence <= 2**31-1-size)
         overflow |= present & (error == 0) & (count > 64-size)
@@ -233,10 +251,19 @@ def project_device(state, tape, before_registry, after_registry, tables):
         # the pinned writer reuses rather than assigning a new public slot.
         # Refuse that ambiguity and an unobserved forme change atomically.
         identity = ~arrival | (~collision & ((prior_species == 0) | (prior_species == semantic[:, 9])))
+        # Old status is a causal receipt fact, and must agree with the BEFORE
+        # public ledger. An enum-valid false WAKE/THAW cannot rewrite CURE
+        # lexical metadata or silently erase a different observed condition.
+        previous_status=statuses[rows,safe,safe_slot]
+        identity &= ~status_event | (old_public_status==previous_status)
         error = jnp.where(present & (error == 0) & ~identity, int(inputs.Error.IDENTITY), error)
         use = present & (error == 0)
         next_species = species.at[rows, safe, safe_slot].set(
             jnp.where(arrival, semantic[:, 9], prior_species))
+        next_status=jnp.where(arrival,semantic[:,15],jnp.where(condition,semantic[:,11],
+            jnp.where(status_event,semantic[:,9],jnp.where(faint,0,previous_status))))
+        status_written=arrival|condition|status_event|faint
+        next_statuses=statuses.at[rows,safe,safe_slot].set(jnp.where(status_written,next_status,previous_status))
         current_slots = slots.at[rows, safe].set(jnp.where(arrival, new_slot, slots[rows, safe]))
         current_live = live.at[rows, safe].set(jnp.where(arrival, True, live[rows, safe]))
 
@@ -303,14 +330,15 @@ def project_device(state, tape, before_registry, after_registry, tables):
         return (words, count+jnp.where(use, size, 0), sequence+jnp.where(use, size, 0),
             jnp.where(use, semantic[:, 2], turn), jnp.where(use, semantic[:, 3], phase),
             jnp.where(use[:, None], current_slots, slots), jnp.where(use[:, None], live_next, live),
-            jnp.where(use[:, None, None], next_species, species), error, overflow), None
+            jnp.where(use[:, None, None], next_species, species),
+            jnp.where(use[:, None, None],next_statuses,statuses),error, overflow), None
 
     init = (jnp.zeros((b, 64, 16), jnp.int32), jnp.zeros(b, jnp.int32), state.sequence,
         state.causal.cursor.turn, state.causal.cursor.phase, state.causal.cursor.public_slot,
-        state.live, state.species, error, jnp.zeros(b, bool))
-    (words, count, sequence, _, _, _, live, species, error, overflow), _ = jax.lax.scan(step, init, jnp.arange(64))
+        state.live, state.species, state.status,error, jnp.zeros(b, bool))
+    (words, count, sequence, _, _, _, live, species,statuses,error, overflow), _ = jax.lax.scan(step, init, jnp.arange(64))
     ok = error == 0
-    next_state = _commit(ok, state, StreamState(lower.state, sequence, live, species))
+    next_state = _commit(ok, state, StreamState(lower.state, sequence, live, species,statuses))
     next_state = next_state._replace(causal=next_state.causal._replace(admitted=state.causal.admitted & ok,
         cursor=next_state.causal.cursor._replace(admitted=state.causal.cursor.admitted & ok)))
     valid = (jnp.arange(64)[None, :] < count[:, None]) & ok[:, None]
@@ -339,7 +367,8 @@ def project_and_fold(state, frame, tables, public, catalog):
     same = ((public.cursor.sequence == state.sequence) & (public.cursor.stream_id == state.causal.cursor.stream_id)
         & (public.cursor.turn == state.causal.cursor.turn) & (public.cursor.phase == state.causal.cursor.phase)
         & jnp.all(public.context.toxic.visibility == visibility, axis=1)
-        & jnp.all(public.mons.species == state.species, axis=(1, 2)))
+        & jnp.all(public.mons.species == state.species, axis=(1, 2))
+        & jnp.all(public.mons.status == state.status,axis=(1,2)))
     error = jnp.where(projection.error != 0, projection.error,
         jnp.where(same, fold_error, int(inputs.Error.STREAM)))
     ok = error == 0

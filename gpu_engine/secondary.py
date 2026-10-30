@@ -82,7 +82,7 @@ def from_metadata(metadata):
         flags({'synchronize'}))
 
 
-def after_status_event(state, source, afflicted, status, table, *, applied, item_table=None):
+def after_status_event(state, source, afflicted, status, table, *, applied, item_table=None, _status_trace=None):
     """Gen3 AfterSetStatus: reflect first, then consume each event's Lum.
 
     The caller has just installed a fresh status and supplies that exact mask.
@@ -98,6 +98,9 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
         & ((status==m.PAR)|(status==m.BRN)|(status==m.PSN)|(status==m.TOX))
         & (state.hp[rows,source,own]>0) & (state.status[rows,source,own]==m.NONE)
         & status_allowed(table,reflected,state.types[rows,source,own],state.ability[rows,source,own]))
+    if _status_trace is not None:
+        from . import engine_status_callbacks as callbacks
+        _status_trace=callbacks.unknown(_status_trace,reflects)
     updates={}
     for name,value in [('status',reflected),('status_counter',0),('sleep_skipped',0),('rest_origin',False)]:
         old=getattr(state,name)
@@ -113,6 +116,8 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
             result=consume_lum(item_table,old_item,get(state.status),get(state.status_counter),
                 get(state.confusion_counter),get(state.hp),eligible=changed)
             consumed=result.item!=old_item
+            if _status_trace is not None:
+                _status_trace=callbacks.unknown(_status_trace,consumed & (get(state.status)!=m.NONE))
             updates={}
             for name,value in zip(('item','status','status_counter','confusion_counter'),result):
                 updates[name]=getattr(state,name).at[rows,side,active].set(value)
@@ -120,10 +125,11 @@ def after_status_event(state, source, afflicted, status, table, *, applied, item
                 old=getattr(state,name)
                 updates[name]=old.at[rows,side,active].set(jnp.where(consumed,jnp.zeros_like(get(old)),get(old)))
             state=state._replace(**updates)
+    if _status_trace is not None:return state,_status_trace
     return state
 
 
-def apply_contact(state, side, move, roll, table, *, eligible, item_table=None):
+def apply_contact(state, side, move, roll, table, *, eligible, item_table=None, _status_trace=None):
     """Static's Gen3 onDamagingHit, after damage/secondaries, before Lum.
 
     The existing uniform [0,60) auxiliary draw gives exactly 20/60 = 1/3.
@@ -144,10 +150,16 @@ def apply_contact(state, side, move, roll, table, *, eligible, item_table=None):
         & table.static[state.ability[rows, foe, target]] & (jnp.asarray(roll) < 20)
         & (state.hp[rows, side, own] > 0) & (state.status[rows, side, own] == m.NONE)
         & ~table.ability_immunity[ability, m.PAR])
+    if _status_trace is not None:
+        from . import engine_status_callbacks as callbacks
+        _status_trace=callbacks.unknown(_status_trace,proc)
     state=state._replace(
         status=state.status.at[rows, side, own].set(jnp.where(proc, m.PAR, state.status[rows, side, own])),
         status_counter=state.status_counter.at[rows, side, own].set(
             jnp.where(proc, 0, state.status_counter[rows, side, own])))
+    if _status_trace is not None:
+        return after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
+            applied=proc,item_table=item_table,_status_trace=_status_trace)
     return after_status_event(state,foe,side,jnp.full(state.hp.shape[0],m.PAR),table,
         applied=proc,item_table=item_table)
 
@@ -160,7 +172,7 @@ def status_allowed(table, status, types, ability, *, effective_weather=0):
 
 
 def apply(state, side, move, roll, table, *, eligible, effective_weather=0, substitute_hit=False,
-          item_table=None):
+          item_table=None, _status_trace=None):
     rows = jnp.arange(state.hp.shape[0]); foe = 1 - side
     own, target = state.active[rows, side], state.active[rows, foe]
     get = lambda value: value[rows, foe, target]
@@ -172,6 +184,9 @@ def apply(state, side, move, roll, table, *, eligible, effective_weather=0, subs
     status = table.status[move]
     changes = (proc & (status != m.NONE) & (get(state.status) == m.NONE)
         & status_allowed(table, status, get(state.types), ability, effective_weather=effective_weather))
+    if _status_trace is not None:
+        from . import engine_status_callbacks as callbacks
+        _status_trace=callbacks.unknown(_status_trace,changes)
     boosts = get(state.boosts)
     drops = proc & table.spd_drop[move] & ~table.clear_body[ability]
     boosts = boosts.at[:, 3].set(jnp.where(drops, jnp.maximum(-6, boosts[:, 3] - 1), boosts[:, 3]))
@@ -190,4 +205,6 @@ def apply(state, side, move, roll, table, *, eligible, effective_weather=0, subs
         boosts=state.boosts.at[rows, foe, target].set(boosts).at[rows, side, own].set(own_boosts),
         volatile=state.volatile.at[rows, foe, target].set(
             get(state.volatile) | jnp.where(flinch, jnp.uint32(FLINCH), jnp.uint32(0))))
+    if _status_trace is not None:
+        return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table,_status_trace=_status_trace)
     return after_status_event(state,side,foe,status,table,applied=changes,item_table=item_table)
