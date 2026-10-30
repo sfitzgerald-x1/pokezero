@@ -38,12 +38,19 @@ class MemoryServer:
 
 
 class MemoryBridge:
-    def __init__(self,events,*,stall=False):self.events=list(events); self.sent=[]; self.stall=stall
+    def __init__(self,events,*,stall=False,auto_ack=True):
+        self.events=list(events); self.sent=[]; self.stall=stall; self.auto_ack=auto_ack
     async def next_event(self):
         if self.events:return self.events.pop(0)
         if self.stall:await asyncio.Event().wait()
         raise RuntimeError('authored bridge exhausted without owning terminal')
-    async def send(self,value):self.sent.append(value)
+    async def send(self,value):
+        self.sent.append(value)
+        if self.auto_ack and value.get('type')=='choices':
+            acks=[dict(type='choice_ack',battleId=value['battleId'],player=seat,choice=value['choices'][seat],
+                **({'submissionId':value['submissionId']} if 'submissionId' in value else {}))
+                for seat in ('p1','p2') if seat in value['choices']]
+            self.events[:0]=acks
 
 
 class OwningBridgeTests(unittest.TestCase):

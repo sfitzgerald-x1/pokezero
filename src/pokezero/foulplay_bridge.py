@@ -34,7 +34,7 @@ from .actions import ACTION_COUNT
 from .belief import PublicBattleBeliefEngine
 from .category_vocab import CategoryVocabulary
 from .live_protocol_bridge import (OwningActorFactory, OwningWireSession,
-    encoder_provenance, require_actor_factory, require_session, validate_encoder_config)
+    bridge_event_snapshot, encoder_provenance, require_actor_factory, require_session, validate_encoder_config)
 from .collection import RolloutRecord, write_rollout_record
 from .determinization import gen3_randbat_belief_start_override_planner
 from .deep_line_audit import PROTOCOL_SIGNATURE_SCHEMA_VERSION, protocol_signature_counts
@@ -5206,8 +5206,14 @@ class _BattleBridge:
             self.events.get(), timeout=timeout_seconds
         )
         if event.get("type") == "error":
-            raise RuntimeError(str(event.get("message") or "BattleStream bridge error."))
+            raise self._event_error(event)
         return event
+
+    @staticmethod
+    def _event_error(event):
+        error=RuntimeError(str(event.get("message") or "BattleStream bridge error."))
+        error.bridge_event=bridge_event_snapshot(event)
+        return error
 
     async def next_event_matching(
         self,
@@ -5222,7 +5228,7 @@ class _BattleBridge:
             if predicate(event):
                 del self._deferred_events[index]
                 if event.get("type") == "error":
-                    raise RuntimeError(str(event.get("message") or "BattleStream bridge error."))
+                    raise self._event_error(event)
                 return event
         while True:
             remaining = deadline - asyncio.get_running_loop().time()
@@ -5230,7 +5236,7 @@ class _BattleBridge:
                 raise TimeoutError("timed out waiting for the requested BattleStream event.")
             event = await asyncio.wait_for(self.events.get(), timeout=remaining)
             if event.get("type") == "error":
-                raise RuntimeError(str(event.get("message") or "BattleStream bridge error."))
+                raise self._event_error(event)
             if predicate(event):
                 return event
             self._deferred_events.append(event)
@@ -7495,6 +7501,8 @@ async def _run_single_game(
         session.check_terminal_deadline()
     except BaseException as failure:
         error = failure
+        if getattr(failure,'bridge_event',None) is not None:
+            session.capture_event_failure(failure,snapshot=failure.bridge_event)
         raise
     finally:
         try:
@@ -7596,19 +7604,34 @@ async def _run_single_game_body(
     requested_players: tuple[PlayerId, ...] = ()
     decision_round = 0
     terminal: TerminalState | None = None
+    deferred_ready = None
 
     while terminal is None:
         if phase_progress is not None:
             phase_progress.emit("bridge_wait", "started", seed=seed, decision_round=decision_round)
-        event = (await bridge.next_event() if owning_session is None else
-                 await asyncio.wait_for(bridge.next_event(), timeout=owning_session.wait_timeout()))
+        if owning_session is not None and deferred_ready is not None and not owning_session.pending_choices:
+            event,requests,generation,prefix=deferred_ready
+            deferred_ready=None
+            if (state.request_lines!=requests or owning_session.actor.generation!=generation
+                    or owning_session.actor.prefix_sha256!=prefix):
+                owning_session.reject_event("owning ready context changed while acknowledgements pending",event)
+        else:
+            event = (await bridge.next_event() if owning_session is None else
+                     await asyncio.wait_for(bridge.next_event(), timeout=owning_session.wait_timeout()))
         if phase_progress is not None:
             phase_progress.emit("bridge_wait", "returned", seed=seed, decision_round=decision_round)
         if event.get("battleId") != battle_id:
             if owning_session is not None:
-                raise ValueError("foreign battle event in owning stream")
+                owning_session.reject_event("foreign battle event in owning stream",event)
             continue
         event_type = event.get("type")
+        if owning_session is not None and event_type == "choice_ack":
+            owning_session.acknowledge(event)
+            terminal = (_terminal_from_public_lines(owning_session.owner_lines,config)
+                        if owning_session.terminal_ready else None)
+            continue
+        if owning_session is not None and event_type == "error":
+            owning_session.reject_event("explicit simulator error in owning stream",event,error_type=RuntimeError)
         if owning_session is not None and event_type == "started":
             owning_session.mark_started(event)
             continue
@@ -7624,6 +7647,13 @@ async def _run_single_game_body(
                     owning_session.wait_for_owner_terminal()
             continue
         if event_type == "ready":
+            if owning_session is not None and owning_session.pending_choices:
+                owning_session.requested(event)
+                if deferred_ready is not None:
+                    owning_session.reject_event("duplicate ready while choice acknowledgements pending",event)
+                deferred_ready=(event,dict(state.request_lines),owning_session.actor.generation,
+                    owning_session.actor.prefix_sha256)
+                continue
             requested_players = (tuple(str(player) for player in event.get("requested") or ())
                 if owning_session is None else owning_session.requested(event))
             if not requested_players:
@@ -7673,7 +7703,7 @@ async def _run_single_game_body(
             )
             break
         if owning_session is not None:
-            raise ValueError("unknown active-battle event in owning stream")
+            owning_session.reject_event("unknown active-battle event in owning stream",event)
 
     if config.live_continuation_smoke and state.live_continuation_smoke_proof is None:
         raise LiveFoulPlayContinuationError(
@@ -8545,7 +8575,8 @@ async def _handle_owning_decision_boundary(
         choices[config.foulplay_player] = choice
     if phase_progress is not None:
         phase_progress.emit("submission", "started", seed=state.seed, decision_round=decision_round)
-    await bridge.send({"type":"choices","battleId":state.battle_id,"choices":choices})
+    submission_id=session.prepare_submission(choices,requested_players=requested_players,decision_round=decision_round)
+    await bridge.send({"type":"choices","battleId":state.battle_id,"choices":choices,"submissionId":submission_id})
     if phase_progress is not None:
         phase_progress.emit("submission", "returned", seed=state.seed, decision_round=decision_round)
     if owner in choices:

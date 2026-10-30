@@ -256,7 +256,9 @@ _CORPUS_TREES = ("reports", "docs")
 # 428 -> 429: measured against main 8afdcc77; the sole JSON addition is
 # rollout_leaf_witness_mutation_battery_20261030_owning_runtime_controls.json.
 # All 428 historical blobs remain identical and no selected path was removed.
-_EXPECTED_COUNTER_ARTIFACTS = 429
+# 429 -> 430: sole addition against main1d1e3181 is the fresh full ACK
+# mutation receipt; all 429 historical selected Git blobs are unchanged.
+_EXPECTED_COUNTER_ARTIFACTS = 430
 
 # CROSS-INSTRUMENT COUPLING, DECLARED FROM THIS SIDE TOO (C153). This module is not only
 # the corpus census; it is also what enforces a structural invariant on a SIBLING module's
