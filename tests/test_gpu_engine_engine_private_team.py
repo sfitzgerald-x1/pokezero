@@ -1,5 +1,6 @@
 """Synthetic owner arrays only: no engine step, model, pool or game execution."""
 import copy
+from dataclasses import replace
 import importlib.util
 import unittest
 
@@ -188,12 +189,58 @@ class EnginePrivateTeamTests(unittest.TestCase):
 
     def test_jit_matches_eager_and_invalid_rows_remain_refused(self):
         tables = self.tables(); owned = self.owned()
-        fast = self.jax.jit(lambda x: self.e.team_facts(x, tables, expected_binding=tables.binding))
+        fast = self.e.prepare_team_facts(tables, expected_binding=tables.binding)
         for data in (owned, owned._replace(owner_side=self.j.array([-1, 1], self.j.int32))):
             eager = self.e.team_facts(data, tables, expected_binding=tables.binding)
             actual = fast(data)
             for left, right in zip(self.jax.tree.leaves(actual), self.jax.tree.leaves(eager)):
                 self.np.testing.assert_array_equal(left, right)
+
+    def test_copied_tags_and_replaced_array_edges_cannot_enter_checked_api(self):
+        compiled = self.tables(); owned = self.owned()
+        raw = compiled.device
+        forged = raw._replace(species_categories=raw.species_categories.at[1].set(raw.species_categories[2]))
+        # Exact independent-review reproduction: a copied digest cannot seal
+        # changed label data, nor can a new handle wrap it into legitimacy.
+        for candidate in (raw, forged, self.e.Compiled(forged), replace(compiled)):
+            with self.assertRaisesRegex(ValueError, 'original compiled holder'):
+                self.e.team_facts(owned, candidate, expected_binding=compiled.binding)
+            with self.assertRaisesRegex(ValueError, 'original compiled holder'):
+                self.e.prepare_team_facts(candidate, expected_binding=compiled.binding)
+        fast = self.e.prepare_team_facts(compiled, expected_binding=compiled.binding)
+        self.assertEqual(fast(owned).admitted.tolist(), [True, True])
+        # Even deliberate frozen-dataclass escape must refuse after a JIT
+        # cache exists. A guard only during tracing would miss this change.
+        binding = compiled.binding
+        object.__setattr__(compiled, 'device', forged)
+        with self.assertRaisesRegex(ValueError, 'original compiled holder'):
+            fast(owned)
+        with self.assertRaisesRegex(ValueError, 'original compiled holder'):
+            self.e.team_facts(owned, compiled, expected_binding=binding)
+        valid = self.tables()
+        with self.assertRaisesRegex(ValueError, 'host boundary cannot be traced'):
+            self.jax.jit(lambda x: self.e.team_facts(x, valid, expected_binding=valid.binding))(owned)
+        prepared = self.e.prepare_team_facts(valid, expected_binding=valid.binding)
+        with self.assertRaisesRegex(ValueError, 'host boundary cannot be traced'):
+            self.jax.jit(prepared)(owned)
+        with self.assertRaisesRegex(ValueError, 'host boundary cannot be traced'):
+            self.jax.jit(lambda: self.e.team_facts(owned, valid, expected_binding=valid.binding))()
+        with self.assertRaisesRegex(ValueError, 'host boundary cannot be traced'):
+            self.jax.jit(lambda: prepared(owned))()
+
+    def test_wrong_dex_lookup_identity_or_display_name_refuses_before_mapping(self):
+        from pokezero.dex import ShowdownDex
+        pikachu = self.dex.species['pikachu']
+        for counterfeit in (self.dex.species['gardevoir'],
+                replace(pikachu, id='gardevoir'), replace(pikachu, name='Gardevoir')):
+            bad = ShowdownDex({}, dict(self.dex.species, pikachu=counterfeit), {})
+            with self.assertRaisesRegex(ValueError, 'dex identity differs'):
+                self.e.compile_engine_private_team(self.metadata, vocabulary=self.vocab,
+                    dex=bad, checkpoint_sha256='a'*64,
+                    exposure=self.e.RequestExposure('current', 'physical', True, True))
+        # Punctuation is an identity-preserving spelling, not a species alias.
+        tables = self.tables()
+        self.assertEqual(int(tables.species_categories[3]), self.vocab.encode('species:Ho-Oh'))
 
 
 if __name__ == '__main__': unittest.main()

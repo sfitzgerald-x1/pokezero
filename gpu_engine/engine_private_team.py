@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 import hashlib
 import json
 from typing import NamedTuple
+import weakref
 
 import jax
 import jax.numpy as jnp
@@ -48,6 +49,7 @@ class RequestExposure:
 
 
 class Tables(NamedTuple):
+    """Trusted device primitive arguments; copied binding tags do not seal data."""
     engine_binding: object
     binding: object
     vocabulary_binding: object
@@ -62,6 +64,32 @@ class Tables(NamedTuple):
     gender_visible: object
     stats_visible: object
     item_visible: object
+
+
+@dataclass(frozen=True, eq=False)
+class Compiled:
+    """Host handle, admitted by compiler identity and retained immutable edges.
+
+    Constructing/copying this dataclass does not admit a new handle. Device
+    Tables are exposed for inspection, not as an alternate checked API.
+    """
+    device: Tables
+
+    def __getattr__(self, name):
+        if name in Tables._fields:
+            return getattr(self.device, name)
+        raise AttributeError(name)
+
+
+_COMPILED = weakref.WeakKeyDictionary()
+
+
+def _checked_tables(compiled):
+    record = _COMPILED.get(compiled) if type(compiled) is Compiled else None
+    if (record is None or compiled.device is not record[0]
+            or any(current is not original for current, original in zip(compiled.device, record[1]))):
+        raise ValueError('original compiled holder and immutable array edges required')
+    return compiled.device
 
 
 def _words(value):
@@ -103,6 +131,9 @@ def compile_engine_private_team(metadata, *, vocabulary, dex,
         info = dex.species_info(name) if index else None
         if index and info is None:
             raise ValueError('engine species outside source dex: '+name)
+        if index and (normalize_id(info.id) != normalize_id(name)
+                or normalize_id(info.name) != normalize_id(name)):
+            raise ValueError('source dex identity differs from engine species: '+name)
         bases.append([info.base_stats.get(k, 0) if info else 0 for k in private_team.STATS])
         types.append([label('type:'+info.types[i]) if info and i < len(info.types) else 0
             for i in (0, 1)])
@@ -123,11 +154,14 @@ def compile_engine_private_team(metadata, *, vocabulary, dex,
         species_categories=categories, base_stats=base.tolist(), type_categories=types,
         ability_categories=ability, item_categories=item, status_categories=statuses, role=role)
     binding = _words(json.dumps(payload, sort_keys=True, separators=(',', ':'), allow_nan=False).encode())
-    return Tables(engine, jnp.asarray(binding), vb, jnp.asarray(categories, jnp.int32),
+    tables = Tables(engine, jnp.asarray(binding), vb, jnp.asarray(categories, jnp.int32),
         jnp.asarray(base), jnp.asarray(types, jnp.int32), jnp.asarray(ability, jnp.int32),
         jnp.asarray(item, jnp.int32), jnp.asarray(statuses, jnp.int32), jnp.asarray(role, jnp.int32),
         jnp.asarray(('current', 'base', 'hidden').index(exposure.ability), jnp.int32),
         jnp.asarray(exposure.gender == 'physical'), jnp.asarray(exposure.stats), jnp.asarray(exposure.item))
+    compiled = Compiled(tables)
+    _COMPILED[compiled] = (tables, tuple(tables))
+    return compiled
 
 
 class OwnedTeam(NamedTuple):
@@ -181,8 +215,50 @@ class Result(NamedTuple):
     admitted: object
 
 
-def team_facts(owned, tables, *, expected_binding):
-    """Construct only the existing partial own-team input; no public facts.
+def _host_call(owned):
+    if type(owned) is not OwnedTeam:
+        raise ValueError('typed owned team required')
+    # Probe through a public JAX primitive too: a zero-argument outer JIT can
+    # close over concrete owned arrays, so checking arguments alone misses it.
+    if (isinstance(owned.owner_side, jax.core.Tracer)
+            or isinstance(jnp.zeros((), jnp.int32), jax.core.Tracer)):
+        raise ValueError('checked host boundary cannot be traced; use prepare_team_facts')
+
+
+def team_facts(owned, compiled, *, expected_binding):
+    """Checked host boundary for the existing partial own-team input.
+
+    A binding word alone never authenticates replaced device arrays. For JIT,
+    use prepare_team_facts, whose host guard runs before every cached call.
+    """
+    _host_call(owned)
+    return _team_facts_device(owned, _checked_tables(compiled), expected_binding=expected_binding)
+
+
+def prepare_team_facts(compiled, *, expected_binding):
+    """Prepare a closed-over kernel with a mandatory guard on EVERY host call.
+
+    Do not JIT this wrapper again: that would cache away its host guard. The
+    wrapper refuses tracing; its enclosed device primitive is already jitted.
+    """
+    tables = _checked_tables(compiled)
+    _require(expected_binding, (8,), jnp.uint32, 'expected adapter binding')
+    if not np.array_equal(np.asarray(expected_binding), np.asarray(tables.binding)):
+        raise ValueError('prepared kernel requires the pinned adapter binding')
+    fast = jax.jit(lambda owned: _team_facts_device(owned, tables,
+        expected_binding=expected_binding))
+    def checked(owned):
+        _host_call(owned)
+        _checked_tables(compiled)
+        return fast(owned)
+    return checked
+
+
+def _team_facts_device(owned, tables, *, expected_binding):
+    """TRUSTED primitive: caller must retain the authenticated table closure.
+
+    This function's word comparison is not content authentication. It must not
+    receive independently supplied/replaced tables, even with copied tags.
 
     Failed rows carry owner=-1 and zero facts, so even a caller accidentally
     ignoring Result.admitted cannot admit them through project_team.
