@@ -29,9 +29,10 @@ from . import engine_lifecycle_callbacks as life, engine_public_event_device as 
 from . import engine_public_events as public, public_inputs as inputs
 from . import public_belief, public_context, public_team
 from . import engine_status_callbacks as status_callbacks, engine_item_callbacks as item_callbacks
-from . import public_items
+from . import public_items, public_active
 from . import engine_weather_callbacks as weather_callbacks, weather, public_field, v4_encoder
 from . import engine_weather_progress_callbacks as weather_progress
+from . import engine_weather_effect_callbacks as weather_effects
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -389,6 +390,7 @@ def project_device(state, tape, before_registry, after_registry, tables):
         entry_weather = kind == weather_callbacks.ENTRY_WEATHER
         move_weather = kind == weather_progress.MOVE_WEATHER
         clock_weather = kind == weather_progress.WEATHER_CLOCK
+        failed_weather = kind == weather_effects.SAME_WEATHER_FAILURE
         any_weather=entry_weather|move_weather|clock_weather
         safe_side, safe_in = jnp.clip(side, 0, 1), jnp.clip(incoming, 0, 5)
         old = cursor.physical_to_public[rows, safe_side, safe_in]
@@ -458,6 +460,13 @@ def project_device(state, tape, before_registry, after_registry, tables):
             & (tables.weather_moves[move_index]==raw[:,6])&(tables.base.public_ids[move_index]>0)
             & (raw[:,8]>=0)&(raw[:,8]<=5)&(raw[:,9]==5)
             & (tables.weather_public[jnp.clip(raw[:,6],0,4)]>0))
+        failed_weather_ok=(tables.weather_events & tables.status_events & ~tables.raw_begin & actor_ok
+            & (phase==0)&(actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            & jnp.all(raw[:,3:5]==-1,axis=1)&(raw[:,5]>=weather.RAIN)&(raw[:,5]<=weather.HAIL)
+            & (raw[:,6]==raw[:,5])&(raw[:,8]==raw[:,5])&(raw[:,9]==weather_effects.STILL_REQUIRED)
+            & (raw[:,7]>0)&(raw[:,7]<tables.weather_moves.shape[0])
+            & (tables.weather_moves[move_index]==raw[:,5])&(tables.base.public_ids[move_index]>0)
+            & (tables.weather_public[jnp.clip(raw[:,5],0,4)]>0))
         upkeep=(raw[:,9]==weather_progress.UPKEEP)&(raw[:,6]==raw[:,5])&(
             ((raw[:,7]==0)&(raw[:,8]==0))|((raw[:,7]>1)&(raw[:,8]==raw[:,7]-1)))
         expires=(raw[:,9]==weather_progress.EXPIRE)&(raw[:,7]==1)&(raw[:,8]==0)&(raw[:,6]==weather.NONE)
@@ -469,7 +478,8 @@ def project_device(state, tape, before_registry, after_registry, tables):
         event_ok = generation_ok & clock_ok & jnp.where(arrival, arrival_ok,
             jnp.where(clock, clock_payload, jnp.where(status_event,status_ok,
                 jnp.where(lum,lum_ok,jnp.where(entry_weather,weather_ok,
-                    jnp.where(move_weather,move_weather_ok,jnp.where(clock_weather,clock_weather_ok,component & component_ok)))))))
+                    jnp.where(move_weather,move_weather_ok,jnp.where(clock_weather,clock_weather_ok,
+                        jnp.where(failed_weather,failed_weather_ok,component & component_ok))))))))
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -510,6 +520,10 @@ def project_device(state, tape, before_registry, after_registry, tables):
         weather_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.FIELD)),
             semantic_sequence,turn,phase,absent,absent,absent,absent),axis=1),weather_payload),axis=1)
         semantic=jnp.where(any_weather[:,None],weather_semantic,semantic)
+        failed_payload=jnp.stack((actor_enc,jnp.full_like(z,public_active.STALL_FAIL),z,z,z,z,z,z),axis=1)
+        failed_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.ACTIVE)),
+            semantic_sequence,turn,phase,absent,absent,actor_side,actor_slot),axis=1),failed_payload),axis=1)
+        semantic=jnp.where(failed_weather[:,None],failed_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)

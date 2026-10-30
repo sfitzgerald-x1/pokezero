@@ -94,7 +94,12 @@ class StatusCallbacksTests(unittest.TestCase):
                     name=self.catalog.species.names[p[1]]; active[target]=f'p{target+1}a: {name}'
                     lines.append(f'|switch|{active[target]}|{name}, L{p[3]}'+
                         (', M' if p[4]==1 else ', F' if p[4]==2 else '')+f'|{p[5]}/{p[6]}'+(' '+tokens[p[7]] if p[7] else ''))
-                elif k==inputs.Kind.MOVE:lines.append(f'|move|{active[actor]}|{self.catalog.moves.names[p[1]]}|{active[target]}')
+                elif k==inputs.Kind.MOVE:
+                    still=index+1<int(frame.callbacks.count[row]) and int(frame.callbacks.words[row,index+1,0])==15
+                    lines.append(f'|move|{active[actor]}|{self.catalog.moves.names[p[1]]}|{active[target]}'+('|[still]' if still else ''))
+                elif k==inputs.Kind.ACTIVE:
+                    self.assertEqual(int(frame.callbacks.words[row,index,0]),15)
+                    lines.append(f'|-fail|{active[target]}')
                 elif k==inputs.Kind.CONDITION:lines.append(f'|-damage|{active[target]}|'+
                     ('0 fnt' if p[4] else f'{p[1]}/{p[2]}'+(' '+tokens[p[3]] if p[3] else '')))
                 elif k==inputs.Kind.STATUS:

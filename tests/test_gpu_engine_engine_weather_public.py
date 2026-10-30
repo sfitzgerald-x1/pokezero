@@ -163,21 +163,41 @@ class WeatherPublicTests(unittest.TestCase):
         s,p=self.start(frame,j.array([0,1],j.int32));result=self.fast(s,frame,p)
         self.assertFalse(bool(result.projection.frames.valid.any()))
 
-    def test_actual_same_weather_failure_and_chip_stay_internal_unknown(self):
+    def test_actual_same_weather_failure_pair_matches_original_while_chip_stays_unknown(self):
         frame=self.initial('raindance',arrays=self.arrays('pressure','pressure'))
-        s,p=self.start(frame,j.array([0,1],j.int32));initial=self.fast(s,frame,p)
+        s,p=self.start(frame,j.array([0,1],j.int32));initial,wire=self.compare(s,frame,p,[public_wire.WireState()]*2)
         first=self.step(frame,[[0,8],[0,8]])
-        accepted=self.fast(initial.projection.state,first,initial.public)
+        accepted,wire=self.compare(initial.projection.state,first,initial.public,wire)
         self.assertEqual(accepted.projection.error.tolist(),[0,0])
         repeated=self.step(first,[[0,4],[0,4]])
         raw=np.asarray(repeated.callbacks.words[0,:int(repeated.callbacks.count[0])])
         failure=raw[raw[:,0]==15]
         self.assertEqual(failure.tolist(),[[15,0,0,-1,-1,weather.RAIN,weather.RAIN,
             self.ids['raindance'],weather.RAIN,1]])
-        self.assertTrue(bool((repeated.callbacks.refusal & weather_callbacks.UNKNOWN_WEATHER).all()))
-        refused=self.fast(accepted.projection.state,repeated,accepted.public)
-        self.assertFalse(bool(refused.projection.frames.valid.any()))
-        self.same(refused.public,accepted.public)
+        self.assertFalse(bool((repeated.callbacks.refusal & weather_callbacks.UNKNOWN_WEATHER).any()))
+        result,_=self.compare(accepted.projection.state,repeated,accepted.public,wire)
+        self.assertFalse(bool(result.projection.full_encoder_admitted.any()))
+        index=int(np.flatnonzero(raw[:,0]==15)[0])
+        self.assertEqual(int(raw[index-1,0]),events.MOVE)
+        for wrong in ('called_move','old_weather','orphan'):
+            words=repeated.callbacks.words
+            if wrong=='called_move':words=words.at[0,index-1,5].set(self.ids['sunnyday'])
+            elif wrong=='old_weather':
+                words=words.at[0,index-1,5].set(self.ids['sunnyday'])
+                for column,value in ((5,weather.SUN),(6,weather.SUN),(7,self.ids['sunnyday']),(8,weather.SUN)):
+                    words=words.at[0,index,column].set(value)
+            else:words=words.at[0,index-1].set(j.array([7,-1,-1,-1,-1,0,0,0,0,0],j.int32))
+            bad=repeated._replace(callbacks=repeated.callbacks._replace(words=words))
+            # Each mutation retains a valid typed receipt grammar; the full
+            # preceding declaration/observed-weather join must refuse it.
+            lower=full.causal.project_frame(accepted.projection.state.causal,bad,self.compiled.causal.device)
+            self.assertEqual(lower.error.tolist(),[0,0])
+            refused=self.fast(accepted.projection.state,bad,accepted.public)
+            self.assertNotEqual(int(refused.projection.error[0]),0)
+            self.assertEqual(int(refused.projection.error[1]),0)
+            self.assertFalse(bool(refused.projection.frames.valid[:,0].any()))
+            self.assertEqual(int(refused.public.cursor.sequence[0]),int(accepted.public.cursor.sequence[0]))
+            self.same(full._commit_public(j.array([False,True]),accepted.public,refused.public),refused.public)
         hail=self.initial('hail',arrays=self.arrays('pressure','pressure'))
         hs,hp=self.start(hail,j.array([0,1],j.int32));before=self.fast(hs,hail,hp)
         chipped=self.step(hail,[[0,8],[0,8]])

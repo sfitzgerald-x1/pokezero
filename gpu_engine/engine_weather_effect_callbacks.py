@@ -95,7 +95,9 @@ def same_weather_failure(tape, side, physical, move_id, old_weather, current_wea
     tape = public._append(tape, SAME_WEATHER_FAILURE, side, physical, absent, absent,
         (old_weather, current_weather, move_id, requested_weather, jnp.full_like(tape.count, STILL_REQUIRED)),
         eligible & valid)
-    return _unknown(tape, eligible)
+    # Valid receipts now have an original full-consumer join to the preceding
+    # called MOVE and its source [still] equivalence. Never clear old latches.
+    return _unknown(tape, eligible & ~valid)
 
 
 def weather_chip(tape, side, physical, old_hp, new_hp, maximum, status, raw_weather, *, eligible):

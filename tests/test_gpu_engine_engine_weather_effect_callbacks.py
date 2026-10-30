@@ -39,7 +39,7 @@ class WeatherEffectTests(unittest.TestCase):
         for row in range(4):
             self.assertEqual(self.words(trace, row).tolist(),
                 [[15, row % 2, [2, 4][row % 2], -1, -1, row + 1, row + 1, int(moves[row]), row + 1, 1]])
-        self.assertEqual(trace.refusal.tolist(), [256] * 4)
+        self.assertEqual(trace.refusal.tolist(), [0] * 4)
 
     def test_actual_same_weather_set_attempt_has_no_numeric_change(self):
         for clock in (0, 1, 5):
@@ -146,6 +146,10 @@ class WeatherEffectTests(unittest.TestCase):
         initial = self.tape(capacity=1)._replace(refusal=j.array([128], j.int32))
         full = self.chip(self.failure(initial))
         self.assertEqual(full.count.tolist(), [1]); self.assertEqual(full.refusal.tolist(), [128 | 256 | public.OVERFLOW])
+        failed_full=self.failure(self.failure(initial))
+        self.assertEqual(failed_full.refusal.tolist(),[128 | public.OVERFLOW])
+        foreign_unknown=self.failure(initial._replace(refusal=j.array([128 | 256],j.int32)))
+        self.assertEqual(foreign_unknown.refusal.tolist(),[128 | 256])
         with patch.object(callbacks, '_unknown', side_effect=lambda trace, eligible: trace):
             preserved = self.failure(initial)
         self.assertEqual(preserved.refusal.tolist(), [128])
