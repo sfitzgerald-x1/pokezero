@@ -140,6 +140,25 @@ class WeatherHPSegmentTests(unittest.TestCase):
             self.same(result.tape._replace(refusal=values[0].refusal), values[0])
             self.assertEqual(result.tape.refusal.tolist(), [128 | 256])
 
+    def test_effective_gen3_cached_speed_keeps_values_above_base_13bit_domain(self):
+        # Gen3 installs Scripts.pokemon.getActionSpeed on each instance. Its
+        # override returns getStat's speed, unlike the BASE prototype's13bit
+        # truncation. Never use that base method as this format's oracle.
+        for stored in (2047,2048,2500):
+            tape,before,pre,after,_,birth,pre_writes=self.case(speeds=(stored,2000),prior=128)
+            self.assertTrue(bool(birth.qualified_birth[0]))
+            pre=pre._replace(boosts=pre.boosts.at[:,0,2,4].set(6))
+            pre_writes=pre_writes._replace(boosts=pre_writes.boosts.at[:,0,2,4].set(6))
+            after=after._replace(boosts=after.boosts.at[:,0,2,4].set(6))
+            speeds=transition._speeds(pre,self.f.table)
+            self.assertEqual(int(speeds[0,0]),stored*4)
+            for offset in (0,1):
+                tape=tape._replace(words=tape.words.at[0,before[0]+offset,1:3].set(speeds[0]))
+            result=self.run_case((tape,before,pre,after,speeds,birth,pre_writes))
+            self.assertEqual(result.supported.tolist(),[True])
+            self.assertEqual(result.tape.refusal.tolist(),[128])
+            self.assertEqual(result.tape.words[0,before[0]:before[0]+2,3].tolist(),[0,1])
+
     def test_lethal_malformed_payload_identity_stamps_and_reserved_metadata_refuse(self):
         values = self.case(prior=128); tape, before, *_ = values; at = int(before[0])
         for col, value in ((0, 3), (1, 9), (3, 2), (4, 0), (5, 0), (6, 0),
