@@ -252,6 +252,10 @@ def initialize_with_lifecycle(state,table,*,cursor,catalog,expected_binding,expe
         seat=jnp.full_like(cursor.turn,side)
         tape=_reveal(tape,state,seat,jnp.full_like(cursor.turn,-1),state.active[:,side],
             eligible=ok,replacement=jnp.zeros_like(ok),baton=jnp.zeros_like(ok),initial=True)
+    # Missing Ability Start/Lum cure attribution is refused before callbacks;
+    # static tables prove no cure possible for other known-status arrivals.
+    from . import engine_status_callbacks as status_callbacks
+    tape=status_callbacks.initial_context(tape,state,table,ok)
     updated=transition.initialize(state,table,eligible=ok,tie_coin=tie_coin)
     complete=ok&jnp.all(~updated.entry_pending,axis=1)&tape.cursor.admitted
     tape=tape._replace(cursor=tape.cursor._replace(initialized=complete,admitted=complete))

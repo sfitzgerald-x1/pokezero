@@ -28,6 +28,7 @@ from pokezero.dex import normalize_id
 from . import engine_lifecycle_callbacks as life, engine_public_event_device as base
 from . import engine_public_events as public, public_inputs as inputs
 from . import public_belief, public_context, public_team
+from . import engine_status_callbacks as status_callbacks
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -44,6 +45,7 @@ class Tables(NamedTuple):
     field_binding: object
     damage_binding: object
     raw_begin: object
+    status_events: object
     binding: object
 
 
@@ -92,7 +94,7 @@ def _host_inputs(projector, species_catalog, source, context_tables):
             raise ValueError('lifecycle source/public namespace drift')
 
 
-def compile_projector(metadata, projector, *, species_catalog, source, context_tables):
+def compile_projector(metadata, projector, *, species_catalog, source, context_tables, status_events=False):
     """Host-only compilation, retaining original guarded upstream handles.
 
     Upstream constructor/compiler provenance is trusted, not attested by tags.
@@ -100,6 +102,10 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
     source ID0, exactly as the existing source species_id lookup does.
     """
     _host_inputs(projector, species_catalog, source, context_tables)
+    if type(status_events) is not bool:
+        raise ValueError('explicit static status-event mode required')
+    if status_events and context_tables.items is not None:
+        raise ValueError('status receipts require typed mode plus actual full raw-control composition')
     if not np.array_equal(np.asarray(engine_metadata_binding(metadata)), np.asarray(projector.device.engine_binding)):
         raise ValueError('exact original constructor metadata required')
     names = metadata['vocabulary']['species']
@@ -123,14 +129,15 @@ def compile_projector(metadata, projector, *, species_catalog, source, context_t
             context_tables.items.binding if raw else None,
             context_tables.field.binding if context_tables.field is not None else None,
             context_tables.damage.binding if context_tables.damage is not None else None)],
-        raw_begin='source_basic_item_nonitem_zero_before_line' if raw else 'absent', admission=False)
+        raw_begin='source_basic_item_nonitem_zero_before_line' if raw else 'absent',
+        status_events=status_events, admission=False)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     device = Tables(projector.device, jnp.array(species, jnp.int32), jnp.array(source_ids, jnp.int32),
         species_catalog.device.binding, context_tables.abilities.binding,
         context_tables.items.binding if raw else None, context_tables.binding if raw else None,
         context_tables.field.binding if context_tables.field is not None else None,
         context_tables.damage.binding if context_tables.damage is not None else None,
-        jnp.array(raw), jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
+        jnp.array(raw), jnp.array(status_events), jnp.array(np.frombuffer(digest, dtype='>u4').astype(np.uint32)))
     result = Compiled(projector, species_catalog, source, context_tables, device)
     _COMPILED[result] = (projector, species_catalog, source, context_tables, device,
         tuple(jax.tree.leaves((species_catalog.device, source.device, context_tables, device))),
@@ -259,8 +266,9 @@ def project_device(state, tape, before_registry, after_registry, tables):
     if tables.species.ndim != 1 or tables.species.shape[0] <= 0:
         raise ValueError('static engine/public species maps required')
     base._shape(tables.raw_begin, (), jnp.bool_)
+    base._shape(tables.status_events, (), jnp.bool_)
     rows = jnp.arange(b)
-    known = public.UNINSTRUMENTED | public.OVERFLOW | public.INVALID_ACTION | life.UNKNOWN_DETAILS | life.UNKNOWN_BATON | life.MISSING_INSTALL | life.CLOCK
+    known = public.UNINSTRUMENTED | public.OVERFLOW | public.INVALID_ACTION | life.UNKNOWN_DETAILS | life.UNKNOWN_BATON | life.MISSING_INSTALL | life.CLOCK | status_callbacks.UNKNOWN_STATUS
     fatal = (tape.refusal & ~public.UNINSTRUMENTED) != 0
     ok = (state.admitted & life._valid(state.cursor) & life._valid(tape.cursor)
         & _snapshot_equal(state.cursor, before_registry)
@@ -284,6 +292,9 @@ def project_device(state, tape, before_registry, after_registry, tables):
         arrival = initial | (kind == life.SWITCH_INSTALLED)
         clock = (kind == life.TURN) | (kind == life.UPKEEP) | (kind == life.ACTION_END)
         component = (kind == public.MOVE) | (kind == public.MAIN_HP) | (kind == public.DIRECT_FAINT)
+        applied = kind == status_callbacks.STATUS_APPLIED
+        cured = kind == status_callbacks.STATUS_CURED
+        status_event = applied | cured
         safe_side, safe_in = jnp.clip(side, 0, 1), jnp.clip(incoming, 0, 5)
         old = cursor.physical_to_public[rows, safe_side, safe_in]
         slot = jnp.where(old < 0, cursor.next_slot[rows, safe_side], old)
@@ -314,8 +325,16 @@ def project_device(state, tape, before_registry, after_registry, tables):
         observer = base.ObserverContext(cursor.stream_id, state.owner, semantic_sequence, cursor.generation)
         projected = base.project_device(ordinary, tables.base, _registry(cursor), observer)
         component_ok = (projected.error == 0) & (phase == 0)
+        status_slot,status_enc,status_identity = (value[:,0] for value in
+            base._resolve(_registry(cursor),side[:,None],incoming[:,None]))
+        old_status,new_status,reason = raw[:,5],raw[:,6],raw[:,7]
+        status_ok = (tables.status_events & ~tables.raw_begin & status_identity & (phase == 0)
+            & jnp.all(raw[:,1:3]==-1,axis=1) & jnp.all(raw[:,8:]==0,axis=1)
+            & jnp.where(applied,(old_status==0)&(new_status>0)&(new_status<=6)&(reason==status_callbacks.PRIMARY),
+                (new_status==0)&(((old_status==5)&(reason==status_callbacks.WAKE))
+                    |((old_status==6)&(reason==status_callbacks.THAW)))))
         event_ok = generation_ok & clock_ok & jnp.where(arrival, arrival_ok,
-            jnp.where(clock, clock_payload, component & component_ok))
+            jnp.where(clock, clock_payload, jnp.where(status_event,status_ok,component & component_ok)))
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -340,6 +359,10 @@ def project_device(state, tape, before_registry, after_registry, tables):
             jnp.where(arrival, side, -1), jnp.where(arrival, slot, -1)), axis=1),
             jnp.where(arrival[:, None], arrival_payload, 0)), axis=1)
         semantic = jnp.where(component[:, None], projected.chunk.words[:, 0], semantic)
+        status_payload = jnp.stack((status_enc,jnp.array([0,2,3,5,6,1,4],jnp.int32)[jnp.clip(new_status,0,6)],z,z,z,z,z,z),axis=1)
+        status_semantic = jnp.concatenate((jnp.stack((jnp.full((b,),int(inputs.Kind.STATUS),jnp.int32),
+            semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),status_payload),axis=1)
+        semantic=jnp.where(status_event[:,None],status_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)
