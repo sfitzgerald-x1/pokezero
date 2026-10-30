@@ -3,6 +3,7 @@ from copy import deepcopy
 from dataclasses import replace
 from pokezero.dex import ShowdownDex
 import unittest
+from unittest.mock import patch
 from types import MappingProxyType
 import jax
 import jax.numpy as j
@@ -200,12 +201,21 @@ class WeatherPublicTests(unittest.TestCase):
             self.same(full._commit_public(j.array([False,True]),accepted.public,refused.public),refused.public)
         hail=self.initial('hail',arrays=self.arrays('pressure','pressure'))
         hs,hp=self.start(hail,j.array([0,1],j.int32));before=self.fast(hs,hail,hp)
-        chipped=self.step(hail,[[0,8],[0,8]])
+        snapshots=[];real_speeds=t._speeds
+        def capture_speeds(state,table):
+            value=real_speeds(state,table)
+            if np.all(np.asarray(state.weather)==weather.HAIL) and np.all(np.asarray(state.active[:,1])==5):
+                snapshots.append(np.asarray(value).copy())
+            return value
+        with patch.object(t,'_speeds',side_effect=capture_speeds):
+            chipped=self.step(hail,[[0,8],[0,8]])
         raw=np.asarray(chipped.callbacks.words[0,:int(chipped.callbacks.count[0])])
         damage=raw[raw[:,0]==16];self.assertGreater(len(damage),0)
+        self.assertGreater(len(snapshots),0);expected_speed=snapshots[0][0]
         for w in damage:
             self.assertGreater(w[5],w[6]);self.assertGreaterEqual(w[7],w[5])
             self.assertEqual(int(w[9]),weather.HAIL)
+            np.testing.assert_array_equal(w[1:3],expected_speed)
         self.assertTrue(bool((chipped.callbacks.refusal & weather_callbacks.UNKNOWN_WEATHER).all()))
         refused=self.fast(before.projection.state,chipped,before.public)
         self.assertFalse(bool(refused.projection.frames.valid.any()))
