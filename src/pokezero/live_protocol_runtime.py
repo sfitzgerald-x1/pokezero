@@ -6,15 +6,71 @@ loads its ordinary checkpoint once. This module never loads weights, runs a
 model, starts a game, or changes process-wide precision settings. B2 and live
 B3 scientific admission remain separate gates.
 """
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 import hashlib
 from pathlib import Path
 import shutil
 import subprocess
+from types import MappingProxyType
 
 from .live_protocol_actor import (ActorContract, JaxBackend, PythonBackend,
     RawPolicy, _mask_values, _require, _vocab_sha)
 from .live_protocol_bridge import OwningActorFactory, require_actor_factory
+
+
+def _catalog_structure_guard(catalog):
+    """Pin every constant graph edge without reading device tensor contents.
+
+    JAX arrays and tuples are immutable. Retaining their actual objects pins
+    array identities and prevents ID reuse. Frozen dataclasses can still be
+    bypassed with object.__setattr__, so check their edges as well as nested
+    host mappings on every use. No device-to-host tensor copy is needed.
+    """
+    import jax
+    import numpy as np
+    from .category_vocab import CategoryVocabulary
+    seen, attributes, mappings = set(), [], []
+
+    def bind(value):
+        if id(value) in seen:
+            return
+        seen.add(id(value))
+        if isinstance(value, jax.Array):
+            return
+        if is_dataclass(value):
+            names = tuple(item.name for item in fields(value))
+            if isinstance(value, CategoryVocabulary):
+                # These affect category row selection but are derived outside
+                # the dataclass fields. The OOV logging set is not an input.
+                names += ('_index', '_oov_offset')
+            edges = tuple((name, getattr(value, name)) for name in names)
+            attributes.append((value, edges))
+            for _, child in edges:
+                bind(child)
+        elif type(value) is dict or isinstance(value, MappingProxyType):
+            edges = tuple(value.items())
+            mappings.append((value, edges))
+            for key, child in edges:
+                bind(key)
+                bind(child)
+        elif isinstance(value, tuple):
+            for child in value:
+                bind(child)
+        else:
+            _require(isinstance(value, (str, int, float, bool, bytes, type(None), np.generic)),
+                     'immutable compiled catalog constants required')
+
+    bind(catalog)
+
+    def validate():
+        for value, edges in attributes:
+            _require(all(getattr(value, name) is child for name, child in edges),
+                     'compiled encoder catalog namespace drift: structure')
+        for value, edges in mappings:
+            _require(len(value) == len(edges)
+                and all(key in value and value[key] is child for key, child in edges),
+                'compiled encoder catalog namespace drift: host mapping')
+    return validate
 
 
 @dataclass(frozen=True, eq=False)
@@ -31,26 +87,17 @@ class CompiledEncoderFunctions:
 
     def __post_init__(self):
         import jax
-        import numpy as np
         from gpu_engine import v4_encoder
         catalog = self.catalog
         step = jax.jit(lambda state, chunk: v4_encoder.fold_chunk(state, chunk, catalog))
         encode = jax.jit(lambda state, own, side:
             v4_encoder.encode(state, own, catalog, observer_sides=side))
-        binding = np.asarray(catalog.binding).tobytes()
-        def vocabulary_rows():
-            vocab = catalog.vocabulary
-            return (tuple(vocab.tokens), vocab.oov_buckets, tuple(sorted(vocab.aliases.items())),
-                    tuple(sorted(vocab._index.items())), vocab._oov_offset)
-        namespace = (catalog.checkpoint_sha256, catalog.source.source_hash,
-                     vocabulary_rows(), catalog.masks)
+        validate_structure = _catalog_structure_guard(catalog)
         def validate(candidate):
             _require(candidate is catalog and self.catalog is catalog
-                and self.step is step and self.encode_step is encode
-                and np.asarray(catalog.binding).tobytes() == binding
-                and (catalog.checkpoint_sha256, catalog.source.source_hash,
-                     vocabulary_rows(), catalog.masks) == namespace,
+                and self.step is step and self.encode_step is encode,
                 'compiled encoder catalog/function namespace drift')
+            validate_structure()
             _require(not jax.config.jax_enable_x64
                 and jax.config.jax_default_matmul_precision == 'highest', 'JAX precision drift')
         object.__setattr__(self, 'step', step)

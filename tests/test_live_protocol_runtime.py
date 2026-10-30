@@ -186,6 +186,82 @@ class FactoryTests(unittest.TestCase):
                 actors[3]._backend.ingest(('|turn|1',))
             for actor in actors: actor.close_game()
 
+    def test_warmed_functions_refuse_nested_catalog_drift_before_adapter_use(self):
+        import jax
+        from pokezero.recorded_encoder_runner import JaxRecordedAdapter
+        from test_gpu_engine_v4_encoder import V4EncoderTests
+        V4EncoderTests.setUpClass(); fixture = V4EncoderTests()
+        catalog = replace(fixture.catalog)
+        with jax.default_matmul_precision('highest'), jax.enable_x64(False):
+            holder = CompiledEncoderFunctions(catalog)
+            adapter = JaxRecordedAdapter(catalog, owner_side=0, compiled_functions=holder)
+            adapter.reset(stream_id=1, battle_id='authored-warm')
+            adapter.feed(tuple(fixture.public.prefix) + ('|turn|1',))
+            request = fixture.request()
+            observation = adapter.encode(request, owner_side=0)
+            cache_sizes = (holder.step._cache_size(), holder.encode_step._cache_size())
+            before = (adapter.state, adapter.host, adapter.bindings, adapter.stream_ids,
+                      adapter.battle_id, dict(adapter.registered))
+
+            def assert_refused_before_use():
+                with patch('gpu_engine.v4_encoder.initialize', side_effect=AssertionError('no new state')) as initialize, \
+                     patch('gpu_engine.v4_encoder.parse_own_requests', side_effect=AssertionError('no request parse')) as parse, \
+                     patch('gpu_engine.public_wire.project_line', side_effect=AssertionError('no host advance')) as project:
+                    for operation in (
+                            lambda: JaxRecordedAdapter(catalog, owner_side=0, compiled_functions=holder),
+                            lambda: adapter.reset(stream_id=2, battle_id='authored-next'),
+                            lambda: adapter.feed(('|turn|2',)),
+                            lambda: adapter.encode(request, owner_side=0)):
+                        with self.assertRaisesRegex(ValueError, 'namespace drift'):
+                            operation()
+                    self.assertEqual((initialize.call_count, parse.call_count, project.call_count), (0, 0, 0))
+                for actual, original in zip((adapter.state, adapter.host, adapter.bindings, adapter.stream_ids), before[:4]):
+                    self.assertIs(actual, original)
+                self.assertEqual((adapter.battle_id, adapter.registered), before[4:])
+                self.assertEqual((holder.step._cache_size(), holder.encode_step._cache_size()), cache_sizes)
+
+            original_actions = catalog.actions
+            changed_device = original_actions.device._replace(
+                numeric=original_actions.device.numeric.at[:, :, 0].add(np.float32(.125)))
+            try:
+                # Reviewer F1 repro: replace a nested table while retaining
+                # the outer catalog identity, masks and binding bytes.
+                object.__setattr__(catalog, 'actions', replace(original_actions, device=changed_device))
+                assert_refused_before_use()
+            finally:
+                object.__setattr__(catalog, 'actions', original_actions)
+            original_device = original_actions.device
+            try:
+                # Also catch replacement inside the SAME nested catalog.
+                object.__setattr__(original_actions, 'device', changed_device)
+                assert_refused_before_use()
+            finally:
+                object.__setattr__(original_actions, 'device', original_device)
+            move = next(iter(original_actions.dex.moves.values()))
+            original_power = move.base_power
+            try:
+                object.__setattr__(move, 'base_power', original_power + 1)
+                assert_refused_before_use()
+            finally:
+                object.__setattr__(move, 'base_power', original_power)
+            vocabulary = catalog.vocabulary
+            key = next(iter(vocabulary._index))
+            original_row = vocabulary._index[key]
+            try:
+                vocabulary._index[key] = original_row + 1
+                assert_refused_before_use()
+            finally:
+                vocabulary._index[key] = original_row
+            try:
+                vocabulary.aliases['authored_alias'] = key
+                assert_refused_before_use()
+            finally:
+                vocabulary.aliases.pop('authored_alias')
+            holder.require_catalog(catalog)
+            restored = adapter.encode(request, owner_side=0)
+            for name in observation:
+                np.testing.assert_array_equal(restored[name], observation[name])
+
 
 if __name__ == '__main__':
     unittest.main()
