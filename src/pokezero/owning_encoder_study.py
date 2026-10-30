@@ -5,6 +5,7 @@ Missing, failed and capped cells remain unknown on the original denominator.
 No result from this module automatically qualifies B3 or an equivalence claim.
 """
 from dataclasses import asdict
+from collections import deque
 from functools import lru_cache
 import hashlib
 import json
@@ -38,6 +39,30 @@ CONSUMED = (
 def require(condition, reason):
     if not condition:
         raise ValueError(reason)
+
+
+def _failure_diagnostics(error):
+    """Retain bounded failure evidence without frame locals or source payloads.
+
+    The runner consumes the exception instead of letting Python print it, so
+    type alone permanently loses the reason for a failed non-resumable attempt.
+    Keep the innermost code locations even when the stack exceeds the bound.
+    """
+    try:
+        message = str(error)
+    except BaseException:
+        message = '<exception message unavailable>'
+    frames = deque(maxlen=16)
+    count = 0
+    trace = error.__traceback__
+    while trace is not None:
+        code = trace.tb_frame.f_code
+        frames.append(dict(file=code.co_filename[-512:], line=trace.tb_lineno,
+                           function=code.co_name[:256]))
+        count += 1
+        trace = trace.tb_next
+    return dict(error_message=message[:4096], error_message_truncated=len(message) > 4096,
+        error_traceback=list(frames), error_traceback_truncated=count > len(frames))
 
 
 def canonical(value):
@@ -500,11 +525,12 @@ async def run_study(spec, output, *, benchmark=None, factory_builder=None, confi
         ledger['status'], ledger['actual_exit'] = 'FAILED', 1
         ledger['invocations'][ordinal]['status'] = 'FAILED'
         failure = dict(invocation=ordinal, stage=stage, error_type=type(error).__name__,
+            **_failure_diagnostics(error),
             owning_encoder_receipt=getattr(error, 'owning_encoder_receipt', None))
         if stage == 'benchmark' and completed < COUNT:
             cell = ledger['cells'][ordinal*COUNT+completed]
             cell['status'] = 'CAPPED' if isinstance(error, CappedGame) or (
-                isinstance(error, RuntimeError) and str(error) ==
+                isinstance(error, RuntimeError) and failure['error_message'] ==
                 'owning game round cap without actual owner terminal') else 'FAILED'
             failure['seed'] = cell['seed']
         if isinstance(error, PermissionError):
