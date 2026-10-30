@@ -1,12 +1,13 @@
 """Bound own-engine inputs to the existing source action-token writer.
 
 Supported requests are explicitly evidenced uncompressed ordinary move rows,
-forced replacement and wait packets. UNKNOWN includes compressed locks,
-Struggle, recharge, Encore and Transform; none is reconstructed from a chosen
+source-proved synthetic Struggle, forced replacement and wait packets. UNKNOWN
+includes other compressed locks, recharge, Encore and Transform; none is reconstructed from a chosen
 action, current PP, a legal mask, or an opposing physical world.
 
-The actual request producer is still missing. SourceRequest is a caller
-attestation, not a certificate that getMoveRequestData ran. MaxPP is retained
+The standalone SourceRequest API is a caller attestation, not a certificate
+that getMoveRequestData ran. engine_request_source is the opt-in actual server
+producer for its declared supported cut. MaxPP is retained
 separately from the actual immutable constructor pool and selection indices.
 generate_teams.cjs retains initial full PP, but BattleState.pp is mutable and
 MoveTable/metadata base PP cannot recover source maxpp (including noPPBoosts).
@@ -39,7 +40,7 @@ from .public_moves import _static_category
 from .state import BattleState
 
 SCHEMA = 'pokezero.engine_private_actions.v1'
-UNKNOWN, ORDINARY, FORCE_SWITCH, WAIT = range(4)
+UNKNOWN, ORDINARY, FORCE_SWITCH, WAIT, STRUGGLE = range(5)
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,8 @@ class SourceRequest(NamedTuple):
     never a default inferred from BattleState. ORDINARY certifies getMoves was
     uncompressed and not replaced by Struggle; rows retain physical move order.
     engine_legal is the owning server mask, never the source request mask.
+    For STRUGGLE, disabled holds the source getMoves precompression mask for
+    proof only; the emitted synthetic row has disabled=False and no PP fields.
     """
     boundary: order_api.RequestBoundary
     binding: object
@@ -84,6 +87,9 @@ class Tables(NamedTuple):
     mechanics: object
     supported: object
     ghost: object
+    struggle_primary: object
+    struggle_mechanics: object
+    struggle_supported: object
 
 
 @dataclass(frozen=True, eq=False)
@@ -257,13 +263,19 @@ def compile_engine_actions(metadata, *, catalog, vocabulary, private_team, expos
             kinds = [_static_category(vocabulary, 'type:' + info.types[i]) if i < len(info.types) else 0 for i in (0, 1)]
             if not np.array_equal(np.asarray(private_team.type_categories[index]), np.asarray(kinds, np.int32)):
                 raise ValueError('action and private-team source species types differ')
+    struggle_mechanics = catalog.ids.get('struggle',0)
+    struggle_supported = bool(struggle_mechanics and vocabulary.is_enumerated('move:struggle'))
+    struggle_primary = _static_category(vocabulary,'move:struggle')
     payload = dict(schema=SCHEMA, engine=np.asarray(engine).tolist(), exposure=asdict(exposure),
         actions=np.asarray(catalog.device.binding).tolist(), team=np.asarray(private_team.binding).tolist(),
-        primary=primary, mechanics=mechanics, supported=supported, ghost=ghosts)
+        primary=primary, mechanics=mechanics, supported=supported, ghost=ghosts,
+        struggle=[struggle_primary,struggle_mechanics,struggle_supported])
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).digest()
     binding = jnp.asarray(np.frombuffer(digest, dtype='>u4').astype(np.uint32))
     tables = Tables(binding, engine, jnp.asarray(primary, jnp.int32), jnp.asarray(mechanics, jnp.int32),
-        jnp.asarray(supported, jnp.bool_), jnp.asarray(ghosts, jnp.bool_))
+        jnp.asarray(supported, jnp.bool_), jnp.asarray(ghosts, jnp.bool_),
+        jnp.asarray(struggle_primary,jnp.int32),jnp.asarray(struggle_mechanics,jnp.int32),
+        jnp.asarray(struggle_supported,jnp.bool_))
     compiled = Compiled(tables)
     _COMPILED[compiled] = dict(tables=tables, edges=tuple(tables), catalog=catalog,
         action_tables=catalog.device, action_edges=tuple(catalog.device), team=private_team,
@@ -332,9 +344,12 @@ def _device(selected, owned, facts, ledger, source, constructor, tables, action_
     max_pp = constructor.max_pp[rows, active]
     mode = source.mode
     ordinary = mode == ORDINARY
+    struggle = mode == STRUGGLE
+    moving = ordinary | struggle
     forced = mode == FORCE_SWITCH
     waiting = mode == WAIT
-    present = ordinary[:, None] & (selected.moves > 0)
+    physical_present = selected.moves > 0
+    present = (ordinary[:, None] & physical_present) | (struggle[:,None] & (jnp.arange(4)==0))
     safe_moves = jnp.clip(selected.moves, 0, tables.primary.shape[0]-1)
     safe_type = jnp.clip(selected.hidden_power_type, 0, tables.mechanics.shape[1]-1)
     mechanics = tables.mechanics[safe_moves, safe_type[:, None]]
@@ -346,26 +361,35 @@ def _device(selected, owned, facts, ledger, source, constructor, tables, action_
     ok &= jnp.all(constructor.species == owned.species, axis=-1)
     ok &= jnp.all(constructor.moves[rows, active] == selected.moves, axis=-1)
     ok &= jnp.all(source.binding == tables.binding, axis=-1)
-    ok &= (source.request_id >= -1) & (ordinary | forced | waiting)
-    ok &= ~ordinary | ((selected.charge_move == 0) & (selected.encore_move == 0)
-        & (selected.encore_counter == 0) & jnp.any(present & ~source.disabled, axis=-1))
-    ok &= jnp.all(~present | ((selected.moves < tables.primary.shape[0]) & supported
+    ok &= (source.request_id >= -1) & (moving | forced | waiting)
+    ok &= ~moving | ((selected.charge_move == 0) & (selected.encore_move == 0)
+        & (selected.encore_counter == 0))
+    ok &= ~ordinary | jnp.any(present & ~source.disabled,axis=-1)
+    # STRUGGLE is an explicitly source-produced synthetic row. Its proof uses
+    # the precompression source disabled mask, never the server legality mask.
+    ok &= ~struggle | (tables.struggle_supported & jnp.any(physical_present,axis=-1)
+        & jnp.all(~physical_present | ((selected.pp<=0)|source.disabled),axis=-1))
+    ok &= jnp.all(~(moving[:,None]&physical_present) | ((selected.moves < tables.primary.shape[0])
         & (selected.pp >= 0) & (max_pp > 0) & (selected.pp <= max_pp)), axis=-1)
-    needs_type = jnp.any(present & ~tables.supported[safe_moves, 0], axis=-1)
+    ok &= jnp.all(~(ordinary[:,None]&physical_present) | supported,axis=-1)
+    needs_type = ordinary & jnp.any(physical_present & ~tables.supported[safe_moves, 0], axis=-1)
     ok &= ~needs_type | ((selected.hidden_power_type > 0)
         & (selected.hidden_power_type < tables.mechanics.shape[1]))
-    ok &= ~ordinary | ~jnp.any((selected.moves[:, 1:] > 0) & (selected.moves[:, :-1] <= 0), axis=-1)
-    ok &= ~ordinary | jnp.all(selected.moves >= 0, axis=-1)
+    ok &= ~moving | ~jnp.any((selected.moves[:, 1:] > 0) & (selected.moves[:, :-1] <= 0), axis=-1)
+    ok &= ~moving | jnp.all(selected.moves >= 0, axis=-1)
     owner = jnp.where(ok, ledger.owner_side, -1)
     team_facts = facts._replace(owner_side=owner)
-    kind = jnp.where(ordinary, requests.RequestKind.MOVE,
+    kind = jnp.where(moving, requests.RequestKind.MOVE,
         jnp.where(forced, requests.RequestKind.FORCE_SWITCH, requests.RequestKind.WAIT)).astype(jnp.int32)
     packet = requests.ActionRequest(owner, ok, source.request_id, kind, waiting, forced,
-        ordinary & source.trapped, ledger.team_size, facts.active, facts.fainted, present, source.disabled & present,
-        jnp.where(present, selected.pp, 0).astype(jnp.float32),
-        jnp.where(present, max_pp, 0).astype(jnp.float32), present)
+        moving & source.trapped, ledger.team_size, facts.active, facts.fainted, present,
+        ordinary[:,None] & source.disabled & present,
+        jnp.where(ordinary[:,None]&present, selected.pp, 0).astype(jnp.float32),
+        jnp.where(ordinary[:,None]&present, max_pp, 0).astype(jnp.float32), ordinary[:,None]&present)
     primary = jnp.where(present, tables.primary[safe_moves], action_tables.fallback_primary[:4])
     mechanics = jnp.where(present, mechanics, 0)
+    primary = jnp.where(struggle[:,None]&(jnp.arange(4)==0),tables.struggle_primary,primary)
+    mechanics = jnp.where(struggle[:,None],jnp.where(jnp.arange(4)==0,tables.struggle_mechanics,0),mechanics)
     # TeamFacts now follows request order, so actual active is request row zero.
     actor_num = facts.hp_numerator[:, 0]
     actor_den = facts.hp_denominator[:, 0]
