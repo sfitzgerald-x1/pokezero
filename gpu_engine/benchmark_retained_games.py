@@ -223,6 +223,25 @@ def _stats(values):
     return dict(samples_ms=values, mean_ms=statistics.fmean(values) if values else None)
 
 
+def _observation_accounting(batch, component_steps, full_steps):
+    """A partial component share cannot certify that all encoding is <=25%."""
+    ratio = sum(component_steps) / sum(full_steps) if full_steps else None
+    triggered = batch == 2048 and ratio is not None and ratio > .25
+    if not full_steps:
+        status = 'UNKNOWN_NO_ADVANCING_STEPS'
+    elif batch != 2048:
+        status = 'NOT_TARGET_BATCH'
+    else:
+        status = 'TRIGGERED_BY_PARTIAL_LOWER_BOUND' if triggered else 'UNKNOWN_INCOMPLETE_ATTRIBUTION'
+    return dict(
+        # Compatibility field: explicitly partial, never a total encoder share.
+        encoder_fraction_of_instrumented_full_step=ratio,
+        partial_observation_fraction_lower_bound=ratio,
+        observation_timing_attribution_complete=False,
+        observation_trigger_25_percent=True if triggered else None,
+        observation_trigger_25_percent_status=status)
+
+
 def _source_snapshot():
     root = Path(__file__).resolve().parents[1]
     def git(*args):
@@ -384,11 +403,12 @@ def measure(runtime, pool, team_indices, *, stream_ids, constructor_seed=719,
         full_step=_stats(full_steps), bf16_forward=_stats(forward), cold_compile=_stats(compiles),
         driver_components={name: _stats(values) for name, values in phases.items()},
         retained_encoder=_stats(encoder_steps),
-        encoder_fraction_of_instrumented_full_step=(sum(encoder_steps) / sum(full_steps) if full_steps else None),
-        observation_trigger_25_percent=(sum(encoder_steps) / sum(full_steps) > .25 if batch == 2048 and full_steps else None),
+        **_observation_accounting(batch, encoder_steps, full_steps),
         constructor_seed=constructor_seed, sampling_seed=sampling_seed, cohort=details, decisions=decisions,
         scope='Unqualified retained173/bf16 actual finite cohort; no fidelity/strength/B4 qualification.',
         accounting='Original denominator retained; actual observed valid terminal transitions only complete; refused and unfinished rows unknown; no refill/redraw/pooling.',
         timing='Instrumented synchronized host wall; construction excluded; compaction/validation/cold recompiles/phase barriers/callbacks included. Components separately scoped; no sum-of-components speed claim.',
-        encoder_scope='Both owner public folds, own facts/retained encode and admission; excludes source requests, model and routing. Fraction uses the same advancing steps.',
+        encoder_scope='PARTIAL observation components: both owner public folds, own facts/retained encode and driver admission phases. The retained_encoder and encoder_fraction compatibility fields cover only these phases. Fraction uses the same instrumented advancing steps; this is a lower bound on observation attribution, not total encoder cost.',
+        omitted_observation_attribution=['Host _admission observation validation',
+            'Model input stacking and compaction in _decide'],
         cold_shape_policy='One compact vectorized forward per request; no waiting/done/refused inputs forwarded; no warmup/replay or prefix discarded.')

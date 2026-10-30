@@ -271,6 +271,26 @@ class RetainedBenchmarkTests(unittest.TestCase):
         self.assertFalse(failed[0])
         self.assertEqual(eligible.tolist(), [[True, False]])
 
+    def test_partial_observation_share_below_threshold_cannot_clear_trigger(self):
+        measured = bench._observation_accounting(2048, [20.], [100.])
+        # Another 15ms of omitted validation/packing would cross the threshold;
+        # the partial measurement cannot distinguish that case from <=25ms.
+        self.assertGreater((20. + 15.) / 100., .25)
+        self.assertEqual(measured['partial_observation_fraction_lower_bound'], .2)
+        self.assertEqual(measured['encoder_fraction_of_instrumented_full_step'], .2)
+        self.assertIsNone(measured['observation_trigger_25_percent'])
+        self.assertEqual(measured['observation_trigger_25_percent_status'], 'UNKNOWN_INCOMPLETE_ATTRIBUTION')
+        self.assertFalse(measured['observation_timing_attribution_complete'])
+        self.assertIsNone(bench._observation_accounting(2048, [25.], [100.])['observation_trigger_25_percent'])
+
+    def test_partial_observation_share_above_threshold_proves_trigger(self):
+        measured = bench._observation_accounting(2048, [26.], [100.])
+        self.assertIs(measured['observation_trigger_25_percent'], True)
+        self.assertEqual(measured['observation_trigger_25_percent_status'], 'TRIGGERED_BY_PARTIAL_LOWER_BOUND')
+        self.assertFalse(measured['observation_timing_attribution_complete'])
+        self.assertIsNone(bench._observation_accounting(8192, [26.], [100.])['observation_trigger_25_percent'])
+        self.assertIsNone(bench._observation_accounting(2048, [], [])['observation_trigger_25_percent'])
+
     def test_initial_done_is_not_a_new_completed_game(self):
         first, config = result(batch=1, done=[True])
         measured, model, advance = self.measure(first, config)
