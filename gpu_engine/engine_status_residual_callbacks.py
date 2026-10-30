@@ -7,8 +7,12 @@ public Toxic evidence. Toxic remains a distinct reason even though the original
 source damage tag is '[from] psn'. The caller must capture the actual numerical
 HP/counter assignment. No damage, counter progression or faint is reconstructed.
 
-Every eligible attempt ALWAYS latches UNKNOWN256, including valid/lethal
-receipts and invalid/no-output claims. Positive lethal writes are explicitly
+Diagnostic attempts always latch UNKNOWN256. A PRIVATE registered owning
+context may defer ONLY this new emitter latch on supported nonlethal BRN/PSN
+writes after separately proven source hooks/history as well as sticky birth
+and cached-speed checks. The actual registered caller currently has no original
+hook compiler: its missing hook_context stays CLOSED/unknown, never proofTrue. Prior bits and
+invalid/no-output/TOX/lethal/overflow claims remain unknown. Positive lethal writes are explicitly
 UNQUALIFIED diagnostics; this helper emits no faint and cannot prove its queue
 order. Original source Damage/status/ability hooks, no-output paths, owning
 history and public consumer registration remain unproved. Legacy tapes are
@@ -46,6 +50,27 @@ class Data(NamedTuple):
     producer_binding: object
     reason_by_status: object
     damage_tag_by_reason: object
+
+
+class RegisteredStatusResidualContext(NamedTuple):
+    """PRIVATE statics; not an accepted boolean or constructor attestation.
+
+    The owning transition also requires actual BirthRecord and the SAME original
+    ProfileData object. Host driver must check both original compiler holders.
+    """
+    data: object
+    weather_profile_data: object
+    # Original source hook/history proof is deliberately NOT supplied by the
+    # speed profile. No implementation currently registers a non-None value.
+    hook_context: object = None
+
+
+def retain_profile_device(record,state,streams,data,*,eligible):
+    """Retain intermediate physical state; inactive rows preserve old carry."""
+    from . import engine_weather_speed_profile as speed_profile
+    retained=speed_profile.retain_device(record,state,streams,data)
+    mask=_eligible(eligible,record.qualified_birth);b=mask.shape[0]
+    return jax.tree.map(lambda old,new:jnp.where(mask.reshape((b,)+(1,)*(old.ndim-1)),new,old),record,retained)
 
 
 @dataclass(frozen=True, eq=False)
@@ -143,7 +168,7 @@ def _unknown(tape,eligible):
 
 
 def record_status_residual_device(tape,side,physical,old_hp,new_hp,maximum,old_status,
-                                  old_counter,new_counter,data,*,eligible):
+                                  old_counter,new_counter,data,*,eligible,_defer_own_unknown=False):
     """Trusted actual-write seam; all payload/counters are literal int32 values.
 
     No-op/dead/unsupported/invalid eligible claims remain unknown-only. Valid
@@ -153,6 +178,7 @@ def record_status_residual_device(tape,side,physical,old_hp,new_hp,maximum,old_s
     """
     if not _check(tape,data):return tape
     eligible=_eligible(eligible,tape.count)
+    defer=_eligible(_defer_own_unknown,tape.count)
     try:
         values=tuple(public_mon_state._int32(v) for v in
             (side,physical,old_hp,new_hp,maximum,old_status,old_counter,new_counter))
@@ -178,9 +204,13 @@ def record_status_residual_device(tape,side,physical,old_hp,new_hp,maximum,old_s
         &(old_hp>0)&(new_hp>=0)&(new_hp<old_hp)&(maximum>=old_hp)&(maximum>0)
         &(status>=0)&(status<7)&(reason>0)&canonical&counters
         &(~room|jnp.all(tape.switch_details[rows,index]==0,axis=1)))
+    # Internal deferral is not public acceptance: only this emitter's NEW bit
+    # is omitted. Existing refusals are never cleared or reclassified.
+    can_defer=(defer&valid&room&(new_hp>0)&((status==mechanics.BRN)|(status==mechanics.PSN))
+        &((tape.refusal&~public.UNINSTRUMENTED)==0))
     tape=public._append(tape,STATUS_RESIDUAL,old_counter,new_counter,side,physical,
         (old_hp,new_hp,maximum,status,reason),eligible&valid)
-    return _unknown(tape,eligible)
+    return _unknown(tape,eligible&~can_defer)
 
 
 def record_status_residual(tape,side,physical,old_hp,new_hp,maximum,old_status,
