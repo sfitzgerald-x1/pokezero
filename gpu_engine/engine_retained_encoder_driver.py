@@ -382,15 +382,25 @@ def _timed(callback, name, function, *args):
     return result
 
 
-def _consume(r, state, frame, active_rows=None, timing_callback=None):
+def _consume(r, state, frame, active_rows=None, timing_callback=None, previous_reports=None):
     if active_rows is None:
         active_rows = jnp.ones_like(state.core.admitted)
     observers, reports = [], []
     for side, observer in enumerate(state.observers, 1):
-        observer, projection, error = _timed(timing_callback, f'public_p{side}', r['public_fast'], observer, frame)
+        def public_phase(before, frame, active):
+            candidate, projection, error = r['public_fast'](before, frame)
+            return _observer_rows(active, before, candidate), projection, error
+        observer, projection, error = _timed(timing_callback, f'public_p{side}', public_phase,
+            observer, frame, active_rows)
         facts, encoded = _timed(timing_callback, f'encode_p{side}', r['encode_fast'], state.core, observer)
-        observer, report = _timed(timing_callback, f'admission_p{side}', r['score_fast'], observer,
-            facts, encoded, projection, error, state.core.admitted, active_rows)
+        def admission_phase(obs, facts, encoded, projection, error, admitted, active, previous):
+            candidate, report = r['score_fast'](obs, facts, encoded, projection, error, admitted, active)
+            if previous is not None:
+                report = _report_rows(active, previous, report)
+            return candidate, report
+        previous = None if previous_reports is None else previous_reports[side-1]
+        observer, report = _timed(timing_callback, f'admission_p{side}', admission_phase, observer,
+            facts, encoded, projection, error, state.core.admitted, active_rows, previous)
         observers.append(observer); reports.append(report)
     return Result(state._replace(observers=tuple(observers)), tuple(reports))
 
@@ -474,8 +484,16 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
     old_state, old_result = session.state, session.result
     record['advancing'] = True
     try:
+        def checked_timing(name, milliseconds):
+            timing_callback(name, milliseconds)
+            # A host observer runs between cached phases. Revalidate at that
+            # boundary so a mutated static holder cannot reach the next phase.
+            _session(session)
+            _checked(session.prepared)
+            source._constructed(record['constructed'])
+        observe = None if timing_callback is None else checked_timing
         chance = transition.sample_chance_inputs(core.engine) if chance_inputs is None else chance_inputs
-        frame = _timed(timing_callback, 'engine', r['frame'], core, engine_actions, chance, executed)
+        frame = _timed(observe, 'engine', r['frame'], core, engine_actions, chance, executed)
         def requests_phase(core, frame):
             orders = tuple(r['installations'](ledger, frame) for ledger in core.orders)
             unsafe = tuple(r['unsafe'](value, frame.state) for value in core.unsafe)
@@ -489,12 +507,8 @@ def advance(session, engine_actions, *, active_rows=None, timing_callback=None, 
             chosen = _rows(executed, core._replace(originals=None, constructors=None),
                 candidate._replace(originals=None, constructors=None))
             return chosen._replace(originals=core.originals, constructors=core.constructors)
-        next_core = _timed(timing_callback, 'requests', requests_phase, core, frame)
-        candidate = _consume(r, old_state._replace(core=next_core), frame, executed, timing_callback)
-        observers = tuple(_observer_rows(executed, old, new) for old, new in
-            zip(old_state.observers, candidate.state.observers))
-        reports = tuple(_report_rows(executed, old, new) for old, new in zip(old_result.owners, candidate.owners))
-        result = Result(candidate.state._replace(observers=observers), reports)
+        next_core = _timed(observe, 'requests', requests_phase, core, frame)
+        result = _consume(r, old_state._replace(core=next_core), frame, executed, observe, old_result.owners)
         # Callbacks can observe timing but cannot replace or replay the carry.
         if _session(session) is not record or session.state is not old_state or session.result is not old_result:
             raise ValueError('timing callback changed the driver session')

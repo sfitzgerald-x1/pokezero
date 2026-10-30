@@ -1,5 +1,6 @@
 """Per-row driver advancement and one-pass timing, using fake models only."""
 import unittest
+from unittest import mock
 import numpy as np
 import jax
 import jax.numpy as j
@@ -134,6 +135,44 @@ class AdvancingDriverTests(unittest.TestCase):
             d.latest_diagnostics(d.Session(session.prepared, session.state, session.result))
         d.advance(session, actions, active_rows=j.zeros(2, bool), chance_inputs=self.chance())
         self.assertFalse(bool(d.latest_diagnostics(session).executed_rows.any()))
+
+    def test_callback_static_mutation_refuses_before_next_cached_phase(self):
+        session = self.construct()
+        before = session.state
+        index = self.f.catalog.vocabulary._index
+        key = next(iter(index)); value = index[key]
+        phases = []
+        def mutate(name, _):
+            phases.append(name)
+            index[key] = value+1
+        try:
+            with self.assertRaises(ValueError):
+                d.advance(session, j.full((2, 2), 8, j.int32), timing_callback=mutate,
+                    chance_inputs=self.chance())
+            self.assertEqual(phases, ['engine'])
+            self.assertIs(session.state, before)
+            self.assertFalse(d._SESSIONS[session]['advancing'])
+        finally:
+            index[key] = value
+        d.latest_diagnostics(session)
+
+    def test_row_freeze_commits_are_inside_the_named_observation_phases(self):
+        session = self.construct()
+        seen = []
+        observer_rows, report_rows = d._observer_rows, d._report_rows
+        def public_commit(*args):
+            seen.append('public_commit')
+            return observer_rows(*args)
+        def report_commit(*args):
+            seen.append('report_commit')
+            return report_rows(*args)
+        with mock.patch.object(d, '_observer_rows', side_effect=public_commit), \
+                mock.patch.object(d, '_report_rows', side_effect=report_commit):
+            d.advance(session, j.full((2, 2), 8, j.int32), active_rows=j.array([False, True]),
+                timing_callback=lambda name, _: seen.append(name), chance_inputs=self.chance())
+        self.assertEqual(seen, ['engine', 'requests', 'public_commit', 'public_p1', 'encode_p1',
+            'report_commit', 'admission_p1', 'public_commit', 'public_p2', 'encode_p2',
+            'report_commit', 'admission_p2'])
 
 
 if __name__ == '__main__':
