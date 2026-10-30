@@ -345,11 +345,11 @@ def finish(tape,state,*,live,replacement,pending_before,residual_ready,defer_res
 
 def trace_step(state,actions,table,*,cursor,catalog,expected_binding,expected_engine_binding,
                chance_inputs=None,capacity=64,leftovers_compiled=None,status_residual_compiled=None,
-               status_residual_mode='diagnostic'):
+               status_residual_mode='diagnostic',direct_hit_compiled=None):
     # A checked host boundary cannot be captured even when only cursor/chance
     # (or no meaningful argument) is dynamic. Inspect this FRESH scalar, not
     # selected input leaves, before any host guard or cached core invocation.
-    if (leftovers_compiled is not None or status_residual_compiled is not None) and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
+    if (leftovers_compiled is not None or status_residual_compiled is not None or direct_hit_compiled is not None) and isinstance(jnp.zeros((),jnp.int32),jax.core.Tracer):
         raise ValueError('checked lifecycle helper API must remain outside outer JIT')
     from . import transition
     if type(status_residual_mode) is not str or status_residual_mode not in ('diagnostic','kernel-event'):
@@ -371,10 +371,18 @@ def trace_step(state,actions,table,*,cursor,catalog,expected_binding,expected_en
         if status_residual_callbacks._COMPILED[status_residual_compiled][4] is not catalog:
             raise ValueError('same original engine catalog required for status residual caller')
         status_residual_context=StatusResidualContext(data)
+    direct_hit_context=None
+    if direct_hit_compiled is not None:
+        from . import engine_direct_hit_controls as direct_hit_controls
+        data=direct_hit_controls.check_compiled(direct_hit_compiled)
+        if direct_hit_controls._COMPILED[direct_hit_compiled][2] is not catalog:
+            raise ValueError('same original engine catalog required for direct-hit caller')
+        direct_hit_context=direct_hit_controls.Context(data)
     before=snapshot(cursor);tape=_tape(cursor,catalog,capacity)
     chance_inputs=transition.sample_chance_inputs(state) if chance_inputs is None else chance_inputs
     result=transition.step_with_chance(state,actions,table,chance_inputs,_public_trace=tape,_lifecycle_trace=True,
-        _leftovers_context=leftovers_context,_status_residual_context=status_residual_context)
+        _leftovers_context=leftovers_context,_status_residual_context=status_residual_context,
+        _direct_hit_context=direct_hit_context)
     tape=result.callbacks
     return LifecycleResult(result.step.state,tape.cursor,tape,before,snapshot(tape.cursor),
         result.step.invalid_actions,result.step.placeholder_moves)

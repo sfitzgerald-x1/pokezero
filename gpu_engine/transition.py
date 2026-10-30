@@ -295,7 +295,8 @@ def step(state: BattleState, actions: jax.Array, table: MoveTable) -> StepResult
 
 def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
                      chance_inputs: ChanceInputs, *, _public_trace=None, _lifecycle_trace=False,
-                     _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None) -> StepResult:
+                     _weather_hp_context=None, _leftovers_context=None, _status_residual_context=None,
+                     _direct_hit_context=None) -> StepResult:
     """Same transition body with supplied finite chance inputs for the oracle.
 
     Callers must supply in-range integers under ``ChanceInputs``' finite law.
@@ -304,6 +305,11 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
     """
     if _lifecycle_trace and _public_trace is None:
         raise ValueError('lifecycle mode requires its actual registered callback tape')
+    if _direct_hit_context is not None:
+        from . import engine_direct_hit_controls as direct_hit_controls
+        if (not _lifecycle_trace or type(_direct_hit_context) is not direct_hit_controls.Context
+                or type(_direct_hit_context.data) is not direct_hit_controls.Data):
+            raise ValueError('typed owning lifecycle direct-hit context required')
     if _status_residual_context is not None:
         from . import engine_lifecycle_callbacks as lifecycle_callbacks
         from . import engine_status_residual_callbacks as status_residual_callbacks
@@ -775,6 +781,12 @@ def step_with_chance(state: BattleState, actions: jax.Array, table: MoveTable,
         work = work._replace(hp=_set_active(work.hp,work,foe,foe_hp),
             substitute_hp=_set_active(work.substitute_hp,work,foe,
                 sub_hp - jnp.where(hits_sub,dealt,0)))
+        if _direct_hit_context is not None:
+            _public_trace=direct_hit_controls.record_direct_hit_controls_device(
+                _public_trace,side,work.active[rows,side],work.active[rows,foe],move,
+                direct_hit_controls.HitWrite(power,critical,hit,immune,num,den,hits_sub,
+                    _risk_protected,enduring[rows,foe],hp,foe_hp,_active(work.max_hp,work,foe)),
+                _direct_hit_context.data,eligible=acts & (power>0))
         if _public_trace is not None:
             _public_trace = public_callbacks.condition(_public_trace,foe,work.active[rows,foe],
                 foe_hp,_active(work.max_hp,work,foe),_active(work.status,work,foe),

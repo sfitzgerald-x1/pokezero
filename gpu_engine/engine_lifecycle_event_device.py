@@ -36,6 +36,7 @@ from . import engine_weather_effect_callbacks as weather_effects
 from . import engine_weather_speed_profile as weather_speed
 from . import engine_leftovers_callbacks as leftovers_callbacks
 from . import engine_status_residual_callbacks as status_residual_callbacks
+from . import engine_direct_hit_controls as direct_hit_controls
 from .engine_private_team import engine_metadata_binding
 
 SCHEMA = 'pokezero.lifecycle_device_events.partial.v1'
@@ -458,6 +459,8 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         weather_chip = kind == weather_effects.WEATHER_CHIP
         leftovers_heal = kind == leftovers_callbacks.LEFTOVERS_HEAL
         status_damage = kind == status_residual_callbacks.STATUS_RESIDUAL
+        direct_control = ((kind == direct_hit_controls.CRITICAL)
+            | (kind == direct_hit_controls.SUPER_EFFECTIVE) | (kind == direct_hit_controls.RESISTED))
         any_weather=entry_weather|move_weather|clock_weather
         safe_side, safe_in = jnp.clip(side, 0, 1), jnp.clip(incoming, 0, 5)
         old = cursor.physical_to_public[rows, safe_side, safe_in]
@@ -564,6 +567,13 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
             & (raw[:,5]>raw[:,6])&(raw[:,6]>0)&(raw[:,7]>=raw[:,5])&(raw[:,7]<=1_000_000)
             & (((raw[:,8]==2)&(raw[:,9]==1))|((raw[:,8]==3)&(raw[:,9]==2))))
         event_ok=jnp.where(status_damage,generation_ok & clock_ok & status_damage_ok,event_ok)
+        direct_move=jnp.clip(raw[:,5],0,tables.base.public_ids.shape[0]-1)
+        direct_ok=(tables.status_events & ~tables.raw_begin & status_identity & actor_ok
+            & direct_hit_controls.validate_raw_device(raw) & (phase==0)
+            & (actor_physical==cursor.physical_active[rows,jnp.clip(actor_side,0,1)])
+            & (incoming==cursor.physical_active[rows,safe_side])
+            & (raw[:,5]<tables.base.public_ids.shape[0]) & (tables.base.public_ids[direct_move]>0))
+        event_ok=jnp.where(direct_control,generation_ok & clock_ok & direct_ok,event_ok)
         amount = 1 + tables.raw_begin.astype(jnp.int32)
         capacity_ok = count <= 64-amount
         sequence_ok = sequence <= 2**31-1-amount
@@ -616,6 +626,12 @@ def project_device(state, tape, before_registry, after_registry, tables, *, weat
         chip_semantic=jnp.concatenate((jnp.stack((jnp.full_like(z,int(inputs.Kind.CONDITION)),
             semantic_sequence,turn,phase,absent,absent,side,status_slot),axis=1),chip_payload),axis=1)
         semantic=jnp.where((weather_chip|leftovers_heal|status_damage)[:,None],chip_semantic,semantic)
+        # Annotation-only lines still enter every original raw consumer. Their
+        # main NONPROC word has no public target; the full adapter resolves the
+        # lexical target independently from this literal raw receipt.
+        direct_semantic=jnp.stack((jnp.full_like(z,int(inputs.Kind.NONPROC)),semantic_sequence,
+            turn,phase,absent,absent,absent,absent,z,absent,absent,z,z,z,z,z),axis=1)
+        semantic=jnp.where(direct_control[:,None],direct_semantic,semantic)
         raw_header = jnp.stack((jnp.full((b,), int(inputs.Kind.RAW_BEGIN), jnp.int32), sequence+1,
             cursor.turn, cursor.phase, absent, absent, absent, absent, z, z, z, z, z, z, z, z), axis=1)
         raw_index = jnp.minimum(count, 63)
